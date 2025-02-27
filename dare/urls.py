@@ -1,0 +1,29 @@
+from django.conf import settings
+from django.conf.urls.static import static
+from django.contrib import admin
+from django.urls import include, path
+
+admin_paths = [
+    path("admin/", admin.site.urls),
+]
+
+app_paths = [
+    path("users/", include("users.urls"), name="users"),
+]
+
+other_paths = []
+
+urlpatterns = admin_paths + app_paths + other_paths
+
+# Use the settings object to get the MEDIA_ROOT and MEDIA_URL
+urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+
+# TODO: Yet to be implemented
+# handler404 = Error404View.as_view()
+# handler500 = Error500View.as_view()
+# handler403 = Error403View.as_view()
+# handler400 = Error400View.as_view()
+
+admin.site.site_title = "DARE Administration"
+admin.site.site_header = "DARE Administration"
+admin.site.index_title = "DARE Administration"

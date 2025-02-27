@@ -1,0 +1,46 @@
+# Python
+*.pyc
+__pycache__/
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+ENV/
+env.bak/
+venv.bak/
+.mypy_cache/
+.coverage
+.tox/
+.hypothesis/
+.pytest_cache/
+.ruff_cache/
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Django
+*.sqlite3
+*.log
+*.pot
+*.pyc
+.env
+db.sqlite3
+/media/
+/staticfiles/
+static/
+/local_settings.py
+
+# SQLite
+*.db
+*.sqlite
+*.sqlite3-journal
+
+# VSCode
+.vscode/
+
+# macOS
+.DS_Store
+
+# Windows
+thumbs.db
