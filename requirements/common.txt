@@ -6,7 +6,7 @@ channels~=4.2.0
 
 # Authentication
 dj-rest-auth~=7.0.1
-PyJWT==2.10.1
+PyJWT<2.10.0
 django-allauth~=65.4.1
 
 # Database (Optional, if using PostgreSQL)
@@ -22,3 +22,5 @@ django-cors-headers~=3.13.0
 sentry_sdk~=2.20.0
 
 djangorestframework-camel-case~=1.4.2
+djangorestframework_simplejwt~=5.5.0
+requests~=2.32.3

@@ -13,7 +13,6 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
         fields = [
             "id",
             "email",
-            "name",
         ]
         read_only_fields = ["id"]
 

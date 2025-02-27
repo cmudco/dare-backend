@@ -12,7 +12,7 @@ SECRET_KEY = os.getenv("DJANGO_SECRET_KEY")
 DEBUG = os.getenv("DJANGO_DEBUG")
 DJANGO_SETTINGS_MODULE = os.getenv("DJANGO_SETTINGS_MODULE")
 ENVIRONMENT = os.getenv("ENVIRONMENT", "local")
-SITE_ID = os.getenv("SITE_ID", 1)
+SITE_ID = int(os.getenv("SITE_ID", 1))
 
 ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "127.0.0.1,localhost").split(",")
 CORS_ALLOWED_ORIGINS = os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000").split(
