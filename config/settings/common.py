@@ -144,7 +144,7 @@ REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 50,
     "JSON_UNDERSCOREIZE": {
-        "ignore_keys": ("password1", "password2"),
+        "ignore_keys": ("password1", "password2", "new_password1", "new_password2"),
     },
 }
 
@@ -173,6 +173,7 @@ REST_AUTH = {
     "JWT_AUTH_HTTPONLY": False,
     "USER_DETAILS_SERIALIZER": "users.api.serializers.CustomUserDetailsSerializer",
     "REGISTER_SERIALIZER": "users.api.serializers.CustomRegisterSerializer",
+    "PASSWORD_RESET_USE_SITES_DOMAIN": False,
 }
 
 # logging

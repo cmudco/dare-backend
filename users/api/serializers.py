@@ -27,6 +27,21 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
 class CustomRegisterSerializer(RegisterSerializer):
     name = serializers.CharField(max_length=255, required=True)
 
+    def validate_email(self, email):
+        """
+        Check if a user with this email already exists.
+        """
+        email = self.normalize_email(email)
+        if User.objects.filter(email__iexact=email).exists():
+            raise serializers.ValidationError(
+                "A user with this email address already exists."
+            )
+        return email
+
+    def normalize_email(self, email):
+        """Normalize the email address"""
+        return email and email.lower() or ""
+
     def get_cleaned_data(self):
         data = super().get_cleaned_data()
         data["name"] = self.validated_data.get("name", "")
