@@ -41,6 +41,7 @@ LOCAL_APPS = [
     "users",
     "common",
     "files",
+    "core",
 ]
 
 THIRD_PARTY_APPS = [
