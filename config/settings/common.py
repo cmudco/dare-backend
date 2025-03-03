@@ -12,7 +12,6 @@ https://docs.djangoproject.com/en/4.1/ref/settings/
 
 import os
 from datetime import timedelta
-
 from config import env
 from config.sentry import init_sentry
 
@@ -41,6 +40,7 @@ DJANGO_APPS = [
 LOCAL_APPS = [
     "users",
     "common",
+    "files",
 ]
 
 THIRD_PARTY_APPS = [
@@ -54,16 +54,15 @@ THIRD_PARTY_APPS = [
     "dj_rest_auth.registration",
 ]
 
-
 INSTALLED_APPS = DJANGO_APPS + LOCAL_APPS + THIRD_PARTY_APPS
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
-    "django.contrib.sessions.middleware.SessionMiddleware",
-    "django.contrib.messages.middleware.MessageMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.common.CommonMiddleware",
+    "django.contrib.sessions.middleware.SessionMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "django.contrib.messages.middleware.MessageMiddleware",
     "allauth.account.middleware.AccountMiddleware",
 ]
 
@@ -72,9 +71,7 @@ ROOT_URLCONF = "dare.urls"
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [
-            os.path.join(env.BASE_DIR, "templates"),
-        ],
+        "DIRS": [os.path.join(env.BASE_DIR, "templates")],
         "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [
@@ -89,18 +86,10 @@ TEMPLATES = [
 ]
 
 AUTH_PASSWORD_VALIDATORS = [
-    {
-        "NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator",
-    },
-    {
-        "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
-    },
-    {
-        "NAME": "django.contrib.auth.password_validation.CommonPasswordValidator",
-    },
-    {
-        "NAME": "django.contrib.auth.password_validation.NumericPasswordValidator",
-    },
+    {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
+    {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
+    {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
+    {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
 ]
 
 LANGUAGE_CODE = "en"
@@ -126,7 +115,6 @@ if env.EMAIL_HOST_USER and env.EMAIL_HOST_PASSWORD:
 else:
     EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 
-
 REST_FRAMEWORK = {
     "DEFAULT_RENDERER_CLASSES": (
         "djangorestframework_camel_case.render.CamelCaseJSONRenderer",
@@ -134,10 +122,13 @@ REST_FRAMEWORK = {
     ),
     "DEFAULT_PARSER_CLASSES": (
         "djangorestframework_camel_case.parser.CamelCaseJSONParser",
+        "rest_framework.parsers.MultiPartParser",
+        "rest_framework.parsers.FormParser",
     ),
     "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticated",),
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "rest_framework_simplejwt.authentication.JWTAuthentication",
+        # 'rest_framework.authentication.TokenAuthentication',
         # "rest_framework.authentication.SessionAuthentication",
         # "dj_rest_auth.jwt_auth.JWTCookieAuthentication",
     ],
@@ -159,7 +150,7 @@ ACCOUNT_LOGIN_METHODS = {"email"}
 ACCOUNT_ADAPTER = "users.adapter.AccountAdapter"
 
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(
+        "ACCESS_TOKEN_LIFETIME": timedelta(
         days=1
     ),  # TODO: Change to 1 hour or few mins when refresh logic is implemented
     "REFRESH_TOKEN_LIFETIME": timedelta(days=5),  # TODO: Change to 1 day
