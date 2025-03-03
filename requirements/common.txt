@@ -21,6 +21,17 @@ django-cors-headers~=3.13.0
 # error monitoring
 sentry_sdk~=2.20.0
 
+# DRF
 djangorestframework-camel-case~=1.4.2
 djangorestframework_simplejwt~=5.5.0
+
 requests~=2.32.3
+
+# PDF
+PyPDF2~=3.0.1
+
+# Pinecone
+pinecone~=6.0.1
+
+# OpenAI
+openai~=1.65.2
