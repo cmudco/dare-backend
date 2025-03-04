@@ -14,7 +14,7 @@ admin_paths = [
 app_paths = [
     path("users/", include("users.urls"), name="users"),
     path("account/", include("allauth.account.urls")),
-    path("files/", include("files.urls", namespace="files")),
+    path("", include("files.urls", namespace="files")),
 ]
 
 other_paths = [

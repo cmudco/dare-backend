@@ -1,9 +1,10 @@
 from rest_framework import serializers
-from ..models import File
+from ..models import File, Tag
 
 class FileSerializer(serializers.ModelSerializer):
     size = serializers.SerializerMethodField()
     user = serializers.ReadOnlyField(source='user.email')
+    tags = serializers.PrimaryKeyRelatedField(queryset=Tag.objects.all(), many=True, required=False)
 
     class Meta:
         model = File
@@ -19,3 +20,9 @@ class FileSerializer(serializers.ModelSerializer):
             display_type = data['file_type'].split('/')[-1]
             data['file_type'] = display_type
         return data
+
+
+class TagSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Tag
+        fields = ['id', 'user', 'label']

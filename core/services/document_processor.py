@@ -12,7 +12,7 @@ class DocumentProcessor:
         self.openai_client = OpenAIWrapper()
         self.pinecone_client = PineconeClient()
 
-    def process_file(self, file: File) -> bool:
+    def create_file_embeddings(self, file: File) -> bool:
         """
         Process a single file:
         1. Generate embeddings for the file content
@@ -23,7 +23,7 @@ class DocumentProcessor:
             chunks = self._chunk_text(content, chunk_size=1000)
             vectors = []
             for i, chunk in enumerate(chunks):
-                embedding = self.openai_client.generate_embedding(chunk)
+                embedding = self.openai_client.create_embeddings(chunk)
 
                 metadata = {
                     'file_id': str(file.id),
@@ -45,10 +45,9 @@ class DocumentProcessor:
             return True
 
         except Exception as e:
-            print(f"Error in process_file: {str(e)}")
-            raise
+            raise Exception(str(e))
 
-    def process_user_files(self, user_id: int) -> bool:
+    def create_user_files_embeddings(self, user_id: int) -> bool:
         """Process all files belonging to a specific user"""
         try:
             files = File.objects.filter(user_id=user_id, is_deleted=False, is_active=True)
@@ -56,7 +55,7 @@ class DocumentProcessor:
                 return True
 
             for file in files:
-                self.process_file(file)
+                self.create_file_embeddings(file)
 
             return True
 
@@ -112,7 +111,7 @@ class DocumentProcessor:
         Search for similar content using embeddings within a user's namespace
         """
         try:
-            query_embedding = self.openai_client.generate_embedding(query_text)
+            query_embedding = self.openai_client.create_embeddings(query_text)
 
             results = self.pinecone_client.query_vectors(
                 vector=query_embedding,
