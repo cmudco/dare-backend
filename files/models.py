@@ -1,0 +1,61 @@
+from django.db import models
+from django.conf import settings
+
+from common.managers import ActiveObjectsManager
+from common.models import BaseModel, TimeStampMixin
+
+class Tag(TimeStampMixin):
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="tags",
+        blank=True,
+        null=True
+    )
+    label = models.CharField(max_length=255, unique=True)
+
+    def __str__(self):
+        return self.label
+
+class File(BaseModel):
+    """
+    Model for user-uploaded files, tracking metadata, tags and file type.
+    """
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='files',
+        help_text="The user who owns this file"
+    )
+    file = models.FileField(
+        upload_to='files/',
+        help_text="The actual file content"
+    )
+    name = models.CharField(
+        max_length=255,
+        blank=True,
+        null=True,
+        help_text="Custom name for the file (defaults to filename if not provided)"
+    )
+    file_type = models.CharField(
+        max_length=50,
+        blank=True,
+        null=True,
+        help_text="MIME type of the file (e.g., application/pdf, image/jpeg)"
+    )
+    size = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="File size in bytes"
+    )
+    tags = models.ManyToManyField(
+        Tag,
+        related_name='files',
+        blank=True,
+        help_text="Custom tags for categorizing and filtering files"
+    )
+
+    active_objects = ActiveObjectsManager()
+
+    def __str__(self):
+        return self.name if self.name else self.file.name
