@@ -46,7 +46,7 @@ class TagViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, IsOwner]
 
     def get_queryset(self):
-        return Tag.objects.filter(user=self.request.user).order_by('label')
+        return Tag.objects.filter(user=self.request.user).union(Tag.objects.filter(user=None)).order_by('label')
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
