@@ -42,6 +42,7 @@ LOCAL_APPS = [
     "common",
     "files",
     "core",
+    "chats"
 ]
 
 THIRD_PARTY_APPS = [
@@ -53,6 +54,8 @@ THIRD_PARTY_APPS = [
     "allauth.socialaccount",
     "dj_rest_auth",
     "dj_rest_auth.registration",
+    "channels",
+    "uvicorn",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + LOCAL_APPS + THIRD_PARTY_APPS
@@ -196,3 +199,9 @@ WSGI_APPLICATION = "dare.wsgi.application"
 
 # Django appends a trailing slash to URLs lacking one, if it resolves to a valid view.
 APPEND_SLASH = True
+
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels.layers.InMemoryChannelLayer"
+    }
+}
