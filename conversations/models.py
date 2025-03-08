@@ -6,14 +6,19 @@ from django.conf import settings
 
 from common.managers import ActiveObjectsManager
 from common.models import BaseModel, TimeStampMixin
-from .constants import SenderType
+from .constants import Provider, SenderType
 
 
 class LLM(models.Model):
     name = models.CharField(max_length=255, help_text="Display name of the Language Model.")
     identifier = models.CharField(max_length=255, unique=True, help_text="Technical identifier used in API calls (e.g., claude-3.5-sonnet-20240307).")
     description = models.TextField(blank=True, null=True, help_text="Description of the language model capabilities.")
-    # link to service
+    provider = models.CharField(
+        max_length=20,
+        choices=Provider.choices(),
+        default="openai",
+        help_text="Provider of the LLM (e.g., OpenAI, Claude)."
+    )
 
     def __str__(self):
         return self.name

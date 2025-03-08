@@ -1,20 +1,20 @@
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Dict, List
 import json
 import httpx
 from config import env
 
 class ClaudeService:
-    def __init__(self):
+    def __init__(self, model: str = "claude-3-7-sonnet-20250219"):
         self.api_url = "https://api.anthropic.com/v1/messages"
         self.headers = {
             "Content-Type": "application/json",
             "X-API-Key": env.CLAUDE_API_KEY,
             "anthropic-version": "2023-06-01"
         }
-        self.model = "claude-3-5-sonnet-20241022"
+        self.model = "claude-3-7-sonnet-20250219"
 
     async def stream_chat_completion(
-        self, messages: str, max_tokens: int = 1024
+        self, messages: List[Dict[str, str]], max_tokens: int = 1024
     ) -> AsyncGenerator[str, None]:
         """
         Stream a chat completion from Claude API.
@@ -33,7 +33,6 @@ class ClaudeService:
                 "messages": messages,
                 "stream": True
             }
-
             async with httpx.AsyncClient(timeout=60.0) as client:
                 async with client.stream(
                     "POST",
