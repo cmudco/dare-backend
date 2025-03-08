@@ -1,6 +1,6 @@
 from django.db.models import Q
 from channels.db import database_sync_to_async
-from conversations.constants import SenderType
+from conversations.constants import Provider, SenderType
 from conversations.models import LLM, Message, Conversation
 from core.services.document_processor import DocumentProcessor
 from core.services.openai_service import OpenAIService
@@ -28,15 +28,15 @@ class LLMService:
         print(context)
 
         message = (
-            f"Context: {context}\n"
-            f"\nCurrent Question: {message}"
+            f"Context: {context}"
+            f"Current Question: {message}"
         )
 
         messages = chat_history + [{"role": "user", "content": message}]
 
         print(messages)
 
-        ai_service = OpenAIService()
+        ai_service = ai_service = self.get_ai_service(llm)
 
         async for chunk in ai_service.stream_chat_completion(messages):
             yield chunk
@@ -48,9 +48,23 @@ class LLMService:
 
     @database_sync_to_async
     def get_chat_history(self, conversation, limit=10):
-        """Retrieves recent chat history for AI context."""
-        messages = Message.active_objects.filter(conversation=conversation).order_by('-created_at')[:limit]
+        """Retrieves recent chat history for AI context, ignoring placeholders."""
+        messages = Message.active_objects.filter(conversation=conversation).order_by('-created_at')
+
+        messages = messages[2:] if len(messages) > 2 else messages
+
         return [
             {"role": "user" if msg.sender_type == SenderType.PLAYER else "assistant", "content": msg.message}
             for msg in reversed(messages)
         ]
+
+    
+    def get_ai_service(self, llm: LLM):
+        """Returns the appropriate AI service based on the LLM provider and model identifier."""
+        print(llm.provider)
+        if llm.provider == Provider.OPENAI.value:
+            return OpenAIService(model=llm.identifier)
+        elif llm.provider == Provider.CLAUDE.value:
+            return ClaudeService(model=llm.identifier)
+        else:
+            return ClaudeService(model=llm.identifier)
