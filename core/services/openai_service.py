@@ -15,7 +15,7 @@ class OpenAIService:
         self.model = model
 
     async def stream_chat_completion(
-        self, prompt: str, max_tokens: int = 1024
+        self, messages: List[Dict[str, str]], max_tokens: int = 1024
     ) -> AsyncGenerator[str, None]:
         """
         Stream a chat completion from OpenAI's API.
@@ -30,7 +30,7 @@ class OpenAIService:
         try:
             payload = {
                 "model": self.model,
-                "messages": [{"role": "user", "content": prompt}],
+                "messages": messages,
                 "temperature": 0.7,
                 "max_tokens": max_tokens,
                 "stream": True

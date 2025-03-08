@@ -16,8 +16,8 @@ django.setup()
 
 from channels.routing import ProtocolTypeRouter, URLRouter
 from django.core.asgi import get_asgi_application
-from chats.middleware import JwtAuthMiddleware
-from chats.routing import websocket_urlpatterns
+from conversations.middleware import JwtAuthMiddleware
+from conversations.routing import websocket_urlpatterns
 
 application = ProtocolTypeRouter(
     {

@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from chats.models import  LLM, Message, Conversation
+from conversations.models import  LLM, Message, Conversation
 from files.api.serializers import FileSerializer
 
 class LLMSerializer(serializers.ModelSerializer):
