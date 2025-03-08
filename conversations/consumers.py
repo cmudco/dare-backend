@@ -36,7 +36,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             self.conversation = conversation
 
             await self.accept()
-            await self.load_chat_history(conversation)
+            await self.load_conversation_history(conversation)
 
         except DenyConnection:
             await self.close()
@@ -106,13 +106,13 @@ class ChatConsumer(AsyncWebsocketConsumer):
             await self.conversation_service.update_message(bot_message_id, ai_response_accumulator)
             await self.send(self.format_message(bot_message_obj, message=ai_response_accumulator, streaming=False))
 
-    async def load_chat_history(self, conversation):
+    async def load_conversation_history(self, conversation):
         """Fetches chat history and sends it to the frontend."""
-        chat_history = await self.conversation_service.fetch_chat_history_from_db(conversation)
+        conversation_history = await self.conversation_service.fetch_chat_history_from_db(conversation)
 
         await self.send(text_data=json.dumps({
-            "type": "chat_history",
-            "chatHistory": chat_history
+            "type": "conversation_history",
+            "conversationHistory": conversation_history
         }))
 
     def format_message(self, message_obj, message=None, is_sender=False, streaming=False):

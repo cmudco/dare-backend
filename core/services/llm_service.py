@@ -18,7 +18,7 @@ class LLMService:
         Handles AI message generation, dynamically selecting the appropriate model (OpenAI or Claude).
         """
         llm = await self.get_llm_model(model_id)
-        chat_history = await self.get_chat_history(conversation, limit=10)
+        conversation_history = await self.get_conversation_history(conversation, limit=10)
 
         context = ""
         if file_ids:
@@ -32,7 +32,7 @@ class LLMService:
             f"Current Question: {message}"
         )
 
-        messages = chat_history + [{"role": "user", "content": message}]
+        messages = conversation_history + [{"role": "user", "content": message}]
 
         print(messages)
 
@@ -47,7 +47,7 @@ class LLMService:
         return LLM.objects.filter(id=model_id).first() if model_id else LLM.objects.first()
 
     @database_sync_to_async
-    def get_chat_history(self, conversation, limit=10):
+    def get_conversation_history(self, conversation, limit=10):
         """Retrieves recent chat history for AI context, ignoring placeholders."""
         messages = Message.active_objects.filter(conversation=conversation).order_by('-created_at')
 
