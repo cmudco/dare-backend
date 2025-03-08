@@ -1,7 +1,7 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from chats.api.views import ConversationViewSet, LLMViewSet, MessageViewSet
-from chats.constants import APP_NAME
+from conversations.api.views import ConversationViewSet, LLMViewSet, MessageViewSet
+from conversations.constants import APP_NAME
 
 
 router = DefaultRouter()

@@ -15,7 +15,7 @@ app_paths = [
     path("users/", include("users.urls"), name="users"),
     path("account/", include("allauth.account.urls")),
     path("", include("files.urls", namespace="files")),
-    path("chats/", include("chats.urls", namespace="chats")),  
+    path("", include("conversations.urls", namespace="conversations")),  
 ]
 
 other_paths = [

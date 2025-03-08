@@ -42,7 +42,7 @@ LOCAL_APPS = [
     "common",
     "files",
     "core",
-    "chats"
+    "conversations"
 ]
 
 THIRD_PARTY_APPS = [

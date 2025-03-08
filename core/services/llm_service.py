@@ -1,7 +1,7 @@
 from django.db.models import Q
 from channels.db import database_sync_to_async
-from chats.constants import SenderType
-from chats.models import LLM, Message, Conversation
+from conversations.constants import SenderType
+from conversations.models import LLM, Message, Conversation
 from core.services.document_processor import DocumentProcessor
 from core.services.openai_service import OpenAIService
 from core.services.claude_service import ClaudeService
@@ -27,19 +27,18 @@ class LLMService:
 
         print(context)
 
-        chat_history = "\nRecent Conversation:\n" + "\n".join(
-            [f"{msg['role']}: {msg['content']}" for msg in chat_history]
-        )
-
-        full_prompt = (
+        message = (
             f"Context: {context}\n"
-            f"{chat_history}\n"
             f"\nCurrent Question: {message}"
         )
 
+        messages = chat_history + [{"role": "user", "content": message}]
+
+        print(messages)
+
         ai_service = OpenAIService()
 
-        async for chunk in ai_service.stream_chat_completion(full_prompt):
+        async for chunk in ai_service.stream_chat_completion(messages):
             yield chunk
 
     @database_sync_to_async
@@ -55,35 +54,3 @@ class LLMService:
             {"role": "user" if msg.sender_type == SenderType.PLAYER else "assistant", "content": msg.message}
             for msg in reversed(messages)
         ]
-
-    @database_sync_to_async
-    def is_first_message(self, conversation):
-        """Check if this is the first message exchange in the conversation."""
-        return Message.active_objects.filter(conversation=conversation).count() <= 2
-
-    @database_sync_to_async
-    def update_conversation_title(self, conversation, title):
-        """Update the conversation title."""
-        conversation.title = title
-        conversation.save()
-
-    async def generate_title(self, user_message, ai_response):
-        """Generate a short, descriptive conversation title."""
-        messages = [
-            {
-                "role": "system",
-                "content": "You are an assistant that generates short, descriptive titles (max 6 words) for conversations based on their content."
-            },
-            {
-                "role": "user",
-                "content": f"Generate a concise title for this conversation:\nUser: {user_message}\nAI: {ai_response}"
-            }
-        ]
-
-        ai_service = OpenAIService(model="gpt-3.5-turbo")
-
-        try:
-            return await ai_service.get_chat_completion(user_message)
-        except Exception as e:
-            print(f"Error generating title: {str(e)}")
-            return "New Chat"

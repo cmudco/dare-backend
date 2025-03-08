@@ -1,6 +1,6 @@
 from django.db import models
 
-APP_NAME = "chats"
+APP_NAME = "conversations"
 
 class SenderType(models.IntegerChoices):
     PLAYER = 1, "Player"

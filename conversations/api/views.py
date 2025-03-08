@@ -1,6 +1,6 @@
 from rest_framework import viewsets, generics
 from rest_framework.permissions import IsAuthenticated
-from chats.models import Message, Conversation, LLM
+from conversations.models import Message, Conversation, LLM
 from .serializers import MessageSerializer, ConversationSerializer, LLMSerializer
 
 
@@ -12,7 +12,7 @@ class ConversationViewSet(viewsets.ModelViewSet):
     lookup_field = 'conversation_id'
 
     def get_queryset(self):
-        return Conversation.active_objects.filter(user=self.request.user)
+        return Conversation.active_objects.filter(user=self.request.user).order_by('-created_at')
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
