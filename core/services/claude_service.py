@@ -1,7 +1,10 @@
+import logging
 from typing import AsyncGenerator, Dict, List
 import json
 import httpx
 from config import env
+
+logger = logging.getLogger(__name__)
 
 class ClaudeService:
     def __init__(self, model: str = "claude-3-7-sonnet-20250219"):
@@ -53,7 +56,7 @@ class ClaudeService:
                                 break
 
         except Exception as e:
-            print(f"Error streaming chat completion: {str(e)}")
+            logger.exception(f"Error streaming chat completion: {str(e)}")
             yield f"Error: {str(e)}"
 
     async def get_chat_completion(

@@ -25,16 +25,12 @@ class LLMService:
             context = await self.document_processor.search_similar_documents(message, file_ids, user_id)
         context = f"\nRelevant Information:\n{context}" if context else ""
 
-        print(context)
-
         message = (
             f"Context: {context}"
             f"Current Question: {message}"
         )
 
         messages = conversation_history + [{"role": "user", "content": message}]
-
-        print(messages)
 
         ai_service = ai_service = self.get_ai_service(llm)
 
@@ -61,7 +57,6 @@ class LLMService:
     
     def get_ai_service(self, llm: LLM):
         """Returns the appropriate AI service based on the LLM provider and model identifier."""
-        print(llm.provider)
         if llm.provider == Provider.OPENAI.value:
             return OpenAIService(model=llm.identifier)
         elif llm.provider == Provider.CLAUDE.value:

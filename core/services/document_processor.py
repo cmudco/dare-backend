@@ -1,3 +1,4 @@
+import logging
 from typing import Any, List, Dict
 import io
 import PyPDF2
@@ -5,6 +6,9 @@ import PyPDF2
 from core.helpers.openai import OpenAIWrapper
 from core.helpers.pinecone import PineconeClient
 from files.models import File
+
+
+logger = logging.getLogger(__name__)
 
 
 class DocumentProcessor:
@@ -135,7 +139,7 @@ class DocumentProcessor:
             return "\n\n".join(context_parts)
 
         except Exception as e:
-            print(f"Error retrieving document context: {str(e)}")
+            logger.exception(f"Error retrieving document context: {str(e)}")
             return ""
 
 
