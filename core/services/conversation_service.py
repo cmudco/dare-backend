@@ -84,5 +84,5 @@ class ConversationService:
         try:
             return await ai_service.get_chat_completion(messages)
         except Exception as e:
-            print(f"Error generating title: {str(e)}")
+            prlogger.exceptionint(f"Error generating title: {str(e)}")
             return "New Chat"

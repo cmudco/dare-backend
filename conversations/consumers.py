@@ -1,3 +1,4 @@
+import logging
 from channels.generic.websocket import AsyncWebsocketConsumer
 import json
 from urllib.parse import parse_qs
@@ -15,6 +16,7 @@ from files.models import File
 import asyncio
 
 User = get_user_model()
+logger = logging.getLogger(__name__)
 
 class ChatConsumer(AsyncWebsocketConsumer):
 
@@ -41,7 +43,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         except DenyConnection:
             await self.close()
         except Exception as e:
-            print(f"Error in WebSocket connection: {e}")
+            logger.exception(f"Error in WebSocket connection: {e}")
             await self.close()
 
     async def disconnect(self, close_code):
@@ -73,7 +75,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             await self.handle_ai_response(msg_content, bot_message_obj, model_id, file_ids)
 
         except Exception as e:
-            print(f"Error processing message: {str(e)}")
+            logger.exception(f"Error processing message: {str(e)}")
 
     async def handle_title_generation(self, user_message):
         """Generate and send the conversation title only if it's the first message."""
