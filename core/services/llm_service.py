@@ -13,7 +13,7 @@ class LLMService:
     def __init__(self):
         self.document_processor = DocumentProcessor()
 
-    async def query(self, message, conversation, model_id=None, file_ids=None, user_id=None) -> AsyncGenerator[str, None]:
+    async def query(self, message, conversation, model_id=None, file_ids=None, user_id=None, prompt=None) -> AsyncGenerator[str, None]:
         """
         Handles AI message generation, dynamically selecting the appropriate model (OpenAI or Claude).
         """
@@ -23,12 +23,14 @@ class LLMService:
         context = ""
         if file_ids:
             context = await self.document_processor.search_similar_documents(message, file_ids, user_id)
-        context = f"\nRelevant Information:\n{context}" if context else ""
+        context = f"{context}" if context else ""
 
-        message = (
-            f"Context: {context}"
-            f"Current Question: {message}"
-        )
+        message = ""
+        if prompt:
+            message += f"Prompt: {prompt}"
+        if context:
+             message += f"Context: {context}"
+        message += f"Current Question: {message}"
 
         messages = conversation_history + [{"role": "user", "content": message}]
 
@@ -54,7 +56,7 @@ class LLMService:
             for msg in reversed(messages)
         ]
 
-    
+
     def get_ai_service(self, llm: LLM):
         """Returns the appropriate AI service based on the LLM provider and model identifier."""
         if llm.provider == Provider.OPENAI.value:
