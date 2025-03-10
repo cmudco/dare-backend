@@ -42,7 +42,8 @@ LOCAL_APPS = [
     "common",
     "files",
     "core",
-    "conversations"
+    "conversations",
+    "prompts",
 ]
 
 THIRD_PARTY_APPS = [
