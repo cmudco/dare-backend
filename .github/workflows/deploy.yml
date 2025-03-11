@@ -1,0 +1,56 @@
+name: Deploy to Server
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@v4
+
+      - name: Install SSHPass
+        run: sudo apt-get update && sudo apt-get install -y sshpass
+
+      - name: Deploy via SSH with Password
+        env:
+          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+        run: |
+          sshpass -p "$SSH_PASSWORD" ssh -o StrictHostKeyChecking=no $SSH_USER@$SSH_HOST << 'EOF'
+          set -e  # Exit immediately if a command exits with a non-zero status
+          echo "Connected to the server"
+          
+          echo "Navigating to API directory..."
+          cd /home/deployer/dare-backend
+          
+          echo "Pulling latest changes..."
+          git pull origin main
+          
+          echo "Activating virtual environment..."
+          source .venv/bin/activate
+          
+          echo "Installing dependencies..."
+          pip install -r requirements/prod.txt
+          
+          echo "Applying database migrations..."
+          python manage.py migrate
+          
+          echo "Collecting static files..."
+          python manage.py collectstatic --noinput
+          
+          echo "Restarting services..."
+          sudo systemctl restart dare
+          sudo systemctl restart nginx
+          
+          echo "Backend deployment successful!"
+          EOF
+
+      - name: Check deployment status
+        if: ${{ failure() }}
+        run: echo "Deployment failed. Please check the logs for more information."
