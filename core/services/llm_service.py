@@ -47,7 +47,7 @@ class LLMService:
         """Retrieves recent chat history for AI context, ignoring placeholders."""
         messages = Message.active_objects.filter(conversation=conversation).order_by('-created_at')
 
-        messages = messages[2:] if len(messages) > 2 else messages
+        messages = messages[2:]
 
         return [
             {"role": "user" if msg.sender_type == SenderType.PLAYER else "assistant", "content": msg.message}
