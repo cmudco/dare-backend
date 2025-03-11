@@ -15,9 +15,10 @@ ENVIRONMENT = os.getenv("ENVIRONMENT", "local")
 SITE_ID = int(os.getenv("SITE_ID", 1))
 
 ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "127.0.0.1,localhost").split(",")
-CORS_ALLOWED_ORIGINS = os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000").split(
+CORS_ALLOWED_ORIGINS = os.getenv("CORS_ALLOWED_ORIGINS", "https://dare-front.hss.cmu.edu").split(
     ","
 )
+CSRF_TRUSTED_ORIGINS = os.getenv("CSRF_TRUSTED_ORIGINS", "https://dare-front.hss.cmu.edu").split(",")
 
 # database
 DB_NAME = os.getenv("DB_NAME")
