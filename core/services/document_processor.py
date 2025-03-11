@@ -1,3 +1,4 @@
+import logging
 from typing import Any, List, Dict
 import io
 import PyPDF2
@@ -5,6 +6,9 @@ import PyPDF2
 from core.helpers.openai import OpenAIWrapper
 from core.helpers.pinecone import PineconeClient
 from files.models import File
+
+
+logger = logging.getLogger(__name__)
 
 
 class DocumentProcessor:
@@ -106,23 +110,38 @@ class DocumentProcessor:
         except Exception as e:
             raise Exception(f"Error reading file content: {str(e)}")
 
-    def search_similar_content(self, query_text: str, user_id: int, top_k: int = 5) -> List[Dict[str, Any]]:
+    async def search_similar_documents(self, query_text: str, file_ids: List[int], user_id: int, top_k: int = 5) -> str:
         """
-        Search for similar content using embeddings within a user's namespace
+        Search for similar document content using embeddings within specified files.
         """
         try:
             query_embedding = self.openai_client.create_embeddings(query_text)
 
+            filter_query = {
+                "user_id": str(user_id),
+                "file_id": {"$in": [str(file_id) for file_id in file_ids]}
+            }
             results = self.pinecone_client.query_vectors(
                 vector=query_embedding,
                 top_k=top_k,
-                namespace=f"user_{user_id}"
+                namespace=f"user_{user_id}",
+                filter=filter_query
             )
 
-            return results
+            context_parts = []
+            for match in results:
+                metadata = match.get("metadata", {})
+                text = metadata.get("text", "")
+                file_name = metadata.get("file_name", "Unknown file")
+
+                if text:
+                    context_parts.append(f"From {file_name}:\n{text}")
+            return "\n\n".join(context_parts)
 
         except Exception as e:
-            raise Exception(f"Error searching content: {str(e)}")
+            logger.exception(f"Error retrieving document context: {str(e)}")
+            return ""
+
 
     def delete_file_vectors(self, file_id: int, user_id: int) -> bool:
         """Delete all vectors related to a specific file"""
