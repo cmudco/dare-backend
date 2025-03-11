@@ -3,6 +3,7 @@ Django~=5.1.6
 djangorestframework~=3.15.2
 asgiref~=3.8.1
 channels~=4.2.0
+uvicorn[standard]~=0.34.0
 
 # Authentication
 dj-rest-auth~=7.0.1
