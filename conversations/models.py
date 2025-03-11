@@ -50,7 +50,7 @@ class Conversation(BaseModel):
     def __str__(self):
         return f"Conversation {self.conversation_id}"
 
-class Message(BaseModel, TimeStampMixin):
+class Message(BaseModel):
     conversation = models.ForeignKey(
         Conversation,
         on_delete=models.CASCADE,
