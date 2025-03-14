@@ -5,7 +5,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import ValidationError
 
 from core.services.document_processor import DocumentProcessor
-from files.api.permissions import IsOwner
+from common.permissions import IsOwner
 from ..models import File, Tag
 from .serializers import FileSerializer, TagSerializer
 from ..constants import ALLOWED_FILES
