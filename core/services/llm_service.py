@@ -7,32 +7,39 @@ from core.services.openai_service import OpenAIService
 from core.services.claude_service import ClaudeService
 from typing import AsyncGenerator
 
+from prompts.models import Prompt
+
 class LLMService:
     """Service for handling AI message generation with optional document context."""
 
     def __init__(self):
         self.document_processor = DocumentProcessor()
 
-    async def query(self, message, conversation, model_id=None, file_ids=None, user_id=None) -> AsyncGenerator[str, None]:
+    async def query(self, message, conversation, model_id=None, file_ids=None, user_id=None, prompt_id=None) -> AsyncGenerator[str, None]:
         """
         Handles AI message generation, dynamically selecting the appropriate model (OpenAI or Claude).
         """
         llm = await self.get_llm_model(model_id)
         conversation_history = await self.get_conversation_history(conversation, limit=10)
+        prompt = await self.get_prompt(prompt_id)
 
         context = ""
         if file_ids:
             context = await self.document_processor.search_similar_documents(message, file_ids, user_id)
-        context = f"\nRelevant Information:\n{context}" if context else ""
 
-        message = (
-            f"Context: {context}"
-            f"Current Question: {message}"
-        )
+        messages = []
 
-        messages = conversation_history + [{"role": "user", "content": message}]
+        if prompt:
+            messages.append({"role": "assistant", "content": f"Prompt: {prompt}"})
 
-        ai_service = ai_service = self.get_ai_service(llm)
+        if context:
+            messages.append({"role": "user", "content": f"Context: {context}"})
+
+        messages.extend(conversation_history)
+
+        messages.append({"role": "user", "content": f"User's message: {message}"})
+
+        ai_service = self.get_ai_service(llm)
 
         async for chunk in ai_service.stream_chat_completion(messages):
             yield chunk
@@ -41,6 +48,14 @@ class LLMService:
     def get_llm_model(self, model_id=None):
         """Fetches selected LLM model or defaults to the first available."""
         return LLM.objects.filter(id=model_id).first() if model_id else LLM.objects.first()
+
+    @database_sync_to_async
+    def get_prompt(self, prompt_id=None):
+        """Fetches the prompt if the prompt_id is provided."""
+        if prompt_id:
+            prompt = Prompt.active_objects.filter(id=prompt_id).first()
+            return prompt.content if prompt else ""
+        return ""
 
     @database_sync_to_async
     def get_conversation_history(self, conversation, limit=10):
@@ -54,7 +69,6 @@ class LLMService:
             for msg in reversed(messages)
         ]
 
-    
     def get_ai_service(self, llm: LLM):
         """Returns the appropriate AI service based on the LLM provider and model identifier."""
         if llm.provider == Provider.OPENAI.value:
