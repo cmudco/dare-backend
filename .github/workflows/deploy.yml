@@ -1,9 +1,14 @@
 name: Deploy to Server
 
+# Disabling the workflow until we figure out SSH VPN
+# on:
+#   push:
+#     branches:
+#       - main
+
+# Alternative: Make it manual only
 on:
-  push:
-    branches:
-      - main
+  workflow_dispatch:
 
 jobs:
   deploy:
