@@ -27,14 +27,21 @@ class LLMService:
         if file_ids:
             context = await self.document_processor.search_similar_documents(message, file_ids, user_id)
 
+        messages = []
+
         if prompt:
-            conversation_history.append({"role": "assistant", "content": f"Prompt: {prompt}"})
+            messages.append({"role": "assistant", "content": f"Prompt: {prompt}"})
+
         if context:
-            conversation_history.append({"role": "user", "content": f"Context: {context}"})
-        conversation_history.append({"role": "user", "content": f"User's message: {message}"})
+            messages.append({"role": "user", "content": f"Context: {context}"})
+
+        messages.extend(conversation_history)
+
+        messages.append({"role": "user", "content": f"User's message: {message}"})
+
         ai_service = self.get_ai_service(llm)
 
-        async for chunk in ai_service.stream_chat_completion(conversation_history):
+        async for chunk in ai_service.stream_chat_completion(messages):
             yield chunk
 
     @database_sync_to_async
@@ -61,7 +68,6 @@ class LLMService:
             {"role": "user" if msg.sender_type == SenderType.PLAYER else "assistant", "content": msg.message}
             for msg in reversed(messages)
         ]
-
 
     def get_ai_service(self, llm: LLM):
         """Returns the appropriate AI service based on the LLM provider and model identifier."""
