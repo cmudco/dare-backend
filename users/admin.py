@@ -7,7 +7,7 @@ from users.models import User
 
 class UserAdmin(DjangoUserAdmin):
     fieldsets = (
-        (None, {"fields": ("email", "password", "is_active", "is_staff")}),
+        (None, {"fields": ("email", "password", "is_active", "is_staff", "is_superuser")}),
         (
             _("Personal info"),
             {
@@ -24,11 +24,11 @@ class UserAdmin(DjangoUserAdmin):
             None,
             {
                 "classes": ("wide",),
-                "fields": ("email", "password1", "password2"),
+                "fields": ("email", "password1", "password2", "is_superuser", "is_staff", "is_active"),
             },
         ),
     )
-    list_display = ("email", "is_staff", "is_active")
+    list_display = ("email", "is_staff", "is_active", "is_superuser")
     search_fields = ("email", "first_name", "last_name")
     ordering = ("email",)
 
