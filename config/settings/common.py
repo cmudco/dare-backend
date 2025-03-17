@@ -115,7 +115,7 @@ EMAIL_FROM = env.EMAIL_FROM
 DEFAULT_FROM_EMAIL = EMAIL_FROM
 EMAIL_PORT = env.EMAIL_PORT
 
-if env.EMAIL_HOST_USER and env.EMAIL_HOST_PASSWORD:
+if env.EMAIL_HOST:
     EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
 else:
     EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
