@@ -60,6 +60,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
             file_ids = data.get("file_ids", [])
             model_id = data.get("model_id")
             prompt_id = data.get("prompt_id")
+            temperature = data.get("temperature", 0.7)
+            max_tokens = data.get("max_tokens", 2048)
 
             message_obj = await self.conversation_service.create_message(
                 self.conversation, sender_type, msg_content, self.user.email, file_ids
@@ -73,7 +75,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             )
             await self.send(self.format_message(bot_message_obj, streaming=True))
 
-            await self.handle_ai_response(msg_content, bot_message_obj, model_id, file_ids, prompt_id)
+            await self.handle_ai_response(msg_content, bot_message_obj, model_id, file_ids, prompt_id, temperature, max_tokens)
 
         except Exception as e:
             logger.exception(f"Error processing message: {str(e)}")
@@ -86,12 +88,12 @@ class ChatConsumer(AsyncWebsocketConsumer):
             await self.conversation_service.update_conversation_title(self.conversation, title)
             await self.send(json.dumps({"type": "conversation_title", "title": title}))
 
-    async def handle_ai_response(self, msg_content, bot_message_obj, model_id, file_ids, prompt_id=None):
+    async def handle_ai_response(self, msg_content, bot_message_obj, model_id, file_ids, prompt_id=None, temperature=0.7, max_tokens=1024):
         """Handles AI response streaming and updates the message."""
         bot_message_id = str(bot_message_obj.id)
         ai_response_accumulator = ""
 
-        async for chunk in self.llm_service.query(msg_content, self.conversation,model_id, file_ids, self.user.id, prompt_id):
+        async for chunk in self.llm_service.query(msg_content, self.conversation, model_id, file_ids, self.user.id, prompt_id, temperature, max_tokens):
             if chunk.strip():
                 ai_response_accumulator += chunk
                 await self.send(json.dumps({
