@@ -15,7 +15,7 @@ class OpenAIService:
         self.model = model
 
     async def stream_chat_completion(
-        self, messages: List[Dict[str, str]], max_tokens: int = 1024
+        self, messages: List[Dict[str, str]], max_tokens: int = 1024, temperature: float = 0.7
     ) -> AsyncGenerator[str, None]:
         """
         Stream a chat completion from OpenAI's API.
@@ -23,6 +23,7 @@ class OpenAIService:
         Args:
             messages (list): List of chat messages in OpenAI format.
             max_tokens (int, optional): Max tokens for response.
+            temperature (float, optional): Controls randomness in the output.
 
         Yields:
             str: Response text chunks.
@@ -31,7 +32,7 @@ class OpenAIService:
             payload = {
                 "model": self.model,
                 "messages": messages,
-                "temperature": 0.7,
+                "temperature": temperature,
                 "max_tokens": max_tokens,
                 "stream": True
             }
@@ -65,7 +66,7 @@ class OpenAIService:
             yield f"Error: {str(e)}"
 
     async def get_chat_completion(
-        self, messages: List[Dict[str, str]], max_tokens: int = 1024
+        self, messages: List[Dict[str, str]], max_tokens: int = 1024, temperature: float = 0.7
     ) -> str:
         """
         Get a complete chat response from OpenAI API.
@@ -73,11 +74,12 @@ class OpenAIService:
         Args:
             messages (list): List of chat messages in OpenAI format.
             max_tokens (int, optional): Max tokens in response.
+            temperature (float, optional): Controls randomness in the output.
 
         Returns:
             str: Complete response text.
         """
         response_text = ""
-        async for chunk in self.stream_chat_completion(messages, max_tokens):
+        async for chunk in self.stream_chat_completion(messages, max_tokens, temperature):
             response_text += chunk
         return response_text

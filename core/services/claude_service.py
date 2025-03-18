@@ -17,14 +17,15 @@ class ClaudeService:
         self.model = "claude-3-7-sonnet-20250219"
 
     async def stream_chat_completion(
-        self, messages: List[Dict[str, str]], max_tokens: int = 1024
+        self, messages: List[Dict[str, str]], max_tokens: int = 1024, temperature: float = 0.7
     ) -> AsyncGenerator[str, None]:
         """
         Stream a chat completion from Claude API.
 
         Args:
-            prompt: The input prompt
+            messages: List of chat messages
             max_tokens: Maximum tokens in response
+            temperature: Controls randomness in the output.
 
         Yields:
             Response text chunks
@@ -34,6 +35,7 @@ class ClaudeService:
                 "model": self.model,
                 "max_tokens": max_tokens,
                 "messages": messages,
+                "temperature": temperature,
                 "stream": True
             }
             async with httpx.AsyncClient(timeout=60.0) as client:
@@ -60,7 +62,7 @@ class ClaudeService:
             yield f"Error: {str(e)}"
 
     async def get_chat_completion(
-        self, prompt: str, max_tokens: int = 1024
+        self, prompt: str, max_tokens: int = 1024, temperature: float = 0.7
     ) -> str:
         """
         Get a complete chat response from Claude API.
@@ -68,11 +70,12 @@ class ClaudeService:
         Args:
             prompt: The input prompt
             max_tokens: Maximum tokens in response
+            temperature: Controls randomness in the output.
 
         Returns:
             Complete response text
         """
         response_text = ""
-        async for chunk in self.stream_chat_completion(prompt, max_tokens):
+        async for chunk in self.stream_chat_completion(prompt, max_tokens, temperature):
             response_text += chunk
         return response_text
