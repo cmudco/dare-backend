@@ -15,7 +15,7 @@ class LLMService:
     def __init__(self):
         self.document_processor = DocumentProcessor()
 
-    async def query(self, message, conversation, model_id=None, file_ids=None, user_id=None, prompt_id=None) -> AsyncGenerator[str, None]:
+    async def query(self, message, conversation, model_id=None, file_ids=None, user_id=None, prompt_id=None, temperature=0.7, max_tokens=2048) -> AsyncGenerator[str, None]:
         """
         Handles AI message generation, dynamically selecting the appropriate model (OpenAI or Claude).
         """
@@ -41,7 +41,7 @@ class LLMService:
 
         ai_service = self.get_ai_service(llm)
 
-        async for chunk in ai_service.stream_chat_completion(messages):
+        async for chunk in ai_service.stream_chat_completion(messages, max_tokens=max_tokens, temperature=temperature):
             yield chunk
 
     @database_sync_to_async
