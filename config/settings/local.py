@@ -1,3 +1,4 @@
+from config.env import BASE_DIR
 from config.settings.common import *
 
 # Database
@@ -13,7 +14,6 @@ DATABASES = {
 
 STATIC_URL = "/static/"
 STATIC_ROOT = os.path.join(env.BASE_DIR, "static")
-
 MEDIA_URL = "/media/"
 MEDIA_ROOT = os.path.join(env.BASE_DIR, "media")
 
