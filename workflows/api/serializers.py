@@ -10,7 +10,6 @@ class StepSerializer(serializers.ModelSerializer):
     )
 
     def to_representation(self, instance):
-        # Override to return full Prompt object in responses
         representation = super().to_representation(instance)
         representation['prompt'] = PromptSerializer(instance.prompt).data
         return representation
