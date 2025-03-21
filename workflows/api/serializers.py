@@ -1,13 +1,23 @@
 from rest_framework import serializers
+from prompts.models import Prompt
 from workflows.models import Workflow, Step
 from prompts.api.serializers import PromptSerializer
 
 class StepSerializer(serializers.ModelSerializer):
-    prompt_detail = PromptSerializer(source='prompt', read_only=True)
+    prompt = serializers.PrimaryKeyRelatedField(
+        queryset=Prompt.active_objects.all(),
+        required=True
+    )
+
+    def to_representation(self, instance):
+        # Override to return full Prompt object in responses
+        representation = super().to_representation(instance)
+        representation['prompt'] = PromptSerializer(instance.prompt).data
+        return representation
 
     class Meta:
         model = Step
-        fields = ['id', 'prompt', 'prompt_detail', 'order', 'created_at', 'user']
+        fields = ['id', 'prompt', 'order', 'created_at', 'user']
         read_only_fields = ['id', 'created_at']
 
 class WorkflowSerializer(serializers.ModelSerializer):
