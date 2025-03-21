@@ -17,6 +17,7 @@ app_paths = [
     path("", include("files.urls", namespace="files")),
     path("", include("conversations.urls", namespace="conversations")),
     path("", include("prompts.urls", namespace="prompts")),
+    path("", include("workflows.urls", namespace="workflows")),
 
 ]
 
@@ -28,7 +29,7 @@ urlpatterns = admin_paths + app_paths + other_paths
 
 # Use the settings object to get the MEDIA_ROOT and MEDIA_URL
 urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
-
+urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)
 # TODO: Yet to be implemented
 # handler404 = Error404View.as_view()
 # handler500 = Error500View.as_view()
