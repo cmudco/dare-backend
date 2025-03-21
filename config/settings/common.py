@@ -44,6 +44,7 @@ LOCAL_APPS = [
     "core",
     "conversations",
     "prompts",
+    "workflows",
 ]
 
 THIRD_PARTY_APPS = [
@@ -56,7 +57,7 @@ THIRD_PARTY_APPS = [
     "dj_rest_auth",
     "dj_rest_auth.registration",
     "channels",
-    "uvicorn",
+
 ]
 
 INSTALLED_APPS = DJANGO_APPS + LOCAL_APPS + THIRD_PARTY_APPS
