@@ -6,7 +6,6 @@ from common.permissions import IsOwner
 from workflows.api.serializers import WorkflowSerializer, StepSerializer
 from workflows.models import Workflow, Step
 
-
 class WorkflowViewSet(viewsets.ModelViewSet):
     """Endpoint for listing, retrieving, creating, updating and deleting workflows."""
     serializer_class = WorkflowSerializer
@@ -18,6 +17,8 @@ class WorkflowViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
 
+    def perform_update(self, serializer):
+        serializer.save(user=self.request.user)
 
 class StepViewSet(viewsets.ModelViewSet):
     """Endpoint for managing workflow steps."""
