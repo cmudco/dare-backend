@@ -12,7 +12,7 @@ from core.services.llm_service import LLMService
 from .constants import SenderType
 from django.contrib.auth import get_user_model
 from files.models import File
-
+from channels.db import database_sync_to_async
 import asyncio
 
 User = get_user_model()
@@ -58,7 +58,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             msg_content = data.get("message", "").strip()
             sender_type = data.get("sender_type", SenderType.PLAYER)
             file_ids = data.get("file_ids", [])
-            model_id = data.get("model_id")
+            llm_id = data.get("llm_id")
             prompt_id = data.get("prompt_id")
             temperature = data.get("temperature", 0.7)
             max_tokens = data.get("max_tokens", 2048)
@@ -70,30 +70,31 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
             asyncio.create_task(self.handle_title_generation(msg_content))
 
+            llm = await database_sync_to_async(LLM.objects.filter(id=llm_id).first)() if llm_id else await database_sync_to_async(LLM.objects.first)()
+
             bot_message_obj = await self.conversation_service.create_message(
-                self.conversation, SenderType.AI_ASSISTANT, "", "AI Assistant", []
+                self.conversation, SenderType.AI_ASSISTANT, "", "AI Assistant", [], llm=llm
             )
             await self.send(self.format_message(bot_message_obj, streaming=True))
 
-            await self.handle_ai_response(msg_content, bot_message_obj, model_id, file_ids, prompt_id, temperature, max_tokens)
+            await self.handle_ai_response(msg_content, bot_message_obj, llm, file_ids, prompt_id, temperature, max_tokens)
 
         except Exception as e:
             logger.exception(f"Error processing message: {str(e)}")
 
     async def handle_title_generation(self, user_message):
-        """Generate and send the conversation title only if it's the first message."""
         is_first_message = await self.conversation_service.is_first_message(self.conversation)
         if is_first_message:
             title = await self.conversation_service.generate_title(user_message, "")
             await self.conversation_service.update_conversation_title(self.conversation, title)
             await self.send(json.dumps({"type": "conversation_title", "title": title}))
 
-    async def handle_ai_response(self, msg_content, bot_message_obj, model_id, file_ids, prompt_id=None, temperature=0.7, max_tokens=1024):
+    async def handle_ai_response(self, msg_content, bot_message_obj, llm, file_ids, prompt_id=None, temperature=0.7, max_tokens=1024):
         """Handles AI response streaming and updates the message."""
         bot_message_id = str(bot_message_obj.id)
         ai_response_accumulator = ""
 
-        async for chunk in self.llm_service.query(msg_content, self.conversation, model_id, file_ids, self.user.id, prompt_id, temperature, max_tokens):
+        async for chunk in self.llm_service.query(msg_content, self.conversation, llm, file_ids, self.user.id, prompt_id, temperature, max_tokens):
             if chunk.strip():
                 ai_response_accumulator += chunk
                 await self.send(json.dumps({
@@ -131,4 +132,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
             "isSender": is_sender,
             "streaming": streaming,
             "date": message_obj.created_at.isoformat(),
+            "llmId": message_obj.llm.id if message_obj.llm else None
         })
+    

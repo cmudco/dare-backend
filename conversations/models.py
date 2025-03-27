@@ -19,6 +19,7 @@ class LLM(models.Model):
         default="openai",
         help_text="Provider of the LLM (e.g., OpenAI, Claude)."
     )
+    is_reasoning = models.BooleanField(default=False, help_text="Whether the model supports reasoning.")
 
     def __str__(self):
         return self.name
@@ -68,6 +69,14 @@ class Message(BaseModel):
         help_text="Name or identifier of the sender."
     )
     message = models.TextField(help_text="Content of the message.")
+    llm = models.ForeignKey(
+        'conversations.LLM',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="messages",
+        help_text="The LLM used to generate this message (null for user messages)."
+    )
 
     files = models.ManyToManyField(
         'files.File',

@@ -1,8 +1,11 @@
 from channels.db import database_sync_to_async
-from conversations.models import Message, Conversation
+from conversations.models import LLM, Message, Conversation
 from core.services.openai_service import OpenAIService
 from conversations.constants import SenderType
 from asgiref.sync import sync_to_async
+import logging
+
+logger = logging.getLogger(__name__)
 
 class ConversationService:
     """Handles conversation metadata like title generation."""
@@ -19,6 +22,7 @@ class ConversationService:
                 "sender_type": msg.sender_type,
                 "date": msg.created_at.isoformat(),
                 "isSender": msg.sender == conversation.user.email,
+                "llmId": msg.llm.id if msg.llm else None,
             }
             for msg in messages
         ]
@@ -32,13 +36,14 @@ class ConversationService:
             message.save()
 
     @sync_to_async
-    def create_message(self, conversation, sender_type, message_content, sender=None, file_ids=None, user=None):
+    def create_message(self, conversation, sender_type, message_content, sender=None, file_ids=None, user=None, llm=None):
         """Create a new message with specified sender information and file attachments."""
         message = Message.active_objects.create(
             conversation=conversation,
             sender_type=sender_type,
             message=message_content,
-            sender=sender
+            sender=sender,
+            llm=llm
         )
 
         if file_ids:
@@ -63,6 +68,15 @@ class ConversationService:
         """Update the conversation title."""
         conversation.title = title
         conversation.save()
+    
+    @database_sync_to_async
+    def get_gpt_35_turbo_model(self):
+        """Fetch the LLM object for gpt-3.5-turbo from the database."""
+        llm = LLM.objects.filter(identifier="gpt-3.5-turbo", provider="openai").first()
+        if not llm:
+            logger.warning("gpt-3.5-turbo not found in LLM table, falling back to first OpenAI model")
+            llm = LLM.objects.filter(provider="openai").first()
+        return llm
 
     async def generate_title(self, user_message, ai_response=""):
         """Generate a short, descriptive conversation title (max 6 words)."""
@@ -79,10 +93,12 @@ class ConversationService:
                         f"Response must be at most 6 words long."
             }
         ]
-        ai_service = OpenAIService(model="gpt-3.5-turbo")
+
+        llm = await self.get_gpt_35_turbo_model()
+        ai_service = OpenAIService(llm=llm)
 
         try:
             return await ai_service.get_chat_completion(messages)
         except Exception as e:
-            prlogger.exceptionint(f"Error generating title: {str(e)}")
+            logger.exception(f"Error generating title: {str(e)}")
             return "New Chat"
