@@ -1,67 +1,55 @@
 from typing import AsyncGenerator, List, Dict
-import json
-import httpx
+from openai import AsyncOpenAI
 from config import env
+from conversations.models import LLM
 
 class OpenAIService:
-    """Service for interacting with OpenAI's GPT models via streaming."""
+    """Service for interacting with OpenAI's GPT models with optional streaming."""
 
-    def __init__(self, model: str = "gpt-4-turbo"):
-        self.api_url = "https://api.openai.com/v1/chat/completions"
-        self.headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {env.OPENAI_API_KEY}"
-        }
-        self.model = model
+    def __init__(self, llm: LLM):
+        self.client = AsyncOpenAI(api_key=env.OPENAI_API_KEY)
+        self.model = llm.identifier 
+        self.is_reasoning = llm.is_reasoning  
 
     async def stream_chat_completion(
         self, messages: List[Dict[str, str]], max_tokens: int = 1024, temperature: float = 0.7
     ) -> AsyncGenerator[str, None]:
         """
-        Stream a chat completion from OpenAI's API.
+        Streams chat completions from OpenAI's GPT model.
+
+        This method sends a list of messages to the OpenAI API and yields the response chunks
+        as they are received. It supports both reasoning and non-reasoning models, adjusting
+        parameters accordingly.
 
         Args:
-            messages (list): List of chat messages in OpenAI format.
-            max_tokens (int, optional): Max tokens for response.
-            temperature (float, optional): Controls randomness in the output.
+            messages (List[Dict[str, str]]): A list of message dictionaries with 'role' and 'content' keys.
+            max_tokens (int, optional): Maximum number of tokens to generate. Defaults to 1024.
+            temperature (float, optional): Controls randomness of the output (0.0 to 1.0). Defaults to 0.7.
 
         Yields:
-            str: Response text chunks.
+            str: Chunks of the generated response text.
+
+        Raises:
+            Exception: If an error occurs during the API call, yields an error message.
         """
         try:
-            payload = {
+            kwargs = {
                 "model": self.model,
                 "messages": messages,
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-                "stream": True
+                "stream": True,
             }
+            if not self.is_reasoning:
+                kwargs["max_tokens"] = max_tokens
+                kwargs["temperature"] = temperature
+            else:
+                kwargs["max_completion_tokens"] = max_tokens
 
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                async with client.stream(
-                    "POST", self.api_url, headers=self.headers, json=payload
-                ) as response:
-                    if response.status_code == 400:
-                        error_text = await response.text()
-                        yield f"OpenAI API Error: {error_text}"
-                        return
-
-                    response.raise_for_status()
-
-                    async for line in response.aiter_lines():
-                        if line.startswith("data: "):
-                            try:
-                                data = json.loads(line[6:].strip())
-
-                                if "choices" in data and data["choices"]:
-                                    delta = data["choices"][0]["delta"]
-                                    chunk = delta.get("content", "")
-
-                                    if chunk:
-                                        yield chunk
-                            except json.JSONDecodeError:
-                                continue
-
+            response = await self.client.chat.completions.create(**kwargs)
+        
+            async for chunk in response:
+                if chunk.choices and chunk.choices[0].delta.content:
+                     yield chunk.choices[0].delta.content
+          
         except Exception as e:
             yield f"Error: {str(e)}"
 
@@ -69,15 +57,21 @@ class OpenAIService:
         self, messages: List[Dict[str, str]], max_tokens: int = 1024, temperature: float = 0.7
     ) -> str:
         """
-        Get a complete chat response from OpenAI API.
+        Retrieves a complete chat completion from OpenAI's GPT model.
+
+        This method uses the streaming functionality to collect all response chunks into a single string.
+        It is a convenience wrapper around `stream_chat_completion`.
 
         Args:
-            messages (list): List of chat messages in OpenAI format.
-            max_tokens (int, optional): Max tokens in response.
-            temperature (float, optional): Controls randomness in the output.
+            messages (List[Dict[str, str]]): A list of message dictionaries with 'role' and 'content' keys.
+            max_tokens (int, optional): Maximum number of tokens to generate. Defaults to 1024.
+            temperature (float, optional): Controls randomness of the output (0.0 to 1.0). Defaults to 0.7.
 
         Returns:
-            str: Complete response text.
+            str: The complete generated response text.
+
+        Raises:
+            Exception: If an error occurs, the error message is included in the returned string.
         """
         response_text = ""
         async for chunk in self.stream_chat_completion(messages, max_tokens, temperature):
