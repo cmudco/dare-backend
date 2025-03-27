@@ -15,11 +15,10 @@ class LLMService:
     def __init__(self):
         self.document_processor = DocumentProcessor()
 
-    async def query(self, message, conversation, model_id=None, file_ids=None, user_id=None, prompt_id=None, temperature=0.7, max_tokens=2048) -> AsyncGenerator[str, None]:
+    async def query(self, message, conversation, llm=None, file_ids=None, user_id=None, prompt_id=None, temperature=0.7, max_tokens=2048) -> AsyncGenerator[str, None]:
         """
         Handles AI message generation, dynamically selecting the appropriate model (OpenAI or Claude).
         """
-        llm = await self.get_llm_model(model_id)
         conversation_history = await self.get_conversation_history(conversation, limit=10)
         prompt = await self.get_prompt(prompt_id)
 
@@ -44,10 +43,6 @@ class LLMService:
         async for chunk in ai_service.stream_chat_completion(messages, max_tokens=max_tokens, temperature=temperature):
             yield chunk
 
-    @database_sync_to_async
-    def get_llm_model(self, model_id=None):
-        """Fetches selected LLM model or defaults to the first available."""
-        return LLM.objects.filter(id=model_id).first() if model_id else LLM.objects.first()
 
     @database_sync_to_async
     def get_prompt(self, prompt_id=None):
@@ -61,19 +56,16 @@ class LLMService:
     def get_conversation_history(self, conversation, limit=10):
         """Retrieves recent chat history for AI context, ignoring placeholders."""
         messages = Message.active_objects.filter(conversation=conversation).order_by('-created_at')
-
         messages = messages[2:]
-
         return [
             {"role": "user" if msg.sender_type == SenderType.PLAYER else "assistant", "content": msg.message}
             for msg in reversed(messages)
         ]
 
     def get_ai_service(self, llm: LLM):
-        """Returns the appropriate AI service based on the LLM provider and model identifier."""
         if llm.provider == Provider.OPENAI.value:
-            return OpenAIService(model=llm.identifier)
+            return OpenAIService(llm=llm)
         elif llm.provider == Provider.CLAUDE.value:
-            return ClaudeService(model=llm.identifier)
+            return ClaudeService(llm=llm)
         else:
-            return ClaudeService(model=llm.identifier)
+            return ClaudeService(llm=llm)
