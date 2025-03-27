@@ -6,5 +6,5 @@ class PromptSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Prompt
-        fields = ['id', 'title', 'content', 'created_at', 'user']
+        fields = ['id', 'title', 'content', 'created_at', 'user', 'version', 'parent']
         read_only_fields = ['id', 'created_at', 'user']
