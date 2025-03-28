@@ -21,7 +21,18 @@ class Prompt(BaseModel):
     content = models.TextField(
         help_text="The prompt content."
     )
-
+    version = models.PositiveIntegerField(
+        default=1,
+        help_text="Version number of the prompt. Increments when cloned."
+    )
+    parent = models.ForeignKey(
+        'self',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='children',
+        help_text="Original prompt this was cloned from."
+    )
 
     active_objects = ActiveObjectsManager()
 

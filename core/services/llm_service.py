@@ -1,3 +1,4 @@
+import json
 from django.db.models import Q
 from channels.db import database_sync_to_async
 from conversations.constants import Provider, SenderType
@@ -17,22 +18,28 @@ class LLMService:
 
     async def query(self, message, conversation, llm=None, file_ids=None, user_id=None, prompt_id=None, temperature=0.7, max_tokens=2048) -> AsyncGenerator[str, None]:
         """
-        Handles AI message generation, dynamically selecting the appropriate model (OpenAI or Claude).
+        Handles AI message generation with structured messages, using vector search for file context.
         """
         conversation_history = await self.get_conversation_history(conversation, limit=10)
         prompt = await self.get_prompt(prompt_id)
-
-        context = ""
-        if file_ids:
-            context = await self.document_processor.search_similar_documents(message, file_ids, user_id)
 
         messages = []
 
         if prompt:
             messages.append({"role": "assistant", "content": f"Prompt: {prompt}"})
 
-        if context:
-            messages.append({"role": "user", "content": f"Context: {context}"})
+        if file_ids:
+            context = await self.document_processor.search_similar_documents(
+                query_text=message,
+                file_ids=file_ids,
+                user_id=user_id,
+                top_k=10
+            )
+            if context:
+                context_parts = context.split("\n\n")
+                for part in context_parts:
+                    if part.strip():
+                        messages.append({"role": "user", "content": part})
 
         messages.extend(conversation_history)
 
