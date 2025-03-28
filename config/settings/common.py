@@ -136,7 +136,7 @@ REST_FRAMEWORK = {
         "rest_framework_simplejwt.authentication.JWTAuthentication",
     ],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
-    "PAGE_SIZE": 50,
+    "PAGE_SIZE": 500, # TODO: temporarily increasing page size, until we add pagination on FE
     "JSON_UNDERSCOREIZE": {
         "ignore_keys": ("password1", "password2", "new_password1", "new_password2"),
     },
