@@ -110,33 +110,49 @@ class DocumentProcessor:
         except Exception as e:
             raise Exception(f"Error reading file content: {str(e)}")
 
-    async def search_similar_documents(self, query_text: str, file_ids: List[int], user_id: int, top_k: int = 5) -> str:
-        """
-        Search for similar document content using embeddings within specified files.
-        """
+    async def search_similar_documents(self, query_text: str, file_ids: List[int], user_id: int, top_k: int = 10) -> str:
         try:
             query_embedding = self.openai_client.create_embeddings(query_text)
-
-            filter_query = {
-                "user_id": str(user_id),
-                "file_id": {"$in": [str(file_id) for file_id in file_ids]}
-            }
-            results = self.pinecone_client.query_vectors(
-                vector=query_embedding,
-                top_k=top_k,
-                namespace=f"user_{user_id}",
-                filter=filter_query
-            )
-
             context_parts = []
-            for match in results:
-                metadata = match.get("metadata", {})
-                text = metadata.get("text", "")
-                file_name = metadata.get("file_name", "Unknown file")
 
-                if text:
-                    context_parts.append(f"From {file_name}:\n{text}")
-            return "\n\n".join(context_parts)
+            for file_id in file_ids:
+                filter_query = {
+                    "user_id": str(user_id),
+                    "file_id": str(file_id)
+                }
+                results = self.pinecone_client.query_vectors(
+                    vector=query_embedding,
+                    top_k=max(1, top_k // len(file_ids)),
+                    namespace=f"user_{user_id}",
+                    filter=filter_query
+                )
+                for match in results:
+                    metadata = match.get("metadata", {})
+                    text = metadata.get("text", "")
+                    file_name = metadata.get("file_name", "Unknown file")
+                    if text:
+                        context_parts.append(f"From {file_name}:\n{text}")
+
+            if len(context_parts) < top_k and len(file_ids) > 1:
+                filter_query = {
+                    "user_id": str(user_id),
+                    "file_id": {"$in": [str(file_id) for file_id in file_ids]}
+                }
+                extra_results = self.pinecone_client.query_vectors(
+                    vector=query_embedding,
+                    top_k=top_k - len(context_parts),
+                    namespace=f"user_{user_id}",
+                    filter=filter_query
+                )
+                for match in extra_results:
+                    if match["id"] not in [part.split("\n")[1] for part in context_parts]:
+                        metadata = match.get("metadata", {})
+                        text = metadata.get("text", "")
+                        file_name = metadata.get("file_name", "Unknown file")
+                        if text:
+                            context_parts.append(f"From {file_name}:\n{text}")
+
+            return "\n\n".join(context_parts[:top_k])
 
         except Exception as e:
             logger.exception(f"Error retrieving document context: {str(e)}")
