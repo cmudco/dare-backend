@@ -19,16 +19,16 @@ class DocumentProcessor:
     def create_file_embeddings(self, file: File) -> bool:
         """
         Process a single file:
-        1. Generate embeddings for the file content
-        2. Store embeddings in Pinecone with proper metadata
+        1. Generate embeddings for all chunks in a single OpenAI request
+        2. Split and store embeddings in Pinecone with proper metadata
         """
         try:
             content = self._read_file_content(file)
             chunks = self._chunk_text(content, chunk_size=1000)
+            embeddings_response = self.openai_client.create_batch_embeddings(chunks)
+            
             vectors = []
-            for i, chunk in enumerate(chunks):
-                embedding = self.openai_client.create_embeddings(chunk)
-
+            for i, (chunk, embedding) in enumerate(zip(chunks, embeddings_response)):
                 metadata = {
                     'file_id': str(file.id),
                     'user_id': str(file.user.id),
@@ -41,15 +41,25 @@ class DocumentProcessor:
                 vector_id = f"file_{file.id}_chunk_{i}"
                 vectors.append((vector_id, embedding, metadata))
 
-            result = self.pinecone_client.upsert_vectors(
-                vectors=vectors,
-                namespace=f"user_{file.user.id}"
-            )
+            # Process vectors in batches to avoid Pinecone size limits
+            batch_size = 50
+            for i in range(0, len(vectors), batch_size):
+                batch = vectors[i:i + batch_size]
+                try:
+                    self.pinecone_client.upsert_vectors(
+                        vectors=batch,
+                        namespace=f"user_{file.user.id}"
+                    )
+                except Exception as e:
+                    logger.error(f"Error upserting batch {i//batch_size + 1}: {str(e)}")
+                    raise
 
+            logger.info(f"Completed processing file: {file.id}")
             return True
 
         except Exception as e:
-            raise Exception(str(e))
+            logger.exception(f"Error processing file {file.id}")
+            raise Exception(f"Error processing file: {str(e)}")
 
     def create_user_files_embeddings(self, user_id: int) -> bool:
         """Process all files belonging to a specific user"""
@@ -59,11 +69,16 @@ class DocumentProcessor:
                 return True
 
             for file in files:
-                self.create_file_embeddings(file)
+                try:
+                    self.create_file_embeddings(file)
+                except Exception as e:
+                    logger.error(f"Failed to process file {file.id}: {str(e)}")
+                    continue
 
             return True
 
         except Exception as e:
+            logger.exception(f"Error processing user files: {str(e)}")
             raise Exception(f"Error processing user files: {str(e)}")
 
     def _chunk_text(self, text: str, chunk_size: int = 1000) -> List[str]:
