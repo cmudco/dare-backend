@@ -4,77 +4,153 @@ Backend for DARE
 
 ## Initial Setup
 
-Please do the following to get this project up and running locally: 
+Please do the following to get this project up and running locally:
 
 Clone the repo
+
 ```
 git clone https://github.com/cmudco/dare-backend.git
 ```
 
 Make virtual environment (with python 3.11) in .venv in the project directory and activate it
+
 ```
 python3 -m venv .venv
 source .venv/bin/activate
 ```
 
 Install the dev requirements
+
 ```
 pip install -r requirements/local.txt
 ```
 
 Create `.env` next to `.example.env` and set the env variables.
 For dev/local setup, these can be the values of the following env variables:
+
 ```
 DJANGO_SETTINGS_MODULE=config.settings.local
 DJANGO_DEBUG=True
 ```
 
-**Note:** 
+**Note:**
 For local development, we are using SQLite as the database, so you don't need to set up PostgreSQL or configure any database credentials.
 For production, create postgreSQL database locally and set the DB env variables in `.env` you just created.
 
 Run migrations
+
 ```
 python manage.py migrate
 ```
-Run the project 
+
+Run the project
+
 ```bash
 python manage.py runserver
 ```
 
+## Background Tasks
+
+This project utilizes **Django RQ** to manage background tasks and **Redis** as a message broker.
+
+### Creating New Tasks
+
+To create new tasks, proceed with the following steps:
+
+1. In your application, create a `tasks.py` file (if it doesn't exist already).
+2. Apply the **Django RQ** `@job` decorator to the functions you wish to run as background tasks.
+3. This system uses the **default queue** for most tasks, so specify the queue when adding the job decorator.
+
+#### Example:
+
+```python
+from django_rq import job
+
+@job('default')
+def my_func():
+    pass
+```
+
+### Running Django RQ Locally
+
+To run **Django RQ** locally, ensure the following requirements are met:
+
+-   **Redis** is installed, operational, and running.
+-   Redis environment variables (e.g., `REDIS_HOST`, `REDIS_PORT`) are correctly set in your `.env` file if they differ from defaults (`localhost:6379`).
+
+Then, use the following commands in separate terminal windows (ensure your virtual environment is activated):
+
+#### Start Redis Server:
+
+```bash
+redis-server
+```
+
+Alternatively, start Redis via a **Docker** container if preferred.
+
+Verify Redis is running:
+
+```bash
+redis-cli ping
+```
+
+This should return `PONG`.
+
+#### Run the RQ Worker (for the default queue):
+
+```bash
+OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES python -Wd manage.py rqworker default -v 3
+```
+
+-   `OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES` is included to avoid fork safety issues on **macOS**.
+-   `-Wd` enables Python warnings.
+-   `-v 3` sets verbosity to the highest level for detailed logging.
+
+#### Run the Application Server (using Uvicorn):
+
+```bash
+uvicorn dare.asgi:application --port 8000 --reload --log-level debug
+```
+
+-   `--port 8000`: Runs the server on port **8000**.
+-   `--reload`: Enables auto-reloading for development.
+-   `--log-level debug`: Sets detailed logging.
+
 ## Development Workflow
 
-1. **Feature Branch Creation**: 
-   - When working on a feature, fix, refactor, or any other task, create a new feature branch.
-   - Naming convention: `[YourName]/[Feature/Fix/Refactor]/[Description]`.
-   - Once completed, merge your feature branch into the `dev` branch.
+1. **Feature Branch Creation**:
+
+    - When working on a feature, fix, refactor, or any other task, create a new feature branch.
+    - Naming convention: `[YourName]/[Feature/Fix/Refactor]/[Description]`.
+    - Once completed, merge your feature branch into the `dev` branch.
 
 2. **Commit Messages**:
-   - Ensure your commit messages are descriptive and explanatory.
-   - These messages will be used to generate release notes.
+
+    - Ensure your commit messages are descriptive and explanatory.
+    - These messages will be used to generate release notes.
 
 3. **Pull Request (PR) Creation**:
-   - Link your issue ticket in the development section of the PR.
-   - Attach screenshots of your work, if available.
-   - Describe what the PR does, how it can be manually tested, and request a review from another developer.
-   - Once approved and merged into `dev`, the associated issue ticket will automatically move to the "in progress done" column on the board.
+    - Link your issue ticket in the development section of the PR.
+    - Attach screenshots of your work, if available.
+    - Describe what the PR does, how it can be manually tested, and request a review from another developer.
+    - Once approved and merged into `dev`, the associated issue ticket will automatically move to the "in progress done" column on the board.
 
 ## Best Practices:
 
-- Always wrap user-facing strings with the translation function.
-- Preferably, source all strings from a constants file.
-- Do **NOT** translate any exceptions or errors that are logged.
+-   Always wrap user-facing strings with the translation function.
+-   Preferably, source all strings from a constants file.
+-   Do **NOT** translate any exceptions or errors that are logged.
 
 ## Sending Emails From App
 
 To send emails from your local setup then set the following env variables in your `.env` file:
+
 ```
 EMAIL_HOST='********'
 EMAIL_HOST_USER='********'
 EMAIL_HOST_PASSWORD='*************'
 EMAIL_FROM='*******'
 ```
-
 
 ## Formatting and Imports Sorting
 
@@ -83,21 +159,25 @@ Currently, we are using [black](https://pypi.org/project/black/) for formatting 
 **(Make sure your environment is activated before you run these commands.)**
 
 To check files formatting etc, run
+
 ```
 black --check --verbose .
 ```
 
 To fix files formatting, run
+
 ```
 black .
 ```
 
 To check imports sorting, run
+
 ```
 isort . -c
 ```
 
 To fix imports sorting, run
+
 ```
 isort .
 ```
@@ -119,8 +199,9 @@ Refer to the `example.env` file for an example configuration.
 To add a new variable to the `.env` file and make it accessible throughout the project, follow these steps:
 
 1. Add the new variable to the `example.env` file:
-   - Use uppercase letters for the variable name and replace spaces with underscores.
-   - Follow the standard format for `.env` files (e.g., `NEW_VARIABLE_NAME=value`).
+
+    - Use uppercase letters for the variable name and replace spaces with underscores.
+    - Follow the standard format for `.env` files (e.g., `NEW_VARIABLE_NAME=value`).
 
 2. Add the new variable to your `.env` file in your local development environment.
 
@@ -133,10 +214,10 @@ To add a new variable to the `.env` file and make it accessible throughout the p
 5. To use the new variable in a Python file, you can import the `env` object from `config/env.py` and access the variable like this:
    from config.env import env
 
-   # Use the new variable
-   print(env.NEW_VARIABLE_NAME)
+    # Use the new variable
 
-   Make sure to replace `NEW_VARIABLE_NAME` with the actual name of your new variable.
+    print(env.NEW_VARIABLE_NAME)
+
+    Make sure to replace `NEW_VARIABLE_NAME` with the actual name of your new variable.
 
 That's it! You can now use the new variable in your project.
-
