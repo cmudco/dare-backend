@@ -57,7 +57,7 @@ THIRD_PARTY_APPS = [
     "dj_rest_auth",
     "dj_rest_auth.registration",
     "channels",
-
+    'django_rq'
 ]
 
 INSTALLED_APPS = DJANGO_APPS + LOCAL_APPS + THIRD_PARTY_APPS
@@ -207,3 +207,14 @@ CHANNEL_LAYERS = {
         "BACKEND": "channels.layers.InMemoryChannelLayer"
     }
 }
+
+RQ_QUEUES = {
+    'default': {
+        'HOST': env.REDIS_HOST,
+        'PORT': env.REDIS_PORT,
+        'DB': env.REDIS_DB,
+        'DEFAULT_TIMEOUT': 3600,
+    },
+}
+
+RQ_SHOW_ADMIN_LINK = True

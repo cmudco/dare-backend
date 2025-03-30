@@ -3,6 +3,7 @@ from django.conf import settings
 
 from common.managers import ActiveObjectsManager
 from common.models import BaseModel, TimeStampMixin
+from .constants import FileStatus
 
 class Tag(TimeStampMixin):
     user = models.ForeignKey(
@@ -53,6 +54,17 @@ class File(BaseModel):
         related_name='files',
         blank=True,
         help_text="Custom tags for categorizing and filtering files"
+    )
+    job_id = models.CharField(
+        max_length=36,
+        blank=True,
+        null=True,
+        help_text="Redis Queue Job ID for tracking background processing"
+    )
+    status = models.IntegerField(
+        choices=FileStatus.choices,
+        default=FileStatus.PROCESSING,
+        help_text="Processing status of the file"
     )
 
     active_objects = ActiveObjectsManager()
