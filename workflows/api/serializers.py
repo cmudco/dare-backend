@@ -1,4 +1,8 @@
 from rest_framework import serializers
+from conversations.api.serializers import LLMSerializer
+from conversations.models import LLM
+from files.api.serializers import FileSerializer
+from files.models import File
 from prompts.models import Prompt
 from workflows.models import Workflow, Step
 from prompts.api.serializers import PromptSerializer
@@ -8,25 +12,36 @@ class StepSerializer(serializers.ModelSerializer):
         queryset=Prompt.active_objects.all(),
         required=True
     )
+    file = serializers.PrimaryKeyRelatedField(
+        queryset=File.active_objects.all(),
+        required=False,
+        allow_null=True
+    )
+    llm = serializers.PrimaryKeyRelatedField(
+        queryset=LLM.objects.all(),
+        required=False,
+        allow_null=True
+    )
 
     def to_representation(self, instance):
         representation = super().to_representation(instance)
         representation['prompt'] = PromptSerializer(instance.prompt).data
+        representation['file'] = FileSerializer(instance.file).data if instance.file else None
+        representation['llm'] = LLMSerializer(instance.llm).data if instance.llm else None
         return representation
 
     class Meta:
         model = Step
-        fields = ['id', 'prompt', 'order', 'created_at', 'user']
+        fields = ['id', 'prompt', 'file', 'llm', 'order', 'created_at', 'user']
         read_only_fields = ['id', 'created_at', 'user']
 
 class WorkflowSerializer(serializers.ModelSerializer):
     user = serializers.ReadOnlyField(source='user.email')
-    steps_detail = StepSerializer(source='steps', many=True, read_only=True)
     steps = StepSerializer(many=True, required=False)
 
     class Meta:
         model = Workflow
-        fields = ['id', 'title', 'description', 'mode', 'created_at', 'user', 'steps_detail', 'steps']
+        fields = ['id', 'title', 'description', 'mode', 'created_at', 'user', 'steps']
         read_only_fields = ['id', 'created_at', 'user', 'steps_detail']
 
     def create(self, validated_data):
@@ -37,6 +52,8 @@ class WorkflowSerializer(serializers.ModelSerializer):
             step = Step.objects.create(
                 user=workflow.user,
                 prompt=step_data['prompt'],
+                file=step_data.get('file'),
+                llm=step_data.get('llm'),
                 order=step_data['order']
             )
             workflow.steps.add(step)
@@ -63,15 +80,20 @@ class WorkflowSerializer(serializers.ModelSerializer):
             step_id = step_data.get('id')
             if step_id and step_id in existing_steps:
                 step = existing_steps[step_id]
-                step.order = step_data['order']
                 step.prompt = step_data['prompt']
+                step.file = step_data.get('file')
+                step.llm = step_data.get('llm')
+                step.order = step_data['order']
                 step.save()
             else:
                 step = Step.objects.create(
                     user=instance.user,
                     prompt=step_data['prompt'],
+                    file=step_data.get('file'),
+                    llm=step_data.get('llm'),
                     order=step_data['order']
                 )
                 instance.steps.add(step)
 
         return instance
+    
