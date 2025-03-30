@@ -19,3 +19,14 @@ class OpenAIWrapper:
             return response.data[0].embedding
         except Exception as e:
             raise Exception(f"Error generating embedding: {str(e)}")
+        
+    def create_batch_embeddings(self, texts: List[str]) -> List[List[float]]:
+        """Generate embeddings for multiple texts in a single request"""
+        try:
+            response = openai.embeddings.create(
+                model=self.embedding_model,
+                input=texts
+            )
+            return [item.embedding for item in response.data]
+        except Exception as e:
+            raise Exception(f"Error generating batch embeddings: {str(e)}")

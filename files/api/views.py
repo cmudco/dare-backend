@@ -1,11 +1,17 @@
 import logging
-from rest_framework.parsers import MultiPartParser, FormParser
+from django_rq import enqueue, get_queue
+
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework import viewsets
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import ValidationError
+from rest_framework.decorators import action
+from rest_framework.response import Response
+from rest_framework import status
 
 from core.services.document_processor import DocumentProcessor
 from common.permissions import IsOwner
+from ..tasks import process_file_embeddings
 from ..models import File, Tag
 from .serializers import FileSerializer, TagSerializer
 from ..constants import ALLOWED_FILES
@@ -57,11 +63,42 @@ class FileViewSet(viewsets.ModelViewSet):
             file_instance.tags.add(*tags)
 
         try:
-            processor = DocumentProcessor()
-            processor.create_file_embeddings(file_instance)
+            job = enqueue(process_file_embeddings, file_instance.id)
+            file_instance.job_id = job.id
+            file_instance.save(update_fields=['job_id'])
         except Exception as e:
             raise Exception(f"Error processing file: {str(e)}")
+        
 
+    @action(detail=False, methods=['post'], url_path='job-statuses', parser_classes=[JSONParser])
+    def get_job_statuses(self, request):
+        try:
+            file_ids = request.data.get('fileIds', [])
+            if not file_ids:
+                return Response({"error": "No file IDs provided"}, status=status.HTTP_400_BAD_REQUEST)
+
+            files = File.active_objects.filter(id__in=file_ids, user=request.user)
+            queue = get_queue()
+            
+            response_data = []
+            for file in files:
+                job = queue.fetch_job(file.job_id) if file.job_id else None
+                status_data = {
+                    "fileId": file.id,
+                    "jobId": file.job_id,
+                    "status": file.get_status_display(),
+                    "statusCode": file.status,
+                }
+                if job:
+                    status_data["jobStatus"] = job.get_status()
+                response_data.append(status_data)
+
+            return Response(response_data, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            logger.exception(f"Error checking job statuses: {str(e)}")
+            return Response({"error": "Internal server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
 class TagViewSet(viewsets.ModelViewSet):
     serializer_class = TagSerializer
     permission_classes = [IsAuthenticated, IsOwner]

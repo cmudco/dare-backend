@@ -1,5 +1,5 @@
 import logging
-from typing import Any, List, Dict
+from typing import List, Tuple
 import io
 import PyPDF2
 
@@ -7,28 +7,42 @@ from core.helpers.openai import OpenAIWrapper
 from core.helpers.pinecone import PineconeClient
 from files.models import File
 
-
 logger = logging.getLogger(__name__)
 
+CHUNK_SIZE = 1000
+BATCH_SIZE = 100
 
 class DocumentProcessor:
     def __init__(self):
         self.openai_client = OpenAIWrapper()
         self.pinecone_client = PineconeClient()
 
-    def create_file_embeddings(self, file: File) -> bool:
+    def create_file_embeddings(self, file: File) -> int:
         """
         Process a single file:
-        1. Generate embeddings for the file content
-        2. Store embeddings in Pinecone with proper metadata
+        1. Generate embeddings for all chunks in a single OpenAI request
+        2. Split and store embeddings in Pinecone with proper metadata
+
+        Args:
+            file: The File object to process
+
+        Returns:
+            int: Number of vectors upserted
+
+        Raises:
+            Exception: If processing fails
         """
         try:
             content = self._read_file_content(file)
-            chunks = self._chunk_text(content, chunk_size=1000)
-            vectors = []
-            for i, chunk in enumerate(chunks):
-                embedding = self.openai_client.create_embeddings(chunk)
+            chunks = self._chunk_text(content, chunk_size=CHUNK_SIZE)
+            embeddings = self.openai_client.create_batch_embeddings(chunks)
 
+            if len(chunks) != len(embeddings):
+                logger.warning(f"Mismatch: {len(chunks)} chunks, {len(embeddings)} embeddings for file {file.id}")
+
+            vectors: List[Tuple[str, list, dict]] = []
+            for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
+                vector_id = f"file_{file.id}_chunk_{i}"
                 metadata = {
                     'file_id': str(file.id),
                     'user_id': str(file.user.id),
@@ -37,19 +51,23 @@ class DocumentProcessor:
                     'text': chunk,
                     'chunk_index': i
                 }
-
-                vector_id = f"file_{file.id}_chunk_{i}"
                 vectors.append((vector_id, embedding, metadata))
 
-            result = self.pinecone_client.upsert_vectors(
-                vectors=vectors,
-                namespace=f"user_{file.user.id}"
-            )
+            for i in range(0, len(vectors), BATCH_SIZE):
+                batch = vectors[i:i + BATCH_SIZE]
+                self.pinecone_client.upsert_vectors(
+                    vectors=batch,
+                    namespace=f"user_{file.user.id}"
+                )
 
-            return True
+            return len(vectors)
 
+        except ValueError as ve:
+            logger.exception(f"Invalid data processing file {file.id}")
+            raise Exception(f"Invalid data: {str(ve)}")
         except Exception as e:
-            raise Exception(str(e))
+            logger.exception(f"Error processing file {file.id}")
+            raise Exception(f"Error processing file: {str(e)}")
 
     def create_user_files_embeddings(self, user_id: int) -> bool:
         """Process all files belonging to a specific user"""
@@ -59,11 +77,16 @@ class DocumentProcessor:
                 return True
 
             for file in files:
-                self.create_file_embeddings(file)
+                try:
+                    self.create_file_embeddings(file)
+                except Exception as e:
+                    logger.error(f"Failed to process file {file.id}: {str(e)}")
+                    continue
 
             return True
 
         except Exception as e:
+            logger.exception(f"Error processing user files: {str(e)}")
             raise Exception(f"Error processing user files: {str(e)}")
 
     def _chunk_text(self, text: str, chunk_size: int = 1000) -> List[str]:
