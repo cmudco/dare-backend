@@ -1,13 +1,11 @@
-import json
-from django.db.models import Q
 from channels.db import database_sync_to_async
 from conversations.constants import Provider, SenderType
-from conversations.models import LLM, Message, Conversation
+from conversations.models import LLM, Message
 from core.services.document_processor import DocumentProcessor
 from core.services.openai_service import OpenAIService
 from core.services.claude_service import ClaudeService
 from typing import AsyncGenerator
-
+from files.models import File
 from prompts.models import Prompt
 
 class LLMService:
@@ -16,7 +14,7 @@ class LLMService:
     def __init__(self):
         self.document_processor = DocumentProcessor()
 
-    async def query(self, message, conversation, llm=None, file_ids=None, user_id=None, prompt_id=None, temperature=0.7, max_tokens=2048) -> AsyncGenerator[str, None]:
+    async def query(self, message, conversation, llm=None, file_ids=None, tag_ids=None, user_id=None, prompt_id=None, temperature=0.7, max_tokens=2048) -> AsyncGenerator[str, None]:
         """
         Handles AI message generation with structured messages, using vector search for file context.
         """
@@ -24,14 +22,19 @@ class LLMService:
         prompt = await self.get_prompt(prompt_id)
 
         messages = []
-
         if prompt:
             messages.append({"role": "assistant", "content": f"Prompt: {prompt}"})
 
-        if file_ids:
+        all_file_ids = set(file_ids or [])
+
+        if tag_ids:
+            tagged_file_ids = await self.get_files_from_tags(tag_ids, user_id)
+            all_file_ids.update(tagged_file_ids)
+
+        if all_file_ids:
             context = await self.document_processor.search_similar_documents(
                 query_text=message,
-                file_ids=file_ids,
+                file_ids=list(all_file_ids),
                 user_id=user_id,
                 top_k=10
             )
@@ -68,6 +71,16 @@ class LLMService:
             {"role": "user" if msg.sender_type == SenderType.PLAYER else "assistant", "content": msg.message}
             for msg in reversed(messages)
         ]
+
+    @database_sync_to_async
+    def get_files_from_tags(self, tag_ids, user_id):
+        if not tag_ids:
+            return []
+        tagged_files = File.active_objects.filter(
+            tags__id__in=tag_ids,
+            user_id=user_id
+        ).distinct().values_list('id', flat=True)
+        return list(tagged_files)
 
     def get_ai_service(self, llm: LLM):
         if llm.provider == Provider.OPENAI.value:

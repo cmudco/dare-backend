@@ -44,3 +44,6 @@ static/
 
 # Windows
 thumbs.db
+
+# redis
+dump.rdb
