@@ -138,7 +138,7 @@ REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 500, # TODO: temporarily increasing page size, until we add pagination on FE
     "JSON_UNDERSCOREIZE": {
-        "ignore_keys": ("password1", "password2", "new_password1", "new_password2"),
+        "ignore_keys": ("password1", "password2", "new_password1", "new_password2", "old_password"),
     },
 }
 
@@ -168,6 +168,7 @@ REST_AUTH = {
     "USER_DETAILS_SERIALIZER": "users.api.serializers.CustomUserDetailsSerializer",
     "REGISTER_SERIALIZER": "users.api.serializers.CustomRegisterSerializer",
     "PASSWORD_RESET_USE_SITES_DOMAIN": False,
+    "OLD_PASSWORD_FIELD_ENABLED": True,
 }
 
 # logging
