@@ -14,7 +14,21 @@ class LLMService:
     def __init__(self):
         self.document_processor = DocumentProcessor()
 
-    async def query(self, message, conversation, llm=None, file_ids=None, tag_ids=None, user_id=None, prompt_id=None, temperature=0.7, max_tokens=2048) -> AsyncGenerator[str, None]:
+    async def query(
+        self,
+        message,
+        conversation,
+        llm=None,
+        file_ids=None,
+        tag_ids=None,
+        user_id=None,
+        prompt_id=None,
+        temperature=0.7,
+        max_tokens=2048,
+        max_context_snippets=4,
+        document_similarity_threshold=0.5,
+        message_obj=None
+    ) -> AsyncGenerator[str, None]:
         """
         Handles AI message generation with structured messages, using vector search for file context.
         """
@@ -36,7 +50,9 @@ class LLMService:
                 query_text=message,
                 file_ids=list(all_file_ids),
                 user_id=user_id,
-                top_k=10
+                top_k=max_context_snippets,
+                similarity_threshold=document_similarity_threshold,
+                message_obj=message_obj
             )
             if context:
                 context_parts = context.split("\n\n")
@@ -52,7 +68,6 @@ class LLMService:
 
         async for chunk in ai_service.stream_chat_completion(messages, max_tokens=max_tokens, temperature=temperature):
             yield chunk
-
 
     @database_sync_to_async
     def get_prompt(self, prompt_id=None):
