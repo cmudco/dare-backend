@@ -14,6 +14,8 @@ from django.contrib.auth import get_user_model
 from files.models import File
 from channels.db import database_sync_to_async
 import asyncio
+from conversations.api.serializers import MessageSerializer
+from djangorestframework_camel_case.util import camelize  # Import camelize
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -47,7 +49,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
             await self.close()
 
     async def disconnect(self, close_code):
-        self.close()
+        """Handle WebSocket disconnection."""
+        await self.close()
 
     async def receive(self, text_data=None, bytes_data=None):
         """
@@ -63,11 +66,13 @@ class ChatConsumer(AsyncWebsocketConsumer):
             prompt_id = data.get("prompt_id")
             temperature = data.get("temperature", 0.7)
             max_tokens = data.get("max_tokens", 2048)
+            max_context_snippets = data.get("max_context_snippets", 4)
+            document_similarity_threshold = data.get("document_similarity_threshold", 0.5)
 
             message_obj = await self.conversation_service.create_message(
                 self.conversation, sender_type, msg_content, self.user.email, file_ids
             )
-            await self.send(self.format_message(message_obj, is_sender=True))
+            await self.send(await self.format_message(message_obj, is_sender=True))
 
             asyncio.create_task(self.handle_title_generation(msg_content))
 
@@ -76,7 +81,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             bot_message_obj = await self.conversation_service.create_message(
                 self.conversation, SenderType.AI_ASSISTANT, "", "AI Assistant", [], llm=llm
             )
-            await self.send(self.format_message(bot_message_obj, streaming=True))
+            await self.send(await self.format_message(bot_message_obj, streaming=True))
 
             await self.handle_ai_response(
                 msg_content,
@@ -86,7 +91,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 tag_ids=tag_ids,
                 prompt_id=prompt_id,
                 temperature=temperature,
-                max_tokens=max_tokens
+                max_tokens=max_tokens,
+                max_context_snippets=max_context_snippets,
+                document_similarity_threshold=document_similarity_threshold
             )
 
         except Exception as e:
@@ -97,17 +104,43 @@ class ChatConsumer(AsyncWebsocketConsumer):
         if is_first_message:
             title = await self.conversation_service.generate_title(user_message, "")
             await self.conversation_service.update_conversation_title(self.conversation, title)
-            await self.send(json.dumps({"type": "conversation_title", "title": title}))
+            payload = {"type": "conversation_title", "title": title}
+            await self.send(json.dumps(camelize(payload)))
 
-    async def handle_ai_response(self, msg_content, bot_message_obj, llm, file_ids, tag_ids=None, prompt_id=None, temperature=0.7, max_tokens=1024):
+    async def handle_ai_response(
+        self,
+        msg_content,
+        bot_message_obj,
+        llm,
+        file_ids,
+        tag_ids=None,
+        prompt_id=None,
+        temperature=0.7,
+        max_tokens=1024,
+        max_context_snippets=4,
+        document_similarity_threshold=0.5
+    ):
         """Handles AI response streaming and updates the message."""
         bot_message_id = str(bot_message_obj.id)
         ai_response_accumulator = ""
 
-        async for chunk in self.llm_service.query(msg_content, self.conversation, llm, file_ids, tag_ids, self.user.id, prompt_id, temperature, max_tokens):
+        async for chunk in self.llm_service.query(
+            msg_content,
+            self.conversation,
+            llm,
+            file_ids,
+            tag_ids,
+            self.user.id,
+            prompt_id,
+            temperature,
+            max_tokens,
+            max_context_snippets,
+            document_similarity_threshold,
+            message_obj=bot_message_obj
+        ):
             if chunk.strip():
                 ai_response_accumulator += chunk
-                await self.send(json.dumps({
+                payload = {
                     "type": "ai_stream",
                     "id": bot_message_id,
                     "message": chunk,
@@ -116,24 +149,35 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     "isSender": False,
                     "streaming": True,
                     "date": bot_message_obj.created_at.isoformat(),
-                }))
+                }
+                await self.send(json.dumps(camelize(payload)))
 
         if ai_response_accumulator.strip():
             await self.conversation_service.update_message(bot_message_id, ai_response_accumulator)
-            await self.send(self.format_message(bot_message_obj, message=ai_response_accumulator, streaming=False))
+            bot_message_obj = await database_sync_to_async(
+                lambda: Message.active_objects.prefetch_related('snippets').get(id=bot_message_obj.id)
+            )()
+            await self.send(await self.format_message(bot_message_obj, message=ai_response_accumulator, streaming=False))
 
     async def load_conversation_history(self, conversation):
         """Fetches chat history and sends it to the frontend."""
         conversation_history = await self.conversation_service.fetch_chat_history_from_db(conversation)
-
-        await self.send(text_data=json.dumps({
+        payload = {
             "type": "conversation_history",
             "conversationHistory": conversation_history
-        }))
+        }
+        await self.send(text_data=json.dumps(camelize(payload)))
 
-    def format_message(self, message_obj, message=None, is_sender=False, streaming=False):
-        """Helper function to format message JSON response."""
-        return json.dumps({
+    async def get_llm_id(self, message_obj):
+        """Safely fetch the llm_id for a message object."""
+        return await database_sync_to_async(lambda: getattr(message_obj.llm, 'id', None))()
+
+    async def format_message(self, message_obj, message=None, is_sender=False, streaming=False):
+        """Helper function to format message JSON response using the serializer."""
+        serialized_data = await database_sync_to_async(lambda: MessageSerializer(message_obj).data)()
+        llm_id = await self.get_llm_id(message_obj)
+
+        response = {
             "type": "message",
             "id": str(message_obj.id),
             "message": message or message_obj.message,
@@ -142,5 +186,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             "isSender": is_sender,
             "streaming": streaming,
             "date": message_obj.created_at.isoformat(),
-            "llmId": message_obj.llm.id if message_obj.llm else None
-        })
+            "llmId": llm_id,
+            "snippets": serialized_data.get("snippets", [])
+        }
+        return json.dumps(camelize(response))
