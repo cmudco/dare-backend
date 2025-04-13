@@ -107,3 +107,34 @@ class Message(BaseModel):
 
     def __str__(self):
         return f"{self.sender_name} ({self.short_message})"
+
+class Snippet(BaseModel):
+    """
+    Model to track retrieved snippets from Pinecone vector search.
+    """
+    message = models.ForeignKey(
+        Message,
+        on_delete=models.CASCADE,
+        related_name="snippets",
+        help_text="The message this snippet was retrieved for."
+    )
+    file = models.ForeignKey(
+        'files.File',
+        on_delete=models.CASCADE,
+        related_name="snippets",
+        help_text="The file this snippet belongs to."
+    )
+    text = models.TextField(
+        help_text="The text content of the snippet (chunk)."
+    )
+    similarity_score = models.FloatField(
+        help_text="The similarity score of the snippet to the query."
+    )
+    chunk_index = models.PositiveIntegerField(
+        help_text="The index of the chunk in the original file."
+    )
+
+    active_objects = ActiveObjectsManager()
+
+    def __str__(self):
+        return f"Snippet for Message {self.message.id} from File {self.file.id} (Score: {self.similarity_score})"

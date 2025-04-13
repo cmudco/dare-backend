@@ -6,6 +6,8 @@ import PyPDF2
 from core.helpers.openai import OpenAIWrapper
 from core.helpers.pinecone import PineconeClient
 from files.models import File
+from conversations.models import Snippet
+from channels.db import database_sync_to_async  # Add this import
 
 logger = logging.getLogger(__name__)
 
@@ -22,15 +24,6 @@ class DocumentProcessor:
         Process a single file:
         1. Generate embeddings for all chunks in a single OpenAI request
         2. Split and store embeddings in Pinecone with proper metadata
-
-        Args:
-            file: The File object to process
-
-        Returns:
-            int: Number of vectors upserted
-
-        Raises:
-            Exception: If processing fails
         """
         try:
             content = self._read_file_content(file)
@@ -72,7 +65,7 @@ class DocumentProcessor:
     def create_user_files_embeddings(self, user_id: int) -> bool:
         """Process all files belonging to a specific user"""
         try:
-            files = File.objects.filter(user_id=user_id, is_deleted=False, is_active=True)
+            files = File.active_objects.filter(user_id=user_id, is_deleted=False, is_active=True)
             if not files:
                 return True
 
@@ -133,54 +126,90 @@ class DocumentProcessor:
         except Exception as e:
             raise Exception(f"Error reading file content: {str(e)}")
 
-    async def search_similar_documents(self, query_text: str, file_ids: List[int], user_id: int, top_k: int = 10) -> str:
+    async def _save_snippets(self, snippets_to_save, message_obj):
+        """
+        Save retrieved snippets to the database.
+        """
+        try:
+            for snippet_data in snippets_to_save:
+                file = await database_sync_to_async(File.active_objects.get)(id=snippet_data["file_id"])
+                await database_sync_to_async(Snippet.active_objects.create)(
+                    message=message_obj,
+                    file=file,
+                    text=snippet_data["text"],
+                    similarity_score=snippet_data["similarity_score"],
+                    chunk_index=snippet_data["chunk_index"]
+                )
+        except Exception as e:
+            logger.exception(f"Error saving snippets for message {message_obj.id}: {str(e)}")
+
+    async def search_similar_documents(
+        self,
+        query_text: str,
+        file_ids: List[int],
+        user_id: int,
+        top_k: int = 10,
+        similarity_threshold: float = 0.5,
+        message_obj=None
+    ) -> str:
+        """
+        Search for similar documents in Pinecone based on the query text.
+        Simplified to a single query with a similarity threshold.
+        Logs retrieved snippets and stores them in the Snippet model.
+        """
         try:
             query_embedding = self.openai_client.create_embeddings(query_text)
             context_parts = []
+            snippets_to_save = []
 
-            for file_id in file_ids:
-                filter_query = {
-                    "user_id": str(user_id),
-                    "file_id": str(file_id)
-                }
-                results = self.pinecone_client.query_vectors(
-                    vector=query_embedding,
-                    top_k=max(1, top_k // len(file_ids)),
-                    namespace=f"user_{user_id}",
-                    filter=filter_query
-                )
-                for match in results:
-                    metadata = match.get("metadata", {})
-                    text = metadata.get("text", "")
-                    file_name = metadata.get("file_name", "Unknown file")
-                    if text:
-                        context_parts.append(f"From {file_name}:\n{text}")
+            if not file_ids:
+                logger.info("No file IDs provided for vector search.")
+                return ""
 
-            if len(context_parts) < top_k and len(file_ids) > 1:
-                filter_query = {
-                    "user_id": str(user_id),
-                    "file_id": {"$in": [str(file_id) for file_id in file_ids]}
-                }
-                extra_results = self.pinecone_client.query_vectors(
-                    vector=query_embedding,
-                    top_k=top_k - len(context_parts),
-                    namespace=f"user_{user_id}",
-                    filter=filter_query
-                )
-                for match in extra_results:
-                    if match["id"] not in [part.split("\n")[1] for part in context_parts]:
-                        metadata = match.get("metadata", {})
-                        text = metadata.get("text", "")
-                        file_name = metadata.get("file_name", "Unknown file")
-                        if text:
-                            context_parts.append(f"From {file_name}:\n{text}")
+            filter_query = {
+                "user_id": str(user_id),
+                "file_id": {"$in": [str(file_id) for file_id in file_ids]}
+            }
 
-            return "\n\n".join(context_parts[:top_k])
+            results = self.pinecone_client.query_vectors(
+                vector=query_embedding,
+                top_k=top_k,
+                namespace=f"user_{user_id}",
+                filter=filter_query
+            )
+
+            for match in results:
+                print(match, similarity_threshold)
+                score = match.get("score", 0.0)
+                if score < similarity_threshold:
+                    continue
+
+                metadata = match.get("metadata", {})
+                text = metadata.get("text", "")
+                file_id = metadata.get("file_id", "")
+                file_name = metadata.get("file_name", "Unknown file")
+                chunk_index = metadata.get("chunk_index", 0)
+
+                if text:
+                    context_parts.append(f"From {file_name}:\n{text}")
+
+                    if message_obj:
+                        snippets_to_save.append({
+                            "message": message_obj,
+                            "file_id": file_id,
+                            "text": text,
+                            "similarity_score": score,
+                            "chunk_index": chunk_index
+                        })
+
+            if snippets_to_save and message_obj:
+                await self._save_snippets(snippets_to_save, message_obj)
+
+            return "\n\n".join(context_parts)
 
         except Exception as e:
             logger.exception(f"Error retrieving document context: {str(e)}")
             return ""
-
 
     def delete_file_vectors(self, file_id: int, user_id: int) -> bool:
         """Delete all vectors related to a specific file"""
