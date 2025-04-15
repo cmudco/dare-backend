@@ -43,14 +43,23 @@ class ChatConsumer(AsyncWebsocketConsumer):
             await self.load_conversation_history(conversation)
 
         except DenyConnection:
+            print(">>>>>>>>>>>>>>>Connection denied: Invalid conversation_id.")
             await self.close()
         except Exception as e:
+            print(f">>>>>>>>>>>>>>>Error in WebSocket connection: {e}")
             logger.exception(f"Error in WebSocket connection: {e}")
             await self.close()
 
     async def disconnect(self, close_code):
         """Handle WebSocket disconnection."""
-        await self.close()
+        logger.info(f"WebSocket disconnected with code: {close_code}")
+        # try:
+        #     if not self.scope.get("closed", False):
+        #         await self.close()
+        # except Exception as e:
+        #     logger.exception(f"Error during WebSocket disconnection: {e}")
+        # finally:
+        #     self.scope["closed"] = True
 
     async def receive(self, text_data=None, bytes_data=None):
         """
