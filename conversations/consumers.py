@@ -53,13 +53,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
     async def disconnect(self, close_code):
         """Handle WebSocket disconnection."""
         logger.info(f"WebSocket disconnected with code: {close_code}")
-        # try:
-        #     if not self.scope.get("closed", False):
-        #         await self.close()
-        # except Exception as e:
-        #     logger.exception(f"Error during WebSocket disconnection: {e}")
-        # finally:
-        #     self.scope["closed"] = True
 
     async def receive(self, text_data=None, bytes_data=None):
         """
