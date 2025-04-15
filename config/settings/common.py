@@ -17,7 +17,6 @@ from config.sentry import init_sentry
 
 init_sentry(
     dsn=env.SENTRY_DSN,
-    environment=env.ENVIRONMENT,
 )
 
 SECRET_KEY = env.SECRET_KEY
