@@ -45,6 +45,7 @@ LOCAL_APPS = [
     "conversations",
     "prompts",
     "workflows",
+    "email_logs",
 ]
 
 THIRD_PARTY_APPS = [
@@ -117,9 +118,9 @@ DEFAULT_FROM_EMAIL = EMAIL_FROM
 EMAIL_PORT = env.EMAIL_PORT
 
 if env.EMAIL_HOST:
-    EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+    EMAIL_BACKEND = "email_logs.backends.LoggingSMTPEmailBackend"
 else:
-    EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+    EMAIL_BACKEND = "email_logs.backends.LoggingConsoleEmailBackend"
 
 REST_FRAMEWORK = {
     "DEFAULT_RENDERER_CLASSES": (
