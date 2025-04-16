@@ -50,7 +50,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
     async def disconnect(self, close_code):
         """Handle WebSocket disconnection."""
-        await self.close()
+        logger.info(f"WebSocket disconnected with code: {close_code}")
 
     async def receive(self, text_data=None, bytes_data=None):
         """
