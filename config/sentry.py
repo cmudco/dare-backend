@@ -4,17 +4,15 @@ import sentry_sdk
 from sentry_sdk.integrations.django import DjangoIntegration
 
 
-def init_sentry(*, dsn, environment):
+def init_sentry(*, dsn,):
     """
     Initializes sentry
 
     Args:
         dsn (str): the sentry DSN key
-        environment (str): the application environment
     """
     sentry_sdk.init(
         dsn=dsn,
-        environment=environment,
         integrations=[
             DjangoIntegration(),
         ],
