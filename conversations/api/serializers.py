@@ -1,6 +1,8 @@
 from rest_framework import serializers
 from conversations.models import LLM, Message, Conversation, Snippet
 from files.api.serializers import FileSerializer
+from prompts.models import Prompt
+from prompts.api.serializers import PromptSerializer
 
 class LLMSerializer(serializers.ModelSerializer):
     class Meta:
@@ -9,11 +11,30 @@ class LLMSerializer(serializers.ModelSerializer):
 
 class ConversationSerializer(serializers.ModelSerializer):
     user = serializers.ReadOnlyField(source='user.email')
+    prompt = PromptSerializer(read_only=True)
+    prompt_id = serializers.PrimaryKeyRelatedField(
+        queryset=Prompt.active_objects.all(),
+        source='prompt',
+        required=False,
+        allow_null=True,
+        write_only=True
+    )
 
     class Meta:
         model = Conversation
-        fields = ['conversation_id', 'title', 'created_at', 'user']
-        read_only_fields = ['conversation_id', 'created_at', 'user']
+        fields = [
+            'conversation_id',
+            'title',
+            'created_at',
+            'user',
+            'max_context_snippets',
+            'document_similarity_threshold',
+            'temperature',
+            'max_tokens',
+            'prompt',
+            'prompt_id',
+        ]
+        read_only_fields = ['conversation_id', 'created_at', 'user', 'prompt']
 
 class SnippetSerializer(serializers.ModelSerializer):
     file = FileSerializer(read_only=True)
