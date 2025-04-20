@@ -1,4 +1,5 @@
 import logging
+import json
 from django_rq import enqueue, get_queue
 
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
@@ -14,7 +15,7 @@ from common.permissions import IsOwner
 from ..tasks import process_file_embeddings
 from ..models import File, Tag
 from .serializers import FileSerializer, TagSerializer
-from ..constants import ALLOWED_FILES
+from ..constants import ALLOWED_FILES, FileStatus
 
 logger = logging.getLogger(__name__)
 
@@ -28,47 +29,66 @@ class FileViewSet(viewsets.ModelViewSet):
             user=self.request.user
         ).order_by('-id')
 
-    def perform_create(self, serializer):
-        uploaded_file = self.request.FILES.get('file')
-        file_type = uploaded_file.content_type if uploaded_file else None
-        size = uploaded_file.size if uploaded_file else None
+    def create(self, request):
+        uploaded_files = request.FILES.getlist('files')
+        file_names = request.data.getlist('names')
 
-        if file_type and file_type.split('/')[-1] not in ALLOWED_FILES:
-            raise ValidationError(f"File type '{file_type}' is not allowed. Allowed types are: {', '.join(ALLOWED_FILES)}")
+        if not uploaded_files:
+            return Response({"error": "No files uploaded."}, status=status.HTTP_400_BAD_REQUEST)
 
-        tag_ids = self.request.data.getlist('tags', [])
+        if len(uploaded_files) != len(file_names):
+            return Response(
+                {"error": "Number of files and names do not match."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
-        if not tag_ids and 'tags' in self.request.data:
-            try:
-                tags_data = self.request.data.get('tags')
-                if isinstance(tags_data, str):
-                    import json
-                    tag_ids = json.loads(tags_data)
-                elif hasattr(tags_data, '__iter__'):
-                    tag_ids = list(tags_data)
-            except Exception:
-                pass
+        tags_data = request.data.get('tags', '[]')
+        tag_ids = json.loads(tags_data)
 
-        tag_ids = [int(tag_id) for tag_id in tag_ids if str(tag_id).isdigit()]
+        file_instances = []
+        for idx, uploaded_file in enumerate(uploaded_files):
+            file_name = file_names[idx]
+            file_type = uploaded_file.content_type
+            size = uploaded_file.size
 
-        tags = Tag.objects.filter(id__in=tag_ids) if tag_ids else []
+            is_valid_file = True
+            if size == 0:
+                is_valid_file = False
+            elif file_type and file_type.split('/')[-1] not in ALLOWED_FILES:
+                is_valid_file = False
 
-        file_instance = serializer.save(
-            user=self.request.user,
-            file_type=file_type,
-            size=size
-        )
+            data = {
+                'file': uploaded_file,
+                'name': file_name,
+                'file_type': file_type,
+                'size': size,
+                'user': request.user.id,
+                'status': FileStatus.FAILED if not is_valid_file else FileStatus.PROCESSING,
+                'tags': tag_ids,
+            }
 
-        if tags:
-            file_instance.tags.add(*tags)
+            serializer = self.get_serializer(data=data)
+            serializer.is_valid(raise_exception=True)
+            file_instance = serializer.save()
 
-        try:
-            job = enqueue(process_file_embeddings, file_instance.id)
-            file_instance.job_id = job.id
-            file_instance.save(update_fields=['job_id'])
-        except Exception as e:
-            raise Exception(f"Error processing file: {str(e)}")
-        
+            if is_valid_file:
+                try:
+                    job = enqueue(process_file_embeddings, file_instance.id)
+                    file_instance.job_id = job.id
+                    file_instance.save(update_fields=['job_id'])
+                except Exception as e:
+                    file_instance.status = FileStatus.FAILED
+                    file_instance.save(update_fields=['status'])
+                    logger.error(f"Error processing file '{file_name}': {str(e)}")
+                    return Response(
+                        {"error": f"Error processing file '{file_name}': {str(e)}"},
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                    )
+
+            file_instances.append(file_instance)
+
+        serializer = self.get_serializer(file_instances, many=True)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
     @action(detail=False, methods=['post'], url_path='job-statuses', parser_classes=[JSONParser])
     def get_job_statuses(self, request):

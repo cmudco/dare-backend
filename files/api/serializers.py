@@ -5,13 +5,14 @@ from ..models import File, Tag
 
 class FileSerializer(serializers.ModelSerializer):
     size = serializers.SerializerMethodField()
-    user = serializers.ReadOnlyField(source='user.email')
+    user = serializers.PrimaryKeyRelatedField(read_only=True)
     tags = serializers.PrimaryKeyRelatedField(queryset=Tag.objects.all(), many=True, required=False)
     status = serializers.ChoiceField(
         choices=FileStatus.choices,
-        read_only=True
+        read_only=True,
+        default=FileStatus.PROCESSING
     )
-    job_id = serializers.CharField(read_only=True)
+    job_id = serializers.CharField(read_only=True, allow_null=True)
 
     class Meta:
         model = File
@@ -27,6 +28,13 @@ class FileSerializer(serializers.ModelSerializer):
             data['file_type'] = display_type
         return data
 
+    def create(self, validated_data):
+        tags = validated_data.pop('tags', [])
+        validated_data['user'] = self.context['request'].user
+        file_instance = File.active_objects.create(**validated_data)
+        if tags:
+            file_instance.tags.add(*tags)
+        return file_instance
 
 class TagSerializer(serializers.ModelSerializer):
     file_count = serializers.SerializerMethodField()
