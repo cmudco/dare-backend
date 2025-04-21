@@ -37,6 +37,18 @@ class Conversation(BaseModel):
     )
     conversation_id = models.CharField(max_length=10, unique=True, help_text="Unique conversation ID.")
     title = models.CharField(max_length=255, blank=True, null=True, help_text="Title of the conversation.")
+    max_context_snippets = models.PositiveIntegerField(default=4, help_text="Maximum number of context snippets to retrieve.")
+    document_similarity_threshold = models.FloatField(default=0.2, help_text="Similarity threshold for document retrieval.")
+    temperature = models.FloatField(default=0.7, help_text="Temperature setting for the LLM.")
+    max_tokens = models.PositiveIntegerField(default=2048, help_text="Maximum tokens for LLM responses.")
+    prompt = models.ForeignKey(
+        'prompts.Prompt',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="conversations",
+        help_text="Associated prompt for this conversation."
+    )
 
     active_objects = ActiveObjectsManager()
 
