@@ -219,3 +219,13 @@ RQ_QUEUES = {
 }
 
 RQ_SHOW_ADMIN_LINK = True
+
+
+VECTOR_DB = env.VECTOR_DB
+
+WEAVIATE = {
+    'HOST': 'localhost',
+    'PORT': 8080,
+    'COLLECTION_NAME': 'Document',
+    'SKIP_INIT_CHECKS': True
+}

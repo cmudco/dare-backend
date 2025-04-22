@@ -47,3 +47,8 @@ thumbs.db
 
 # redis
 dump.rdb
+
+# Weaviate
+data/
+weaviate_data/
+backups/
