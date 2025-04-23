@@ -73,6 +73,8 @@ class FileViewSet(viewsets.ModelViewSet):
 
             if is_valid_file:
                 try:
+                    print("enqueuing job for file processing...")
+                    logger.info(f"Enqueuing job for file processing: {file_name}")
                     job = enqueue(process_file_embeddings, file_instance.id)
                     file_instance.job_id = job.id
                     file_instance.save(update_fields=['job_id'])
@@ -99,7 +101,7 @@ class FileViewSet(viewsets.ModelViewSet):
 
             files = File.active_objects.filter(id__in=file_ids, user=request.user)
             queue = get_queue()
-            
+
             response_data = []
             for file in files:
                 job = queue.fetch_job(file.job_id) if file.job_id else None
@@ -118,7 +120,7 @@ class FileViewSet(viewsets.ModelViewSet):
         except Exception as e:
             logger.exception(f"Error checking job statuses: {str(e)}")
             return Response({"error": "Internal server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        
+
 class TagViewSet(viewsets.ModelViewSet):
     serializer_class = TagSerializer
     permission_classes = [IsAuthenticated, IsOwner]

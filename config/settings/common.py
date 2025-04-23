@@ -220,9 +220,6 @@ RQ_QUEUES = {
 
 RQ_SHOW_ADMIN_LINK = True
 
-
-VECTOR_DB = env.VECTOR_DB
-
 WEAVIATE = {
     'HOST': 'localhost',
     'PORT': 8080,

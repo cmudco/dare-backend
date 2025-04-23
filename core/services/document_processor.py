@@ -37,6 +37,7 @@ class DocumentProcessor:
                 vector_id = f"file_{file.id}_chunk_{i}"
                 metadata = {
                     'file_id': str(file.id),
+
                     'user_id': str(file.user.id),
                     'file_name': file.name or file.file.name,
                     'file_type': file.file_type,
@@ -47,6 +48,7 @@ class DocumentProcessor:
 
             for i in range(0, len(vectors), BATCH_SIZE):
                 batch = vectors[i:i + BATCH_SIZE]
+                print(f"Processing batch {i // BATCH_SIZE + 1} with {len(batch)} vectors")
                 self.vector_service.upsert_vectors(
                     vectors=batch,
                     namespace=f"user_{file.user.id}"
@@ -141,7 +143,7 @@ class DocumentProcessor:
                     snippet = await database_sync_to_async(Snippet.active_objects.create)(
                         message=message_obj,
                         file=file,
-                        text=snippet_data["text"][:50] + "..." if len(snippet_data["text"]) > 50 else snippet_data["text"],
+                        text=snippet_data["text"],
                         similarity_score=snippet_data["similarity_score"],
                         chunk_index=snippet_data["chunk_index"]
                     )
@@ -190,7 +192,7 @@ class DocumentProcessor:
                 namespace=f"user_{user_id}",
                 filter=filter_query
             )
-
+            print(f"Query results: {results}")
             for match in results:
                 score = match.get("score", 0.0)
                 if score < similarity_threshold:
