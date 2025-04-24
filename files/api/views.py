@@ -1,4 +1,3 @@
-import logging
 import json
 from django_rq import enqueue, get_queue
 
@@ -16,8 +15,6 @@ from ..tasks import process_file_embeddings
 from ..models import File, Tag
 from .serializers import FileSerializer, TagSerializer
 from ..constants import ALLOWED_FILES, FileStatus
-
-logger = logging.getLogger(__name__)
 
 class FileViewSet(viewsets.ModelViewSet):
     serializer_class = FileSerializer
@@ -73,15 +70,12 @@ class FileViewSet(viewsets.ModelViewSet):
 
             if is_valid_file:
                 try:
-                    print("enqueuing job for file processing...")
-                    logger.info(f"Enqueuing job for file processing: {file_name}")
                     job = enqueue(process_file_embeddings, file_instance.id)
                     file_instance.job_id = job.id
                     file_instance.save(update_fields=['job_id'])
                 except Exception as e:
                     file_instance.status = FileStatus.FAILED
                     file_instance.save(update_fields=['status'])
-                    logger.error(f"Error processing file '{file_name}': {str(e)}")
                     return Response(
                         {"error": f"Error processing file '{file_name}': {str(e)}"},
                         status=status.HTTP_500_INTERNAL_SERVER_ERROR
@@ -118,7 +112,6 @@ class FileViewSet(viewsets.ModelViewSet):
             return Response(response_data, status=status.HTTP_200_OK)
 
         except Exception as e:
-            logger.exception(f"Error checking job statuses: {str(e)}")
             return Response({"error": "Internal server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class TagViewSet(viewsets.ModelViewSet):

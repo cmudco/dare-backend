@@ -62,7 +62,6 @@ class LLMService:
 
         messages.extend(conversation_history)
         messages.append({"role": "user", "content": f"User's message: {message}"})
-        print(f"Conversation history: {messages}")
 
         ai_service = self.get_ai_service(llm)
 

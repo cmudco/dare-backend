@@ -1,9 +1,42 @@
 from abc import ABC, abstractmethod
 from typing import List, Tuple, Dict, Optional
 from django.conf import settings
-import logging
 
-logger = logging.getLogger(__name__)
+from core.config.vector_db import get_user_namespace
+from core.config.processing import VECTOR_DIMENSION
+
+
+def client_operation(func):
+    """Decorator for standardized error handling in vector client operations."""
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            operation_name = func.__name__
+            raise Exception(f"Error in {operation_name}: {str(e)}")
+    return wrapper
+
+
+class BaseVectorClient(ABC):
+    """Abstract base class for vector database clients."""
+
+    @abstractmethod
+    def upsert_vectors(self, vectors: List[Tuple[str, List[float], Dict]], namespace: Optional[str] = None) -> bool:
+        pass
+
+    @abstractmethod
+    def query_vectors(self, vector: List[float], top_k: int = 5,
+                     namespace: Optional[str] = None, filter: Optional[Dict] = None) -> List[Dict]:
+        pass
+
+    @abstractmethod
+    def delete_vectors(self, ids: List[str], namespace: Optional[str] = None) -> bool:
+        pass
+
+    @abstractmethod
+    def delete_namespace(self, namespace: str) -> bool:
+        pass
+
 
 class BaseVectorService(ABC):
     """Abstract base class for vector database services."""
@@ -42,21 +75,71 @@ class BaseVectorService(ABC):
         """Delete an entire namespace."""
         pass
 
+    def search_documents(
+        self,
+        vector: List[float],
+        user_id: int,
+        file_ids: List[int],
+        top_k: int = 10
+    ) -> List[Dict]:
+        """
+        Search for documents similar to the given vector.
+        This provides a higher-level interface that works with document concepts.
+        """
+        filter_query = {
+            "user_id": str(user_id),
+            "file_id": {"$in": [str(file_id) for file_id in file_ids]}
+        }
+
+        return self.query_vectors(
+            vector=vector,
+            top_k=top_k,
+            namespace=get_user_namespace(user_id),
+            filter=filter_query
+        )
+
+    def delete_file_vectors(self, file_id: int, user_id: int) -> bool:
+        """
+        Delete all vectors related to a specific file.
+        This provides a more domain-specific interface for deleting file vectors.
+        """
+        filter_query = {
+            "user_id": str(user_id),
+            "file_id": {"$in": [str(file_id)]}
+        }
+
+        dummy_vector = [0] * VECTOR_DIMENSION
+
+        results = self.query_vectors(
+            vector=dummy_vector,
+            top_k=1000,
+            namespace=get_user_namespace(user_id),
+            filter=filter_query
+        )
+
+        if results:
+            vector_ids = [match['id'] for match in results]
+            return self.delete_vectors(
+                ids=vector_ids,
+                namespace=get_user_namespace(user_id)
+            )
+
+        return True
+
 
 class PineconeVectorService(BaseVectorService):
     """Pinecone implementation of the vector service."""
 
     def __init__(self):
         from core.helpers.pinecone import PineconeClient
-        logger.info("Initializing PineconeVectorService")
         self.client = PineconeClient()
 
+    @client_operation
     def upsert_vectors(
         self,
         vectors: List[Tuple[str, List[float], Dict]],
         namespace: Optional[str] = None
     ) -> bool:
-        logger.info(f"PineconeVectorService.upsert_vectors called with {len(vectors)} vectors and namespace={namespace}")
         return self.client.upsert_vectors(vectors, namespace)
 
     def query_vectors(
@@ -66,7 +149,6 @@ class PineconeVectorService(BaseVectorService):
         namespace: Optional[str] = None,
         filter: Optional[Dict] = None
     ) -> List[Dict]:
-        logger.info(f"PineconeVectorService.query_vectors called with namespace={namespace}")
         return self.client.query_vectors(vector, top_k, namespace, filter)
 
     def delete_vectors(
@@ -74,11 +156,9 @@ class PineconeVectorService(BaseVectorService):
         ids: List[str],
         namespace: Optional[str] = None
     ) -> bool:
-        logger.info(f"PineconeVectorService.delete_vectors called with {len(ids)} ids")
         return self.client.delete_vectors(ids, namespace)
 
     def delete_namespace(self, namespace: str) -> bool:
-        logger.info(f"PineconeVectorService.delete_namespace called with namespace={namespace}")
         return self.client.delete_namespace(namespace)
 
 
@@ -89,6 +169,7 @@ class WeaviateVectorService(BaseVectorService):
         from core.helpers.weaviate import WeaviateClient
         self.client = WeaviateClient()
 
+    @client_operation
     def upsert_vectors(
         self,
         vectors: List[Tuple[str, List[float], Dict]],
@@ -96,6 +177,7 @@ class WeaviateVectorService(BaseVectorService):
     ) -> bool:
         return self.client.upsert_vectors(vectors, namespace)
 
+    @client_operation
     def query_vectors(
         self,
         vector: List[float],
@@ -105,6 +187,7 @@ class WeaviateVectorService(BaseVectorService):
     ) -> List[Dict]:
         return self.client.query_vectors(vector, top_k, namespace, filter)
 
+    @client_operation
     def delete_vectors(
         self,
         ids: List[str],
@@ -112,6 +195,7 @@ class WeaviateVectorService(BaseVectorService):
     ) -> bool:
         return self.client.delete_vectors(ids, namespace)
 
+    @client_operation
     def delete_namespace(self, namespace: str) -> bool:
         return self.client.delete_namespace(namespace)
 
@@ -119,26 +203,11 @@ class WeaviateVectorService(BaseVectorService):
 def get_vector_service() -> BaseVectorService:
     """Factory function to get the appropriate vector service based on settings."""
 
-    # Define as string, not tuple with parentheses
-    vector_db = 'WEAVIATE'  # For testing purposes
+    vector_db = 'PINECONE'
 
-    print(f"[vector_service] Initializing vector service of type: {vector_db}")
-    logger.info(f"Initializing vector service for: {vector_db}")
-
-    try:
-        if vector_db == 'WEAVIATE':
-            print("[vector_service] Creating WeaviateVectorService instance")
-            return WeaviateVectorService()
-        elif vector_db == 'PINECONE':
-            print("[vector_service] Creating PineconeVectorService instance")
-            service = PineconeVectorService()
-            print(f"[vector_service] PineconeVectorService created: {service.__class__.__name__}")
-            return service
-        else:
-            error_msg = f"Unsupported vector database: {vector_db}"
-            print(f"[vector_service] ERROR: {error_msg}")
-            raise ValueError(error_msg)
-    except Exception as e:
-        print(f"[vector_service] ERROR creating vector service: {str(e)}")
-        logger.exception(f"Error creating vector service: {str(e)}")
-        raise
+    if vector_db == 'WEAVIATE':
+        return WeaviateVectorService()
+    elif vector_db == 'PINECONE':
+        return PineconeVectorService()
+    else:
+        raise ValueError(f"Unsupported vector database: {vector_db}")
