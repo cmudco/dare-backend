@@ -19,7 +19,10 @@ class WeaviateClient:
             )
             return client
         except Exception as e:
-            raise ConnectionError(f"Could not connect to Weaviate: {str(e)}")
+            error_details = f"Host: {settings.WEAVIATE.get('HOST', 'localhost')}, " \
+                            f"Port: {settings.WEAVIATE.get('PORT', 8080)}, " \
+                            f"Error: {str(e)}"
+            raise ConnectionError(f"Could not connect to Weaviate. Details: {error_details}")
 
     def _close_connection(self):
         if hasattr(self, 'client') and self.client:

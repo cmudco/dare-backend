@@ -49,4 +49,3 @@ def parse_vector_id(vector_id: str) -> Dict[str, Any]:
     except (IndexError, ValueError):
         pass
     return {"file_id": "", "chunk_index": 0}
-

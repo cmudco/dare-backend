@@ -22,3 +22,10 @@ COMPRESS_ROOT = STATIC_ROOT
 
 CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOW_CREDENTIALS = True
+
+WEAVIATE = {
+    'HOST': 'localhost',
+    'PORT': 8080,
+    'COLLECTION_NAME': 'Document',
+    'SKIP_INIT_CHECKS': True
+}

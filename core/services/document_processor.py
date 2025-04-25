@@ -12,24 +12,33 @@ from core.config.vector_db import get_user_namespace
 from core.config.processing import CHUNK_SIZE, BATCH_SIZE, DEFAULT_SIMILARITY_THRESHOLD, DEFAULT_TOP_K
 
 class DocumentProcessor:
-    def __init__(self, openai_client=None, vector_service=None, embedding_service=None, file_processor=None):
+    def __init__(self, openai_client=None, vector_service=None, embedding_service=None, file_processor=None, user_id=None):
         self.openai_client = openai_client or OpenAIWrapper()
-        self.vector_service = vector_service or get_vector_service()
+        self.user_id = user_id
+        self.vector_service = vector_service
         self.embedding_service = embedding_service or EmbeddingService(self.openai_client)
         self.file_processor = file_processor or FileProcessor()
 
+    def _ensure_vector_service(self):
+        """Ensure we have a vector service available, initializing it if needed."""
+        if self.vector_service is None:
+            self.vector_service = get_vector_service(self.user_id)
+
+    def update_vector_service(self, user_id):
+        """Update the vector service if the user has changed."""
+        if user_id and (not hasattr(self, 'user_id') or self.user_id != user_id):
+            self.user_id = user_id
+            self.vector_service = get_vector_service(user_id)
+
     def create_file_embeddings(self, file: File) -> int:
-        """
-        Process a single file:
-        1. Generate embeddings for all chunks in a single OpenAI request
-        2. Split and store embeddings in the vector database with proper metadata
-        """
+        """Process a single file and create embeddings."""
         try:
+            self.update_vector_service(file.user.id)
+
             content = self.file_processor.read_file_content(file)
             vectors = self._process_chunks(content, file)
             self._store_vectors(vectors, file.user.id)
             return len(vectors)
-
         except Exception as e:
             raise Exception(f"Error processing file: {str(e)}")
 
@@ -110,11 +119,11 @@ class DocumentProcessor:
                     )
                     successful_saves += 1
                 except File.DoesNotExist:
-                    pass
-                except Exception as e:
-                    pass
-        except Exception as e:
-            pass
+                    continue
+                except Exception:
+                    continue
+        except Exception:
+            return
 
     async def search_similar_documents(
         self,

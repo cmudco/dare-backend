@@ -3,7 +3,6 @@ from pinecone import Pinecone
 from django.conf import settings
 from config.env import PINECONE_API_KEY, PINECONE_INDEX_NAME
 
-
 class PineconeClient:
     def __init__(self):
         self.pc = Pinecone(api_key=PINECONE_API_KEY)

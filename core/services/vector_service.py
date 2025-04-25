@@ -1,9 +1,14 @@
 from abc import ABC, abstractmethod
-from typing import List, Tuple, Dict, Optional
+from typing import List, Tuple, Dict, Optional, Union
 from django.conf import settings
+from django.contrib.auth import get_user_model
+from asgiref.sync import sync_to_async
 
 from core.config.vector_db import get_user_namespace
 from core.config.processing import VECTOR_DIMENSION
+from users.constants import VectorDBChoice
+
+User = get_user_model()
 
 
 def client_operation(func):
@@ -200,14 +205,40 @@ class WeaviateVectorService(BaseVectorService):
         return self.client.delete_namespace(namespace)
 
 
-def get_vector_service() -> BaseVectorService:
-    """Factory function to get the appropriate vector service based on settings."""
-
-    vector_db = 'PINECONE'
-
-    if vector_db == 'WEAVIATE':
+def get_vector_service(user_id: Optional[int] = None) -> BaseVectorService:
+    """
+    Factory function to get the appropriate vector service based on user preference.
+    """
+    if user_id is None:
         return WeaviateVectorService()
-    elif vector_db == 'PINECONE':
-        return PineconeVectorService()
-    else:
-        raise ValueError(f"Unsupported vector database: {vector_db}")
+
+    try:
+        user = User.objects.get(id=user_id)
+
+        if user.vector_db == VectorDBChoice.PINECONE:
+            return PineconeVectorService()
+
+        return WeaviateVectorService()
+    except Exception as e:
+        return WeaviateVectorService()
+
+
+async def get_vector_service_async(user_id: Optional[int] = None) -> BaseVectorService:
+    """Async version with connection testing."""
+    if user_id is None:
+        return WeaviateVectorService()
+
+    try:
+
+        user_data = await sync_to_async(lambda: User.objects.get(id=user_id))()
+
+        if user_data.vector_db == VectorDBChoice.PINECONE:
+            try:
+                service = PineconeVectorService()
+                return service
+            except Exception as e:
+                return WeaviateVectorService()
+
+        return WeaviateVectorService()
+    except Exception as e:
+        return WeaviateVectorService()
