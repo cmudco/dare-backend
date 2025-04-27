@@ -1,5 +1,3 @@
-import logging
-
 from django.contrib.auth.models import AbstractUser
 from django.db import models
 from django.utils.translation import gettext_lazy as _
@@ -7,8 +5,7 @@ from django.utils.translation import gettext_lazy as _
 from common.managers import ActiveObjectsManager
 from common.models import IsDeletedMixin
 from users.managers import UserManager
-
-logger = logging.getLogger(__name__)
+from users.constants import VectorDBChoice
 
 
 class User(AbstractUser, IsDeletedMixin):
@@ -18,6 +15,12 @@ class User(AbstractUser, IsDeletedMixin):
     USERNAME_FIELD = "email"
 
     country = models.CharField(max_length=100, blank=True, null=True)
+    vector_db = models.IntegerField(
+        choices=VectorDBChoice.choices,
+        default=VectorDBChoice.WEAVIATE,
+        verbose_name=_("Vector Database"),
+        help_text=_("Vector database to use for this user's data")
+    )
 
     objects = UserManager()
     active_objects = ActiveObjectsManager()
@@ -25,7 +28,7 @@ class User(AbstractUser, IsDeletedMixin):
     @property
     def full_name(self):
         """
-        Returns True if the user has subscribed to any package other than the free one, otherwise False.
+        Returns the user's full name.
         """
         return self.get_full_name()
 

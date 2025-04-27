@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from pinecone import Pinecone
 from django.conf import settings
 from config.env import PINECONE_API_KEY, PINECONE_INDEX_NAME
@@ -10,7 +10,7 @@ class PineconeClient:
 
     def upsert_vectors(
         self,
-        vectors: List[tuple[str, List[float], Dict]],
+        vectors: List[Tuple[str, List[float], Dict]],
         namespace: Optional[str] = None
     ) -> bool:
         """Upsert vectors to Pinecone."""
