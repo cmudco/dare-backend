@@ -45,3 +45,7 @@ django-rq==3.0.0
 redis==5.2.1
 
 pycryptodome==3.22.0
+
+
+# weaviate
+weaviate-client==4.14.1
