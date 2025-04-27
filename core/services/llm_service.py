@@ -7,12 +7,13 @@ from core.services.claude_service import ClaudeService
 from typing import AsyncGenerator
 from files.models import File
 from prompts.models import Prompt
+from core.services.vector_service import get_vector_service, get_vector_service_async
 
 class LLMService:
     """Service for handling AI message generation with optional document context."""
 
     def __init__(self):
-        self.document_processor = DocumentProcessor()
+        self.document_processor = DocumentProcessor(vector_service=None)
 
     async def query(
         self,
@@ -45,6 +46,10 @@ class LLMService:
             tagged_file_ids = await self.get_files_from_tags(tag_ids, user_id)
             all_file_ids.update(tagged_file_ids)
 
+        if user_id and user_id != self.document_processor.user_id:
+            self.document_processor.user_id = user_id
+            self.document_processor.vector_service = await get_vector_service_async(user_id)
+
         if all_file_ids:
             context = await self.document_processor.search_similar_documents(
                 query_text=message,
@@ -61,7 +66,6 @@ class LLMService:
                         messages.append({"role": "user", "content": part})
 
         messages.extend(conversation_history)
-
         messages.append({"role": "user", "content": f"User's message: {message}"})
 
         ai_service = self.get_ai_service(llm)

@@ -33,4 +33,4 @@ class LLMViewSet(viewsets.ModelViewSet):
     """Endpoint for listing available LLM models."""
     serializer_class = LLMSerializer
     permission_classes = [IsAuthenticated]
-    queryset = LLM.objects.all()
+    queryset = LLM.objects.all().order_by('name')

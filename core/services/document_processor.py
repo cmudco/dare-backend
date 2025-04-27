@@ -1,65 +1,45 @@
-import logging
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 import io
 import PyPDF2
-
 from core.helpers.openai import OpenAIWrapper
-from core.helpers.pinecone import PineconeClient
+from core.services.vector_service import get_vector_service
+from core.services.embedding_service import EmbeddingService
+from core.services.file_processor import FileProcessor
 from files.models import File
 from conversations.models import Snippet
-from channels.db import database_sync_to_async  # Add this import
-
-logger = logging.getLogger(__name__)
-
-CHUNK_SIZE = 1000
-BATCH_SIZE = 100
+from channels.db import database_sync_to_async
+from core.config.vector_db import get_user_namespace
+from core.config.processing import CHUNK_SIZE, BATCH_SIZE, DEFAULT_SIMILARITY_THRESHOLD, DEFAULT_TOP_K
 
 class DocumentProcessor:
-    def __init__(self):
-        self.openai_client = OpenAIWrapper()
-        self.pinecone_client = PineconeClient()
+    def __init__(self, openai_client=None, vector_service=None, embedding_service=None, file_processor=None, user_id=None):
+        self.openai_client = openai_client or OpenAIWrapper()
+        self.user_id = user_id
+        self.vector_service = vector_service
+        self.embedding_service = embedding_service or EmbeddingService(self.openai_client)
+        self.file_processor = file_processor or FileProcessor()
+
+    def _ensure_vector_service(self):
+        """Ensure we have a vector service available, initializing it if needed."""
+        if self.vector_service is None:
+            self.vector_service = get_vector_service(self.user_id)
+
+    def update_vector_service(self, user_id):
+        """Update the vector service if the user has changed."""
+        if user_id and (not hasattr(self, 'user_id') or self.user_id != user_id):
+            self.user_id = user_id
+            self.vector_service = get_vector_service(user_id)
 
     def create_file_embeddings(self, file: File) -> int:
-        """
-        Process a single file:
-        1. Generate embeddings for all chunks in a single OpenAI request
-        2. Split and store embeddings in Pinecone with proper metadata
-        """
+        """Process a single file and create embeddings."""
         try:
-            content = self._read_file_content(file)
-            chunks = self._chunk_text(content, chunk_size=CHUNK_SIZE)
-            embeddings = self.openai_client.create_batch_embeddings(chunks)
+            self.update_vector_service(file.user.id)
 
-            if len(chunks) != len(embeddings):
-                logger.warning(f"Mismatch: {len(chunks)} chunks, {len(embeddings)} embeddings for file {file.id}")
-
-            vectors: List[Tuple[str, list, dict]] = []
-            for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
-                vector_id = f"file_{file.id}_chunk_{i}"
-                metadata = {
-                    'file_id': str(file.id),
-                    'user_id': str(file.user.id),
-                    'file_name': file.name or file.file.name,
-                    'file_type': file.file_type,
-                    'text': chunk,
-                    'chunk_index': i
-                }
-                vectors.append((vector_id, embedding, metadata))
-
-            for i in range(0, len(vectors), BATCH_SIZE):
-                batch = vectors[i:i + BATCH_SIZE]
-                self.pinecone_client.upsert_vectors(
-                    vectors=batch,
-                    namespace=f"user_{file.user.id}"
-                )
-
+            content = self.file_processor.read_file_content(file)
+            vectors = self._process_chunks(content, file)
+            self._store_vectors(vectors, file.user.id)
             return len(vectors)
-
-        except ValueError as ve:
-            logger.exception(f"Invalid data processing file {file.id}")
-            raise Exception(f"Invalid data: {str(ve)}")
         except Exception as e:
-            logger.exception(f"Error processing file {file.id}")
             raise Exception(f"Error processing file: {str(e)}")
 
     def create_user_files_embeddings(self, user_id: int) -> bool:
@@ -73,13 +53,11 @@ class DocumentProcessor:
                 try:
                     self.create_file_embeddings(file)
                 except Exception as e:
-                    logger.error(f"Failed to process file {file.id}: {str(e)}")
                     continue
 
             return True
 
         except Exception as e:
-            logger.exception(f"Error processing user files: {str(e)}")
             raise Exception(f"Error processing user files: {str(e)}")
 
     def _chunk_text(self, text: str, chunk_size: int = 1000) -> List[str]:
@@ -103,135 +81,122 @@ class DocumentProcessor:
 
         return chunks
 
-    def _read_file_content(self, file: File) -> str:
-        """Read and extract content from various file types"""
-        try:
-            file_name = file.file.name.lower()
+    def _process_chunks(self, content: str, file: File) -> List[Tuple[str, List[float], Dict]]:
+        """Process file content into chunks and generate vectors."""
+        chunks = self._chunk_text(content, chunk_size=CHUNK_SIZE)
+        return self.embedding_service.create_embeddings_with_metadata(
+            chunks,
+            file.id,
+            file.user.id,
+            file.name or file.file.name,
+            file.file_type
+        )
 
-            if file_name.endswith('.pdf'):
-                with file.file.open('rb') as f:
-                    pdf_reader = PyPDF2.PdfReader(io.BytesIO(f.read()))
-                    text_content = []
-                    for page in pdf_reader.pages:
-                        text_content.append(page.extract_text())
-                    return ' '.join(text_content)
-
-            elif file_name.endswith(('.txt', '.md', '.json')):
-                with file.file.open('r') as f:
-                    return f.read()
-
-            else:
-                return f"File: {file.name or file.file.name}"
-
-        except Exception as e:
-            raise Exception(f"Error reading file content: {str(e)}")
+    def _store_vectors(self, vectors: List[Tuple[str, List[float], Dict]], user_id: int) -> bool:
+        """Store vectors in batches."""
+        for i in range(0, len(vectors), BATCH_SIZE):
+            batch = vectors[i:i + BATCH_SIZE]
+            self.vector_service.upsert_vectors(
+                vectors=batch,
+                namespace=get_user_namespace(user_id)
+            )
+        return True
 
     async def _save_snippets(self, snippets_to_save, message_obj):
-        """
-        Save retrieved snippets to the database.
-        """
+        """Save retrieved snippets to the database."""
         try:
-            for snippet_data in snippets_to_save:
-                file = await database_sync_to_async(File.active_objects.get)(id=snippet_data["file_id"])
-                await database_sync_to_async(Snippet.active_objects.create)(
-                    message=message_obj,
-                    file=file,
-                    text=snippet_data["text"],
-                    similarity_score=snippet_data["similarity_score"],
-                    chunk_index=snippet_data["chunk_index"]
-                )
-        except Exception as e:
-            logger.exception(f"Error saving snippets for message {message_obj.id}: {str(e)}")
+            successful_saves = 0
+            for i, snippet_data in enumerate(snippets_to_save):
+                try:
+                    file_id = snippet_data["file_id"]
+                    file = await database_sync_to_async(File.active_objects.get)(id=file_id)
+                    snippet = await database_sync_to_async(Snippet.active_objects.create)(
+                        message=message_obj,
+                        file=file,
+                        text=snippet_data["text"],
+                        similarity_score=snippet_data["similarity_score"],
+                        chunk_index=snippet_data["chunk_index"]
+                    )
+                    successful_saves += 1
+                except File.DoesNotExist:
+                    continue
+                except Exception:
+                    continue
+        except Exception:
+            return
 
     async def search_similar_documents(
         self,
         query_text: str,
         file_ids: List[int],
         user_id: int,
-        top_k: int = 10,
-        similarity_threshold: float = 0.5,
+        top_k: int = DEFAULT_TOP_K,
+        similarity_threshold: float = DEFAULT_SIMILARITY_THRESHOLD,
         message_obj=None
     ) -> str:
-        """
-        Search for similar documents in Pinecone based on the query text.
-        Simplified to a single query with a similarity threshold.
-        Logs retrieved snippets and stores them in the Snippet model.
-        """
+        """Search for similar documents based on the query text."""
+        if not file_ids:
+            return ""
+
         try:
             query_embedding = self.openai_client.create_embeddings(query_text)
-            context_parts = []
-            snippets_to_save = []
 
-            if not file_ids:
-                logger.info("No file IDs provided for vector search.")
-                return ""
-
-            filter_query = {
-                "user_id": str(user_id),
-                "file_id": {"$in": [str(file_id) for file_id in file_ids]}
-            }
-
-            results = self.pinecone_client.query_vectors(
+            results = self.vector_service.search_documents(
                 vector=query_embedding,
-                top_k=top_k,
-                namespace=f"user_{user_id}",
-                filter=filter_query
+                user_id=user_id,
+                file_ids=file_ids,
+                top_k=top_k
             )
 
-            for match in results:
-                print(match, similarity_threshold)
-                score = match.get("score", 0.0)
-                if score < similarity_threshold:
-                    continue
-
-                metadata = match.get("metadata", {})
-                text = metadata.get("text", "")
-                file_id = metadata.get("file_id", "")
-                file_name = metadata.get("file_name", "Unknown file")
-                chunk_index = metadata.get("chunk_index", 0)
-
-                if text:
-                    context_parts.append(f"From {file_name}:\n{text}")
-
-                    if message_obj:
-                        snippets_to_save.append({
-                            "message": message_obj,
-                            "file_id": file_id,
-                            "text": text,
-                            "similarity_score": score,
-                            "chunk_index": chunk_index
-                        })
-
-            if snippets_to_save and message_obj:
-                await self._save_snippets(snippets_to_save, message_obj)
-
-            return "\n\n".join(context_parts)
-
+            return await self._process_search_results(
+                results,
+                similarity_threshold,
+                message_obj
+            )
         except Exception as e:
-            logger.exception(f"Error retrieving document context: {str(e)}")
             return ""
+
+    async def _process_search_results(
+        self,
+        results: List[Dict],
+        similarity_threshold: float,
+        message_obj=None
+    ) -> str:
+        """Process search results and collect context."""
+        context_parts = []
+        snippets_to_save = []
+
+        for match in results:
+            score = match.get("score", 0.0)
+            if score < similarity_threshold:
+                continue
+
+            metadata = match.get("metadata", {})
+            text = metadata.get("text", "")
+            file_id = metadata.get("file_id", "")
+            file_name = metadata.get("file_name", "Unknown file")
+            chunk_index = metadata.get("chunk_index", 0)
+
+            if text:
+                context_parts.append(f"From {file_name}:\n{text}")
+
+                if message_obj:
+                    snippets_to_save.append({
+                        "message": message_obj,
+                        "file_id": file_id,
+                        "text": text,
+                        "similarity_score": score,
+                        "chunk_index": chunk_index
+                    })
+
+        if snippets_to_save and message_obj:
+            await self._save_snippets(snippets_to_save, message_obj)
+
+        return "\n\n".join(context_parts)
 
     def delete_file_vectors(self, file_id: int, user_id: int) -> bool:
         """Delete all vectors related to a specific file"""
         try:
-            filter_query = {"file_id": str(file_id)}
-
-            results = self.pinecone_client.query_vectors(
-                vector=[0] * 3072,
-                filter=filter_query,
-                top_k=1000,
-                namespace=f"user_{user_id}"
-            )
-
-            if results:
-                vector_ids = [match['id'] for match in results]
-
-                self.pinecone_client.delete_vectors(
-                    ids=vector_ids,
-                    namespace=f"user_{user_id}"
-                )
-
-            return True
-
+            return self.vector_service.delete_file_vectors(file_id, user_id)
         except Exception as e:
             raise Exception(f"Error deleting file vectors: {str(e)}")
