@@ -2,23 +2,25 @@ from dj_rest_auth.registration.serializers import RegisterSerializer
 from dj_rest_auth.serializers import UserDetailsSerializer
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
+from users.constants import VectorDBChoice
 
 User = get_user_model()
 
 
 class CustomUserDetailsSerializer(UserDetailsSerializer):
+    vector_db = serializers.ChoiceField(choices=VectorDBChoice.choices)
 
     class Meta:
         model = User
         fields = [
             "id",
             "email",
+            "vector_db",
         ]
         read_only_fields = ["id"]
 
     def to_representation(self, instance):
         representation = super().to_representation(instance)
-        # Combine first_name and last_name to form the full name
         full_name = f"{instance.first_name} {instance.last_name}".strip()
         representation["name"] = full_name
         return representation
@@ -49,7 +51,6 @@ class CustomRegisterSerializer(RegisterSerializer):
 
     def save(self, request):
         user = super().save(request)
-        # Parse the name into first_name and last_name
         full_name = self.validated_data.get("name", "")
         name_parts = full_name.split(maxsplit=1)
         user.first_name = name_parts[0]

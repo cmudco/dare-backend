@@ -3,6 +3,7 @@ from conversations.models import LLM, Message, Conversation, Snippet
 from files.api.serializers import FileSerializer
 from prompts.models import Prompt
 from prompts.api.serializers import PromptSerializer
+from users.constants import VectorDBChoice
 
 class LLMSerializer(serializers.ModelSerializer):
     class Meta:
@@ -38,11 +39,18 @@ class ConversationSerializer(serializers.ModelSerializer):
 
 class SnippetSerializer(serializers.ModelSerializer):
     file = FileSerializer(read_only=True)
+    vector_db_source = serializers.SerializerMethodField()
 
     class Meta:
         model = Snippet
-        fields = ['id', 'file', 'text', 'similarity_score', 'chunk_index']
-        read_only_fields = ['id', 'file', 'text', 'similarity_score', 'chunk_index']
+        fields = ['id', 'file', 'text', 'similarity_score', 'chunk_index', 'vector_db_source']
+        read_only_fields = ['id', 'file', 'text', 'similarity_score', 'chunk_index', 'vector_db_source']
+
+    def get_vector_db_source(self, obj):
+        """Return the human-readable name of the vector database source."""
+        if hasattr(obj.file, 'vector_db_source') and obj.file.vector_db_source is not None:
+            return dict(VectorDBChoice.choices).get(obj.file.vector_db_source, "Unknown")
+        return "Unknown"
 
 class MessageSerializer(serializers.ModelSerializer):
     sender_name = serializers.ReadOnlyField(read_only=True)

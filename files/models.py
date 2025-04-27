@@ -3,7 +3,10 @@ from django.conf import settings
 
 from common.managers import ActiveObjectsManager
 from common.models import BaseModel, TimeStampMixin
+from users.constants import VectorDBChoice
 from .constants import FileStatus
+from django.utils.translation import gettext_lazy as _
+
 
 class Tag(TimeStampMixin):
     user = models.ForeignKey(
@@ -65,6 +68,13 @@ class File(BaseModel):
         choices=FileStatus.choices,
         default=FileStatus.PROCESSING,
         help_text="Processing status of the file"
+    )
+    vector_db_source = models.IntegerField(
+        choices=VectorDBChoice.choices,
+        null=True,
+        blank=True,
+        verbose_name=_("Vector DB Source"),
+        help_text=_("Vector database where this file's chunks are stored")
     )
 
     active_objects = ActiveObjectsManager()
