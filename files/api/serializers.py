@@ -16,7 +16,7 @@ class FileSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = File
-        fields = ['id', 'user', 'name', 'file', 'file_type', 'size', 'tags', 'job_id', 'status']
+        fields = ['id', 'user', 'name', 'file', 'file_type', 'size', 'tags', 'job_id', 'status', 'vector_db_source']
 
     def get_size(self, obj):
         return obj.file.size if obj.file else None
