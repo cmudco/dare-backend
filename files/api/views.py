@@ -62,6 +62,7 @@ class FileViewSet(viewsets.ModelViewSet):
                 'user': request.user.id,
                 'status': FileStatus.FAILED if not is_valid_file else FileStatus.PROCESSING,
                 'tags': tag_ids,
+                'vector_db_source': request.user.vector_db
             }
 
             serializer = self.get_serializer(data=data)

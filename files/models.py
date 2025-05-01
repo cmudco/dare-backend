@@ -33,7 +33,8 @@ class File(BaseModel):
     )
     file = models.FileField(
         upload_to='files/',
-        help_text="The actual file content"
+        help_text="The actual file content",
+        max_length=255
     )
     name = models.CharField(
         max_length=255,
@@ -42,7 +43,7 @@ class File(BaseModel):
         help_text="Custom name for the file (defaults to filename if not provided)"
     )
     file_type = models.CharField(
-        max_length=50,
+        max_length=150,
         blank=True,
         null=True,
         help_text="MIME type of the file (e.g., application/pdf, image/jpeg)"
