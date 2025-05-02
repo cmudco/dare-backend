@@ -130,6 +130,16 @@ class Message(BaseModel):
         help_text="Original content of the message before editing or regeneration."
     )
 
+    is_liked = models.BooleanField(
+        default=False,
+        help_text="Whether this message has been liked by the user."
+    )
+    is_disliked = models.BooleanField(
+        default=False,
+        help_text="Whether this message has been disliked by the user."
+    )
+
+
     active_objects = ActiveObjectsManager()
 
     @property

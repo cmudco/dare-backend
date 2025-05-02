@@ -62,7 +62,7 @@ class MessageSerializer(serializers.ModelSerializer):
     )
     snippets = SnippetSerializer(many=True, read_only=True)
     llm = serializers.PrimaryKeyRelatedField(read_only=True, allow_null=True)
-    
+
     class Meta:
         model = Message
         fields = [

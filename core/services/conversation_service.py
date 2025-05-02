@@ -37,7 +37,7 @@ class ConversationService:
                 "sender_type": msg["sender_type"],
                 "date": msg["created_at"],
                 "isSender": msg["sender_name"] == user_email,
-                "llmId": msg["llm"],  # Now correctly an ID or None
+                "llmId": msg["llm"],
                 "snippets": msg.get("snippets", []),
                 "is_liked": msg.get("is_liked", False),
                 "is_disliked": msg.get("is_disliked", False),
