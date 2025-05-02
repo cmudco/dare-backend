@@ -73,6 +73,8 @@ class MessageSerializer(serializers.ModelSerializer):
             'files',
             'file_ids',
             'snippets',
-            'created_at'
+            'created_at',
+            'is_liked',
+            'is_disliked',
         ]
         read_only_fields = ['id', 'created_at', 'sender_name', 'files', 'snippets']

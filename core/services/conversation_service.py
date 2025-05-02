@@ -37,7 +37,9 @@ class ConversationService:
                 "date": msg["created_at"],
                 "isSender": msg["sender_name"] == user_email,
                 "llmId": msg["llm"] if "llm" in msg else None,
-                "snippets": msg.get("snippets", [])
+                "snippets": msg.get("snippets", []),
+                "is_liked": msg.get("is_liked", False),
+                "is_disliked": msg.get("is_disliked", False),
             }
             for msg in serialized_messages
         ]
