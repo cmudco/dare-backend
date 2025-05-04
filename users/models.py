@@ -6,7 +6,7 @@ from common.managers import ActiveObjectsManager
 from common.models import IsDeletedMixin
 from users.managers import UserManager
 from users.constants import VectorDBChoice
-
+from prompts.models import Prompt 
 
 class User(AbstractUser, IsDeletedMixin):
     username = None
@@ -20,6 +20,15 @@ class User(AbstractUser, IsDeletedMixin):
         default=VectorDBChoice.WEAVIATE,
         verbose_name=_("Vector Database"),
         help_text=_("Vector database to use for this user's data")
+    )
+    default_prompt = models.ForeignKey(
+        Prompt,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="default_for_users",
+        verbose_name=_("Default Prompt"),
+        help_text=_("The default prompt for this user, if set.")
     )
 
     objects = UserManager()

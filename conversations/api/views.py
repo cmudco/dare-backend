@@ -16,6 +16,9 @@ class ConversationViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
+        if  self.request.user.default_prompt:
+            serializer.instance.prompt = self.request.user.default_prompt
+            serializer.instance.save()
 
 class MessageViewSet(viewsets.ModelViewSet):
     """Endpoint for creating/retrieving messages within a conversation."""
