@@ -61,7 +61,8 @@ class MessageSerializer(serializers.ModelSerializer):
         required=False
     )
     snippets = SnippetSerializer(many=True, read_only=True)
-
+    llm = serializers.PrimaryKeyRelatedField(read_only=True, allow_null=True)
+    
     class Meta:
         model = Message
         fields = [
@@ -76,5 +77,9 @@ class MessageSerializer(serializers.ModelSerializer):
             'created_at',
             'is_liked',
             'is_disliked',
+            'is_edited',
+            'is_regenerated',
+            'original_message',
+            'llm',
         ]
         read_only_fields = ['id', 'created_at', 'sender_name', 'files', 'snippets']

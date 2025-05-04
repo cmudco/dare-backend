@@ -5,20 +5,21 @@ from conversations.constants import SenderType
 from asgiref.sync import sync_to_async
 import logging
 from conversations.api.serializers import MessageSerializer
-from djangorestframework_camel_case.util import camelize  # Import camelize
+from djangorestframework_camel_case.util import camelize
 
 logger = logging.getLogger(__name__)
 
 class ConversationService:
-    """Handles conversation metadata like title generation."""
+    """Handles conversation metadata like title generation and message management."""
 
     async def fetch_chat_history_from_db(self, conversation):
         """Fetches recent chat history for AI context, including snippets."""
         messages = await database_sync_to_async(
             lambda: list(
                 Message.active_objects.filter(conversation=conversation)
-                .order_by('-created_at')
+                .select_related('llm')  # Preload llm relationship
                 .prefetch_related('snippets')
+                .order_by('-created_at')
             )
         )()
 
@@ -36,15 +37,17 @@ class ConversationService:
                 "sender_type": msg["sender_type"],
                 "date": msg["created_at"],
                 "isSender": msg["sender_name"] == user_email,
-                "llmId": msg["llm"] if "llm" in msg else None,
+                "llmId": msg["llm"],  # Now correctly an ID or None
                 "snippets": msg.get("snippets", []),
                 "is_liked": msg.get("is_liked", False),
                 "is_disliked": msg.get("is_disliked", False),
+                "isEdited": msg.get("is_edited", False),
+                "isRegenerated": msg.get("is_regenerated", False),
+                "originalMessage": msg.get("original_message", None),
             }
             for msg in serialized_messages
         ]
 
-        # Apply camelCase transformation
         return camelize(history)
 
     async def get_user_email(self, conversation):
@@ -137,3 +140,53 @@ class ConversationService:
         except Exception as e:
             logger.exception(f"Error generating title: {str(e)}")
             return "New Chat"
+
+    async def get_latest_user_message(self, conversation):
+        """Retrieve the latest user message for the given conversation."""
+        return await database_sync_to_async(
+            lambda: Message.active_objects.filter(
+                conversation=conversation,
+                sender_type=SenderType.PLAYER
+            ).order_by('-created_at').first()
+        )()
+
+    async def get_latest_ai_message(self, conversation):
+        """Retrieve the latest AI message for the given conversation."""
+        return await database_sync_to_async(
+            lambda: Message.active_objects.filter(
+                conversation=conversation,
+                sender_type=SenderType.AI_ASSISTANT
+            ).order_by('-created_at').first()
+        )()
+
+    async def edit_message(self, message_id, new_content, conversation):
+        """Edit the latest user message with new content."""
+        message = await database_sync_to_async(
+            lambda: Message.active_objects.get(id=message_id)
+        )()
+        latest_user_message = await self.get_latest_user_message(conversation)
+        if not latest_user_message or str(latest_user_message.id) != message_id:
+            raise ValueError("Can only edit the latest user message")
+
+        if not message.is_edited:
+            message.original_message = message.message
+            message.is_edited = True
+        message.message = new_content
+        await database_sync_to_async(message.save)()
+        return message
+
+    async def regenerate_message(self, message_id, new_content, conversation):
+        """Regenerate the latest AI message with new content."""
+        message = await database_sync_to_async(
+            lambda: Message.active_objects.get(id=message_id)
+        )()
+        latest_ai_message = await self.get_latest_ai_message(conversation)
+        if not latest_ai_message or str(latest_ai_message.id) != message_id:
+            raise ValueError("Can only regenerate the latest AI message")
+
+        if not message.is_regenerated:
+            message.original_message = message.message
+            message.is_regenerated = True
+        message.message = new_content
+        await database_sync_to_async(message.save)()
+        return message

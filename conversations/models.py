@@ -105,7 +105,19 @@ class Message(BaseModel):
         default=False,
         help_text="Whether this message has been disliked by the user."
     )
-
+    is_edited = models.BooleanField(
+        default=False,
+        help_text="Whether this message has been edited by the user (applies to user messages only)."
+    )
+    is_regenerated = models.BooleanField(
+        default=False,
+        help_text="Whether this message has been regenerated (applies to AI messages only)."
+    )
+    original_message = models.TextField(
+        blank=True,
+        null=True,
+        help_text="Original content of the message before editing or regeneration."
+    )
 
     active_objects = ActiveObjectsManager()
 
