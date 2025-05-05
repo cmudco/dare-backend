@@ -9,7 +9,6 @@ class FileSerializer(serializers.ModelSerializer):
     tags = serializers.PrimaryKeyRelatedField(queryset=Tag.objects.all(), many=True, required=False)
     status = serializers.ChoiceField(
         choices=FileStatus.choices,
-        read_only=True,
         default=FileStatus.PROCESSING
     )
     job_id = serializers.CharField(read_only=True, allow_null=True)
