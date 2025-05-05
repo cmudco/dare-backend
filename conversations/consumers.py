@@ -177,7 +177,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
             "date": ai_message.created_at.isoformat(),
         })))
 
-        async for chunk in self.llm_service.query(
+        token_usage = None
+        async for chunk, usage in self.llm_service.query(
             preceding_user_message.message,
             self.conversation,
             llm,
@@ -191,6 +192,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
             document_similarity_threshold=document_similarity_threshold,
             message_obj=ai_message
         ):
+            if usage:
+                token_usage = usage
             if chunk.strip():
                 ai_response_accumulator += chunk
                 payload = {
@@ -210,6 +213,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
             updated_message = await self.conversation_service.regenerate_message(
                 bot_message_id, ai_response_accumulator, self.conversation
             )
+            if token_usage:
+                updated_message.input_tokens = token_usage.get("input_tokens", 0)
+                updated_message.output_tokens = token_usage.get("output_tokens", 0)
+                await database_sync_to_async(updated_message.save)(update_fields=['input_tokens', 'output_tokens'])
             await self.send(await self.format_message(
                 updated_message, message=ai_response_accumulator, streaming=False, regenerate=True
             ))
@@ -239,7 +246,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
         bot_message_id = str(bot_message_obj.id)
         ai_response_accumulator = ""
 
-        async for chunk in self.llm_service.query(
+        token_usage = None
+        async for chunk, usage in self.llm_service.query(
             msg_content,
             self.conversation,
             llm,
@@ -253,6 +261,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
             document_similarity_threshold,
             message_obj=bot_message_obj
         ):
+            if usage:
+                token_usage = usage
             if chunk.strip():
                 ai_response_accumulator += chunk
                 payload = {
@@ -273,6 +283,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
             bot_message_obj = await database_sync_to_async(
                 lambda: Message.active_objects.prefetch_related('snippets').get(id=bot_message_obj.id)
             )()
+            if token_usage:
+                bot_message_obj.input_tokens = token_usage.get("input_tokens", 0)
+                bot_message_obj.output_tokens = token_usage.get("output_tokens", 0)
+                await database_sync_to_async(bot_message_obj.save)(update_fields=['input_tokens', 'output_tokens'])
             await self.send(await self.format_message(
                 bot_message_obj, message=ai_response_accumulator, streaming=False, regenerate=False
             ))
