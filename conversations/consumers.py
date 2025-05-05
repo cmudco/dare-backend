@@ -129,6 +129,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
     async def handle_regenerate_response(self, data):
         message_id = data.get("message_id")
+        llm_id = data.get("llm_id")
+        temperature = data.get("temperature", self.DEFAULT_TEMPERATURE)
+        max_tokens = data.get("max_tokens", self.DEFAULT_MAX_TOKENS)
+        max_context_snippets = data.get("max_context_snippets", self.DEFAULT_MAX_CONTEXT_SNIPPETS)
+        document_similarity_threshold = data.get("document_similarity_threshold", self.DEFAULT_DOCUMENT_SIMILARITY_THRESHOLD)
+        prompt_id = data.get("prompt_id")
+        file_ids = data.get("file_ids", [])
+        tag_ids = data.get("tag_ids", [])
 
         if not message_id:
             await self.send(json.dumps({"error": "Missing message_id"}))
@@ -149,9 +157,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
             await self.send(json.dumps({"error": "No preceding user message found to regenerate response"}))
             return
 
-        llm = await database_sync_to_async(lambda: ai_message.llm)()
+        llm = await database_sync_to_async(LLM.objects.filter(id=llm_id).first)() if llm_id else await database_sync_to_async(lambda: ai_message.llm)()
         if not llm:
-            logger.warning("LLM not found for message, falling back to default")
+            logger.warning("LLM not found, falling back to default")
             llm = await database_sync_to_async(lambda: LLM.objects.first())()
 
         bot_message_id = str(ai_message.id)
@@ -169,25 +177,18 @@ class ChatConsumer(AsyncWebsocketConsumer):
             "date": ai_message.created_at.isoformat(),
         })))
 
-        conversation_data = await database_sync_to_async(
-            lambda: {
-                'prompt_id': self.conversation.prompt.id if self.conversation.prompt else None,
-                'temperature': self.conversation.temperature,
-                'max_tokens': self.conversation.max_tokens,
-                'max_context_snippets': self.conversation.max_context_snippets,
-                'document_similarity_threshold': self.conversation.document_similarity_threshold
-            }
-        )()
-        file_ids = await self._get_file_ids(preceding_user_message)
-
         async for chunk in self.llm_service.query(
             preceding_user_message.message,
             self.conversation,
             llm,
             file_ids,
-            tag_ids=[],
+            tag_ids=tag_ids,
             user_id=self.user.id,
-            **conversation_data,
+            prompt_id=prompt_id,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            max_context_snippets=max_context_snippets,
+            document_similarity_threshold=document_similarity_threshold,
             message_obj=ai_message
         ):
             if chunk.strip():
