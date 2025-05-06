@@ -2,6 +2,7 @@ from dj_rest_auth.registration.serializers import RegisterSerializer
 from dj_rest_auth.serializers import UserDetailsSerializer
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
+from prompts.api.serializers import PromptSerializer
 from users.constants import VectorDBChoice
 
 User = get_user_model()
@@ -9,6 +10,7 @@ User = get_user_model()
 
 class CustomUserDetailsSerializer(UserDetailsSerializer):
     vector_db = serializers.ChoiceField(choices=VectorDBChoice.choices)
+    default_prompt = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -16,8 +18,14 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
             "id",
             "email",
             "vector_db",
+            "default_prompt"
         ]
         read_only_fields = ["id"]
+
+    def get_default_prompt(self, obj):
+        if obj.default_prompt:
+            return PromptSerializer(obj.default_prompt).data
+        return None
 
     def to_representation(self, instance):
         representation = super().to_representation(instance)

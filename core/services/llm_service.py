@@ -4,7 +4,7 @@ from conversations.models import LLM, Message
 from core.services.document_processor import DocumentProcessor
 from core.services.openai_service import OpenAIService
 from core.services.claude_service import ClaudeService
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Dict, Tuple
 from files.models import File
 from prompts.models import Prompt
 from core.services.vector_service import get_vector_service, get_vector_service_async
@@ -29,7 +29,7 @@ class LLMService:
         max_context_snippets=4,
         document_similarity_threshold=0.5,
         message_obj=None
-    ) -> AsyncGenerator[str, None]:
+    ) -> AsyncGenerator[Tuple[str, Dict], None]:
         """
         Handles AI message generation with structured messages, using vector search for file context.
         """
@@ -37,7 +37,7 @@ class LLMService:
         prompt = await self.get_prompt(prompt_id)
 
         messages = []
-        if prompt:
+        if prompt and prompt.strip():
             messages.append({"role": "assistant", "content": f"Prompt: {prompt}"})
 
         all_file_ids = set(file_ids or [])
@@ -65,13 +65,17 @@ class LLMService:
                     if part.strip():
                         messages.append({"role": "user", "content": part})
 
-        messages.extend(conversation_history)
+        filtered_history = [msg for msg in conversation_history if msg["content"].strip()]
+
+        messages.extend(filtered_history)
+        if not message.strip():
+            raise ValueError("User message cannot be empty.")
         messages.append({"role": "user", "content": f"User's message: {message}"})
 
         ai_service = self.get_ai_service(llm)
 
-        async for chunk in ai_service.stream_chat_completion(messages, max_tokens=max_tokens, temperature=temperature):
-            yield chunk
+        async for chunk, usage in ai_service.stream_chat_completion(messages, max_tokens=max_tokens, temperature=temperature):
+            yield chunk, usage
 
     @database_sync_to_async
     def get_prompt(self, prompt_id=None):

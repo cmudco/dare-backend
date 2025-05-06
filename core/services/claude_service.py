@@ -1,5 +1,5 @@
 import logging
-from typing import AsyncGenerator, Dict, List
+from typing import AsyncGenerator, Dict, List, Tuple
 from anthropic import AsyncAnthropic
 from config import env
 from conversations.models import LLM
@@ -14,7 +14,7 @@ class ClaudeService:
 
     async def stream_chat_completion(
         self, messages: List[Dict[str, str]], max_tokens: int = 1024, temperature: float = 0.7
-    ) -> AsyncGenerator[str, None]:
+    ) -> AsyncGenerator[Tuple[str, Dict], None]:
         """
         Streams chat completions from the Claude API.
 
@@ -27,7 +27,7 @@ class ClaudeService:
             temperature (float, optional): Controls randomness of the output (0.0 to 1.0). Defaults to 0.7.
 
         Yields:
-            str: Chunks of the generated response text.
+            Tuple[str, Dict]: Text chunk and usage data (or None if usage not available)
 
         Raises:
             Exception: If an error occurs during the API call, yields an error message and logs the exception.
@@ -40,15 +40,31 @@ class ClaudeService:
                 temperature=temperature,
                 stream=True
             )
+            usage = None
+            input_tokens = None
+
             async for event in stream:
                 if event.type == "content_block_delta":
-                    yield event.delta.text
-                elif event.type == "content_block_stop":
-                    break
+                    yield event.delta.text, None
+                elif event.type == "message_start" and hasattr(event, 'message') and hasattr(event.message, 'usage'):
+                    input_tokens = event.message.usage.input_tokens
+                elif event.type == "message_delta" and hasattr(event, 'usage'):
+                    output_tokens = event.usage.output_tokens
+                    if input_tokens is not None:
+                        usage = {
+                            "input_tokens": input_tokens,
+                            "output_tokens": output_tokens,
+                            "total_tokens": input_tokens + output_tokens
+                        }
+
+            if usage:
+                yield "", usage
+            else:
+                yield "", None
 
         except Exception as e:
             logger.exception(f"Error streaming chat completion: {str(e)}")
-            yield f"Error: {str(e)}"
+            yield f"Error: {str(e)}", None
 
     async def get_chat_completion(
         self, messages: List[Dict[str, str]], max_tokens: int = 1024, temperature: float = 0.7
@@ -71,6 +87,6 @@ class ClaudeService:
             Exception: If an error occurs, the error message is included in the returned string and logged.
         """
         response_text = ""
-        async for chunk in self.stream_chat_completion(messages, max_tokens, temperature):
+        async for chunk, _ in self.stream_chat_completion(messages, max_tokens, temperature):
             response_text += chunk
         return response_text
