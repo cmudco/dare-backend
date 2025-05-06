@@ -1,7 +1,7 @@
 from django.db import models
 
 APP_NAME = "files"
-ALLOWED_FILES = ['docx', 'doc', 'pdf', 'txt', 'md', 'json', 'plain']
+ALLOWED_FILES = ['docx', 'doc', 'pdf', 'txt', 'md', 'json', 'plain','vnd.openxmlformats-officedocument.wordprocessingml.document']
 
 class FileStatus(models.IntegerChoices):
     PROCESSING = 0, "Processing"

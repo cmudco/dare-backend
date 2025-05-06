@@ -16,6 +16,9 @@ class ConversationViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
+        if  self.request.user.default_prompt:
+            serializer.instance.prompt = self.request.user.default_prompt
+            serializer.instance.save()
 
 class MessageViewSet(viewsets.ModelViewSet):
     """Endpoint for creating/retrieving messages within a conversation."""
@@ -23,7 +26,7 @@ class MessageViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return Message.active_objects.filter(conversation_user=self.request.user)
+        return Message.active_objects.filter(conversation__user=self.request.user)
 
     def get_serializer_context(self):
         context = super().get_serializer_context()

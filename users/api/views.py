@@ -1,4 +1,4 @@
-from django.db.models import Count
+from django.db.models import Sum
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, viewsets
@@ -34,6 +34,15 @@ class UserStatsView(APIView):
 
         tagged_files_count = File.active_objects.filter(user=user, tags__isnull=False).count()
 
+
+        token_stats = Message.active_objects.filter(
+            conversation__user=user,
+            sender_type=SenderType.AI_ASSISTANT
+        ).aggregate(
+            total_input_tokens=Sum('input_tokens'),
+            total_output_tokens=Sum('output_tokens')
+        )
+
         stats = {
             'prompt_count': prompt_count,
             'file_count': file_count,
@@ -41,6 +50,9 @@ class UserStatsView(APIView):
             'message_count': message_count,
             'ai_message_count': ai_message_count,
             'tagged_files_count': tagged_files_count,
+            'total_input_tokens': token_stats['total_input_tokens'] or 0,
+            'total_output_tokens': token_stats['total_output_tokens'] or 0,
+            'total_tokens': (token_stats['total_input_tokens'] or 0) + (token_stats['total_output_tokens'] or 0)
         }
 
         return Response(stats, status=status.HTTP_200_OK)
