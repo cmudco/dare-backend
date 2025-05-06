@@ -1,4 +1,4 @@
-from typing import AsyncGenerator, List, Dict
+from typing import AsyncGenerator, List, Dict, Tuple
 from openai import AsyncOpenAI
 from config import env
 from conversations.models import LLM
@@ -8,12 +8,12 @@ class OpenAIService:
 
     def __init__(self, llm: LLM):
         self.client = AsyncOpenAI(api_key=env.OPENAI_API_KEY)
-        self.model = llm.identifier 
-        self.is_reasoning = llm.is_reasoning  
+        self.model = llm.identifier
+        self.is_reasoning = llm.is_reasoning
 
     async def stream_chat_completion(
         self, messages: List[Dict[str, str]], max_tokens: int = 1024, temperature: float = 0.7
-    ) -> AsyncGenerator[str, None]:
+    ) -> AsyncGenerator[Tuple[str, Dict], None]:
         """
         Streams chat completions from OpenAI's GPT model.
 
@@ -27,7 +27,7 @@ class OpenAIService:
             temperature (float, optional): Controls randomness of the output (0.0 to 1.0). Defaults to 0.7.
 
         Yields:
-            str: Chunks of the generated response text.
+            Tuple[str, Dict]: Text chunk and usage data (or None if usage not available)
 
         Raises:
             Exception: If an error occurs during the API call, yields an error message.
@@ -37,6 +37,7 @@ class OpenAIService:
                 "model": self.model,
                 "messages": messages,
                 "stream": True,
+                "stream_options": {"include_usage": True},
             }
             if not self.is_reasoning:
                 kwargs["max_tokens"] = max_tokens
@@ -45,13 +46,20 @@ class OpenAIService:
                 kwargs["max_completion_tokens"] = max_tokens
 
             response = await self.client.chat.completions.create(**kwargs)
-        
+
             async for chunk in response:
                 if chunk.choices and chunk.choices[0].delta.content:
-                     yield chunk.choices[0].delta.content
-          
+                     yield chunk.choices[0].delta.content, None
+                if chunk.usage:
+                    usage = {
+                        "input_tokens": chunk.usage.prompt_tokens,
+                        "output_tokens": chunk.usage.completion_tokens,
+                        "total_tokens": chunk.usage.total_tokens
+                    }
+            yield "", usage
+
         except Exception as e:
-            yield f"Error: {str(e)}"
+            yield f"Error: {str(e)}", None
 
     async def get_chat_completion(
         self, messages: List[Dict[str, str]], max_tokens: int = 1024, temperature: float = 0.7
@@ -74,6 +82,6 @@ class OpenAIService:
             Exception: If an error occurs, the error message is included in the returned string.
         """
         response_text = ""
-        async for chunk in self.stream_chat_completion(messages, max_tokens, temperature):
+        async for chunk, _ in self.stream_chat_completion(messages, max_tokens, temperature):
             response_text += chunk
         return response_text
