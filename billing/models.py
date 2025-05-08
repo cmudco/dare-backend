@@ -1,8 +1,9 @@
+from decimal import Decimal
 from django.db import models, transaction as db_transaction
+from django.core.exceptions import ValidationError
 from billing.constants import TransactionTypeChoice
 from common.models import TimeStampMixin
 from users.models import User
-from pydantic import ValidationError
 
 class Wallet(TimeStampMixin):
     """
@@ -15,8 +16,10 @@ class Wallet(TimeStampMixin):
         verbose_name=("User"),
         help_text=("The user associated with this wallet"),
     )
-    balance = models.IntegerField(
-        default=5,
+    balance = models.DecimalField(
+        max_digits=15,
+        decimal_places=2,
+        default=Decimal("5.00"),
         verbose_name=("Balance"),
         help_text=("Wallet balance in USD"),
     )
@@ -54,7 +57,9 @@ class Transaction(TimeStampMixin):
         verbose_name=("Message"),
         help_text=("Description of the transaction"),
     )
-    amount = models.IntegerField(
+    amount = models.DecimalField(
+        max_digits=15,
+        decimal_places=15,
         verbose_name=("Amount"),
         help_text=("Transaction amount in USD"),
     )
@@ -69,25 +74,39 @@ class Transaction(TimeStampMixin):
 
     @property
     def display_amount(self):
-        """
-        Returns the amount formatted as USD.
-        """
-        return f"${self.amount / 100:.2f}" if self.amount else ("No amount")
+        if self.amount is None:
+            return "No amount"
+        if abs(self.amount) >= Decimal('0.01'):
+            return f"${self.amount:.2f}"
+        else:
+            if abs(self.amount) < Decimal('0.0000001'):
+                return f"${self.amount:.8e}"
+            else:
+                normalized = self.amount.normalize()
+                return f"${normalized}"
 
     def save(self, *args, **kwargs):
         """
         Override save to handle balance deduction for debit transactions.
         """
         if self.pk is None:
-            with db_transaction.atomic():
-                if self.type == TransactionTypeChoice.DEBIT:
+            try:
+                with db_transaction.atomic():
                     wallet = Wallet.objects.get(user=self.user)
-                    if wallet.balance < self.amount:
-                        raise ValidationError(("Insufficient wallet balance"))
-                    wallet.balance -= self.amount
-                elif self.type == TransactionTypeChoice.CREDIT:
-                    wallet.balance += self.amount
-                wallet.save()
+                    if self.type == TransactionTypeChoice.DEBIT:
+                        if wallet.balance < self.amount:
+                            raise ValidationError({
+                                "error": "insufficient_balance",
+                                "message": "Insufficient wallet balance",
+                                "current_balance": str(wallet.balance),
+                                "required_amount": str(self.amount)
+                            })
+                        wallet.balance -= self.amount
+                    elif self.type == TransactionTypeChoice.CREDIT:
+                        wallet.balance += self.amount
+                    wallet.save()
+            except Exception as e:
+                raise
         super().save(*args, **kwargs)
 
     def __str__(self):

@@ -1,13 +1,14 @@
+from decimal import Decimal
+from django.db import models, transaction as db_transaction
 from channels.db import database_sync_to_async
+from billing.constants import TransactionTypeChoice
+from billing.models import Transaction
 from conversations.models import LLM, Message, Conversation
 from core.services.openai_service import OpenAIService
 from conversations.constants import SenderType
 from asgiref.sync import sync_to_async
-import logging
 from conversations.api.serializers import MessageSerializer
 from djangorestframework_camel_case.util import camelize
-
-logger = logging.getLogger(__name__)
 
 class ConversationService:
     """Handles conversation metadata like title generation and message management."""
@@ -17,7 +18,7 @@ class ConversationService:
         messages = await database_sync_to_async(
             lambda: list(
                 Message.active_objects.filter(conversation=conversation)
-                .select_related('llm')  # Preload llm relationship
+                .select_related('llm')
                 .prefetch_related('snippets')
                 .order_by('-created_at')
             )
@@ -37,7 +38,7 @@ class ConversationService:
                 "sender_type": msg["sender_type"],
                 "date": msg["created_at"],
                 "isSender": msg["sender_name"] == user_email,
-                "llmId": msg["llm"],  # Now correctly an ID or None
+                "llmId": msg["llm"],
                 "snippets": msg.get("snippets", []),
                 "is_liked": msg.get("is_liked", False),
                 "is_disliked": msg.get("is_disliked", False),
@@ -110,7 +111,6 @@ class ConversationService:
             lambda: LLM.objects.filter(identifier="gpt-3.5-turbo", provider="openai").first()
         )()
         if not llm:
-            logger.warning("gpt-3.5-turbo not found in LLM table, falling back to first OpenAI model")
             llm = await database_sync_to_async(
                 lambda: LLM.objects.filter(provider="openai").first()
             )()
@@ -137,8 +137,7 @@ class ConversationService:
 
         try:
             return await ai_service.get_chat_completion(messages)
-        except Exception as e:
-            logger.exception(f"Error generating title: {str(e)}")
+        except Exception:
             return "New Chat"
 
     async def get_latest_user_message(self, conversation):
@@ -190,3 +189,85 @@ class ConversationService:
         message.message = new_content
         await database_sync_to_async(message.save)()
         return message
+
+    def finalize_ai_message_with_billing(self, message_obj, ai_response, token_usage):
+        try:
+            with db_transaction.atomic():
+                message_obj.message = ai_response
+                if token_usage:
+                    message_obj.input_tokens = token_usage.get("input_tokens", 0)
+                    message_obj.output_tokens = token_usage.get("output_tokens", 0)
+
+                llm = message_obj.llm
+                if llm and message_obj.input_tokens is not None and message_obj.output_tokens is not None:
+                    input_rate_per_token = llm.input_token_rate_per_million / Decimal('1000000')
+                    output_rate_per_token = llm.output_token_rate_per_million / Decimal('1000000')
+
+                    input_cost = Decimal(message_obj.input_tokens) * input_rate_per_token
+                    output_cost = Decimal(message_obj.output_tokens) * output_rate_per_token
+                    total_cost = input_cost + output_cost
+
+                    amount = total_cost
+
+                    if amount > Decimal('0.00'):
+                        billing_transaction = Transaction(
+                            user=message_obj.conversation.user,
+                            message=f"LLM usage for message {message_obj.id}: {message_obj.input_tokens} input tokens, {message_obj.output_tokens} output tokens",
+                            amount=amount,
+                            type=TransactionTypeChoice.DEBIT
+                        )
+                        billing_transaction.save()
+
+                message_obj.save()
+        except Exception as e:
+                        raise
+
+    async def check_user_has_sufficient_credits(self, user, llm, estimated_input_tokens=500, estimated_output_tokens=1000):
+        """
+        Check if a user has sufficient wallet balance for an estimated conversation.
+        This is a pre-check to avoid generating content that can't be billed.
+
+        Args:
+            user: The user making the request
+            llm: The LLM model to be used
+            estimated_input_tokens: Estimated number of input tokens (default: 500)
+            estimated_output_tokens: Estimated number of output tokens (default: 1000)
+
+        Returns:
+            tuple: (bool, dict) - (has_sufficient_funds, error_details)
+        """
+        try:
+            wallet = await database_sync_to_async(lambda: user.wallet)()
+
+            if not wallet:
+                return False, {
+                    "error": "wallet_not_found",
+                    "message": "User wallet not found"
+                }
+
+            balance = await database_sync_to_async(lambda: wallet.balance)()
+
+            input_rate_per_token = llm.input_token_rate_per_million / Decimal('1000000')
+            output_rate_per_token = llm.output_token_rate_per_million / Decimal('1000000')
+
+            estimated_input_cost = Decimal(estimated_input_tokens) * input_rate_per_token
+            estimated_output_cost = Decimal(estimated_output_tokens) * output_rate_per_token
+            estimated_total_cost = estimated_input_cost + estimated_output_cost
+
+            estimated_amount = estimated_total_cost
+
+            if balance < estimated_amount.quantize(Decimal('0.01')):
+                                return False, {
+                    "error": "insufficient_credits",
+                    "message": "You've run out of credits. Please add more to continue.",
+                    "current_balance": str(balance),
+                    "required_amount": str(estimated_amount)
+                }
+
+            return True, {}
+
+        except Exception as e:
+                        return False, {
+                "error": "credit_check_error",
+                "message": "An error occurred while checking your credits"
+            }

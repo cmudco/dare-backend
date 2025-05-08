@@ -1,9 +1,10 @@
+from decimal import Decimal
 import random
 import string
 
 from django.db import models
 from django.conf import settings
-
+from django.core.validators import MinValueValidator
 from common.managers import ActiveObjectsManager
 from common.models import BaseModel, TimeStampMixin
 from .constants import Provider, SenderType
@@ -20,6 +21,22 @@ class LLM(models.Model):
         help_text="Provider of the LLM (e.g., OpenAI, Claude)."
     )
     is_reasoning = models.BooleanField(default=False, help_text="Whether the model supports reasoning.")
+
+    input_token_rate_per_million = models.DecimalField(
+            max_digits=10,
+            decimal_places=2,
+            default=Decimal('0.00'),
+            validators=[MinValueValidator(0)],
+            help_text="Cost per million input tokens in USD (e.g., 3.00 for $3 per 1M tokens)."
+        )
+    output_token_rate_per_million = models.DecimalField(
+            max_digits=10,
+            decimal_places=2,
+            default=Decimal('0.00'),
+            validators=[MinValueValidator(0)],
+            help_text="Cost per million output tokens in USD (e.g., 15.00 for $15 per 1M tokens)."
+        )
+
 
     def __str__(self):
         return self.name

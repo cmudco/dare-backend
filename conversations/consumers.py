@@ -1,10 +1,10 @@
-import logging
-from channels.generic.websocket import AsyncWebsocketConsumer
 import json
+from channels.generic.websocket import AsyncWebsocketConsumer
 from urllib.parse import parse_qs
 from asgiref.sync import sync_to_async
 from django.conf import settings
 from channels.exceptions import DenyConnection
+from pydantic import ValidationError
 
 from conversations.models import Conversation, Message, LLM
 from core.services.conversation_service import ConversationService
@@ -18,7 +18,6 @@ from conversations.api.serializers import MessageSerializer
 from djangorestframework_camel_case.util import camelize
 
 User = get_user_model()
-logger = logging.getLogger(__name__)
 
 class ChatConsumer(AsyncWebsocketConsumer):
     DEFAULT_TEMPERATURE = 0.7
@@ -48,12 +47,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
         except DenyConnection:
             await self.close()
         except Exception as e:
-            logger.exception(f"Error in WebSocket connection: {e}")
             await self.close()
 
     async def disconnect(self, close_code):
         """Handle WebSocket disconnection."""
-        logger.info(f"WebSocket disconnected with code: {close_code}")
+        pass
 
     async def receive(self, text_data=None, bytes_data=None):
         """
@@ -63,6 +61,18 @@ class ChatConsumer(AsyncWebsocketConsumer):
             data = json.loads(text_data)
             action = data.get("action")
 
+            if action != "edit_message":
+                llm_id = data.get("llm_id")
+                llm = await database_sync_to_async(LLM.objects.filter(id=llm_id).first)() if llm_id else await database_sync_to_async(LLM.objects.first)()
+
+                has_sufficient_credits, error_details = await self.conversation_service.check_user_has_sufficient_credits(
+                    self.user, llm
+                )
+
+                if not has_sufficient_credits:
+                    await self.send(json.dumps(error_details))
+                    return
+
             if action == "edit_message":
                 await self.handle_edit_message(data)
             elif action == "regenerate_response":
@@ -70,7 +80,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
             else:
                 await self.handle_new_message(data)
         except Exception as e:
-            logger.exception(f"Error processing message: {str(e)}")
+            await self.send(json.dumps({
+                "error": "processing_error",
+                "message": "An error occurred while processing your message."
+            }))
 
     async def handle_new_message(self, data):
         msg_content = data.get("message", "").strip()
@@ -92,6 +105,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
         asyncio.create_task(self.handle_title_generation(msg_content))
 
         llm = await database_sync_to_async(LLM.objects.filter(id=llm_id).first)() if llm_id else await database_sync_to_async(LLM.objects.first)()
+
+        has_sufficient_credits, error_details = await self.conversation_service.check_user_has_sufficient_credits(
+            self.user, llm
+        )
+
+        if not has_sufficient_credits:
+            await self.send(json.dumps(error_details))
+            return
 
         bot_message_obj = await self.conversation_service.create_message(
             self.conversation, SenderType.AI_ASSISTANT, "", "AI Assistant", [], llm=llm
@@ -159,11 +180,19 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
         llm = await database_sync_to_async(LLM.objects.filter(id=llm_id).first)() if llm_id else await database_sync_to_async(lambda: ai_message.llm)()
         if not llm:
-            logger.warning("LLM not found, falling back to default")
             llm = await database_sync_to_async(lambda: LLM.objects.first())()
+
+        has_sufficient_credits, error_details = await self.conversation_service.check_user_has_sufficient_credits(
+            self.user, llm
+        )
+
+        if not has_sufficient_credits:
+            await self.send(json.dumps(error_details))
+            return
 
         bot_message_id = str(ai_message.id)
         ai_response_accumulator = ""
+        token_usage = None
 
         await self.send(json.dumps(camelize({
             "type": "ai_stream",
@@ -177,7 +206,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
             "date": ai_message.created_at.isoformat(),
         })))
 
-        token_usage = None
         async for chunk, usage in self.llm_service.query(
             preceding_user_message.message,
             self.conversation,
@@ -210,16 +238,17 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 await self.send(json.dumps(camelize(payload)))
 
         if ai_response_accumulator.strip():
-            updated_message = await self.conversation_service.regenerate_message(
-                bot_message_id, ai_response_accumulator, self.conversation
-            )
-            if token_usage:
-                updated_message.input_tokens = token_usage.get("input_tokens", 0)
-                updated_message.output_tokens = token_usage.get("output_tokens", 0)
-                await database_sync_to_async(updated_message.save)(update_fields=['input_tokens', 'output_tokens'])
-            await self.send(await self.format_message(
-                updated_message, message=ai_response_accumulator, streaming=False, regenerate=True
-            ))
+            try:
+                await database_sync_to_async(self.conversation_service.finalize_ai_message_with_billing)(ai_message, ai_response_accumulator, token_usage)
+                ai_message.is_regenerated = True
+                if not ai_message.original_message:
+                    ai_message.original_message = ai_message.message
+                await database_sync_to_async(ai_message.save)(update_fields=['is_regenerated', 'original_message'])
+                await self.send(await self.format_message(
+                    ai_message, message=ai_response_accumulator, streaming=False, regenerate=True
+                ))
+            except ValidationError:
+                await self.send(json.dumps({"error": "Insufficient wallet balance"}))
 
     async def handle_title_generation(self, user_message):
         is_first_message = await self.conversation_service.is_first_message(self.conversation)
@@ -245,8 +274,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
         """Handles AI response streaming and updates the message."""
         bot_message_id = str(bot_message_obj.id)
         ai_response_accumulator = ""
-
         token_usage = None
+
         async for chunk, usage in self.llm_service.query(
             msg_content,
             self.conversation,
@@ -279,17 +308,16 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 await self.send(json.dumps(camelize(payload)))
 
         if ai_response_accumulator.strip():
-            await self.conversation_service.update_message(bot_message_id, ai_response_accumulator)
-            bot_message_obj = await database_sync_to_async(
-                lambda: Message.active_objects.prefetch_related('snippets').get(id=bot_message_obj.id)
-            )()
-            if token_usage:
-                bot_message_obj.input_tokens = token_usage.get("input_tokens", 0)
-                bot_message_obj.output_tokens = token_usage.get("output_tokens", 0)
-                await database_sync_to_async(bot_message_obj.save)(update_fields=['input_tokens', 'output_tokens'])
-            await self.send(await self.format_message(
-                bot_message_obj, message=ai_response_accumulator, streaming=False, regenerate=False
-            ))
+            try:
+                await database_sync_to_async(self.conversation_service.finalize_ai_message_with_billing)(bot_message_obj, ai_response_accumulator, token_usage)
+                bot_message_obj = await database_sync_to_async(
+                    lambda: Message.active_objects.prefetch_related('snippets').get(id=bot_message_obj.id)
+                )()
+                await self.send(await self.format_message(
+                    bot_message_obj, message=ai_response_accumulator, streaming=False, regenerate=False
+                ))
+            except ValidationError:
+                await self.send(json.dumps({"error": "Insufficient wallet balance"}))
 
     async def load_conversation_history(self, conversation):
         """Fetches chat history and sends it to the frontend."""
