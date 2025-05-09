@@ -1,10 +1,13 @@
 import json
+import traceback
 from channels.generic.websocket import AsyncWebsocketConsumer
 from urllib.parse import parse_qs
 from asgiref.sync import sync_to_async
 from django.conf import settings
 from channels.exceptions import DenyConnection
 from pydantic import ValidationError
+from django.core.exceptions import ValidationError as DjangoValidationError
+from decimal import Decimal
 
 from conversations.models import Conversation, Message, LLM
 from core.services.conversation_service import ConversationService
@@ -194,6 +197,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
         ai_response_accumulator = ""
         token_usage = None
 
+        user_balance = await database_sync_to_async(
+            lambda: getattr(self.user.wallet, 'balance', 0)
+        )()
+        print(f"[WebSocket] User balance before regeneration: {user_balance}")
+
         await self.send(json.dumps(camelize({
             "type": "ai_stream",
             "id": bot_message_id,
@@ -205,6 +213,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
             "regenerate": True,
             "date": ai_message.created_at.isoformat(),
         })))
+
+        stream_interrupted = False
 
         async for chunk, usage in self.llm_service.query(
             preceding_user_message.message,
@@ -222,7 +232,74 @@ class ChatConsumer(AsyncWebsocketConsumer):
         ):
             if usage:
                 token_usage = usage
-            if chunk.strip():
+
+
+                can_continue, error_response = await self.conversation_service.check_streaming_credit_usage(
+                    self.user, llm, token_usage
+                )
+
+                if not can_continue:
+                    print(f"[WebSocket] Interrupting regeneration stream - insufficient balance")
+
+
+                    self.user = await database_sync_to_async(
+                        lambda: type(self.user).objects.get(pk=self.user.pk)
+                    )()
+
+
+                    current_balance = await database_sync_to_async(
+                        lambda: getattr(self.user.wallet, 'balance', 0)
+                    )()
+                    print(f"[WebSocket] Current balance after interruption: {current_balance:.6f}")
+
+
+                    if ai_response_accumulator.strip():
+                        last_payload = {
+                            "type": "ai_stream",
+                            "id": bot_message_id,
+                            "message": ai_response_accumulator,
+                            "senderName": "AI Assistant",
+                            "senderType": SenderType.AI_ASSISTANT,
+                            "isSender": False,
+                            "streaming": False,
+                            "regenerate": True,
+                            "date": ai_message.created_at.isoformat(),
+                        }
+                        await self.send(json.dumps(camelize(last_payload)))
+
+
+                    await self.send(json.dumps(error_response))
+
+
+                    if not ai_message.original_message:
+                        ai_message.original_message = ai_message.message
+
+
+                    await database_sync_to_async(
+                        lambda: setattr(ai_message, 'message',
+                                       f"{ai_response_accumulator}\n\n[Response cut off - insufficient credits]")
+                    )()
+
+
+                    await database_sync_to_async(
+                        lambda: setattr(ai_message, 'input_tokens', token_usage.get('input_tokens', 0))
+                    )()
+                    await database_sync_to_async(
+                        lambda: setattr(ai_message, 'output_tokens', token_usage.get('output_tokens', 0))
+                    )()
+
+
+                    await database_sync_to_async(
+                        lambda: setattr(ai_message, 'is_regenerated', True)
+                    )()
+
+
+                    await database_sync_to_async(ai_message.save)()
+
+                    stream_interrupted = True
+                    break
+
+            if chunk.strip() and not stream_interrupted:
                 ai_response_accumulator += chunk
                 payload = {
                     "type": "ai_stream",
@@ -237,9 +314,27 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 }
                 await self.send(json.dumps(camelize(payload)))
 
+        if stream_interrupted:
+
+            print("[WebSocket] Regeneration stream was interrupted due to insufficient balance")
+            return
+
         if ai_response_accumulator.strip():
             try:
+                print(f"[WebSocket] Finalizing regenerated message with billing, tokens used: {token_usage}")
                 await database_sync_to_async(self.conversation_service.finalize_ai_message_with_billing)(ai_message, ai_response_accumulator, token_usage)
+
+
+                self.user = await database_sync_to_async(
+                    lambda: type(self.user).objects.get(pk=self.user.pk)
+                )()
+
+
+                updated_balance = await database_sync_to_async(
+                    lambda: getattr(self.user.wallet, 'balance', 0)
+                )()
+                print(f"[WebSocket] Balance after finalizing regenerated message: {updated_balance:.6f}")
+
                 ai_message.is_regenerated = True
                 if not ai_message.original_message:
                     ai_message.original_message = ai_message.message
@@ -247,8 +342,24 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 await self.send(await self.format_message(
                     ai_message, message=ai_response_accumulator, streaming=False, regenerate=True
                 ))
-            except ValidationError:
-                await self.send(json.dumps({"error": "Insufficient wallet balance"}))
+            except ValidationError as ve:
+                print(f"[WebSocket ERROR] ValidationError in finalizing regenerated message: {str(ve)}")
+
+                error_data = ve.message_dict if hasattr(ve, 'message_dict') else {}
+
+
+                if 'current_balance' in error_data and 'required_amount' in error_data:
+                    error_response = {
+                        "error": "insufficient_balance",
+                        "message": "Insufficient wallet balance",
+                        "current_balance": error_data.get('current_balance', ['0'])[0],
+                        "required_amount": error_data.get('required_amount', ['0'])[0]
+                    }
+                else:
+                    error_response = {"error": "insufficient_balance", "message": "Insufficient wallet balance"}
+
+
+                await self.send(json.dumps(error_response))
 
     async def handle_title_generation(self, user_message):
         is_first_message = await self.conversation_service.is_first_message(self.conversation)
@@ -272,52 +383,202 @@ class ChatConsumer(AsyncWebsocketConsumer):
         document_similarity_threshold=DEFAULT_DOCUMENT_SIMILARITY_THRESHOLD
     ):
         """Handles AI response streaming and updates the message."""
-        bot_message_id = str(bot_message_obj.id)
-        ai_response_accumulator = ""
-        token_usage = None
+        try:
+            print("[WebSocket] Starting handle_ai_response")
+            bot_message_id = str(bot_message_obj.id)
+            ai_response_accumulator = ""
+            token_usage = None
 
-        async for chunk, usage in self.llm_service.query(
-            msg_content,
-            self.conversation,
-            llm,
-            file_ids,
-            tag_ids,
-            self.user.id,
-            prompt_id,
-            temperature,
-            max_tokens,
-            max_context_snippets,
-            document_similarity_threshold,
-            message_obj=bot_message_obj
-        ):
-            if usage:
-                token_usage = usage
-            if chunk.strip():
-                ai_response_accumulator += chunk
-                payload = {
-                    "type": "ai_stream",
-                    "id": bot_message_id,
-                    "message": ai_response_accumulator,
-                    "senderName": "AI Assistant",
-                    "senderType": SenderType.AI_ASSISTANT,
-                    "isSender": False,
-                    "streaming": True,
-                    "regenerate": False,
-                    "date": bot_message_obj.created_at.isoformat(),
-                }
-                await self.send(json.dumps(camelize(payload)))
 
-        if ai_response_accumulator.strip():
-            try:
-                await database_sync_to_async(self.conversation_service.finalize_ai_message_with_billing)(bot_message_obj, ai_response_accumulator, token_usage)
-                bot_message_obj = await database_sync_to_async(
-                    lambda: Message.active_objects.prefetch_related('snippets').get(id=bot_message_obj.id)
-                )()
-                await self.send(await self.format_message(
-                    bot_message_obj, message=ai_response_accumulator, streaming=False, regenerate=False
-                ))
-            except ValidationError:
-                await self.send(json.dumps({"error": "Insufficient wallet balance"}))
+            user_balance = await database_sync_to_async(
+                lambda: getattr(self.user.wallet, 'balance', 0)
+            )()
+            print(f"[WebSocket] User balance before streaming: {user_balance:.6f}")
+
+            print(f"[WebSocket] Starting LLM query for message: {bot_message_id}")
+            stream_interrupted = False
+
+            async for chunk, usage in self.llm_service.query(
+                msg_content,
+                self.conversation,
+                llm,
+                file_ids,
+                tag_ids,
+                self.user.id,
+                prompt_id,
+                temperature,
+                max_tokens,
+                max_context_snippets,
+                document_similarity_threshold,
+                message_obj=bot_message_obj
+            ):
+                if usage:
+                    token_usage = usage
+
+
+                    can_continue, error_response = await self.conversation_service.check_streaming_credit_usage(
+                        self.user, llm, token_usage
+                    )
+
+                    if not can_continue:
+                        print(f"[WebSocket] Interrupting stream - insufficient balance")
+
+
+                        self.user = await database_sync_to_async(
+                            lambda: type(self.user).objects.get(pk=self.user.pk)
+                        )()
+
+
+                        current_balance = await database_sync_to_async(
+                            lambda: getattr(self.user.wallet, 'balance', 0)
+                        )()
+                        print(f"[WebSocket] Current balance after interruption: {current_balance:.6f}")
+
+
+                        if ai_response_accumulator.strip():
+                            last_payload = {
+                                "type": "ai_stream",
+                                "id": bot_message_id,
+                                "message": ai_response_accumulator,
+                                "senderName": "AI Assistant",
+                                "senderType": SenderType.AI_ASSISTANT,
+                                "isSender": False,
+                                "streaming": False,
+                                "regenerate": False,
+                                "date": bot_message_obj.created_at.isoformat(),
+                            }
+                            await self.send(json.dumps(camelize(last_payload)))
+
+
+                        await self.send(json.dumps(error_response))
+
+
+                        await database_sync_to_async(
+                            lambda: setattr(bot_message_obj, 'message',
+                                           f"{ai_response_accumulator}\n\n[Response cut off - insufficient credits]")
+                        )()
+
+
+                        await database_sync_to_async(
+                            lambda: setattr(bot_message_obj, 'input_tokens', token_usage.get('input_tokens', 0))
+                        )()
+                        await database_sync_to_async(
+                            lambda: setattr(bot_message_obj, 'output_tokens', token_usage.get('output_tokens', 0))
+                        )()
+
+
+                        await database_sync_to_async(bot_message_obj.save)()
+
+                        stream_interrupted = True
+                        break
+
+
+
+                if chunk.strip() and not stream_interrupted:
+                    ai_response_accumulator += chunk
+                    payload = {
+                        "type": "ai_stream",
+                        "id": bot_message_id,
+                        "message": ai_response_accumulator,
+                        "senderName": "AI Assistant",
+                        "senderType": SenderType.AI_ASSISTANT,
+                        "isSender": False,
+                        "streaming": True,
+                        "regenerate": False,
+                        "date": bot_message_obj.created_at.isoformat(),
+                    }
+                    await self.send(json.dumps(camelize(payload)))
+
+            if stream_interrupted:
+
+                print("[WebSocket] Stream was interrupted due to insufficient balance - processing complete")
+                return
+
+            print(f"[WebSocket] AI response complete, accumulated {len(ai_response_accumulator)} chars")
+
+            if ai_response_accumulator.strip():
+                try:
+                    print(f"[WebSocket] Finalizing message with billing, tokens used: {token_usage}")
+                    await database_sync_to_async(self.conversation_service.finalize_ai_message_with_billing)(bot_message_obj, ai_response_accumulator, token_usage)
+
+
+                    self.user = await database_sync_to_async(
+                        lambda: type(self.user).objects.get(pk=self.user.pk)
+                    )()
+
+
+                    updated_balance = await database_sync_to_async(
+                        lambda: getattr(self.user.wallet, 'balance', 0)
+                    )()
+                    print(f"[WebSocket] Balance after finalizing message: {updated_balance:.6f}")
+
+                    bot_message_obj = await database_sync_to_async(
+                        lambda: Message.active_objects.prefetch_related('snippets').get(id=bot_message_obj.id)
+                    )()
+                    await self.send(await self.format_message(
+                        bot_message_obj, message=ai_response_accumulator, streaming=False, regenerate=False
+                    ))
+                except (ValidationError, DjangoValidationError) as ve:
+                    print(f"[WebSocket ERROR] ValidationError in finalizing message: {str(ve)}")
+
+
+
+                    if hasattr(ve, 'message_dict'):
+                        error_data = ve.message_dict
+                    elif hasattr(ve, 'errors'):
+                        error_data = ve.errors()
+                    else:
+                        error_data = {}
+
+
+                    if 'current_balance' in error_data and 'required_amount' in error_data:
+                        error_response = {
+                            "error": "insufficient_balance",
+                            "message": "Insufficient wallet balance",
+                            "current_balance": error_data.get('current_balance', ['0'])[0],
+                            "required_amount": error_data.get('required_amount', ['0'])[0]
+                        }
+                    else:
+                        error_response = {"error": "insufficient_balance", "message": "Insufficient wallet balance"}
+
+
+                    await self.send(json.dumps(error_response))
+
+
+                    await database_sync_to_async(
+                        lambda: setattr(bot_message_obj, 'message',
+                                       f"{ai_response_accumulator}\n\n[Finalization failed - insufficient credits]")
+                    )()
+
+
+                    await database_sync_to_async(
+                        lambda: setattr(bot_message_obj, 'input_tokens', token_usage.get('input_tokens', 0))
+                    )()
+                    await database_sync_to_async(
+                        lambda: setattr(bot_message_obj, 'output_tokens', token_usage.get('output_tokens', 0))
+                    )()
+
+
+                    await database_sync_to_async(bot_message_obj.save)()
+                except Exception as e:
+                    print(f"[WebSocket ERROR] Exception in finalizing message: {str(e)}")
+                    print(f"[WebSocket ERROR] Exception type: {type(e)}")
+                    print(f"[WebSocket ERROR] Full traceback: {traceback.format_exc()}")
+                    await self.send(json.dumps({
+                        "error": "processing_error",
+                        "message": "Failed to finalize message"
+                    }))
+                    raise
+        except Exception as e:
+            print(f"[WebSocket ERROR] Exception in handle_ai_response: {str(e)}")
+            print(f"[WebSocket ERROR] Error type: {type(e)}")
+            print(f"[WebSocket ERROR] Traceback: {traceback.format_exc()}")
+
+
+            await self.send(json.dumps({
+                "error": "ai_response_error",
+                "message": f"Error generating AI response: {str(e)}"
+            }))
 
     async def load_conversation_history(self, conversation):
         """Fetches chat history and sends it to the frontend."""

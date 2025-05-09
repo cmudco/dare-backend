@@ -1,12 +1,12 @@
 from decimal import Decimal
 from django.db import models, transaction as db_transaction
+from django.core.exceptions import ValidationError
 from channels.db import database_sync_to_async
 from billing.constants import TransactionTypeChoice
 from billing.models import Transaction
 from conversations.models import LLM, Message, Conversation
 from core.services.openai_service import OpenAIService
 from conversations.constants import SenderType
-from asgiref.sync import sync_to_async
 from conversations.api.serializers import MessageSerializer
 from djangorestframework_camel_case.util import camelize
 
@@ -191,36 +191,65 @@ class ConversationService:
         return message
 
     def finalize_ai_message_with_billing(self, message_obj, ai_response, token_usage):
-        try:
-            with db_transaction.atomic():
-                message_obj.message = ai_response
-                if token_usage:
-                    message_obj.input_tokens = token_usage.get("input_tokens", 0)
-                    message_obj.output_tokens = token_usage.get("output_tokens", 0)
+        """
+        Finalizes an AI message with billing by updating the message and processing the transaction.
 
-                llm = message_obj.llm
-                if llm and message_obj.input_tokens is not None and message_obj.output_tokens is not None:
-                    input_rate_per_token = llm.input_token_rate_per_million / Decimal('1000000')
-                    output_rate_per_token = llm.output_token_rate_per_million / Decimal('1000000')
+        Args:
+            message_obj: The message object to be finalized
+            ai_response: The AI response text
+            token_usage: Dictionary with token usage stats {'input_tokens': X, 'output_tokens': Y}
 
-                    input_cost = Decimal(message_obj.input_tokens) * input_rate_per_token
-                    output_cost = Decimal(message_obj.output_tokens) * output_rate_per_token
-                    total_cost = input_cost + output_cost
+        Returns:
+            The updated message object
 
-                    amount = total_cost
+        Raises:
+            ValidationError: If there's insufficient balance
+        """
+        message_obj.message = ai_response
 
-                    if amount > Decimal('0.00'):
+        if token_usage:
+            message_obj.input_tokens = token_usage.get("input_tokens", 0)
+            message_obj.output_tokens = token_usage.get("output_tokens", 0)
+
+            llm = message_obj.llm
+
+            if llm:
+                input_rate_per_token = llm.input_token_rate_per_million / Decimal('1000000')
+                output_rate_per_token = llm.output_token_rate_per_million / Decimal('1000000')
+
+                input_tokens = token_usage.get('input_tokens', 0)
+                output_tokens = token_usage.get('output_tokens', 0)
+
+                input_cost = Decimal(input_tokens) * input_rate_per_token
+                output_cost = Decimal(output_tokens) * output_rate_per_token
+                total_cost = input_cost + output_cost
+
+                if total_cost > Decimal('0.00'):
+                    user = message_obj.conversation.user
+                    wallet = user.wallet
+                    current_balance = wallet.balance
+
+                    if wallet.balance < total_cost:
+                        raise ValidationError({
+                            'error': ['insufficient_balance'],
+                            'message': ['Insufficient wallet balance'],
+                            'current_balance': [str(wallet.balance)],
+                            'required_amount': [str(total_cost)]
+                        })
+
+                    with db_transaction.atomic():
                         billing_transaction = Transaction(
-                            user=message_obj.conversation.user,
-                            message=f"LLM usage for message {message_obj.id}: {message_obj.input_tokens} input tokens, {message_obj.output_tokens} output tokens",
-                            amount=amount,
-                            type=TransactionTypeChoice.DEBIT
+                            user=user,
+                            amount=total_cost,
+                            type=TransactionTypeChoice.DEBIT,
+                            message=f"LLM usage: {input_tokens} input tokens, {output_tokens} output tokens"
                         )
-                        billing_transaction.save()
 
-                message_obj.save()
-        except Exception as e:
-                        raise
+                        billing_transaction.save()
+                        wallet.refresh_from_db()
+
+        message_obj.save()
+        return message_obj
 
     async def check_user_has_sufficient_credits(self, user, llm, estimated_input_tokens=500, estimated_output_tokens=1000):
         """
@@ -257,17 +286,98 @@ class ConversationService:
             estimated_amount = estimated_total_cost
 
             if balance < estimated_amount.quantize(Decimal('0.01')):
-                                return False, {
+                return False, {
                     "error": "insufficient_credits",
                     "message": "You've run out of credits. Please add more to continue.",
                     "current_balance": str(balance),
                     "required_amount": str(estimated_amount)
                 }
 
+            if balance < (estimated_amount * Decimal('1.5')).quantize(Decimal('0.01')):
+                return True, {
+                    "warning": "low_balance",
+                    "message": "You're running low on credits. Response may be cut short.",
+                    "current_balance": str(balance),
+                    "estimated_amount": str(estimated_amount)
+                }
+
             return True, {}
 
         except Exception as e:
-                        return False, {
+            return False, {
+                "error": "credit_check_error",
+                "message": "An error occurred while checking your credits"
+            }
+
+    async def check_streaming_credit_usage(self, user, llm, token_usage):
+        """
+        Check if a user has sufficient wallet balance to continue streaming based on current token usage.
+        If insufficient balance is found, deduct the amount used so far.
+
+        Args:
+            user: The user making the request
+            llm: The LLM model being used
+            token_usage: Dictionary containing current token usage {'input_tokens': X, 'output_tokens': Y}
+
+        Returns:
+            tuple: (can_continue, error_response) where error_response is None if can_continue is True
+        """
+        try:
+            wallet = await database_sync_to_async(lambda: user.wallet)()
+
+            if not wallet:
+                return False, {
+                    "error": "wallet_not_found",
+                    "message": "User wallet not found"
+                }
+
+            balance = await database_sync_to_async(lambda: wallet.balance)()
+
+            input_rate_per_token = await database_sync_to_async(
+                lambda: llm.input_token_rate_per_million / Decimal('1000000')
+            )()
+            output_rate_per_token = await database_sync_to_async(
+                lambda: llm.output_token_rate_per_million / Decimal('1000000')
+            )()
+
+            input_cost = Decimal(token_usage.get('input_tokens', 0)) * input_rate_per_token
+            output_cost = Decimal(token_usage.get('output_tokens', 0)) * output_rate_per_token
+            estimated_cost = input_cost + output_cost
+
+            if estimated_cost > balance:
+                if balance > Decimal('0'):
+                    amount_to_deduct = balance
+
+                    transaction = await database_sync_to_async(
+                        lambda: Transaction.objects.create(
+                            user=user,
+                            message=f"Partial LLM usage: {token_usage.get('input_tokens', 0)} input tokens, {token_usage.get('output_tokens', 0)} output tokens (interrupted - insufficient balance)",
+                            amount=amount_to_deduct,
+                            type=TransactionTypeChoice.DEBIT
+                        )
+                    )()
+
+                    await database_sync_to_async(lambda: wallet.refresh_from_db())()
+                    updated_balance = await database_sync_to_async(lambda: wallet.balance)()
+
+                    return False, {
+                        "error": "insufficient_balance",
+                        "message": "Insufficient wallet balance to continue generating response",
+                        "current_balance": str(updated_balance),
+                        "required_amount": str(estimated_cost)
+                    }
+
+                return False, {
+                    "error": "insufficient_balance",
+                    "message": "Insufficient wallet balance to continue generating response",
+                    "current_balance": str(balance),
+                    "required_amount": str(estimated_cost)
+                }
+
+            return True, None
+
+        except Exception:
+            return False, {
                 "error": "credit_check_error",
                 "message": "An error occurred while checking your credits"
             }

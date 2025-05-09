@@ -87,26 +87,30 @@ class Transaction(TimeStampMixin):
 
     def save(self, *args, **kwargs):
         """
-        Override save to handle balance deduction for debit transactions.
+        Override save method to handle balance deduction for debit transactions.
         """
-        if self.pk is None:
-            try:
-                with db_transaction.atomic():
-                    wallet = Wallet.objects.get(user=self.user)
-                    if self.type == TransactionTypeChoice.DEBIT:
-                        if wallet.balance < self.amount:
-                            raise ValidationError({
-                                "error": "insufficient_balance",
-                                "message": "Insufficient wallet balance",
-                                "current_balance": str(wallet.balance),
-                                "required_amount": str(self.amount)
-                            })
-                        wallet.balance -= self.amount
-                    elif self.type == TransactionTypeChoice.CREDIT:
-                        wallet.balance += self.amount
-                    wallet.save()
-            except Exception as e:
-                raise
+
+        is_new = self.pk is None
+
+        if is_new:
+            wallet = self.user.wallet
+            current_balance = wallet.balance
+            if self.type == TransactionTypeChoice.DEBIT:
+                if wallet.balance < self.amount:
+                    raise ValidationError({
+                        'error': ['insufficient_balance'],
+                        'message': ['Insufficient wallet balance'],
+                        'current_balance': [str(wallet.balance)],
+                        'required_amount': [str(self.amount)]
+                    })
+
+                wallet.balance -= self.amount
+
+            elif self.type == TransactionTypeChoice.CREDIT:
+                wallet.balance += self.amount
+
+            wallet.save(update_fields=['balance'])
+
         super().save(*args, **kwargs)
 
     def __str__(self):
