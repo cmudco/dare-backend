@@ -18,7 +18,7 @@ class Wallet(TimeStampMixin):
     )
     balance = models.DecimalField(
         max_digits=15,
-        decimal_places=2,
+        decimal_places=6,
         default=Decimal("5.00"),
         verbose_name=("Balance"),
         help_text=("Wallet balance in USD"),
