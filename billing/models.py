@@ -25,8 +25,8 @@ class Wallet(TimeStampMixin):
     )
 
     class Meta:
-            verbose_name = ("Wallet")
-            verbose_name_plural = ("Wallets")
+        verbose_name = ("Wallet")
+        verbose_name_plural = ("Wallets")
 
     @property
     def display_balance(self):
@@ -64,10 +64,25 @@ class Transaction(TimeStampMixin):
         help_text=("Transaction amount in USD"),
     )
     type = models.IntegerField(
-        choices = TransactionTypeChoice.choices,
+        choices=TransactionTypeChoice.choices,
         verbose_name=("Transaction Type"),
         help_text=("Type of the transaction: debit or credit"),
     )
+    input_tokens = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        default=0,
+        verbose_name=("Input Tokens"),
+        help_text=("Number of input tokens used in the transaction"),
+    )
+    output_tokens = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        default=0,
+        verbose_name=("Output Tokens"),
+        help_text=("Number of output tokens used in the transaction"),
+    )
+
     class Meta:
         verbose_name = ("Transaction")
         verbose_name_plural = ("Transactions")
@@ -89,11 +104,14 @@ class Transaction(TimeStampMixin):
         """
         Override save method to handle balance deduction for debit transactions.
         """
-
         is_new = self.pk is None
 
         if is_new:
-            wallet = self.user.wallet
+            try:
+                wallet = self.user.wallet
+            except self.user.wallet.RelatedObjectDoesNotExist:
+                wallet = Wallet.objects.create(user=self.user, balance=Decimal('5.00'))
+
             current_balance = wallet.balance
             if self.type == TransactionTypeChoice.DEBIT:
                 if wallet.balance < self.amount:
@@ -103,9 +121,7 @@ class Transaction(TimeStampMixin):
                         'current_balance': [str(wallet.balance)],
                         'required_amount': [str(self.amount)]
                     })
-
                 wallet.balance -= self.amount
-
             elif self.type == TransactionTypeChoice.CREDIT:
                 wallet.balance += self.amount
 
@@ -117,4 +133,5 @@ class Transaction(TimeStampMixin):
         """
         Returns a string representation of the transaction.
         """
-        return f"{self.user.email}: {self.get_type_display()} - {self.display_amount}"
+        token_info = f", {self.input_tokens} input, {self.output_tokens} output tokens" if self.input_tokens is not None and self.output_tokens is not None else ""
+        return f"{self.user.email}: {self.get_type_display()} - {self.display_amount}{token_info}"
