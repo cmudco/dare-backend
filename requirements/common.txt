@@ -49,3 +49,6 @@ pycryptodome==3.22.0
 
 # weaviate
 weaviate-client==4.14.1
+
+#email
+resend~=2.7.0
