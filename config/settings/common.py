@@ -45,6 +45,7 @@ LOCAL_APPS = [
     "prompts",
     "workflows",
     "email_logs",
+    "billing",
 ]
 
 THIRD_PARTY_APPS = [

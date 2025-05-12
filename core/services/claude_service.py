@@ -56,10 +56,9 @@ class ClaudeService:
                             "output_tokens": output_tokens,
                             "total_tokens": input_tokens + output_tokens
                         }
+                        yield "", usage
 
-            if usage:
-                yield "", usage
-            else:
+            if not usage:
                 yield "", None
 
         except Exception as e:
