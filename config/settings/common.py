@@ -117,7 +117,9 @@ EMAIL_FROM = env.EMAIL_FROM
 DEFAULT_FROM_EMAIL = EMAIL_FROM
 EMAIL_PORT = env.EMAIL_PORT
 
-if env.EMAIL_HOST:
+if env.EMAIL_HOST_USER and env.EMAIL_HOST_PASSWORD:
+    EMAIL_BACKEND = "email_logs.backends.LoggingResendEmailBackend"
+elif env.EMAIL_HOST:
     EMAIL_BACKEND = "email_logs.backends.LoggingSMTPEmailBackend"
 else:
     EMAIL_BACKEND = "email_logs.backends.LoggingConsoleEmailBackend"
