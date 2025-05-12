@@ -1,21 +1,23 @@
-import logging
-from channels.generic.websocket import AsyncWebsocketConsumer
 import json
-from urllib.parse import parse_qs
-from asgiref.sync import sync_to_async
-from django.conf import settings
+import logging
+import uuid
+from typing import Optional, Dict, Any
+from channels.generic.websocket import AsyncWebsocketConsumer
+from channels.db import database_sync_to_async
 from channels.exceptions import DenyConnection
+from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError as DjangoValidationError
+from pydantic import ValidationError
+from asgiref.sync import sync_to_async
+from djangorestframework_camel_case.util import camelize
+import asyncio
 
 from conversations.models import Conversation, Message, LLM
 from core.services.conversation_service import ConversationService
 from core.services.llm_service import LLMService
+from core.services.billing_service import BillingService
 from .constants import SenderType
-from django.contrib.auth import get_user_model
-from files.models import File
-from channels.db import database_sync_to_async
-import asyncio
 from conversations.api.serializers import MessageSerializer
-from djangorestframework_camel_case.util import camelize
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -30,289 +32,241 @@ class ChatConsumer(AsyncWebsocketConsumer):
         super().__init__(*args, **kwargs)
         self.conversation_service = ConversationService()
         self.llm_service = LLMService()
-        self.user = None
-        self.conversation = None
-        self.conversation_id = None
+        self.billing_service = BillingService()
+        self.user: Optional[User] = None
+        self.conversation: Optional[Conversation] = None
+        self.conversation_id: Optional[str] = None
 
     async def connect(self):
-        """Handles WebSocket connection and initializes conversation."""
+        """Initialize WebSocket connection and validate conversation."""
         try:
             self.user = self.scope["user"]
             self.conversation_id = self.scope["url_route"]["kwargs"].get("conversation_id")
-            conversation = await self.conversation_service.get_conversation(self.conversation_id, self.user)
-            if not conversation:
-                raise DenyConnection("Invalid conversation_id.")
-            self.conversation = conversation
+            self.conversation = await self.conversation_service.get_conversation(self.conversation_id, self.user)
+            if not self.conversation:
+                logger.warning(f"Invalid conversation_id: {self.conversation_id} for user: {self.user.id}")
+                raise DenyConnection("Invalid conversation_id")
             await self.accept()
-            await self.load_conversation_history(conversation)
-        except DenyConnection:
-            await self.close()
+            await self.load_conversation_history()
+        except DenyConnection as e:
+            logger.error(f"Connection denied: {str(e)}")
+            await self.close(code=4000)
         except Exception as e:
-            logger.exception(f"Error in WebSocket connection: {e}")
-            await self.close()
+            logger.exception(f"Error during connect: {str(e)}")
+            await self.close(code=4001)
 
-    async def disconnect(self, close_code):
-        """Handle WebSocket disconnection."""
-        logger.info(f"WebSocket disconnected with code: {close_code}")
-
-    async def receive(self, text_data=None, bytes_data=None):
-        """
-        Handle incoming WebSocket messages, process them, and stream AI responses.
-        """
+    async def receive(self, text_data: str = None, bytes_data: bytes = None):
+        """Handle incoming WebSocket messages."""
         try:
             data = json.loads(text_data)
             action = data.get("action")
-
             if action == "edit_message":
                 await self.handle_edit_message(data)
             elif action == "regenerate_response":
                 await self.handle_regenerate_response(data)
             else:
                 await self.handle_new_message(data)
+        except json.JSONDecodeError:
+            await self.send_error("invalid_json", "Invalid JSON format")
         except Exception as e:
             logger.exception(f"Error processing message: {str(e)}")
+            await self.send_error("processing_error", "Failed to process message")
 
-    async def handle_new_message(self, data):
-        msg_content = data.get("message", "").strip()
-        sender_type = data.get("sender_type", SenderType.PLAYER)
-        file_ids = data.get("file_ids", [])
-        tag_ids = data.get("tag_ids", [])
-        llm_id = data.get("llm_id")
-        prompt_id = data.get("prompt_id", None)
-        temperature = data.get("temperature", self.DEFAULT_TEMPERATURE)
-        max_tokens = data.get("max_tokens", self.DEFAULT_MAX_TOKENS)
-        max_context_snippets = data.get("max_context_snippets", self.DEFAULT_MAX_CONTEXT_SNIPPETS)
-        document_similarity_threshold = data.get("document_similarity_threshold", self.DEFAULT_DOCUMENT_SIMILARITY_THRESHOLD)
+    async def handle_new_message(self, data: Dict[str, Any]):
+        """Process new user message and stream AI response."""
+        try:
+            message_data = self._validate_message_data(data)
+            llm = await self._get_llm(message_data.get("llm_id"))
+            if not await self.billing_service.check_sufficient_credits(self.user, llm):
+                await self.send_error("insufficient_credits", "Insufficient wallet balance")
+                return
 
-        message_obj = await self.conversation_service.create_message(
-            self.conversation, sender_type, msg_content, self.user.email, file_ids
-        )
-        await self.send(await self.format_message(message_obj, is_sender=True))
+            message_obj = await self.conversation_service.create_message(
+                self.conversation,
+                message_data["sender_type"],
+                message_data["message"],
+                self.user.email,
+                message_data["file_ids"]
+            )
+            await self.send(await self._format_message(message_obj, is_sender=True))
 
-        asyncio.create_task(self.handle_title_generation(msg_content))
+            if await self.conversation_service.is_first_message(self.conversation):
+                asyncio.create_task(self._generate_conversation_title(message_data["message"]))
 
-        llm = await database_sync_to_async(LLM.objects.filter(id=llm_id).first)() if llm_id else await database_sync_to_async(LLM.objects.first)()
+            bot_message_obj = await self.conversation_service.create_message(
+                self.conversation, SenderType.AI_ASSISTANT, "", "AI Assistant", llm=llm
+            )
+            await self.send(await self._format_message(bot_message_obj, streaming=True))
 
-        bot_message_obj = await self.conversation_service.create_message(
-            self.conversation, SenderType.AI_ASSISTANT, "", "AI Assistant", [], llm=llm
-        )
-        await self.send(await self.format_message(bot_message_obj, streaming=True))
+            await self._stream_ai_response(message_data, bot_message_obj, llm)
+        except ValidationError as e:
+            await self.send_error("validation_error", str(e))
+        except Exception as e:
+            logger.exception(f"Error in handle_new_message: {str(e)}")
+            await self.send_error("ai_response_error", "Failed to generate AI response")
 
-        await self.handle_ai_response(
-            msg_content,
-            bot_message_obj,
-            llm,
-            file_ids,
-            tag_ids=tag_ids,
-            prompt_id=prompt_id,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            max_context_snippets=max_context_snippets,
-            document_similarity_threshold=document_similarity_threshold
-        )
+    async def handle_edit_message(self, data: Dict[str, Any]):
+        """Edit the latest user message."""
+        try:
+            message_id = data.get("message_id")
+            new_content = data.get("message", "").strip()
+            if not message_id or not new_content:
+                await self.send_error("missing_data", "Missing message_id or message content")
+                return
 
-    async def handle_edit_message(self, data):
-        message_id = data.get("message_id")
-        new_content = data.get("message", "").strip()
+            updated_message = await self.conversation_service.edit_message(
+                message_id, new_content, self.conversation
+            )
+            await self.send(await self._format_message(updated_message, is_sender=True))
+        except ValueError as e:
+            await self.send_error("invalid_edit", str(e))
+        except Exception as e:
+            logger.exception(f"Error in handle_edit_message: {str(e)}")
+            await self.send_error("edit_error", "Failed to edit message")
 
-        if not message_id or not new_content:
-            await self.send(json.dumps({"error": "Missing message_id or message content"}))
-            return
+    async def handle_regenerate_response(self, data: Dict[str, Any]):
+        """Regenerate an AI response for a given message."""
+        try:
+            message_id = data.get("message_id")
+            if not message_id:
+                await self.send_error("missing_data", "Missing message_id")
+                return
 
-        latest_user_message = await self.conversation_service.get_latest_user_message(self.conversation)
-        if not latest_user_message or latest_user_message.id != message_id:
-            await self.send(json.dumps({"error": "Can only edit the latest user message"}))
-            return
+            ai_message = await database_sync_to_async(
+                lambda: Message.active_objects.select_related('llm').filter(
+                    id=message_id, sender_type=SenderType.AI_ASSISTANT
+                ).first()
+            )()
+            if not ai_message:
+                await self.send_error("invalid_message", "AI message not found")
+                return
 
-        updated_message = await self.conversation_service.edit_message(message_id, new_content, self.conversation)
-        await self.send(await self.format_message(updated_message, is_sender=True))
+            preceding_user_message = await self._get_preceding_user_message(ai_message)
+            if not preceding_user_message:
+                await self.send_error("no_user_message", "No preceding user message found")
+                return
 
-    async def handle_regenerate_response(self, data):
-        message_id = data.get("message_id")
-        llm_id = data.get("llm_id")
-        temperature = data.get("temperature", self.DEFAULT_TEMPERATURE)
-        max_tokens = data.get("max_tokens", self.DEFAULT_MAX_TOKENS)
-        max_context_snippets = data.get("max_context_snippets", self.DEFAULT_MAX_CONTEXT_SNIPPETS)
-        document_similarity_threshold = data.get("document_similarity_threshold", self.DEFAULT_DOCUMENT_SIMILARITY_THRESHOLD)
-        prompt_id = data.get("prompt_id")
-        file_ids = data.get("file_ids", [])
-        tag_ids = data.get("tag_ids", [])
+            llm = await self._get_llm(data.get("llm_id"), default=ai_message.llm)
+            if not await self.billing_service.check_sufficient_credits(self.user, llm):
+                await self.send_error("insufficient_credits", "Insufficient wallet balance")
+                return
 
-        if not message_id:
-            await self.send(json.dumps({"error": "Missing message_id"}))
-            return
+            message_data = self._validate_message_data(data, default_message=preceding_user_message.message)
+            await self._stream_ai_response(message_data, ai_message, llm, regenerate=True)
+        except Exception as e:
+            logger.exception(f"Error in handle_regenerate_response: {str(e)}")
+            await self.send_error("regenerate_error", "Failed to regenerate response")
 
-        ai_message = await database_sync_to_async(
-            lambda: Message.active_objects.select_related('llm').filter(
-                id=message_id,
-                sender_type=SenderType.AI_ASSISTANT
-            ).first()
-        )()
-        if not ai_message:
-            await self.send(json.dumps({"error": "AI message not found"}))
-            return
+    async def _stream_ai_response(self, message_data: Dict[str, Any], message_obj: Message, llm: LLM, regenerate: bool = False):
+        """Stream AI response and handle billing."""
+        try:
+            bot_message_id = str(message_obj.id)
+            ai_response_accumulator = ""
+            token_usage = None
 
-        preceding_user_message = await self._get_preceding_user_message(ai_message)
-        if not preceding_user_message:
-            await self.send(json.dumps({"error": "No preceding user message found to regenerate response"}))
-            return
+            async for chunk, usage in self.llm_service.query(
+                message_data["message"],
+                self.conversation,
+                llm,
+                message_data["file_ids"],
+                message_data["tag_ids"],
+                user_id=self.user.id,
+                prompt_id=message_data["prompt_id"],
+                temperature=message_data["temperature"],
+                max_tokens=message_data["max_tokens"],
+                max_context_snippets=message_data["max_context_snippets"],
+                document_similarity_threshold=message_data["document_similarity_threshold"],
+                message_obj=message_obj
+            ):
+                if usage:
+                    token_usage = usage
+                    can_continue, error_response = await self.billing_service.check_streaming_credit_usage(
+                        self.user, llm, token_usage
+                    )
+                    if not can_continue:
+                        await self._handle_insufficient_balance(
+                            message_obj, ai_response_accumulator, token_usage, error_response
+                        )
+                        return
 
-        llm = await database_sync_to_async(LLM.objects.filter(id=llm_id).first)() if llm_id else await database_sync_to_async(lambda: ai_message.llm)()
-        if not llm:
-            logger.warning("LLM not found, falling back to default")
-            llm = await database_sync_to_async(lambda: LLM.objects.first())()
+                if chunk.strip():
+                    ai_response_accumulator += chunk
+                    payload = {
+                        "type": "ai_stream",
+                        "id": bot_message_id,
+                        "message": ai_response_accumulator,
+                        "senderName": "AI Assistant",
+                        "senderType": SenderType.AI_ASSISTANT,
+                        "isSender": False,
+                        "streaming": True,
+                        "regenerate": regenerate,
+                        "date": message_obj.created_at.isoformat(),
+                    }
+                    await self.send(json.dumps(camelize(payload)))
 
-        bot_message_id = str(ai_message.id)
-        ai_response_accumulator = ""
+            if ai_response_accumulator.strip():
+                await self._finalize_message(message_obj, ai_response_accumulator, token_usage, regenerate)
+        except Exception as e:
+            logger.exception(f"Error streaming AI response: {str(e)}")
+            await self.send_error("stream_error", "Failed to stream AI response")
 
+    async def _finalize_message(self, message_obj: Message, ai_response: str, token_usage: Dict, regenerate: bool):
+        """Finalize AI message with billing and send final response."""
+        try:
+            updated_message = await sync_to_async(
+                self.conversation_service.finalize_ai_message_with_billing
+            )(message_obj, ai_response, token_usage)
+            if regenerate:
+                updated_message.is_regenerated = True
+                if not updated_message.original_message:
+                    updated_message.original_message = updated_message.message
+                await database_sync_to_async(updated_message.save)(update_fields=['is_regenerated', 'original_message'])
+            await self.send(await self._format_message(updated_message, streaming=False, regenerate=regenerate))
+        except (ValidationError, DjangoValidationError) as e:
+            logger.error(f"Validation error finalizing message: {str(e)}")
+            await self.send_error("insufficient_balance", "Insufficient wallet balance", details={"error": str(e)})
+        except Exception as e:
+            logger.exception(f"Error finalizing message: {str(e)}")
+            await self.send_error("finalize_error", "Failed to finalize message")
+
+    async def _handle_insufficient_balance(self, message_obj: Message, ai_response: str, token_usage: Dict, error_response: Dict):
+        """Handle insufficient balance during streaming."""
+        message_obj.message = f"{ai_response}\n\n[Response cut off - insufficient credits]"
+        message_obj.input_tokens = token_usage.get('input_tokens', 0)
+        message_obj.output_tokens = token_usage.get('output_tokens', 0)
+        await database_sync_to_async(message_obj.save)()
         await self.send(json.dumps(camelize({
             "type": "ai_stream",
-            "id": bot_message_id,
-            "message": ai_response_accumulator,
+            "id": str(message_obj.id),
+            "message": message_obj.message,
             "senderName": "AI Assistant",
             "senderType": SenderType.AI_ASSISTANT,
             "isSender": False,
-            "streaming": True,
-            "regenerate": True,
-            "date": ai_message.created_at.isoformat(),
+            "streaming": False,
+            "regenerate": False,
+            "date": message_obj.created_at.isoformat(),
         })))
+        await self.send(json.dumps(error_response))
 
-        token_usage = None
-        async for chunk, usage in self.llm_service.query(
-            preceding_user_message.message,
-            self.conversation,
-            llm,
-            file_ids,
-            tag_ids=tag_ids,
-            user_id=self.user.id,
-            prompt_id=prompt_id,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            max_context_snippets=max_context_snippets,
-            document_similarity_threshold=document_similarity_threshold,
-            message_obj=ai_message
-        ):
-            if usage:
-                token_usage = usage
-            if chunk.strip():
-                ai_response_accumulator += chunk
-                payload = {
-                    "type": "ai_stream",
-                    "id": bot_message_id,
-                    "message": ai_response_accumulator,
-                    "senderName": "AI Assistant",
-                    "senderType": SenderType.AI_ASSISTANT,
-                    "isSender": False,
-                    "streaming": True,
-                    "regenerate": True,
-                    "date": ai_message.created_at.isoformat(),
-                }
-                await self.send(json.dumps(camelize(payload)))
+    async def load_conversation_history(self):
+        """Fetches and sends conversation history to the frontend."""
+        history = await self.conversation_service.fetch_chat_history_from_db(self.conversation)
+        await self.send(json.dumps(camelize({"type": "conversation_history", "conversationHistory": history})))
 
-        if ai_response_accumulator.strip():
-            updated_message = await self.conversation_service.regenerate_message(
-                bot_message_id, ai_response_accumulator, self.conversation
-            )
-            if token_usage:
-                updated_message.input_tokens = token_usage.get("input_tokens", 0)
-                updated_message.output_tokens = token_usage.get("output_tokens", 0)
-                await database_sync_to_async(updated_message.save)(update_fields=['input_tokens', 'output_tokens'])
-            await self.send(await self.format_message(
-                updated_message, message=ai_response_accumulator, streaming=False, regenerate=True
-            ))
+    async def _generate_conversation_title(self, user_message: str):
+        """Generate and send conversation title for the first message."""
+        title = await self.conversation_service.generate_title(user_message)
+        await self.conversation_service.update_conversation_title(self.conversation, title)
+        await self.send(json.dumps(camelize({"type": "conversation_title", "title": title})))
 
-    async def handle_title_generation(self, user_message):
-        is_first_message = await self.conversation_service.is_first_message(self.conversation)
-        if is_first_message:
-            title = await self.conversation_service.generate_title(user_message, "")
-            await self.conversation_service.update_conversation_title(self.conversation, title)
-            payload = {"type": "conversation_title", "title": title}
-            await self.send(json.dumps(camelize(payload)))
-
-    async def handle_ai_response(
-        self,
-        msg_content,
-        bot_message_obj,
-        llm,
-        file_ids,
-        tag_ids=None,
-        prompt_id=None,
-        temperature=DEFAULT_TEMPERATURE,
-        max_tokens=DEFAULT_MAX_TOKENS,
-        max_context_snippets=DEFAULT_MAX_CONTEXT_SNIPPETS,
-        document_similarity_threshold=DEFAULT_DOCUMENT_SIMILARITY_THRESHOLD
-    ):
-        """Handles AI response streaming and updates the message."""
-        bot_message_id = str(bot_message_obj.id)
-        ai_response_accumulator = ""
-
-        token_usage = None
-        async for chunk, usage in self.llm_service.query(
-            msg_content,
-            self.conversation,
-            llm,
-            file_ids,
-            tag_ids,
-            self.user.id,
-            prompt_id,
-            temperature,
-            max_tokens,
-            max_context_snippets,
-            document_similarity_threshold,
-            message_obj=bot_message_obj
-        ):
-            if usage:
-                token_usage = usage
-            if chunk.strip():
-                ai_response_accumulator += chunk
-                payload = {
-                    "type": "ai_stream",
-                    "id": bot_message_id,
-                    "message": ai_response_accumulator,
-                    "senderName": "AI Assistant",
-                    "senderType": SenderType.AI_ASSISTANT,
-                    "isSender": False,
-                    "streaming": True,
-                    "regenerate": False,
-                    "date": bot_message_obj.created_at.isoformat(),
-                }
-                await self.send(json.dumps(camelize(payload)))
-
-        if ai_response_accumulator.strip():
-            await self.conversation_service.update_message(bot_message_id, ai_response_accumulator)
-            bot_message_obj = await database_sync_to_async(
-                lambda: Message.active_objects.prefetch_related('snippets').get(id=bot_message_obj.id)
-            )()
-            if token_usage:
-                bot_message_obj.input_tokens = token_usage.get("input_tokens", 0)
-                bot_message_obj.output_tokens = token_usage.get("output_tokens", 0)
-                await database_sync_to_async(bot_message_obj.save)(update_fields=['input_tokens', 'output_tokens'])
-            await self.send(await self.format_message(
-                bot_message_obj, message=ai_response_accumulator, streaming=False, regenerate=False
-            ))
-
-    async def load_conversation_history(self, conversation):
-        """Fetches chat history and sends it to the frontend."""
-        conversation_history = await self.conversation_service.fetch_chat_history_from_db(conversation)
-        payload = {
-            "type": "conversation_history",
-            "conversationHistory": conversation_history
-        }
-        await self.send(text_data=json.dumps(camelize(payload)))
-
-    async def get_llm_id(self, message_obj):
-        """Safely fetch the llm_id for a message object."""
-        return await database_sync_to_async(lambda: getattr(message_obj.llm, 'id', None))()
-
-    async def format_message(self, message_obj, message=None, is_sender=False, streaming=False, regenerate=False):
-        """Helper function to format message JSON response using the serializer."""
+    async def _format_message(self, message_obj: Message, is_sender: bool = False, streaming: bool = False, regenerate: bool = False):
+        """Format message for WebSocket response."""
         serialized_data = await database_sync_to_async(lambda: MessageSerializer(message_obj).data)()
-        llm_id = await self.get_llm_id(message_obj)
-
+        llm_id = await database_sync_to_async(lambda: getattr(message_obj.llm, 'id', None))()
         response = {
             "type": "message",
             "id": str(message_obj.id),
-            "message": message or message_obj.message,
+            "message": message_obj.message,
             "senderType": message_obj.sender_type,
             "senderName": message_obj.sender or "AI Assistant",
             "isSender": is_sender,
@@ -327,13 +281,41 @@ class ChatConsumer(AsyncWebsocketConsumer):
         }
         return json.dumps(camelize(response))
 
-    async def _get_preceding_user_message(self, ai_message):
-        """Retrieve the preceding user message for a given AI message."""
+    async def _get_llm(self, llm_id: Optional[str], default: LLM = None) -> LLM:
+        """Fetch LLM by ID or return default/first available."""
+        if llm_id:
+            llm = await database_sync_to_async(lambda: LLM.objects.filter(id=llm_id).first())()
+            if llm:
+                return llm
+        return default or await database_sync_to_async(lambda: LLM.objects.first())()
+
+    def _validate_message_data(self, data: Dict[str, Any], default_message: str = None) -> Dict[str, Any]:
+        """Validate and extract message data."""
+        return {
+            "message": (data.get("message", default_message or "").strip()),
+            "sender_type": data.get("sender_type", SenderType.PLAYER),
+            "file_ids": data.get("file_ids", []),
+            "tag_ids": data.get("tag_ids", []),
+            "llm_id": data.get("llm_id"),
+            "prompt_id": data.get("prompt_id"),
+            "temperature": data.get("temperature", self.DEFAULT_TEMPERATURE),
+            "max_tokens": data.get("max_tokens", self.DEFAULT_MAX_TOKENS),
+            "max_context_snippets": data.get("max_context_snippets", self.DEFAULT_MAX_CONTEXT_SNIPPETS),
+            "document_similarity_threshold": data.get("document_similarity_threshold", self.DEFAULT_DOCUMENT_SIMILARITY_THRESHOLD),
+        }
+
+    async def send_error(self, code: str, message: str, details: Dict = None):
+        """Send standardized error response."""
+        error_response = {"error": code, "message": message}
+        if details:
+            error_response["details"] = details
+        await self.send(json.dumps(error_response))
+
+    async def _get_preceding_user_message(self, ai_message: Message) -> Optional[Message]:
+        """Retrieve the preceding user message."""
         preceding_messages = await database_sync_to_async(
-            lambda: list(Message.active_objects.filter(conversation=self.conversation, created_at__lt=ai_message.created_at).order_by('-created_at'))
+            lambda: list(Message.active_objects.filter(
+                conversation=self.conversation, created_at__lt=ai_message.created_at
+            ).order_by('-created_at'))
         )()
         return next((msg for msg in preceding_messages if msg.sender_type == SenderType.PLAYER), None)
-
-    async def _get_file_ids(self, message):
-        """Retrieve file IDs associated with a message."""
-        return await database_sync_to_async(lambda: list(message.files.values_list('id', flat=True)))()
