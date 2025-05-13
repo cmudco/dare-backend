@@ -8,7 +8,6 @@ from workflows.constants import WorkflowRunStepStatus
 from workflows.models import Workflow, Step, WorkflowRun, WorkflowRunStep
 from django_rq import enqueue
 from workflows.tasks import execute_workflow_run
-from django.db.models import Subquery, OuterRef
 
 
 class WorkflowViewSet(viewsets.ModelViewSet):
