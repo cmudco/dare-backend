@@ -4,7 +4,8 @@ from conversations.models import LLM
 from files.api.serializers import FileSerializer
 from files.models import File
 from prompts.models import Prompt
-from workflows.models import Workflow, Step
+from workflows.models import Workflow, Step, WorkflowRun, WorkflowRunStep
+from workflows.constants import WorkflowRunStepStatus
 from prompts.api.serializers import PromptSerializer
 
 class StepSerializer(serializers.ModelSerializer):
@@ -96,4 +97,24 @@ class WorkflowSerializer(serializers.ModelSerializer):
                 instance.steps.add(step)
 
         return instance
+
+class WorkflowRunStepSerializer(serializers.ModelSerializer):
+    status = serializers.ChoiceField(
+        choices=WorkflowRunStepStatus.choices,
+        default=WorkflowRunStepStatus.PENDING
+    )
     
+    class Meta:
+        model = WorkflowRunStep
+        fields = ['id', 'step', 'order', 'status', 'response', 'error', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+class WorkflowRunSerializer(serializers.ModelSerializer):
+    steps = WorkflowRunStepSerializer(many=True, read_only=True)
+    started_at = serializers.DateTimeField()
+    status = serializers.CharField()
+
+    class Meta:
+        model = WorkflowRun
+        fields = ['id', 'workflow', 'user', 'started_at', 'ended_at', 'status', 'steps']
+        read_only_fields = ['id', 'started_at', 'ended_at', 'status', 'steps']

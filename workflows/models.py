@@ -6,7 +6,7 @@ from common.models import BaseModel, TimeStampMixin
 from conversations.models import LLM
 from files.models import File
 from prompts.models import Prompt
-from workflows.constants import Mode
+from workflows.constants import Mode, WorkflowRunStepStatus
 
 class Step(TimeStampMixin):
     """
@@ -90,3 +90,87 @@ class Workflow(BaseModel):
 
     def __str__(self):
         return f"{self.title} ({self.user.email})"
+
+class WorkflowRun(BaseModel):
+    """
+    Represents an instance of a workflow execution.
+    """
+    workflow = models.ForeignKey(
+        Workflow,
+        on_delete=models.CASCADE,
+        related_name='runs',
+        help_text="Workflow being executed."
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='workflow_runs',
+        help_text="User who initiated this run."
+    )
+    ended_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Timestamp when the run ended."
+    )
+
+    objects = models.Manager()
+    active_objects = ActiveObjectsManager()
+
+    @property
+    def started_at(self):
+        return self.created_at
+
+    @property
+    def status(self):
+        steps = self.steps.all()
+        if not steps:
+            return WorkflowRunStepStatus.RUNNING
+        if any(step.status == WorkflowRunStepStatus.FAILED for step in steps):
+            return WorkflowRunStepStatus.FAILED
+        if all(step.status == WorkflowRunStepStatus.COMPLETED for step in steps):
+            return WorkflowRunStepStatus.COMPLETED
+        return WorkflowRunStepStatus.RUNNING
+
+    def __str__(self):
+        return f"Run of {self.workflow.title} by {self.user.email} at {self.created_at}"
+
+class WorkflowRunStep(TimeStampMixin):
+    """
+    Represents the execution of a single step within a workflow run.
+    """
+    workflow_run = models.ForeignKey(
+        WorkflowRun,
+        on_delete=models.CASCADE,
+        related_name='steps',
+        help_text="Workflow run this step belongs to."
+    )
+    step = models.ForeignKey(
+        Step,
+        on_delete=models.CASCADE,
+        help_text="Step being executed."
+    )
+    order = models.PositiveIntegerField(
+        help_text="Order of this step in the run."
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=WorkflowRunStepStatus.choices,
+        default=WorkflowRunStepStatus.PENDING,
+        help_text="Current status of this step."
+    )
+    response = models.TextField(
+        null=True,
+        blank=True,
+        help_text="Response from step execution."
+    )
+    error = models.TextField(
+        null=True,
+        blank=True,
+        help_text="Error message if step failed."
+    )
+
+    class Meta:
+        ordering = ['order']
+
+    def __str__(self):
+        return f"Step {self.order} of {self.workflow_run}"

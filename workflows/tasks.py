@@ -1,0 +1,155 @@
+from typing import Optional
+from django_rq import job, enqueue
+from channels.db import database_sync_to_async
+from django.utils import timezone
+
+from conversations.models import LLM, Message
+from files.models import File
+from core.services.llm_service import LLMService
+from .models import Step, WorkflowRun, WorkflowRunStep, Mode, WorkflowRunStepStatus
+from core.services.file_processor import FileProcessor
+
+async def execute_step_async(step: 'Step', previous_response: Optional[str] = None) -> str:
+    """
+    Executes a single step in a workflow asynchronously.
+
+    Args:
+        step (Step): The step to execute.
+        previous_response (Optional[str]): The response from the previous step, if applicable.
+
+    Returns:
+        str: The generated AI response.
+    """
+    try:
+        step_prompt = await database_sync_to_async(lambda s: s.prompt)(step)
+        prompt_content = await database_sync_to_async(lambda p: p.content if p else "")(step_prompt)
+
+        message = prompt_content
+
+        if previous_response:
+            message = f"Previous response: {previous_response}\n\nCurrent prompt: {prompt_content}"
+
+        step_llm_obj = await database_sync_to_async(lambda s: s.llm)(step)
+        if step_llm_obj:
+            llm_to_use = step_llm_obj
+        else:
+            llm_to_use = await database_sync_to_async(LLM.objects.filter(provider="openai").first)()
+
+        llm_service = LLMService()
+
+        full_file_content = None
+        step_file_obj = await database_sync_to_async(lambda s: s.file)(step)
+        if step_file_obj:
+            file_processor = FileProcessor()
+            current_file_content = await database_sync_to_async(file_processor.read_file_content)(step_file_obj)
+            full_file_content = current_file_content
+
+        step_user = await database_sync_to_async(lambda s: s.user)(step)
+        step_user_id = await database_sync_to_async(lambda u: u.id)(step_user)
+
+        response_generator = llm_service.query(
+            message=message,
+            conversation=None,
+            llm=llm_to_use,
+            full_file_content=full_file_content,
+            user_id=step_user_id,
+            prompt_id=None,
+            temperature=0.7,
+            max_tokens=1024,
+            message_obj=None
+        )
+
+        full_response = ""
+        async for chunk, _ in response_generator:
+            full_response += chunk
+
+        return full_response
+    except Exception as e:
+        raise
+
+def execute_step(step: 'Step', previous_response: Optional[str] = None) -> str:
+    """
+    Synchronous wrapper for execute_step_async to be used in RQ jobs.
+
+    Args:
+        step (Step): The step to execute.
+        previous_response (Optional[str]): The response from the previous step, if applicable.
+
+    Returns:
+        str: The generated AI response.
+    """
+    try:
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        result = loop.run_until_complete(execute_step_async(step, previous_response))
+        loop.close()
+        return result
+    except Exception as e:
+        raise
+
+@job('default', timeout=600)
+def execute_workflow_run(workflow_run_id):
+    try:
+        workflow_run = WorkflowRun.active_objects.get(id=workflow_run_id)
+    except WorkflowRun.DoesNotExist:
+        return
+
+    try:
+        workflow = workflow_run.workflow
+        if workflow.mode == Mode.SERIAL:
+            previous_response = None
+            for step_run in workflow_run.steps.all().order_by('order'):
+                step_run.status = WorkflowRunStepStatus.RUNNING
+                step_run.save()
+
+                try:
+                    response = execute_step(step_run.step, previous_response)
+                    step_run.response = response
+                    step_run.status = WorkflowRunStepStatus.COMPLETED
+                    previous_response = response
+                except Exception as e:
+                    step_run.error = str(e)
+                    step_run.status = WorkflowRunStepStatus.FAILED
+                finally:
+                    step_run.save()
+
+            workflow_run.ended_at = timezone.now()
+            workflow_run.save(update_fields=['ended_at'])
+
+        elif workflow.mode == Mode.PARALLEL:
+            for step_run in workflow_run.steps.all():
+                enqueue(execute_step_task, step_run.id, workflow_run.id)
+
+    except Exception as e:
+        workflow_run.ended_at = timezone.now()
+        workflow_run.save(update_fields=['ended_at'])
+
+@job('default', timeout=600)
+def execute_step_task(workflow_run_step_id, workflow_run_id=None):
+    try:
+        step_run = WorkflowRunStep.objects.get(id=workflow_run_step_id)
+        step_run.status = WorkflowRunStepStatus.RUNNING
+        step_run.save()
+
+        try:
+            response = execute_step(step_run.step)
+            step_run.response = response
+            step_run.status = WorkflowRunStepStatus.COMPLETED
+        except Exception as e:
+            step_run.error = str(e)
+            step_run.status = WorkflowRunStepStatus.FAILED
+        finally:
+            step_run.save()
+
+            if workflow_run_id:
+                workflow_run = WorkflowRun.active_objects.get(id=workflow_run_id)
+                all_steps = workflow_run.steps.all()
+                pending_steps = all_steps.filter(status__in=[WorkflowRunStepStatus.PENDING, WorkflowRunStepStatus.RUNNING])
+
+                if not pending_steps.exists():
+                    workflow_run.ended_at = timezone.now()
+                    workflow_run.save(update_fields=['ended_at'])
+
+    except WorkflowRunStep.DoesNotExist:
+        pass
