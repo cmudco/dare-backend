@@ -1,4 +1,3 @@
-# filepath: /Users/work/Projects/dare-backend/workflows/api/serializers.py
 from rest_framework import serializers
 from conversations.api.serializers import LLMSerializer
 from conversations.models import LLM
