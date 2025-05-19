@@ -1,3 +1,4 @@
+# filepath: /Users/work/Projects/dare-backend/workflows/api/serializers.py
 from rest_framework import serializers
 from conversations.api.serializers import LLMSerializer
 from conversations.models import LLM
@@ -7,6 +8,35 @@ from prompts.models import Prompt
 from workflows.models import Workflow, Step, WorkflowRun, WorkflowRunStep
 from workflows.constants import WorkflowRunStepStatus
 from prompts.api.serializers import PromptSerializer
+
+class WorkflowRunStepSerializer(serializers.ModelSerializer):
+    status = serializers.ChoiceField(
+        choices=WorkflowRunStepStatus.choices,
+        default=WorkflowRunStepStatus.PENDING
+    )
+
+    class Meta:
+        model = WorkflowRunStep
+        fields = ['id', 'step', 'order', 'status', 'response', 'error', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+class WorkflowRunSerializer(serializers.ModelSerializer):
+    steps = WorkflowRunStepSerializer(many=True, read_only=True)
+    started_at = serializers.DateTimeField()
+    status = serializers.CharField()
+    workflow_title = serializers.SerializerMethodField()
+    workflow_description = serializers.SerializerMethodField()
+
+    class Meta:
+        model = WorkflowRun
+        fields = ['id', 'workflow', 'user', 'started_at', 'ended_at', 'status', 'steps', 'workflow_title', 'workflow_description']
+        read_only_fields = ['id', 'started_at', 'ended_at', 'status', 'steps', 'workflow_title', 'workflow_description']
+
+    def get_workflow_title(self, obj):
+        return obj.workflow.title if obj.workflow else None
+
+    def get_workflow_description(self, obj):
+        return obj.workflow.description if obj.workflow else None
 
 class StepSerializer(serializers.ModelSerializer):
     prompt = serializers.PrimaryKeyRelatedField(
@@ -39,11 +69,18 @@ class StepSerializer(serializers.ModelSerializer):
 class WorkflowSerializer(serializers.ModelSerializer):
     user = serializers.ReadOnlyField(source='user.email')
     steps = StepSerializer(many=True, required=False)
+    latest_run = serializers.SerializerMethodField()
 
     class Meta:
         model = Workflow
-        fields = ['id', 'title', 'description', 'mode', 'created_at', 'user', 'steps']
-        read_only_fields = ['id', 'created_at', 'user', 'steps_detail']
+        fields = ['id', 'title', 'description', 'mode', 'created_at', 'user', 'steps', 'latest_run']
+        read_only_fields = ['id', 'created_at', 'user', 'steps_detail', 'latest_run']
+
+    def get_latest_run(self, obj):
+        latest_run = WorkflowRun.active_objects.filter(workflow=obj).order_by('-created_at').first()
+        if latest_run:
+            return WorkflowRunSerializer(latest_run).data
+        return None
 
     def create(self, validated_data):
         steps_data = validated_data.pop('steps', [])
@@ -97,24 +134,3 @@ class WorkflowSerializer(serializers.ModelSerializer):
                 instance.steps.add(step)
 
         return instance
-
-class WorkflowRunStepSerializer(serializers.ModelSerializer):
-    status = serializers.ChoiceField(
-        choices=WorkflowRunStepStatus.choices,
-        default=WorkflowRunStepStatus.PENDING
-    )
-    
-    class Meta:
-        model = WorkflowRunStep
-        fields = ['id', 'step', 'order', 'status', 'response', 'error', 'created_at', 'updated_at']
-        read_only_fields = ['id', 'created_at', 'updated_at']
-
-class WorkflowRunSerializer(serializers.ModelSerializer):
-    steps = WorkflowRunStepSerializer(many=True, read_only=True)
-    started_at = serializers.DateTimeField()
-    status = serializers.CharField()
-
-    class Meta:
-        model = WorkflowRun
-        fields = ['id', 'workflow', 'user', 'started_at', 'ended_at', 'status', 'steps']
-        read_only_fields = ['id', 'started_at', 'ended_at', 'status', 'steps']

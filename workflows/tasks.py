@@ -54,8 +54,6 @@ async def execute_step_async(step: 'Step', previous_response: Optional[str] = No
             full_file_content=full_file_content,
             user_id=step_user_id,
             prompt_id=None,
-            temperature=0.7,
-            max_tokens=1024,
             message_obj=None
         )
 
