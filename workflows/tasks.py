@@ -34,6 +34,8 @@ async def execute_step_async(step: 'Step', previous_response: Optional[str] = No
             llm_to_use = step_llm_obj
         else:
             llm_to_use = await database_sync_to_async(LLM.objects.filter(provider="openai").first)()
+        step_max_tokens = await database_sync_to_async(lambda s: s.max_tokens)(step)
+        step_temperature = await database_sync_to_async(lambda s: s.temperature)(step)
 
         llm_service = LLMService()
 
@@ -54,7 +56,9 @@ async def execute_step_async(step: 'Step', previous_response: Optional[str] = No
             full_file_content=full_file_content,
             user_id=step_user_id,
             prompt_id=None,
-            message_obj=None
+            message_obj=None,
+            max_tokens=step_max_tokens,
+            temperature=step_temperature
         )
 
         full_response = ""

@@ -44,6 +44,14 @@ class Step(TimeStampMixin):
         blank=True,
         help_text="Optional language model for this step."
     )
+    max_tokens = models.PositiveIntegerField(
+        default=2048,
+        help_text="Maximum tokens for LLM response for this step."
+    )
+    temperature = models.FloatField(
+        default=0.7,
+        help_text="Temperature setting for the LLM for this step."
+    )
 
     objects = models.Manager()
 
