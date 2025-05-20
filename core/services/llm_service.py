@@ -35,30 +35,33 @@ class LLMService:
         max_tokens: int = 2048,
         max_context_snippets: int = 4,
         document_similarity_threshold: float = 0.5,
-        message_obj: Message = None
+        message_obj: Message = None,
+        full_file_content: str = None
     ) -> AsyncGenerator[Tuple[str, Dict], None]:
         """Generate AI response with context."""
         try:
             if not message.strip():
                 raise ValueError("User message cannot be empty")
 
-            conversation_history = await self.get_conversation_history(conversation, limit=10)
+            conversation_history = await self.get_conversation_history(conversation, limit=10) if conversation else []
             prompt = await self.get_prompt(prompt_id)
             messages = []
 
             if prompt and prompt.strip():
                 messages.append({"role": "assistant", "content": f"Prompt: {prompt}"})
 
-            all_file_ids = set(file_ids or [])
-            if tag_ids:
-                tagged_file_ids = await self.get_files_from_tags(tag_ids, user_id)
-                all_file_ids.update(tagged_file_ids)
+            if full_file_content:
+                messages.append({"role": "user", "content": f"File content: {full_file_content}"})
+            elif file_ids:
+                all_file_ids = set(file_ids or [])
+                if tag_ids:
+                    tagged_file_ids = await self.get_files_from_tags(tag_ids, user_id)
+                    all_file_ids.update(tagged_file_ids)
 
-            if user_id and user_id != self.document_processor.user_id:
-                self.document_processor.user_id = user_id
-                self.document_processor.vector_service = await get_vector_service_async(user_id)
+                if user_id and user_id != self.document_processor.user_id:
+                    self.document_processor.user_id = user_id
+                    self.document_processor.vector_service = await get_vector_service_async(user_id)
 
-            if all_file_ids:
                 context = await self.document_processor.search_similar_documents(
                     query_text=message,
                     file_ids=list(all_file_ids),
@@ -94,8 +97,6 @@ class LLMService:
     def get_conversation_history(self, conversation: 'Conversation', limit: int = 10) -> list:
         """Retrieves recent chat history for AI context, ignoring placeholders."""
         messages = Message.active_objects.filter(conversation=conversation).order_by('-created_at')
-        # FA: skip the last two messages because at this point
-        # the AI message is empty so it can be streamed on FE & we already have the user message in query function
         messages = messages[2:]
         return [
             {"role": "user" if msg.sender_type == SenderType.PLAYER else "assistant", "content": msg.message}

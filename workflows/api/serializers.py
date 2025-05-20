@@ -4,8 +4,38 @@ from conversations.models import LLM
 from files.api.serializers import FileSerializer
 from files.models import File
 from prompts.models import Prompt
-from workflows.models import Workflow, Step
+from workflows.models import Workflow, Step, WorkflowRun, WorkflowRunStep
+from workflows.constants import WorkflowRunStepStatus
 from prompts.api.serializers import PromptSerializer
+
+class WorkflowRunStepSerializer(serializers.ModelSerializer):
+    status = serializers.ChoiceField(
+        choices=WorkflowRunStepStatus.choices,
+        default=WorkflowRunStepStatus.PENDING
+    )
+
+    class Meta:
+        model = WorkflowRunStep
+        fields = ['id', 'step', 'order', 'status', 'response', 'error', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+class WorkflowRunSerializer(serializers.ModelSerializer):
+    steps = WorkflowRunStepSerializer(many=True, read_only=True)
+    started_at = serializers.DateTimeField()
+    status = serializers.CharField()
+    workflow_title = serializers.SerializerMethodField()
+    workflow_description = serializers.SerializerMethodField()
+
+    class Meta:
+        model = WorkflowRun
+        fields = ['id', 'workflow', 'user', 'started_at', 'ended_at', 'status', 'steps', 'workflow_title', 'workflow_description']
+        read_only_fields = ['id', 'started_at', 'ended_at', 'status', 'steps', 'workflow_title', 'workflow_description']
+
+    def get_workflow_title(self, obj):
+        return obj.workflow.title if obj.workflow else None
+
+    def get_workflow_description(self, obj):
+        return obj.workflow.description if obj.workflow else None
 
 class StepSerializer(serializers.ModelSerializer):
     prompt = serializers.PrimaryKeyRelatedField(
@@ -22,6 +52,9 @@ class StepSerializer(serializers.ModelSerializer):
         required=False,
         allow_null=True
     )
+    max_tokens = serializers.IntegerField(required=False)
+    temperature = serializers.FloatField(required=False)
+
 
     def to_representation(self, instance):
         representation = super().to_representation(instance)
@@ -32,17 +65,24 @@ class StepSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Step
-        fields = ['id', 'prompt', 'file', 'llm', 'order', 'created_at', 'user']
+        fields = ['id', 'prompt', 'file', 'llm', 'order', 'created_at', 'user','max_tokens', 'temperature']
         read_only_fields = ['id', 'created_at', 'user']
 
 class WorkflowSerializer(serializers.ModelSerializer):
     user = serializers.ReadOnlyField(source='user.email')
     steps = StepSerializer(many=True, required=False)
+    latest_run = serializers.SerializerMethodField()
 
     class Meta:
         model = Workflow
-        fields = ['id', 'title', 'description', 'mode', 'created_at', 'user', 'steps']
-        read_only_fields = ['id', 'created_at', 'user', 'steps_detail']
+        fields = ['id', 'title', 'description', 'mode', 'created_at', 'user', 'steps', 'latest_run']
+        read_only_fields = ['id', 'created_at', 'user', 'steps_detail', 'latest_run']
+
+    def get_latest_run(self, obj):
+        latest_run = WorkflowRun.active_objects.filter(workflow=obj).order_by('-created_at').first()
+        if latest_run:
+            return WorkflowRunSerializer(latest_run).data
+        return None
 
     def create(self, validated_data):
         steps_data = validated_data.pop('steps', [])
@@ -54,10 +94,11 @@ class WorkflowSerializer(serializers.ModelSerializer):
                 prompt=step_data['prompt'],
                 file=step_data.get('file'),
                 llm=step_data.get('llm'),
-                order=step_data['order']
+                order=step_data['order'],
+                max_tokens=step_data.get('max_tokens', Step._meta.get_field('max_tokens').default),
+                temperature=step_data.get('temperature', Step._meta.get_field('temperature').default)
             )
             workflow.steps.add(step)
-
         return workflow
 
     def update(self, instance, validated_data):
@@ -84,6 +125,8 @@ class WorkflowSerializer(serializers.ModelSerializer):
                 step.file = step_data.get('file')
                 step.llm = step_data.get('llm')
                 step.order = step_data['order']
+                step.max_tokens = step_data.get('max_tokens', Step._meta.get_field('max_tokens').default)
+                step.temperature = step_data.get('temperature', Step._meta.get_field('temperature').default)
                 step.save()
             else:
                 step = Step.objects.create(
@@ -91,9 +134,10 @@ class WorkflowSerializer(serializers.ModelSerializer):
                     prompt=step_data['prompt'],
                     file=step_data.get('file'),
                     llm=step_data.get('llm'),
-                    order=step_data['order']
+                    order=step_data['order'],
+                    max_tokens=step_data.get('max_tokens', Step._meta.get_field('max_tokens').default),
+                    temperature=step_data.get('temperature', Step._meta.get_field('temperature').default)
                 )
                 instance.steps.add(step)
 
         return instance
-    
