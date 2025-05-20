@@ -8,7 +8,7 @@ from users.constants import VectorDBChoice
 class LLMSerializer(serializers.ModelSerializer):
     class Meta:
         model = LLM
-        fields = ['id', 'name', 'identifier', 'description']
+        fields = ['id', 'name', 'identifier', 'description','is_reasoning', 'input_token_rate_per_million', 'output_token_rate_per_million',]
 
 class ConversationSerializer(serializers.ModelSerializer):
     user = serializers.ReadOnlyField(source='user.email')
