@@ -6,6 +6,8 @@ from channels.db import database_sync_to_async
 from billing.constants import TransactionTypeChoice
 from billing.models import Transaction, Wallet
 from conversations.models import LLM, Message
+from workflows.models import Step, Workflow, WorkflowRun
+
 import logging
 
 from users.models import User
@@ -52,6 +54,7 @@ class BillingService:
 
     async def check_streaming_credit_usage(self, user: 'User', llm: LLM, token_usage: Dict) -> tuple:
         """Check if user has sufficient credits during streaming."""
+        """Check if user has sufficient credits during streaming."""
         try:
             wallet = await self._get_user_wallet(user)
             if not wallet:
@@ -68,10 +71,9 @@ class BillingService:
             if estimated_cost > balance:
                 if balance > Decimal('0'):
                     amount_to_deduct = balance
-                    # Construct message based on availability of message_id and message_content
                     transaction_message = (
-                        f"Message {message_id}: {message_content[:100]}" 
-                        if message_id and message_content 
+                        f"Message {message_id}: {message_content[:100]}"
+                        if message_id and message_content
                         else "Partial LLM usage (streaming)"
                     )
                     await database_sync_to_async(
@@ -106,7 +108,9 @@ class BillingService:
             return False, {"error": "credit_check_error", "message": "Error checking credits"}
 
     def finalize_ai_message(self, message_obj: Message, ai_response: str, token_usage: Dict) -> Message:
-        """Finalize AI message and process billing."""
+        if not message_obj:
+            return None
+
         try:
             message_obj.message = ai_response
             if token_usage:
@@ -150,6 +154,60 @@ class BillingService:
             raise
         except Exception as e:
             logger.exception(f"Error finalizing message: {str(e)}")
+            raise ValidationError({"error": "billing_error", "message": "Failed to process billing"})
+
+    def process_workflow_billing(self, user: 'User', llm: LLM, input_tokens: int, output_tokens: int, step_id: int) -> bool:
+        """Process billing for a workflow step."""
+        try:
+            cost = self._calculate_cost(llm, input_tokens, output_tokens)
+
+            if cost <= Decimal('0'):
+                return True
+
+            wallet = getattr(user, 'wallet', None)
+            if not wallet:
+                logger.error(f"Wallet not found for user: {user.id}")
+                return False
+
+            step = Step.objects.get(id=step_id)
+            workflows = step.workflows.all()
+            workflow = workflows.first() if workflows.exists() else None
+
+            step_order = step.order
+            workflow_title = workflow.title if workflow else "Unknown Workflow"
+
+            transaction_message = f"Workflow {workflow.id} : Title - {workflow_title} | Step #{step_order} "
+
+            if wallet.balance < cost:
+                amount_to_deduct = wallet.balance
+                if amount_to_deduct > Decimal('0'):
+                    with db_transaction.atomic():
+                        Transaction.objects.create(
+                            user=user,
+                            message=transaction_message + " (insufficient balance)",
+                            amount=amount_to_deduct,
+                            type=TransactionTypeChoice.DEBIT,
+                            input_tokens=input_tokens,
+                            output_tokens=output_tokens
+                        )
+                        wallet.balance = Decimal('0')
+                        wallet.save()
+                return False
+            else:
+                with db_transaction.atomic():
+                    Transaction.objects.create(
+                        user=user,
+                        message=transaction_message,
+                        amount=cost,
+                        type=TransactionTypeChoice.DEBIT,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens
+                    )
+                    wallet.refresh_from_db()
+                return True
+
+        except Exception as e:
+            logger.exception(f"Error processing workflow billing: {str(e)}")
             raise ValidationError({"error": "billing_error", "message": "Failed to process billing"})
 
     def _calculate_estimated_cost(self, llm: LLM, input_tokens: int, output_tokens: int) -> Decimal:
