@@ -141,6 +141,7 @@ class BillingService:
                             Transaction.objects.create(
                                 user=user,
                                 amount=cost,
+                                llm=llm,
                                 type=TransactionTypeChoice.DEBIT,
                                 message=transaction_message,
                                 input_tokens=message_obj.input_tokens,
@@ -185,6 +186,7 @@ class BillingService:
                         Transaction.objects.create(
                             user=user,
                             message=transaction_message + " (insufficient balance)",
+                            llm=llm,
                             amount=amount_to_deduct,
                             type=TransactionTypeChoice.DEBIT,
                             input_tokens=input_tokens,
