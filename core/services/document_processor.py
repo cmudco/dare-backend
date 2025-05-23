@@ -8,6 +8,7 @@ from conversations.models import Snippet
 from channels.db import database_sync_to_async
 from core.config.vector_db import get_user_namespace
 from core.config.processing import CHUNK_SIZE, BATCH_SIZE, DEFAULT_SIMILARITY_THRESHOLD, DEFAULT_TOP_K, OVERLAP_SIZE
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 class DocumentProcessor:
     def __init__(self, openai_client=None, vector_service=None, embedding_service=None, file_processor=None, user_id=None):
@@ -34,10 +35,10 @@ class DocumentProcessor:
             self.update_vector_service(file.user.id)
 
             content = self.file_processor.read_file_content(file)
-            
+
             user_chunk_size = getattr(file.user, 'chunk_size', CHUNK_SIZE)
             user_overlap_size = getattr(file.user, 'overlap_size', OVERLAP_SIZE)
-            
+
             vectors = self._process_chunks(content, file, user_chunk_size, user_overlap_size)
             self._store_vectors(vectors, file.user.id)
             return len(vectors)
@@ -63,60 +64,36 @@ class DocumentProcessor:
             raise Exception(f"Error processing user files: {str(e)}")
 
     def _chunk_text(self, text: str, chunk_size: int = CHUNK_SIZE, overlap: int = OVERLAP_SIZE) -> List[str]:
-        """Split text into smaller chunks with overlap, preserving word boundaries."""
+        """Split text into smaller chunks with overlap, using RecursiveCharacterTextSplitter.
+
+        This splitter is optimal for generic text, trying to keep paragraphs, sentences,
+        and words together as long as possible for better semantic coherence.
+        """
         if not text or not isinstance(text, str):
             return []
 
-        overlap = min(overlap, chunk_size - 1)
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=overlap,
+            length_function=len,
+            # Default separators: ["\n\n", "\n", " ", ""]
+            # separators for languages without word boundaries
+            separators=[
+                "\n\n",
+                "\n",
+                " ",
+                ".",
+                ",",
+                "\u200b",  # Zero-width space
+                "\uff0c",  # Fullwidth comma
+                "\u3001",  # Ideographic comma
+                "\uff0e",  # Fullwidth full stop
+                "\u3002",  # Ideographic full stop
+                ""
+            ]
+        )
 
-        words = text.split()
-        if not words:
-            return []
-
-        chunks = []
-        current_chunk = []
-        current_size = 0
-        i = 0
-
-        while i < len(words):
-            word = words[i]
-            word_with_space = word + " "
-            current_size += len(word_with_space)
-            current_chunk.append(word)
-
-            if current_size >= chunk_size:
-                chunk_text = ' '.join(current_chunk)
-                chunks.append(chunk_text)
-
-                if overlap > 0:
-                    overlap_chars = chunk_text[-overlap:] if len(chunk_text) > overlap else chunk_text
-                    last_space = overlap_chars.rfind(' ')
-                    if last_space != -1 and last_space > 0:
-                        overlap_text = overlap_chars[last_space + 1:]
-                    else:
-                        overlap_text = overlap_chars
-
-                    overlap_words = overlap_text.split()
-                    if overlap_words:
-                        overlap_word_count = len(overlap_words)
-                        i = max(0, i - len(current_chunk) + (len(current_chunk) - overlap_word_count))
-                        current_chunk = overlap_words[:]
-                        current_size = len(' '.join(overlap_words)) + 1
-                    else:
-                        i += 1
-                        current_chunk = []
-                        current_size = 0
-                else:
-                    i += 1
-                    current_chunk = []
-                    current_size = 0
-            else:
-                i += 1
-
-        if current_chunk:
-            chunk_text = ' '.join(current_chunk)
-            if chunk_text.strip():
-                chunks.append(chunk_text)
+        chunks = text_splitter.split_text(text)
         return chunks
 
     def _process_chunks(self, content: str, file: File, chunk_size=CHUNK_SIZE, overlap=OVERLAP_SIZE) -> List[Tuple[str, List[float], Dict]]:
