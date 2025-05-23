@@ -213,14 +213,16 @@ class ChatConsumer(AsyncWebsocketConsumer):
     async def _finalize_message(self, message_obj: Message, ai_response: str, token_usage: Dict, regenerate: bool):
         """Finalize AI message with billing and send final response."""
         try:
+            if regenerate and not message_obj.original_message:
+                message_obj.original_message = message_obj.message
+                await database_sync_to_async(message_obj.save)(update_fields=['original_message'])
+
             updated_message = await sync_to_async(
                 self.conversation_service.finalize_ai_message_with_billing
             )(message_obj, ai_response, token_usage)
             if regenerate:
                 updated_message.is_regenerated = True
-                if not updated_message.original_message:
-                    updated_message.original_message = updated_message.message
-                await database_sync_to_async(updated_message.save)(update_fields=['is_regenerated', 'original_message'])
+                await database_sync_to_async(updated_message.save)(update_fields=['is_regenerated'])
             await self.send(await self._format_message(updated_message, streaming=False, regenerate=regenerate))
         except (ValidationError, DjangoValidationError) as e:
             logger.error(f"Validation error finalizing message: {str(e)}")
