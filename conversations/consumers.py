@@ -27,6 +27,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
     DEFAULT_MAX_TOKENS = 1024
     DEFAULT_MAX_CONTEXT_SNIPPETS = 4
     DEFAULT_DOCUMENT_SIMILARITY_THRESHOLD = 0.5
+    DEFAULT_HISTORY_LIMIT = 10
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -176,6 +177,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 max_tokens=message_data["max_tokens"],
                 max_context_snippets=message_data["max_context_snippets"],
                 document_similarity_threshold=message_data["document_similarity_threshold"],
+                history_limit=message_data["history_limit"],
                 message_obj=message_obj
             ):
                 if usage:
@@ -304,6 +306,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             "max_tokens": data.get("max_tokens", self.DEFAULT_MAX_TOKENS),
             "max_context_snippets": data.get("max_context_snippets", self.DEFAULT_MAX_CONTEXT_SNIPPETS),
             "document_similarity_threshold": data.get("document_similarity_threshold", self.DEFAULT_DOCUMENT_SIMILARITY_THRESHOLD),
+            "history_limit": data.get("history_limit", self.DEFAULT_HISTORY_LIMIT),
         }
 
     async def send_error(self, code: str, message: str, details: Dict = None):

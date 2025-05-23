@@ -35,6 +35,7 @@ class LLMService:
         max_tokens: int = 2048,
         max_context_snippets: int = 4,
         document_similarity_threshold: float = 0.5,
+        history_limit: int = 10,
         message_obj: Message = None,
         full_file_content: str = None
     ) -> AsyncGenerator[Tuple[str, Dict], None]:
@@ -43,7 +44,7 @@ class LLMService:
             if not message.strip():
                 raise ValueError("User message cannot be empty")
 
-            conversation_history = await self.get_conversation_history(conversation, limit=10) if conversation else []
+            conversation_history = await self.get_conversation_history(conversation, limit=history_limit) if conversation else []
             prompt = await self.get_prompt(prompt_id)
             messages = []
 
@@ -97,7 +98,7 @@ class LLMService:
     def get_conversation_history(self, conversation: 'Conversation', limit: int = 10) -> list:
         """Retrieves recent chat history for AI context, ignoring placeholders."""
         messages = Message.active_objects.filter(conversation=conversation).order_by('-created_at')
-        messages = messages[2:]
+        messages = messages[2:limit+2] if limit > 0 else messages[2:]
         return [
             {"role": "user" if msg.sender_type == SenderType.PLAYER else "assistant", "content": msg.message}
             for msg in reversed(messages)
