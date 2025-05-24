@@ -201,6 +201,7 @@ class BillingService:
                         user=user,
                         message=transaction_message,
                         amount=cost,
+                        llm=llm,
                         type=TransactionTypeChoice.DEBIT,
                         input_tokens=input_tokens,
                         output_tokens=output_tokens
