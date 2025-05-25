@@ -2,9 +2,9 @@ from typing import Optional
 from django_rq import job, enqueue
 from channels.db import database_sync_to_async
 from django.utils import timezone
+from billing.models import Transaction
 
-from conversations.models import LLM, Message
-from files.models import File
+from conversations.models import LLM
 from core.services.llm_service import LLMService
 from .models import Step, WorkflowRun, WorkflowRunStep, Mode, WorkflowRunStepStatus
 from core.services.file_processor import FileProcessor
@@ -62,8 +62,28 @@ async def execute_step_async(step: 'Step', previous_response: Optional[str] = No
         )
 
         full_response = ""
-        async for chunk, _ in response_generator:
+        token_usage = {}
+        async for chunk, usage in response_generator:
             full_response += chunk
+            if usage:
+                token_usage = usage
+
+        if token_usage and llm_to_use:
+            input_tokens = token_usage.get("input_tokens", 0)
+            output_tokens = token_usage.get("output_tokens", 0)
+
+            try:
+                await database_sync_to_async(create_workflow_transaction)(
+                    user=step_user,
+                    llm=llm_to_use,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    step_id=step.id
+                )
+            except Exception as billing_error:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"Billing error in execute_step_async: {str(billing_error)}")
 
         return full_response
     except Exception as e:
@@ -138,6 +158,16 @@ def execute_step_task(workflow_run_step_id, workflow_run_id=None):
             response = execute_step(step_run.step)
             step_run.response = response
             step_run.status = WorkflowRunStepStatus.COMPLETED
+
+            transaction = Transaction.objects.filter(
+                user=step_run.step.user,
+                message__contains=f"Workflow step {step_run.step.id}"
+            ).order_by('-created_at').first()
+
+            if transaction:
+                step_run.input_tokens = transaction.input_tokens
+                step_run.output_tokens = transaction.output_tokens
+
         except Exception as e:
             step_run.error = str(e)
             step_run.status = WorkflowRunStepStatus.FAILED
@@ -155,3 +185,15 @@ def execute_step_task(workflow_run_step_id, workflow_run_id=None):
 
     except WorkflowRunStep.DoesNotExist:
         pass
+
+def create_workflow_transaction(user, llm, input_tokens, output_tokens, step_id):
+    from core.services.billing_service import BillingService
+
+    billing_service = BillingService()
+    return billing_service.process_workflow_billing(
+        user=user,
+        llm=llm,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        step_id=step_id
+    )

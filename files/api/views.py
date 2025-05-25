@@ -15,6 +15,9 @@ from ..tasks import process_file_embeddings
 from ..models import File, Tag
 from .serializers import FileSerializer, TagSerializer
 from ..constants import ALLOWED_FILES, FileStatus
+import logging
+logger = logging.getLogger(__name__)
+
 
 class FileViewSet(viewsets.ModelViewSet):
     serializer_class = FileSerializer
@@ -108,11 +111,21 @@ class FileViewSet(viewsets.ModelViewSet):
                 }
                 if job:
                     status_data["jobStatus"] = job.get_status()
+                    if job.is_failed:
+                        error_message = str(job.exc_info) if job.exc_info else "Unknown error"
+                        status_data["error"] = error_message
+                        logger.error(f"Job failed for file ID {file.id}: {error_message}")
+
+                if file.status == FileStatus.FAILED and "error" not in status_data:
+                    status_data["error"] = "File processing failed"
+                    logger.error(f"File with ID {file.id} has failed status but no error message")
+
                 response_data.append(status_data)
 
             return Response(response_data, status=status.HTTP_200_OK)
 
         except Exception as e:
+            logger.error(f"Error in get_job_statuses: {str(e)}")
             return Response({"error": "Internal server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 class TagViewSet(viewsets.ModelViewSet):
