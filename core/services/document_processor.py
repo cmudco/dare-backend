@@ -1,6 +1,4 @@
 from typing import Dict, List, Tuple
-import io
-import PyPDF2
 from core.helpers.openai import OpenAIWrapper
 from core.services.vector_service import get_vector_service
 from core.services.embedding_service import EmbeddingService
@@ -9,7 +7,8 @@ from files.models import File
 from conversations.models import Snippet
 from channels.db import database_sync_to_async
 from core.config.vector_db import get_user_namespace
-from core.config.processing import CHUNK_SIZE, BATCH_SIZE, DEFAULT_SIMILARITY_THRESHOLD, DEFAULT_TOP_K
+from core.config.processing import CHUNK_SIZE, BATCH_SIZE, DEFAULT_SIMILARITY_THRESHOLD, DEFAULT_TOP_K, OVERLAP_SIZE
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 class DocumentProcessor:
     def __init__(self, openai_client=None, vector_service=None, embedding_service=None, file_processor=None, user_id=None):
@@ -36,7 +35,11 @@ class DocumentProcessor:
             self.update_vector_service(file.user.id)
 
             content = self.file_processor.read_file_content(file)
-            vectors = self._process_chunks(content, file)
+
+            user_chunk_size = getattr(file.user, 'chunk_size', CHUNK_SIZE)
+            user_overlap_size = getattr(file.user, 'overlap_size', OVERLAP_SIZE)
+
+            vectors = self._process_chunks(content, file, user_chunk_size, user_overlap_size)
             self._store_vectors(vectors, file.user.id)
             return len(vectors)
         except Exception as e:
@@ -60,30 +63,42 @@ class DocumentProcessor:
         except Exception as e:
             raise Exception(f"Error processing user files: {str(e)}")
 
-    def _chunk_text(self, text: str, chunk_size: int = 1000) -> List[str]:
-        """Split text into smaller chunks."""
-        words = text.split()
-        chunks = []
-        current_chunk = []
-        current_size = 0
+    def _chunk_text(self, text: str, chunk_size: int = CHUNK_SIZE, overlap: int = OVERLAP_SIZE) -> List[str]:
+        """Split text into smaller chunks with overlap, using RecursiveCharacterTextSplitter.
 
-        for word in words:
-            current_size += len(word) + 1
-            if current_size > chunk_size:
-                chunks.append(' '.join(current_chunk))
-                current_chunk = [word]
-                current_size = len(word)
-            else:
-                current_chunk.append(word)
+        This splitter is optimal for generic text, trying to keep paragraphs, sentences,
+        and words together as long as possible for better semantic coherence.
+        """
+        if not text or not isinstance(text, str):
+            return []
 
-        if current_chunk:
-            chunks.append(' '.join(current_chunk))
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=overlap,
+            length_function=len,
+            # Default separators: ["\n\n", "\n", " ", ""]
+            # separators for languages without word boundaries
+            separators=[
+                "\n\n",
+                "\n",
+                " ",
+                ".",
+                ",",
+                "\u200b",  # Zero-width space
+                "\uff0c",  # Fullwidth comma
+                "\u3001",  # Ideographic comma
+                "\uff0e",  # Fullwidth full stop
+                "\u3002",  # Ideographic full stop
+                ""
+            ]
+        )
 
+        chunks = text_splitter.split_text(text)
         return chunks
 
-    def _process_chunks(self, content: str, file: File) -> List[Tuple[str, List[float], Dict]]:
+    def _process_chunks(self, content: str, file: File, chunk_size=CHUNK_SIZE, overlap=OVERLAP_SIZE) -> List[Tuple[str, List[float], Dict]]:
         """Process file content into chunks and generate vectors."""
-        chunks = self._chunk_text(content, chunk_size=CHUNK_SIZE)
+        chunks = self._chunk_text(content, chunk_size=chunk_size, overlap=overlap)
         return self.embedding_service.create_embeddings_with_metadata(
             chunks,
             file.id,

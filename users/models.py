@@ -4,9 +4,10 @@ from django.utils.translation import gettext_lazy as _
 
 from common.managers import ActiveObjectsManager
 from common.models import IsDeletedMixin
+from core.config.processing import CHUNK_SIZE, OVERLAP_SIZE
 from users.managers import UserManager
 from users.constants import VectorDBChoice
-from prompts.models import Prompt 
+from prompts.models import Prompt
 
 class User(AbstractUser, IsDeletedMixin):
     username = None
@@ -29,6 +30,16 @@ class User(AbstractUser, IsDeletedMixin):
         related_name="default_for_users",
         verbose_name=_("Default Prompt"),
         help_text=_("The default prompt for this user, if set.")
+    )
+    chunk_size = models.IntegerField(
+        default=CHUNK_SIZE,
+        verbose_name=_("Chunk Size"),
+        help_text=_("Size of text chunks for document processing.")
+    )
+    overlap_size = models.IntegerField(
+        default=OVERLAP_SIZE,
+        verbose_name=_("Overlap Size"),
+        help_text=_("Size of overlap between text chunks")
     )
 
     objects = UserManager()

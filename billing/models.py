@@ -3,6 +3,7 @@ from django.db import models, transaction as db_transaction
 from django.core.exceptions import ValidationError
 from billing.constants import TransactionTypeChoice
 from common.models import TimeStampMixin
+from conversations.models import LLM
 from users.models import User
 
 class Wallet(TimeStampMixin):
@@ -56,6 +57,16 @@ class Transaction(TimeStampMixin):
         blank=True,
         verbose_name=("Message"),
         help_text=("Description of the transaction"),
+    )
+
+    llm = models.ForeignKey(
+        LLM,
+        on_delete=models.CASCADE,
+        related_name="transactions",
+        verbose_name=("Model"),
+        help_text=("Model used in the transaction"),
+        null=True,
+        blank=True,
     )
     amount = models.DecimalField(
         max_digits=15,

@@ -52,3 +52,6 @@ weaviate-client==4.14.1
 
 #email
 resend~=2.7.0
+
+# Text splitting
+langchain-text-splitters~=0.3.8

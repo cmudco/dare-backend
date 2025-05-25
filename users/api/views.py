@@ -139,3 +139,55 @@ class VectorDBViewSet(viewsets.ViewSet):
             })
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class ChunkingSettingsViewSet(viewsets.ModelViewSet):
+    permission_classes = [IsAuthenticated]
+
+    @action(detail=False, methods=['get', 'post', 'patch'], url_path='settings')
+    def config(self, request):
+        user = request.user
+
+        if request.method == 'GET':
+            return Response({
+                "chunk_size": user.chunk_size,
+                "overlap_size": user.overlap_size
+            })
+
+        chunk_size = request.data.get('chunk_size')
+        overlap_size = request.data.get('overlap_size')
+
+        if chunk_size is None or overlap_size is None:
+            return Response(
+                {"error": "chunk_size and overlap_size fields are required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            chunk_size = int(chunk_size)
+            overlap_size = int(overlap_size)
+
+            if chunk_size <= 0:
+                return Response(
+                    {"error": "chunk_size  must be positive"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if overlap_size < 0 or overlap_size >= chunk_size:
+                return Response(
+                    {"error": "overlap_size must be non-negative and less than chunk_size"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            user.chunk_size = chunk_size
+            user.overlap_size = overlap_size
+            user.save(update_fields=["chunk_size", "overlap_size"])
+
+            return Response({
+                "chunk_size": user.chunk_size,
+                "overlap_size": user.overlap_size
+            })
+        except ValueError:
+            return Response(
+                {"error": "chunk_size and overlap_size must be integers"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
