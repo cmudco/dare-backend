@@ -1,7 +1,7 @@
 from rest_framework import serializers
 
 from ..constants import FileStatus
-from ..models import File, Tag
+from ..models import File, Tag, Folder
 
 class FileSerializer(serializers.ModelSerializer):
     size = serializers.SerializerMethodField()
@@ -28,11 +28,8 @@ class FileSerializer(serializers.ModelSerializer):
         return data
 
     def create(self, validated_data):
-        tags = validated_data.pop('tags', [])
         validated_data['user'] = self.context['request'].user
         file_instance = File.active_objects.create(**validated_data)
-        if tags:
-            file_instance.tags.add(*tags)
         return file_instance
 
 class TagSerializer(serializers.ModelSerializer):
@@ -48,7 +45,6 @@ class TagSerializer(serializers.ModelSerializer):
             return 0
 
         current_user = request.user
-        
         # For default tags (user=None), count all files from current user with this tag
         # For user-specific tags, count only files belonging to that user
         if obj.user is None:
@@ -65,3 +61,38 @@ class TagSerializer(serializers.ModelSerializer):
                 user=obj.user,
                 tags=obj
             ).count()
+
+
+class FolderSerializer(serializers.ModelSerializer):
+    file_count = serializers.SerializerMethodField()
+    user = serializers.PrimaryKeyRelatedField(read_only=True)
+    files = FileSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Folder
+        fields = ['id', 'user', 'name', 'files', 'file_count', 'updated_at']
+
+    def get_file_count(self, obj):
+        return obj.files.count()
+
+    def create(self, validated_data):
+        file_ids = self.initial_data.get('files', [])
+        validated_data['user'] = self.context['request'].user
+        folder_instance = Folder.objects.create(**validated_data)
+        if file_ids:
+            files = File.active_objects.filter(id__in=file_ids, user=self.context['request'].user)
+            folder_instance.files.add(*files)
+        return folder_instance
+
+    def update(self, instance, validated_data):
+        file_ids = self.initial_data.get('files', None)
+
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+        instance.save()
+
+        if file_ids is not None:
+            files = File.active_objects.filter(id__in=file_ids, user=self.context['request'].user)
+            instance.files.set(files)
+
+        return instance
