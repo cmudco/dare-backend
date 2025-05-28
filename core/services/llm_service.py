@@ -95,10 +95,13 @@ class LLMService:
         return ""
 
     @database_sync_to_async
-    def get_conversation_history(self, conversation: 'Conversation', limit: int = 10) -> list:
+    def get_conversation_history(self, conversation: 'Conversation', limit: int = 10, ) -> list:
         """Retrieves recent chat history for AI context, ignoring placeholders."""
         messages = Message.active_objects.filter(conversation=conversation).order_by('-created_at')
-        messages = messages[2:limit+2] if limit > 0 else messages[2:]
+        if limit >= 50:
+            messages = messages[2:]
+        else:
+            messages = messages[2:limit+2] if limit > 0 else messages[2:]
         return [
             {"role": "user" if msg.sender_type == SenderType.PLAYER else "assistant", "content": msg.message}
             for msg in reversed(messages)
