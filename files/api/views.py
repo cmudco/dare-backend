@@ -114,6 +114,49 @@ class FileViewSet(viewsets.ModelViewSet):
                 file.folders.clear()
             return Response({"status": "Files removed from all folders"}, status=status.HTTP_200_OK)
 
+    @action(detail=False, methods=['post'], url_path='bulk-delete', parser_classes=[JSONParser])
+    def bulk_delete(self, request):
+        """
+        Bulk delete multiple files using DRF's built-in delete method for each file.
+        Expected payload: {"fileIds": [1, 2, 3, ...]}
+        """
+        file_ids = request.data.get('fileIds', [])
+
+        if not file_ids:
+            return Response({"error": "No file IDs provided."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not isinstance(file_ids, list):
+            return Response({"error": "fileIds must be a list."}, status=status.HTTP_400_BAD_REQUEST)
+
+        files = File.active_objects.filter(id__in=file_ids, user=request.user)
+
+        if not files.exists():
+            return Response({"error": "No valid files found to delete."}, status=status.HTTP_404_NOT_FOUND)
+
+        deleted_files = []
+        failed_files = []
+
+        for file in files:
+            try:
+                file_data = {"id": file.id, "name": file.name}
+                self.perform_destroy(file)
+                deleted_files.append(file_data)
+            except Exception as e:
+                logger.error(f"Error deleting file ID {file.id}: {str(e)}")
+                failed_files.append({"id": file.id, "error": str(e)})
+
+        response_data = {
+            "status": "Bulk delete completed",
+            "deleted_count": len(deleted_files),
+            "failed_count": len(failed_files),
+            "requested_count": len(file_ids)
+        }
+
+        if failed_files:
+            response_data["failed_files"] = failed_files
+
+        return Response(response_data, status=status.HTTP_200_OK)
+
 class TagViewSet(viewsets.ModelViewSet):
     serializer_class = TagSerializer
     permission_classes = [IsAuthenticated, IsOwner]
