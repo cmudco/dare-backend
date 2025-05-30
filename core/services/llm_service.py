@@ -6,7 +6,7 @@ from core.services.document_processor import DocumentProcessor
 from core.services.openai_service import OpenAIService
 from core.services.claude_service import ClaudeService
 from typing import AsyncGenerator, Dict, Tuple
-from files.models import File
+from files.models import File, Folder
 from prompts.models import Prompt
 from core.services.vector_service import get_vector_service_async
 
@@ -29,6 +29,7 @@ class LLMService:
         llm: LLM = None,
         file_ids: list = None,
         tag_ids: list = None,
+        folder_ids: list = None,
         user_id: int = None,
         prompt_id: str = None,
         temperature: float = 0.7,
@@ -53,28 +54,32 @@ class LLMService:
 
             if full_file_content:
                 messages.append({"role": "user", "content": f"File content: {full_file_content}"})
-            elif file_ids:
+            elif file_ids or tag_ids or folder_ids:
                 all_file_ids = set(file_ids or [])
                 if tag_ids:
                     tagged_file_ids = await self.get_files_from_tags(tag_ids, user_id)
                     all_file_ids.update(tagged_file_ids)
+                if folder_ids:
+                    folder_file_ids = await self.get_files_from_folders(folder_ids, user_id)
+                    all_file_ids.update(folder_file_ids)
 
-                if user_id and user_id != self.document_processor.user_id:
-                    self.document_processor.user_id = user_id
-                    self.document_processor.vector_service = await get_vector_service_async(user_id)
+                if all_file_ids:
+                    if user_id and user_id != self.document_processor.user_id:
+                        self.document_processor.user_id = user_id
+                        self.document_processor.vector_service = await get_vector_service_async(user_id)
 
-                context = await self.document_processor.search_similar_documents(
-                    query_text=message,
-                    file_ids=list(all_file_ids),
-                    user_id=user_id,
-                    top_k=max_context_snippets,
-                    similarity_threshold=document_similarity_threshold,
-                    message_obj=message_obj
-                )
-                if context:
-                    for part in context.split("\n\n"):
-                        if part.strip():
-                            messages.append({"role": "user", "content": part})
+                    context = await self.document_processor.search_similar_documents(
+                        query_text=message,
+                        file_ids=list(all_file_ids),
+                        user_id=user_id,
+                        top_k=max_context_snippets,
+                        similarity_threshold=document_similarity_threshold,
+                        message_obj=message_obj
+                    )
+                    if context:
+                        for part in context.split("\n\n"):
+                            if part.strip():
+                                messages.append({"role": "user", "content": part})
 
             messages.extend([msg for msg in conversation_history if msg["content"].strip()])
             messages.append({"role": "user", "content": f"User's message: {message}"})
@@ -95,10 +100,13 @@ class LLMService:
         return ""
 
     @database_sync_to_async
-    def get_conversation_history(self, conversation: 'Conversation', limit: int = 10) -> list:
+    def get_conversation_history(self, conversation: 'Conversation', limit: int = 10, ) -> list:
         """Retrieves recent chat history for AI context, ignoring placeholders."""
         messages = Message.active_objects.filter(conversation=conversation).order_by('-created_at')
-        messages = messages[2:limit+2] if limit > 0 else messages[2:]
+        if limit >= 50:
+            messages = messages[2:]
+        else:
+            messages = messages[2:limit+2] if limit > 0 else messages[2:]
         return [
             {"role": "user" if msg.sender_type == SenderType.PLAYER else "assistant", "content": msg.message}
             for msg in reversed(messages)
@@ -110,6 +118,13 @@ class LLMService:
         if not tag_ids:
             return []
         return list(File.active_objects.filter(tags__id__in=tag_ids, user_id=user_id).distinct().values_list('id', flat=True))
+
+    @database_sync_to_async
+    def get_files_from_folders(self, folder_ids: list, user_id: int) -> list:
+        """Fetch file IDs from folders."""
+        if not folder_ids:
+            return []
+        return list(File.active_objects.filter(folders__id__in=folder_ids, user_id=user_id).distinct().values_list('id', flat=True))
 
     def _get_ai_service(self, llm: LLM) -> AIService:
         if llm.provider == Provider.OPENAI.value:

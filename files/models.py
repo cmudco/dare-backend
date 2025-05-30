@@ -21,6 +21,37 @@ class Tag(TimeStampMixin):
     def __str__(self):
         return self.label
 
+
+class Folder(TimeStampMixin):
+    """
+    Model for organizing files into folders.
+    """
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='folders',
+        help_text="The user who owns this folder"
+    )
+    name = models.CharField(
+        max_length=255,
+        help_text="Name of the folder"
+    )
+    files = models.ManyToManyField(
+        'File',
+        related_name='folders',
+        blank=True,
+        help_text="Files contained in this folder"
+    )
+
+    objects = models.Manager()
+
+    class Meta:
+        unique_together = ('user', 'name')
+
+    def __str__(self):
+        return self.name
+
+
 class File(BaseModel):
     """
     Model for user-uploaded files, tracking metadata, tags and file type.
