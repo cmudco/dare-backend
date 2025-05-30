@@ -42,6 +42,7 @@ anthropic==0.49.0
 
 rq==2.2.0
 django-rq==3.0.0
+rq-scheduler==0.14.0
 redis==5.2.1
 
 pycryptodome==3.22.0
