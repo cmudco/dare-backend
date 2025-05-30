@@ -10,10 +10,11 @@ from rest_framework.response import Response
 from rest_framework import status
 
 from core.services.document_processor import DocumentProcessor
+from core.services.file_upload_service import FileUploadService
 from common.permissions import IsOwner
 from ..tasks import process_file_embeddings
-from ..models import File, Tag
-from .serializers import FileSerializer, TagSerializer
+from ..models import File, Tag, Folder
+from .serializers import FileSerializer, TagSerializer, FolderSerializer
 from ..constants import ALLOWED_FILES, FileStatus
 import logging
 logger = logging.getLogger(__name__)
@@ -22,7 +23,7 @@ logger = logging.getLogger(__name__)
 class FileViewSet(viewsets.ModelViewSet):
     serializer_class = FileSerializer
     permission_classes = [IsAuthenticated, IsOwner]
-    parser_classes = (MultiPartParser, FormParser)
+    parser_classes = (MultiPartParser, FormParser, JSONParser)
 
     def get_queryset(self):
         return File.active_objects.filter(
@@ -36,59 +37,22 @@ class FileViewSet(viewsets.ModelViewSet):
         if not uploaded_files:
             return Response({"error": "No files uploaded."}, status=status.HTTP_400_BAD_REQUEST)
 
-        if len(uploaded_files) != len(file_names):
-            return Response(
-                {"error": "Number of files and names do not match."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
         tags_data = request.data.get('tags', '[]')
-        tag_ids = json.loads(tags_data)
+        tag_ids = FileUploadService.parse_tags(tags_data)
 
-        file_instances = []
-        for idx, uploaded_file in enumerate(uploaded_files):
-            file_name = file_names[idx]
-            file_type = uploaded_file.content_type
-            size = uploaded_file.size
-
-            is_valid_file = True
-            if size == 0:
-                is_valid_file = False
-            elif file_type and file_type.split('/')[-1] not in ALLOWED_FILES:
-                is_valid_file = False
-
-            data = {
-                'file': uploaded_file,
-                'name': file_name,
-                'file_type': file_type,
-                'size': size,
-                'user': request.user.id,
-                'status': FileStatus.FAILED if not is_valid_file else FileStatus.PROCESSING,
-                'tags': tag_ids,
-                'vector_db_source': request.user.vector_db
-            }
-
-            serializer = self.get_serializer(data=data)
-            serializer.is_valid(raise_exception=True)
-            file_instance = serializer.save()
-
-            if is_valid_file:
-                try:
-                    job = enqueue(process_file_embeddings, file_instance.id)
-                    file_instance.job_id = job.id
-                    file_instance.save(update_fields=['job_id'])
-                except Exception as e:
-                    file_instance.status = FileStatus.FAILED
-                    file_instance.save(update_fields=['status'])
-                    return Response(
-                        {"error": f"Error processing file '{file_name}': {str(e)}"},
-                        status=status.HTTP_500_INTERNAL_SERVER_ERROR
-                    )
-
-            file_instances.append(file_instance)
-
-        serializer = self.get_serializer(file_instances, many=True)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        try:
+            file_instances = FileUploadService.upload_files(
+                uploaded_files, file_names, request.user, tag_ids
+            )
+            serializer = self.get_serializer(file_instances, many=True)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        except ValueError as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response(
+                {"error": f"Error uploading files: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
     @action(detail=False, methods=['post'], url_path='job-statuses', parser_classes=[JSONParser])
     def get_job_statuses(self, request):
@@ -128,6 +92,71 @@ class FileViewSet(viewsets.ModelViewSet):
             logger.error(f"Error in get_job_statuses: {str(e)}")
             return Response({"error": "Internal server error"}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+    @action(detail=False, methods=['post'], url_path='move')
+    def move_files_to_folder(self, request):
+        file_ids = request.data.get('fileIds', [])
+        folder_id = request.data.get('folderId')
+
+        if not file_ids:
+            return Response({"error": "No file IDs provided."}, status=status.HTTP_400_BAD_REQUEST)
+
+        files = File.active_objects.filter(id__in=file_ids, user=request.user)
+
+        if folder_id:
+            try:
+                folder = Folder.objects.get(id=folder_id, user=request.user)
+                folder.files.add(*files)
+                return Response({"status": "Files moved to folder successfully"}, status=status.HTTP_200_OK)
+            except Folder.DoesNotExist:
+                return Response({"error": "Folder not found."}, status=status.HTTP_404_NOT_FOUND)
+        else:
+            for file in files:
+                file.folders.clear()
+            return Response({"status": "Files removed from all folders"}, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=['post'], url_path='bulk-delete', parser_classes=[JSONParser])
+    def bulk_delete(self, request):
+        """
+        Bulk delete multiple files using DRF's built-in delete method for each file.
+        Expected payload: {"fileIds": [1, 2, 3, ...]}
+        """
+        file_ids = request.data.get('fileIds', [])
+
+        if not file_ids:
+            return Response({"error": "No file IDs provided."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not isinstance(file_ids, list):
+            return Response({"error": "fileIds must be a list."}, status=status.HTTP_400_BAD_REQUEST)
+
+        files = File.active_objects.filter(id__in=file_ids, user=request.user)
+
+        if not files.exists():
+            return Response({"error": "No valid files found to delete."}, status=status.HTTP_404_NOT_FOUND)
+
+        deleted_files = []
+        failed_files = []
+
+        for file in files:
+            try:
+                file_data = {"id": file.id, "name": file.name}
+                self.perform_destroy(file)
+                deleted_files.append(file_data)
+            except Exception as e:
+                logger.error(f"Error deleting file ID {file.id}: {str(e)}")
+                failed_files.append({"id": file.id, "error": str(e)})
+
+        response_data = {
+            "status": "Bulk delete completed",
+            "deleted_count": len(deleted_files),
+            "failed_count": len(failed_files),
+            "requested_count": len(file_ids)
+        }
+
+        if failed_files:
+            response_data["failed_files"] = failed_files
+
+        return Response(response_data, status=status.HTTP_200_OK)
+
 class TagViewSet(viewsets.ModelViewSet):
     serializer_class = TagSerializer
     permission_classes = [IsAuthenticated, IsOwner]
@@ -137,3 +166,78 @@ class TagViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
+
+class FolderViewSet(viewsets.ModelViewSet):
+    serializer_class = FolderSerializer
+    permission_classes = [IsAuthenticated, IsOwner]
+    parser_classes = (MultiPartParser, FormParser, JSONParser)
+
+    def get_queryset(self):
+        return Folder.objects.filter(user=self.request.user).order_by('name')
+
+    def create(self, request):
+        """
+        Create a folder and optionally upload files to it.
+        Supports both:
+        1. Creating empty folder: {"name": "folder_name"}
+        2. Creating folder with files: {"name": "folder_name", "files": [...], "names": [...]}
+        """
+        folder_name = request.data.get('name')
+        if not folder_name:
+            return Response({"error": "Folder name is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if Folder.objects.filter(name=folder_name, user=request.user).exists():
+            return Response({"error": "A folder with this name already exists."}, status=status.HTTP_400_BAD_REQUEST)
+
+        uploaded_files = request.FILES.getlist('files') if hasattr(request.FILES, 'getlist') else []
+        file_names = request.data.get('names', []) if isinstance(request.data.get('names'), list) else request.data.getlist('names', []) if hasattr(request.data, 'getlist') else []
+
+        if not uploaded_files:
+            folder = Folder.objects.create(name=folder_name, user=request.user)
+            serializer = self.get_serializer(folder)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+        tags_data = request.data.get('tags', '[]')
+        if isinstance(tags_data, list):
+            tags_data = json.dumps(tags_data)
+        tag_ids = FileUploadService.parse_tags(tags_data)
+
+        try:
+            folder, file_instances = FileUploadService.upload_folder_with_files(
+                folder_name, uploaded_files, file_names, request.user, tag_ids
+            )
+            serializer = self.get_serializer(folder)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        except ValueError as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            return Response(
+                {"error": f"Error creating folder with files: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+    def perform_update(self, serializer):
+        serializer.save(user=self.request.user)
+
+    @action(detail=True, methods=['post'], url_path='add-files')
+    def add_files(self, request, pk=None):
+        folder = self.get_object()
+        file_ids = request.data.get('fileIds', [])
+
+        files = File.active_objects.filter(id__in=file_ids, user=request.user)
+        folder.files.add(*files)
+
+        return Response({'status': 'files added to folder'})
+
+    @action(detail=True, methods=['post'], url_path='remove-files')
+    def remove_files(self, request, pk=None):
+        folder = self.get_object()
+        file_ids = request.data.get('fileIds', [])
+
+        files = File.active_objects.filter(id__in=file_ids, user=request.user)
+        folder.files.remove(*files)
+
+        return Response({'status': 'files removed from folder'})
