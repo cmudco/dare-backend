@@ -52,13 +52,61 @@ class ConversationViewSet(viewsets.ModelViewSet):
                     conversation_map[conversation_id].sort_order = sort_order
                     conversation_map[conversation_id].save(update_fields=['sort_order'])
 
-            return Response({"success": True}, status=status.HTTP_200_OK)
+            return Response(status=status.HTTP_204_NO_CONTENT)
 
         except Exception as e:
             return Response(
                 {"error": str(e)},
                 status=status.HTTP_400_BAD_REQUEST
             )
+
+    @action(detail=False, methods=['post'], url_path='bulk-delete')
+    def bulk_delete(self, request):
+        """
+        Bulk delete multiple conversations using DRF's built-in delete method for each conversation.
+        Expected payload: {"conversation_ids": ["ABC123", "DEF456", ...]}
+        """
+        conversation_ids = request.data.get('conversation_ids', [])
+
+        if not conversation_ids:
+            return Response({"error": "No conversation IDs provided."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not isinstance(conversation_ids, list):
+            return Response({"error": "conversation_ids must be a list."}, status=status.HTTP_400_BAD_REQUEST)
+
+        conversations = Conversation.active_objects.filter(
+            conversation_id__in=conversation_ids,
+            user=request.user
+        )
+
+        if not conversations.exists():
+            return Response({"error": "No valid conversations found to delete."}, status=status.HTTP_404_NOT_FOUND)
+
+        deleted_conversations = []
+        failed_conversations = []
+
+        for conversation in conversations:
+            try:
+                conversation_data = {"conversation_id": conversation.conversation_id, "title": conversation.title}
+                self.perform_destroy(conversation)
+                deleted_conversations.append(conversation_data)
+            except Exception as e:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"Error deleting conversation ID {conversation.conversation_id}: {str(e)}")
+                failed_conversations.append({"conversation_id": conversation.conversation_id, "error": str(e)})
+
+        response_data = {
+            "status": "Bulk delete completed",
+            "deleted_count": len(deleted_conversations),
+            "failed_count": len(failed_conversations),
+            "requested_count": len(conversation_ids)
+        }
+
+        if failed_conversations:
+            response_data["failed_conversations"] = failed_conversations
+
+        return Response(response_data, status=status.HTTP_200_OK)
 
 class MessageViewSet(viewsets.ModelViewSet):
     """Endpoint for creating/retrieving messages within a conversation."""
