@@ -67,6 +67,10 @@ class Conversation(BaseModel):
         related_name="conversations",
         help_text="Associated prompt for this conversation."
     )
+    sort_order = models.PositiveIntegerField(
+        default=0,
+        help_text="Sort order for drag-and-drop functionality. Higher values appear later."
+    )
 
     active_objects = ActiveObjectsManager()
 

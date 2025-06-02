@@ -35,6 +35,7 @@ class ConversationSerializer(serializers.ModelSerializer):
             'history_limit',
             'prompt',
             'prompt_id',
+            'sort_order',
         ]
         read_only_fields = ['conversation_id', 'created_at', 'user', 'prompt']
 

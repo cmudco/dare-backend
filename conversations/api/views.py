@@ -1,4 +1,6 @@
-from rest_framework import viewsets, generics
+from rest_framework import viewsets, generics, status
+from rest_framework.decorators import action
+from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from conversations.models import Message, Conversation, LLM
 from .serializers import MessageSerializer, ConversationSerializer, LLMSerializer
@@ -12,13 +14,51 @@ class ConversationViewSet(viewsets.ModelViewSet):
     lookup_field = 'conversation_id'
 
     def get_queryset(self):
-        return Conversation.active_objects.filter(user=self.request.user).order_by('-created_at')
+        return Conversation.active_objects.filter(user=self.request.user).order_by('sort_order', '-created_at')
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
         if  self.request.user.default_prompt:
             serializer.instance.prompt = self.request.user.default_prompt
             serializer.instance.save()
+
+    @action(detail=False, methods=['patch'], url_path='update-sort-order')
+    def update_sort_order(self, request):
+        """
+        Update the sort order of multiple conversations.
+        Expected payload: [{"conversation_id": "ABC123", "sort_order": 1}, ...]
+        """
+        try:
+            updates = request.data
+            if not isinstance(updates, list):
+                return Response(
+                    {"error": "Expected a list of conversation updates"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            conversation_ids = [update.get('conversation_id') for update in updates]
+            conversations = Conversation.active_objects.filter(
+                user=request.user,
+                conversation_id__in=conversation_ids
+            )
+
+            conversation_map = {conv.conversation_id: conv for conv in conversations}
+
+            for update in updates:
+                conversation_id = update.get('conversation_id')
+                sort_order = update.get('sort_order')
+
+                if conversation_id in conversation_map and sort_order is not None:
+                    conversation_map[conversation_id].sort_order = sort_order
+                    conversation_map[conversation_id].save(update_fields=['sort_order'])
+
+            return Response({"success": True}, status=status.HTTP_200_OK)
+
+        except Exception as e:
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
 class MessageViewSet(viewsets.ModelViewSet):
     """Endpoint for creating/retrieving messages within a conversation."""
