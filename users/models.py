@@ -3,11 +3,53 @@ from django.db import models
 from django.utils.translation import gettext_lazy as _
 
 from common.managers import ActiveObjectsManager
-from common.models import IsDeletedMixin
+from common.models import IsDeletedMixin, TimeStampMixin
 from core.config.processing import CHUNK_SIZE, OVERLAP_SIZE
 from users.managers import UserManager
 from users.constants import VectorDBChoice
 from prompts.models import Prompt
+
+class AccessCodeGroup(TimeStampMixin):
+    """
+    Represents a group of access codes for user registration.
+    Tracks the total capacity and usage of registration codes.
+    """
+    max_capacity = models.IntegerField(
+        help_text="Maximum number of users that can use this access code group"
+    )
+    current_usage = models.IntegerField(
+        default=0,
+        help_text="Number of times this access code has been used"
+    )
+    access_code = models.CharField(
+        max_length=255,
+        unique=True,
+        help_text="Unique registration code for this group"
+    )
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Whether this access code is currently active"
+    )
+
+    class Meta:
+        verbose_name = "Access Code Group"
+        verbose_name_plural = "Access Code Groups"
+
+    def __str__(self):
+        return f"Access Code: {self.access_code} ({self.current_usage}/{self.max_capacity} used)"
+
+    @property
+    def is_available(self):
+        """Check if the access code can still be used"""
+        return self.is_active and self.current_usage < self.max_capacity
+
+    def use_code(self):
+        """Increment usage count when code is used"""
+        if self.is_available:
+            self.current_usage += 1
+            self.save(update_fields=['current_usage'])
+            return True
+        return False
 
 class User(AbstractUser, IsDeletedMixin):
     username = None
