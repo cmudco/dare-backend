@@ -219,6 +219,11 @@ RQ_QUEUES = {
         'DB': env.REDIS_DB,
         'DEFAULT_TIMEOUT': 3600,
     },
+    'scheduler': {
+        'HOST': env.REDIS_HOST,
+        'PORT': env.REDIS_PORT,
+        'DB': env.REDIS_DB,
+    },
 }
 
 RQ_SHOW_ADMIN_LINK = True

@@ -69,8 +69,8 @@ class Transaction(TimeStampMixin):
         blank=True,
     )
     amount = models.DecimalField(
-        max_digits=15,
-        decimal_places=15,
+        max_digits=10,
+        decimal_places=6,  
         verbose_name=("Amount"),
         help_text=("Transaction amount in USD"),
     )
