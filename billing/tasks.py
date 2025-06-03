@@ -20,19 +20,47 @@ def process_monthly_topup():
     """
     cutoff_date = timezone.now() - timedelta(days=30)
 
-    eligible_users = User.objects.filter(
-        is_active=True,
-        wallet__created_at__lte=cutoff_date
-    ).exclude(
-        transactions__type=TransactionTypeChoice.CREDIT,
-        transactions__message="Monthly $5 top-up",
-        transactions__created_at__gte=cutoff_date
-    ).distinct()
+    stats = {
+        "processed": 0,
+        "failed": 0,
+        "total_eligible": 0,
+        "ineligible_inactive_users": 0,
+        "ineligible_wallet_too_new": 0,
+        "ineligible_recent_topup": 0,
+        "ineligible_no_wallet": 0,
+        "total_users_checked": 0
+    }
 
-    topup_count = 0
-    failed_count = 0
+    all_users = User.objects.all()
+    stats["total_users_checked"] = all_users.count()
 
-    for user in eligible_users:
+    for user in all_users:
+        if not user.is_active:
+            stats["ineligible_inactive_users"] += 1
+            continue
+
+        try:
+            wallet = user.wallet
+        except:
+            stats["ineligible_no_wallet"] += 1
+            continue
+
+        wallet_age = timezone.now() - wallet.created_at
+        if wallet_age < timedelta(days=30):
+            stats["ineligible_wallet_too_new"] += 1
+            continue
+
+        has_recent_topup = Transaction.objects.filter(
+            user=user,
+            type=TransactionTypeChoice.CREDIT,
+            message="Monthly $5 top-up",
+            created_at__gte=cutoff_date
+        ).exists()
+
+        if has_recent_topup:
+            stats["ineligible_recent_topup"] += 1
+            continue
+
         try:
             with transaction.atomic():
                 Transaction.objects.create(
@@ -41,16 +69,13 @@ def process_monthly_topup():
                     type=TransactionTypeChoice.CREDIT,
                     message="Monthly $5 top-up"
                 )
-                topup_count += 1
+                stats["processed"] += 1
         except Exception as e:
-            failed_count += 1
+            stats["failed"] += 1
             continue
 
-    return {
-        "processed": topup_count,
-        "failed": failed_count,
-        "total_eligible": topup_count + failed_count
-    }
+    stats["total_eligible"] = stats["processed"] + stats["failed"]
+    return stats
 
 @job
 def process_user_topup(user_id):
