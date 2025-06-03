@@ -22,12 +22,13 @@ async def execute_step_async(step: 'Step', previous_response: Optional[str] = No
     """
     try:
         step_prompt = await database_sync_to_async(lambda s: s.prompt)(step)
-        prompt_content = await database_sync_to_async(lambda p: p.content if p else "")(step_prompt)
-
-        message = prompt_content
+        prompt_id = await database_sync_to_async(lambda p: p.id if p else None)(step_prompt)
 
         if previous_response:
-            message = f"Previous response: {previous_response}\n\nCurrent prompt: {prompt_content}"
+            message = previous_response
+        else:
+            prompt_content = await database_sync_to_async(lambda p: p.content if p else "")(step_prompt)
+            message = prompt_content
 
         step_llm_obj = await database_sync_to_async(lambda s: s.llm)(step)
         if step_llm_obj:
@@ -39,12 +40,11 @@ async def execute_step_async(step: 'Step', previous_response: Optional[str] = No
 
         llm_service = LLMService()
 
-        full_file_content = None
+        file_ids = None
         step_file_obj = await database_sync_to_async(lambda s: s.file)(step)
         if step_file_obj:
-            file_processor = FileProcessor()
-            current_file_content = await database_sync_to_async(file_processor.read_file_content)(step_file_obj)
-            full_file_content = current_file_content
+            file_id = await database_sync_to_async(lambda f: f.id)(step_file_obj)
+            file_ids = [file_id]
 
         step_user = await database_sync_to_async(lambda s: s.user)(step)
         step_user_id = await database_sync_to_async(lambda u: u.id)(step_user)
@@ -53,9 +53,9 @@ async def execute_step_async(step: 'Step', previous_response: Optional[str] = No
             message=message,
             conversation=None,
             llm=llm_to_use,
-            full_file_content=full_file_content,
+            file_ids=file_ids,
             user_id=step_user_id,
-            prompt_id=None,
+            prompt_id=prompt_id,
             message_obj=None,
             max_tokens=step_max_tokens,
             temperature=step_temperature
