@@ -138,6 +138,11 @@ class Message(BaseModel):
         default=False,
         help_text="Whether this message has been disliked by the user."
     )
+    dislike_feedback = models.TextField(
+        blank=True,
+        null=True,
+        help_text="Optional feedback text when user dislikes a message."
+    )
     is_edited = models.BooleanField(
         default=False,
         help_text="Whether this message has been edited by the user (applies to user messages only)."
