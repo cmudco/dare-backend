@@ -58,7 +58,7 @@ class Conversation(BaseModel):
     document_similarity_threshold = models.FloatField(default=0.2, help_text="Similarity threshold for document retrieval.")
     temperature = models.FloatField(default=0.7, help_text="Temperature setting for the LLM.")
     max_tokens = models.PositiveIntegerField(default=2048, help_text="Maximum tokens for LLM responses.")
-    history_limit = models.PositiveIntegerField(default=10, help_text="Maximum number of messages to include in conversation history.")
+    history_limit = models.PositiveIntegerField(default=20, help_text="Maximum number of messages to include in conversation history.")
     prompt = models.ForeignKey(
         'prompts.Prompt',
         on_delete=models.SET_NULL,
