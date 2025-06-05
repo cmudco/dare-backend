@@ -170,6 +170,7 @@ REST_AUTH = {
     "JWT_AUTH_HTTPONLY": False,
     "USER_DETAILS_SERIALIZER": "users.api.serializers.CustomUserDetailsSerializer",
     "REGISTER_SERIALIZER": "users.api.serializers.CustomRegisterSerializer",
+    "LOGIN_SERIALIZER": "users.api.serializers.CustomLoginSerializer",
     "PASSWORD_RESET_USE_SITES_DOMAIN": False,
     "OLD_PASSWORD_FIELD_ENABLED": True,
 }
