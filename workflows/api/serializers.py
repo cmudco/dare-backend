@@ -54,6 +54,9 @@ class StepSerializer(serializers.ModelSerializer):
     )
     max_tokens = serializers.IntegerField(required=False)
     temperature = serializers.FloatField(required=False)
+    max_context_snippets = serializers.IntegerField(required=False)
+    document_similarity_threshold = serializers.FloatField(required=False)
+    is_embeddings = serializers.BooleanField(required=False)
 
 
     def to_representation(self, instance):
@@ -65,7 +68,11 @@ class StepSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Step
-        fields = ['id', 'prompt', 'file', 'llm', 'order', 'created_at', 'user','max_tokens', 'temperature']
+        fields = [
+            'id', 'prompt', 'file', 'llm', 'order', 'created_at', 'user',
+            'max_tokens', 'temperature', 'max_context_snippets',
+            'document_similarity_threshold', 'is_embeddings'
+        ]
         read_only_fields = ['id', 'created_at', 'user']
 
 class WorkflowSerializer(serializers.ModelSerializer):
@@ -96,7 +103,10 @@ class WorkflowSerializer(serializers.ModelSerializer):
                 llm=step_data.get('llm'),
                 order=step_data['order'],
                 max_tokens=step_data.get('max_tokens', Step._meta.get_field('max_tokens').default),
-                temperature=step_data.get('temperature', Step._meta.get_field('temperature').default)
+                temperature=step_data.get('temperature', Step._meta.get_field('temperature').default),
+                max_context_snippets=step_data.get('max_context_snippets', Step._meta.get_field('max_context_snippets').default),
+                document_similarity_threshold=step_data.get('document_similarity_threshold', Step._meta.get_field('document_similarity_threshold').default),
+                is_embeddings=step_data.get('is_embeddings', Step._meta.get_field('is_embeddings').default)
             )
             workflow.steps.add(step)
         return workflow
@@ -127,6 +137,9 @@ class WorkflowSerializer(serializers.ModelSerializer):
                 step.order = step_data['order']
                 step.max_tokens = step_data.get('max_tokens', Step._meta.get_field('max_tokens').default)
                 step.temperature = step_data.get('temperature', Step._meta.get_field('temperature').default)
+                step.max_context_snippets = step_data.get('max_context_snippets', Step._meta.get_field('max_context_snippets').default)
+                step.document_similarity_threshold = step_data.get('document_similarity_threshold', Step._meta.get_field('document_similarity_threshold').default)
+                step.is_embeddings = step_data.get('is_embeddings', Step._meta.get_field('is_embeddings').default)
                 step.save()
             else:
                 step = Step.objects.create(
@@ -136,7 +149,10 @@ class WorkflowSerializer(serializers.ModelSerializer):
                     llm=step_data.get('llm'),
                     order=step_data['order'],
                     max_tokens=step_data.get('max_tokens', Step._meta.get_field('max_tokens').default),
-                    temperature=step_data.get('temperature', Step._meta.get_field('temperature').default)
+                    temperature=step_data.get('temperature', Step._meta.get_field('temperature').default),
+                    max_context_snippets=step_data.get('max_context_snippets', Step._meta.get_field('max_context_snippets').default),
+                    document_similarity_threshold=step_data.get('document_similarity_threshold', Step._meta.get_field('document_similarity_threshold').default),
+                    is_embeddings=step_data.get('is_embeddings', Step._meta.get_field('is_embeddings').default)
                 )
                 instance.steps.add(step)
 
