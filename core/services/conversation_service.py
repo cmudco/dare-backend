@@ -43,6 +43,7 @@ class ConversationService:
                 "snippets": msg.get("snippets", []),
                 "is_liked": msg.get("is_liked", False),
                 "is_disliked": msg.get("is_disliked", False),
+                "dislike_feedback": msg.get("dislike_feedback", None),
                 "isEdited": msg.get("is_edited", False),
                 "isRegenerated": msg.get("is_regenerated", False),
                 "originalMessage": msg.get("original_message", None),

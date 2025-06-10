@@ -6,12 +6,25 @@ from users.models import User, AccessCodeGroup
 from users.constants import VectorDBChoice
 
 
+class UserInline(admin.TabularInline):
+    model = User
+    fields = ('email', 'first_name', 'last_name', 'is_active', 'is_staff', 'date_joined')
+    readonly_fields = ('email', 'first_name', 'last_name', 'is_staff', 'date_joined')
+    extra = 0
+    can_delete = False
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+
 @admin.register(AccessCodeGroup)
 class AccessCodeGroupAdmin(admin.ModelAdmin):
-    list_display = ('access_code', 'usage_display', 'is_active', 'created_at')
+    list_display = ('access_code', 'usage_display', 'is_active', 'user_count', 'created_at')
     list_filter = ('is_active', 'created_at')
     search_fields = ('access_code',)
     readonly_fields = ('current_usage', 'created_at', 'updated_at')
+    list_editable = ('is_active',) 
+    inlines = [UserInline]
 
     fieldsets = (
         (None, {
@@ -32,6 +45,11 @@ class AccessCodeGroupAdmin(admin.ModelAdmin):
         percentage = (obj.current_usage / obj.max_capacity * 100) if obj.max_capacity > 0 else 0
         return f"{obj.current_usage}/{obj.max_capacity} ({percentage:.1f}%)"
     usage_display.short_description = "Usage"
+
+    def user_count(self, obj):
+        """Display the number of users in this group"""
+        return obj.users.count()
+    user_count.short_description = "Users Count"
 
     def get_list_display_links(self, request, list_display):
         """Make access_code clickable"""
@@ -55,6 +73,7 @@ class UserAdmin(DjangoUserAdmin):
                 )
             },
         ),
+        (_("Access Control"), {"fields": ("access_code_group",)}),
         (_("Vector Database Settings"), {"fields": ("vector_db",)}),
         (_("Important dates"), {"fields": ("last_login", "date_joined")}),
     )
@@ -67,8 +86,8 @@ class UserAdmin(DjangoUserAdmin):
             },
         ),
     )
-    list_display = ("email", "is_staff", "is_active", "is_superuser", "vector_db")
-    list_filter = ("is_staff", "is_superuser", "is_active", "vector_db")
+    list_display = ("email", "is_staff", "is_active", "is_superuser", "access_code_group", "vector_db")
+    list_filter = ("is_staff", "is_superuser", "is_active", "vector_db", "access_code_group")
     search_fields = ("email", "first_name", "last_name")
     ordering = ("email",)
 

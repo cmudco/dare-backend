@@ -27,7 +27,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
     DEFAULT_MAX_TOKENS = 1024
     DEFAULT_MAX_CONTEXT_SNIPPETS = 4
     DEFAULT_DOCUMENT_SIMILARITY_THRESHOLD = 0.5
-    DEFAULT_HISTORY_LIMIT = 10
+    DEFAULT_HISTORY_LIMIT = 20
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

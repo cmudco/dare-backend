@@ -1,6 +1,7 @@
 from dj_rest_auth.registration.serializers import RegisterSerializer
-from dj_rest_auth.serializers import UserDetailsSerializer
-from django.contrib.auth import get_user_model
+from dj_rest_auth.serializers import UserDetailsSerializer, LoginSerializer
+from django.contrib.auth import get_user_model, authenticate
+from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 from prompts.api.serializers import PromptSerializer
 from users.constants import VectorDBChoice
@@ -18,6 +19,7 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
         fields = [
             "id",
             "email",
+            "is_active",
             "vector_db",
             "default_prompt"
         ]
@@ -55,8 +57,7 @@ class CustomRegisterSerializer(RegisterSerializer):
                         "This access code has reached its maximum usage limit."
                     )
             return access_code
-        except AccessCodeGroup.DoesNotExist:
-            raise serializers.ValidationError(
+        except AccessCodeGroup.DoesNotExist:            raise serializers.ValidationError(
                 "Invalid access code. Please check your code and try again."
             )
 
@@ -65,10 +66,19 @@ class CustomRegisterSerializer(RegisterSerializer):
         Check if a user with this email already exists.
         """
         email = self.normalize_email(email)
-        if User.objects.filter(email__iexact=email).exists():
-            raise serializers.ValidationError(
-                "A user with this email address already exists."
-            )
+        try:
+            existing_user = User.objects.get(email__iexact=email)
+            if not existing_user.is_active:
+                raise serializers.ValidationError(
+                    "An account with this email address exists but is currently inactive. "
+                    "Please contact the administrator for assistance."
+                )
+            else:
+                raise serializers.ValidationError(
+                    "A user with this email address already exists."
+                )
+        except User.DoesNotExist:
+            pass
         return email
 
     def normalize_email(self, email):
@@ -93,8 +103,30 @@ class CustomRegisterSerializer(RegisterSerializer):
             try:
                 code_group = AccessCodeGroup.objects.get(access_code=access_code)
                 code_group.use_code()
+                user.access_code_group = code_group
             except AccessCodeGroup.DoesNotExist:
                 pass
 
         user.save()
         return user
+
+
+class CustomLoginSerializer(LoginSerializer):
+    def validate(self, attrs):
+        email = attrs.get('email')
+        password = attrs.get('password')
+
+        if email and password:
+            # First check if user exists and is active
+            try:
+                user = User.objects.get(email__iexact=email)
+                if not user.is_active:
+                    raise serializers.ValidationError(
+                        "Your account is currently inactive. Please contact the administrator for assistance."
+                    )
+            except User.DoesNotExist:
+                # Let the parent class handle the "invalid credentials" message
+                pass
+
+        # Call parent validation
+        return super().validate(attrs)

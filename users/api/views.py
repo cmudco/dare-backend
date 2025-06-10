@@ -12,6 +12,8 @@ from conversations.models import Conversation, Message
 from files.models import File
 from prompts.models import Prompt
 from users.constants import VectorDBChoice
+from billing.models import Transaction
+from billing.constants import TransactionTypeChoice
 
 User = get_user_model()
 
@@ -34,10 +36,10 @@ class UserStatsView(APIView):
 
         tagged_files_count = File.active_objects.filter(user=user, tags__isnull=False).count()
 
-
-        token_stats = Message.active_objects.filter(
-            conversation__user=user,
-            sender_type=SenderType.AI_ASSISTANT
+        token_stats = Transaction.objects.filter(
+            user=user,
+            type=TransactionTypeChoice.DEBIT,
+            llm__isnull=False
         ).aggregate(
             total_input_tokens=Sum('input_tokens'),
             total_output_tokens=Sum('output_tokens')

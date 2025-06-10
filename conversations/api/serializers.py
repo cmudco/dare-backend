@@ -79,6 +79,7 @@ class MessageSerializer(serializers.ModelSerializer):
             'created_at',
             'is_liked',
             'is_disliked',
+            'dislike_feedback',
             'is_edited',
             'is_regenerated',
             'original_message',
