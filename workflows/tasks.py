@@ -37,14 +37,23 @@ async def execute_step_async(step: 'Step', previous_response: Optional[str] = No
             llm_to_use = await database_sync_to_async(LLM.objects.filter(provider="openai").first)()
         step_max_tokens = await database_sync_to_async(lambda s: s.max_tokens)(step)
         step_temperature = await database_sync_to_async(lambda s: s.temperature)(step)
+        step_max_context_snippets = await database_sync_to_async(lambda s: s.max_context_snippets)(step)
+        step_document_similarity_threshold = await database_sync_to_async(lambda s: s.document_similarity_threshold)(step)
+        step_is_embeddings = await database_sync_to_async(lambda s: s.is_embeddings)(step)
 
         llm_service = LLMService()
 
         file_ids = None
+        embedding_ids = None
         step_file_obj = await database_sync_to_async(lambda s: s.file)(step)
+
         if step_file_obj:
             file_id = await database_sync_to_async(lambda f: f.id)(step_file_obj)
-            file_ids = [file_id]
+
+            if step_is_embeddings:
+                embedding_ids = [file_id]
+            else:
+                file_ids = [file_id]
 
         step_user = await database_sync_to_async(lambda s: s.user)(step)
         step_user_id = await database_sync_to_async(lambda u: u.id)(step_user)
@@ -54,11 +63,14 @@ async def execute_step_async(step: 'Step', previous_response: Optional[str] = No
             conversation=None,
             llm=llm_to_use,
             file_ids=file_ids,
+            embedding_ids=embedding_ids,
             user_id=step_user_id,
             prompt_id=prompt_id,
             message_obj=None,
             max_tokens=step_max_tokens,
-            temperature=step_temperature
+            temperature=step_temperature,
+            max_context_snippets=step_max_context_snippets,
+            document_similarity_threshold=step_document_similarity_threshold
         )
 
         full_response = ""

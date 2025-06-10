@@ -52,6 +52,18 @@ class Step(TimeStampMixin):
         default=0.7,
         help_text="Temperature setting for the LLM for this step."
     )
+    max_context_snippets = models.PositiveIntegerField(
+        default=4,
+        help_text="Maximum number of context snippets to retrieve for this step."
+    )
+    document_similarity_threshold = models.FloatField(
+        default=0.2,
+        help_text="Similarity threshold for document retrieval in this step."
+    )
+    is_embeddings = models.BooleanField(
+        default=False,
+        help_text="Whether to use embeddings for context retrieval. If False, uses full file content."
+    )
 
     objects = models.Manager()
 

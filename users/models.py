@@ -51,6 +51,14 @@ class AccessCodeGroup(TimeStampMixin):
             return True
         return False
 
+    def deactivate_all_users(self):
+        """Deactivate all users associated with this access code group"""
+        return self.users.update(is_active=False)
+
+    def reactivate_all_users(self):
+        """Reactivate all users associated with this access code group"""
+        return self.users.update(is_active=True)
+
 class User(AbstractUser, IsDeletedMixin):
     username = None
     email = models.EmailField(_("email"), unique=True, blank=False, null=False)
@@ -58,6 +66,14 @@ class User(AbstractUser, IsDeletedMixin):
     USERNAME_FIELD = "email"
 
     country = models.CharField(max_length=100, blank=True, null=True)
+    access_code_group = models.ForeignKey(
+        AccessCodeGroup,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="users",
+        help_text=_("Access code group this user belongs to")
+    )
     vector_db = models.IntegerField(
         choices=VectorDBChoice.choices,
         default=VectorDBChoice.WEAVIATE,

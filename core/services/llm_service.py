@@ -39,7 +39,7 @@ class LLMService:
         max_tokens: int = 2048,
         max_context_snippets: int = 4,
         document_similarity_threshold: float = 0.5,
-        history_limit: int = 10,
+        history_limit: int = 20,
         message_obj: Message = None
     ) -> AsyncGenerator[Tuple[str, Dict], None]:
         """Generate AI response with context."""
