@@ -28,13 +28,17 @@ class Step(TimeStampMixin):
         default=0,
         help_text="Default order of the step."
     )
-    file = models.ForeignKey(
+    files = models.ManyToManyField(
         File,
-        on_delete=models.SET_NULL,
-        related_name="workflow_steps",
-        null=True,
+        related_name="workflow_steps_files",
         blank=True,
-        help_text="Optional file associated with this step."
+        help_text="Files to be processed with full content."
+    )
+    embeddings = models.ManyToManyField(
+        File,
+        related_name="workflow_steps_embeddings",
+        blank=True,
+        help_text="Files to be processed using embeddings/vector search."
     )
     llm = models.ForeignKey(
         LLM,
@@ -59,10 +63,6 @@ class Step(TimeStampMixin):
     document_similarity_threshold = models.FloatField(
         default=0.2,
         help_text="Similarity threshold for document retrieval in this step."
-    )
-    is_embeddings = models.BooleanField(
-        default=False,
-        help_text="Whether to use embeddings for context retrieval. If False, uses full file content."
     )
 
     objects = models.Manager()
