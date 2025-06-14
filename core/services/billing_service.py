@@ -113,12 +113,15 @@ class BillingService:
 
         try:
             message_obj.message = ai_response
+            cost = Decimal('0.000000')
+            
             if token_usage:
                 message_obj.input_tokens = token_usage.get("input_tokens", 0)
                 message_obj.output_tokens = token_usage.get("output_tokens", 0)
                 llm = message_obj.llm
                 if llm:
                     cost = self._calculate_cost(llm, message_obj.input_tokens, message_obj.output_tokens)
+                    message_obj.cost = cost
                     logger.debug(f"Input tokens: {message_obj.input_tokens}, Output tokens: {message_obj.output_tokens}, Cost: {cost}")
                     if cost > Decimal('0.00'):
                         user = message_obj.conversation.user

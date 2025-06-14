@@ -47,6 +47,9 @@ class ConversationService:
                 "isEdited": msg.get("is_edited", False),
                 "isRegenerated": msg.get("is_regenerated", False),
                 "originalMessage": msg.get("original_message", None),
+                "cost": msg.get("cost", None),
+                "inputTokens": msg.get("input_tokens", None),
+                "outputTokens": msg.get("output_tokens", None),
             }
             for msg in serialized_messages
         ]
@@ -67,7 +70,8 @@ class ConversationService:
                 sender_type=sender_type,
                 message=message_content,
                 sender=sender,
-                llm=llm
+                llm=llm,
+                cost=Decimal('0.000000') if sender_type == SenderType.PLAYER else None
             )
         )()
 
