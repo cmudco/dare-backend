@@ -31,7 +31,7 @@ class WalletTopupScheduler:
     Handles scheduling of monthly wallet top-ups.
     """
 
-    def __init__(self, queue_name='default'):
+    def __init__(self, queue_name='scheduler'):
         """
         Initialize the scheduler.
 
@@ -40,11 +40,12 @@ class WalletTopupScheduler:
         """
         self.scheduler = get_scheduler(queue_name)
         self.job_id = 'monthly_wallet_topup'
-        self.interval_seconds = 2592000  # 30 days in seconds
+        self.interval_seconds = 86400  # 1 day in seconds
 
     def start(self):
         """
         Start the monthly top-up scheduler.
+        Runs daily to check for users eligible for their monthly top-up.
 
         Returns:
             dict: Status information about the scheduled job
@@ -53,17 +54,18 @@ class WalletTopupScheduler:
             # Cancel existing job if it exists
             self.stop()
 
-            # Schedule the job to run every 30 days
+            # Schedule the job to run daily to check for eligible users
             job = self.scheduler.schedule(
                 scheduled_time=timezone.now(),
                 func=process_monthly_topup,
                 interval=self.interval_seconds,
                 repeat=None,  # Repeat indefinitely
                 id=self.job_id,
-                description='Automated monthly $5 wallet top-up for all eligible users',
+                description='Daily check for users eligible for monthly $5 wallet top-up',
                 meta={
                     'created_at': timezone.now().isoformat(),
-                    'interval_days': 30,
+                    'interval_days': 1,  # Runs daily
+                    'eligibility_days': 30,  # Users eligible after 30 days
                     'scheduler_version': '1.0'
                 }
             )
@@ -74,8 +76,9 @@ class WalletTopupScheduler:
                 'status': 'started',
                 'job_id': self.job_id,
                 'next_run': timezone.now().isoformat(),
-                'interval_days': 30,
-                'message': 'Monthly wallet top-up scheduler is now active'
+                'interval_days': 1,
+                'eligibility_days': 30,
+                'message': 'Daily scheduler is now active - checks for monthly top-up eligibility'
             }
 
         except Exception as e:
