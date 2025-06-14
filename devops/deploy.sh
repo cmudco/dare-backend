@@ -28,6 +28,6 @@ sudo systemctl restart dare
 sudo systemctl restart nginx
 
 echo "Restarting RQ worker services..."
-sudo systemctl restart rqworker1 rqworker2 rqworker3 rqworker4
+sudo systemctl restart rqworker1 rqworker2 rqworker3 rqworker4 rqscheduler
 
 echo "Backend deployment successful!"
