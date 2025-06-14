@@ -240,6 +240,15 @@ class ChatConsumer(AsyncWebsocketConsumer):
         message_obj.message = f"{ai_response}\n\n[Response cut off - insufficient credits]"
         message_obj.input_tokens = token_usage.get('input_tokens', 0)
         message_obj.output_tokens = token_usage.get('output_tokens', 0)
+        
+        # Calculate and set cost even for insufficient balance scenarios
+        if message_obj.llm and (message_obj.input_tokens or message_obj.output_tokens):
+            llm = message_obj.llm
+            input_rate = llm.input_token_rate_per_million / 1000000
+            output_rate = llm.output_token_rate_per_million / 1000000
+            cost = (message_obj.input_tokens * input_rate) + (message_obj.output_tokens * output_rate)
+            message_obj.cost = cost
+        
         await database_sync_to_async(message_obj.save)()
         await self.send(json.dumps(camelize({
             "type": "ai_stream",
@@ -251,6 +260,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
             "streaming": False,
             "regenerate": False,
             "date": message_obj.created_at.isoformat(),
+            "cost": str(message_obj.cost) if message_obj.cost is not None else None,
+            "inputTokens": message_obj.input_tokens,
+            "outputTokens": message_obj.output_tokens,
         })))
         await self.send(json.dumps(error_response))
 
@@ -269,6 +281,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
         """Format message for WebSocket response."""
         serialized_data = await database_sync_to_async(lambda: MessageSerializer(message_obj).data)()
         llm_id = await database_sync_to_async(lambda: getattr(message_obj.llm, 'id', None))()
+        cost = await database_sync_to_async(lambda: message_obj.cost)()
+        input_tokens = await database_sync_to_async(lambda: message_obj.input_tokens)()
+        output_tokens = await database_sync_to_async(lambda: message_obj.output_tokens)()
+        
         response = {
             "type": "message",
             "id": str(message_obj.id),
@@ -284,6 +300,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
             "isEdited": message_obj.is_edited,
             "isRegenerated": message_obj.is_regenerated,
             "originalMessage": message_obj.original_message,
+            "cost": str(cost) if cost is not None else None,
+            "inputTokens": input_tokens,
+            "outputTokens": output_tokens,
         }
         return json.dumps(camelize(response))
 
