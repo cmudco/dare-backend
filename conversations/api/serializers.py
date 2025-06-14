@@ -84,5 +84,8 @@ class MessageSerializer(serializers.ModelSerializer):
             'is_regenerated',
             'original_message',
             'llm',
+            'input_tokens',
+            'output_tokens',
+            'cost',
         ]
-        read_only_fields = ['id', 'created_at', 'sender_name', 'files', 'snippets']
+        read_only_fields = ['id', 'created_at', 'sender_name', 'files', 'snippets', 'input_tokens', 'output_tokens', 'cost']
