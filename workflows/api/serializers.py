@@ -42,10 +42,17 @@ class StepSerializer(serializers.ModelSerializer):
         queryset=Prompt.active_objects.all(),
         required=True
     )
-    file = serializers.PrimaryKeyRelatedField(
+    files = serializers.PrimaryKeyRelatedField(
         queryset=File.active_objects.all(),
+        many=True,
         required=False,
-        allow_null=True
+        allow_empty=True
+    )
+    embeddings = serializers.PrimaryKeyRelatedField(
+        queryset=File.active_objects.all(),
+        many=True,
+        required=False,
+        allow_empty=True
     )
     llm = serializers.PrimaryKeyRelatedField(
         queryset=LLM.objects.all(),
@@ -56,22 +63,21 @@ class StepSerializer(serializers.ModelSerializer):
     temperature = serializers.FloatField(required=False)
     max_context_snippets = serializers.IntegerField(required=False)
     document_similarity_threshold = serializers.FloatField(required=False)
-    is_embeddings = serializers.BooleanField(required=False)
-
 
     def to_representation(self, instance):
         representation = super().to_representation(instance)
         representation['prompt'] = PromptSerializer(instance.prompt).data
-        representation['file'] = FileSerializer(instance.file).data if instance.file else None
+        representation['files'] = FileSerializer(instance.files.all(), many=True).data
+        representation['embeddings'] = FileSerializer(instance.embeddings.all(), many=True).data
         representation['llm'] = LLMSerializer(instance.llm).data if instance.llm else None
         return representation
 
     class Meta:
         model = Step
         fields = [
-            'id', 'prompt', 'file', 'llm', 'order', 'created_at', 'user',
+            'id', 'prompt', 'files', 'embeddings', 'llm', 'order', 'created_at', 'user',
             'max_tokens', 'temperature', 'max_context_snippets',
-            'document_similarity_threshold', 'is_embeddings'
+            'document_similarity_threshold'
         ]
         read_only_fields = ['id', 'created_at', 'user']
 
@@ -96,18 +102,20 @@ class WorkflowSerializer(serializers.ModelSerializer):
         workflow = Workflow.active_objects.create(**validated_data)
 
         for step_data in steps_data:
+            files_data = step_data.pop('files', [])
+            embeddings_data = step_data.pop('embeddings', [])
             step = Step.objects.create(
                 user=workflow.user,
                 prompt=step_data['prompt'],
-                file=step_data.get('file'),
                 llm=step_data.get('llm'),
                 order=step_data['order'],
                 max_tokens=step_data.get('max_tokens', Step._meta.get_field('max_tokens').default),
                 temperature=step_data.get('temperature', Step._meta.get_field('temperature').default),
                 max_context_snippets=step_data.get('max_context_snippets', Step._meta.get_field('max_context_snippets').default),
-                document_similarity_threshold=step_data.get('document_similarity_threshold', Step._meta.get_field('document_similarity_threshold').default),
-                is_embeddings=step_data.get('is_embeddings', Step._meta.get_field('is_embeddings').default)
+                document_similarity_threshold=step_data.get('document_similarity_threshold', Step._meta.get_field('document_similarity_threshold').default)
             )
+            step.files.set(files_data)
+            step.embeddings.set(embeddings_data)
             workflow.steps.add(step)
         return workflow
 
@@ -128,32 +136,34 @@ class WorkflowSerializer(serializers.ModelSerializer):
                 step.delete()
 
         for step_data in steps_data:
+            files_data = step_data.pop('files', [])
+            embeddings_data = step_data.pop('embeddings', [])
             step_id = step_data.get('id')
             if step_id and step_id in existing_steps:
                 step = existing_steps[step_id]
                 step.prompt = step_data['prompt']
-                step.file = step_data.get('file')
                 step.llm = step_data.get('llm')
                 step.order = step_data['order']
                 step.max_tokens = step_data.get('max_tokens', Step._meta.get_field('max_tokens').default)
                 step.temperature = step_data.get('temperature', Step._meta.get_field('temperature').default)
                 step.max_context_snippets = step_data.get('max_context_snippets', Step._meta.get_field('max_context_snippets').default)
                 step.document_similarity_threshold = step_data.get('document_similarity_threshold', Step._meta.get_field('document_similarity_threshold').default)
-                step.is_embeddings = step_data.get('is_embeddings', Step._meta.get_field('is_embeddings').default)
                 step.save()
+                step.files.set(files_data)
+                step.embeddings.set(embeddings_data)
             else:
                 step = Step.objects.create(
                     user=instance.user,
                     prompt=step_data['prompt'],
-                    file=step_data.get('file'),
                     llm=step_data.get('llm'),
                     order=step_data['order'],
                     max_tokens=step_data.get('max_tokens', Step._meta.get_field('max_tokens').default),
                     temperature=step_data.get('temperature', Step._meta.get_field('temperature').default),
                     max_context_snippets=step_data.get('max_context_snippets', Step._meta.get_field('max_context_snippets').default),
-                    document_similarity_threshold=step_data.get('document_similarity_threshold', Step._meta.get_field('document_similarity_threshold').default),
-                    is_embeddings=step_data.get('is_embeddings', Step._meta.get_field('is_embeddings').default)
+                    document_similarity_threshold=step_data.get('document_similarity_threshold', Step._meta.get_field('document_similarity_threshold').default)
                 )
+                step.files.set(files_data)
+                step.embeddings.set(embeddings_data)
                 instance.steps.add(step)
 
         return instance

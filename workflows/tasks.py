@@ -1,4 +1,6 @@
 from typing import Optional
+import asyncio
+import logging
 from django_rq import job, enqueue
 from channels.db import database_sync_to_async
 from django.utils import timezone
@@ -39,21 +41,22 @@ async def execute_step_async(step: 'Step', previous_response: Optional[str] = No
         step_temperature = await database_sync_to_async(lambda s: s.temperature)(step)
         step_max_context_snippets = await database_sync_to_async(lambda s: s.max_context_snippets)(step)
         step_document_similarity_threshold = await database_sync_to_async(lambda s: s.document_similarity_threshold)(step)
-        step_is_embeddings = await database_sync_to_async(lambda s: s.is_embeddings)(step)
 
         llm_service = LLMService()
 
         file_ids = None
         embedding_ids = None
-        step_file_obj = await database_sync_to_async(lambda s: s.file)(step)
+        
+        step_files = await database_sync_to_async(lambda s: list(s.files.values_list('id', flat=True)))(step)
 
-        if step_file_obj:
-            file_id = await database_sync_to_async(lambda f: f.id)(step_file_obj)
+        step_embeddings = await database_sync_to_async(lambda s: list(s.embeddings.values_list('id', flat=True)))(step)
 
-            if step_is_embeddings:
-                embedding_ids = [file_id]
-            else:
-                file_ids = [file_id]
+
+        if step_files:
+            file_ids = step_files
+
+        if step_embeddings:
+            embedding_ids = step_embeddings
 
         step_user = await database_sync_to_async(lambda s: s.user)(step)
         step_user_id = await database_sync_to_async(lambda u: u.id)(step_user)
