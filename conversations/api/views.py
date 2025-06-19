@@ -108,6 +108,27 @@ class ConversationViewSet(viewsets.ModelViewSet):
 
         return Response(response_data, status=status.HTTP_200_OK)
 
+    @action(detail=True, methods=['post'], url_path='clone')
+    def clone_conversation(self, request, conversation_id=None):
+        """Custom action to clone a conversation."""
+        instance = self.get_object()
+        
+        cloned_conversation = Conversation(
+            user=instance.user,
+            title=f"COPY OF - {instance.title}" if instance.title else "COPY OF - New Chat",
+            max_context_snippets=instance.max_context_snippets,
+            document_similarity_threshold=instance.document_similarity_threshold,
+            temperature=instance.temperature,
+            max_tokens=instance.max_tokens,
+            history_limit=instance.history_limit,
+            prompt=instance.prompt,
+            sort_order=instance.sort_order
+        )
+        cloned_conversation.save()
+
+        serializer = self.get_serializer(cloned_conversation)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
 class MessageViewSet(viewsets.ModelViewSet):
     """Endpoint for creating/retrieving messages within a conversation."""
     serializer_class = MessageSerializer
