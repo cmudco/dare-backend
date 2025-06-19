@@ -7,7 +7,7 @@ from django.conf import settings
 from django.core.validators import MinValueValidator
 from common.managers import ActiveObjectsManager
 from common.models import BaseModel, TimeStampMixin
-from .constants import Provider, SenderType
+from .constants import Provider, SenderType, FeedbackType
 
 
 class LLM(models.Model):
@@ -146,18 +146,18 @@ class Message(BaseModel):
         help_text="Cost of this message in USD based on token usage and LLM pricing."
     )
 
-    is_liked = models.BooleanField(
-        default=False,
-        help_text="Whether this message has been liked by the user."
+    # Unified feedback system
+    feedback_type = models.CharField(
+        max_length=10,
+        choices=FeedbackType.choices,
+        null=True,
+        blank=True,
+        help_text="Type of feedback provided by the user (like/dislike)."
     )
-    is_disliked = models.BooleanField(
-        default=False,
-        help_text="Whether this message has been disliked by the user."
-    )
-    dislike_feedback = models.TextField(
+    feedback_text = models.TextField(
         blank=True,
         null=True,
-        help_text="Optional feedback text when user dislikes a message."
+        help_text="Optional feedback text provided by the user."
     )
     is_edited = models.BooleanField(
         default=False,

@@ -305,6 +305,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
             "files": serialized_data.get("files", []),
             "tags": serialized_data.get("tags", []),
             "snippets": serialized_data.get("snippets", []),
+            "feedbackType": message_obj.feedback_type,
+            "feedbackText": message_obj.feedback_text,
             "isEdited": message_obj.is_edited,
             "isRegenerated": message_obj.is_regenerated,
             "originalMessage": message_obj.original_message,
