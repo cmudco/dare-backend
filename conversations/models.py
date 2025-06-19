@@ -119,6 +119,13 @@ class Message(BaseModel):
         help_text="Files referenced in this message"
     )
 
+    tags = models.ManyToManyField(
+        'files.Tag',
+        blank=True,
+        related_name='chat_messages',
+        help_text="Tags associated with this message"
+    )
+
     input_tokens = models.PositiveIntegerField(
         null=True,
         blank=True,

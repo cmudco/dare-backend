@@ -86,8 +86,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 self.conversation,
                 message_data["sender_type"],
                 message_data["message"],
-                self.user.email,
-                message_data["file_ids"]
+                self.user.email
             )
             await self.send(await self._format_message(message_obj, is_sender=True))
 
@@ -95,7 +94,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 asyncio.create_task(self._generate_conversation_title(message_data["message"]))
 
             bot_message_obj = await self.conversation_service.create_message(
-                self.conversation, SenderType.AI_ASSISTANT, "", "AI Assistant", llm=llm
+                self.conversation, 
+                SenderType.AI_ASSISTANT, 
+                "", 
+                "AI Assistant", 
+                message_data["file_ids"],
+                message_data["tag_ids"],
+                message_data["embedding_ids"],
+                llm
             )
             await self.send(await self._format_message(bot_message_obj, streaming=True))
 
@@ -296,6 +302,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
             "regenerate": regenerate,
             "date": message_obj.created_at.isoformat(),
             "llmId": llm_id,
+            "files": serialized_data.get("files", []),
+            "tags": serialized_data.get("tags", []),
             "snippets": serialized_data.get("snippets", []),
             "isEdited": message_obj.is_edited,
             "isRegenerated": message_obj.is_regenerated,
