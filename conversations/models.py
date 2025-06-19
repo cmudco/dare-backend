@@ -85,6 +85,101 @@ class Conversation(BaseModel):
     def __str__(self):
         return f"Conversation {self.conversation_id}"
 
+    def clone(self, include_messages=True, include_files=True, include_tags=True, 
+              include_snippets=True, custom_title=None):
+        """
+        Clone this conversation with its messages and associated data.
+        
+        Args:
+            include_messages (bool): Whether to clone messages
+            include_files (bool): Whether to clone file associations  
+            include_tags (bool): Whether to clone tag associations
+            include_snippets (bool): Whether to clone snippets
+            custom_title (str): Custom title for cloned conversation
+            
+        Returns:
+            Conversation: The cloned conversation instance
+        """
+        from django.db import transaction
+        
+        with transaction.atomic():
+            # Determine cloned title
+            if custom_title:
+                cloned_title = custom_title
+            elif self.title:
+                cloned_title = f"COPY OF - {self.title}"
+            else:
+                cloned_title = "COPY OF - New Chat"
+            
+            # Create cloned conversation
+            cloned_conversation = Conversation(
+                user=self.user,
+                title=cloned_title,
+                max_context_snippets=self.max_context_snippets,
+                document_similarity_threshold=self.document_similarity_threshold,
+                temperature=self.temperature,
+                max_tokens=self.max_tokens,
+                history_limit=self.history_limit,
+                prompt=self.prompt,
+                sort_order=self.sort_order
+            )
+            cloned_conversation.save()
+            
+            if include_messages:
+                # Clone messages
+                original_messages = Message.active_objects.filter(
+                    conversation=self
+                ).order_by('created_at')
+                
+                message_mapping = {}
+                
+                for original_message in original_messages:
+                    cloned_message = Message(
+                        conversation=cloned_conversation,
+                        sender_type=original_message.sender_type,
+                        sender=original_message.sender,
+                        message=original_message.message,
+                        llm=original_message.llm,
+                        feedback_type=original_message.feedback_type,
+                        feedback_text=original_message.feedback_text,
+                        is_edited=original_message.is_edited,
+                        is_regenerated=original_message.is_regenerated,
+                        original_message=original_message.original_message,
+                        # Don't copy usage metrics
+                        input_tokens=None,
+                        output_tokens=None,
+                        cost=None
+                    )
+                    cloned_message.save()
+                    message_mapping[original_message.id] = cloned_message
+                    
+                    # Clone relationships
+                    if include_files and original_message.files.exists():
+                        cloned_message.files.set(original_message.files.all())
+                    
+                    if include_tags and original_message.tags.exists():
+                        cloned_message.tags.set(original_message.tags.all())
+                
+                # Clone snippets
+                if include_snippets:
+                    for original_message in original_messages:
+                        cloned_message = message_mapping[original_message.id]
+                        original_snippets = Snippet.active_objects.filter(
+                            message=original_message
+                        )
+                        
+                        for original_snippet in original_snippets:
+                            cloned_snippet = Snippet(
+                                message=cloned_message,
+                                file=original_snippet.file,
+                                text=original_snippet.text,
+                                similarity_score=original_snippet.similarity_score,
+                                chunk_index=original_snippet.chunk_index
+                            )
+                            cloned_snippet.save()
+            
+            return cloned_conversation
+
 class Message(BaseModel):
     conversation = models.ForeignKey(
         Conversation,

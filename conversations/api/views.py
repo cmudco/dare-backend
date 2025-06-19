@@ -2,7 +2,8 @@ from rest_framework import viewsets, generics, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from conversations.models import Message, Conversation, LLM
+from django.db import transaction
+from conversations.models import Message, Conversation, LLM, Snippet
 from .serializers import MessageSerializer, ConversationSerializer, LLMSerializer
 
 
@@ -110,24 +111,30 @@ class ConversationViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='clone')
     def clone_conversation(self, request, conversation_id=None):
-        """Custom action to clone a conversation."""
-        instance = self.get_object()
-        
-        cloned_conversation = Conversation(
-            user=instance.user,
-            title=f"COPY OF - {instance.title}" if instance.title else "COPY OF - New Chat",
-            max_context_snippets=instance.max_context_snippets,
-            document_similarity_threshold=instance.document_similarity_threshold,
-            temperature=instance.temperature,
-            max_tokens=instance.max_tokens,
-            history_limit=instance.history_limit,
-            prompt=instance.prompt,
-            sort_order=instance.sort_order
-        )
-        cloned_conversation.save()
+        """
+        Clone a conversation with all its messages, files, tags, and snippets.
+        Simply clones everything - no options needed.
+        """
+        try:
+            with transaction.atomic():
+                instance = self.get_object()
+                
+                # Use the model's built-in clone method
+                cloned_conversation = instance.clone()
+                
+                # Prepare response data
+                serializer = self.get_serializer(cloned_conversation)
+                return Response(serializer.data, status=status.HTTP_201_CREATED)
 
-        serializer = self.get_serializer(cloned_conversation)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error cloning conversation {conversation_id}: {str(e)}")
+            return Response(
+                {"error": f"Failed to clone conversation: {str(e)}"}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
 
 class MessageViewSet(viewsets.ModelViewSet):
     """Endpoint for creating/retrieving messages within a conversation."""
