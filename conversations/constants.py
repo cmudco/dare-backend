@@ -14,3 +14,7 @@ class Provider(Enum):
     @classmethod
     def choices(cls):
         return [(provider.value, provider.name.replace("_", " ").title()) for provider in cls]
+
+class FeedbackType(models.TextChoices):
+    LIKE = 'like', 'Like'
+    DISLIKE = 'dislike', 'Dislike'

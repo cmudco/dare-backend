@@ -96,6 +96,18 @@ class Workflow(BaseModel):
         default=Mode.SERIAL,
         help_text="Mode of operation (Serial or Parallel)."
     )
+    version = models.PositiveIntegerField(
+        default=1,
+        help_text="Version number of the workflow. Increments when cloned."
+    )
+    parent = models.ForeignKey(
+        'self',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='children',
+        help_text="Original workflow this was cloned from."
+    )
     steps = models.ManyToManyField(
         Step,
         related_name='workflows',

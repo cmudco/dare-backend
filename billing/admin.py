@@ -10,7 +10,7 @@ class WalletAdmin(admin.ModelAdmin):
     list_display = ("user", "display_balance", "created_at", "updated_at")
     search_fields = ("user__email",)
     list_filter = ("user__is_active",)
-    ordering = ("-created_at",)
+    ordering = ("-balance",)
     readonly_fields = ("balance", "created_at", "updated_at")
 
 @admin.register(Transaction)
