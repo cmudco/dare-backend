@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from conversations.models import LLM, Message, Conversation, Snippet
-from files.api.serializers import FileSerializer
+from files.api.serializers import FileSerializer, TagSerializer
 from prompts.models import Prompt
 from prompts.api.serializers import PromptSerializer
 from users.constants import VectorDBChoice
@@ -57,6 +57,7 @@ class SnippetSerializer(serializers.ModelSerializer):
 class MessageSerializer(serializers.ModelSerializer):
     sender_name = serializers.ReadOnlyField(read_only=True)
     files = FileSerializer(many=True, read_only=True)
+    tags = TagSerializer(many=True, read_only=True)
     file_ids = serializers.ListField(
         child=serializers.IntegerField(),
         write_only=True,
@@ -75,11 +76,11 @@ class MessageSerializer(serializers.ModelSerializer):
             'sender_name',
             'files',
             'file_ids',
+            'tags',
             'snippets',
             'created_at',
-            'is_liked',
-            'is_disliked',
-            'dislike_feedback',
+            'feedback_type',
+            'feedback_text',
             'is_edited',
             'is_regenerated',
             'original_message',
@@ -88,4 +89,4 @@ class MessageSerializer(serializers.ModelSerializer):
             'output_tokens',
             'cost',
         ]
-        read_only_fields = ['id', 'created_at', 'sender_name', 'files', 'snippets', 'input_tokens', 'output_tokens', 'cost']
+        read_only_fields = ['id', 'created_at', 'sender_name', 'files', 'tags', 'snippets', 'input_tokens', 'output_tokens', 'cost']

@@ -13,4 +13,5 @@ app_name = APP_NAME
 
 urlpatterns = [
     path('', include(router.urls)),
+    path('conversations/<str:conversation_id>/clone/', ConversationViewSet.as_view({'post': 'clone_conversation'}), name='conversation-clone'),
 ]
