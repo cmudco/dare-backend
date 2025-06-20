@@ -20,7 +20,7 @@ class ConversationService:
             lambda: list(
                 Message.active_objects.filter(conversation=conversation)
                 .select_related('llm')
-                .prefetch_related('snippets')
+                .prefetch_related('snippets', 'files', 'tags')
                 .order_by('-created_at')[:limit]
             )
         )()
@@ -40,10 +40,11 @@ class ConversationService:
                 "date": msg["created_at"],
                 "isSender": msg["sender_name"] == user_email,
                 "llmId": msg["llm"],
+                "files": msg.get("files", []),
+                "tags": msg.get("tags", []),
                 "snippets": msg.get("snippets", []),
-                "is_liked": msg.get("is_liked", False),
-                "is_disliked": msg.get("is_disliked", False),
-                "dislike_feedback": msg.get("dislike_feedback", None),
+                "feedbackType": msg.get("feedback_type", None),
+                "feedbackText": msg.get("feedback_text", None),
                 "isEdited": msg.get("is_edited", False),
                 "isRegenerated": msg.get("is_regenerated", False),
                 "originalMessage": msg.get("original_message", None),
@@ -61,9 +62,10 @@ class ConversationService:
 
     async def create_message(
         self, conversation: Conversation, sender_type: str, message_content: str,
-        sender: str = None, file_ids: list = None, llm: LLM = None
+        sender: str = None, file_ids: list = None, tag_ids: list = None, 
+        embedding_ids: list = None, llm: LLM = None
     ) -> Message:
-        """Create a new message with file attachments."""
+        """Create a new message with file attachments and tags."""
         message = await database_sync_to_async(
             lambda: Message.active_objects.create(
                 conversation=conversation,
@@ -75,12 +77,23 @@ class ConversationService:
             )
         )()
 
-        if file_ids and sender:
+        all_file_ids = list(set((file_ids or []) + (embedding_ids or [])))
+        
+        if all_file_ids:
+            from files.models import File
             files = await database_sync_to_async(
-                lambda: list(conversation.user.files.filter(pk__in=file_ids))
+                lambda: list(File.active_objects.filter(pk__in=all_file_ids, user=conversation.user))
             )()
             if files:
                 await database_sync_to_async(lambda: message.files.add(*files))()
+
+        if tag_ids:
+            from files.models import Tag
+            tags = await database_sync_to_async(
+                lambda: list(Tag.objects.filter(pk__in=tag_ids, user=conversation.user))
+            )()
+            if tags:
+                await database_sync_to_async(lambda: message.tags.add(*tags))()
 
         return message
 

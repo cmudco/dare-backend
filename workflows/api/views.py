@@ -25,6 +25,44 @@ class WorkflowViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         serializer.save(user=self.request.user)
 
+    @action(detail=True, methods=['post'], url_path='clone')
+    def clone_workflow(self, request, pk=None):
+        """Custom action to clone a workflow."""
+        instance = self.get_object()
+        
+        cloned_workflow = Workflow(
+            user=instance.user,
+            title=f"COPY OF - {instance.title}",
+            description=instance.description,
+            mode=instance.mode,
+            version=1,
+            parent=None
+        )
+        cloned_workflow.save()
+
+        for step in instance.steps.all():
+            cloned_step = Step.objects.create(
+                user=step.user,
+                prompt=step.prompt,
+                order=step.order,
+                llm=step.llm,
+                max_tokens=step.max_tokens,
+                temperature=step.temperature,
+                max_context_snippets=step.max_context_snippets,
+                document_similarity_threshold=step.document_similarity_threshold,
+            )
+            
+            # Clone the many-to-many relationships for files and embeddings
+            if hasattr(step, 'files'):
+                cloned_step.files.set(step.files.all())
+            if hasattr(step, 'embeddings'):
+                cloned_step.embeddings.set(step.embeddings.all())
+                
+            cloned_workflow.steps.add(cloned_step)
+
+        serializer = self.get_serializer(cloned_workflow)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
 class StepViewSet(viewsets.ModelViewSet):
     """Endpoint for managing workflow steps."""
     serializer_class = StepSerializer
@@ -52,6 +90,12 @@ class WorkflowRunViewSet(viewsets.ModelViewSet):
             workflow = Workflow.active_objects.get(id=workflow_id, user=request.user)
         except Workflow.DoesNotExist:
             return Response({"error": "Workflow not found"}, status=404)
+
+        if not workflow.steps.exists():
+            return Response(
+                {"error": "Cannot run workflow with zero steps. Please add at least one step to the workflow."}, 
+                status=400
+            )
 
         workflow_run = WorkflowRun.objects.create(workflow=workflow, user=request.user)
 

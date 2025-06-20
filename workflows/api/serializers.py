@@ -88,7 +88,7 @@ class WorkflowSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Workflow
-        fields = ['id', 'title', 'description', 'mode', 'created_at', 'user', 'steps', 'latest_run']
+        fields = ['id', 'title', 'description', 'mode', 'version', 'parent', 'created_at', 'user', 'steps', 'latest_run']
         read_only_fields = ['id', 'created_at', 'user', 'steps_detail', 'latest_run']
 
     def get_latest_run(self, obj):
