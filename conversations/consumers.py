@@ -97,7 +97,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 self.conversation,
                 SenderType.AI_ASSISTANT,
                 "",
-                "AI Assistant"
+                "AI Assistant",
                 message_data["file_ids"],
                 message_data["tag_ids"],
                 message_data["embedding_ids"],
