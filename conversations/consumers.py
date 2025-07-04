@@ -94,10 +94,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 asyncio.create_task(self._generate_conversation_title(message_data["message"]))
 
             bot_message_obj = await self.conversation_service.create_message(
-                self.conversation, 
-                SenderType.AI_ASSISTANT, 
-                "", 
-                "AI Assistant", 
+                self.conversation,
+                SenderType.AI_ASSISTANT,
+                "",
+                "AI Assistant"
                 message_data["file_ids"],
                 message_data["tag_ids"],
                 message_data["embedding_ids"],
@@ -186,6 +186,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 max_context_snippets=message_data["max_context_snippets"],
                 document_similarity_threshold=message_data["document_similarity_threshold"],
                 history_limit=message_data["history_limit"],
+                referenced_conversation_ids=message_data["referenced_conversation_ids"],
+                referenced_conversation_history_limit=message_data["referenced_conversation_history_limit"],
                 message_obj=message_obj
             ):
                 if usage:
@@ -246,15 +248,12 @@ class ChatConsumer(AsyncWebsocketConsumer):
         message_obj.message = f"{ai_response}\n\n[Response cut off - insufficient credits]"
         message_obj.input_tokens = token_usage.get('input_tokens', 0)
         message_obj.output_tokens = token_usage.get('output_tokens', 0)
-        
-        # Calculate and set cost even for insufficient balance scenarios
         if message_obj.llm and (message_obj.input_tokens or message_obj.output_tokens):
             llm = message_obj.llm
             input_rate = llm.input_token_rate_per_million / 1000000
             output_rate = llm.output_token_rate_per_million / 1000000
             cost = (message_obj.input_tokens * input_rate) + (message_obj.output_tokens * output_rate)
             message_obj.cost = cost
-        
         await database_sync_to_async(message_obj.save)()
         await self.send(json.dumps(camelize({
             "type": "ai_stream",
@@ -290,7 +289,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
         cost = await database_sync_to_async(lambda: message_obj.cost)()
         input_tokens = await database_sync_to_async(lambda: message_obj.input_tokens)()
         output_tokens = await database_sync_to_async(lambda: message_obj.output_tokens)()
-        
         response = {
             "type": "message",
             "id": str(message_obj.id),
@@ -333,6 +331,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
             "embedding_ids": data.get("embedding_ids", []),
             "tag_ids": data.get("tag_ids", []),
             "folder_ids": data.get("folder_ids", []),
+            "referenced_conversation_ids": data.get("referenced_conversation_ids", []),
+            "referenced_conversation_history_limit": data.get("referenced_conversation_history_limit", 10),
             "llm_id": data.get("llm_id"),
             "prompt_id": data.get("prompt_id"),
             "temperature": data.get("temperature", self.DEFAULT_TEMPERATURE),

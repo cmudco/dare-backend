@@ -40,6 +40,8 @@ class LLMService:
         max_context_snippets: int = 4,
         document_similarity_threshold: float = 0.5,
         history_limit: int = 20,
+        referenced_conversation_ids: list = None,
+        referenced_conversation_history_limit: int = 10,
         message_obj: Message = None
     ) -> AsyncGenerator[Tuple[str, Dict], None]:
         """Generate AI response with context."""
@@ -53,6 +55,15 @@ class LLMService:
 
             if prompt and prompt.strip():
                 messages.append({"role": "assistant", "content": f"Prompt: {prompt}"})
+
+            if referenced_conversation_ids:
+                referenced_context = await self.get_referenced_conversations_context(
+                    referenced_conversation_ids,
+                    user_id,
+                    referenced_conversation_history_limit
+                )
+                if referenced_context:
+                    messages.append({"role": "user", "content": referenced_context})
 
             if file_ids:
                 file_contents = await self.get_full_file_contents(file_ids, user_id)
@@ -151,6 +162,39 @@ class LLMService:
                 continue
 
         return file_contents
+
+    @database_sync_to_async
+    def get_referenced_conversations_context(self, conversation_ids: list, user_id: int, history_limit: int = 10) -> str:
+        """Fetch context from referenced conversations."""
+        if not conversation_ids:
+            return ""
+
+        context_parts = []
+        conversations = Conversation.active_objects.filter(
+            conversation_id__in=conversation_ids,
+            user_id=user_id
+        )
+
+        for conversation in conversations:
+            messages = Message.active_objects.filter(
+                conversation=conversation
+            ).order_by('-created_at')[:history_limit]
+
+            if messages:
+                conversation_title = conversation.title or "Untitled Conversation"
+                context_parts.append(f"=== Referenced Conversation: {conversation_title} ===")
+
+                for msg in reversed(messages):
+                    role = "User" if msg.sender_type == SenderType.PLAYER else "Assistant"
+                    context_parts.append(f"{role}: {msg.message}")
+
+                context_parts.append("=== End of Referenced Conversation ===\n")
+
+        if context_parts:
+            full_context = "\n".join(context_parts)
+            return f"Referenced conversation context for additional background:\n\n{full_context}"
+
+        return ""
 
     def _get_ai_service(self, llm: LLM) -> AIService:
         if llm.provider == Provider.OPENAI.value:
