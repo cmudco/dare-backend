@@ -44,12 +44,27 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
 
 class CustomRegisterSerializer(RegisterSerializer):
     name = serializers.CharField(max_length=255, required=True)
-    access_code = serializers.CharField(max_length=255, required=True)
+    access_code = serializers.CharField(max_length=255, required=False, allow_blank=True)
 
     def validate_access_code(self, access_code):
         """
-        Validate that the access code exists and is available for use.
+        Validate access code based on platform:
+        - DARE: access_code is required
+        - SocraticBooks: access_code is optional
         """
+        request = self.context.get('request')
+        platform = detect_platform_from_request(request) if request else AuthSourceChoice.DARE
+        
+        # If no access code provided
+        if not access_code:
+            if platform == AuthSourceChoice.DARE:
+                raise serializers.ValidationError(
+                    "Access code is required for DARE registration."
+                )
+            # For SocraticBooks, empty access code is allowed
+            return access_code
+        
+        # If access_code is provided, validate it exists and is available
         try:
             code_group = AccessCodeGroup.objects.get(access_code=access_code)
             if not code_group.is_available:
@@ -62,7 +77,8 @@ class CustomRegisterSerializer(RegisterSerializer):
                         "This access code has reached its maximum usage limit."
                     )
             return access_code
-        except AccessCodeGroup.DoesNotExist:            raise serializers.ValidationError(
+        except AccessCodeGroup.DoesNotExist:
+            raise serializers.ValidationError(
                 "Invalid access code. Please check your code and try again."
             )
 
