@@ -21,22 +21,28 @@ def process_file_embeddings(file_id):
 
     try:
         file.status = FileStatus.PROCESSING
-        file.save(update_fields=['status'])
+        file.error_message = None
+        file.save(update_fields=['status', 'error_message'])
 
-        DocumentProcessor().create_file_embeddings(file)
+        processor = DocumentProcessor()
+        result = processor.create_file_embeddings(file)
 
         # Record the user's current vector DB preference with the file
         file.vector_db_source = file.user.vector_db
         file.status = FileStatus.PROCESSED
-        file.save(update_fields=['status', 'vector_db_source'])
+        file.error_message = None
+        file.save(update_fields=['status', 'vector_db_source', 'error_message'])
 
         elapsed_time = time.time() - start_time
 
     except Exception as e:
         elapsed_time = time.time() - start_time
+        error_message = str(e)
+
         try:
             file.status = FileStatus.FAILED
-            file.save(update_fields=['status'])
+            file.error_message = error_message 
+            file.save(update_fields=['status', 'error_message'])
         except Exception as update_error:
             pass
 

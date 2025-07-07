@@ -108,6 +108,11 @@ class File(BaseModel):
         verbose_name=_("Vector DB Source"),
         help_text=_("Vector database where this file's chunks are stored")
     )
+    error_message = models.TextField(
+        blank=True,
+        null=True,
+        help_text="Error message if file processing failed"
+    )
 
     active_objects = ActiveObjectsManager()
 
