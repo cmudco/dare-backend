@@ -2,15 +2,15 @@ from allauth.account.adapter import DefaultAccountAdapter
 
 from config.env import FRONTEND_CONFIRM_EMAIL_URL, FRONTEND_PASSWORD_RESET_URL
 from users.utils import detect_platform_from_request, get_callback_parameter
-from users.constants import CallbackChoice
+from users.constants import AuthSourceChoice
 
 class AccountAdapter(DefaultAccountAdapter):
     def get_email_confirmation_url(self, request, emailconfirmation):
         # Detect platform from request to determine callback parameter
         platform = detect_platform_from_request(request)
-        callback = get_callback_parameter(platform)
-        
-        return f"{FRONTEND_CONFIRM_EMAIL_URL}?key={emailconfirmation.key}&callback={callback}"
+        callback_url = get_callback_parameter(platform)
+
+        return f"{FRONTEND_CONFIRM_EMAIL_URL}?key={emailconfirmation.key}&callbackurl={callback_url}"
 
     def render_mail(self, template_prefix, email, context):
         """
@@ -26,11 +26,12 @@ class AccountAdapter(DefaultAccountAdapter):
             request = context.get('request')
             if request:
                 platform = detect_platform_from_request(request)
-                callback = get_callback_parameter(platform)
-                password_reset_url = f"{FRONTEND_PASSWORD_RESET_URL or ''}/{uid}/{token}?callback={callback}"
+                callback_url = get_callback_parameter(platform)
+                password_reset_url = f"{FRONTEND_PASSWORD_RESET_URL or ''}/{uid}/{token}?callbackurl={callback_url}"
             else:
                 # Fallback to default behavior if request is not available
-                password_reset_url = f"{FRONTEND_PASSWORD_RESET_URL or ''}/{uid}/{token}?callback={CallbackChoice.DARE}"
+                callback_url = get_callback_parameter(AuthSourceChoice.DARE)
+                password_reset_url = f"{FRONTEND_PASSWORD_RESET_URL or ''}/{uid}/{token}?callbackurl={callback_url}"
 
             context['password_reset_url'] = password_reset_url
 
