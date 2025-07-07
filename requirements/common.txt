@@ -36,6 +36,7 @@ pinecone~=6.0.1
 
 # OpenAI
 openai~=1.65.2
+tiktoken~=0.8.0
 
 # Claude/Anthropic
 anthropic==0.49.0
