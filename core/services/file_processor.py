@@ -31,6 +31,34 @@ class FileProcessor:
             return ' '.join(text_content)
 
     def _read_text_file(self, file: File) -> str:
-        """Read content from text-based files."""
-        with file.file.open('r') as f:
-            return f.read()
+        """Read content from text-based files with encoding detection."""
+        # Read file as binary first
+        with file.file.open('rb') as f:
+            raw_content = f.read()
+
+        # List of encodings to try in order of preference
+        encodings_to_try = [
+            'utf-8',
+            'utf-8-sig',  # UTF-8 with BOM
+            'latin-1',    # ISO-8859-1
+            'cp1252',     # Windows-1252
+            'iso-8859-1', # Latin-1
+            'ascii',
+        ]
+
+        # Try different encodings on the binary content
+        for encoding in encodings_to_try:
+            try:
+                content = raw_content.decode(encoding)
+                return content
+            except UnicodeDecodeError:
+                continue
+            except Exception as e:
+                continue
+
+        # Final fallback: decode with error handling
+        try:
+            content = raw_content.decode('utf-8', errors='replace')
+            return content
+        except Exception as final_error:
+            raise Exception(f"Could not decode text file with any encoding method: {str(final_error)}")
