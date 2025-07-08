@@ -12,10 +12,11 @@ class FileSerializer(serializers.ModelSerializer):
         default=FileStatus.PROCESSING
     )
     job_id = serializers.CharField(read_only=True, allow_null=True)
+    error_message = serializers.CharField(read_only=True, allow_null=True)
 
     class Meta:
         model = File
-        fields = ['id', 'user', 'name', 'file', 'file_type', 'size', 'tags', 'job_id', 'status', 'vector_db_source']
+        fields = ['id', 'user', 'name', 'file', 'file_type', 'size', 'tags', 'job_id', 'status', 'vector_db_source', 'error_message']
 
     def get_size(self, obj):
         return obj.file.size if obj.file else None

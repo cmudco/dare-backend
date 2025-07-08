@@ -80,9 +80,12 @@ class FileViewSet(viewsets.ModelViewSet):
                         status_data["error"] = error_message
                         logger.error(f"Job failed for file ID {file.id}: {error_message}")
 
-                if file.status == FileStatus.FAILED and "error" not in status_data:
+                if file.status == FileStatus.FAILED:
                     status_data["error"] = "File processing failed"
-                    logger.error(f"File with ID {file.id} has failed status but no error message")
+                    if file.error_message:
+                        status_data["errorDetails"] = file.error_message
+                    else:
+                        logger.error(f"File with ID {file.id} has failed status but no error message")
 
                 response_data.append(status_data)
 
