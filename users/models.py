@@ -6,7 +6,7 @@ from common.managers import ActiveObjectsManager
 from common.models import IsDeletedMixin, TimeStampMixin
 from core.config.processing import CHUNK_SIZE, OVERLAP_SIZE
 from users.managers import UserManager
-from users.constants import VectorDBChoice, AuthSourceChoice
+from users.constants import VectorDBChoice
 from prompts.models import Prompt
 
 class AccessCodeGroup(TimeStampMixin):
@@ -98,25 +98,6 @@ class User(AbstractUser, IsDeletedMixin):
         default=OVERLAP_SIZE,
         verbose_name=_("Overlap Size"),
         help_text=_("Size of overlap between text chunks")
-    )
-    
-    # Platform-specific authentication fields
-    auth_source = models.CharField(
-        max_length=50,
-        choices=AuthSourceChoice.choices,
-        default=AuthSourceChoice.DARE,
-        verbose_name=_("Authentication Source"),
-        help_text=_("Platform where the user was originally authenticated")
-    )
-    is_dare_accessible = models.BooleanField(
-        default=True,
-        verbose_name=_("DARE Access"),
-        help_text=_("Whether this user can access DARE platform")
-    )
-    is_socratic_books_accessible = models.BooleanField(
-        default=False,
-        verbose_name=_("SocraticBooks Access"),
-        help_text=_("Whether this user can access SocraticBooks platform")
     )
 
     objects = UserManager()
