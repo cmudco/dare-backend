@@ -54,7 +54,7 @@ class CustomRegisterSerializer(RegisterSerializer):
         """
         request = self.context.get('request')
         platform = detect_platform_from_request(request) if request else AuthSourceChoice.DARE
-        
+
         # If no access code provided
         if not access_code:
             if platform == AuthSourceChoice.DARE:
@@ -63,7 +63,7 @@ class CustomRegisterSerializer(RegisterSerializer):
                 )
             # For SocraticBooks, empty access code is allowed
             return access_code
-        
+
         # If access_code is provided, validate it exists and is available
         try:
             code_group = AccessCodeGroup.objects.get(access_code=access_code)
@@ -122,7 +122,7 @@ class CustomRegisterSerializer(RegisterSerializer):
         # Set auth_source based on platform detection
         platform = detect_platform_from_request(request)
         user.auth_source = platform
-        
+
         # Set platform accessibility based on auth_source
         if platform == AuthSourceChoice.DARE:
             user.is_dare_accessible = True
@@ -147,36 +147,26 @@ class CustomRegisterSerializer(RegisterSerializer):
 class CustomLoginSerializer(LoginSerializer):
     def validate(self, attrs):
         email = attrs.get('email')
-        password = attrs.get('password')
 
-        if email and password:
-            # First check if user exists and is active
+        if email:
             try:
                 user = User.objects.get(email__iexact=email)
+
                 if not user.is_active:
                     raise serializers.ValidationError(
                         "Your account is currently inactive. Please contact the administrator for assistance."
                     )
-                
-                # Detect platform from request
+
                 request = self.context.get('request')
                 if request:
                     platform = detect_platform_from_request(request)
-                    
-                    # Check platform-specific access permissions
                     if not get_platform_access_permission(user, platform):
-                        if platform == AuthSourceChoice.DARE:
-                            raise serializers.ValidationError(
-                                "You do not have access to the DARE platform. Please contact the administrator for assistance."
-                            )
-                        elif platform == AuthSourceChoice.SOCRATIC_BOOKS:
-                            raise serializers.ValidationError(
-                                "You do not have access to the SocraticBooks platform. Please contact the administrator for assistance."
-                            )
-                
+                        platform_name = "DARE" if platform == AuthSourceChoice.DARE else "SocraticBooks"
+                        raise serializers.ValidationError(
+                            f"You do not have access to the {platform_name} platform. Please contact the administrator for assistance."
+                        )
+
             except User.DoesNotExist:
-                # Let the parent class handle the "invalid credentials" message
                 pass
 
-        # Call parent validation
         return super().validate(attrs)

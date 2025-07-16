@@ -8,7 +8,7 @@ from config.env import (
     DARE_BACKEND_URL,
     SOCRATIC_BOOKS_BACKEND_URL
 )
-from users.constants import AuthSourceChoice, CallbackChoice
+from users.constants import AuthSourceChoice
 
 
 def detect_platform_from_request(request):
@@ -102,8 +102,8 @@ def get_callback_parameter(platform):
         str: Full frontend URL for the platform
     """
     if platform == AuthSourceChoice.DARE:
-        return DARE_FRONTEND_URL or "http://localhost:5173"
+        return DARE_FRONTEND_URL
     elif platform == AuthSourceChoice.SOCRATIC_BOOKS:
-        return SOCRATIC_BOOKS_FRONTEND_URL or "http://localhost:5174"
+        return SOCRATIC_BOOKS_FRONTEND_URL
 
-    return DARE_FRONTEND_URL or "http://localhost:5173"  # Default to DARE
+    return DARE_FRONTEND_URL
