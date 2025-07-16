@@ -9,7 +9,7 @@ from config import env
 def main():
     """Run administrative tasks."""
     # constant from env used here instead of env variable key since it wasn't working for python commands.
-    os.environ.setdefault(env.DJANGO_SETTINGS_MODULE, "config.settings.production")
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", env.DJANGO_SETTINGS_MODULE or "config.settings.production")
     try:
         from django.core.management import execute_from_command_line
     except ImportError as exc:
