@@ -5,6 +5,8 @@ from conversations.models import LLM, Conversation, Message
 from core.services.document_processor import DocumentProcessor
 from core.services.openai_service import OpenAIService
 from core.services.claude_service import ClaudeService
+from core.services.gemini_service import GeminiService
+from core.services.llama_service import LlamaService
 from typing import AsyncGenerator, Dict, Tuple
 from files.models import File, Folder
 from prompts.models import Prompt
@@ -205,4 +207,8 @@ class LLMService:
             return OpenAIService(llm=llm)
         elif llm.provider == Provider.CLAUDE.value:
             return ClaudeService(llm=llm)
+        elif llm.provider == Provider.GEMINI.value:
+            return GeminiService(llm=llm)
+        elif llm.provider == Provider.LLAMA.value:
+            return LlamaService(llm=llm)
         return ClaudeService(llm=llm)
