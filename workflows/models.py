@@ -206,3 +206,41 @@ class WorkflowRunStep(TimeStampMixin):
 
     def __str__(self):
         return f"Step {self.order} of {self.workflow_run}"
+
+
+class WorkflowStepSnippet(BaseModel):
+    """
+    Model to track retrieved snippets from vector search for workflow steps.
+    """
+    workflow_run_step = models.ForeignKey(
+        WorkflowRunStep,
+        on_delete=models.CASCADE,
+        related_name="snippets",
+        help_text="The workflow run step this snippet was retrieved for."
+    )
+    file = models.ForeignKey(
+        File,
+        on_delete=models.CASCADE,
+        related_name="workflow_step_snippets",
+        help_text="The file this snippet belongs to."
+    )
+    text = models.TextField(
+        help_text="The text content of the snippet (chunk)."
+    )
+    similarity_score = models.FloatField(
+        help_text="The similarity score of the snippet to the query."
+    )
+    chunk_index = models.PositiveIntegerField(
+        help_text="The index of the chunk in the original file."
+    )
+    vector_db_source = models.CharField(
+        max_length=50,
+        blank=True,
+        null=True,
+        help_text="The vector database source (e.g., 'pinecone', 'weaviate')."
+    )
+
+    active_objects = ActiveObjectsManager()
+
+    def __str__(self):
+        return f"Snippet for WorkflowRunStep {self.workflow_run_step.id} from File {self.file.id} (Score: {self.similarity_score})"

@@ -42,12 +42,15 @@ class LLMService:
         history_limit: int = 20,
         referenced_conversation_ids: list = None,
         referenced_conversation_history_limit: int = 10,
-        message_obj: Message = None
+        message_obj: Message = None,
+        workflow_run_step_obj=None
     ) -> AsyncGenerator[Tuple[str, Dict], None]:
         """Generate AI response with context."""
         try:
-            if not message.strip():
-                raise ValueError("User message cannot be empty")
+            llm = llm or LLM.objects.filter(is_active=True).first()
+            if not llm:
+                yield "Error: No active LLM found", None
+                return
 
             conversation_history = await self.get_conversation_history(conversation, limit=history_limit) if conversation else []
             prompt = await self.get_prompt(prompt_id)
@@ -91,7 +94,8 @@ class LLMService:
                         user_id=user_id,
                         top_k=max_context_snippets,
                         similarity_threshold=document_similarity_threshold,
-                        message_obj=message_obj
+                        message_obj=message_obj,
+                        workflow_run_step_obj=workflow_run_step_obj
                     )
                     if context:
                         for part in context.split("\n\n"):
