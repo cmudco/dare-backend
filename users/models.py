@@ -74,6 +74,15 @@ class User(AbstractUser, IsDeletedMixin):
         related_name="users",
         help_text=_("Access code group this user belongs to")
     )
+    model_group = models.ForeignKey(
+        'conversations.ModelGroup',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="users",
+        verbose_name=_("Model Group"),
+        help_text=_("Model group that determines which LLM models this user can access")
+    )
     vector_db = models.IntegerField(
         choices=VectorDBChoice.choices,
         default=VectorDBChoice.WEAVIATE,
@@ -99,7 +108,7 @@ class User(AbstractUser, IsDeletedMixin):
         verbose_name=_("Overlap Size"),
         help_text=_("Size of overlap between text chunks")
     )
-    
+
     # Platform-specific authentication fields
     auth_source = models.CharField(
         max_length=50,

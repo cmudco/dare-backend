@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import LLM, Conversation, Message
+from .models import LLM, Conversation, Message, ModelGroup
 
 @admin.register(LLM)
 class LLMAdmin(admin.ModelAdmin):
@@ -27,3 +27,29 @@ class MessageAdmin(admin.ModelAdmin):
         return obj.short_message
     short_message.short_description = "Message"
 
+@admin.register(ModelGroup)
+class ModelGroupAdmin(admin.ModelAdmin):
+    list_display = ("name", "is_active", "model_count", "user_count", "created_at")
+    search_fields = ("name", "description")
+    list_filter = ("is_active", "created_at")
+    ordering = ("name",)
+    list_editable = ("is_active",)
+
+    filter_horizontal = ("allowed_models",)
+
+    fieldsets = (
+        (None, {
+            "fields": ("name", "description", "is_active")
+        }),
+        ("Models", {
+            "fields": ("allowed_models",)
+        }),
+    )
+
+    def model_count(self, obj):
+        return obj.allowed_models.count()
+    model_count.short_description = "Models"
+
+    def user_count(self, obj):
+        return obj.users.count()
+    user_count.short_description = "Users"

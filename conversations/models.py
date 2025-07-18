@@ -45,6 +45,40 @@ class LLM(models.Model):
         verbose_name_plural = "LLMs"
 
 
+class ModelGroup(models.Model):
+    """
+    Model groups define which LLM models are available to different sets of users.
+    Each user can belong to one model group.
+    """
+    name = models.CharField(max_length=255, help_text="Name of the model group (e.g., 'Basic', 'Premium', 'Enterprise').")
+    description = models.TextField(blank=True, null=True, help_text="Description of the model group and its capabilities.")
+
+        # Many-to-many relationship with LLM models
+    allowed_models = models.ManyToManyField(
+        LLM,
+        related_name="model_groups",
+        help_text="LLM models that users in this group can access."
+    )
+
+    # Whether this group is active
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Whether this model group is currently active and can be assigned to users."
+    )
+
+    # Timestamps
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return self.name
+
+    class Meta:
+        verbose_name = "Model Group"
+        verbose_name_plural = "Model Groups"
+        ordering = ['name']
+
+
 class Conversation(BaseModel):
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -85,23 +119,23 @@ class Conversation(BaseModel):
     def __str__(self):
         return f"Conversation {self.conversation_id}"
 
-    def clone(self, include_messages=True, include_files=True, include_tags=True, 
+    def clone(self, include_messages=True, include_files=True, include_tags=True,
               include_snippets=True, custom_title=None):
         """
         Clone this conversation with its messages and associated data.
-        
+
         Args:
             include_messages (bool): Whether to clone messages
-            include_files (bool): Whether to clone file associations  
+            include_files (bool): Whether to clone file associations
             include_tags (bool): Whether to clone tag associations
             include_snippets (bool): Whether to clone snippets
             custom_title (str): Custom title for cloned conversation
-            
+
         Returns:
             Conversation: The cloned conversation instance
         """
         from django.db import transaction
-        
+
         with transaction.atomic():
             # Determine cloned title
             if custom_title:
@@ -110,7 +144,7 @@ class Conversation(BaseModel):
                 cloned_title = f"COPY OF - {self.title}"
             else:
                 cloned_title = "COPY OF - New Chat"
-            
+
             # Create cloned conversation
             cloned_conversation = Conversation(
                 user=self.user,
@@ -124,15 +158,15 @@ class Conversation(BaseModel):
                 sort_order=self.sort_order
             )
             cloned_conversation.save()
-            
+
             if include_messages:
                 # Clone messages
                 original_messages = Message.active_objects.filter(
                     conversation=self
                 ).order_by('created_at')
-                
+
                 message_mapping = {}
-                
+
                 for original_message in original_messages:
                     cloned_message = Message(
                         conversation=cloned_conversation,
@@ -152,14 +186,14 @@ class Conversation(BaseModel):
                     )
                     cloned_message.save()
                     message_mapping[original_message.id] = cloned_message
-                    
+
                     # Clone relationships
                     if include_files and original_message.files.exists():
                         cloned_message.files.set(original_message.files.all())
-                    
+
                     if include_tags and original_message.tags.exists():
                         cloned_message.tags.set(original_message.tags.all())
-                
+
                 # Clone snippets
                 if include_snippets:
                     for original_message in original_messages:
@@ -167,7 +201,7 @@ class Conversation(BaseModel):
                         original_snippets = Snippet.active_objects.filter(
                             message=original_message
                         )
-                        
+
                         for original_snippet in original_snippets:
                             cloned_snippet = Snippet(
                                 message=cloned_message,
@@ -177,7 +211,7 @@ class Conversation(BaseModel):
                                 chunk_index=original_snippet.chunk_index
                             )
                             cloned_snippet.save()
-            
+
             return cloned_conversation
 
 class Message(BaseModel):

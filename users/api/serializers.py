@@ -14,6 +14,7 @@ User = get_user_model()
 class CustomUserDetailsSerializer(UserDetailsSerializer):
     vector_db = serializers.ChoiceField(choices=VectorDBChoice.choices)
     default_prompt = serializers.SerializerMethodField()
+    model_group = serializers.SerializerMethodField()
     auth_source = serializers.ChoiceField(choices=AuthSourceChoice.choices, read_only=True)
 
     class Meta:
@@ -24,6 +25,7 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
             "is_active",
             "vector_db",
             "default_prompt",
+            "model_group",
             "auth_source",
             "is_dare_accessible",
             "is_socratic_books_accessible"
@@ -33,6 +35,16 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
     def get_default_prompt(self, obj):
         if obj.default_prompt:
             return PromptSerializer(obj.default_prompt).data
+        return None
+
+    def get_model_group(self, obj):
+        if obj.model_group:
+            return {
+                "id": obj.model_group.id,
+                "name": obj.model_group.name,
+                "description": obj.model_group.description,
+                "isActive": obj.model_group.is_active
+            }
         return None
 
     def to_representation(self, instance):

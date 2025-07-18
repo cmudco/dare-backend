@@ -118,10 +118,10 @@ class ConversationViewSet(viewsets.ModelViewSet):
         try:
             with transaction.atomic():
                 instance = self.get_object()
-                
+
                 # Use the model's built-in clone method
                 cloned_conversation = instance.clone()
-                
+
                 # Prepare response data
                 serializer = self.get_serializer(cloned_conversation)
                 return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -131,7 +131,7 @@ class ConversationViewSet(viewsets.ModelViewSet):
             logger = logging.getLogger(__name__)
             logger.error(f"Error cloning conversation {conversation_id}: {str(e)}")
             return Response(
-                {"error": f"Failed to clone conversation: {str(e)}"}, 
+                {"error": f"Failed to clone conversation: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 

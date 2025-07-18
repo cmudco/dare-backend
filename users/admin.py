@@ -23,7 +23,7 @@ class AccessCodeGroupAdmin(admin.ModelAdmin):
     list_filter = ('is_active', 'created_at')
     search_fields = ('access_code',)
     readonly_fields = ('current_usage', 'created_at', 'updated_at')
-    list_editable = ('is_active',) 
+    list_editable = ('is_active',)
     inlines = [UserInline]
 
     fieldsets = (
@@ -73,7 +73,7 @@ class UserAdmin(DjangoUserAdmin):
                 )
             },
         ),
-        (_("Access Control"), {"fields": ("access_code_group",)}),
+        (_("Access Control"), {"fields": ("access_code_group", "model_group")}),
         (_("Vector Database Settings"), {"fields": ("vector_db",)}),
         (_("Platform Settings"), {
             "fields": ("auth_source", "is_dare_accessible", "is_socratic_books_accessible")
@@ -89,8 +89,8 @@ class UserAdmin(DjangoUserAdmin):
             },
         ),
     )
-    list_display = ("email", "is_staff", "is_active", "is_superuser", "access_code_group", "vector_db", "auth_source", "is_dare_accessible", "is_socratic_books_accessible")
-    list_filter = ("is_staff", "is_superuser", "is_active", "vector_db", "access_code_group", "auth_source", "is_dare_accessible", "is_socratic_books_accessible")
+    list_display = ("email", "is_staff", "is_active", "is_superuser", "access_code_group", "model_group", "vector_db", "auth_source", "is_dare_accessible", "is_socratic_books_accessible")
+    list_filter = ("is_staff", "is_superuser", "is_active", "vector_db", "access_code_group", "model_group", "auth_source", "is_dare_accessible", "is_socratic_books_accessible")
     search_fields = ("email", "first_name", "last_name")
     ordering = ("email",)
 
