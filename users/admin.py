@@ -3,7 +3,7 @@ from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
 from django.utils.translation import gettext_lazy as _
 
 from users.models import User, AccessCodeGroup
-from users.constants import VectorDBChoice, AuthSourceChoice
+from users.constants import VectorDBChoice, AuthSourceChoice, ScopeChoice
 
 
 class UserInline(admin.TabularInline):
@@ -19,8 +19,8 @@ class UserInline(admin.TabularInline):
 
 @admin.register(AccessCodeGroup)
 class AccessCodeGroupAdmin(admin.ModelAdmin):
-    list_display = ('access_code', 'usage_display', 'is_active', 'user_count', 'created_at')
-    list_filter = ('is_active', 'created_at')
+    list_display = ('access_code', 'scope', 'usage_display', 'is_active', 'user_count', 'created_at')
+    list_filter = ('is_active', 'scope', 'created_at')
     search_fields = ('access_code',)
     readonly_fields = ('current_usage', 'created_at', 'updated_at')
     list_editable = ('is_active',)
@@ -29,6 +29,10 @@ class AccessCodeGroupAdmin(admin.ModelAdmin):
     fieldsets = (
         (None, {
             'fields': ('access_code', 'max_capacity', 'is_active')
+        }),
+        (_('Platform Access'), {
+            'fields': ('scope',),
+            'description': 'DUAL scope allows users to access both DARE and SocraticBooks platforms'
         }),
         (_('Usage Statistics'), {
             'fields': ('current_usage',),

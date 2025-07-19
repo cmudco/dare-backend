@@ -6,7 +6,7 @@ from common.managers import ActiveObjectsManager
 from common.models import IsDeletedMixin, TimeStampMixin
 from core.config.processing import CHUNK_SIZE, OVERLAP_SIZE
 from users.managers import UserManager
-from users.constants import VectorDBChoice, AuthSourceChoice
+from users.constants import VectorDBChoice, AuthSourceChoice, ScopeChoice
 from prompts.models import Prompt
 
 class AccessCodeGroup(TimeStampMixin):
@@ -30,13 +30,21 @@ class AccessCodeGroup(TimeStampMixin):
         default=True,
         help_text="Whether this access code is currently active"
     )
+    scope = models.CharField(
+        max_length=50,
+        choices=ScopeChoice.choices,
+        default=ScopeChoice.DARE,
+        verbose_name=_("Access Scope"),
+        help_text=_("Determines which platforms users can access with this code")
+    )
 
     class Meta:
         verbose_name = "Access Code Group"
         verbose_name_plural = "Access Code Groups"
 
     def __str__(self):
-        return f"Access Code: {self.access_code} ({self.current_usage}/{self.max_capacity} used)"
+        scope_indicator = f" [{self.get_scope_display()}]"
+        return f"Access Code: {self.access_code} ({self.current_usage}/{self.max_capacity} used){scope_indicator}"
 
     @property
     def is_available(self):
