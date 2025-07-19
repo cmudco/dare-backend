@@ -4,9 +4,12 @@ from django.contrib.auth import get_user_model, authenticate
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 from prompts.api.serializers import PromptSerializer
-from users.constants import VectorDBChoice, AuthSourceChoice
+from users.constants import VectorDBChoice, AuthSourceChoice, ScopeChoice
 from users.models import AccessCodeGroup
 from users.utils import detect_platform_from_request, get_platform_access_permission
+import logging
+
+logger = logging.getLogger(__name__)
 
 User = get_user_model()
 
@@ -150,7 +153,7 @@ class CustomRegisterSerializer(RegisterSerializer):
         if platform == AuthSourceChoice.DARE:
             user.is_dare_accessible = True
             # If access code has DUAL scope, also give SocraticBooks access
-            if code_group and code_group.scope == 'DUAL':
+            if code_group and code_group.scope == ScopeChoice.DUAL:
                 user.is_socratic_books_accessible = True
             else:
                 user.is_socratic_books_accessible = False
@@ -158,11 +161,11 @@ class CustomRegisterSerializer(RegisterSerializer):
         elif platform == AuthSourceChoice.SOCRATIC_BOOKS:
             user.is_socratic_books_accessible = True
             # If access code has DUAL scope, also give DARE access
-            if code_group and code_group.scope == 'DUAL':
+            if code_group and code_group.scope == ScopeChoice.DUAL:
                 user.is_dare_accessible = True
             else:
                 user.is_dare_accessible = False
-
+        
         user.save()
         return user
 

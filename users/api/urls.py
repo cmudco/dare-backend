@@ -13,7 +13,7 @@ urlpatterns = [
     path("dj-rest-auth/", include("dj_rest_auth.urls")),
     path("dj-rest-auth/registration/", include("dj_rest_auth.registration.urls")),
     path("stats/", UserStatsView.as_view(), name="user-stats"),
-    path("api/access-codes/check/", AccessCodeCheckView.as_view(), name="access-code-check"),
+    path("access-codes/check/", AccessCodeCheckView.as_view(), name="access-code-check"),
 
     path("", include(router.urls)),
 ]

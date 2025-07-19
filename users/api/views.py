@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny
 from django.contrib.auth import get_user_model
 from django_rq import enqueue
 
@@ -202,6 +203,7 @@ class AccessCodeCheckView(APIView):
     API endpoint to check if an access code exists and get its scope information.
     Used by SocraticBooks backend for cross-platform validation.
     """
+    permission_classes = [AllowAny]
     
     def post(self, request, *args, **kwargs):
         """
