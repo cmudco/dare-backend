@@ -14,6 +14,8 @@ from prompts.models import Prompt
 from users.constants import VectorDBChoice
 from billing.models import Transaction
 from billing.constants import TransactionTypeChoice
+from users.models import AccessCodeGroup
+from rest_framework import serializers
 
 User = get_user_model()
 
@@ -193,3 +195,75 @@ class ChunkingSettingsViewSet(viewsets.ModelViewSet):
                 {"error": "chunk_size and overlap_size must be integers"},
                 status=status.HTTP_400_BAD_REQUEST
             )
+
+
+class AccessCodeCheckView(APIView):
+    """
+    API endpoint to check if an access code exists and get its scope information.
+    Used by SocraticBooks backend for cross-platform validation.
+    """
+    
+    def post(self, request, *args, **kwargs):
+        """
+        Check if access code exists in DARE backend
+        
+        Expected input:
+        {
+            "access_code": "ABC123"
+        }
+        
+        Returns:
+        {
+            "exists": true/false,
+            "scope": "DARE" or "DUAL",
+            "available_slots": integer,
+            "message": "descriptive message"
+        }
+        """
+        access_code = request.data.get('access_code')
+        
+        if not access_code:
+            return Response(
+                {
+                    "exists": False,
+                    "scope": None,
+                    "available_slots": 0,
+                    "message": "Access code is required"
+                },
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            code_group = AccessCodeGroup.objects.get(access_code=access_code)
+            
+            # Check if code is available
+            if not code_group.is_available:
+                if not code_group.is_active:
+                    message = "Access code exists but is inactive"
+                else:
+                    message = "Access code exists but has reached maximum capacity"
+                
+                return Response({
+                    "exists": True,
+                    "scope": code_group.scope,
+                    "available_slots": 0,
+                    "message": message
+                })
+            
+            # Code exists and is available
+            available_slots = code_group.max_capacity - code_group.current_usage
+            
+            return Response({
+                "exists": True,
+                "scope": code_group.scope,
+                "available_slots": available_slots,
+                "message": f"Access code is available with {code_group.get_scope_display()} scope"
+            })
+            
+        except AccessCodeGroup.DoesNotExist:
+            return Response({
+                "exists": False,
+                "scope": None,
+                "available_slots": 0,
+                "message": "Access code not found"
+            })

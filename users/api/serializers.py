@@ -135,15 +135,9 @@ class CustomRegisterSerializer(RegisterSerializer):
         platform = detect_platform_from_request(request)
         user.auth_source = platform
 
-        # Set platform accessibility based on auth_source
-        if platform == AuthSourceChoice.DARE:
-            user.is_dare_accessible = True
-            user.is_socratic_books_accessible = False
-        elif platform == AuthSourceChoice.SOCRATIC_BOOKS:
-            user.is_dare_accessible = False
-            user.is_socratic_books_accessible = True
-
         access_code = self.validated_data.get("access_code")
+        code_group = None
+        
         if access_code:
             try:
                 code_group = AccessCodeGroup.objects.get(access_code=access_code)
@@ -151,6 +145,23 @@ class CustomRegisterSerializer(RegisterSerializer):
                 user.access_code_group = code_group
             except AccessCodeGroup.DoesNotExist:
                 pass
+
+        # Set platform accessibility based on auth_source and access code scope
+        if platform == AuthSourceChoice.DARE:
+            user.is_dare_accessible = True
+            # If access code has DUAL scope, also give SocraticBooks access
+            if code_group and code_group.scope == 'DUAL':
+                user.is_socratic_books_accessible = True
+            else:
+                user.is_socratic_books_accessible = False
+                
+        elif platform == AuthSourceChoice.SOCRATIC_BOOKS:
+            user.is_socratic_books_accessible = True
+            # If access code has DUAL scope, also give DARE access
+            if code_group and code_group.scope == 'DUAL':
+                user.is_dare_accessible = True
+            else:
+                user.is_dare_accessible = False
 
         user.save()
         return user
