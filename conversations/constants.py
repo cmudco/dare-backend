@@ -10,6 +10,8 @@ class SenderType(models.IntegerChoices):
 class Provider(Enum):
     OPENAI = "openai"
     CLAUDE = "claude"
+    GEMINI = "gemini"
+    LLAMA = "llama"
 
     @classmethod
     def choices(cls):

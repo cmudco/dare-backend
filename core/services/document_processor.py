@@ -140,6 +140,32 @@ class DocumentProcessor:
         except Exception:
             return
 
+    async def _save_workflow_step_snippets(self, snippets_to_save, workflow_run_step_obj):
+        """Save retrieved snippets for workflow steps to the database."""
+        try:
+            from workflows.models import WorkflowStepSnippet
+
+            successful_saves = 0
+            for i, snippet_data in enumerate(snippets_to_save):
+                try:
+                    file_id = snippet_data["file_id"]
+                    file = await database_sync_to_async(File.active_objects.get)(id=file_id)
+                    snippet = await database_sync_to_async(WorkflowStepSnippet.active_objects.create)(
+                        workflow_run_step=workflow_run_step_obj,
+                        file=file,
+                        text=snippet_data["text"],
+                        similarity_score=snippet_data["similarity_score"],
+                        chunk_index=snippet_data["chunk_index"],
+                        vector_db_source=snippet_data.get("vector_db_source")
+                    )
+                    successful_saves += 1
+                except File.DoesNotExist:
+                    continue
+                except Exception:
+                    continue
+        except Exception:
+            return
+
     async def search_similar_documents(
         self,
         query_text: str,
@@ -147,7 +173,8 @@ class DocumentProcessor:
         user_id: int,
         top_k: int = DEFAULT_TOP_K,
         similarity_threshold: float = DEFAULT_SIMILARITY_THRESHOLD,
-        message_obj=None
+        message_obj=None,
+        workflow_run_step_obj=None
     ) -> str:
         """Search for similar documents based on the query text."""
         if not file_ids:
@@ -166,7 +193,8 @@ class DocumentProcessor:
             return await self._process_search_results(
                 results,
                 similarity_threshold,
-                message_obj
+                message_obj,
+                workflow_run_step_obj
             )
         except Exception as e:
             return ""
@@ -175,7 +203,8 @@ class DocumentProcessor:
         self,
         results: List[Dict],
         similarity_threshold: float,
-        message_obj=None
+        message_obj=None,
+        workflow_run_step_obj=None
     ) -> str:
         """Process search results and collect context."""
         context_parts = []
@@ -191,6 +220,7 @@ class DocumentProcessor:
             file_id = metadata.get("file_id", "")
             file_name = metadata.get("file_name", "Unknown file")
             chunk_index = metadata.get("chunk_index", 0)
+            vector_db_source = metadata.get("vector_db_source")
 
             if text:
                 context_parts.append(f"From {file_name}:\n{text}")
@@ -203,9 +233,20 @@ class DocumentProcessor:
                         "similarity_score": score,
                         "chunk_index": chunk_index
                     })
+                elif workflow_run_step_obj:
+                    snippets_to_save.append({
+                        "workflow_run_step": workflow_run_step_obj,
+                        "file_id": file_id,
+                        "text": text,
+                        "similarity_score": score,
+                        "chunk_index": chunk_index,
+                        "vector_db_source": vector_db_source
+                    })
 
         if snippets_to_save and message_obj:
             await self._save_snippets(snippets_to_save, message_obj)
+        elif snippets_to_save and workflow_run_step_obj:
+            await self._save_workflow_step_snippets(snippets_to_save, workflow_run_step_obj)
 
         return "\n\n".join(context_parts)
 
