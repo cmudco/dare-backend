@@ -11,16 +11,17 @@ from core.services.llm_service import LLMService
 from .models import Step, WorkflowRun, WorkflowRunStep, Mode, WorkflowRunStepStatus
 from core.services.file_processor import FileProcessor
 
-async def execute_step_async(step: 'Step', previous_response: Optional[str] = None) -> str:
+async def execute_step_async(step: 'Step', previous_response: Optional[str] = None, workflow_run_step_obj=None) -> str:
     """
-    Executes a single step in a workflow asynchronously.
+    Execute a single step of a workflow.
 
     Args:
-        step (Step): The step to execute.
-        previous_response (Optional[str]): The response from the previous step, if applicable.
+        step: The step to execute
+        previous_response: Response from the previous step (if any)
+        workflow_run_step_obj: The WorkflowRunStep object for saving snippets
 
     Returns:
-        str: The generated AI response.
+        The response from the LLM
     """
     try:
         step_prompt = await database_sync_to_async(lambda s: s.prompt)(step)
@@ -46,7 +47,7 @@ async def execute_step_async(step: 'Step', previous_response: Optional[str] = No
 
         file_ids = None
         embedding_ids = None
-        
+
         step_files = await database_sync_to_async(lambda s: list(s.files.values_list('id', flat=True)))(step)
 
         step_embeddings = await database_sync_to_async(lambda s: list(s.embeddings.values_list('id', flat=True)))(step)
@@ -70,6 +71,7 @@ async def execute_step_async(step: 'Step', previous_response: Optional[str] = No
             user_id=step_user_id,
             prompt_id=prompt_id,
             message_obj=None,
+            workflow_run_step_obj=workflow_run_step_obj,
             max_tokens=step_max_tokens,
             temperature=step_temperature,
             max_context_snippets=step_max_context_snippets,
@@ -104,13 +106,14 @@ async def execute_step_async(step: 'Step', previous_response: Optional[str] = No
     except Exception as e:
         raise
 
-def execute_step(step: 'Step', previous_response: Optional[str] = None) -> str:
+def execute_step(step: 'Step', previous_response: Optional[str] = None, workflow_run_step_obj=None) -> str:
     """
     Synchronous wrapper for execute_step_async to be used in RQ jobs.
 
     Args:
         step (Step): The step to execute.
         previous_response (Optional[str]): The response from the previous step, if applicable.
+        workflow_run_step_obj: The WorkflowRunStep object for saving snippets
 
     Returns:
         str: The generated AI response.
@@ -119,7 +122,7 @@ def execute_step(step: 'Step', previous_response: Optional[str] = None) -> str:
         import asyncio
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        result = loop.run_until_complete(execute_step_async(step, previous_response))
+        result = loop.run_until_complete(execute_step_async(step, previous_response, workflow_run_step_obj))
         loop.close()
         return result
     except Exception as e:
@@ -170,7 +173,7 @@ def execute_step_task(workflow_run_step_id, workflow_run_id=None):
         step_run.save()
 
         try:
-            response = execute_step(step_run.step)
+            response = execute_step(step_run.step, workflow_run_step_obj=step_run)
             step_run.response = response
             step_run.status = WorkflowRunStepStatus.COMPLETED
 

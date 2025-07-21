@@ -4,9 +4,12 @@ from django.contrib.auth import get_user_model, authenticate
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 from prompts.api.serializers import PromptSerializer
-from users.constants import VectorDBChoice, AuthSourceChoice
+from users.constants import VectorDBChoice, AuthSourceChoice, ScopeChoice
 from users.models import AccessCodeGroup
 from users.utils import detect_platform_from_request, get_platform_access_permission
+import logging
+
+logger = logging.getLogger(__name__)
 
 User = get_user_model()
 
@@ -14,6 +17,7 @@ User = get_user_model()
 class CustomUserDetailsSerializer(UserDetailsSerializer):
     vector_db = serializers.ChoiceField(choices=VectorDBChoice.choices)
     default_prompt = serializers.SerializerMethodField()
+    model_group = serializers.SerializerMethodField()
     auth_source = serializers.ChoiceField(choices=AuthSourceChoice.choices, read_only=True)
 
     class Meta:
@@ -24,6 +28,7 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
             "is_active",
             "vector_db",
             "default_prompt",
+            "model_group",
             "auth_source",
             "is_dare_accessible",
             "is_socratic_books_accessible"
@@ -33,6 +38,16 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
     def get_default_prompt(self, obj):
         if obj.default_prompt:
             return PromptSerializer(obj.default_prompt).data
+        return None
+
+    def get_model_group(self, obj):
+        if obj.model_group:
+            return {
+                "id": obj.model_group.id,
+                "name": obj.model_group.name,
+                "description": obj.model_group.description,
+                "isActive": obj.model_group.is_active
+            }
         return None
 
     def to_representation(self, instance):
@@ -123,15 +138,9 @@ class CustomRegisterSerializer(RegisterSerializer):
         platform = detect_platform_from_request(request)
         user.auth_source = platform
 
-        # Set platform accessibility based on auth_source
-        if platform == AuthSourceChoice.DARE:
-            user.is_dare_accessible = True
-            user.is_socratic_books_accessible = False
-        elif platform == AuthSourceChoice.SOCRATIC_BOOKS:
-            user.is_dare_accessible = False
-            user.is_socratic_books_accessible = True
-
         access_code = self.validated_data.get("access_code")
+        code_group = None
+        
         if access_code:
             try:
                 code_group = AccessCodeGroup.objects.get(access_code=access_code)
@@ -140,6 +149,23 @@ class CustomRegisterSerializer(RegisterSerializer):
             except AccessCodeGroup.DoesNotExist:
                 pass
 
+        # Set platform accessibility based on auth_source and access code scope
+        if platform == AuthSourceChoice.DARE:
+            user.is_dare_accessible = True
+            # If access code has DUAL scope, also give SocraticBooks access
+            if code_group and code_group.scope == ScopeChoice.DUAL:
+                user.is_socratic_books_accessible = True
+            else:
+                user.is_socratic_books_accessible = False
+                
+        elif platform == AuthSourceChoice.SOCRATIC_BOOKS:
+            user.is_socratic_books_accessible = True
+            # If access code has DUAL scope, also give DARE access
+            if code_group and code_group.scope == ScopeChoice.DUAL:
+                user.is_dare_accessible = True
+            else:
+                user.is_dare_accessible = False
+        
         user.save()
         return user
 

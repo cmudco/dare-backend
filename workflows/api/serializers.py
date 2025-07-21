@@ -4,20 +4,31 @@ from conversations.models import LLM
 from files.api.serializers import FileSerializer
 from files.models import File
 from prompts.models import Prompt
-from workflows.models import Workflow, Step, WorkflowRun, WorkflowRunStep
+from workflows.models import Workflow, Step, WorkflowRun, WorkflowRunStep, WorkflowStepSnippet
 from workflows.constants import WorkflowRunStepStatus
 from prompts.api.serializers import PromptSerializer
+
+
+class WorkflowStepSnippetSerializer(serializers.ModelSerializer):
+    file = FileSerializer(read_only=True)
+    vector_db_source = serializers.CharField(read_only=True)
+
+    class Meta:
+        model = WorkflowStepSnippet
+        fields = ['id', 'file', 'text', 'similarity_score', 'chunk_index', 'vector_db_source']
+
 
 class WorkflowRunStepSerializer(serializers.ModelSerializer):
     status = serializers.ChoiceField(
         choices=WorkflowRunStepStatus.choices,
         default=WorkflowRunStepStatus.PENDING
     )
+    snippets = WorkflowStepSnippetSerializer(many=True, read_only=True)
 
     class Meta:
         model = WorkflowRunStep
-        fields = ['id', 'step', 'order', 'status', 'response', 'error', 'created_at', 'updated_at']
-        read_only_fields = ['id', 'created_at', 'updated_at']
+        fields = ['id', 'step', 'order', 'status', 'response', 'error', 'created_at', 'updated_at', 'snippets']
+        read_only_fields = ['id', 'created_at', 'updated_at', 'snippets']
 
 class WorkflowRunSerializer(serializers.ModelSerializer):
     steps = WorkflowRunStepSerializer(many=True, read_only=True)

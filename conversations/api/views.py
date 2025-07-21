@@ -118,10 +118,10 @@ class ConversationViewSet(viewsets.ModelViewSet):
         try:
             with transaction.atomic():
                 instance = self.get_object()
-                
+
                 # Use the model's built-in clone method
                 cloned_conversation = instance.clone()
-                
+
                 # Prepare response data
                 serializer = self.get_serializer(cloned_conversation)
                 return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -131,7 +131,7 @@ class ConversationViewSet(viewsets.ModelViewSet):
             logger = logging.getLogger(__name__)
             logger.error(f"Error cloning conversation {conversation_id}: {str(e)}")
             return Response(
-                {"error": f"Failed to clone conversation: {str(e)}"}, 
+                {"error": f"Failed to clone conversation: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
@@ -153,3 +153,28 @@ class LLMViewSet(viewsets.ModelViewSet):
     serializer_class = LLMSerializer
     permission_classes = [IsAuthenticated]
     queryset = LLM.objects.all().order_by('name')
+
+    def get_queryset(self):
+        """
+        Filter LLM models based on user's model group.
+        If user has no model group assigned, return all models.
+        """
+        user = self.request.user
+
+        if not user.model_group:
+            return LLM.objects.all().order_by('name')
+        if not user.model_group.is_active:
+            return LLM.objects.all().order_by('name')
+
+        return user.model_group.allowed_models.all().order_by('name')
+
+    @action(detail=False, methods=['get'])
+    def all_models(self, request):
+        """
+        Return all LLM models without filtering by user's model group.
+        This is used for displaying model names in historical conversations.
+        """
+        queryset = LLM.objects.all().order_by('name')
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
+
