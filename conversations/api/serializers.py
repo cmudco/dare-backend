@@ -36,6 +36,8 @@ class ConversationSerializer(serializers.ModelSerializer):
             'prompt',
             'prompt_id',
             'sort_order',
+            'selected_embedding_ids',
+            'selected_file_ids',
         ]
         read_only_fields = ['conversation_id', 'created_at', 'user', 'prompt']
 
