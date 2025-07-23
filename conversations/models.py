@@ -105,6 +105,16 @@ class Conversation(BaseModel):
         default=0,
         help_text="Sort order for drag-and-drop functionality. Higher values appear later."
     )
+    selected_embedding_ids = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="List of selected embedding file IDs for this conversation."
+    )
+    selected_file_ids = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="List of selected file IDs for this conversation."
+    )
 
     active_objects = ActiveObjectsManager()
 
