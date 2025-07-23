@@ -9,8 +9,8 @@ class VectorDBChoice(models.IntegerChoices):
 
 class AuthSourceChoice(models.TextChoices):
     DARE = "DARE", _("DARE")
-    SOCRATIC_BOOKS = "SocraticBooks", _("SocraticBooks")
+    SOCRATIC_BOTS = "SocraticBots", _("SocraticBots")
 
 class ScopeChoice(models.TextChoices):
     DARE = "DARE", _("DARE Only")
-    DUAL = "DUAL", _("DARE + SocraticBooks")
+    DUAL = "DUAL", _("DARE + SocraticBots")

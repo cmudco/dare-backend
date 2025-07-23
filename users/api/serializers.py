@@ -31,7 +31,7 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
             "model_group",
             "auth_source",
             "is_dare_accessible",
-            "is_socratic_books_accessible"
+            "is_socratic_bots_accessible"
         ]
         read_only_fields = ["id", "auth_source"]
 
@@ -61,41 +61,49 @@ class CustomRegisterSerializer(RegisterSerializer):
     name = serializers.CharField(max_length=255, required=True)
     access_code = serializers.CharField(max_length=255, required=False, allow_blank=True)
 
-    def validate_access_code(self, access_code):
-        """
-        Validate access code based on platform:
-        - DARE: access_code is required
-        - SocraticBooks: access_code is optional
-        """
-        request = self.context.get('request')
-        platform = detect_platform_from_request(request) if request else AuthSourceChoice.DARE
+    validate_access_code_attrs = {
+        # Platform rules:
+        # - DARE: access_code is optional
+        # - SocraticBots: access_code is optional
+        AuthSourceChoice.DARE: {'access_code_required': False},
+        AuthSourceChoice.SOCRATIC_BOTS: {'access_code_required': False}
+    }
 
-        # If no access code provided
-        if not access_code:
-            if platform == AuthSourceChoice.DARE:
-                raise serializers.ValidationError(
-                    "Access code is required for DARE registration."
-                )
-            # For SocraticBooks, empty access code is allowed
-            return access_code
+    def validate(self, attrs):
+        """
+        Validate registration based on platform detection
+        """
+        # Get platform from request
+        platform = detect_platform_from_request(self.context['request'])
+        
+        access_code = attrs.get("access_code")
+        validation_rules = self.validate_access_code_attrs.get(platform, {})
+        
+        # For SocraticBots, empty access code is allowed
+        if platform == AuthSourceChoice.SOCRATIC_BOTS and not access_code:
+            return attrs
 
-        # If access_code is provided, validate it exists and is available
-        try:
-            code_group = AccessCodeGroup.objects.get(access_code=access_code)
-            if not code_group.is_available:
-                if not code_group.is_active:
-                    raise serializers.ValidationError(
-                        "This access code is no longer active."
-                    )
-                else:
-                    raise serializers.ValidationError(
-                        "This access code has reached its maximum usage limit."
-                    )
-            return access_code
-        except AccessCodeGroup.DoesNotExist:
-            raise serializers.ValidationError(
-                "Invalid access code. Please check your code and try again."
-            )
+        # If access code is provided, validate it exists and is active
+        if access_code:
+            try:
+                code_group = AccessCodeGroup.objects.get(access_code=access_code)
+                if not code_group.is_available:
+                    raise serializers.ValidationError({
+                        "access_code": "This access code has reached its usage limit or is no longer active."
+                    })
+                attrs['_code_group'] = code_group
+            except AccessCodeGroup.DoesNotExist:
+                raise serializers.ValidationError({
+                    "access_code": "Invalid access code. Please check the code and try again."
+                })
+        
+        # Check if access code is required for the platform
+        elif validation_rules.get('access_code_required', False):
+            raise serializers.ValidationError({
+                "access_code": f"Access code is required for {platform} registration."
+            })
+            
+        return attrs
 
     def validate_email(self, email):
         """
@@ -152,14 +160,14 @@ class CustomRegisterSerializer(RegisterSerializer):
         # Set platform accessibility based on auth_source and access code scope
         if platform == AuthSourceChoice.DARE:
             user.is_dare_accessible = True
-            # If access code has DUAL scope, also give SocraticBooks access
+            # If access code has DUAL scope, also give SocraticBots access
             if code_group and code_group.scope == ScopeChoice.DUAL:
-                user.is_socratic_books_accessible = True
+                user.is_socratic_bots_accessible = True
             else:
-                user.is_socratic_books_accessible = False
+                user.is_socratic_bots_accessible = False
                 
-        elif platform == AuthSourceChoice.SOCRATIC_BOOKS:
-            user.is_socratic_books_accessible = True
+        elif platform == AuthSourceChoice.SOCRATIC_BOTS:
+            user.is_socratic_bots_accessible = True
             # If access code has DUAL scope, also give DARE access
             if code_group and code_group.scope == ScopeChoice.DUAL:
                 user.is_dare_accessible = True
@@ -187,7 +195,7 @@ class CustomLoginSerializer(LoginSerializer):
                 if request:
                     platform = detect_platform_from_request(request)
                     if not get_platform_access_permission(user, platform):
-                        platform_name = "DARE" if platform == AuthSourceChoice.DARE else "SocraticBooks"
+                        platform_name = "DARE" if platform == AuthSourceChoice.DARE else "SocraticBots"
                         raise serializers.ValidationError(
                             f"You do not have access to the {platform_name} platform. Please contact the administrator for assistance."
                         )

@@ -4,9 +4,9 @@ Utility functions for platform detection and authentication.
 from urllib.parse import urlparse
 from config.env import (
     DARE_FRONTEND_URL,
-    SOCRATIC_BOOKS_FRONTEND_URL,
+    SOCRATIC_BOTS_FRONTEND_URL,
     DARE_BACKEND_URL,
-    SOCRATIC_BOOKS_BACKEND_URL
+    SOCRATIC_BOTS_BACKEND_URL
 )
 from users.constants import AuthSourceChoice
 
@@ -19,7 +19,7 @@ def detect_platform_from_request(request):
         request: Django request object
 
     Returns:
-        str: Either 'DARE' or 'SocraticBooks' based on the request origin
+        str: Either 'DARE' or 'SocraticBots' based on the request origin
     """
     # Check Origin header first
     origin = request.META.get('HTTP_ORIGIN', '')
@@ -38,9 +38,9 @@ def detect_platform_from_request(request):
                 if _url_matches(base_url, DARE_FRONTEND_URL) or _url_matches(base_url, DARE_BACKEND_URL):
                     return AuthSourceChoice.DARE
 
-                # Check against SocraticBooks URLs
-                elif _url_matches(base_url, SOCRATIC_BOOKS_FRONTEND_URL) or _url_matches(base_url, SOCRATIC_BOOKS_BACKEND_URL):
-                    return AuthSourceChoice.SOCRATIC_BOOKS
+                # Check against SocraticBots URLs
+                elif _url_matches(base_url, SOCRATIC_BOTS_FRONTEND_URL) or _url_matches(base_url, SOCRATIC_BOTS_BACKEND_URL):
+                    return AuthSourceChoice.SOCRATIC_BOTS
 
             except Exception:
                 # If URL parsing fails, continue to next header
@@ -53,23 +53,19 @@ def detect_platform_from_request(request):
 def _url_matches(url1, url2):
     """
     Helper function to compare URLs by normalizing them.
-
+    
     Args:
-        url1: First URL string
-        url2: Second URL string
-
+        url1: First URL to compare
+        url2: Second URL to compare
+        
     Returns:
         bool: True if URLs match after normalization
     """
-    try:
-        parsed1 = urlparse(url1)
-        parsed2 = urlparse(url2)
-
-        # Compare scheme and netloc (host:port)
-        return (parsed1.scheme == parsed2.scheme and
-                parsed1.netloc == parsed2.netloc)
-    except Exception:
+    if not url1 or not url2:
         return False
+    
+    # Remove trailing slashes and convert to lowercase for comparison
+    return url1.rstrip('/').lower() == url2.rstrip('/').lower()
 
 
 def get_platform_access_permission(user, platform):
@@ -78,32 +74,32 @@ def get_platform_access_permission(user, platform):
 
     Args:
         user: User instance
-        platform: Platform name (AuthSourceChoice.DARE or AuthSourceChoice.SOCRATIC_BOOKS)
+        platform: Platform name (AuthSourceChoice.DARE or AuthSourceChoice.SOCRATIC_BOTS)
 
     Returns:
         bool: True if user has access to the platform
     """
     if platform == AuthSourceChoice.DARE:
         return user.is_dare_accessible
-    elif platform == AuthSourceChoice.SOCRATIC_BOOKS:
-        return user.is_socratic_books_accessible
+    elif platform == AuthSourceChoice.SOCRATIC_BOTS:
+        return user.is_socratic_bots_accessible
 
     return False
 
 
-def get_callback_parameter(platform):
+def get_platform_frontend_url(platform):
     """
-    Get callback URL based on platform using frontend environment variables.
+    Get the frontend URL for a specific platform.
 
     Args:
-        platform: Platform name (AuthSourceChoice.DARE or AuthSourceChoice.SOCRATIC_BOOKS)
+        platform: Platform name (AuthSourceChoice.DARE or AuthSourceChoice.SOCRATIC_BOTS)
 
     Returns:
-        str: Full frontend URL for the platform
+        str: Frontend URL for the platform
     """
     if platform == AuthSourceChoice.DARE:
         return DARE_FRONTEND_URL
-    elif platform == AuthSourceChoice.SOCRATIC_BOOKS:
-        return SOCRATIC_BOOKS_FRONTEND_URL
+    elif platform == AuthSourceChoice.SOCRATIC_BOTS:
+        return SOCRATIC_BOTS_FRONTEND_URL
 
-    return DARE_FRONTEND_URL
+    return None

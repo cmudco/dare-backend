@@ -200,8 +200,10 @@ class ChunkingSettingsViewSet(viewsets.ModelViewSet):
 
 class AccessCodeCheckView(APIView):
     """
-    API endpoint to check if an access code exists and get its scope information.
-    Used by SocraticBooks backend for cross-platform validation.
+    Cross-platform user validation endpoint.
+    
+    Used by SocraticBots backend for cross-platform validation.
+    Checks if a user exists in DARE and can access both platforms.
     """
     permission_classes = [AllowAny]
     
