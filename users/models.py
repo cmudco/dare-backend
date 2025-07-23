@@ -130,10 +130,10 @@ class User(AbstractUser, IsDeletedMixin):
         verbose_name=_("DARE Access"),
         help_text=_("Whether this user can access DARE platform")
     )
-    is_socratic_books_accessible = models.BooleanField(
+    is_socratic_bots_accessible = models.BooleanField(
         default=False,
-        verbose_name=_("SocraticBooks Access"),
-        help_text=_("Whether this user can access SocraticBooks platform")
+        verbose_name=_("SocraticBots Access"),
+        help_text=_("Whether this user can access SocraticBots platform")
     )
 
     objects = UserManager()

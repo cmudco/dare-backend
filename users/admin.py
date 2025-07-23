@@ -32,7 +32,7 @@ class AccessCodeGroupAdmin(admin.ModelAdmin):
         }),
         (_('Platform Access'), {
             'fields': ('scope',),
-            'description': 'DUAL scope allows users to access both DARE and SocraticBooks platforms'
+            'description': 'DUAL scope allows users to access both DARE and SocraticBots platforms'
         }),
         (_('Usage Statistics'), {
             'fields': ('current_usage',),
@@ -80,7 +80,7 @@ class UserAdmin(DjangoUserAdmin):
         (_("Access Control"), {"fields": ("access_code_group", "model_group")}),
         (_("Vector Database Settings"), {"fields": ("vector_db",)}),
         (_("Platform Settings"), {
-            "fields": ("auth_source", "is_dare_accessible", "is_socratic_books_accessible")
+            "fields": ("auth_source", "is_dare_accessible", "is_socratic_bots_accessible")
         }),
         (_("Important dates"), {"fields": ("last_login", "date_joined")}),
     )
@@ -89,12 +89,12 @@ class UserAdmin(DjangoUserAdmin):
             None,
             {
                 "classes": ("wide",),
-                "fields": ("email", "password1", "password2", "vector_db", "auth_source", "is_dare_accessible", "is_socratic_books_accessible", "is_superuser", "is_staff", "is_active"),
+                "fields": ("email", "password1", "password2", "vector_db", "auth_source", "is_dare_accessible", "is_socratic_bots_accessible", "is_superuser", "is_staff", "is_active"),
             },
         ),
     )
-    list_display = ("email", "is_staff", "is_active", "is_superuser", "access_code_group", "model_group", "vector_db", "auth_source", "is_dare_accessible", "is_socratic_books_accessible")
-    list_filter = ("is_staff", "is_superuser", "is_active", "vector_db", "access_code_group", "model_group", "auth_source", "is_dare_accessible", "is_socratic_books_accessible")
+    list_display = ("email", "is_staff", "is_active", "is_superuser", "access_code_group", "model_group", "vector_db", "auth_source", "is_dare_accessible", "is_socratic_bots_accessible")
+    list_filter = ("is_staff", "is_superuser", "is_active", "vector_db", "access_code_group", "model_group", "auth_source", "is_dare_accessible", "is_socratic_bots_accessible")
     search_fields = ("email", "first_name", "last_name")
     ordering = ("email",)
 
