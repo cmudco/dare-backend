@@ -40,6 +40,14 @@ class Step(TimeStampMixin):
         blank=True,
         help_text="Files to be processed using embeddings/vector search."
     )
+    use_previous_step_files = models.BooleanField(
+        default=False,
+        help_text="If True, inherit files from the previous step in the workflow instead of using manually selected files."
+    )
+    use_previous_step_embeddings = models.BooleanField(
+        default=False,
+        help_text="If True, inherit embeddings from the previous step in the workflow instead of using manually selected embeddings."
+    )
     llm = models.ForeignKey(
         LLM,
         on_delete=models.SET_NULL,
@@ -72,6 +80,66 @@ class Step(TimeStampMixin):
 
     def __str__(self):
         return f"Step {self.order}: {self.prompt.title}"
+
+    def get_effective_files(self, workflow=None):
+        """
+        Get the effective files for this step, either from manual selection
+        or inherited from the previous step in the workflow.
+        """
+        if self.use_previous_step_files and workflow:
+            previous_step = self._get_previous_step_in_workflow(workflow)
+            if previous_step:
+                # Recursively get files from previous step (handles chaining)
+                return previous_step.get_effective_files(workflow)
+            else:
+                # No previous step found, return empty queryset
+                return self.files.none()
+        return self.files.all()
+
+    def get_effective_embeddings(self, workflow=None):
+        """
+        Get the effective embeddings for this step, either from manual selection
+        or inherited from the previous step in the workflow.
+        """
+        if self.use_previous_step_embeddings and workflow:
+            previous_step = self._get_previous_step_in_workflow(workflow)
+            if previous_step:
+                # Recursively get embeddings from previous step (handles chaining)
+                return previous_step.get_effective_embeddings(workflow)
+            else:
+                # No previous step found, return empty queryset
+                return self.embeddings.none()
+        return self.embeddings.all()
+
+    def _get_previous_step_in_workflow(self, workflow):
+        """
+        Get the previous step in the given workflow based on order.
+        """
+        if not workflow:
+            return None
+        
+        # Get all steps in the workflow ordered by their order field
+        workflow_steps = workflow.steps.all().order_by('order')
+        current_step_order = None
+        
+        # Find the current step's order in the workflow
+        for step in workflow_steps:
+            if step.id == self.id:
+                current_step_order = step.order
+                break
+        
+        if current_step_order is None:
+            return None
+        
+        # Find the step with the highest order that is less than current step's order
+        previous_step = None
+        for step in workflow_steps:
+            if step.order < current_step_order:
+                previous_step = step
+            else:
+                break  # Since steps are ordered, we can break here
+        
+        return previous_step
 
 
 class Workflow(BaseModel):
