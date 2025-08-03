@@ -10,6 +10,8 @@ class NotificationListSerializer(serializers.ModelSerializer):
     Serializer for listing notifications with essential fields
     """
     is_expired = serializers.ReadOnlyField()
+    effective_status = serializers.SerializerMethodField()
+    effective_read_at = serializers.SerializerMethodField()
 
     class Meta:
         model = Notification
@@ -20,13 +22,40 @@ class NotificationListSerializer(serializers.ModelSerializer):
             'delivery_type',
             'category',
             'status',
+            'effective_status',
             'action_type',
             'action_url',
             'is_banner_notification',
             'is_expired',
             'created_at',
             'read_at',
+            'effective_read_at',
         ]
+
+    def get_effective_status(self, obj):
+        """Get the effective status for the current user"""
+        request = self.context.get('request')
+        if request and request.user:
+            return obj.get_status_for_user(request.user)
+        return obj.status
+
+    def get_effective_read_at(self, obj):
+        """Get the effective read_at timestamp for the current user"""
+        request = self.context.get('request')
+        if request and request.user:
+            user = request.user
+            if obj.user and obj.user == user:
+                return obj.read_at
+            elif obj.user is None:
+                try:
+                    from notifications.models import UserNotificationReadStatus
+                    user_read_status = UserNotificationReadStatus.objects.get(
+                        user=user, notification=obj
+                    )
+                    return user_read_status.read_at
+                except UserNotificationReadStatus.DoesNotExist:
+                    return None
+        return obj.read_at
 
 
 class NotificationDetailSerializer(serializers.ModelSerializer):
@@ -36,6 +65,8 @@ class NotificationDetailSerializer(serializers.ModelSerializer):
     is_banner_notification = serializers.ReadOnlyField()
     is_expired = serializers.ReadOnlyField()
     user_email = serializers.EmailField(source='user.email', read_only=True)
+    effective_status = serializers.SerializerMethodField()
+    effective_read_at = serializers.SerializerMethodField()
 
     class Meta:
         model = Notification
@@ -47,6 +78,7 @@ class NotificationDetailSerializer(serializers.ModelSerializer):
             'delivery_type',
             'category',
             'status',
+            'effective_status',
             'action_type',
             'action_url',
             'expires_at',
@@ -55,7 +87,33 @@ class NotificationDetailSerializer(serializers.ModelSerializer):
             'created_at',
             'updated_at',
             'read_at',
+            'effective_read_at',
         ]
+
+    def get_effective_status(self, obj):
+        """Get the effective status for the current user"""
+        request = self.context.get('request')
+        if request and request.user:
+            return obj.get_status_for_user(request.user)
+        return obj.status
+
+    def get_effective_read_at(self, obj):
+        """Get the effective read_at timestamp for the current user"""
+        request = self.context.get('request')
+        if request and request.user:
+            user = request.user
+            if obj.user and obj.user == user:
+                return obj.read_at
+            elif obj.user is None:
+                try:
+                    from notifications.models import UserNotificationReadStatus
+                    user_read_status = UserNotificationReadStatus.objects.get(
+                        user=user, notification=obj
+                    )
+                    return user_read_status.read_at
+                except UserNotificationReadStatus.DoesNotExist:
+                    return None
+        return obj.read_at
 
 
 class NotificationCreateSerializer(serializers.ModelSerializer):
@@ -99,15 +157,20 @@ class NotificationUpdateSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         """
-        Update notification and set read_at timestamp if marking as read
+        Update notification using user-specific methods for proper global notification handling
         """
         new_status = validated_data.get('status')
-
-        if new_status == NotificationStatus.READ and instance.status != NotificationStatus.READ:
-            instance.read_at = timezone.now()
-        elif new_status == NotificationStatus.UNREAD:
-            instance.read_at = None
-
-        instance.status = new_status
-        instance.save(update_fields=['status', 'read_at'])
+        request = self.context.get('request')
+        
+        if request and request.user:
+            user = request.user
+            
+            if new_status == NotificationStatus.READ:
+                instance.mark_as_read_for_user(user)
+            elif new_status == NotificationStatus.UNREAD:
+                instance.mark_as_unread_for_user(user)
+            elif new_status == NotificationStatus.ARCHIVED:
+                instance.archive_for_user(user)
+        
+        # Return the instance (it will be re-serialized with current user context)
         return instance

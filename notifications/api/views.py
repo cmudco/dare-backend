@@ -1,4 +1,4 @@
-from django.db.models import Q
+from django.db.models import Q, Case, When, CharField, Value
 from django.utils import timezone
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
@@ -6,7 +6,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from common.pagination import CustomPageNumberPagination
-from notifications.models import Notification
+from notifications.models import Notification, UserNotificationReadStatus
+from notifications.constants import NotificationStatus
 from .serializers import (
     NotificationListSerializer,
     NotificationDetailSerializer,
@@ -26,15 +27,50 @@ class NotificationViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         """
         Return notifications for the current user plus system notifications
+        with user-specific read status for global notifications
         """
         user = self.request.user
+        
+        # Base queryset: user's own notifications + global notifications
         queryset = Notification.active_objects.filter(
             Q(user=user) | Q(user__isnull=True)
+        ).select_related('user').prefetch_related('user_read_statuses')
+        
+        # For filtering, we need to use a subquery approach since Case with joins can be unreliable
+        from django.db.models import OuterRef, Subquery
+        
+        # Subquery to get user's read status for global notifications
+        user_read_status_subquery = UserNotificationReadStatus.objects.filter(
+            user=user,
+            notification=OuterRef('pk')
+        ).values('status')[:1]
+        
+        # Annotate with effective status for this user
+        queryset = queryset.annotate(
+            effective_status=Case(
+                # For user-specific notifications, use the notification's status
+                When(user=user, then='status'),
+                # For global notifications, use user's read status if exists, otherwise notification's status
+                When(
+                    user__isnull=True,
+                    then=Case(
+                        When(
+                            id__in=UserNotificationReadStatus.objects.filter(user=user).values('notification_id'),
+                            then=Subquery(user_read_status_subquery)
+                        ),
+                        default='status',
+                        output_field=CharField()
+                    )
+                ),
+                default=Value('unread'),
+                output_field=CharField()
+            )
         )
 
+        # Apply status filter using effective status
         status_filter = self.request.query_params.get('status')
         if status_filter:
-            queryset = queryset.filter(status=status_filter)
+            queryset = queryset.filter(effective_status=status_filter)
 
         delivery_type_filter = self.request.query_params.get('delivery_type')
         if delivery_type_filter:
@@ -49,6 +85,11 @@ class NotificationViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(
                 Q(expires_at__isnull=True) | Q(expires_at__gt=timezone.now())
             )
+
+        # By default, exclude read notifications for all delivery types
+        # This can be overridden by explicitly setting status=read in query params
+        if not status_filter:
+            queryset = queryset.exclude(effective_status=NotificationStatus.READ)
 
         return queryset.order_by('-created_at')
 
@@ -77,36 +118,69 @@ class NotificationViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'], url_path='stats')
     def get_stats(self, request):
         """
-        Get notification statistics for the current user
+        Get notification statistics for the current user with user-specific read status
         """
         user = request.user
 
+        # Get all notifications visible to user with effective status
         user_notifications = Notification.active_objects.filter(
             Q(user=user) | Q(user__isnull=True)
-        )
+        ).select_related('user').prefetch_related('user_read_statuses')
 
         active_notifications = user_notifications.filter(
             Q(expires_at__isnull=True) | Q(expires_at__gt=timezone.now())
         )
 
-        stats = {
-            'total_notifications': active_notifications.count(),
-            'unread_notifications': active_notifications.filter(status='unread', delivery_type='panel').count(),
-            'read_notifications': active_notifications.filter(status='read').count(),
-            'archived_notifications': active_notifications.filter(status='archived').count(),
-            'system_notifications': active_notifications.filter(user__isnull=True).count(),
-            'user_notifications': active_notifications.filter(user=user).count(),
-        }
+        # Calculate stats considering user-specific read status
+        total_count = 0
+        unread_count = 0
+        read_count = 0
+        archived_count = 0
+        system_count = 0
+        user_count = 0
 
         delivery_type_counts = {}
-        for delivery_type in active_notifications.values_list('delivery_type', flat=True).distinct():
-            delivery_type_counts[delivery_type] = active_notifications.filter(delivery_type=delivery_type).count()
-        stats['notifications_by_delivery_type'] = delivery_type_counts
-
         category_counts = {}
-        for category in active_notifications.values_list('category', flat=True).distinct():
-            category_counts[category] = active_notifications.filter(category=category).count()
-        stats['notifications_by_category'] = category_counts
+
+        for notification in active_notifications:
+            total_count += 1
+            
+            # Get effective status for this user
+            effective_status = notification.get_status_for_user(user)
+            
+            if effective_status == NotificationStatus.UNREAD:
+                unread_count += 1
+                if notification.delivery_type != 'panel':
+                    unread_count -= 1  # Only count panel notifications in unread count
+            elif effective_status == NotificationStatus.READ:
+                read_count += 1
+            elif effective_status == NotificationStatus.ARCHIVED:
+                archived_count += 1
+            
+            # Count system vs user notifications
+            if notification.user is None:
+                system_count += 1
+            elif notification.user == user:
+                user_count += 1
+            
+            # Count by delivery type
+            delivery_type = notification.delivery_type
+            delivery_type_counts[delivery_type] = delivery_type_counts.get(delivery_type, 0) + 1
+            
+            # Count by category
+            category = notification.category
+            category_counts[category] = category_counts.get(category, 0) + 1
+
+        stats = {
+            'total_notifications': total_count,
+            'unread_notifications': unread_count,
+            'read_notifications': read_count,
+            'archived_notifications': archived_count,
+            'system_notifications': system_count,
+            'user_notifications': user_count,
+            'notifications_by_delivery_type': delivery_type_counts,
+            'notifications_by_category': category_counts,
+        }
 
         return Response(stats)
 
@@ -116,15 +190,18 @@ class NotificationViewSet(viewsets.ModelViewSet):
         Mark all unread notifications as read for the current user
         """
         user = request.user
+        updated_count = 0
 
-        updated_count = Notification.active_objects.filter(
-            Q(user=user) | Q(user__isnull=True),
-            status='unread'
-        ).update(
-            status='read',
-            read_at=timezone.now(),
-            updated_at=timezone.now()
-        )
+        # Get all notifications visible to this user
+        notifications = Notification.active_objects.filter(
+            Q(user=user) | Q(user__isnull=True)
+        ).select_related('user').prefetch_related('user_read_statuses')
+
+        for notification in notifications:
+            effective_status = notification.get_status_for_user(user)
+            if effective_status == NotificationStatus.UNREAD:
+                notification.mark_as_read_for_user(user)
+                updated_count += 1
 
         return Response({
             'message': f'Marked {updated_count} notifications as read',
@@ -145,4 +222,76 @@ class NotificationViewSet(viewsets.ModelViewSet):
         return Response({
             'message': f'Cleared {updated_count} notifications',
             'cleared_count': updated_count
+        })
+
+    @action(detail=True, methods=['post'], url_path='mark-read')
+    def mark_notification_as_read(self, request, pk=None):
+        """
+        Mark a specific notification as read for the current user
+        """
+        user = request.user
+        notification = self.get_object()
+        
+        # Check if user can access this notification
+        if notification.user and notification.user != user:
+            return Response(
+                {'error': 'You do not have permission to access this notification'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        notification.mark_as_read_for_user(user)
+        
+        # Return updated notification data
+        serializer = self.get_serializer(notification)
+        return Response({
+            'message': 'Notification marked as read',
+            'notification': serializer.data
+        })
+
+    @action(detail=True, methods=['post'], url_path='mark-unread')
+    def mark_notification_as_unread(self, request, pk=None):
+        """
+        Mark a specific notification as unread for the current user
+        """
+        user = request.user
+        notification = self.get_object()
+        
+        # Check if user can access this notification
+        if notification.user and notification.user != user:
+            return Response(
+                {'error': 'You do not have permission to access this notification'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        notification.mark_as_unread_for_user(user)
+        
+        # Return updated notification data
+        serializer = self.get_serializer(notification)
+        return Response({
+            'message': 'Notification marked as unread',
+            'notification': serializer.data
+        })
+
+    @action(detail=True, methods=['post'], url_path='archive')
+    def archive_notification(self, request, pk=None):
+        """
+        Archive a specific notification for the current user
+        """
+        user = request.user
+        notification = self.get_object()
+        
+        # Check if user can access this notification
+        if notification.user and notification.user != user:
+            return Response(
+                {'error': 'You do not have permission to access this notification'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        notification.archive_for_user(user)
+        
+        # Return updated notification data
+        serializer = self.get_serializer(notification)
+        return Response({
+            'message': 'Notification archived',
+            'notification': serializer.data
         })

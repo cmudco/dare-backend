@@ -1,6 +1,7 @@
 from django.db import models
 from django.conf import settings
 from django.utils.translation import gettext_lazy as _
+from django.utils import timezone
 
 from common.models import BaseModel
 from common.managers import ActiveObjectsManager
@@ -124,3 +125,127 @@ class Notification(BaseModel):
         """Archive the notification"""
         self.status = NotificationStatus.ARCHIVED
         self.save(update_fields=['status'])
+
+    def get_status_for_user(self, user):
+        """Get the effective status of this notification for a specific user"""
+        if self.user and self.user == user:
+            # User-specific notification - use the notification's own status
+            return self.status
+        elif self.user is None:
+            # Global notification - check user's read status
+            try:
+                user_read_status = UserNotificationReadStatus.objects.get(
+                    user=user, notification=self
+                )
+                return user_read_status.status
+            except UserNotificationReadStatus.DoesNotExist:
+                # User hasn't interacted with this notification yet
+                return self.status
+        else:
+            # Notification belongs to another user
+            return None
+
+    def mark_as_read_for_user(self, user):
+        """Mark notification as read for a specific user"""
+        if self.user and self.user == user:
+            # User-specific notification - update the notification directly
+            self.mark_as_read()
+        elif self.user is None:
+            # Global notification - create/update user read status
+            user_read_status, created = UserNotificationReadStatus.objects.get_or_create(
+                user=user,
+                notification=self,
+                defaults={
+                    'status': NotificationStatus.READ,
+                    'read_at': timezone.now()
+                }
+            )
+            if not created and user_read_status.status != NotificationStatus.READ:
+                user_read_status.status = NotificationStatus.READ
+                user_read_status.read_at = timezone.now()
+                user_read_status.save(update_fields=['status', 'read_at'])
+
+    def mark_as_unread_for_user(self, user):
+        """Mark notification as unread for a specific user"""
+        if self.user and self.user == user:
+            # User-specific notification - update the notification directly
+            self.mark_as_unread()
+        elif self.user is None:
+            # Global notification - create/update user read status
+            user_read_status, created = UserNotificationReadStatus.objects.get_or_create(
+                user=user,
+                notification=self,
+                defaults={
+                    'status': NotificationStatus.UNREAD,
+                    'read_at': None
+                }
+            )
+            if not created:
+                user_read_status.status = NotificationStatus.UNREAD
+                user_read_status.read_at = None
+                user_read_status.save(update_fields=['status', 'read_at'])
+
+    def archive_for_user(self, user):
+        """Archive notification for a specific user"""
+        if self.user and self.user == user:
+            # User-specific notification - update the notification directly
+            self.archive()
+        elif self.user is None:
+            # Global notification - create/update user read status
+            user_read_status, created = UserNotificationReadStatus.objects.get_or_create(
+                user=user,
+                notification=self,
+                defaults={'status': NotificationStatus.ARCHIVED}
+            )
+            if not created:
+                user_read_status.status = NotificationStatus.ARCHIVED
+                user_read_status.save(update_fields=['status'])
+
+
+class UserNotificationReadStatus(BaseModel):
+    """
+    Track user-specific read status for global notifications.
+    This allows global notifications to have different read states per user.
+    """
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='notification_read_statuses',
+        help_text=_("User who has this read status")
+    )
+    
+    notification = models.ForeignKey(
+        Notification,
+        on_delete=models.CASCADE,
+        related_name='user_read_statuses',
+        help_text=_("Notification this read status applies to")
+    )
+    
+    status = models.CharField(
+        max_length=10,
+        choices=NotificationStatus.choices,
+        default=NotificationStatus.READ,
+        help_text=_("User's status for this notification")
+    )
+    
+    read_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text=_("When the user marked this notification as read")
+    )
+
+    objects = models.Manager()
+    active_objects = ActiveObjectsManager()
+
+    class Meta:
+        verbose_name = _("User Notification Read Status")
+        verbose_name_plural = _("User Notification Read Statuses")
+        unique_together = ('user', 'notification')
+        indexes = [
+            models.Index(fields=['user', 'status']),
+            models.Index(fields=['notification', 'status']),
+            models.Index(fields=['created_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.user.email} - {self.notification.title} ({self.get_status_display()})"
