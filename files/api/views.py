@@ -8,9 +8,12 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.views import APIView
+from django.http import Http404
 
 from core.services.document_processor import DocumentProcessor
 from core.services.file_upload_service import FileUploadService
+from core.services.file_processor import FileProcessor
 from common.permissions import IsOwner
 from ..tasks import process_file_embeddings
 from ..models import File, Tag, Folder
@@ -159,6 +162,84 @@ class FileViewSet(viewsets.ModelViewSet):
             response_data["failed_files"] = failed_files
 
         return Response(response_data, status=status.HTTP_200_OK)
+
+
+class FileViewAPIView(APIView):
+    permission_classes = [IsAuthenticated, IsOwner]
+    
+    def get(self, request, file_id):
+        """
+        Serve the actual file for viewing with proper content type headers.
+        """
+        from django.http import FileResponse
+        import mimetypes
+        import os
+        
+        logger.info(f"File view request - User: {request.user}, File ID: {file_id}")
+        
+        try:
+            # Get the file object with proper ownership check
+            file_obj = File.active_objects.get(id=file_id, user=request.user)
+            
+            # Ensure file is processed successfully
+            if file_obj.status != FileStatus.PROCESSED:
+                return Response(
+                    {"error": "File is not ready for viewing"}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Get the actual file path
+            file_path = file_obj.file.path
+            
+            if not os.path.exists(file_path):
+                return Response(
+                    {"error": "File not found on disk"}, 
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # Determine content type
+            content_type, _ = mimetypes.guess_type(file_path)
+            if not content_type:
+                ext = os.path.splitext(file_path)[1].lower()
+                if ext == '.pdf':
+                    content_type = 'application/pdf'
+                elif ext in ['.txt', '.md']:
+                    content_type = 'text/plain'
+                elif ext in ['.docx', '.doc']:
+                    content_type = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+                else:
+                    content_type = 'application/octet-stream'
+            
+            # Create file response
+            response = FileResponse(
+                open(file_path, 'rb'),
+                content_type=content_type,
+                as_attachment=False
+            )
+            
+            # Set CORS headers
+            response['Access-Control-Allow-Origin'] = '*'
+            response['Access-Control-Allow-Methods'] = 'GET'
+            response['Access-Control-Allow-Headers'] = 'Authorization, Content-Type'
+            
+            # Set filename
+            filename = file_obj.name or os.path.basename(file_path)
+            response['Content-Disposition'] = f'inline; filename="{filename}"'
+            
+            return response
+            
+        except File.DoesNotExist:
+            return Response(
+                {"error": "File not found"}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            logger.error(f"Error in FileViewAPIView: {str(e)}")
+            return Response(
+                {"error": f"Error accessing file: {str(e)}"}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
 
 class TagViewSet(viewsets.ModelViewSet):
     serializer_class = TagSerializer

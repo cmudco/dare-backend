@@ -48,10 +48,12 @@ async def execute_step_async(step: 'Step', previous_response: Optional[str] = No
         file_ids = None
         embedding_ids = None
 
-        step_files = await database_sync_to_async(lambda s: list(s.files.values_list('id', flat=True)))(step)
-
-        step_embeddings = await database_sync_to_async(lambda s: list(s.embeddings.values_list('id', flat=True)))(step)
-
+        workflow = None
+        if workflow_run_step_obj:
+            workflow = await database_sync_to_async(lambda wr: wr.workflow_run.workflow)(workflow_run_step_obj)
+        
+        step_files = await database_sync_to_async(lambda s: list(s.get_effective_files(workflow).values_list('id', flat=True)))(step)
+        step_embeddings = await database_sync_to_async(lambda s: list(s.get_effective_embeddings(workflow).values_list('id', flat=True)))(step)        
 
         if step_files:
             file_ids = step_files
@@ -144,7 +146,7 @@ def execute_workflow_run(workflow_run_id):
                 step_run.save()
 
                 try:
-                    response = execute_step(step_run.step, previous_response)
+                    response = execute_step(step_run.step, previous_response, step_run)
                     step_run.response = response
                     step_run.status = WorkflowRunStepStatus.COMPLETED
                     previous_response = response

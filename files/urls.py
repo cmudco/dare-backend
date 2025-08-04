@@ -1,9 +1,9 @@
 from django.urls import path, include
 from files.constants import APP_NAME
-from .api.urls import router
+from . import api
 
 app_name = APP_NAME
 
 urlpatterns = [
-    path("api/", include((router.urls, app_name), namespace="api"))
+    path("api/", include("files.api.urls"))
 ]

@@ -30,6 +30,7 @@ requests~=2.32.3
 
 # PDF
 PyPDF2~=3.0.1
+weasyprint~=62.3
 
 # Pinecone
 pinecone~=6.0.1

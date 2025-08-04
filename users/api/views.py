@@ -2,11 +2,12 @@ from django.db.models import Sum
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, viewsets
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.permissions import AllowAny
 from django.contrib.auth import get_user_model
 from django_rq import enqueue
+from django.utils import timezone
 
 from conversations.constants import SenderType
 from conversations.models import Conversation, Message
@@ -198,24 +199,48 @@ class ChunkingSettingsViewSet(viewsets.ModelViewSet):
             )
 
 
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def token_health_check(request):
+    """
+    Health check endpoint to verify JWT token validity.
+
+    Returns user info if token is valid, 401 if expired/invalid.
+    Used by frontend to periodically check token status.
+    """
+    try:
+        user = request.user
+        return Response({
+            'status': 'valid',
+            'user_id': user.id,
+            'username': user.username if hasattr(user, 'username') else user.email,
+            'is_active': user.is_active,
+            'timestamp': timezone.now().isoformat()
+        }, status=status.HTTP_200_OK)
+    except Exception:
+        return Response({
+            'status': 'invalid',
+            'detail': 'Token validation failed'
+        }, status=status.HTTP_401_UNAUTHORIZED)
+
 class AccessCodeCheckView(APIView):
     """
     Cross-platform user validation endpoint.
-    
+
     Used by SocraticBots backend for cross-platform validation.
     Checks if a user exists in DARE and can access both platforms.
     """
     permission_classes = [AllowAny]
-    
+
     def post(self, request, *args, **kwargs):
         """
         Check if access code exists in DARE backend
-        
+
         Expected input:
         {
             "access_code": "ABC123"
         }
-        
+
         Returns:
         {
             "exists": true/false,
@@ -225,7 +250,7 @@ class AccessCodeCheckView(APIView):
         }
         """
         access_code = request.data.get('access_code')
-        
+
         if not access_code:
             return Response(
                 {
@@ -236,34 +261,34 @@ class AccessCodeCheckView(APIView):
                 },
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+
         try:
             code_group = AccessCodeGroup.objects.get(access_code=access_code)
-            
+
             # Check if code is available
             if not code_group.is_available:
                 if not code_group.is_active:
                     message = "Access code exists but is inactive"
                 else:
                     message = "Access code exists but has reached maximum capacity"
-                
+
                 return Response({
                     "exists": True,
                     "scope": code_group.scope,
                     "available_slots": 0,
                     "message": message
                 })
-            
+
             # Code exists and is available
             available_slots = code_group.max_capacity - code_group.current_usage
-            
+
             return Response({
                 "exists": True,
                 "scope": code_group.scope,
                 "available_slots": available_slots,
                 "message": f"Access code is available with {code_group.get_scope_display()} scope"
             })
-            
+
         except AccessCodeGroup.DoesNotExist:
             return Response({
                 "exists": False,
