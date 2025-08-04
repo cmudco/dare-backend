@@ -20,6 +20,7 @@ app_paths = [
     path("", include("prompts.urls", namespace="prompts")),
     path("", include("workflows.urls", namespace="workflows")),
     path("", include("billing.urls", namespace="billing")),
+    path("", include("notifications.urls", namespace="notifications")),
 
 ]
 

@@ -65,6 +65,8 @@ class StepSerializer(serializers.ModelSerializer):
         required=False,
         allow_empty=True
     )
+    use_previous_step_files = serializers.BooleanField(required=False)
+    use_previous_step_embeddings = serializers.BooleanField(required=False)
     llm = serializers.PrimaryKeyRelatedField(
         queryset=LLM.objects.all(),
         required=False,
@@ -86,7 +88,8 @@ class StepSerializer(serializers.ModelSerializer):
     class Meta:
         model = Step
         fields = [
-            'id', 'prompt', 'files', 'embeddings', 'llm', 'order', 'created_at', 'user',
+            'id', 'prompt', 'files', 'embeddings', 'use_previous_step_files', 
+            'use_previous_step_embeddings', 'llm', 'order', 'created_at', 'user',
             'max_tokens', 'temperature', 'max_context_snippets',
             'document_similarity_threshold'
         ]
@@ -120,6 +123,8 @@ class WorkflowSerializer(serializers.ModelSerializer):
                 prompt=step_data['prompt'],
                 llm=step_data.get('llm'),
                 order=step_data['order'],
+                use_previous_step_files=step_data.get('use_previous_step_files', False),
+                use_previous_step_embeddings=step_data.get('use_previous_step_embeddings', False),
                 max_tokens=step_data.get('max_tokens', Step._meta.get_field('max_tokens').default),
                 temperature=step_data.get('temperature', Step._meta.get_field('temperature').default),
                 max_context_snippets=step_data.get('max_context_snippets', Step._meta.get_field('max_context_snippets').default),
@@ -155,6 +160,8 @@ class WorkflowSerializer(serializers.ModelSerializer):
                 step.prompt = step_data['prompt']
                 step.llm = step_data.get('llm')
                 step.order = step_data['order']
+                step.use_previous_step_files = step_data.get('use_previous_step_files', False)
+                step.use_previous_step_embeddings = step_data.get('use_previous_step_embeddings', False)
                 step.max_tokens = step_data.get('max_tokens', Step._meta.get_field('max_tokens').default)
                 step.temperature = step_data.get('temperature', Step._meta.get_field('temperature').default)
                 step.max_context_snippets = step_data.get('max_context_snippets', Step._meta.get_field('max_context_snippets').default)
@@ -168,6 +175,8 @@ class WorkflowSerializer(serializers.ModelSerializer):
                     prompt=step_data['prompt'],
                     llm=step_data.get('llm'),
                     order=step_data['order'],
+                    use_previous_step_files=step_data.get('use_previous_step_files', False),
+                    use_previous_step_embeddings=step_data.get('use_previous_step_embeddings', False),
                     max_tokens=step_data.get('max_tokens', Step._meta.get_field('max_tokens').default),
                     temperature=step_data.get('temperature', Step._meta.get_field('temperature').default),
                     max_context_snippets=step_data.get('max_context_snippets', Step._meta.get_field('max_context_snippets').default),
