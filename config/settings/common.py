@@ -158,7 +158,7 @@ ACCOUNT_ADAPTER = "users.adapter.AccountAdapter"
 
 SIMPLE_JWT = {
         "ACCESS_TOKEN_LIFETIME": timedelta(
-        minutes=20
+        hours=12
     ),  # TODO: Change to 1 hour or few mins when refresh logic is implemented
     "REFRESH_TOKEN_LIFETIME": timedelta(days=1),  # TODO: Change to 1 day
     "ROTATE_REFRESH_TOKENS": False,
