@@ -2,9 +2,16 @@ from rest_framework import viewsets, generics, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
+from django.http import HttpResponse
+from django.template.loader import render_to_string
+from django.utils import timezone
 from django.db import transaction
 from conversations.models import Message, Conversation, LLM, Snippet
 from .serializers import MessageSerializer, ConversationSerializer, LLMSerializer
+import weasyprint
+import tempfile
+import os
+import markdown
 
 
 
@@ -132,6 +139,69 @@ class ConversationViewSet(viewsets.ModelViewSet):
             logger.error(f"Error cloning conversation {conversation_id}: {str(e)}")
             return Response(
                 {"error": f"Failed to clone conversation: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=True, methods=['get'], url_path='export-pdf')
+    def export_pdf(self, request, conversation_id=None):
+        """Export conversation history as a PDF."""
+        try:
+            conversation = self.get_object()
+            
+            # Get all messages in the conversation, ordered by creation date
+            messages = conversation.messages.filter(is_active=True, is_deleted=False).order_by('created_at')
+            
+            # Convert markdown to HTML for each message
+            processed_messages = []
+            for message in messages:
+                processed_message = message
+                # Convert markdown to HTML if the message contains markdown
+                if message.message:
+                    processed_message.message = markdown.markdown(
+                        message.message, 
+                        extensions=['markdown.extensions.fenced_code', 'markdown.extensions.tables', 'markdown.extensions.nl2br']
+                    )
+                processed_messages.append(processed_message)
+            
+            # Prepare context for template
+            context = {
+                'conversation': conversation,
+                'messages': processed_messages,
+                'generated_at': timezone.now(),
+                'user': conversation.user,
+            }
+            
+            # Render HTML template
+            html_content = render_to_string('conversations/conversation_export.html', context)
+            
+            # Generate PDF
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
+                weasyprint.HTML(string=html_content, base_url=request.build_absolute_uri('/')).write_pdf(tmp_file.name)
+                
+                # Read PDF content
+                with open(tmp_file.name, 'rb') as pdf_file:
+                    pdf_content = pdf_file.read()
+                
+                # Clean up temporary file
+                os.unlink(tmp_file.name)
+            
+            # Generate filename
+            safe_title = "".join(c for c in (conversation.title or "Conversation") if c.isalnum() or c in (' ', '-', '_')).rstrip()
+            filename = f"{safe_title}_{conversation.conversation_id}.pdf"
+            
+            # Create HTTP response
+            response = HttpResponse(pdf_content, content_type='application/pdf')
+            response['Content-Disposition'] = f'attachment; filename="{filename}"'
+            response['Content-Length'] = len(pdf_content)
+            
+            return response
+            
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error exporting conversation {conversation_id} to PDF: {str(e)}")
+            return Response(
+                {"error": f"Failed to export conversation: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
