@@ -7,129 +7,118 @@
     <style>
         @page {
             size: A4;
-            margin: 0.75in;
+            margin: 0.5in;
             @bottom-center {
                 content: "Page " counter(page);
-                font-size: 9px;
+                font-size: 10px;
                 color: #666;
             }
         }
         
         body {
-            font-family: Arial, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
             line-height: 1.6;
             color: #333;
             margin: 0;
             padding: 0;
-            font-size: 12px;
+            font-size: 14px;
         }
         
         .header {
-            text-align: center;
-            padding-bottom: 20px;
-            margin-bottom: 30px;
+            margin-bottom: 20px;
             border-bottom: 2px solid #ddd;
+            padding-bottom: 15px;
         }
         
         .header h1 {
             color: #333;
-            margin: 0 0 10px 0;
-            font-size: 20px;
-            font-weight: bold;
+            margin: 0 0 5px 0;
+            font-size: 24px;
+            font-weight: 600;
         }
         
         .header .subtitle {
             color: #666;
             font-size: 14px;
-            margin: 5px 0;
+            margin: 0;
         }
         
         .summary {
-            background: #f5f5f5;
-            border: 1px solid #ddd;
+            background: #f8f9fa;
+            border-left: 4px solid #007bff;
             padding: 15px;
-            margin-bottom: 25px;
-        }
-        
-        .summary-grid {
-            display: table;
-            width: 100%;
-            table-layout: fixed;
+            margin-bottom: 20px;
+            display: flex;
+            gap: 30px;
+            align-items: center;
         }
         
         .summary-item {
-            display: table-cell;
             text-align: center;
-            vertical-align: top;
-            width: 33.33%;
         }
         
         .summary-label {
             display: block;
-            font-size: 10px;
+            font-size: 11px;
             color: #666;
             text-transform: uppercase;
-            font-weight: bold;
+            font-weight: 600;
             margin-bottom: 5px;
         }
         
         .summary-value {
-            font-size: 14px;
-            font-weight: bold;
+            font-size: 16px;
+            font-weight: 600;
             color: #333;
         }
         
         .status-badge {
             display: inline-block;
-            padding: 2px 8px;
-            font-size: 10px;
-            font-weight: bold;
+            padding: 4px 12px;
+            font-size: 11px;
+            font-weight: 600;
             text-transform: uppercase;
-            border: 1px solid #ddd;
+            border-radius: 12px;
+            border: none;
         }
         
-        .status-completed { background: #e8f5e8; color: #2d5a2d; }
-        .status-failed { background: #f5e8e8; color: #5a2d2d; }
-        .status-running { background: #e8f0f5; color: #2d405a; }
-        .status-pending { background: #f5f0e8; color: #5a4a2d; }
+        .status-completed { background: #d4edda; color: #155724; }
+        .status-failed { background: #f8d7da; color: #721c24; }
+        .status-running { background: #d1ecf1; color: #0c5460; }
+        .status-pending { background: #fff3cd; color: #856404; }
         
         .steps-section {
-            margin-top: 25px;
+            margin-top: 20px;
         }
         
         .section-title {
-            font-size: 16px;
-            font-weight: bold;
+            font-size: 18px;
+            font-weight: 600;
             color: #333;
             margin: 0 0 15px 0;
             border-bottom: 1px solid #ddd;
-            padding-bottom: 5px;
+            padding-bottom: 8px;
         }
         
         .step {
-            margin-bottom: 20px;
-            page-break-inside: avoid;
-            border: 1px solid #ddd;
+            margin-bottom: 25px;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            overflow: hidden;
         }
         
         .step-header {
-            background: #f9f9f9;
-            border-bottom: 1px solid #ddd;
-            padding: 10px;
+            background: #f8f9fa;
+            padding: 12px 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
         }
         
         .step-title {
-            font-weight: bold;
+            font-weight: 600;
             color: #333;
-            font-size: 13px;
-            display: inline-block;
-            width: 70%;
-        }
-        
-        .step-status {
-            float: right;
-            width: 25%;
-            text-align: right;
+            font-size: 14px;
         }
         
         .step-content {
@@ -141,121 +130,139 @@
         }
         
         .content-label {
-            font-weight: bold;
-            color: #333;
-            font-size: 11px;
-            text-transform: uppercase;
-            margin-bottom: 5px;
+            font-weight: 600;
+            color: #495057;
+            font-size: 12px;
+            margin-bottom: 8px;
             display: block;
         }
         
         .content-text {
-            background: #f9f9f9;
-            border: 1px solid #ddd;
-            padding: 10px;
-            line-height: 1.5;
-            white-space: pre-wrap;
-            word-wrap: break-word;
-            font-size: 12px;
+            background: #ffffff;
+            border: 1px solid #e9ecef;
+            border-radius: 4px;
+            padding: 12px;
+            line-height: 1.6;
+            font-size: 13px;
             color: #333;
         }
         
+        /* Markdown support */
+        .content-text h1, .content-text h2, .content-text h3, 
+        .content-text h4, .content-text h5, .content-text h6 {
+            margin: 1em 0 0.5em 0;
+            font-weight: 600;
+            line-height: 1.3;
+        }
+        
+        .content-text h1 { font-size: 1.5em; }
+        .content-text h2 { font-size: 1.3em; }
+        .content-text h3 { font-size: 1.1em; }
+        
+        .content-text p {
+            margin: 0.8em 0;
+        }
+        
+        .content-text ul, .content-text ol {
+            margin: 0.8em 0;
+            padding-left: 2em;
+        }
+        
+        .content-text li {
+            margin: 0.3em 0;
+        }
+        
+        .content-text strong, .content-text b {
+            font-weight: 600;
+        }
+        
+        .content-text em, .content-text i {
+            font-style: italic;
+        }
+        
+        .content-text code {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 3px;
+            padding: 0.2em 0.4em;
+            font-family: 'Monaco', 'Consolas', monospace;
+            font-size: 0.9em;
+        }
+        
+        .content-text pre {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 4px;
+            padding: 12px;
+            overflow-x: auto;
+            margin: 1em 0;
+        }
+        
+        .content-text pre code {
+            background: none;
+            border: none;
+            padding: 0;
+        }
+        
+        .content-text blockquote {
+            border-left: 4px solid #ddd;
+            margin: 1em 0;
+            padding-left: 1em;
+            color: #666;
+            font-style: italic;
+        }
+        
         .error-text {
-            background: #ffe6e6;
-            border-color: #ffcccc;
-            color: #cc0000;
+            background: #f8d7da;
+            border-color: #f5c6cb;
+            color: #721c24;
         }
         
-        .metadata-row {
-            border: 1px solid #ddd;
+        .metadata {
+            background: #f8f9fa;
+            border-radius: 4px;
+            padding: 12px;
             margin-bottom: 15px;
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
         }
         
-        .metadata-table {
-            width: 100%;
-            border-collapse: collapse;
-        }
-        
-        .metadata-table td {
-            padding: 8px;
-            text-align: center;
-            border-right: 1px solid #ddd;
-            font-size: 11px;
-        }
-        
-        .metadata-table td:last-child {
-            border-right: none;
+        .metadata-item {
+            flex: 1;
+            min-width: 120px;
         }
         
         .metadata-label {
             display: block;
             color: #666;
-            font-weight: bold;
+            font-weight: 600;
+            font-size: 11px;
+            text-transform: uppercase;
             margin-bottom: 3px;
         }
         
         .metadata-value {
             color: #333;
-            font-weight: bold;
-        }
-        
-        .snippets {
-            margin-top: 15px;
-        }
-        
-        .snippet {
-            background: #fffef0;
-            border: 1px solid #e6e6cc;
-            margin-bottom: 10px;
-        }
-        
-        .snippet-meta {
-            background: #f5f5e6;
-            padding: 8px;
-            font-size: 10px;
-            color: #666;
-            font-weight: bold;
-            border-bottom: 1px solid #e6e6cc;
-        }
-        
-        .snippet-text {
-            padding: 10px;
-            font-size: 11px;
-            line-height: 1.4;
-            color: #333;
-        }
-        
-        .footer {
-            margin-top: 30px;
-            text-align: center;
-            color: #666;
-            font-size: 10px;
-            border-top: 1px solid #ddd;
-            padding-top: 15px;
+            font-weight: 500;
+            font-size: 12px;
         }
         
         .no-data {
             text-align: center;
-            color: #666;
+            color: #6c757d;
             font-style: italic;
-            padding: 30px 15px;
-            background: #f9f9f9;
+            padding: 40px 20px;
+            background: #f8f9fa;
+            border-radius: 8px;
         }
         
-        /* Ensure text is selectable and flows properly */
+        /* Ensure text is selectable */
         * {
             user-select: text;
             -webkit-user-select: text;
             -moz-user-select: text;
             -ms-user-select: text;
-        }
-        
-        /* Remove any potential selection barriers */
-        .content-text, .snippet-text {
-            position: static;
-            overflow: visible;
-            white-space: pre-wrap;
-            word-wrap: break-word;
         }
         
         /* Print optimizations */
@@ -264,9 +271,19 @@
                 print-color-adjust: exact; 
                 -webkit-print-color-adjust: exact; 
             }
-            .step { 
+            .step-header { 
                 page-break-inside: avoid; 
-                break-inside: avoid; 
+                break-inside: avoid;
+                page-break-after: avoid;
+                break-after: avoid;
+            }
+            .step-content {
+                orphans: 3;
+                widows: 3;
+            }
+            .metadata {
+                page-break-inside: avoid;
+                break-inside: avoid;
             }
         }
     </style>
@@ -274,125 +291,90 @@
 <body>
     <div class="header">
         <h1>{{ workflow.title }}</h1>
-        <div class="subtitle">Workflow Execution Results</div>
+        <div class="subtitle">Workflow Results</div>
         {% if workflow.description %}
         <div class="subtitle">{{ workflow.description }}</div>
         {% endif %}
     </div>
     
     <div class="summary">
-        <div class="summary-grid">
-            <div class="summary-item">
-                <span class="summary-label">Status</span>
-                <div class="summary-value">
-                    <span class="status-badge status-{{ workflow_run.status|lower }}">
-                        {{ workflow_run.status }}
-                    </span>
-                </div>
+        <div class="summary-item">
+            <span class="summary-label">Status</span>
+            <div class="summary-value">
+                <span class="status-badge status-{{ workflow_run.status|lower }}">
+                    {{ workflow_run.status }}
+                </span>
             </div>
-            <div class="summary-item">
-                <span class="summary-label">Mode</span>
-                <div class="summary-value">
-                    {% if workflow.mode == 1 %}Serial{% else %}Parallel{% endif %}
-                </div>
+        </div>
+        <div class="summary-item">
+            <span class="summary-label">Mode</span>
+            <div class="summary-value">
+                {% if workflow.mode == 1 %}Serial{% else %}Parallel{% endif %}
             </div>
-            <div class="summary-item">
-                <span class="summary-label">Steps</span>
-                <div class="summary-value">{{ steps|length }}</div>
-            </div>
+        </div>
+        <div class="summary-item">
+            <span class="summary-label">Steps</span>
+            <div class="summary-value">{{ steps|length }}</div>
         </div>
     </div>
     
-    <div class="steps-section">
-        <h2 class="section-title">Execution Steps</h2>
-        
-        {% if steps %}
-            {% for step in steps %}
-            <div class="step">
-                <div class="step-header">
-                    <span class="step-title">Step {{ step.order }}: {{ step.step.prompt.title }}</span>
-                    <span class="step-status">
-                        <span class="status-badge status-{{ step.status|lower }}">{{ step.status }}</span>
-                    </span>
-                </div>
-                
-                <div class="step-content">
-                    <div class="metadata-row">
-                        <table class="metadata-table">
-                            <tr>
-                                <td>
-                                    <div class="metadata-label">Model</div>
-                                    <div class="metadata-value">
-                                        {% if step.step.llm %}{{ step.step.llm.name }}{% else %}Default{% endif %}
-                                    </div>
-                                </td>
-                                <td>
-                                    <div class="metadata-label">Max Tokens</div>
-                                    <div class="metadata-value">{{ step.step.max_tokens|default:"2048" }}</div>
-                                </td>
-                                <td>
-                                    <div class="metadata-label">Temperature</div>
-                                    <div class="metadata-value">{{ step.step.temperature|default:"0.7" }}</div>
-                                </td>
-                                <td>
-                                    <div class="metadata-label">Executed</div>
-                                    <div class="metadata-value">{{ step.created_at|date:"M j, g:i A" }}</div>
-                                </td>
-                            </tr>
-                        </table>
-                    </div>
-                    
-                    {% if step.step.prompt.prompt %}
-                    <div class="content-section">
-                        <div class="content-label">Prompt</div>
-                        <div class="content-text">{{ step.step.prompt.prompt }}</div>
-                    </div>
-                    {% endif %}
-                    
-                    {% if step.response %}
-                    <div class="content-section">
-                        <div class="content-label">Response</div>
-                        <div class="content-text">{{ step.response }}</div>
-                    </div>
-                    {% endif %}
-                    
-                    {% if step.error %}
-                    <div class="content-section">
-                        <div class="content-label">Error</div>
-                        <div class="content-text error-text">{{ step.error }}</div>
-                    </div>
-                    {% endif %}
-                    
-                    {% if step.snippets.all %}
-                    <div class="content-section">
-                        <div class="content-label">Retrieved Context ({{ step.snippets.all|length }} snippet{{ step.snippets.all|length|pluralize }})</div>
-                        <div class="snippets">
-                            {% for snippet in step.snippets.all %}
-                            <div class="snippet">
-                                <div class="snippet-meta">
-                                    {{ snippet.file.name }} • Similarity: {{ snippet.similarity_score|floatformat:3 }} • Chunk: {{ snippet.chunk_index }}
-                                </div>
-                                <div class="snippet-text">{{ snippet.text }}</div>
-                            </div>
-                            {% endfor %}
+    {% if steps %}
+        {% for step in steps %}
+        <div class="step">
+            <div class="step-header">
+                <span class="step-title">{{ step.order }}. {{ step.step.prompt.title }}</span>
+                <span class="status-badge status-{{ step.status|lower }}">{{ step.status }}</span>
+            </div>
+            
+            <div class="step-content">
+                <div class="metadata">
+                    <div class="metadata-item">
+                        <span class="metadata-label">Model</span>
+                        <div class="metadata-value">
+                            {% if step.step.llm %}{{ step.step.llm.name }}{% else %}Default{% endif %}
                         </div>
                     </div>
-                    {% endif %}
+                    <div class="metadata-item">
+                        <span class="metadata-label">Temperature</span>
+                        <div class="metadata-value">{{ step.step.temperature|default:"0.7" }}</div>
+                    </div>
+                    <div class="metadata-item">
+                        <span class="metadata-label">Max Tokens</span>
+                        <div class="metadata-value">{{ step.step.max_tokens|default:"2048" }}</div>
+                    </div>
+                    <div class="metadata-item">
+                        <span class="metadata-label">Executed</span>
+                        <div class="metadata-value">{{ step.created_at|date:"M j, g:i A" }}</div>
+                    </div>
                 </div>
+                
+                {% if step.step.prompt.content %}
+                <div class="content-section">
+                    <div class="content-label">Prompt</div>
+                    <div class="content-text">{{ step.step.prompt.content|safe }}</div>
+                </div>
+                {% endif %}
+                
+                {% if step.response %}
+                <div class="content-section">
+                    <div class="content-label">Response</div>
+                    <div class="content-text">{{ step.response|safe }}</div>
+                </div>
+                {% endif %}
+                
+                {% if step.error %}
+                <div class="content-section">
+                    <div class="content-label">Error</div>
+                    <div class="content-text error-text">{{ step.error }}</div>
+                </div>
+                {% endif %}
             </div>
-            {% endfor %}
-        {% else %}
-            <div class="no-data">
-                No execution steps found for this workflow run.
-            </div>
-        {% endif %}
-    </div>
-    
-    <div class="footer">
-        Generated {{ generated_at|date:"F j, Y \a\t g:i A" }} • DARE Workflow Engine
-        <br>
-        Executed by {{ user.first_name }} {{ user.last_name }} ({{ user.email }}) • Started {{ workflow_run.started_at|date:"F j, Y \a\t g:i A" }}
-        {% if workflow_run.ended_at %} • Completed {{ workflow_run.ended_at|date:"F j, Y \a\t g:i A" }}{% endif %}
-    </div>
+        </div>
+        {% endfor %}
+    {% else %}
+        <div class="no-data">
+            No execution steps found for this workflow run.
+        </div>
+    {% endif %}
 </body>
 </html>
