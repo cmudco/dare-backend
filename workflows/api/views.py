@@ -15,6 +15,7 @@ from django.db.models import Subquery, OuterRef
 import weasyprint
 import tempfile
 import os
+import markdown
 
 
 class WorkflowViewSet(viewsets.ModelViewSet):
@@ -131,11 +132,30 @@ class WorkflowRunViewSet(viewsets.ModelViewSet):
             workflow_run = self.get_object()
             print(f"Found workflow run: {workflow_run}")
             
+            # Get and process steps for markdown content
+            steps = workflow_run.steps.all().order_by('order')
+            processed_steps = []
+            
+            for step in steps:
+                processed_step = step
+                # Convert markdown to HTML for prompts and responses
+                if step.step.prompt and step.step.prompt.content:
+                    step.step.prompt.content = markdown.markdown(
+                        step.step.prompt.content,
+                        extensions=['markdown.extensions.fenced_code', 'markdown.extensions.tables', 'markdown.extensions.nl2br']
+                    )
+                if step.response:
+                    step.response = markdown.markdown(
+                        step.response,
+                        extensions=['markdown.extensions.fenced_code', 'markdown.extensions.tables', 'markdown.extensions.nl2br']
+                    )
+                processed_steps.append(processed_step)
+            
             # Prepare context for template
             context = {
                 'workflow_run': workflow_run,
                 'workflow': workflow_run.workflow,
-                'steps': workflow_run.steps.all().order_by('order'),
+                'steps': processed_steps,
                 'generated_at': timezone.now(),
                 'user': workflow_run.user,
             }
