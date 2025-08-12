@@ -41,12 +41,16 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
         return None
 
     def get_model_group(self, obj):
-        if obj.model_group:
+        # Only use AccessCodeGroup -> ModelGroup mapping
+        acg = getattr(obj, 'access_code_group', None)
+        group = acg.model_group if acg and getattr(acg, 'model_group', None) else None
+
+        if group:
             return {
-                "id": obj.model_group.id,
-                "name": obj.model_group.name,
-                "description": obj.model_group.description,
-                "isActive": obj.model_group.is_active
+                "id": group.id,
+                "name": group.name,
+                "description": group.description,
+                "isActive": group.is_active
             }
         return None
 

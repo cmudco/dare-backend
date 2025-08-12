@@ -226,22 +226,32 @@ class LLMViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         """
-        Filter LLM models based on user's model group.
-        If user has no model group assigned, return all models.
+        Filter LLM models based on the user's Access Code Group -> Model Group mapping.
+        Rules:
+        - If the user has no access code group, return ALL models.
+        - If the access code group has no model group (or is inactive), return ALL models.
+        - Otherwise, return the allowed models from the group's model list.
         """
         user = self.request.user
 
-        if not user.model_group:
-            return LLM.objects.all().order_by('name')
-        if not user.model_group.is_active:
+        # No access code group: all models
+        if not getattr(user, 'access_code_group', None):
             return LLM.objects.all().order_by('name')
 
-        return user.model_group.allowed_models.all().order_by('name')
+        acg = user.access_code_group
+        # ACG without model group or inactive group: all models
+        if not getattr(acg, 'model_group', None):
+            return LLM.objects.all().order_by('name')
+        if not acg.model_group.is_active:
+            return LLM.objects.all().order_by('name')
+
+        # Restrict to allowed models from the access code group's model group
+        return acg.model_group.allowed_models.all().order_by('name')
 
     @action(detail=False, methods=['get'])
     def all_models(self, request):
         """
-        Return all LLM models without filtering by user's model group.
+        Return all LLM models without filtering by user's groups.
         This is used for displaying model names in historical conversations.
         """
         queryset = LLM.objects.all().order_by('name')
