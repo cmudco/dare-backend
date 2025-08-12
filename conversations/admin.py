@@ -1,6 +1,9 @@
 from django.contrib import admin
+from django.contrib.auth import get_user_model
 
 from .models import LLM, Conversation, Message, ModelGroup
+
+User = get_user_model()
 
 @admin.register(LLM)
 class LLMAdmin(admin.ModelAdmin):
@@ -51,5 +54,6 @@ class ModelGroupAdmin(admin.ModelAdmin):
     model_count.short_description = "Models"
 
     def user_count(self, obj):
-        return obj.users.count()
+        # Count users linked via AccessCodeGroup -> ModelGroup using module-level User
+        return User.objects.filter(access_code_group__model_group=obj).count()
     user_count.short_description = "Users"

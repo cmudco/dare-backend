@@ -37,6 +37,15 @@ class AccessCodeGroup(TimeStampMixin):
         verbose_name=_("Access Scope"),
         help_text=_("Determines which platforms users can access with this code")
     )
+    # Link this access code group to a model group to control available LLMs
+    model_group = models.ForeignKey(
+        'conversations.ModelGroup',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='access_code_groups',
+        help_text=_("Model group applied to users who register with this access code group")
+    )
 
     class Meta:
         verbose_name = "Access Code Group"
@@ -81,15 +90,6 @@ class User(AbstractUser, IsDeletedMixin):
         blank=True,
         related_name="users",
         help_text=_("Access code group this user belongs to")
-    )
-    model_group = models.ForeignKey(
-        'conversations.ModelGroup',
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="users",
-        verbose_name=_("Model Group"),
-        help_text=_("Model group that determines which LLM models this user can access")
     )
     vector_db = models.IntegerField(
         choices=VectorDBChoice.choices,
