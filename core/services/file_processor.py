@@ -1,7 +1,9 @@
 import io
 import PyPDF2
+import zipfile
 from typing import Dict, List, Any
 from files.models import File
+from xml.etree import ElementTree as ET
 
 class FileProcessor:
     """Service for processing different types of files."""
@@ -15,6 +17,8 @@ class FileProcessor:
                 return self._read_pdf(file)
             elif file_name.endswith(('.txt', '.md', '.json')):
                 return self._read_text_file(file)
+            elif file_name.endswith('.docx'):
+                return self._read_docx(file)
             else:
                 return f"File: {file.name or file.file.name}"
 
@@ -62,3 +66,28 @@ class FileProcessor:
             return content
         except Exception as final_error:
             raise Exception(f"Could not decode text file with any encoding method: {str(final_error)}")
+
+    def _read_docx(self, file: File) -> str:
+        """Extract text from DOCX file."""
+        try:
+            with file.file.open('rb') as f:
+                with zipfile.ZipFile(f) as docx_zip:
+                    with docx_zip.open('word/document.xml') as document_xml:
+                        xml_content = document_xml.read()
+                        
+                        root = ET.fromstring(xml_content)
+                        
+                        namespaces = {
+                            'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'
+                        }
+                        
+                        text_elements = root.findall('.//w:t', namespaces)
+                        text_content = []
+                        
+                        for element in text_elements:
+                            if element.text:
+                                text_content.append(element.text)
+                        
+                        return '\n'.join(text_content)
+        except Exception as e:
+            raise Exception(f"Error reading DOCX file: {str(e)}")
