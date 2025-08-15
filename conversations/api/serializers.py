@@ -39,7 +39,7 @@ class ConversationSerializer(serializers.ModelSerializer):
             'selected_embedding_ids',
             'selected_file_ids',
         ]
-        read_only_fields = ['conversation_id', 'created_at', 'user', 'prompt']
+        read_only_fields = ['created_at', 'user', 'prompt']
 
 class SnippetSerializer(serializers.ModelSerializer):
     file = FileSerializer(read_only=True)

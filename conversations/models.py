@@ -86,7 +86,7 @@ class Conversation(BaseModel):
         related_name="conversations",
         help_text="User who owns this conversation."
     )
-    conversation_id = models.CharField(max_length=10, unique=True, help_text="Unique conversation ID.")
+    conversation_id = models.CharField(max_length=50, unique=True, help_text="Unique conversation ID.")
     title = models.CharField(max_length=255, blank=True, null=True, help_text="Title of the conversation.")
     max_context_snippets = models.PositiveIntegerField(default=4, help_text="Maximum number of context snippets to retrieve.")
     document_similarity_threshold = models.FloatField(default=0.2, help_text="Similarity threshold for document retrieval.")
@@ -121,6 +121,7 @@ class Conversation(BaseModel):
 
     def save(self, *args, **kwargs):
         if not self.conversation_id:
+            # Generate random 5-character ID only if no custom ID provided
             self.conversation_id = "".join(
                 random.choices(string.ascii_uppercase + string.digits, k=5)
             )
