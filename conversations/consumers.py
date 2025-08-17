@@ -203,7 +203,10 @@ Provide your assessment in a clear, encouraging format that helps track their pr
                 history_limit=message_data["history_limit"],
                 referenced_conversation_ids=message_data["referenced_conversation_ids"],
                 referenced_conversation_history_limit=message_data["referenced_conversation_history_limit"],
-                message_obj=message_obj
+                message_obj=message_obj,
+                # SocraticBooks-style prompt construction (when applicable)
+                socratic_mode=((self.platform or "").lower() == "socratic" and not message_data.get("prompt_id")),
+                bot_meta=message_data.get("bot_meta") or {},
             ):
                 if usage:
                     token_usage = usage
