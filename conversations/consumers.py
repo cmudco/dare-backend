@@ -16,6 +16,7 @@ from conversations.models import Conversation, Message, LLM
 from core.services.conversation_service import ConversationService
 from core.services.llm_service import LLMService
 from core.services.billing_service import BillingService
+from core.services.learning_progress_service import LearningProgressService
 from .constants import SenderType
 from conversations.api.serializers import MessageSerializer
 from users.utils import detect_platform_from_scope, should_run_learning_progress
@@ -46,6 +47,7 @@ Provide your assessment in a clear, encouraging format that helps track their pr
         self.conversation_service = ConversationService()
         self.llm_service = LLMService()
         self.billing_service = BillingService()
+        self.learning_progress_service = LearningProgressService()
         self.user: Optional[User] = None
         self.conversation: Optional[Conversation] = None
         self.conversation_id: Optional[str] = None
@@ -64,6 +66,8 @@ Provide your assessment in a clear, encouraging format that helps track their pr
             self.platform = detect_platform_from_scope(self.scope)
             await self.accept()
             await self.load_conversation_history()
+            # Also send the latest learning progress assessment if available
+            await self.send_latest_progress()
         except DenyConnection as e:
             logger.error(f"Connection denied: {str(e)}")
             await self.close(code=4000)
@@ -310,6 +314,7 @@ Provide your assessment in a clear, encouraging format that helps track their pr
         cost = await database_sync_to_async(lambda: message_obj.cost)()
         input_tokens = await database_sync_to_async(lambda: message_obj.input_tokens)()
         output_tokens = await database_sync_to_async(lambda: message_obj.output_tokens)()
+        learning_progress_data = await database_sync_to_async(lambda: message_obj.learning_progress_data)()
         response = {
             "type": "message",
             "id": str(message_obj.id),
@@ -332,6 +337,7 @@ Provide your assessment in a clear, encouraging format that helps track their pr
             "cost": str(cost) if cost is not None else None,
             "inputTokens": input_tokens,
             "outputTokens": output_tokens,
+            "learningProgressData": learning_progress_data or {},
         }
         return json.dumps(camelize(response))
 
@@ -389,72 +395,38 @@ Provide your assessment in a clear, encouraging format that helps track their pr
         """
         Stream a learning-progress assessment after the main message.
         Uses tracking prompt and learning goals from message_data with DEFAULT_TRACKING_PROMPT as fallback.
+        Also saves the assessment to DB and updates message.learning_progress_data.
         """
         try:
-            # Get tracking prompt and learning goals from message_data or use defaults
             tracking_prompt = (message_data.get("tracking_prompt") or "").strip()
             learning_goals = (message_data.get("learning_goals") or "").strip()
-            
-            # Use defaults if not provided
+
             if not tracking_prompt:
                 tracking_prompt = self.DEFAULT_TRACKING_PROMPT
-                logger.info("Using default tracking prompt")
-            
             if not learning_goals:
                 learning_goals = "No specific learning goals defined."
-                logger.info("Using default learning goals")
 
-            # Get the progress LLM (use provided progress_llm_id or default)
             progress_llm_id = message_data.get("progress_llm_id")
             progress_llm = await self._get_llm(progress_llm_id, default=default_llm)
 
-            # Construct the evaluation prompt
-            bot_meta = message_data.get("bot_meta") or {}
-            subject = bot_meta.get("subject", "")
-            topic = bot_meta.get("topic", "")
-            title = bot_meta.get("title", "")
-
-            evaluation_input = f"""Learning Goals:
-{learning_goals}
-
-Conversation Context:
-Subject: {subject}
-Topic: {topic}
-Title: {title}
-
-Student's Last Message and AI Response to Assess:
-{ai_message.message}
-
-Assessment Instructions:
-{tracking_prompt}
-
-Please provide a concise assessment focusing on the student's progress toward the learning goals."""
-
             accumulated = ""
-            token_usage = None
+            last_usage = None
 
-            # Stream the progress assessment
-            async for chunk, usage in self.llm_service.query(
-                evaluation_input,
-                self.conversation,
-                progress_llm,
-                [], [], [], [],
-                user_id=self.user.id,
-                prompt_id=None,
-                temperature=0.7,
+            # Stream via LearningProgressService
+            async for chunk, usage in self.learning_progress_service.assess_learning_progress(
+                conversation=self.conversation,
+                learning_goals=learning_goals,
+                tracking_prompt=tracking_prompt,
+                last_message=ai_message,
+                llm=progress_llm,
                 max_tokens=2048,
-                max_context_snippets=0,
-                document_similarity_threshold=self.DEFAULT_DOCUMENT_SIMILARITY_THRESHOLD,
-                history_limit=0,
-                referenced_conversation_ids=[],
-                referenced_conversation_history_limit=0,
-                message_obj=None,
+                temperature=0.7,
+                conversation_history_limit=20,
+                bot_meta=message_data.get("bot_meta") or {},
             ):
                 if usage:
-                    token_usage = usage
-                    can_continue, _ = await self.billing_service.check_streaming_credit_usage(
-                        self.user, progress_llm, token_usage
-                    )
+                    last_usage = usage
+                    can_continue, _ = await self.billing_service.check_streaming_credit_usage(self.user, progress_llm, usage)
                     if not can_continue:
                         await self.send(json.dumps({
                             "type": "progress_error",
@@ -471,22 +443,88 @@ Please provide a concise assessment focusing on the student's progress toward th
                         "chunk": chunk
                     }))
 
-            # Send completion notification
+            # Save assessment and update message metadata if we have content
+            if accumulated.strip():
+                # Build usage with totals for FE
+                def _build_usage(u: Dict):
+                    if not isinstance(u, dict):
+                        return u
+                    inp = u.get("input_tokens") or u.get("prompt_tokens") or 0
+                    out = u.get("output_tokens") or u.get("completion_tokens") or 0
+                    tot = (inp or 0) + (out or 0)
+                    u_with_totals = dict(u)
+                    u_with_totals["total_tokens"] = tot
+                    return u_with_totals
+
+                platform_label = (self.platform or "")
+                if platform_label.lower() == "socratic":
+                    platform_label = "SocraticBots"
+
+                metadata = {
+                    "llm_model": getattr(progress_llm, "identifier", None),
+                    "usage": _build_usage(last_usage),
+                    "platform": platform_label,
+                    "tracking_prompt_used": tracking_prompt[:100] + "..." if len(tracking_prompt) > 100 else tracking_prompt,
+                }
+                assessment = await self.learning_progress_service._save_progress_assessment(
+                    conversation=self.conversation,
+                    content=accumulated,
+                    learning_goals=learning_goals,
+                    last_message=ai_message,
+                    metadata=metadata,
+                )
+
+                # Update AI message with learning progress data
+                def _update_msg():
+                    ai_message.learning_progress_data = {
+                        "progress_assessment_id": str(getattr(assessment, "id", "")),
+                        "learning_goals": learning_goals,
+                        "tracking_prompt": tracking_prompt,
+                        "llm_id": getattr(progress_llm, "id", None),
+                        "input_tokens": (last_usage or {}).get("input_tokens"),
+                        "output_tokens": (last_usage or {}).get("output_tokens"),
+                        "status": "completed",
+                    }
+                    ai_message.save(update_fields=["learning_progress_data"])
+                    return ai_message
+
+                ai_message = await database_sync_to_async(_update_msg)()
+
+            # Completion notification
             meta = {
                 "type": "progress_complete",
                 "conversationId": str(self.conversation.id),
                 "messageId": str(ai_message.id),
             }
-            if token_usage:
+            if last_usage:
                 meta.update({
-                    "inputTokens": token_usage.get("input_tokens"),
-                    "outputTokens": token_usage.get("output_tokens"),
+                    "inputTokens": last_usage.get("input_tokens"),
+                    "outputTokens": last_usage.get("output_tokens"),
                 })
             await self.send(json.dumps(meta))
-            
+
         except Exception as e:
             logger.exception(f"Learning progress stream error: {e}")
             await self.send(json.dumps({
                 "type": "progress_error",
                 "message": "Failed to generate learning progress"
             }))
+
+    async def send_latest_progress(self):
+        """Fetch and send the latest learning progress assessment to the client."""
+        try:
+            latest = await self.learning_progress_service.get_latest_assessment(self.conversation)
+            payload = {
+                "type": "latest_progress",
+                "conversationId": str(self.conversation.id),
+                "assessment": latest  # None or dict
+            }
+            await self.send(json.dumps(camelize(payload)))
+        except Exception as e:
+            logger.exception(f"Error sending latest progress: {e}")
+            # Non-fatal; do not close socket
+            await self.send(json.dumps(camelize({
+                "type": "latest_progress",
+                "conversationId": str(self.conversation.id),
+                "assessment": None
+            })))
