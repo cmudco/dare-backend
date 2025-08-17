@@ -18,6 +18,7 @@ from core.services.llm_service import LLMService
 from core.services.billing_service import BillingService
 from .constants import SenderType
 from conversations.api.serializers import MessageSerializer
+from users.utils import detect_platform_from_scope, should_run_learning_progress
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -28,6 +29,17 @@ class ChatConsumer(AsyncWebsocketConsumer):
     DEFAULT_MAX_CONTEXT_SNIPPETS = 4
     DEFAULT_DOCUMENT_SIMILARITY_THRESHOLD = 0.5
     DEFAULT_HISTORY_LIMIT = 20
+    
+    # Default tracking prompt from SocraticBooks migration
+    DEFAULT_TRACKING_PROMPT = """You are an AI tutor designed to assess student learning progress. Based on the conversation history and learning goals provided, evaluate the student's understanding and provide constructive feedback.
+
+Please analyze:
+1. What concepts the student has grasped well
+2. Areas where they need improvement
+3. Specific misconceptions or gaps in understanding
+4. Recommendations for next steps in their learning journey
+
+Provide your assessment in a clear, encouraging format that helps track their progress toward the learning goals."""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -37,6 +49,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         self.user: Optional[User] = None
         self.conversation: Optional[Conversation] = None
         self.conversation_id: Optional[str] = None
+        self.platform: Optional[str] = None
 
     async def connect(self):
         """Initialize WebSocket connection and validate conversation."""
@@ -47,6 +60,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
             if not self.conversation:
                 logger.warning(f"Invalid conversation_id: {self.conversation_id} for user: {self.user.id}")
                 raise DenyConnection("Invalid conversation_id")
+            # Detect platform from ASGI scope headers
+            self.platform = detect_platform_from_scope(self.scope)
             await self.accept()
             await self.load_conversation_history()
         except DenyConnection as e:
@@ -218,6 +233,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
             if ai_response_accumulator.strip():
                 await self._finalize_message(message_obj, ai_response_accumulator, token_usage, regenerate)
+                # Socratic-only sequential progress stream
+                if not regenerate and should_run_learning_progress(self.platform, message_data.get("enable_progress")):
+                    await self._run_learning_progress_stream(message_data, message_obj, llm)
         except Exception as e:
             logger.exception(f"Error streaming AI response: {str(e)}")
             await self.send_error("stream_error", "Failed to stream AI response")
@@ -340,6 +358,12 @@ class ChatConsumer(AsyncWebsocketConsumer):
             "max_context_snippets": data.get("max_context_snippets", self.DEFAULT_MAX_CONTEXT_SNIPPETS),
             "document_similarity_threshold": data.get("document_similarity_threshold", self.DEFAULT_DOCUMENT_SIMILARITY_THRESHOLD),
             "history_limit": data.get("history_limit", self.DEFAULT_HISTORY_LIMIT),
+            # Socratic-only optional fields
+            "enable_progress": data.get("enable_progress"),
+            "tracking_prompt": data.get("tracking_prompt", ""),
+            "learning_goals": data.get("learning_goals", ""),
+            "progress_llm_id": data.get("progress_llm_id"),
+            "bot_meta": data.get("bot_meta", {}),
         }
 
     async def send_error(self, code: str, message: str, details: Dict = None):
@@ -357,3 +381,109 @@ class ChatConsumer(AsyncWebsocketConsumer):
             ).order_by('-created_at'))
         )()
         return next((msg for msg in preceding_messages if msg.sender_type == SenderType.PLAYER), None)
+
+    async def _run_learning_progress_stream(self, message_data: Dict[str, Any], ai_message: Message, default_llm: LLM):
+        """
+        Stream a learning-progress assessment after the main message.
+        Uses tracking prompt and learning goals from message_data with DEFAULT_TRACKING_PROMPT as fallback.
+        """
+        try:
+            # Get tracking prompt and learning goals from message_data or use defaults
+            tracking_prompt = (message_data.get("tracking_prompt") or "").strip()
+            learning_goals = (message_data.get("learning_goals") or "").strip()
+            
+            # Use defaults if not provided
+            if not tracking_prompt:
+                tracking_prompt = self.DEFAULT_TRACKING_PROMPT
+                logger.info("Using default tracking prompt")
+            
+            if not learning_goals:
+                learning_goals = "No specific learning goals defined."
+                logger.info("Using default learning goals")
+
+            # Get the progress LLM (use provided progress_llm_id or default)
+            progress_llm_id = message_data.get("progress_llm_id")
+            progress_llm = await self._get_llm(progress_llm_id, default=default_llm)
+
+            # Construct the evaluation prompt
+            bot_meta = message_data.get("bot_meta") or {}
+            subject = bot_meta.get("subject", "")
+            topic = bot_meta.get("topic", "")
+            title = bot_meta.get("title", "")
+
+            evaluation_input = f"""Learning Goals:
+{learning_goals}
+
+Conversation Context:
+Subject: {subject}
+Topic: {topic}
+Title: {title}
+
+Student's Last Message and AI Response to Assess:
+{ai_message.message}
+
+Assessment Instructions:
+{tracking_prompt}
+
+Please provide a concise assessment focusing on the student's progress toward the learning goals."""
+
+            accumulated = ""
+            token_usage = None
+
+            # Stream the progress assessment
+            async for chunk, usage in self.llm_service.query(
+                evaluation_input,
+                self.conversation,
+                progress_llm,
+                [], [], [], [],
+                user_id=self.user.id,
+                prompt_id=None,
+                temperature=0.7,
+                max_tokens=2048,
+                max_context_snippets=0,
+                document_similarity_threshold=self.DEFAULT_DOCUMENT_SIMILARITY_THRESHOLD,
+                history_limit=0,
+                referenced_conversation_ids=[],
+                referenced_conversation_history_limit=0,
+                message_obj=None,
+            ):
+                if usage:
+                    token_usage = usage
+                    can_continue, _ = await self.billing_service.check_streaming_credit_usage(
+                        self.user, progress_llm, token_usage
+                    )
+                    if not can_continue:
+                        await self.send(json.dumps({
+                            "type": "progress_error",
+                            "message": "Insufficient credits during progress assessment"
+                        }))
+                        return
+
+                if chunk:
+                    accumulated += chunk
+                    await self.send(json.dumps({
+                        "type": "progress_stream",
+                        "conversationId": str(self.conversation.id),
+                        "messageId": str(ai_message.id),
+                        "chunk": chunk
+                    }))
+
+            # Send completion notification
+            meta = {
+                "type": "progress_complete",
+                "conversationId": str(self.conversation.id),
+                "messageId": str(ai_message.id),
+            }
+            if token_usage:
+                meta.update({
+                    "inputTokens": token_usage.get("input_tokens"),
+                    "outputTokens": token_usage.get("output_tokens"),
+                })
+            await self.send(json.dumps(meta))
+            
+        except Exception as e:
+            logger.exception(f"Learning progress stream error: {e}")
+            await self.send(json.dumps({
+                "type": "progress_error",
+                "message": "Failed to generate learning progress"
+            }))
