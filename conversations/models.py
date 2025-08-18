@@ -86,7 +86,7 @@ class Conversation(BaseModel):
         related_name="conversations",
         help_text="User who owns this conversation."
     )
-    conversation_id = models.CharField(max_length=10, unique=True, help_text="Unique conversation ID.")
+    conversation_id = models.CharField(max_length=50, unique=True, help_text="Unique conversation ID.")
     title = models.CharField(max_length=255, blank=True, null=True, help_text="Title of the conversation.")
     max_context_snippets = models.PositiveIntegerField(default=4, help_text="Maximum number of context snippets to retrieve.")
     document_similarity_threshold = models.FloatField(default=0.2, help_text="Similarity threshold for document retrieval.")
@@ -115,12 +115,18 @@ class Conversation(BaseModel):
         blank=True,
         help_text="List of selected file IDs for this conversation."
     )
+    learning_metadata = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Learning-specific metadata including goals, tracking settings, and educational context."
+    )
 
     active_objects = ActiveObjectsManager()
 
 
     def save(self, *args, **kwargs):
         if not self.conversation_id:
+            # Generate random 5-character ID only if no custom ID provided
             self.conversation_id = "".join(
                 random.choices(string.ascii_uppercase + string.digits, k=5)
             )
@@ -311,6 +317,11 @@ class Message(BaseModel):
         null=True,
         help_text="Original content of the message before editing or regeneration."
     )
+    learning_progress_data = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Learning progress data associated with this message, such as assessment triggers and educational metadata."
+    )
 
     active_objects = ActiveObjectsManager()
 
@@ -365,3 +376,46 @@ class Snippet(BaseModel):
 
     def __str__(self):
         return f"Snippet for Message {self.message.id} from File {self.file.id} (Score: {self.similarity_score})"
+
+
+class LearningProgressAssessment(BaseModel):
+    """
+    Model to store AI-generated learning progress assessments for conversations.
+    Tracks student understanding and learning progression over time.
+    """
+    conversation = models.ForeignKey(
+        Conversation,
+        on_delete=models.CASCADE,
+        related_name="progress_assessments",
+        help_text="The conversation this assessment belongs to."
+    )
+    last_message = models.ForeignKey(
+        Message,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="triggered_assessments",
+        help_text="The message that triggered this assessment (optional)."
+    )
+    content = models.TextField(
+        help_text="AI-generated progress assessment content (Markdown formatted)."
+    )
+    learning_goals = models.TextField(
+        blank=True,
+        help_text="Learning goals that were used for this assessment."
+    )
+    metadata = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Additional metadata including assessment parameters, AI model used, etc."
+    )
+
+    active_objects = ActiveObjectsManager()
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = "Learning Progress Assessment"
+        verbose_name_plural = "Learning Progress Assessments"
+
+    def __str__(self):
+        return f"Progress Assessment for {self.conversation.conversation_id} at {self.created_at.strftime('%Y-%m-%d %H:%M')}"

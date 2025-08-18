@@ -68,6 +68,41 @@ def _url_matches(url1, url2):
     return url1.rstrip('/').lower() == url2.rstrip('/').lower()
 
 
+# New: ASGI-safe platform detection for WebSocket scope
+# This mirrors detect_platform_from_request but uses scope headers.
+def detect_platform_from_scope(scope):
+    """Detect platform from ASGI scope headers (Origin/Referer). Defaults to DARE."""
+    try:
+        headers = dict(
+            (k.decode('latin1'), v.decode('latin1'))
+            for k, v in (scope.get('headers') or [])
+        )
+        origin = headers.get('origin', '')
+        referer = headers.get('referer', '')
+        for header_value in [origin, referer]:
+            if not header_value:
+                continue
+            parsed_url = urlparse(header_value)
+            base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
+            # DARE
+            if _url_matches(base_url, DARE_FRONTEND_URL) or _url_matches(base_url, DARE_BACKEND_URL):
+                return AuthSourceChoice.DARE
+            # SocraticBots
+            if _url_matches(base_url, SOCRATIC_BOTS_FRONTEND_URL) or _url_matches(base_url, SOCRATIC_BOTS_BACKEND_URL):
+                return AuthSourceChoice.SOCRATIC_BOTS
+    except Exception:
+        pass
+    return AuthSourceChoice.DARE
+
+
+# New: Optional gate for learning progress
+# Honors explicit flag if provided; otherwise only enables for Socratic FE.
+def should_run_learning_progress(platform: str, explicit_flag: bool | None = None) -> bool:
+    if explicit_flag is not None:
+        return bool(explicit_flag)
+    return platform == AuthSourceChoice.SOCRATIC_BOTS
+
+
 def get_platform_access_permission(user, platform):
     """
     Check if a user has access to a specific platform.
