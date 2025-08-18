@@ -20,6 +20,7 @@ from core.services.learning_progress_service import LearningProgressService
 from .constants import SenderType
 from conversations.api.serializers import MessageSerializer
 from users.utils import detect_platform_from_scope, should_run_learning_progress
+from users.constants import AuthSourceChoice
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
@@ -209,7 +210,7 @@ Provide your assessment in a clear, encouraging format that helps track their pr
                 referenced_conversation_history_limit=message_data["referenced_conversation_history_limit"],
                 message_obj=message_obj,
                 # SocraticBooks-style prompt construction (when applicable)
-                socratic_mode=((self.platform or "").lower() == "socratic" and not message_data.get("prompt_id")),
+                socratic_mode=(self.platform == AuthSourceChoice.SOCRATIC_BOTS and not message_data.get("prompt_id")),
                 bot_meta=message_data.get("bot_meta") or {},
             ):
                 if usage:
@@ -456,9 +457,11 @@ Provide your assessment in a clear, encouraging format that helps track their pr
                     u_with_totals["total_tokens"] = tot
                     return u_with_totals
 
-                platform_label = (self.platform or "")
-                if platform_label.lower() == "socratic":
+                platform_label = self.platform or AuthSourceChoice.DARE
+                if platform_label == AuthSourceChoice.SOCRATIC_BOTS:
                     platform_label = "SocraticBots"
+                else:
+                    platform_label = "DARE"
 
                 metadata = {
                     "llm_model": getattr(progress_llm, "identifier", None),

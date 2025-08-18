@@ -125,12 +125,9 @@ class WorkflowRunViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get'], url_path='export-pdf')
     def export_pdf(self, request, pk=None):
         """Export workflow run results as a PDF."""
-        print(f"PDF export requested for workflow run ID: {pk}")
-        print(f"User: {request.user}")
         
         try:
             workflow_run = self.get_object()
-            print(f"Found workflow run: {workflow_run}")
             
             # Get and process steps for markdown content
             steps = workflow_run.steps.all().order_by('order')
@@ -160,11 +157,8 @@ class WorkflowRunViewSet(viewsets.ModelViewSet):
                 'user': workflow_run.user,
             }
             
-            print(f"Context prepared with {len(context['steps'])} steps")
-            
             # Render HTML template
             html_content = render_to_string('workflows/pdf_export.html', context)
-            print(f"HTML template rendered, length: {len(html_content)}")
             
             # Generate PDF
             with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
@@ -177,8 +171,6 @@ class WorkflowRunViewSet(viewsets.ModelViewSet):
                 # Clean up temporary file
                 os.unlink(tmp_file.name)
             
-            print(f"PDF generated successfully, size: {len(pdf_content)} bytes")
-            
             # Prepare response
             filename = f"{workflow_run.workflow.title.replace(' ', '_')}-results.pdf"
             response = HttpResponse(pdf_content, content_type='application/pdf')
@@ -188,7 +180,6 @@ class WorkflowRunViewSet(viewsets.ModelViewSet):
             return response
             
         except Exception as e:
-            print(f"PDF export error: {str(e)}")
             import traceback
             traceback.print_exc()
             return Response(

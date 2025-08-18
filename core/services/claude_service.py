@@ -20,6 +20,8 @@ class ClaudeService:
 
         This method sends a list of messages to the Claude API and yields response chunks as they are
         received in real-time. It handles streaming events and extracts text content from the response.
+        
+        System messages are automatically extracted from the messages list and passed as the system parameter.
 
         Args:
             messages (List[Dict[str, str]]): A list of message dictionaries with 'role' and 'content' keys.
@@ -33,13 +35,31 @@ class ClaudeService:
             Exception: If an error occurs during the API call, yields an error message and logs the exception.
         """
         try:
-            stream = await self.client.messages.create(
-                model=self.model,
-                max_tokens=max_tokens,
-                messages=messages,
-                temperature=temperature,
-                stream=True
-            )
+            # Extract system messages and regular messages
+            system_message = None
+            filtered_messages = []
+            
+            for message in messages:
+                if message.get('role') == 'system':
+                    # Take the last system message if multiple exist
+                    system_message = message.get('content', '')
+                else:
+                    filtered_messages.append(message)
+            
+            # Prepare API call parameters
+            call_params = {
+                "model": self.model,
+                "max_tokens": max_tokens,
+                "messages": filtered_messages,
+                "temperature": temperature,
+                "stream": True
+            }
+            
+            # Add system parameter only if system message exists
+            if system_message:
+                call_params["system"] = system_message
+            
+            stream = await self.client.messages.create(**call_params)
             usage = None
             input_tokens = None
 
@@ -73,6 +93,8 @@ class ClaudeService:
 
         This method uses the streaming functionality to collect all response chunks into a single string.
         It serves as a convenience wrapper around `stream_chat_completion`.
+        
+        System messages are automatically handled by the streaming method.
 
         Args:
             messages (List[Dict[str, str]]): A list of message dictionaries with 'role' and 'content' keys.

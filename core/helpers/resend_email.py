@@ -35,5 +35,4 @@ def send_email_via_resend(
         }
 
     response = resend.Emails.send(params)
-    print(response)
     return response
