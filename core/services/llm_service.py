@@ -45,13 +45,39 @@ class LLMService:
         referenced_conversation_ids: list = None,
         referenced_conversation_history_limit: int = 10,
         message_obj: Message = None,
-        workflow_run_step_obj=None
+        workflow_run_step_obj=None,
+        # New optional params for SocraticBooks-style prompt construction
+        socratic_mode: bool = False,
+        bot_meta: Dict = None,
     ) -> AsyncGenerator[Tuple[str, Dict], None]:
         """Generate AI response with context."""
         try:
             llm = llm or LLM.objects.filter(is_active=True).first()
             if not llm:
                 yield "Error: No active LLM found", None
+                return
+
+            # If Socratic mode is enabled, construct prompts using SocraticBooks logic
+            if socratic_mode:
+                messages = await self._build_socratic_messages(
+                    message=message,
+                    conversation=conversation,
+                    user_id=user_id,
+                    file_ids=[],
+                    embedding_ids=file_ids or [], # Note: using file IDs for context, will update later
+                    tag_ids=[],
+                    folder_ids=[],
+                    history_limit=history_limit,
+                    max_context_snippets=max_context_snippets,
+                    document_similarity_threshold=document_similarity_threshold,
+                    message_obj=message_obj,
+                    workflow_run_step_obj=workflow_run_step_obj,
+                    bot_meta=bot_meta or {},
+                )
+
+                ai_service = self._get_ai_service(llm)
+                async for chunk, usage in ai_service.stream_chat_completion(messages, max_tokens, temperature):
+                    yield chunk, usage
                 return
 
             conversation_history = await self.get_conversation_history(conversation, limit=history_limit) if conversation else []
@@ -212,3 +238,100 @@ class LLMService:
         elif llm.provider == Provider.LLAMA.value:
             return LlamaService(llm=llm)
         return ClaudeService(llm=llm)
+
+    # -------- SocraticBooks helpers --------
+    async def _build_socratic_messages(
+        self,
+        message: str,
+        conversation: 'Conversation',
+        user_id: int,
+        file_ids: list,
+        embedding_ids: list,
+        tag_ids: list,
+        folder_ids: list,
+        history_limit: int,
+        max_context_snippets: int,
+        document_similarity_threshold: float,
+        message_obj: Message,
+        workflow_run_step_obj,
+        bot_meta: Dict,
+    ) -> list:
+        """Build messages array in the classic SocraticBooks format."""
+        subject = (bot_meta or {}).get("subject", "")
+        topic = (bot_meta or {}).get("topic", "")
+        learning_goals = (bot_meta or {}).get("learning_goals", "No specific learning goals defined.")
+        chat_prompt = (bot_meta or {}).get("chat_prompt", "Provide a helpful, educational response.")
+
+        # System prompt
+        prompt_start = (
+            f"Subject and Topic:\n"
+            f"Your job is to act as a living Socratic book that helps '{subject}' students\n"
+            f"learn about different subjects. This chapter specifically is about '{topic}'."
+        )
+        system_prompt = (
+            prompt_start
+            + "\n\nTeaching Style:\n" + chat_prompt
+            + "\n\nLearning Goals:\n" + learning_goals
+        )
+
+        # Conversation history as simple transcript
+        history_list = await self.get_conversation_history(conversation, limit=history_limit) if conversation else []
+        transcript_parts = []
+        for h in history_list:
+            role_name = "User" if h["role"] == "user" else "Assistant"
+            content = (h["content"] or "").strip()
+            if content:
+                transcript_parts.append(f"{role_name}: {content}")
+        conversation_history_text = "\n\n".join(transcript_parts) if transcript_parts else "No previous messages."
+
+        # File context: try vector search first, then explicit files
+        file_context_parts = []
+        # Vector/embedding search
+        all_embedding_file_ids = set(embedding_ids or [])
+        if tag_ids:
+            tagged_file_ids = await self.get_files_from_tags(tag_ids, user_id)
+            all_embedding_file_ids.update(tagged_file_ids)
+        if folder_ids:
+            folder_file_ids = await self.get_files_from_folders(folder_ids, user_id)
+            all_embedding_file_ids.update(folder_file_ids)
+
+        if all_embedding_file_ids:
+            if user_id and user_id != self.document_processor.user_id:
+                self.document_processor.user_id = user_id
+                self.document_processor.vector_service = await get_vector_service_async(user_id)
+
+            context = await self.document_processor.search_similar_documents(
+                query_text=message,
+                file_ids=list(all_embedding_file_ids),
+                user_id=user_id,
+                top_k=max_context_snippets,
+                similarity_threshold=document_similarity_threshold,
+                message_obj=message_obj,
+                workflow_run_step_obj=workflow_run_step_obj,
+            )
+            if context:
+                file_context_parts.append(context)
+
+        # Direct file contents (explicit attachments)
+        if file_ids:
+            fulls = await self.get_full_file_contents(file_ids, user_id)
+            if fulls:
+                file_context_parts.extend(fulls)
+
+        file_context_text = "\n\n".join([p for p in file_context_parts if p and p.strip()])
+        if not file_context_text:
+            file_context_text = "No relevant file content found."
+
+        # User message assembled like the old SocraticBooks format
+        user_message = (
+            "Respond based on the following documents.\n"
+            f"{file_context_text}\n"
+            "And the recent conversation history:\n"
+            f"{conversation_history_text}\n"
+            f"Question: {message}\n"
+        )
+
+        return [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message},
+        ]
