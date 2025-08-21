@@ -63,8 +63,8 @@ class LLMService:
                     message=message,
                     conversation=conversation,
                     user_id=user_id,
-                    file_ids=[],
-                    embedding_ids=file_ids or [], # Note: using file IDs for context, will update later
+                    file_ids=file_ids or [],
+                    embedding_ids=[], # Note: using file IDs for context, will update later
                     tag_ids=[],
                     folder_ids=[],
                     history_limit=history_limit,
@@ -97,7 +97,7 @@ class LLMService:
                     messages.append({"role": "user", "content": referenced_context})
 
             if file_ids:
-                file_contents = await self.get_full_file_contents(file_ids, user_id)
+                file_contents = await self.get_full_file_contents(file_ids,)
                 if file_contents:
                     for file_content in file_contents:
                         messages.append({"role": "user", "content": file_content})
@@ -116,12 +116,14 @@ class LLMService:
                         self.document_processor.user_id = user_id
                         self.document_processor.vector_service = await get_vector_service_async(user_id)
 
+                    effective_threshold = 0.05 if socratic_mode else document_similarity_threshold
+
                     context = await self.document_processor.search_similar_documents(
                         query_text=message,
                         file_ids=list(all_embedding_file_ids),
                         user_id=user_id,
                         top_k=max_context_snippets,
-                        similarity_threshold=document_similarity_threshold,
+                        similarity_threshold=effective_threshold,
                         message_obj=message_obj,
                         workflow_run_step_obj=workflow_run_step_obj
                     )
@@ -176,14 +178,13 @@ class LLMService:
         return list(File.active_objects.filter(folders__id__in=folder_ids, user_id=user_id).distinct().values_list('id', flat=True))
 
     @database_sync_to_async
-    def get_full_file_contents(self, file_ids: list, user_id: int) -> list:
+    def get_full_file_contents(self, file_ids: list,) -> list:
         """Read full content from files for the given file IDs."""
         if not file_ids:
             return []
 
         file_contents = []
-        files = File.active_objects.filter(id__in=file_ids, user_id=user_id)
-
+        files = File.active_objects.filter(id__in=file_ids)
         for file in files:
             try:
                 content = self.file_processor.read_file_content(file)
@@ -284,37 +285,11 @@ class LLMService:
                 transcript_parts.append(f"{role_name}: {content}")
         conversation_history_text = "\n\n".join(transcript_parts) if transcript_parts else "No previous messages."
 
-        # File context: try vector search first, then explicit files
         file_context_parts = []
-        # Vector/embedding search
-        all_embedding_file_ids = set(embedding_ids or [])
-        if tag_ids:
-            tagged_file_ids = await self.get_files_from_tags(tag_ids, user_id)
-            all_embedding_file_ids.update(tagged_file_ids)
-        if folder_ids:
-            folder_file_ids = await self.get_files_from_folders(folder_ids, user_id)
-            all_embedding_file_ids.update(folder_file_ids)
-
-        if all_embedding_file_ids:
-            if user_id and user_id != self.document_processor.user_id:
-                self.document_processor.user_id = user_id
-                self.document_processor.vector_service = await get_vector_service_async(user_id)
-
-            context = await self.document_processor.search_similar_documents(
-                query_text=message,
-                file_ids=list(all_embedding_file_ids),
-                user_id=user_id,
-                top_k=max_context_snippets,
-                similarity_threshold=document_similarity_threshold,
-                message_obj=message_obj,
-                workflow_run_step_obj=workflow_run_step_obj,
-            )
-            if context:
-                file_context_parts.append(context)
 
         # Direct file contents (explicit attachments)
         if file_ids:
-            fulls = await self.get_full_file_contents(file_ids, user_id)
+            fulls = await self.get_full_file_contents(file_ids,)
             if fulls:
                 file_context_parts.extend(fulls)
 
