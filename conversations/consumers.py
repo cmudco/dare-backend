@@ -422,7 +422,7 @@ Provide your assessment in a clear, encouraging format that helps track their pr
                 llm=progress_llm,
                 max_tokens=2048,
                 temperature=0.7,
-                conversation_history_limit=20,
+                conversation_history_limit=80,
                 bot_meta=message_data.get("bot_meta") or {},
             ):
                 if usage:
