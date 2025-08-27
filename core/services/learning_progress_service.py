@@ -30,12 +30,13 @@ class LearningProgressService:
         bot_meta: Optional[Dict] = None,
     ) -> AsyncGenerator[Tuple[str, Dict], None]:
         """
-        Stream an assessment using the exact evaluation prompt shape requested:
-
-        Learning Goals: ...
-        Conversation Context: Subject/Topic/Title (from bot_meta)
-        Student's Last Message and AI Response to Assess: (last_message.message)
-        Assessment Instructions: tracking_prompt
+        Stream a comprehensive learning progress assessment including:
+        - Full conversation history
+        - Previous assessment context for progression tracking
+        - Learning goals and tracking instructions
+        - Bot metadata (subject/topic/title)
+        
+        Uses system + user message format for better AI comprehension.
         """
         try:
             if not learning_goals or not learning_goals.strip():
@@ -46,15 +47,21 @@ class LearningProgressService:
             if not llm:
                 llm = await self._get_default_progress_llm()
 
-            # Build the evaluation input exactly as specified
+            # Get conversation history (following reference pattern)
+            conversation_history = await self._get_conversation_history(
+                conversation, limit=conversation_history_limit
+            )
+
+            # Get latest previous assessment (following reference pattern)
+            previous_assessment_text = await self._get_previous_assessment(conversation)
+
+            # Build comprehensive system prompt (following reference pattern)
             meta = bot_meta or {}
             subject = meta.get("subject", "")
             topic = meta.get("topic", "")
             title = meta.get("title", "")
 
-            last_msg_text = (last_message.message if last_message and last_message.message else "").strip()
-
-            evaluation_input = f"""Learning Goals:
+            system_prompt = f"""Learning Goals:
 {learning_goals}
 
 Conversation Context:
@@ -62,17 +69,24 @@ Subject: {subject}
 Topic: {topic}
 Title: {title}
 
-Student's Last Message and AI Response to Assess:
-{last_msg_text}
+Progress Tracking Instructions:
+{tracking_prompt}"""
 
-Assessment Instructions:
-{tracking_prompt}
+            # Build user message with full context (following reference pattern)
+            user_message = f"""Analyze the new conversation and update the current progress status.
+Refer to the conversation history when necessary:
 
-Please provide a concise assessment focusing on the student's progress toward the learning goals."""
+{conversation_history}
 
-            # Single-message prompt (no separate system message per request)
+Current Progress:
+{previous_assessment_text}
+
+If there is no current status, follow the system prompt to make a new status report."""
+
+            # System + User message format (following reference pattern)
             messages = [
-                {"role": "user", "content": evaluation_input},
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
             ]
 
             ai_service = self._get_ai_service(llm)
@@ -122,6 +136,36 @@ Please provide a concise assessment focusing on the student's progress toward th
         if llm:
             return llm
         raise ValueError("No LLM models configured for progress tracking")
+
+    @database_sync_to_async
+    def _get_conversation_history(self, conversation: Conversation, limit: int = 20) -> str:
+        """Get formatted conversation history as readable transcript."""
+        messages = Message.active_objects.filter(conversation=conversation).order_by('created_at')
+        
+        if limit > 0:
+            messages = messages[:limit]
+            
+        conversation_history = ""
+        if messages.exists():
+            for msg in messages:
+                role_name = "User" if msg.sender_type == SenderType.PLAYER else "Assistant"
+                conversation_history += f"{role_name}: {msg.message}\n\n"
+        else:
+            conversation_history = "No previous messages in this conversation.\n\n"
+            
+        return conversation_history.strip()
+
+    @database_sync_to_async
+    def _get_previous_assessment(self, conversation: Conversation) -> str:
+        """Get the latest previous assessment content for the conversation."""
+        latest_assessment = LearningProgressAssessment.active_objects.filter(
+            conversation=conversation
+        ).order_by('-created_at').first()
+        
+        if latest_assessment:
+            return latest_assessment.content
+        else:
+            return "No previous progress assessment found, please provide an initial assessment."
 
     @database_sync_to_async
     def get_latest_assessment(self, conversation: Conversation) -> Optional[Dict]:
