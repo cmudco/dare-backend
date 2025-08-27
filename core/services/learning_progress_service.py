@@ -25,7 +25,7 @@ class LearningProgressService:
         llm: LLM = None,
         max_tokens: int = 2048,
         temperature: float = 0.7,
-        conversation_history_limit: int = 20,
+        conversation_history_limit: int = 80,
         # New: include bot metadata for subject/topic/title
         bot_meta: Optional[Dict] = None,
     ) -> AsyncGenerator[Tuple[str, Dict], None]:
@@ -140,14 +140,16 @@ If there is no current status, follow the system prompt to make a new status rep
     @database_sync_to_async
     def _get_conversation_history(self, conversation: Conversation, limit: int = 20) -> str:
         """Get formatted conversation history as readable transcript."""
-        messages = Message.active_objects.filter(conversation=conversation).order_by('created_at')
+        # Get messages in reverse chronological order (newest first)
+        messages = Message.active_objects.filter(conversation=conversation).order_by('-created_at')
         
         if limit > 0:
-            messages = messages[:limit]
-            
+            messages = messages[:limit]  # Take most recent N messages
         conversation_history = ""
         if messages.exists():
-            for msg in messages:
+            # Reverse to get chronological order (oldest to newest) for the transcript
+            for msg in reversed(messages):
+                print(msg.message)
                 role_name = "User" if msg.sender_type == SenderType.PLAYER else "Assistant"
                 conversation_history += f"{role_name}: {msg.message}\n\n"
         else:
