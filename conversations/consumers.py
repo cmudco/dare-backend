@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 class ChatConsumer(AsyncWebsocketConsumer):
     DEFAULT_TEMPERATURE = 0.7
     DEFAULT_MAX_TOKENS = 1024
-    DEFAULT_MAX_CONTEXT_SNIPPETS = 4
+    DEFAULT_MAX_CONTEXT_SNIPPETS = 5
     DEFAULT_DOCUMENT_SIMILARITY_THRESHOLD = 0.5
     DEFAULT_HISTORY_LIMIT = 20
     
