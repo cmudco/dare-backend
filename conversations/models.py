@@ -7,7 +7,7 @@ from django.conf import settings
 from django.core.validators import MinValueValidator
 from common.managers import ActiveObjectsManager
 from common.models import BaseModel, TimeStampMixin
-from .constants import Provider, SenderType, FeedbackType
+from .constants import Provider, SenderType, FeedbackType, ConversationSource
 
 
 class LLM(models.Model):
@@ -88,6 +88,12 @@ class Conversation(BaseModel):
     )
     conversation_id = models.CharField(max_length=50, unique=True, help_text="Unique conversation ID.")
     title = models.CharField(max_length=255, blank=True, null=True, help_text="Title of the conversation.")
+    source = models.CharField(
+        max_length=20,
+        choices=ConversationSource.choices,
+        default=ConversationSource.DARE,
+        help_text="Platform source where the conversation was created (DARE or SocraticBots)."
+    )
     max_context_snippets = models.PositiveIntegerField(default=4, help_text="Maximum number of context snippets to retrieve.")
     document_similarity_threshold = models.FloatField(default=0.2, help_text="Similarity threshold for document retrieval.")
     temperature = models.FloatField(default=0.7, help_text="Temperature setting for the LLM.")
@@ -165,6 +171,7 @@ class Conversation(BaseModel):
             cloned_conversation = Conversation(
                 user=self.user,
                 title=cloned_title,
+                source=self.source,
                 max_context_snippets=self.max_context_snippets,
                 document_similarity_threshold=self.document_similarity_threshold,
                 temperature=self.temperature,

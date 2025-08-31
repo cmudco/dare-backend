@@ -20,12 +20,18 @@ class ConversationSerializer(serializers.ModelSerializer):
         allow_null=True,
         write_only=True
     )
+    conversation_id = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        help_text="Optional conversation ID. Auto-generated if not provided."
+    )
 
     class Meta:
         model = Conversation
         fields = [
             'conversation_id',
             'title',
+            'source',
             'created_at',
             'user',
             'max_context_snippets',
