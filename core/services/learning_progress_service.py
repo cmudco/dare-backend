@@ -149,7 +149,6 @@ If there is no current status, follow the system prompt to make a new status rep
         if messages.exists():
             # Reverse to get chronological order (oldest to newest) for the transcript
             for msg in reversed(messages):
-                print(msg.message)
                 role_name = "User" if msg.sender_type == SenderType.PLAYER else "Assistant"
                 conversation_history += f"{role_name}: {msg.message}\n\n"
         else:
