@@ -39,7 +39,7 @@ class LLMService:
         prompt_id: str = None,
         temperature: float = 0.7,
         max_tokens: int = 2048,
-        max_context_snippets: int = 5,
+        max_context_snippets: int = 4,
         document_similarity_threshold: float = 0.5,
         history_limit: int = 20,
         referenced_conversation_ids: list = None,
@@ -63,8 +63,8 @@ class LLMService:
                     message=message,
                     conversation=conversation,
                     user_id=user_id,
-                    file_ids=[],
-                    embedding_ids= file_ids or [], # Note: using file IDs for context, will update later
+                    file_ids=file_ids or [],
+                    embedding_ids=[], # Note: using file IDs for context, will update later
                     tag_ids=[],
                     folder_ids=[],
                     history_limit=history_limit,
@@ -288,28 +288,10 @@ class LLMService:
         file_context_parts = []
 
         # Direct file contents (explicit attachments)
-        if embedding_ids:
-            if user_id and user_id != self.document_processor.user_id:
-                self.document_processor.user_id = user_id
-                self.document_processor.vector_service = await get_vector_service_async(user_id)
-
-            effective_threshold = 0
-
-            context = await self.document_processor.search_similar_documents(
-                query_text=message,
-                file_ids=embedding_ids,
-                user_id=user_id,
-                top_k=max_context_snippets,
-                similarity_threshold=effective_threshold,
-                message_obj=message_obj,
-                workflow_run_step_obj=workflow_run_step_obj
-            )
-            print("context", context)
-            if context:
-                for part in context.split("\n\n"):
-                    if part.strip():
-                        file_context_parts.append(part)
-            
+        if file_ids:
+            fulls = await self.get_full_file_contents(file_ids,)
+            if fulls:
+                file_context_parts.extend(fulls)
 
         file_context_text = "\n\n".join([p for p in file_context_parts if p and p.strip()])
         if not file_context_text:
