@@ -76,7 +76,6 @@ class LLMService:
                 )
 
                 ai_service = self._get_ai_service(llm)
-                print(max_tokens)
                 async for chunk, usage in ai_service.stream_chat_completion(messages, max_tokens, temperature):
                     yield chunk, usage
                 return
