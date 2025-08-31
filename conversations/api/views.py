@@ -8,6 +8,7 @@ from django.utils import timezone
 from django.db import transaction
 from conversations.models import Message, Conversation, LLM, Snippet
 from .serializers import MessageSerializer, ConversationSerializer, LLMSerializer
+from users.utils import detect_platform_from_request
 import weasyprint
 import tempfile
 import os
@@ -22,11 +23,17 @@ class ConversationViewSet(viewsets.ModelViewSet):
     lookup_field = 'conversation_id'
 
     def get_queryset(self):
-        return Conversation.active_objects.filter(user=self.request.user).order_by('sort_order', '-created_at')
+        # Filter conversations based on platform source
+        platform_source = detect_platform_from_request(self.request)
+        return Conversation.active_objects.filter(
+            user=self.request.user,
+            source=platform_source
+        ).order_by('sort_order', '-created_at')
 
     def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
-        if  self.request.user.default_prompt:
+        platform_source = detect_platform_from_request(self.request)
+        serializer.save(user=self.request.user, source=platform_source)
+        if self.request.user.default_prompt:
             serializer.instance.prompt = self.request.user.default_prompt
             serializer.instance.save()
 
