@@ -20,3 +20,7 @@ class Provider(Enum):
 class FeedbackType(models.TextChoices):
     LIKE = 'like', 'Like'
     DISLIKE = 'dislike', 'Dislike'
+
+class ConversationSource(models.TextChoices):
+    DARE = 'DARE', 'DARE'
+    SOCRATIC_BOTS = 'SocraticBots', 'SocraticBots'
