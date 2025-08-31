@@ -38,7 +38,7 @@ class LLMService:
         user_id: int = None,
         prompt_id: str = None,
         temperature: float = 0.7,
-        max_tokens: int = 2048,
+        max_tokens: int = 8000,
         max_context_snippets: int = 4,
         document_similarity_threshold: float = 0.5,
         history_limit: int = 20,
@@ -76,6 +76,7 @@ class LLMService:
                 )
 
                 ai_service = self._get_ai_service(llm)
+                print(max_tokens)
                 async for chunk, usage in ai_service.stream_chat_completion(messages, max_tokens, temperature):
                     yield chunk, usage
                 return
