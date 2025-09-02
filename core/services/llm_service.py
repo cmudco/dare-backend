@@ -276,7 +276,6 @@ class LLMService:
         bot_meta: Dict,
     ) -> list:
         """Build messages array in the classic SocraticBooks format."""
-        print("[DEBUG] Building socratic messages")
         subject = (bot_meta or {}).get("subject", "")
         topic = (bot_meta or {}).get("topic", "")
         learning_goals = (bot_meta or {}).get("learning_goals", "No specific learning goals defined.")
@@ -348,7 +347,6 @@ class LLMService:
         bot_meta: Dict,
     ) -> list:
         """Build messages using the Advanced Prompt construction provided."""
-        print("[DEBUG] Building advanced messagess")
         title = (bot_meta or {}).get("title") or (conversation.title if conversation and conversation.title else "Untitled Conversation")
         subject = (bot_meta or {}).get("subject", "")
         topic = (bot_meta or {}).get("topic", "")
