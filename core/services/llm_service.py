@@ -49,6 +49,7 @@ class LLMService:
         # New optional params for SocraticBooks-style prompt construction
         socratic_mode: bool = False,
         bot_meta: Dict = None,
+        advanced_mode: bool = False,
     ) -> AsyncGenerator[Tuple[str, Dict], None]:
         """Generate AI response with context."""
         try:
@@ -59,21 +60,38 @@ class LLMService:
 
             # If Socratic mode is enabled, construct prompts using SocraticBooks logic
             if socratic_mode:
-                messages = await self._build_socratic_messages(
-                    message=message,
-                    conversation=conversation,
-                    user_id=user_id,
-                    file_ids=file_ids or [],
-                    embedding_ids=[], # Note: using file IDs for context, will update later
-                    tag_ids=[],
-                    folder_ids=[],
-                    history_limit=history_limit,
-                    max_context_snippets=max_context_snippets,
-                    document_similarity_threshold=document_similarity_threshold,
-                    message_obj=message_obj,
-                    workflow_run_step_obj=workflow_run_step_obj,
-                    bot_meta=bot_meta or {},
-                )
+                if advanced_mode:
+                    messages = await self._build_advanced_messages(
+                        message=message,
+                        conversation=conversation,
+                        user_id=user_id,
+                        file_ids=file_ids or [],
+                        embedding_ids=embedding_ids or [],
+                        tag_ids=tag_ids or [],
+                        folder_ids=folder_ids or [],
+                        history_limit=history_limit,
+                        max_context_snippets=max_context_snippets,
+                        document_similarity_threshold=document_similarity_threshold,
+                        message_obj=message_obj,
+                        workflow_run_step_obj=workflow_run_step_obj,
+                        bot_meta=bot_meta or {},
+                    )
+                else:
+                    messages = await self._build_socratic_messages(
+                        message=message,
+                        conversation=conversation,
+                        user_id=user_id,
+                        file_ids=file_ids or [],
+                        embedding_ids=[], # Note: using file IDs for context, will update later
+                        tag_ids=[],
+                        folder_ids=[],
+                        history_limit=history_limit,
+                        max_context_snippets=max_context_snippets,
+                        document_similarity_threshold=document_similarity_threshold,
+                        message_obj=message_obj,
+                        workflow_run_step_obj=workflow_run_step_obj,
+                        bot_meta=bot_meta or {},
+                    )
 
                 ai_service = self._get_ai_service(llm)
                 async for chunk, usage in ai_service.stream_chat_completion(messages, max_tokens, temperature):
@@ -258,6 +276,7 @@ class LLMService:
         bot_meta: Dict,
     ) -> list:
         """Build messages array in the classic SocraticBooks format."""
+        print("[DEBUG] Building socratic messages")
         subject = (bot_meta or {}).get("subject", "")
         topic = (bot_meta or {}).get("topic", "")
         learning_goals = (bot_meta or {}).get("learning_goals", "No specific learning goals defined.")
@@ -309,4 +328,67 @@ class LLMService:
         return [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_message},
+        ]
+
+    # -------- Advanced Prompt helpers --------
+    async def _build_advanced_messages(
+        self,
+        message: str,
+        conversation: 'Conversation',
+        user_id: int,
+        file_ids: list,
+        embedding_ids: list,
+        tag_ids: list,
+        folder_ids: list,
+        history_limit: int,
+        max_context_snippets: int,
+        document_similarity_threshold: float,
+        message_obj: Message,
+        workflow_run_step_obj,
+        bot_meta: Dict,
+    ) -> list:
+        """Build messages using the Advanced Prompt construction provided."""
+        print("[DEBUG] Building advanced messagess")
+        title = (bot_meta or {}).get("title") or (conversation.title if conversation and conversation.title else "Untitled Conversation")
+        subject = (bot_meta or {}).get("subject", "")
+        topic = (bot_meta or {}).get("topic", "")
+        learning_goals = (bot_meta or {}).get("learning_goals", "No specific learning goals defined.")
+        chat_prompt = (bot_meta or {}).get("chat_prompt", "Provide a helpful, educational response.")
+
+        # Conversation history as a readable transcript
+        history_list = await self.get_conversation_history(conversation, limit=history_limit) if conversation else []
+        transcript_parts = []
+        for h in history_list:
+            role_name = "User" if h["role"] == "user" else "Assistant"
+            content = (h["content"] or "").strip()
+            if content:
+                transcript_parts.append(f"{role_name}: {content}")
+        conversation_history_text = "\n\n".join(transcript_parts) if transcript_parts else "No previous messages."
+
+        # Build relevant content (attached files + retrieved snippets)
+        relevant_sections = []
+
+        if file_ids:
+            fulls = await self.get_full_file_contents(file_ids,)
+            if fulls:
+                relevant_sections.append("\n\n".join(fulls))
+
+        relevant_content_text = "\n\n".join([s for s in relevant_sections if s and s.strip()])
+        if not relevant_content_text:
+            relevant_content_text = "No relevant external content found."
+
+        # Assemble the advanced system prompt exactly as requested
+        system_prompt = (
+            f"Here is a conversation:\n{conversation_history_text}\n\n"
+            f"This is a conversation on {title} (Subject: {subject}, Topic: {topic}).\n"
+            f"We are trying to teach the following learning goals:\n{learning_goals}\n\n"
+            f"{relevant_content_text}\n"
+            f"The latest user message was: \"{message}\"\n\n"
+            f"Please respond according to these directions:\n{chat_prompt}"
+        )
+
+        # Include the user message as a separate turn to comply with chat APIs
+        return [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": message},
         ]
