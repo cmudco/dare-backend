@@ -211,6 +211,7 @@ Provide your assessment in a clear, encouraging format that helps track their pr
                 message_obj=message_obj,
                 # SocraticBooks-style prompt construction (when applicable)
                 socratic_mode=(self.platform == AuthSourceChoice.SOCRATIC_BOTS and not message_data.get("prompt_id")),
+                advanced_mode=bool(message_data.get("is_advanced")),
                 bot_meta=message_data.get("bot_meta") or {},
             ):
                 if usage:
@@ -374,6 +375,7 @@ Provide your assessment in a clear, encouraging format that helps track their pr
             "learning_goals": data.get("learning_goals", ""),
             "progress_llm_id": data.get("progress_llm_id"),
             "bot_meta": data.get("bot_meta", {}),
+            "is_advanced": data.get("is_advanced", data.get("isAdvanced")),
         }
 
     async def send_error(self, code: str, message: str, details: Dict = None):
