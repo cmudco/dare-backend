@@ -65,8 +65,8 @@ class LLMService:
                         message=message,
                         conversation=conversation,
                         user_id=user_id,
-                        file_ids=file_ids or [],
-                        embedding_ids=embedding_ids or [],
+                        file_ids=[],
+                        embedding_ids=file_ids or [],
                         tag_ids=tag_ids or [],
                         folder_ids=folder_ids or [],
                         history_limit=history_limit,
@@ -81,8 +81,8 @@ class LLMService:
                         message=message,
                         conversation=conversation,
                         user_id=user_id,
-                        file_ids=file_ids or [],
-                        embedding_ids=[], # Note: using file IDs for context, will update later
+                        file_ids=[],
+                        embedding_ids=file_ids or [], # using file_ids for now, will update SB FE once stable
                         tag_ids=[],
                         folder_ids=[],
                         history_limit=history_limit,
@@ -305,11 +305,28 @@ class LLMService:
 
         file_context_parts = []
 
-        # Direct file contents (explicit attachments)
-        if file_ids:
-            fulls = await self.get_full_file_contents(file_ids,)
-            if fulls:
-                file_context_parts.extend(fulls)
+        # Retrieve contextual snippets using embedding_ids (avoid full file reads)
+        if embedding_ids:
+            if user_id and user_id != self.document_processor.user_id:
+                self.document_processor.user_id = user_id
+                self.document_processor.vector_service = await get_vector_service_async(user_id)
+
+            effective_threshold = 0
+
+            context = await self.document_processor.search_similar_documents(
+                query_text=message,
+                file_ids=embedding_ids,
+                user_id=user_id,
+                top_k=12,
+                similarity_threshold=effective_threshold,
+                message_obj=message_obj,
+                workflow_run_step_obj=workflow_run_step_obj
+            )
+            # print("context", context)
+            if context:
+                for part in context.split("\n\n"):
+                    if part.strip():
+                        file_context_parts.append(part)
 
         file_context_text = "\n\n".join([p for p in file_context_parts if p and p.strip()])
         if not file_context_text:
@@ -363,13 +380,30 @@ class LLMService:
                 transcript_parts.append(f"{role_name}: {content}")
         conversation_history_text = "\n\n".join(transcript_parts) if transcript_parts else "No previous messages."
 
-        # Build relevant content (attached files + retrieved snippets)
+        # Build relevant content using embedding-based retrieval (avoid full file reads)
         relevant_sections = []
 
-        if file_ids:
-            fulls = await self.get_full_file_contents(file_ids,)
-            if fulls:
-                relevant_sections.append("\n\n".join(fulls))
+        if embedding_ids:
+            if user_id and user_id != self.document_processor.user_id:
+                self.document_processor.user_id = user_id
+                self.document_processor.vector_service = await get_vector_service_async(user_id)
+
+            effective_threshold = 0
+
+            context = await self.document_processor.search_similar_documents(
+                query_text=message,
+                file_ids=embedding_ids,
+                user_id=user_id,
+                top_k=12,
+                similarity_threshold=effective_threshold,
+                message_obj=message_obj,
+                workflow_run_step_obj=workflow_run_step_obj
+            )
+            # print("context", len(context))
+            if context:
+                for part in context.split("\n\n"):
+                    if part.strip():
+                        relevant_sections.append(part)
 
         relevant_content_text = "\n\n".join([s for s in relevant_sections if s and s.strip()])
         if not relevant_content_text:
