@@ -311,14 +311,12 @@ class LLMService:
                 self.document_processor.user_id = user_id
                 self.document_processor.vector_service = await get_vector_service_async(user_id)
 
-            effective_threshold = 0
-
             context = await self.document_processor.search_similar_documents(
                 query_text=message,
                 file_ids=embedding_ids,
                 user_id=user_id,
-                top_k=12,
-                similarity_threshold=effective_threshold,
+                top_k=max_context_snippets,
+                similarity_threshold=document_similarity_threshold,
                 message_obj=message_obj,
                 workflow_run_step_obj=workflow_run_step_obj
             )
@@ -388,14 +386,12 @@ class LLMService:
                 self.document_processor.user_id = user_id
                 self.document_processor.vector_service = await get_vector_service_async(user_id)
 
-            effective_threshold = 0
-
             context = await self.document_processor.search_similar_documents(
                 query_text=message,
                 file_ids=embedding_ids,
                 user_id=user_id,
-                top_k=12,
-                similarity_threshold=effective_threshold,
+                top_k=max_context_snippets,
+                similarity_threshold=document_similarity_threshold,
                 message_obj=message_obj,
                 workflow_run_step_obj=workflow_run_step_obj
             )
