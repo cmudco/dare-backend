@@ -29,7 +29,7 @@ class DocumentProcessor:
             self.user_id = user_id
             self.vector_service = get_vector_service(user_id)
 
-    def create_file_embeddings(self, file: File) -> int:
+    def create_file_embeddings(self, file: File, chunk_size=None, overlap_size=None) -> int:
         """Process a single file and create embeddings."""
         try:
             self.update_vector_service(file.user.id)
@@ -39,7 +39,21 @@ class DocumentProcessor:
             user_chunk_size = getattr(file.user, 'chunk_size', CHUNK_SIZE)
             user_overlap_size = getattr(file.user, 'overlap_size', OVERLAP_SIZE)
 
-            vectors = self._process_chunks(content, file, user_chunk_size, user_overlap_size)
+            try:
+                if chunk_size is not None and not isinstance(chunk_size, int):
+                    chunk_size = int(chunk_size)
+            except (ValueError, TypeError):
+                chunk_size = None
+            try:
+                if overlap_size is not None and not isinstance(overlap_size, int):
+                    overlap_size = int(overlap_size)
+            except (ValueError, TypeError):
+                overlap_size = None
+
+            effective_chunk_size = chunk_size if chunk_size is not None else user_chunk_size
+            effective_overlap_size = overlap_size if overlap_size is not None else user_overlap_size
+            
+            vectors = self._process_chunks(content, file, effective_chunk_size, effective_overlap_size)
             self._store_vectors(vectors, file.user.id)
             return len(vectors)
         except Exception as e:

@@ -38,7 +38,7 @@ class FileUploadService:
         return True, None
 
     @staticmethod
-    def create_file_instance(uploaded_file, file_name: str, user, tag_ids: List[int] = None) -> File:
+    def create_file_instance(uploaded_file, file_name: str, user, tag_ids: List[int] = None, *, chunk_size: int | None = None, overlap_size: int | None = None) -> File:
         """
         Create a file instance in the database.
 
@@ -71,7 +71,7 @@ class FileUploadService:
 
         if is_valid:
             try:
-                job = enqueue(process_file_embeddings, file_instance.id)
+                job = enqueue(process_file_embeddings, file_instance.id, chunk_size, overlap_size)
                 file_instance.job_id = job.id
                 file_instance.save(update_fields=['job_id'])
             except Exception as e:
@@ -83,7 +83,7 @@ class FileUploadService:
         return file_instance
 
     @staticmethod
-    def upload_files(uploaded_files: List, file_names: List[str], user, tag_ids: List[int] = None) -> List[File]:
+    def upload_files(uploaded_files: List, file_names: List[str], user, tag_ids: List[int] = None, *, chunk_size: int | None = None, overlap_size: int | None = None) -> List[File]:
         """
         Upload multiple files and create file instances.
 
@@ -106,7 +106,8 @@ class FileUploadService:
                 file_name = file_names[idx]
                 try:
                     file_instance = FileUploadService.create_file_instance(
-                        uploaded_file, file_name, user, tag_ids
+                        uploaded_file, file_name, user, tag_ids,
+                        chunk_size=chunk_size, overlap_size=overlap_size
                     )
                     file_instances.append(file_instance)
                 except Exception as e:
@@ -117,7 +118,7 @@ class FileUploadService:
 
     @staticmethod
     def upload_folder_with_files(folder_name: str, uploaded_files: List, file_names: List[str],
-                                user, tag_ids: List[int] = None) -> tuple[Folder, List[File]]:
+                                user, tag_ids: List[int] = None, *, chunk_size: int | None = None, overlap_size: int | None = None) -> tuple[Folder, List[File]]:
         """
         Create a folder and upload files to it.
 
@@ -137,7 +138,8 @@ class FileUploadService:
 
             # Upload files
             file_instances = FileUploadService.upload_files(
-                uploaded_files, file_names, user, tag_ids
+                uploaded_files, file_names, user, tag_ids,
+                chunk_size=chunk_size, overlap_size=overlap_size
             )
 
             # Add files to folder
