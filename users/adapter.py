@@ -10,7 +10,7 @@ class AccountAdapter(DefaultAccountAdapter):
         platform = detect_platform_from_request(request)
         callback_url = get_platform_frontend_url(platform)
 
-        return f"{FRONTEND_CONFIRM_EMAIL_URL}?key={emailconfirmation.key}&callbackurl={callback_url}"
+        return f"{FRONTEND_CONFIRM_EMAIL_URL}/?key={emailconfirmation.key}&callbackurl={callback_url}"
 
     def render_mail(self, template_prefix, email, context):
         """
