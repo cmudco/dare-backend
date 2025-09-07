@@ -83,7 +83,7 @@ class ClaudeService:
 
         except Exception as e:
             logger.exception(f"Error streaming chat completion: {str(e)}")
-            yield f"Error: {str(e)}", None
+            yield f"Error: {self._format_error(e)}", None
 
     async def get_chat_completion(
         self, messages: List[Dict[str, str]], max_tokens: int = 1024, temperature: float = 0.7
@@ -111,3 +111,81 @@ class ClaudeService:
         async for chunk, _ in self.stream_chat_completion(messages, max_tokens, temperature):
             response_text += chunk
         return response_text
+
+    def _format_error(self, e: Exception) -> str:
+        """Extract a concise error message from Anthropic exceptions.
+
+        Handles typical Anthropic APIStatusError shapes to avoid dumping full dicts.
+        """
+        # Check for overloaded condition first and short-circuit with a friendly message
+        try:
+            body = getattr(e, "body", None)
+            if isinstance(body, dict):
+                err = body.get("error")
+                if isinstance(err, dict):
+                    err_type = (err.get("type") or "").lower()
+                    if err_type == "overloaded_error":
+                        return "Due to high traffic, claude services are un-available"
+
+            resp = getattr(e, "response", None)
+            if resp is not None:
+                try:
+                    data = resp.json()
+                    if isinstance(data, dict):
+                        err = data.get("error")
+                        if isinstance(err, dict):
+                            err_type = (err.get("type") or "").lower()
+                            if err_type == "overloaded_error":
+                                return "Due to high traffic, claude services are un-available"
+                except Exception:
+                    pass
+
+            if "overload" in str(e).lower():
+                return "Due to high traffic, claude services are un-available"
+        except Exception:
+            pass
+
+        # Anthropic errors often expose a 'body' dict with nested 'error'
+        body = getattr(e, "body", None)
+        if isinstance(body, dict):
+            err = body.get("error")
+            if isinstance(err, dict):
+                msg = err.get("message")
+                err_type = err.get("type")
+                if isinstance(msg, str) and msg:
+                    if err_type:
+                        return f"Claude error ({err_type}): {msg}"
+                    return f"Claude error: {msg}"
+            for key in ("message", "detail", "error"):
+                val = body.get(key)
+                if isinstance(val, str) and val:
+                    return f"Claude error: {val}"
+
+        # Some exceptions carry an HTTP response with JSON
+        resp = getattr(e, "response", None)
+        if resp is not None:
+            try:
+                data = resp.json()
+                if isinstance(data, dict):
+                    err = data.get("error")
+                    if isinstance(err, dict):
+                        msg = err.get("message") or err.get("type")
+                        if isinstance(msg, str) and msg:
+                            return f"Claude error: {msg}"
+                    for key in ("message", "detail", "error"):
+                        val = data.get(key)
+                        if isinstance(val, str) and val:
+                            return f"Claude error: {val}"
+            except Exception:
+                try:
+                    text = getattr(resp, "text", "")
+                    if text:
+                        return f"Claude error: {text[:200]}"
+                except Exception:
+                    pass
+
+        msg_attr = getattr(e, "message", None)
+        if isinstance(msg_attr, str) and msg_attr:
+            return f"Claude error: {msg_attr}"
+
+        return f"Claude error: {str(e)}"

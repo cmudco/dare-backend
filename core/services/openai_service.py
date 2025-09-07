@@ -1,4 +1,5 @@
 from typing import AsyncGenerator, List, Dict, Tuple
+import logging
 from openai import AsyncOpenAI
 from config import env
 from conversations.models import LLM
@@ -59,7 +60,8 @@ class OpenAIService:
             yield "", usage
 
         except Exception as e:
-            yield f"Error: {str(e)}", None
+            logging.getLogger(__name__).exception("OpenAI streaming error")
+            yield f"Error: {self._format_error(e)}", None
 
     async def get_chat_completion(
         self, messages: List[Dict[str, str]], max_tokens: int = 1024, temperature: float = 0.7
@@ -85,3 +87,57 @@ class OpenAIService:
         async for chunk, _ in self.stream_chat_completion(messages, max_tokens, temperature):
             response_text += chunk
         return response_text
+
+    def _format_error(self, e: Exception) -> str:
+        """Extract a concise error message from OpenAI/HTTP exceptions.
+
+        Tries common shapes (OpenAI error payloads, httpx/requests responses),
+        then falls back to str(e).
+        """
+        # Check for overloaded condition first and short-circuit with a friendly message
+        try:
+            resp = getattr(e, "response", None)
+            if resp is not None:
+                try:
+                    data = resp.json()
+                    if isinstance(data, dict):
+                        err = data.get("error")
+                        if isinstance(err, dict):
+                            err_type = (err.get("type") or "").lower()
+                            if err_type == "overloaded_error":
+                                return "Due to high traffic, openai services are un-available"
+                except Exception:
+                    pass
+            if "overload" in str(e).lower():
+                return "Due to high traffic, openai services are un-available"
+        except Exception:
+            pass
+
+        # OpenAI errors often expose a response with JSON body
+        resp = getattr(e, "response", None)
+        if resp is not None:
+            try:
+                data = resp.json()
+                if isinstance(data, dict):
+                    err = data.get("error")
+                    if isinstance(err, dict):
+                        msg = err.get("message") or err.get("code") or err.get("type")
+                        if isinstance(msg, str) and msg:
+                            return f"OpenAI error: {msg}"
+                    for key in ("message", "detail", "error"):
+                        val = data.get(key)
+                        if isinstance(val, str) and val:
+                            return f"OpenAI error: {val}"
+            except Exception:
+                try:
+                    text = getattr(resp, "text", "")
+                    if text:
+                        return f"OpenAI error: {text[:200]}"
+                except Exception:
+                    pass
+
+        msg = getattr(e, "message", None)
+        if isinstance(msg, str) and msg:
+            return f"OpenAI error: {msg}"
+
+        return f"OpenAI error: {str(e)}"
