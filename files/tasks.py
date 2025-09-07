@@ -9,7 +9,17 @@ from .constants import FileStatus
 from users.constants import VectorDBChoice
 
 @job
-def process_file_embeddings(file_id):
+def process_file_embeddings(file_id, chunk_size=None, overlap_size=None):
+    try:
+        if chunk_size is not None and not isinstance(chunk_size, int):
+            chunk_size = int(chunk_size)
+    except (ValueError, TypeError):
+        chunk_size = None
+    try:
+        if overlap_size is not None and not isinstance(overlap_size, int):
+            overlap_size = int(overlap_size)
+    except (ValueError, TypeError):
+        overlap_size = None
     start_time = time.time()
 
     try:
@@ -25,7 +35,7 @@ def process_file_embeddings(file_id):
         file.save(update_fields=['status', 'error_message'])
 
         processor = DocumentProcessor()
-        result = processor.create_file_embeddings(file)
+        result = processor.create_file_embeddings(file, chunk_size, overlap_size)
 
         # Record the user's current vector DB preference with the file
         file.vector_db_source = file.user.vector_db

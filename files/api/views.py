@@ -42,10 +42,13 @@ class FileViewSet(viewsets.ModelViewSet):
 
         tags_data = request.data.get('tags', '[]')
         tag_ids = FileUploadService.parse_tags(tags_data)
+        chunk_size = request.data.get('chunk_size')
+        overlap_size = request.data.get('overlap_size')
 
         try:
             file_instances = FileUploadService.upload_files(
-                uploaded_files, file_names, request.user, tag_ids
+                uploaded_files, file_names, request.user, tag_ids,
+                chunk_size=chunk_size, overlap_size=overlap_size
             )
             serializer = self.get_serializer(file_instances, many=True)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
