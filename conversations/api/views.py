@@ -13,6 +13,7 @@ import weasyprint
 import tempfile
 import os
 import markdown
+from decimal import Decimal
 
 
 
@@ -156,18 +157,66 @@ class ConversationViewSet(viewsets.ModelViewSet):
             conversation = self.get_object()
             
             # Get all messages in the conversation, ordered by creation date
-            messages = conversation.messages.filter(is_active=True, is_deleted=False).order_by('created_at')
+            messages = (
+                conversation.messages
+                .filter(is_active=True, is_deleted=False)
+                .select_related('llm')
+                .prefetch_related('files__tags', 'tags', 'snippets__file')
+                .order_by('created_at')
+            )
             
             # Convert markdown to HTML for each message
             processed_messages = []
+            total_input_tokens = 0
+            total_output_tokens = 0
+            total_cost = Decimal('0.000000')
+            models_counter = {}
+            unique_files = {}
+            unique_tags = set()
+
             for message in messages:
                 processed_message = message
                 # Convert markdown to HTML if the message contains markdown
                 if message.message:
                     processed_message.message = markdown.markdown(
-                        message.message, 
+                        message.message,
                         extensions=['markdown.extensions.fenced_code', 'markdown.extensions.tables', 'markdown.extensions.nl2br']
                     )
+
+                # Aggregate usage metrics
+                if message.input_tokens:
+                    total_input_tokens += int(message.input_tokens)
+                if message.output_tokens:
+                    total_output_tokens += int(message.output_tokens)
+                if message.cost:
+                    try:
+                        total_cost += Decimal(message.cost)
+                    except Exception:
+                        pass
+
+                # Count models for AI messages
+                if message.llm is not None and message.sender_type == 2:
+                    key = message.llm_id
+                    if key not in models_counter:
+                        models_counter[key] = {
+                            'name': message.llm.name,
+                            'provider': message.llm.provider,
+                            'identifier': message.llm.identifier,
+                            'count': 0,
+                        }
+                    models_counter[key]['count'] += 1
+
+                # Collect unique files
+                for f in message.files.all():
+                    unique_files[f.id] = f
+                    # collect file tags as part of tag summary
+                    for tg in getattr(f, 'tags', []).all() if hasattr(f, 'tags') else []:
+                        unique_tags.add(tg.label)
+
+                # Collect message tags
+                for tag in message.tags.all():
+                    unique_tags.add(tag.label)
+
                 processed_messages.append(processed_message)
             
             # Prepare context for template
@@ -176,6 +225,14 @@ class ConversationViewSet(viewsets.ModelViewSet):
                 'messages': processed_messages,
                 'generated_at': timezone.now(),
                 'user': conversation.user,
+                # Aggregates / summary
+                'total_input_tokens': total_input_tokens,
+                'total_output_tokens': total_output_tokens,
+                'total_cost': total_cost,
+                'models_summary': list(models_counter.values()),
+                'files_summary': list(unique_files.values()),
+                'files_count': len(unique_files),
+                'tags_summary': sorted(list(unique_tags)),
             }
             
             # Render HTML template
@@ -264,4 +321,3 @@ class LLMViewSet(viewsets.ModelViewSet):
         queryset = LLM.objects.all().order_by('name')
         serializer = self.get_serializer(queryset, many=True)
         return Response(serializer.data)
-

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ conversation.title }} - Conversation History</title>
+    <title>{{ conversation.title|default:"Conversation" }} - Conversation Export</title>
     <style>
         @page {
             size: A4;
@@ -266,6 +266,20 @@
             background: #f8f9fa;
             border-radius: 8px;
         }
+
+        .section { margin: 20px 0; }
+        .section h2 { margin: 0 0 8px 0; font-size: 16px; font-weight: 600; color: #2c3e50; }
+        .card { border: 1px solid #e9ecef; border-radius: 8px; background: #ffffff; padding: 12px; }
+        .grid-2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; }
+        .meta-item { display: flex; gap: 8px; align-items: baseline; }
+        .meta-label { min-width: 180px; color: #6c757d; font-size: 12px; text-transform: uppercase; letter-spacing: 0.02em; }
+        .meta-value { color: #212529; font-size: 13px; }
+        .badge { display: inline-block; padding: 2px 6px; font-size: 11px; border-radius: 10px; background: #eef2f7; color: #48556a; margin-left: 6px; }
+        .badge.warn { background: #fff3cd; color: #7a5a00; }
+        .badge.info { background: #e7f3ff; color: #0c5460; }
+        .badge.ok { background: #e6f4ea; color: #1e6b3a; }
+        .kvs { margin: 6px 0 0 0; padding-left: 16px; }
+        .small { font-size: 11px; color: #6c757d; }
         
         /* Ensure text is selectable */
         * {
@@ -300,8 +314,8 @@
 </head>
 <body>
     <div class="header">
-        <h1>{{ conversation.title|default:"Conversation History" }}</h1>
-        <div class="subtitle">DARE AI Conversation Export</div>
+        <h1>{{ conversation.title|default:"Conversation" }}</h1>
+        <div class="subtitle">DARE AI Conversation Export • ID: {{ conversation.conversation_id }} • Generated: {{ generated_at|date:"M j, Y g:i A" }}</div>
     </div>
     
     <div class="conversation-info">
@@ -317,42 +331,191 @@
             <span class="info-label">Last Updated</span>
             <div class="info-value">{{ conversation.updated_at|date:"M j, Y g:i A" }}</div>
         </div>
-        {% if conversation.llm %}
         <div class="info-item">
-            <span class="info-label">Primary Model</span>
-            <div class="info-value">{{ conversation.llm.name }}</div>
+            <span class="info-label">Owner</span>
+            <div class="info-value">{{ user.email }}</div>
         </div>
-        {% endif %}
+    </div>
+
+    <div class="section">
+        <h2>Conversation Settings</h2>
+        <div class="card grid-2">
+            <div class="meta-item"><div class="meta-label">Source</div><div class="meta-value">{{ conversation.source }}</div></div>
+            <div class="meta-item"><div class="meta-label">History Limit</div><div class="meta-value">{{ conversation.history_limit }}</div></div>
+            <div class="meta-item"><div class="meta-label">Temperature</div><div class="meta-value">{{ conversation.temperature }}</div></div>
+            <div class="meta-item"><div class="meta-label">Max Tokens</div><div class="meta-value">{{ conversation.max_tokens }}</div></div>
+            <div class="meta-item"><div class="meta-label">Max Context Snippets</div><div class="meta-value">{{ conversation.max_context_snippets }}</div></div>
+            <div class="meta-item"><div class="meta-label">Similarity Threshold</div><div class="meta-value">{{ conversation.document_similarity_threshold }}</div></div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Usage & Models</h2>
+        <div class="card">
+            <div class="grid-2">
+                <div class="meta-item"><div class="meta-label">Total Input Tokens</div><div class="meta-value">{{ total_input_tokens|default:0 }}</div></div>
+                <div class="meta-item"><div class="meta-label">Total Output Tokens</div><div class="meta-value">{{ total_output_tokens|default:0 }}</div></div>
+                <div class="meta-item"><div class="meta-label">Total Cost</div><div class="meta-value">${{ total_cost|default:0|floatformat:6 }}</div></div>
+            </div>
+            {% if models_summary %}
+                <div class="meta-item" style="margin-top:8px;"><div class="meta-label">Models Used</div></div>
+                <ul class="kvs">
+                    {% for m in models_summary %}
+                        <li><strong>{{ m.name }}</strong> {% if m.provider %}<span class="small">({{ m.provider|title }})</span>{% endif %}{% if m.identifier %}<span class="small"> • {{ m.identifier }}</span>{% endif %} <span class="badge info">{{ m.count }}</span></li>
+                    {% endfor %}
+                </ul>
+            {% else %}
+                <div class="small" style="margin-top:6px;">No AI messages in this conversation.</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>System Prompt</h2>
+        <div class="card">
+            {% if conversation.prompt %}
+                <div class="meta-item"><div class="meta-label">Title</div><div class="meta-value">{{ conversation.prompt.title }} (v{{ conversation.prompt.version }})</div></div>
+                <div class="meta-item"><div class="meta-label">Content</div></div>
+                <div class="message-text" style="margin-top:6px; white-space:pre-wrap;">{{ conversation.prompt.content }}</div>
+            {% else %}
+                <div class="small">No system prompt attached to this conversation.</div>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Data Sources</h2>
+        <div class="card">
+            <div class="meta-item"><div class="meta-label">Selected File IDs</div><div class="meta-value">{% if conversation.selected_file_ids %}{% for fid in conversation.selected_file_ids %}{{ fid }}{% if not forloop.last %}, {% endif %}{% endfor %}{% else %}<span class="small">None</span>{% endif %}</div></div>
+            <div class="meta-item"><div class="meta-label">Selected Embedding IDs</div><div class="meta-value">{% if conversation.selected_embedding_ids %}{% for eid in conversation.selected_embedding_ids %}{{ eid }}{% if not forloop.last %}, {% endif %}{% endfor %}{% else %}<span class="small">None</span>{% endif %}</div></div>
+            {% if conversation.learning_metadata %}
+                <div class="meta-item" style="margin-top:6px;"><div class="meta-label">Learning Metadata</div></div>
+                <div class="message-text" style="margin-top:6px;">
+                    <ul class="kvs">
+                        {% for k, v in conversation.learning_metadata.items %}
+                            <li><strong>{{ k }}:</strong> {{ v }}</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            {% endif %}
+            <div class="meta-item" style="margin-top:8px;"><div class="meta-label">Referenced Files</div><div class="meta-value">{{ files_count|default:0 }}</div></div>
+            {% if files_summary %}
+                <ul class="kvs">
+                    {% for f in files_summary %}
+                        <li>{{ f.name|default:f.file.name }}</li>
+                    {% endfor %}
+                </ul>
+            {% endif %}
+            {% if tags_summary %}
+                <div class="meta-item" style="margin-top:8px;"><div class="meta-label">Tags Used</div></div>
+                <ul class="kvs">
+                    {% for t in tags_summary %}
+                        <li>{{ t }}</li>
+                    {% endfor %}
+                </ul>
+            {% endif %}
+        </div>
     </div>
     
     {% if messages %}
         {% for message in messages %}
         <div class="message">
-            <div class="message-header {{ message.role|lower }}">
-                <span class="message-role">{{ message.role }}</span>
+            <div class="message-header {% if message.sender_type == 2 %}assistant{% else %}user{% endif %}">
+                <span class="message-role">{% if message.sender_type == 2 %}AI Assistant{% else %}User{% endif %}
+                    {% if message.is_edited %}<span class="badge info">Edited</span>{% endif %}
+                    {% if message.is_regenerated %}<span class="badge warn">Regenerated</span>{% endif %}
+                </span>
                 <span class="message-time">{{ message.created_at|date:"M j, Y g:i A" }}</span>
             </div>
-            
+
             <div class="message-content">
-                {% if message.role == 'assistant' and message.llm %}
+                {% if message.sender_type == 2 and message.llm %}
                 <div class="model-info">
-                    <span class="model-name">{{ message.llm.name }}</span>
-                    {% if message.llm.temperature %} • Temperature: {{ message.llm.temperature }}{% endif %}
-                    {% if message.llm.max_tokens %} • Max Tokens: {{ message.llm.max_tokens }}{% endif %}
+                    <span class="model-name">Model: {{ message.llm.name }}</span>
+                    {% if message.llm.provider %} • Provider: {{ message.llm.provider|title }}{% endif %}
+                    {% if message.llm.identifier %} • ID: {{ message.llm.identifier }}{% endif %}
+                    {% if message.input_tokens %} • Input Tokens: {{ message.input_tokens }}{% endif %}
+                    {% if message.output_tokens %} • Output Tokens: {{ message.output_tokens }}{% endif %}
+                    {% if message.cost %} • Cost: ${{ message.cost }}{% endif %}
                 </div>
                 {% endif %}
-                
-                {% if message.files_used.all %}
-                <div class="files-used">
-                    <strong>Referenced Files:</strong>
-                    <ul class="file-list">
-                        {% for file in message.files_used.all %}
-                        <li>{{ file.name }}</li>
-                        {% endfor %}
-                    </ul>
-                </div>
+
+                {% with files_qs=message.files.all %}
+                    {% if files_qs %}
+                    <div class="files-used">
+                        <strong>Referenced Files:</strong>
+                        <ul class="file-list">
+                            {% for file in files_qs %}
+                            <li>{{ file.name|default:file.file.name }}</li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                    {% endif %}
+                {% endwith %}
+
+                {% with tags_qs=message.tags.all %}
+                    {% if tags_qs %}
+                    <div class="files-used" style="background:#f0f4f7; border-color:#d4e1ee; color:#425b76;">
+                        <strong>Tags:</strong>
+                        <ul class="file-list">
+                            {% for tag in tags_qs %}
+                            <li>{{ tag.label }}</li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                    {% endif %}
+                {% endwith %}
+
+                {% with snippets_qs=message.snippets.all %}
+                    {% if snippets_qs %}
+                    <div class="files-used" style="background:#fff8e6; border-color:#ffe5a3; color:#7a5a00;">
+                        <strong>Retrieved Snippets ({{ snippets_qs|length }}):</strong>
+                        <ul class="file-list">
+                            {% for snip in snippets_qs %}
+                                <li>
+                                    {{ snip.file.name|default:snip.file.file.name }} • Chunk #{{ snip.chunk_index }} • Score: {{ snip.similarity_score }}
+                                    <div class="small" style="margin-top:4px; color:#6b5e3a;">“{{ snip.text|truncatechars:200 }}”</div>
+                                </li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                    {% endif %}
+                {% endwith %}
+
+                {% if message.feedback_type or message.feedback_text %}
+                    <div class="files-used" style="background:#eef7f0; border-color:#c8e6d0; color:#1e6b3a;">
+                        <strong>Feedback:</strong>
+                        <div class="message-text" style="margin-top:6px;">
+                            {% if message.feedback_type %}
+                                <span class="badge ok">{% if message.feedback_type == 'like' %}Like{% elif message.feedback_type == 'dislike' %}Dislike{% else %}{{ message.feedback_type }}{% endif %}</span>
+                            {% endif %}
+                            {% if message.feedback_text %}
+                                <div style="margin-top:6px; white-space:pre-wrap;">{{ message.feedback_text }}</div>
+                            {% endif %}
+                        </div>
+                    </div>
                 {% endif %}
-                
+
+                {% if message.is_edited or message.is_regenerated %}
+                    {% if message.original_message %}
+                    <div class="files-used" style="background:#f9f0ff; border-color:#e6d6ff; color:#4a3f6b;">
+                        <strong>Original Message:</strong>
+                        <div class="message-text" style="margin-top:6px; white-space:pre-wrap;">{{ message.original_message }}</div>
+                    </div>
+                    {% endif %}
+                {% endif %}
+
+                {% if message.learning_progress_data %}
+                    <div class="files-used" style="background:#f0f7ff; border-color:#cfe2ff; color:#274c77;">
+                        <strong>Learning Progress Data:</strong>
+                        <ul class="file-list">
+                            {% for k, v in message.learning_progress_data.items %}
+                                <li><strong>{{ k }}:</strong> {{ v }}</li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                {% endif %}
+
                 <div class="message-text">{{ message.message|safe }}</div>
             </div>
         </div>
