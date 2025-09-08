@@ -12,6 +12,7 @@ ALLOWED_FILES = [
     'plain', 'rtf', 'html', 'xml',
     'vnd.openxmlformats-officedocument.wordprocessingml.document',
     'vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'vnd.ms-excel',
 
     # Full MIME types
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
