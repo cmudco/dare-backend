@@ -1,9 +1,24 @@
 import io
-import PyPDF2
 import zipfile
 from typing import Dict, List, Any
-from files.models import File
 from xml.etree import ElementTree as ET
+
+import PyPDF2
+
+# Optional spreadsheet libraries
+try:
+    from openpyxl import load_workbook  # type: ignore
+    OPENPYXL_AVAILABLE = True
+except Exception:
+    OPENPYXL_AVAILABLE = False
+
+try:
+    import xlrd  # type: ignore
+    XLRD_AVAILABLE = True
+except Exception:
+    XLRD_AVAILABLE = False
+
+from files.models import File
 
 class FileProcessor:
     """Service for processing different types of files."""
@@ -17,8 +32,19 @@ class FileProcessor:
                 return self._read_pdf(file)
             elif file_name.endswith(('.txt', '.md', '.json')):
                 return self._read_text_file(file)
+            elif file_name.endswith('.csv'):
+                # Treat CSV as text for extraction
+                return self._read_text_file(file)
             elif file_name.endswith('.docx'):
                 return self._read_docx(file)
+            elif file_name.endswith('.xlsx'):
+                if OPENPYXL_AVAILABLE:
+                    return self._read_xlsx(file)
+                return f"Spreadsheet: {file.name or file.file.name} (XLSX content not extracted: openpyxl not installed)"
+            elif file_name.endswith('.xls'):
+                if XLRD_AVAILABLE:
+                    return self._read_xls(file)
+                return f"Spreadsheet: {file.name or file.file.name} (XLS content not extracted: xlrd not installed)"
             else:
                 return f"File: {file.name or file.file.name}"
 
@@ -91,3 +117,36 @@ class FileProcessor:
                         return '\n'.join(text_content)
         except Exception as e:
             raise Exception(f"Error reading DOCX file: {str(e)}")
+
+    def _read_xlsx(self, file: File) -> str:
+        """Extract text from XLSX spreadsheet using openpyxl."""
+        try:
+            with file.file.open('rb') as f:
+                wb = load_workbook(filename=f, data_only=True, read_only=True)
+                texts = []
+                for ws in wb.worksheets:
+                    texts.append(f"Sheet: {ws.title}")
+                    for row in ws.iter_rows(values_only=True):
+                        row_values = [str(cell) for cell in row if cell is not None]
+                        if row_values:
+                            texts.append('\t'.join(row_values))
+                return '\n'.join(texts) if texts else (file.name or file.file.name)
+        except Exception as e:
+            raise Exception(f"Error reading XLSX file: {str(e)}")
+
+    def _read_xls(self, file: File) -> str:
+        """Extract text from legacy XLS spreadsheet using xlrd if available."""
+        try:
+            with file.file.open('rb') as f:
+                book = xlrd.open_workbook(file_contents=f.read())
+                texts = []
+                for sheet in book.sheets():
+                    texts.append(f"Sheet: {sheet.name}")
+                    for r in range(sheet.nrows):
+                        row = sheet.row_values(r)
+                        row_values = [str(cell) for cell in row if str(cell).strip() != '']
+                        if row_values:
+                            texts.append('\t'.join(row_values))
+                return '\n'.join(texts) if texts else (file.name or file.file.name)
+        except Exception as e:
+            return f"Spreadsheet: {file.name or file.file.name} (XLS content not extracted: {str(e)})"

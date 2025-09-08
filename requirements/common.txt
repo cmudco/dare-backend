@@ -65,3 +65,8 @@ resend~=2.7.0
 
 # Text splitting
 langchain-text-splitters~=0.3.8
+
+# Spreadsheet processing
+openpyxl~=3.1.5
+# Optional legacy .xls support (used only if available)
+xlrd~=2.0.1
