@@ -46,6 +46,15 @@ class AccessCodeGroup(TimeStampMixin):
         related_name='access_code_groups',
         help_text=_("Model group applied to users who register with this access code group")
     )
+    # Optional: set an initial wallet credit for users who register with this code
+    initial_wallet_credit = models.DecimalField(
+        max_digits=10,
+        decimal_places=6,
+        null=True,
+        blank=True,
+        help_text=_("Optional initial wallet credit (USD) to grant new users who register with this access code. If left blank, normal defaults apply."),
+        verbose_name=_("Initial Wallet Credit (USD)")
+    )
 
     class Meta:
         verbose_name = "Access Code Group"
