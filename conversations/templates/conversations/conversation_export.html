@@ -257,6 +257,10 @@
             margin: 5px 0 0 0;
             padding-left: 15px;
         }
+        .file-list li {
+            overflow-wrap: anywhere;
+            word-break: break-word;
+        }
         
         .no-messages {
             text-align: center;
@@ -302,12 +306,25 @@
                 break-after: avoid;
             }
             .message-content {
-                orphans: 3;
-                widows: 3;
+                orphans: 2;
+                widows: 2;
             }
-            .model-info, .files-used {
+            .model-info {
                 page-break-inside: avoid;
                 break-inside: avoid;
+            }
+            /* Allow info cards to split across pages */
+            .files-used {
+                page-break-inside: auto;
+                break-inside: auto;
+                overflow: visible;
+            }
+            /* Allow list items to split to avoid large gaps on page ends */
+            .files-used .file-list > li {
+                page-break-inside: auto;
+                break-inside: auto;
+                orphans: 2;
+                widows: 2;
             }
         }
     </style>
