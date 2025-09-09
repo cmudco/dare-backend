@@ -11,6 +11,8 @@ from billing.constants import TransactionTypeChoice
 def create_user_wallet(sender, instance, created, **kwargs):
     """
     Create a wallet when a new user is registered.
+    Default starting balance is $0.00; initial credit is applied explicitly
+    during registration (either via Access Code Group setting or $5 default).
     """
     if created:
-            wallet = Wallet.objects.create(user=instance)
+        Wallet.objects.create(user=instance, balance=Decimal('0.00'))

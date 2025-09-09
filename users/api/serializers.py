@@ -6,6 +6,8 @@ from rest_framework import serializers
 from prompts.api.serializers import PromptSerializer
 from users.constants import VectorDBChoice, AuthSourceChoice, ScopeChoice
 from users.models import AccessCodeGroup
+from billing.services import WalletService
+from decimal import Decimal
 from users.utils import detect_platform_from_request, get_platform_access_permission
 import logging
 
@@ -179,6 +181,31 @@ class CustomRegisterSerializer(RegisterSerializer):
                 user.is_dare_accessible = False
         
         user.save()
+
+        # Apply initial wallet credit with a single transaction
+        # - If access code has an initial_wallet_credit, grant exactly that amount
+        # - Otherwise grant the default $5.00
+        try:
+            # Ensure wallet exists with $0 from signal; create with $0 if missing
+            wallet = getattr(user, 'wallet', None)
+            if wallet is None:
+                from billing.models import Wallet
+                wallet = Wallet.objects.create(user=user, balance=Decimal('0.00'))
+
+            if code_group and getattr(code_group, 'initial_wallet_credit', None) is not None:
+                initial_amount = Decimal(code_group.initial_wallet_credit)
+                message = f"Initial credit via access code '{code_group.access_code}'"
+            else:
+                initial_amount = Decimal('5.00')
+                message = "Initial wallet credit"
+
+            # Credit exactly the intended amount (wallet starts at $0)
+            if initial_amount > Decimal('0.00'):
+                WalletService.add_topup(user, amount=initial_amount, message=message)
+        except Exception:
+            # Do not block registration if crediting fails
+            logger.exception(f"Failed to apply initial wallet credit for user {user.id}")
+            pass
         return user
 
 
