@@ -2,6 +2,7 @@ import json
 import logging
 import uuid
 from typing import Optional, Dict, Any
+import time
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
 from channels.exceptions import DenyConnection
@@ -80,6 +81,13 @@ Provide your assessment in a clear, encouraging format that helps track their pr
         """Handle incoming WebSocket messages."""
         try:
             data = json.loads(text_data)
+            # Lightweight heartbeat: respond to client pings to keep connection alive
+            if data.get("type") == "ping":
+                await self.send(json.dumps({
+                    "type": "pong",
+                    "ts": data.get("ts") or int(time.time() * 1000)
+                }))
+                return
             action = data.get("action")
             if action == "edit_message":
                 await self.handle_edit_message(data)
