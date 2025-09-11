@@ -208,9 +208,15 @@ WSGI_APPLICATION = "dare.wsgi.application"
 # Django appends a trailing slash to URLs lacking one, if it resolves to a valid view.
 APPEND_SLASH = True
 
+_REDIS_HOST = env.REDIS_HOST or "127.0.0.1"
+_REDIS_PORT = int(env.REDIS_PORT or 6379)
+
 CHANNEL_LAYERS = {
     "default": {
-        "BACKEND": "channels.layers.InMemoryChannelLayer"
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {
+            "hosts": [(_REDIS_HOST, _REDIS_PORT)],
+        },
     }
 }
 
