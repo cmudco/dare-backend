@@ -171,6 +171,10 @@
             font-family: 'Monaco', 'Consolas', 'Courier New', monospace;
             font-size: 0.9em;
             color: #d73a49;
+            /* Ensure long inline code wraps to new lines */
+            white-space: pre-wrap;
+            word-break: break-word;
+            overflow-wrap: anywhere;
         }
         
         .message-text pre {
@@ -178,6 +182,10 @@
             border: 1px solid #e9ecef;
             border-radius: 6px;
             padding: 16px;
+            /* Wrap long lines instead of forcing horizontal scroll */
+            white-space: pre-wrap;
+            word-break: break-word;
+            overflow-wrap: anywhere;
             overflow-x: auto;
             margin: 1em 0;
             font-family: 'Monaco', 'Consolas', 'Courier New', monospace;
@@ -191,6 +199,10 @@
             padding: 0;
             color: #24292e;
             font-size: inherit;
+            /* Inherit wrapping behavior from pre */
+            white-space: inherit;
+            word-break: inherit;
+            overflow-wrap: inherit;
         }
         
         .message-text blockquote {
