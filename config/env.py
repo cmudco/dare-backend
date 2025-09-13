@@ -60,6 +60,7 @@ OLLAMA_HOST = env('OLLAMA_HOST', default='http://localhost:11434')
 REDIS_HOST = os.getenv("REDIS_HOST")
 REDIS_PORT = os.getenv("REDIS_PORT")
 REDIS_DB = os.getenv("REDIS_DB")
+REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
 
 # Add these configurations
 WEAVIATE_HOST = os.getenv("WEAVIATE_HOST", "localhost")

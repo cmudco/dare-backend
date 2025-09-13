@@ -208,29 +208,35 @@ WSGI_APPLICATION = "dare.wsgi.application"
 # Django appends a trailing slash to URLs lacking one, if it resolves to a valid view.
 APPEND_SLASH = True
 
-_REDIS_HOST = env.REDIS_HOST or "127.0.0.1"
-_REDIS_PORT = int(env.REDIS_PORT or 6379)
+REDIS_HOST = env.REDIS_HOST or "127.0.0.1"
+REDIS_PORT = int(env.REDIS_PORT or 6379)
+REDIS_DB = int(env.REDIS_DB or 1)
+REDIS_PASSWORD = env.REDIS_PASSWORD or ""
 
 CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
         "CONFIG": {
-            "hosts": [(_REDIS_HOST, _REDIS_PORT)],
+            "hosts": [
+                f"redis://:{REDIS_PASSWORD}@{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}" if REDIS_PASSWORD else f"redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}"
+            ],
         },
     }
 }
 
 RQ_QUEUES = {
     'default': {
-        'HOST': env.REDIS_HOST,
-        'PORT': env.REDIS_PORT,
-        'DB': env.REDIS_DB,
+        'HOST': REDIS_HOST,
+        'PORT': REDIS_PORT,
+        'DB': REDIS_DB,
+        'PASSWORD': REDIS_PASSWORD if REDIS_PASSWORD else None,
         'DEFAULT_TIMEOUT': 3600,
     },
     'scheduler': {
-        'HOST': env.REDIS_HOST,
-        'PORT': env.REDIS_PORT,
-        'DB': env.REDIS_DB,
+        'HOST': REDIS_HOST,
+        'PORT': REDIS_PORT,
+        'DB': REDIS_DB,
+        'PASSWORD': REDIS_PASSWORD if REDIS_PASSWORD else None,
     },
 }
 
