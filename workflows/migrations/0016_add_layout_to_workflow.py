@@ -4,7 +4,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('workflows', '0016_drop_execution_type_from_step'),
+        ('workflows', '0015_merge_20250803_0348'),
     ]
 
     operations = [
