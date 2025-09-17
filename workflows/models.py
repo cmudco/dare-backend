@@ -187,6 +187,11 @@ class Workflow(BaseModel):
         blank=True,
         help_text="Optional React Flow layout data: positions keyed by 'start', 'step:<order>', 'output:<order>'"
     )
+    viewport = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="Optional React Flow viewport data: { x: number, y: number, zoom: number }"
+    )
 
     active_objects = ActiveObjectsManager()
 

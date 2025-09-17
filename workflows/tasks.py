@@ -195,13 +195,19 @@ def execute_step_task(workflow_run_step_id, workflow_run_id=None):
             step_run.save()
 
             if workflow_run_id:
-                workflow_run = WorkflowRun.active_objects.get(id=workflow_run_id)
-                all_steps = workflow_run.steps.all()
-                pending_steps = all_steps.filter(status__in=[WorkflowRunStepStatus.PENDING, WorkflowRunStepStatus.RUNNING])
+                # Use atomic transaction with select_for_update to prevent race conditions
+                from django.db import transaction
 
-                if not pending_steps.exists():
-                    workflow_run.ended_at = timezone.now()
-                    workflow_run.save(update_fields=['ended_at'])
+                with transaction.atomic():
+                    workflow_run = WorkflowRun.active_objects.select_for_update().get(id=workflow_run_id)
+                    # Refresh step data to ensure we have the latest status updates
+                    pending_steps = workflow_run.steps.filter(
+                        status__in=[WorkflowRunStepStatus.PENDING, WorkflowRunStepStatus.RUNNING]
+                    )
+
+                    if not pending_steps.exists():
+                        workflow_run.ended_at = timezone.now()
+                        workflow_run.save(update_fields=['ended_at'])
 
     except WorkflowRunStep.DoesNotExist:
         pass
