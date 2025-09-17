@@ -182,6 +182,11 @@ class Workflow(BaseModel):
         blank=True,
         help_text="Steps included in this workflow"
     )
+    layout = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Optional React Flow layout data: positions keyed by 'start', 'step:<order>', 'output:<order>'"
+    )
 
     active_objects = ActiveObjectsManager()
 
