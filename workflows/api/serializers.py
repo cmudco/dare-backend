@@ -95,6 +95,21 @@ class StepSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['id', 'created_at', 'user']
 
+def _normalize_step_payload(validated_step, raw_step=None):
+    """Coerce incoming step payload keys and types to match model expectations."""
+    step_data = validated_step.copy()
+
+    source = raw_step if raw_step is not None else validated_step
+    step_id = source.get('id') if isinstance(source, dict) else None
+    if step_id is not None:
+        try:
+            step_data['id'] = int(step_id)
+        except (TypeError, ValueError):
+            step_data['id'] = None
+
+    return step_data
+
+
 class WorkflowSerializer(serializers.ModelSerializer):
     user = serializers.ReadOnlyField(source='user.email')
     steps = StepSerializer(many=True, required=False)
@@ -119,7 +134,11 @@ class WorkflowSerializer(serializers.ModelSerializer):
         viewport = validated_data.pop('viewport', None)
         workflow = Workflow.active_objects.create(layout=layout, viewport=viewport, **validated_data)
 
-        for step_data in steps_data:
+        raw_steps = self.initial_data.get('steps', []) if hasattr(self, 'initial_data') else []
+
+        for index, raw_step_data in enumerate(steps_data):
+            request_step = raw_steps[index] if index < len(raw_steps) else None
+            step_data = _normalize_step_payload(raw_step_data, request_step)
             files_data = step_data.pop('files', [])
             embeddings_data = step_data.pop('embeddings', [])
             step = Step.objects.create(
@@ -152,14 +171,21 @@ class WorkflowSerializer(serializers.ModelSerializer):
         instance.save()
 
         existing_steps = {step.id: step for step in instance.steps.all()}
-        updated_step_ids = {step_data['id'] for step_data in steps_data if 'id' in step_data}
+        raw_steps = self.initial_data.get('steps', []) if hasattr(self, 'initial_data') else []
+        normalized_steps = []
+        for index, step_data in enumerate(steps_data):
+            request_step = raw_steps[index] if index < len(raw_steps) else None
+            normalized_steps.append(_normalize_step_payload(step_data, request_step))
+        updated_step_ids = {
+            step_data['id'] for step_data in normalized_steps if step_data.get('id')
+        }
 
         for step_id, step in existing_steps.items():
             if step_id not in updated_step_ids:
                 instance.steps.remove(step)
                 step.delete()
 
-        for step_data in steps_data:
+        for step_data in normalized_steps:
             files_data = step_data.pop('files', [])
             embeddings_data = step_data.pop('embeddings', [])
             step_id = step_data.get('id')
