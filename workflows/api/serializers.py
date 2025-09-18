@@ -99,10 +99,12 @@ class WorkflowSerializer(serializers.ModelSerializer):
     user = serializers.ReadOnlyField(source='user.email')
     steps = StepSerializer(many=True, required=False)
     latest_run = serializers.SerializerMethodField()
+    layout = serializers.JSONField(required=False)
+    viewport = serializers.JSONField(required=False, allow_null=True)
 
     class Meta:
         model = Workflow
-        fields = ['id', 'title', 'description', 'mode', 'version', 'parent', 'created_at', 'user', 'steps', 'latest_run']
+        fields = ['id', 'title', 'description', 'mode', 'version', 'parent', 'created_at', 'user', 'steps', 'latest_run', 'layout', 'viewport']
         read_only_fields = ['id', 'created_at', 'user', 'steps_detail', 'latest_run']
 
     def get_latest_run(self, obj):
@@ -113,7 +115,9 @@ class WorkflowSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         steps_data = validated_data.pop('steps', [])
-        workflow = Workflow.active_objects.create(**validated_data)
+        layout = validated_data.pop('layout', {})
+        viewport = validated_data.pop('viewport', None)
+        workflow = Workflow.active_objects.create(layout=layout, viewport=viewport, **validated_data)
 
         for step_data in steps_data:
             files_data = step_data.pop('files', [])
@@ -141,6 +145,10 @@ class WorkflowSerializer(serializers.ModelSerializer):
         instance.title = validated_data.get('title', instance.title)
         instance.description = validated_data.get('description', instance.description)
         instance.mode = validated_data.get('mode', instance.mode)
+        if 'layout' in validated_data:
+            instance.layout = validated_data['layout'] or {}
+        if 'viewport' in validated_data:
+            instance.viewport = validated_data['viewport']
         instance.save()
 
         existing_steps = {step.id: step for step in instance.steps.all()}
