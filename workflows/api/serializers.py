@@ -9,6 +9,17 @@ from workflows.constants import WorkflowRunStepStatus
 from prompts.api.serializers import PromptSerializer
 
 
+def _merge_step_ids_from_initial_data(steps_data, initial_data):
+    """
+    Merge step IDs from initial_data back into validated steps_data.
+    This is needed because DRF validation strips IDs from nested serializers.
+    """
+    raw_steps = initial_data.get('steps', []) if initial_data else []
+    for i, step_data in enumerate(steps_data):
+        if i < len(raw_steps) and 'id' in raw_steps[i]:
+            step_data['id'] = raw_steps[i]['id']
+
+
 class WorkflowStepSnippetSerializer(serializers.ModelSerializer):
     file = FileSerializer(read_only=True)
     vector_db_source = serializers.CharField(read_only=True)
@@ -79,7 +90,10 @@ class StepSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         representation = super().to_representation(instance)
-        representation['prompt'] = PromptSerializer(instance.prompt).data
+        try:
+            representation['prompt'] = PromptSerializer(instance.prompt).data
+        except:
+            representation['prompt'] = None
         representation['files'] = FileSerializer(instance.files.all(), many=True).data
         representation['embeddings'] = FileSerializer(instance.embeddings.all(), many=True).data
         representation['llm'] = LLMSerializer(instance.llm).data if instance.llm else None
@@ -88,26 +102,12 @@ class StepSerializer(serializers.ModelSerializer):
     class Meta:
         model = Step
         fields = [
-            'id', 'prompt', 'files', 'embeddings', 'use_previous_step_files', 
+            'id', 'prompt', 'files', 'embeddings', 'use_previous_step_files',
             'use_previous_step_embeddings', 'llm', 'order', 'created_at', 'user',
             'max_tokens', 'temperature', 'max_context_snippets',
             'document_similarity_threshold'
         ]
-        read_only_fields = ['id', 'created_at', 'user']
-
-def _normalize_step_payload(validated_step, raw_step=None):
-    """Coerce incoming step payload keys and types to match model expectations."""
-    step_data = validated_step.copy()
-
-    source = raw_step if raw_step is not None else validated_step
-    step_id = source.get('id') if isinstance(source, dict) else None
-    if step_id is not None:
-        try:
-            step_data['id'] = int(step_id)
-        except (TypeError, ValueError):
-            step_data['id'] = None
-
-    return step_data
+        read_only_fields = ['created_at', 'user']
 
 
 class WorkflowSerializer(serializers.ModelSerializer):
@@ -130,28 +130,14 @@ class WorkflowSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         steps_data = validated_data.pop('steps', [])
-        layout = validated_data.pop('layout', {})
-        viewport = validated_data.pop('viewport', None)
-        workflow = Workflow.active_objects.create(layout=layout, viewport=viewport, **validated_data)
+        workflow = Workflow.active_objects.create(**validated_data)
 
-        raw_steps = self.initial_data.get('steps', []) if hasattr(self, 'initial_data') else []
-
-        for index, raw_step_data in enumerate(steps_data):
-            request_step = raw_steps[index] if index < len(raw_steps) else None
-            step_data = _normalize_step_payload(raw_step_data, request_step)
+        for step_data in steps_data:
             files_data = step_data.pop('files', [])
             embeddings_data = step_data.pop('embeddings', [])
             step = Step.objects.create(
                 user=workflow.user,
-                prompt=step_data['prompt'],
-                llm=step_data.get('llm'),
-                order=step_data['order'],
-                use_previous_step_files=step_data.get('use_previous_step_files', False),
-                use_previous_step_embeddings=step_data.get('use_previous_step_embeddings', False),
-                max_tokens=step_data.get('max_tokens', Step._meta.get_field('max_tokens').default),
-                temperature=step_data.get('temperature', Step._meta.get_field('temperature').default),
-                max_context_snippets=step_data.get('max_context_snippets', Step._meta.get_field('max_context_snippets').default),
-                document_similarity_threshold=step_data.get('document_similarity_threshold', Step._meta.get_field('document_similarity_threshold').default)
+                **step_data
             )
             step.files.set(files_data)
             step.embeddings.set(embeddings_data)
@@ -161,60 +147,42 @@ class WorkflowSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         steps_data = validated_data.pop('steps', [])
 
-        instance.title = validated_data.get('title', instance.title)
-        instance.description = validated_data.get('description', instance.description)
-        instance.mode = validated_data.get('mode', instance.mode)
-        if 'layout' in validated_data:
-            instance.layout = validated_data['layout'] or {}
-        if 'viewport' in validated_data:
-            instance.viewport = validated_data['viewport']
+        # Merge IDs from initial_data back into validated steps_data
+        _merge_step_ids_from_initial_data(steps_data, getattr(self, 'initial_data', None))
+
+        # Update workflow fields
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
         instance.save()
 
+        # Handle steps
         existing_steps = {step.id: step for step in instance.steps.all()}
-        raw_steps = self.initial_data.get('steps', []) if hasattr(self, 'initial_data') else []
-        normalized_steps = []
-        for index, step_data in enumerate(steps_data):
-            request_step = raw_steps[index] if index < len(raw_steps) else None
-            normalized_steps.append(_normalize_step_payload(step_data, request_step))
-        updated_step_ids = {
-            step_data['id'] for step_data in normalized_steps if step_data.get('id')
-        }
+        updated_step_ids = {step_data.get('id') for step_data in steps_data if step_data.get('id')}
 
         for step_id, step in existing_steps.items():
             if step_id not in updated_step_ids:
                 instance.steps.remove(step)
                 step.delete()
 
-        for step_data in normalized_steps:
+        # Update or create steps
+        for step_data in steps_data:
             files_data = step_data.pop('files', [])
             embeddings_data = step_data.pop('embeddings', [])
             step_id = step_data.get('id')
+
             if step_id and step_id in existing_steps:
+                # Update existing step
                 step = existing_steps[step_id]
-                step.prompt = step_data['prompt']
-                step.llm = step_data.get('llm')
-                step.order = step_data['order']
-                step.use_previous_step_files = step_data.get('use_previous_step_files', False)
-                step.use_previous_step_embeddings = step_data.get('use_previous_step_embeddings', False)
-                step.max_tokens = step_data.get('max_tokens', Step._meta.get_field('max_tokens').default)
-                step.temperature = step_data.get('temperature', Step._meta.get_field('temperature').default)
-                step.max_context_snippets = step_data.get('max_context_snippets', Step._meta.get_field('max_context_snippets').default)
-                step.document_similarity_threshold = step_data.get('document_similarity_threshold', Step._meta.get_field('document_similarity_threshold').default)
+                for attr, value in step_data.items():
+                    setattr(step, attr, value)
                 step.save()
                 step.files.set(files_data)
                 step.embeddings.set(embeddings_data)
             else:
+                # Create new step
                 step = Step.objects.create(
                     user=instance.user,
-                    prompt=step_data['prompt'],
-                    llm=step_data.get('llm'),
-                    order=step_data['order'],
-                    use_previous_step_files=step_data.get('use_previous_step_files', False),
-                    use_previous_step_embeddings=step_data.get('use_previous_step_embeddings', False),
-                    max_tokens=step_data.get('max_tokens', Step._meta.get_field('max_tokens').default),
-                    temperature=step_data.get('temperature', Step._meta.get_field('temperature').default),
-                    max_context_snippets=step_data.get('max_context_snippets', Step._meta.get_field('max_context_snippets').default),
-                    document_similarity_threshold=step_data.get('document_similarity_threshold', Step._meta.get_field('document_similarity_threshold').default)
+                    **step_data
                 )
                 step.files.set(files_data)
                 step.embeddings.set(embeddings_data)

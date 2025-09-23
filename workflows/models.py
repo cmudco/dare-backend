@@ -79,7 +79,11 @@ class Step(TimeStampMixin):
         ordering = ['order']
 
     def __str__(self):
-        return f"Step {self.order}: {self.prompt.title}"
+        try:
+            prompt_title = self.prompt.title
+        except:
+            prompt_title = "No Prompt"
+        return f"Step {self.order}: {prompt_title}"
 
     def get_effective_files(self, workflow=None):
         """

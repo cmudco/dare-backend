@@ -327,7 +327,7 @@
         {% for step in steps %}
         <div class="step">
             <div class="step-header">
-                <span class="step-title">{{ step.order }}. {{ step.step.prompt.title }}</span>
+                <span class="step-title">{{ step.order }}. {% if step.step.prompt %}{{ step.step.prompt.title }}{% else %}No Prompt{% endif %}</span>
                 <span class="status-badge status-{{ step.status|lower }}">{{ step.status }}</span>
             </div>
             
