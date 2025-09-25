@@ -2,7 +2,7 @@ from rest_framework import serializers
 from django.contrib.contenttypes.models import ContentType
 from files.api.serializers import FileSerializer
 from workflows.models import (
-    Workflow, WorkflowRun, WorkflowRunStep, WorkflowStepSnippet,
+    Workflow, WorkflowRun, WorkflowRunStep,  # WorkflowStepSnippet,
     # Graph-driven models
     StepNodeData, StartNodeData, ChatOutputNodeData, AggregatorNodeData,
     WorkflowNode, WorkflowEdge
@@ -10,13 +10,14 @@ from workflows.models import (
 from workflows.constants import WorkflowRunStepStatus
 
 
-class WorkflowStepSnippetSerializer(serializers.ModelSerializer):
-    file = FileSerializer(read_only=True)
-    vector_db_source = serializers.CharField(read_only=True)
+# TEMPORARILY COMMENTED OUT - TABLE MISSING
+# class WorkflowStepSnippetSerializer(serializers.ModelSerializer):
+#     file = FileSerializer(read_only=True)
+#     vector_db_source = serializers.CharField(read_only=True)
 
-    class Meta:
-        model = WorkflowStepSnippet
-        fields = ['id', 'file', 'text', 'similarity_score', 'chunk_index', 'vector_db_source']
+#     class Meta:
+#         model = WorkflowStepSnippet
+#         fields = ['id', 'file', 'text', 'similarity_score', 'chunk_index', 'vector_db_source']
 
 
 class WorkflowRunStepSerializer(serializers.ModelSerializer):
@@ -24,12 +25,12 @@ class WorkflowRunStepSerializer(serializers.ModelSerializer):
         choices=WorkflowRunStepStatus.choices,
         default=WorkflowRunStepStatus.PENDING
     )
-    snippets = WorkflowStepSnippetSerializer(many=True, read_only=True)
+    # snippets = WorkflowStepSnippetSerializer(many=True, read_only=True)  # TEMPORARILY COMMENTED
 
     class Meta:
         model = WorkflowRunStep
-        fields = ['id', 'step_node', 'order', 'status', 'response', 'error', 'created_at', 'updated_at', 'snippets']
-        read_only_fields = ['id', 'created_at', 'updated_at', 'snippets']
+        fields = ['id', 'step_node', 'order', 'status', 'response', 'error', 'created_at', 'updated_at']  # removed 'snippets'
+        read_only_fields = ['id', 'created_at', 'updated_at']  # removed 'snippets'
 
 class WorkflowRunSerializer(serializers.ModelSerializer):
     steps = WorkflowRunStepSerializer(many=True, read_only=True)
