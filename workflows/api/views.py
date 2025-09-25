@@ -273,7 +273,8 @@ class WorkflowRunViewSet(viewsets.ModelViewSet):
         workflow_run = WorkflowRun.objects.create(workflow=workflow, user=request.user)
 
         # Create WorkflowRunStep objects for each step node
-        for step_node in step_nodes.order_by('data_object__step_number'):
+        # Note: Using new node handler system, so order will be determined at execution time
+        for step_node in step_nodes:
             if step_node.data_object and isinstance(step_node.data_object, StepNodeData):
                 WorkflowRunStep.objects.create(
                     workflow_run=workflow_run,

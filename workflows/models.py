@@ -537,8 +537,8 @@ class Workflow(BaseModel):
 
     @property
     def step_nodes(self):
-        """Get ordered step nodes from graph."""
-        return self.nodes.filter(node_type='step').order_by('data_object__step_number')
+        """Get step nodes (order determined at execution time by node handlers)."""
+        return self.nodes.filter(node_type='step')
 
     @property
     def viewport(self):
@@ -585,7 +585,9 @@ class WorkflowRun(BaseModel):
             return WorkflowRunStepStatus.RUNNING
         if any(step.status == WorkflowRunStepStatus.FAILED for step in steps):
             return WorkflowRunStepStatus.FAILED
-        if all(step.status == WorkflowRunStepStatus.COMPLETED for step in steps):
+        # Consider both COMPLETED and SKIPPED as finished states
+        finished_statuses = {WorkflowRunStepStatus.COMPLETED, WorkflowRunStepStatus.SKIPPED}
+        if all(step.status in finished_statuses for step in steps):
             return WorkflowRunStepStatus.COMPLETED
         return WorkflowRunStepStatus.RUNNING
 
