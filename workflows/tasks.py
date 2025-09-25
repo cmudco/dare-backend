@@ -8,15 +8,34 @@ from billing.models import Transaction
 
 from conversations.models import LLM
 from core.services.llm_service import LLMService
-from .models import Step, WorkflowRun, WorkflowRunStep, Mode, WorkflowRunStepStatus
+from .models import WorkflowRun, WorkflowRunStep, WorkflowRunStepStatus
+from .models import WorkflowNode, StepNodeData
 from core.services.file_processor import FileProcessor
 
-async def execute_step_async(step: 'Step', previous_response: Optional[str] = None, workflow_run_step_obj=None) -> str:
+
+def get_previous_step_node(current_step_node: WorkflowNode, workflow) -> Optional[WorkflowNode]:
     """
-    Execute a single step of a workflow.
+    Get the previous step node in the workflow based on step_number.
+    """
+    if not current_step_node.data_object or not isinstance(current_step_node.data_object, StepNodeData):
+        return None
+
+    current_step_number = current_step_node.data_object.step_number
+
+    # Find the step node with the highest step_number that is less than current
+    previous_step = workflow.nodes.filter(
+        node_type='step',
+        data_object__step_number__lt=current_step_number
+    ).order_by('-data_object__step_number').first()
+
+    return previous_step
+
+async def execute_step_async(step_node: 'WorkflowNode', previous_response: Optional[str] = None, workflow_run_step_obj=None) -> str:
+    """
+    Execute a single step node of a workflow.
 
     Args:
-        step: The step to execute
+        step_node: The WorkflowNode (step type) to execute
         previous_response: Response from the previous step (if any)
         workflow_run_step_obj: The WorkflowRunStep object for saving snippets
 
@@ -24,7 +43,13 @@ async def execute_step_async(step: 'Step', previous_response: Optional[str] = No
         The response from the LLM
     """
     try:
-        step_prompt = await database_sync_to_async(lambda s: s.prompt)(step)
+        # Get the StepNodeData from the WorkflowNode
+        step_data = await database_sync_to_async(lambda sn: sn.data_object if sn.node_type == 'step' else None)(step_node)
+        if not step_data or not isinstance(step_data, StepNodeData):
+            raise ValueError(f"WorkflowNode {step_node.node_id} is not a valid step node")
+
+        # Get step configuration from StepNodeData
+        step_prompt = await database_sync_to_async(lambda sd: sd.prompt)(step_data)
         prompt_id = await database_sync_to_async(lambda p: p.id if p else None)(step_prompt)
 
         if previous_response:
@@ -33,27 +58,41 @@ async def execute_step_async(step: 'Step', previous_response: Optional[str] = No
             prompt_content = await database_sync_to_async(lambda p: p.content if p else "")(step_prompt)
             message = prompt_content
 
-        step_llm_obj = await database_sync_to_async(lambda s: s.llm)(step)
+        step_llm_obj = await database_sync_to_async(lambda sd: sd.llm)(step_data)
         if step_llm_obj:
             llm_to_use = step_llm_obj
         else:
             llm_to_use = await database_sync_to_async(LLM.objects.filter(provider="openai").first)()
-        step_max_tokens = await database_sync_to_async(lambda s: s.max_tokens)(step)
-        step_temperature = await database_sync_to_async(lambda s: s.temperature)(step)
-        step_max_context_snippets = await database_sync_to_async(lambda s: s.max_context_snippets)(step)
-        step_document_similarity_threshold = await database_sync_to_async(lambda s: s.document_similarity_threshold)(step)
+
+        step_max_tokens = await database_sync_to_async(lambda sd: sd.max_tokens)(step_data)
+        step_temperature = await database_sync_to_async(lambda sd: sd.temperature)(step_data)
+        step_max_context_snippets = await database_sync_to_async(lambda sd: sd.max_context_snippets)(step_data)
+        step_document_similarity_threshold = await database_sync_to_async(lambda sd: sd.document_similarity_threshold)(step_data)
 
         llm_service = LLMService()
 
         file_ids = None
         embedding_ids = None
 
-        workflow = None
-        if workflow_run_step_obj:
+        # Get effective files and embeddings from StepNodeData
+        step_files = await database_sync_to_async(lambda sd: list(sd.content_files.values_list('id', flat=True)))(step_data)
+        step_embeddings = await database_sync_to_async(lambda sd: list(sd.embedding_files.values_list('id', flat=True)))(step_data)
+
+        # Handle previous step file/embedding inheritance
+        use_previous_step_files = await database_sync_to_async(lambda sd: sd.use_previous_step_files)(step_data)
+        use_previous_step_embeddings = await database_sync_to_async(lambda sd: sd.use_previous_step_embeddings)(step_data)
+
+        if use_previous_step_files or use_previous_step_embeddings:
             workflow = await database_sync_to_async(lambda wr: wr.workflow_run.workflow)(workflow_run_step_obj)
-        
-        step_files = await database_sync_to_async(lambda s: list(s.get_effective_files(workflow).values_list('id', flat=True)))(step)
-        step_embeddings = await database_sync_to_async(lambda s: list(s.get_effective_embeddings(workflow).values_list('id', flat=True)))(step)        
+            previous_step_node = await database_sync_to_async(get_previous_step_node)(step_node, workflow)
+
+            if previous_step_node and previous_step_node.data_object:
+                if use_previous_step_files:
+                    prev_files = await database_sync_to_async(lambda sd: list(sd.content_files.values_list('id', flat=True)))(previous_step_node.data_object)
+                    step_files.extend(prev_files)
+                if use_previous_step_embeddings:
+                    prev_embeddings = await database_sync_to_async(lambda sd: list(sd.embedding_files.values_list('id', flat=True)))(previous_step_node.data_object)
+                    step_embeddings.extend(prev_embeddings)
 
         if step_files:
             file_ids = step_files
@@ -61,7 +100,9 @@ async def execute_step_async(step: 'Step', previous_response: Optional[str] = No
         if step_embeddings:
             embedding_ids = step_embeddings
 
-        step_user = await database_sync_to_async(lambda s: s.user)(step)
+        # Get workflow user
+        workflow = await database_sync_to_async(lambda sn: sn.workflow)(step_node)
+        step_user = await database_sync_to_async(lambda w: w.user)(workflow)
         step_user_id = await database_sync_to_async(lambda u: u.id)(step_user)
 
         response_generator = llm_service.query(
@@ -97,7 +138,7 @@ async def execute_step_async(step: 'Step', previous_response: Optional[str] = No
                     llm=llm_to_use,
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
-                    step_id=step.id
+                    step_node_id=step_node.id
                 )
             except Exception as billing_error:
                 import logging
@@ -108,12 +149,12 @@ async def execute_step_async(step: 'Step', previous_response: Optional[str] = No
     except Exception as e:
         raise
 
-def execute_step(step: 'Step', previous_response: Optional[str] = None, workflow_run_step_obj=None) -> str:
+def execute_step(step_node: WorkflowNode, previous_response: Optional[str] = None, workflow_run_step_obj=None) -> str:
     """
     Synchronous wrapper for execute_step_async to be used in RQ jobs.
 
     Args:
-        step (Step): The step to execute.
+        step_node (WorkflowNode): The step node to execute.
         previous_response (Optional[str]): The response from the previous step, if applicable.
         workflow_run_step_obj: The WorkflowRunStep object for saving snippets
 
@@ -124,7 +165,7 @@ def execute_step(step: 'Step', previous_response: Optional[str] = None, workflow
         import asyncio
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        result = loop.run_until_complete(execute_step_async(step, previous_response, workflow_run_step_obj))
+        result = loop.run_until_complete(execute_step_async(step_node, previous_response, workflow_run_step_obj))
         loop.close()
         return result
     except Exception as e:
@@ -139,14 +180,21 @@ def execute_workflow_run(workflow_run_id):
 
     try:
         workflow = workflow_run.workflow
-        if workflow.mode == Mode.SERIAL:
+
+        # Get workflow mode from StartNodeData
+        start_node = workflow.nodes.filter(node_type='start').first()
+        workflow_mode = 'sequential'  # default
+        if start_node and start_node.data_object:
+            workflow_mode = start_node.data_object.mode
+
+        if workflow_mode == 'sequential':
             previous_response = None
             for step_run in workflow_run.steps.all().order_by('order'):
                 step_run.status = WorkflowRunStepStatus.RUNNING
                 step_run.save()
 
                 try:
-                    response = execute_step(step_run.step, previous_response, step_run)
+                    response = execute_step(step_run.step_node, previous_response, step_run)
                     step_run.response = response
                     step_run.status = WorkflowRunStepStatus.COMPLETED
                     previous_response = response
@@ -159,7 +207,7 @@ def execute_workflow_run(workflow_run_id):
             workflow_run.ended_at = timezone.now()
             workflow_run.save(update_fields=['ended_at'])
 
-        elif workflow.mode == Mode.PARALLEL:
+        elif workflow_mode == 'parallel':
             for step_run in workflow_run.steps.all():
                 enqueue(execute_step_task, step_run.id, workflow_run.id)
 
@@ -175,13 +223,15 @@ def execute_step_task(workflow_run_step_id, workflow_run_id=None):
         step_run.save()
 
         try:
-            response = execute_step(step_run.step, workflow_run_step_obj=step_run)
+            response = execute_step(step_run.step_node, workflow_run_step_obj=step_run)
             step_run.response = response
             step_run.status = WorkflowRunStepStatus.COMPLETED
 
+            # Get user from workflow instead of step
+            workflow_user = step_run.step_node.workflow.user
             transaction = Transaction.objects.filter(
-                user=step_run.step.user,
-                message__contains=f"Workflow step {step_run.step.id}"
+                user=workflow_user,
+                message__contains=f"Workflow step {step_run.step_node.id}"
             ).order_by('-created_at').first()
 
             if transaction:
@@ -212,7 +262,7 @@ def execute_step_task(workflow_run_step_id, workflow_run_id=None):
     except WorkflowRunStep.DoesNotExist:
         pass
 
-def create_workflow_transaction(user, llm, input_tokens, output_tokens, step_id):
+def create_workflow_transaction(user, llm, input_tokens, output_tokens, step_node_id):
     from core.services.billing_service import BillingService
 
     billing_service = BillingService()
@@ -221,5 +271,5 @@ def create_workflow_transaction(user, llm, input_tokens, output_tokens, step_id)
         llm=llm,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
-        step_id=step_id
+        step_node_id=step_node_id
     )
