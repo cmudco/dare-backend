@@ -226,18 +226,15 @@ class WorkflowNodeSerializer(serializers.ModelSerializer):
     def to_internal_value(self, data):
         # Accept both snake_case and React Flow camelCase for node fields
         mapped = dict(data)
-
         if 'id' in mapped and 'node_id' not in mapped:
             mapped['node_id'] = mapped.get('id')
         if 'type' in mapped and 'node_type' not in mapped:
             mapped['node_type'] = mapped.get('type')
-
         # Position
         if 'position' in mapped:
             pos = mapped.get('position') or {}
             mapped.setdefault('position_x', pos.get('x'))
             mapped.setdefault('position_y', pos.get('y'))
-
         # CamelCase to snake_case
         cc = {
             'sourcePosition': 'source_position',
@@ -250,12 +247,10 @@ class WorkflowNodeSerializer(serializers.ModelSerializer):
         for ck, sk in cc.items():
             if ck in mapped and sk not in mapped:
                 mapped[sk] = mapped.pop(ck)
-
         # Coerce nullable-like CharFields to empty strings
         for k in ['source_position', 'target_position', 'drag_handle', 'class_name']:
             if mapped.get(k, None) is None:
                 mapped[k] = ''
-
         return super().to_internal_value(mapped)
 
     def to_representation(self, instance):
@@ -302,7 +297,6 @@ class WorkflowNodeSerializer(serializers.ModelSerializer):
             # Filter incoming data to only allowed fields for the target serializer
             allowed_fields = set(getattr(serializer_class.Meta, 'fields', []))
             filtered_data = {k: v for k, v in (data_dict or {}).items() if k in allowed_fields}
-
             data_serializer = serializer_class(data=filtered_data)
             if data_serializer.is_valid(raise_exception=True):
                 data_object = data_serializer.save()
