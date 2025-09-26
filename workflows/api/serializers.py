@@ -8,6 +8,7 @@ from workflows.models import (
     WorkflowNode, WorkflowEdge
 )
 from workflows.constants import WorkflowRunStepStatus
+from workflows.handlers import NodeDataHandler
 
 
 # TEMPORARILY COMMENTED OUT - TABLE MISSING
@@ -310,7 +311,6 @@ class WorkflowNodeSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         # Update typed data if provided
         data_dict = validated_data.pop('data', None)
-
         if data_dict and instance.data_object:
             # Update appropriate data object based on type
             data_serializer_map = {
@@ -325,7 +325,6 @@ class WorkflowNodeSerializer(serializers.ModelSerializer):
                 # Filter incoming data to only allowed fields for the target serializer
                 allowed_fields = set(serializer_class().get_fields().keys())
                 filtered_data = {k: v for k, v in data_dict.items() if k in allowed_fields}
-
                 # Update the existing data object
                 data_serializer = serializer_class(instance.data_object, data=filtered_data, partial=True)
                 if data_serializer.is_valid(raise_exception=True):
