@@ -59,8 +59,7 @@ class WorkflowExecutionService:
             print(f"🚀 STARTING WORKFLOW EXECUTION - WorkflowRun ID: {workflow_run.id}")
 
             workflow = await database_sync_to_async(lambda: workflow_run.workflow)()
-            print(f"📋 Workflow loaded - ID: {workflow.id}")
-
+            
             context = WorkflowExecutionContext(
                 workflow_run=workflow_run,
                 workflow=workflow,
@@ -69,9 +68,7 @@ class WorkflowExecutionService:
 
             # Get all workflow nodes ordered by step number for step nodes
             nodes = await self._get_ordered_workflow_nodes(workflow)
-            print(f"🔍 Found {len(nodes)} nodes to process:")
-            for node in nodes:
-                print(f"   - {node.type} node: {node.id}")
+            print(f"🔍 Found {len(nodes)} nodes to process")
 
             if not nodes:
                 print("❌ ERROR: No nodes found in workflow")
@@ -82,14 +79,11 @@ class WorkflowExecutionService:
                 }
 
             # Execute nodes with conditional routing logic
-            print(f"\n⚡ STARTING NODE EXECUTION...")
             failed_count = 0
             executed_nodes = set()  # Track which nodes have been executed
             skipped_nodes = set()   # Track which nodes were skipped due to routing
 
             for i, node in enumerate(nodes, 1):
-                print(f"\n🔄 PROCESSING NODE {i}/{len(nodes)}: {node.type} - {node.id}")
-
                 # Check if this node should be executed based on routing decisions
                 should_execute = await self._should_execute_node(node, context, workflow)
 
@@ -111,7 +105,6 @@ class WorkflowExecutionService:
 
                     continue
 
-                print(f"✅ EXECUTING node {node.id}")
                 executed_nodes.add(node.id)
                 result = await self._execute_node(node, context)
                 context.node_results[node.id] = result
@@ -120,26 +113,18 @@ class WorkflowExecutionService:
                     failed_count += 1
                     print(f"❌ NODE FAILED: {node.id} - {result.error}")
                 else:
-                    print(f"✅ NODE COMPLETED: {node.id}")
-                    if result.output:
-                        output_preview = result.output[:100] + "..." if len(result.output) > 100 else result.output
-                        print(f"📤 OUTPUT: {output_preview}")
-                        context.current_context = result.output
+                    context.current_context = result.output
 
                     # Special handling for aggregator results
                     if result.metadata and 'routing_decision' in result.metadata:
                         routing_decision = result.metadata['routing_decision']
                         print(f"🎯 ROUTING DECISION: '{routing_decision}'")
 
-            print(f"\n📊 EXECUTION SUMMARY:")
-            print(f"   ✅ Executed: {len(executed_nodes)} nodes")
-            print(f"   ⏭️  Skipped: {len(skipped_nodes)} nodes")
-            print(f"   ❌ Failed: {failed_count} nodes")
+            print(f"📊 EXECUTION SUMMARY: {len(executed_nodes)} executed, {len(skipped_nodes)} skipped, {failed_count} failed")
 
             # Update workflow run status
             final_status = 'completed' if failed_count == 0 else 'failed'
-            print(f"\n🏁 WORKFLOW COMPLETION:")
-            print(f"   Status: {final_status.upper()}")
+            print(f"🏁 WORKFLOW {final_status.upper()}")
             await self._update_workflow_run_status(workflow_run, final_status)
 
             results_dict = {
@@ -157,7 +142,6 @@ class WorkflowExecutionService:
                 } for node_id, result in context.node_results.items()}
             }
 
-            print(f"✅ WORKFLOW EXECUTION COMPLETED!")
             return results_dict
 
         except Exception as e:
@@ -200,8 +184,6 @@ class WorkflowExecutionService:
         Sort nodes based on their dependencies to ensure proper execution order.
         Aggregators must run before nodes that depend on their routing decisions.
         """
-        print(f"🔄 SORTING NODES BY DEPENDENCIES...")
-
         # Get all edges to understand dependencies
         edges = await database_sync_to_async(lambda: list(workflow.edges.all()))()
 
@@ -210,10 +192,6 @@ class WorkflowExecutionService:
 
         for edge in edges:
             dependencies[edge.target].add(edge.source)
-
-        print(f"📍 DEPENDENCY MAP:")
-        for node_id, deps in dependencies.items():
-            print(f"   {node_id} depends on: {deps}")
 
         # Topological sort with special handling for aggregator dependencies
         sorted_nodes = []
@@ -227,13 +205,22 @@ class WorkflowExecutionService:
                 deps = dependencies[node.id]
                 executed_deps = {n.id for n in sorted_nodes}
 
-                # Check if all dependencies are met
-                if deps.issubset(executed_deps):
-                    ready_nodes.append(node)
+                # Special handling for aggregator nodes - they need ALL their dependencies to be met
+                if node.type == 'aggregator':
+                    # For aggregators, ensure ALL incoming edges are from executed nodes
+                    incoming_edges = [e for e in edges if e.target == node.id]
+                    all_sources_ready = all(e.source in executed_deps for e in incoming_edges)
+                    
+                    if all_sources_ready and deps.issubset(executed_deps):
+                        ready_nodes.append(node)
+                        print(f"🎯 Aggregator {node.id} ready: all {len(incoming_edges)} dependencies met")
+                else:
+                    # Regular dependency check for non-aggregator nodes
+                    if deps.issubset(executed_deps):
+                        ready_nodes.append(node)
 
             if not ready_nodes:
                 # Fallback: if no nodes are ready (circular dependency), take start nodes
-                print(f"⚠️  No ready nodes found, using fallback ordering")
                 ready_nodes = [n for n in remaining_nodes if n.type == 'start']
                 if not ready_nodes:
                     ready_nodes = [remaining_nodes[0]]  # Emergency fallback
@@ -254,12 +241,6 @@ class WorkflowExecutionService:
             next_node = ready_nodes[0]
             sorted_nodes.append(next_node)
             remaining_nodes.remove(next_node)
-
-            print(f"   ➡️  Added to execution order: {next_node.type} - {next_node.id}")
-
-        print(f"✅ FINAL EXECUTION ORDER:")
-        for i, node in enumerate(sorted_nodes, 1):
-            print(f"   {i}. {node.type} - {node.id}")
 
         return sorted_nodes
 
@@ -307,41 +288,31 @@ class WorkflowExecutionService:
         Returns:
             bool: True if node should be executed, False if it should be skipped
         """
-        print(f"🔍 ROUTING CHECK for node {node.id} (type: {node.type})")
-
         # Always execute start nodes
         if node.type == 'start':
-            print(f"   ✅ Start node - always execute")
             return True
 
         # Check if this node is connected from an aggregator via conditional routing
         edges = await database_sync_to_async(lambda: list(workflow.edges.all()))()
-        print(f"   🔗 Total edges in workflow: {len(edges)}")
 
         # Find edges that target this node
         incoming_edges = [edge for edge in edges if edge.target == node.id]
-        print(f"   📥 Incoming edges to {node.id}: {len(incoming_edges)}")
 
-        for i, edge in enumerate(incoming_edges, 1):
+        for edge in incoming_edges:
             source_node_id = edge.source
-            print(f"   📍 Edge {i}: from {source_node_id} → {node.id} (handle: '{edge.source_handle}')")
 
             # Check if the source node has been processed (executed or skipped)
             if source_node_id in context.node_results:
                 source_result = context.node_results[source_node_id]
-                print(f"   🎯 Source node {source_node_id} has been executed")
 
                 # If source node was skipped, also skip this node
                 if (hasattr(source_result, 'metadata') and source_result.metadata and
                     source_result.metadata.get('skipped')):
-                    print(f"   ⏭️  Source node {source_node_id} was SKIPPED - skipping this node too")
                     return False
 
                 # Check if the source node is an aggregator type
                 source_nodes = [n for n in await database_sync_to_async(lambda: list(workflow.nodes.all()))() if n.node_id == source_node_id]
                 if source_nodes and source_nodes[0].node_type == 'aggregator':
-                    print(f"   🔄 Source node {source_node_id} is an AGGREGATOR")
-
                     # If source is an aggregator with routing decision
                     if (hasattr(source_result, 'metadata') and
                         source_result.metadata and
@@ -349,10 +320,6 @@ class WorkflowExecutionService:
 
                         routing_decision = source_result.metadata['routing_decision']
                         edge_handle = edge.source_handle
-
-                        print(f"   🎯 ROUTING COMPARISON:")
-                        print(f"      Decision: '{routing_decision}'")
-                        print(f"      Handle:   '{edge_handle}'")
 
                         # Check if routing decision matches the edge handle
                         # Handle formats: 'output-good', 'output-bad', 'output-average' or 'true', 'false'
@@ -367,24 +334,13 @@ class WorkflowExecutionService:
                                 # For qualitative decisions: direct match
                                 is_match = (routing_decision == edge_handle_lower)
 
-                        print(f"      Match:    {is_match}")
-
                         # Only execute if the routing decision matches the edge handle
                         if not is_match:
-                            print(f"   ❌ SKIP: Decision '{routing_decision}' != Handle '{edge_handle}'")
                             return False
                         else:
-                            print(f"   ✅ EXECUTE: Decision '{routing_decision}' matches Handle '{edge_handle}'")
                             return True
-                    else:
-                        print(f"   ⚠️  Aggregator {source_node_id} has no routing decision yet")
-                else:
-                    print(f"   📝 Source node {source_node_id} is not an aggregator (type: {source_nodes[0].node_type if source_nodes else 'unknown'})")
-            else:
-                print(f"   ⏳ Source node {source_node_id} not executed yet")
 
         # If no conditional routing applies, execute the node
-        print(f"   ✅ No conditional routing - execute normally")
         return True
 
     @database_sync_to_async
@@ -407,11 +363,8 @@ class WorkflowExecutionService:
             if step:
                 step.status = WorkflowRunStepStatus.SKIPPED
                 step.save(update_fields=['status'])
-                print(f"   📝 Updated WorkflowRunStep {step.id} status to SKIPPED")
-            else:
-                print(f"   ⚠️  No WorkflowRunStep found for node {node.id}")
         except Exception as e:
-            print(f"   ❌ Error updating WorkflowRunStep status: {e}")
+            logger.error(f"Error updating WorkflowRunStep status: {e}")
 
     @database_sync_to_async
     def _clear_output_node_data(self, node: ExecutionNode):
@@ -423,14 +376,11 @@ class WorkflowExecutionService:
             if output_data and isinstance(output_data, ChatOutputNodeData):
                 # Clear the output content to prevent showing stale data
                 output_data.status = 'skipped'
-                output_data.response = None
+                output_data.response = ''  # Use empty string instead of None to avoid NOT NULL constraint
                 output_data.error = 'Output skipped due to routing decision'
                 output_data.save(update_fields=['status', 'response', 'error'])
-                print(f"   🧹 Cleared ChatOutputNodeData for skipped output node {node.id}")
-            else:
-                print(f"   ⚠️  No ChatOutputNodeData found for output node {node.id}")
         except Exception as e:
-            print(f"   ❌ Error clearing output node data: {e}")
+            logger.error(f"Error clearing output node data: {e}")
 
 
 # Convenience function for external use

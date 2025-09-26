@@ -282,11 +282,32 @@ class AggregatorNodeHandler(BaseNodeHandler):
                     error="Invalid aggregator node data"
                 )
 
-            # Collect all previous results for aggregation
+            # Get workflow to find direct input nodes to this aggregator
+            workflow = await database_sync_to_async(lambda: context.workflow_run.workflow)()
+            edges = await database_sync_to_async(lambda: list(workflow.edges.all()))()
+            
+            # Find nodes that directly connect TO this aggregator
+            direct_inputs = set()
+            for edge in edges:
+                if edge.target == node.id:
+                    direct_inputs.add(edge.source)
+            
+            print(f"🎯 Aggregator inputs: {direct_inputs}")
+            
+            # Only collect results from direct input nodes
             previous_outputs = []
-            for result_key, result_data in context.previous_results.items():
-                if isinstance(result_data, dict) and 'output' in result_data:
-                    previous_outputs.append(f"Result from {result_key}: {result_data['output']}")
+            for input_node_id in direct_inputs:
+                if input_node_id in context.previous_results:
+                    result_data = context.previous_results[input_node_id]
+                    if isinstance(result_data, dict) and 'output' in result_data and result_data['output']:
+                        previous_outputs.append(f"Result from {input_node_id}: {result_data['output']}")
+                        print(f"   ✅ Using input from {input_node_id}")
+                    else:
+                        print(f"   ⚠️  Input {input_node_id} has no output")
+                else:
+                    print(f"   ❌ Input {input_node_id} not ready")
+
+            print(f"📈 Aggregating {len(previous_outputs)} results from {len(direct_inputs)} direct inputs")
 
             if not previous_outputs:
                 return NodeExecutionResult(
