@@ -11,6 +11,7 @@ from typing import Dict, List, Optional, Any, AsyncGenerator, Tuple
 from dataclasses import dataclass
 
 from django.utils import timezone
+from django.core.exceptions import ValidationError
 from channels.db import database_sync_to_async
 
 from workflows.models import (
@@ -18,6 +19,7 @@ from workflows.models import (
     StepNodeData, AggregatorNodeData, ChatOutputNodeData, StartNodeData
 )
 from workflows.constants import WorkflowRunStepStatus
+from workflows.node_handler_constants import ScoringThresholds, DefaultValues
 # ExecutionNode is now defined locally
 from core.services.llm_service import LLMService
 from conversations.models import LLM
@@ -196,8 +198,10 @@ class StepNodeHandler(BaseNodeHandler):
                 execution_time=execution_time
             )
 
-        except Exception as e:
-            logger.error(f"Failed to execute step node {node.id}: {str(e)}", exc_info=True)
+        except (ValidationError, ValueError) as e:
+            logger.error(f"Validation error in step {node.id}: {str(e)}", exc_info=True)
+            # Handle validation/value errors
+            error_msg = f"Validation error: {str(e)}"
 
             # Update workflow run step with error
             try:
@@ -205,7 +209,7 @@ class StepNodeHandler(BaseNodeHandler):
                 await database_sync_to_async(
                     lambda: WorkflowRunStep.objects.filter(id=workflow_run_step.id).update(
                         status=WorkflowRunStepStatus.FAILED,
-                        error=str(e)
+                        error=error_msg
                     )
                 )()
             except:
@@ -216,12 +220,77 @@ class StepNodeHandler(BaseNodeHandler):
 
             return NodeExecutionResult(
                 success=False,
-                error=str(e),
+                error=error_msg,
+                execution_time=execution_time
+            )
+
+        except (ConnectionError, TimeoutError) as e:
+            logger.error(f"Service connection error in step {node.id}: {str(e)}", exc_info=True)
+            # Handle network/service errors
+            error_msg = f"Service error: {str(e)}"
+
+            # Update workflow run step with error
+            try:
+                workflow_run_step = await self._get_or_create_workflow_run_step(context.workflow_run, node)
+                await database_sync_to_async(
+                    lambda: WorkflowRunStep.objects.filter(id=workflow_run_step.id).update(
+                        status=WorkflowRunStepStatus.FAILED,
+                        error=error_msg
+                    )
+                )()
+            except:
+                pass
+
+            end_time = timezone.now()
+            execution_time = (end_time - start_time).total_seconds()
+
+            return NodeExecutionResult(
+                success=False,
+                error=error_msg,
+                execution_time=execution_time
+            )
+
+        except Exception as e:
+            logger.error(f"Unexpected error in step {node.id}: {str(e)}", exc_info=True)
+            # Handle unknown errors
+            error_msg = f"Unexpected error: {str(e)}"
+
+            # Update workflow run step with error
+            try:
+                workflow_run_step = await self._get_or_create_workflow_run_step(context.workflow_run, node)
+                await database_sync_to_async(
+                    lambda: WorkflowRunStep.objects.filter(id=workflow_run_step.id).update(
+                        status=WorkflowRunStepStatus.FAILED,
+                        error=error_msg
+                    )
+                )()
+            except:
+                pass
+
+            end_time = timezone.now()
+            execution_time = (end_time - start_time).total_seconds()
+
+            return NodeExecutionResult(
+                success=False,
+                error=error_msg,
                 execution_time=execution_time
             )
 
     async def _prepare_message(self, step_data: StepNodeData, context: NodeExecutionContext) -> str:
-        """Prepare the message for LLM based on step configuration and context."""
+        """
+        Prepare the message for LLM based on step configuration and context.
+
+        Combines the step's prompt content with any previous step results to create
+        the final message that will be sent to the LLM. Handles cases where no
+        prompt is configured or no previous context exists.
+
+        Args:
+            step_data: StepNodeData with prompt configuration
+            context: NodeExecutionContext with previous step results
+
+        Returns:
+            str: Formatted message ready for LLM processing
+        """
         # Get base prompt content using async wrapper for Django ORM access
         prompt_content = ""
         prompt = await database_sync_to_async(lambda: step_data.prompt)()
@@ -235,16 +304,27 @@ class StepNodeHandler(BaseNodeHandler):
             else:
                 message = context.current_input
         else:
-            message = prompt_content or "Please proceed with the task."
+            message = prompt_content or DefaultValues.DEFAULT_TASK_MESSAGE
 
         return message
 
     async def _get_llm_for_step(self, step_data: StepNodeData) -> LLM:
-        """Get the LLM to use for this step."""
+        """
+        Get the LLM to use for this step.
+
+        Returns the LLM configured for this step, or falls back to the first
+        available OpenAI model if no LLM is specifically configured.
+
+        Args:
+            step_data: StepNodeData with LLM configuration
+
+        Returns:
+            LLM: The language model to use for execution
+        """
         llm = await database_sync_to_async(lambda: step_data.llm)()
         if not llm:
             llm = await database_sync_to_async(
-                lambda: LLM.objects.filter(provider="openai").first()
+                lambda: LLM.objects.filter(provider=DefaultValues.DEFAULT_LLM_PROVIDER).first()
             )()
         return llm
 
@@ -323,10 +403,10 @@ class AggregatorNodeHandler(BaseNodeHandler):
 
             if aggregator_data.scoring_mode == 'quantitative':
                 # For quantitative scoring, expect numerical output for routing
-                scoring_instruction = """Provide a quantitative score from 0-100 and categorize it:
-- 0-40: bad
-- 41-70: average
-- 71-100: good
+                scoring_instruction = f"""Provide a quantitative score from 0-100 and categorize it:
+- 0-{ScoringThresholds.QUANTITATIVE_BAD_MAX}: bad
+- {ScoringThresholds.QUANTITATIVE_BAD_MAX + 1}-{ScoringThresholds.QUANTITATIVE_AVERAGE_MAX}: average
+- {ScoringThresholds.QUANTITATIVE_GOOD_MIN}-100: good
 
 End your response with: ROUTING_DECISION: [good|bad|average]"""
             else:
@@ -356,7 +436,7 @@ Provide your evaluation with reasoning and end with the routing decision."""
             if not llm:
                 print(f"⚠️  No Claude LLM found, falling back to OpenAI...")
                 llm = await database_sync_to_async(
-                    lambda: LLM.objects.filter(provider="openai").first()
+                    lambda: LLM.objects.filter(provider=DefaultValues.DEFAULT_LLM_PROVIDER).first()
                 )()
 
             print(f"🤖 Selected LLM: {llm.identifier if llm else 'None'} ({llm.provider if llm else 'None'})")

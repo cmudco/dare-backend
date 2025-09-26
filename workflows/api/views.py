@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.exceptions import PermissionDenied
 from django.db import transaction
+from django.db.models import Prefetch
 from django.http import HttpResponse
 from django.template.loader import render_to_string
 from django.utils import timezone
@@ -19,6 +20,7 @@ from workflows.models import (
     # New graph-driven models
     WorkflowNode, WorkflowEdge, StepNodeData, StartNodeData, ChatOutputNodeData, AggregatorNodeData
 )
+from workflows.services import WorkflowCloningService
 from django_rq import enqueue
 from workflows.tasks import execute_workflow_run
 import weasyprint
@@ -137,108 +139,9 @@ class WorkflowViewSet(viewsets.ModelViewSet):
         """Custom action to clone a workflow using graph-driven architecture."""
         instance = self.get_object()
 
-        # Create cloned workflow
-        cloned_workflow = Workflow.objects.create(
-            user=instance.user,
-            version=1,
-            parent=instance,
-            viewport_x=instance.viewport_x,
-            viewport_y=instance.viewport_y,
-            viewport_zoom=instance.viewport_zoom
-        )
-
-        # Clone all nodes and their data
-        for node in instance.nodes.all():
-            # Clone the typed data object first
-            if node.data_object:
-                cloned_data = None
-                if isinstance(node.data_object, StartNodeData):
-                    cloned_data = StartNodeData.objects.create(
-                        title=f"COPY OF - {node.data_object.title}",
-                        description=node.data_object.description,
-                        mode=node.data_object.mode
-                    )
-                elif isinstance(node.data_object, StepNodeData):
-                    cloned_data = StepNodeData.objects.create(
-                        prompt=node.data_object.prompt,
-                        llm=node.data_object.llm,
-                        step_number=node.data_object.step_number,
-                        max_tokens=node.data_object.max_tokens,
-                        temperature=node.data_object.temperature,
-                        max_context_snippets=node.data_object.max_context_snippets,
-                        document_similarity_threshold=node.data_object.document_similarity_threshold,
-                        use_previous_step_files=node.data_object.use_previous_step_files,
-                        use_previous_step_embeddings=node.data_object.use_previous_step_embeddings
-                    )
-                    # Clone many-to-many relationships
-                    cloned_data.content_files.set(node.data_object.content_files.all())
-                    cloned_data.embedding_files.set(node.data_object.embedding_files.all())
-                elif isinstance(node.data_object, ChatOutputNodeData):
-                    cloned_data = ChatOutputNodeData.objects.create(
-                        step_number=node.data_object.step_number,
-                        status='',
-                        response='',
-                        error=''
-                    )
-                elif isinstance(node.data_object, AggregatorNodeData):
-                    cloned_data = AggregatorNodeData.objects.create(
-                        scoring_mode=node.data_object.scoring_mode,
-                        custom_prompt=node.data_object.custom_prompt,
-                        step_number=node.data_object.step_number
-                    )
-
-                if cloned_data:
-                    # Create cloned node
-                    WorkflowNode.objects.create(
-                        workflow=cloned_workflow,
-                        node_id=node.node_id,
-                        node_type=node.node_type,
-                        position_x=node.position_x,
-                        position_y=node.position_y,
-                        width=node.width,
-                        height=node.height,
-                        selected=False,
-                        dragging=False,
-                        draggable=node.draggable,
-                        selectable=node.selectable,
-                        connectable=node.connectable,
-                        deletable=node.deletable,
-                        hidden=node.hidden,
-                        source_position=node.source_position,
-                        target_position=node.target_position,
-                        parent_id=node.parent_id,
-                        z_index=node.z_index,
-                        drag_handle=node.drag_handle,
-                        style=node.style,
-                        class_name=node.class_name,
-                        data_content_type=ContentType.objects.get_for_model(cloned_data),
-                        data_object_id=cloned_data.id
-                    )
-
-        # Clone all edges
-        for edge in instance.edges.all():
-            WorkflowEdge.objects.create(
-                workflow=cloned_workflow,
-                edge_id=edge.edge_id,
-                edge_type=edge.edge_type,
-                source=edge.source,
-                target=edge.target,
-                source_handle=edge.source_handle,
-                target_handle=edge.target_handle,
-                data=edge.data,
-                selected=False,
-                animated=edge.animated,
-                hidden=edge.hidden,
-                deletable=edge.deletable,
-                selectable=edge.selectable,
-                z_index=edge.z_index,
-                label=edge.label,
-                style=edge.style,
-                class_name=edge.class_name,
-                marker_start=edge.marker_start,
-                marker_end=edge.marker_end,
-                path_options=edge.path_options
-            )
+        # Use the dedicated cloning service
+        cloning_service = WorkflowCloningService()
+        cloned_workflow = cloning_service.clone_workflow(instance)
 
         serializer = self.get_serializer(cloned_workflow)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -263,7 +166,15 @@ class WorkflowRunViewSet(viewsets.ModelViewSet):
             return Response({"error": "Workflow not found"}, status=404)
 
         # Check if workflow has step nodes
-        step_nodes = workflow.nodes.filter(node_type='step')
+        step_nodes = workflow.nodes.filter(node_type='step').select_related('data_content_type')
+
+        # Prefetch StepNodeData for step nodes to avoid N+1 queries
+        step_node_ids = list(step_nodes.values_list('data_object_id', flat=True))
+        step_data_objects = {
+            obj.id: obj for obj in StepNodeData.objects.filter(
+                id__in=step_node_ids
+            ).select_related('prompt', 'llm').prefetch_related('content_files', 'embedding_files')
+        }
         if not step_nodes.exists():
             return Response(
                 {"error": "Cannot run workflow with zero step nodes. Please add at least one step node to the workflow."},
@@ -275,11 +186,12 @@ class WorkflowRunViewSet(viewsets.ModelViewSet):
         # Create WorkflowRunStep objects for each step node
         # Note: Using new node handler system, so order will be determined at execution time
         for step_node in step_nodes:
-            if step_node.data_object and isinstance(step_node.data_object, StepNodeData):
+            step_data = step_data_objects.get(step_node.data_object_id)
+            if step_data and isinstance(step_data, StepNodeData):
                 WorkflowRunStep.objects.create(
                     workflow_run=workflow_run,
                     step_node=step_node,
-                    order=step_node.data_object.step_number,
+                    order=step_data.step_number,
                     status=WorkflowRunStepStatus.PENDING
                 )
 

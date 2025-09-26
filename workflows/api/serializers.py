@@ -8,6 +8,7 @@ from workflows.models import (
     WorkflowNode, WorkflowEdge
 )
 from workflows.constants import WorkflowRunStepStatus
+from workflows.handlers import NodeDataHandler
 
 
 # TEMPORARILY COMMENTED OUT - TABLE MISSING
@@ -244,33 +245,7 @@ class WorkflowNodeSerializer(serializers.ModelSerializer):
                 mapped[sk] = mapped.pop(ck)
         # Normalize node data keys based on node_type
         node_type = mapped.get('node_type')
-        node_data = (mapped.get('data') or {}).copy()
-        if node_type == 'step':
-            nd_map = {
-                'contentFiles': 'content_files',
-                'embeddingFiles': 'embedding_files',
-                'stepNumber': 'step_number',
-                'maxTokens': 'max_tokens',
-                'maxContextSnippets': 'max_context_snippets',
-                'documentSimilarityThreshold': 'document_similarity_threshold',
-                'usePreviousStepFiles': 'use_previous_step_files',
-                'usePreviousStepEmbeddings': 'use_previous_step_embeddings',
-            }
-            for ck, sk in nd_map.items():
-                if ck in node_data and sk not in node_data:
-                    node_data[sk] = node_data.pop(ck)
-        elif node_type == 'chatOutput':
-            if 'stepNumber' in node_data and 'step_number' not in node_data:
-                node_data['step_number'] = node_data.pop('stepNumber')
-        elif node_type == 'aggregator':
-            nd_map = {
-                'scoringMode': 'scoring_mode',
-                'customPrompt': 'custom_prompt',
-                'stepNumber': 'step_number',
-            }
-            for ck, sk in nd_map.items():
-                if ck in node_data and sk not in node_data:
-                    node_data[sk] = node_data.pop(ck)
+        node_data = NodeDataHandler.normalize_data(node_type, mapped)
         mapped['data'] = node_data
         # Coerce nullable-like CharFields to empty strings
         for k in ['source_position', 'target_position', 'drag_handle', 'class_name']:
@@ -334,7 +309,8 @@ class WorkflowNodeSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         # Update typed data if provided
         data_dict = validated_data.pop('data', None)
-        if data_dict is not None and instance.data_object is not None:
+        if data_dict and instance.data_object:
+            # Update appropriate data object based on type
             data_serializer_map = {
                 'step': StepNodeDataSerializer,
                 'start': StartNodeDataSerializer,
@@ -343,18 +319,13 @@ class WorkflowNodeSerializer(serializers.ModelSerializer):
             }
             serializer_class = data_serializer_map.get(instance.node_type)
             if serializer_class:
-                allowed_fields = set(getattr(serializer_class.Meta, 'fields', []))
-                filtered = {k: v for k, v in data_dict.items() if k in allowed_fields}
-                # Handle ManyToMany separately for StepNodeData
-                m2m_content = filtered.pop('content_files', None)
-                m2m_embed = filtered.pop('embedding_files', None)
-                data_serializer = serializer_class(instance=instance.data_object, data=filtered, partial=True)
-                data_serializer.is_valid(raise_exception=True)
-                data_obj = data_serializer.save()
-                if m2m_content is not None and hasattr(data_obj, 'content_files'):
-                    data_obj.content_files.set(m2m_content)
-                if m2m_embed is not None and hasattr(data_obj, 'embedding_files'):
-                    data_obj.embedding_files.set(m2m_embed)
+                # Filter incoming data to only allowed fields for the target serializer
+                allowed_fields = set(serializer_class().get_fields().keys())
+                filtered_data = {k: v for k, v in data_dict.items() if k in allowed_fields}
+                # Update the existing data object
+                data_serializer = serializer_class(instance.data_object, data=filtered_data, partial=True)
+                if data_serializer.is_valid(raise_exception=True):
+                    data_serializer.save()
 
         # Update simple fields on node instance
         for attr, value in validated_data.items():

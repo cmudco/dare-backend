@@ -8,7 +8,8 @@ from billing.models import Transaction
 
 from conversations.models import LLM
 from core.services.llm_service import LLMService
-from .models import WorkflowRun, WorkflowRunStep, WorkflowRunStepStatus
+from .models import WorkflowRun, WorkflowRunStep
+from .constants import WorkflowRunStepStatus
 from .models import WorkflowNode, StepNodeData
 from core.services.file_processor import FileProcessor
 

@@ -362,7 +362,8 @@ class WorkflowExecutionService:
 
             if step:
                 step.status = WorkflowRunStepStatus.SKIPPED
-                step.save(update_fields=['status'])
+                step.response = 'Output skipped due to routing decision'
+                step.save(update_fields=['status', 'response'])
         except Exception as e:
             logger.error(f"Error updating WorkflowRunStep status: {e}")
 
@@ -374,10 +375,10 @@ class WorkflowExecutionService:
             output_data = node.db_node.data_object
 
             if output_data and isinstance(output_data, ChatOutputNodeData):
-                # Clear the output content to prevent showing stale data
+                # Set skip message in response field for display
                 output_data.status = 'skipped'
-                output_data.response = ''  # Use empty string instead of None to avoid NOT NULL constraint
-                output_data.error = 'Output skipped due to routing decision'
+                output_data.response = 'Output skipped due to routing decision'
+                output_data.error = ''  # Clear any previous error
                 output_data.save(update_fields=['status', 'response', 'error'])
         except Exception as e:
             logger.error(f"Error clearing output node data: {e}")
