@@ -141,6 +141,15 @@ class ConditionalNodeDataSerializer(serializers.ModelSerializer):
         ]
 
 
+class ConditionalNodeDataSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ConditionalNodeData
+        fields = [
+            'custom_prompt', 'route_a_name', 'route_b_name',
+            'route_a_description', 'route_b_description', 'step_number'
+        ]
+
+
 class WorkflowEdgeSerializer(serializers.ModelSerializer):
     class Meta:
         model = WorkflowEdge
