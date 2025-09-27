@@ -16,7 +16,7 @@ from channels.db import database_sync_to_async
 
 from workflows.models import (
     WorkflowNode, WorkflowRun, WorkflowRunStep,
-    StepNodeData, AggregatorNodeData, ChatOutputNodeData, StartNodeData
+    StepNodeData, AggregatorNodeData, ChatOutputNodeData, StartNodeData, ConditionalNodeData
 )
 from workflows.constants import WorkflowRunStepStatus
 from workflows.node_handler_constants import ScoringThresholds, DefaultValues
@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 class ExecutionNode:
     """Simplified node representation for execution planning."""
     id: str
-    type: str  # 'start', 'step', 'chatOutput', 'aggregator'
+    type: str  # 'start', 'step', 'chatOutput', 'aggregator', 'conditional'
     step_number: Optional[int]  # For step and output nodes
     db_node: WorkflowNode
     next_node_id: Optional[str] = None
@@ -282,7 +282,8 @@ class StepNodeHandler(BaseNodeHandler):
 
         Combines the step's prompt content with any previous step results to create
         the final message that will be sent to the LLM. Handles cases where no
-        prompt is configured or no previous context exists.
+        prompt is configured or no previous context exists. For multi-input steps,
+        combines all input results.
 
         Args:
             step_data: StepNodeData with prompt configuration
@@ -297,8 +298,33 @@ class StepNodeHandler(BaseNodeHandler):
         if prompt:
             prompt_content = await database_sync_to_async(lambda: prompt.content)()
 
-        # Add previous context if available
-        if context.current_input:
+        # Check if we have multiple previous results (multi-input step)
+        previous_outputs = []
+        if context.previous_results:
+            for node_id, result_data in context.previous_results.items():
+                if result_data and isinstance(result_data, dict) and 'output' in result_data and result_data['output']:
+                    metadata = result_data.get('metadata') or {}
+                    if not metadata.get('skipped', False):
+                        previous_outputs.append(f"Result from {node_id}:\n{result_data['output']}")
+
+        # Build message based on available inputs
+        if previous_outputs:
+            if len(previous_outputs) == 1:
+                # Single input - use traditional format
+                combined_input = previous_outputs[0].replace(f"Result from {list(context.previous_results.keys())[0]}:\n", "")
+                if prompt_content:
+                    message = f"{prompt_content}\n\nPrevious step result:\n{combined_input}"
+                else:
+                    message = combined_input
+            else:
+                # Multiple inputs - combine all results
+                combined_input = "\n\n".join(previous_outputs)
+                if prompt_content:
+                    message = f"{prompt_content}\n\nResults from previous steps:\n{combined_input}"
+                else:
+                    message = combined_input
+        elif context.current_input:
+            # Fallback to current_input for backward compatibility
             if prompt_content:
                 message = f"{prompt_content}\n\nPrevious step result:\n{context.current_input}"
             else:
@@ -351,7 +377,6 @@ class AggregatorNodeHandler(BaseNodeHandler):
     async def execute(self, node: ExecutionNode, context: NodeExecutionContext) -> NodeExecutionResult:
         """Execute an aggregator node by combining multiple inputs and evaluating them."""
         start_time = timezone.now()
-        print(f"🔄 AGGREGATOR NODE EXECUTION STARTED - {node.id}")
 
         try:
             # Get aggregator data
@@ -371,9 +396,7 @@ class AggregatorNodeHandler(BaseNodeHandler):
             for edge in edges:
                 if edge.target == node.id:
                     direct_inputs.add(edge.source)
-            
-            print(f"🎯 Aggregator inputs: {direct_inputs}")
-            
+
             # Only collect results from direct input nodes
             previous_outputs = []
             for input_node_id in direct_inputs:
@@ -381,13 +404,6 @@ class AggregatorNodeHandler(BaseNodeHandler):
                     result_data = context.previous_results[input_node_id]
                     if isinstance(result_data, dict) and 'output' in result_data and result_data['output']:
                         previous_outputs.append(f"Result from {input_node_id}: {result_data['output']}")
-                        print(f"   ✅ Using input from {input_node_id}")
-                    else:
-                        print(f"   ⚠️  Input {input_node_id} has no output")
-                else:
-                    print(f"   ❌ Input {input_node_id} not ready")
-
-            print(f"📈 Aggregating {len(previous_outputs)} results from {len(direct_inputs)} direct inputs")
 
             if not previous_outputs:
                 return NodeExecutionResult(
@@ -428,25 +444,18 @@ Please evaluate the following results:
 Provide your evaluation with reasoning and end with the routing decision."""
 
             # Get default LLM for aggregation - try Claude first to avoid OpenAI connection issues
-            print(f"📋 Getting LLM for aggregation...")
             llm = await database_sync_to_async(
                 lambda: LLM.objects.filter(provider="claude").first()
             )()
 
             if not llm:
-                print(f"⚠️  No Claude LLM found, falling back to OpenAI...")
                 llm = await database_sync_to_async(
                     lambda: LLM.objects.filter(provider=DefaultValues.DEFAULT_LLM_PROVIDER).first()
                 )()
 
-            print(f"🤖 Selected LLM: {llm.identifier if llm else 'None'} ({llm.provider if llm else 'None'})")
-
             # Get user for LLM service
             workflow = await database_sync_to_async(lambda: context.workflow_run.workflow)()
             user = await database_sync_to_async(lambda: workflow.user)()
-            print(f"👤 User: {user.id}")
-
-            print(f"🚀 Starting LLM query for aggregation...")
 
             # Execute LLM query for aggregation
             response_generator = self.llm_service.query(
@@ -463,27 +472,18 @@ Provide your evaluation with reasoning and end with the routing decision."""
                 temperature=0.3  # Lower temperature for more consistent evaluation
             )
 
-            print(f"📡 LLM query initiated, collecting response...")
-
             # Collect response with proper error handling
             full_response = ""
             token_usage = {}
-            chunk_count = 0
 
             try:
                 async for chunk, usage in response_generator:
-                    chunk_count += 1
                     if chunk:  # Only add non-empty chunks
                         full_response += chunk
                     if usage:
                         token_usage = usage
-                    if chunk_count % 10 == 0:  # Log every 10 chunks
-                        print(f"📥 Received {chunk_count} chunks, current response length: {len(full_response)}")
-
-                print(f"✅ Response collection complete: {chunk_count} chunks, {len(full_response)} chars")
 
             except Exception as stream_error:
-                print(f"💥 Error during response streaming: {stream_error}")
                 raise  # Re-raise to be caught by outer exception handler
 
             # Extract routing decision from response
@@ -648,6 +648,246 @@ class StartNodeHandler(BaseNodeHandler):
             )
 
 
+class ConditionalNodeHandler(BaseNodeHandler):
+    """Handler for 'conditional' type nodes - routes workflow based on AI evaluation."""
+
+    def can_handle(self, node_type: str) -> bool:
+        return node_type == 'conditional'
+
+    async def execute(self, node: ExecutionNode, context: NodeExecutionContext) -> NodeExecutionResult:
+        """Execute a conditional node by evaluating input with AI and choosing a route."""
+        start_time = timezone.now()
+
+        try:
+            # Get conditional data
+            conditional_data = await database_sync_to_async(lambda: node.db_node.data_object)()
+            if not conditional_data or not isinstance(conditional_data, ConditionalNodeData):
+                return NodeExecutionResult(
+                    success=False,
+                    error="Invalid conditional node data"
+                )
+
+            # Get or create workflow run step for conditional node
+            workflow_run_step = await self._get_or_create_workflow_run_step(context.workflow_run, node, conditional_data.step_number)
+
+            # Update status to running
+            await database_sync_to_async(
+                lambda: WorkflowRunStep.objects.filter(id=workflow_run_step.id).update(
+                    status=WorkflowRunStepStatus.RUNNING
+                )
+            )()
+
+            # Get the workflow and edges to find direct input dependencies
+            workflow = await database_sync_to_async(lambda: context.workflow_run.workflow)()
+            edges = await database_sync_to_async(lambda: list(workflow.edges.all()))()
+
+            # Find nodes that directly connect TO this conditional node
+            direct_inputs = []
+            for edge in edges:
+                if edge.target == node.id:
+                    direct_inputs.append(edge.source)
+
+            # Validate that we have input from the single direct source
+            input_output = None
+            if context.previous_results and direct_inputs:
+                # Get input only from direct dependencies, not all previous results
+                valid_outputs = []
+
+                for input_node_id in direct_inputs:
+                    if input_node_id in context.previous_results:
+                        result_data = context.previous_results[input_node_id]
+
+                        if result_data and isinstance(result_data, dict) and 'output' in result_data and result_data['output']:
+                            metadata = result_data.get('metadata') or {}
+                            is_skipped = metadata.get('skipped', False)
+
+                            if not is_skipped:
+                                valid_outputs.append(result_data['output'])
+
+                if len(valid_outputs) == 1:
+                    input_output = valid_outputs[0]
+                elif len(valid_outputs) > 1:
+                    return NodeExecutionResult(
+                        success=False,
+                        error="Conditional nodes can only accept input from a single source"
+                    )
+
+            if not input_output and context.current_input:
+                input_output = context.current_input
+
+            if not input_output:
+                return NodeExecutionResult(
+                    success=False,
+                    error="No input provided to conditional node"
+                )
+
+            # Prepare evaluation message with custom prompt and route information
+            route_a_desc = conditional_data.route_a_description or f"Choose {conditional_data.route_a_name}"
+            route_b_desc = conditional_data.route_b_description or f"Choose {conditional_data.route_b_name}"
+
+            evaluation_prompt = conditional_data.custom_prompt or "Evaluate the input and choose the appropriate route."
+
+            message = f"""{evaluation_prompt}
+
+Based on the following input, choose one of these routes:
+- Route A ({conditional_data.route_a_name}): {route_a_desc}
+- Route B ({conditional_data.route_b_name}): {route_b_desc}
+
+Input to evaluate:
+{input_output}
+
+Provide your reasoning and end with: ROUTING_DECISION: [{conditional_data.route_a_name}|{conditional_data.route_b_name}]"""
+
+            # Get LLM for evaluation - prefer Claude for consistent evaluation
+            llm = await database_sync_to_async(
+                lambda: LLM.objects.filter(provider="claude").first()
+            )()
+
+            if not llm:
+                llm = await database_sync_to_async(
+                    lambda: LLM.objects.filter(provider=DefaultValues.DEFAULT_LLM_PROVIDER).first()
+                )()
+
+            # Get user for LLM service
+            user = await database_sync_to_async(lambda: workflow.user)()
+
+            # Execute LLM query for routing decision
+            response_generator = self.llm_service.query(
+                message=message,
+                conversation=None,
+                llm=llm,
+                file_ids=None,
+                embedding_ids=None,
+                user_id=user.id,
+                prompt_id=None,
+                message_obj=None,
+                workflow_run_step_obj=None,
+                max_tokens=1024,
+                temperature=0.3  # Lower temperature for more consistent routing decisions
+            )
+
+            # Collect response
+            full_response = ""
+            token_usage = {}
+
+            try:
+                async for chunk, usage in response_generator:
+                    if chunk:
+                        full_response += chunk
+                    if usage:
+                        token_usage = usage
+
+            except Exception as stream_error:
+                raise
+
+            # Extract routing decision from response
+            routing_decision = self._extract_routing_decision(
+                full_response,
+                conditional_data.route_a_name,
+                conditional_data.route_b_name
+            )
+
+            # Update workflow run step with results
+            await database_sync_to_async(
+                lambda: WorkflowRunStep.objects.filter(id=workflow_run_step.id).update(
+                    status=WorkflowRunStepStatus.COMPLETED,
+                    response=routing_decision  # Store the routing decision, not the full response
+                )
+            )()
+
+            end_time = timezone.now()
+            execution_time = (end_time - start_time).total_seconds()
+
+            logger.info(f"Successfully executed conditional node {node.id} in {execution_time:.2f}s. Routing: {routing_decision}")
+
+            return NodeExecutionResult(
+                success=True,
+                output=routing_decision,  # Return just the routing decision, not the full response
+                token_usage=token_usage,
+                execution_time=execution_time,
+                metadata={
+                    'routing_decision': routing_decision,
+                    'route_a_name': conditional_data.route_a_name,
+                    'route_b_name': conditional_data.route_b_name,
+                    'evaluated_input_length': len(input_output),
+                    'full_response': full_response  # Store full response in metadata for debugging
+                }
+            )
+
+        except Exception as e:
+            logger.error(f"Failed to execute conditional node {node.id}: {str(e)}", exc_info=True)
+
+            # Update workflow run step with error
+            try:
+                await database_sync_to_async(
+                    lambda: WorkflowRunStep.objects.filter(id=workflow_run_step.id).update(
+                        status=WorkflowRunStepStatus.FAILED,
+                        error=str(e)
+                    )
+                )()
+            except:
+                pass
+
+            end_time = timezone.now()
+            execution_time = (end_time - start_time).total_seconds()
+
+            return NodeExecutionResult(
+                success=False,
+                error=str(e),
+                execution_time=execution_time
+            )
+
+    def _extract_routing_decision(self, response: str, route_a_name: str, route_b_name: str) -> str:
+        """Extract routing decision from conditional response."""
+        try:
+            # Look for ROUTING_DECISION: pattern with the exact route names
+            import re
+            pattern = rf'ROUTING_DECISION:\s*(?:\[)?({re.escape(route_a_name)}|{re.escape(route_b_name)})(?:\])?'
+            match = re.search(pattern, response, re.IGNORECASE)
+
+            if match:
+                decision = match.group(1)
+                # Return the decision as provided (maintaining case)
+                if decision.lower() == route_a_name.lower():
+                    return route_a_name
+                elif decision.lower() == route_b_name.lower():
+                    return route_b_name
+
+            # Fallback: search for route names in the response
+            response_lower = response.lower()
+            route_a_lower = route_a_name.lower()
+            route_b_lower = route_b_name.lower()
+
+            # Count occurrences to determine intent
+            a_count = response_lower.count(route_a_lower)
+            b_count = response_lower.count(route_b_lower)
+
+            if a_count > b_count:
+                return route_a_name
+            elif b_count > a_count:
+                return route_b_name
+            else:
+                # Default to route A if no clear decision
+                return route_a_name
+
+        except Exception:
+            # Default fallback to route A
+            return route_a_name
+
+    @database_sync_to_async
+    def _get_or_create_workflow_run_step(self, workflow_run: WorkflowRun, node: ExecutionNode, step_number: int) -> WorkflowRunStep:
+        """Get or create a WorkflowRunStep for the conditional node."""
+        step, created = WorkflowRunStep.objects.get_or_create(
+            workflow_run=workflow_run,
+            step_node=node.db_node,
+            defaults={
+                'order': step_number,
+                'status': WorkflowRunStepStatus.PENDING
+            }
+        )
+        return step
+
+
 class NodeHandlerRegistry:
     """Registry for managing node type handlers."""
 
@@ -660,6 +900,7 @@ class NodeHandlerRegistry:
         """Register the default node handlers."""
         self.register_handler(StepNodeHandler())
         self.register_handler(AggregatorNodeHandler())
+        self.register_handler(ConditionalNodeHandler())
         self.register_handler(OutputNodeHandler())
         self.register_handler(StartNodeHandler())
 

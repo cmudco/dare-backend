@@ -5,6 +5,7 @@ from .nodes import (
     StartNodeData,
     ChatOutputNodeData,
     AggregatorNodeData,
+    ConditionalNodeData,
 )
 
 from .graph import (
@@ -25,6 +26,7 @@ __all__ = [
     'StartNodeData',
     'ChatOutputNodeData',
     'AggregatorNodeData',
+    'ConditionalNodeData',
     'WorkflowNode',
     'WorkflowEdge',
     'Workflow',

@@ -172,3 +172,45 @@ class AggregatorNodeData(BaseNodeData):
 
     def __str__(self):
         return f"Aggregator {self.step_number}: {self.scoring_mode}"
+
+
+class ConditionalNodeData(BaseNodeData):
+    """Data model for 'conditional' type nodes."""
+    custom_prompt = models.TextField(
+        default='Evaluate the input and choose the appropriate route.',
+        help_text="Custom evaluation prompt for routing decision"
+    )
+    route_a_name = models.CharField(
+        max_length=100,
+        default='Route A',
+        help_text="Name for route A output"
+    )
+    route_b_name = models.CharField(
+        max_length=100,
+        default='Route B',
+        help_text="Name for route B output"
+    )
+    route_a_description = models.TextField(
+        blank=True,
+        help_text="Optional description for route A"
+    )
+    route_b_description = models.TextField(
+        blank=True,
+        help_text="Optional description for route B"
+    )
+    step_number = models.PositiveIntegerField(
+        help_text="Step number for execution ordering"
+    )
+
+    def to_dict(self):
+        return {
+            'customPrompt': self.custom_prompt,
+            'routeAName': self.route_a_name,
+            'routeBName': self.route_b_name,
+            'routeADescription': self.route_a_description,
+            'routeBDescription': self.route_b_description,
+            'stepNumber': self.step_number,
+        }
+
+    def __str__(self):
+        return f"Conditional {self.step_number}: {self.route_a_name} / {self.route_b_name}"
