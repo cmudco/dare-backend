@@ -3,7 +3,7 @@ from .models import (
     Workflow,
     # Graph-driven models
     WorkflowNode, WorkflowEdge,
-    StepNodeData, StartNodeData, ChatOutputNodeData, AggregatorNodeData, ConditionalNodeData
+    StepNodeData, StartNodeData, ChatOutputNodeData, ConditionalNodeData
 )
 
 class WorkflowNodeInline(admin.TabularInline):
@@ -56,10 +56,6 @@ class ChatOutputNodeDataAdmin(admin.ModelAdmin):
     list_display = ('step_number', 'status', 'created_at')
     list_filter = ('status', 'created_at')
 
-@admin.register(AggregatorNodeData)
-class AggregatorNodeDataAdmin(admin.ModelAdmin):
-    list_display = ('step_number', 'scoring_mode', 'created_at')
-    list_filter = ('scoring_mode', 'created_at')
 
 @admin.register(ConditionalNodeData)
 class ConditionalNodeDataAdmin(admin.ModelAdmin):

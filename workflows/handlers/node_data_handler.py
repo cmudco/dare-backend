@@ -19,10 +19,10 @@ class NodeDataHandler:
 
         Converts camelCase field names from React Flow frontend to snake_case
         field names expected by Django models. Handles type-specific field
-        mappings for step, chatOutput, aggregator, and conditional nodes.
+        mappings for step, chatOutput, and conditional nodes.
 
         Args:
-            node_type: The type of node (step, start, chatOutput, aggregator, conditional)
+            node_type: The type of node (step, start, chatOutput, conditional)
             data: Raw data dictionary from React Flow frontend
 
         Returns:
@@ -50,15 +50,6 @@ class NodeDataHandler:
         elif node_type == 'chatOutput':
             if 'stepNumber' in node_data and 'step_number' not in node_data:
                 node_data['step_number'] = node_data.pop('stepNumber')
-        elif node_type == 'aggregator':
-            nd_map = {
-                'scoringMode': 'scoring_mode',
-                'customPrompt': 'custom_prompt',
-                'stepNumber': 'step_number',
-            }
-            for ck, sk in nd_map.items():
-                if ck in node_data and sk not in node_data:
-                    node_data[sk] = node_data.pop(ck)
         elif node_type == 'conditional':
             nd_map = {
                 'customPrompt': 'custom_prompt',

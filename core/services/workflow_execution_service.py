@@ -143,7 +143,7 @@ class WorkflowExecutionService:
         Get workflow nodes in execution order.
 
         Returns nodes ordered by: start node first, then step nodes by step_number,
-        then output nodes, then aggregator nodes.
+        then output nodes, then conditional nodes.
         """
         db_nodes = await database_sync_to_async(lambda: list(workflow.nodes.all()))()
 
@@ -167,7 +167,7 @@ class WorkflowExecutionService:
     async def _sort_nodes_by_dependencies(self, execution_nodes: List[ExecutionNode], workflow: Workflow) -> List[ExecutionNode]:
         """
         Sort nodes based on their dependencies to ensure proper execution order.
-        Aggregators must run before nodes that depend on their routing decisions.
+        Conditional nodes must run before nodes that depend on their routing decisions.
         """
         # Get all edges to understand dependencies
         edges = await database_sync_to_async(lambda: list(workflow.edges.all()))()
@@ -178,7 +178,7 @@ class WorkflowExecutionService:
         for edge in edges:
             dependencies[edge.target].add(edge.source)
 
-        # Topological sort with special handling for aggregator dependencies
+        # Topological sort with special handling for conditional dependencies
         sorted_nodes = []
         remaining_nodes = execution_nodes.copy()
 
@@ -191,14 +191,7 @@ class WorkflowExecutionService:
                 executed_deps = {n.id for n in sorted_nodes}
 
                 # Special handling for nodes that need ALL their dependencies to be met
-                if node.type == 'aggregator':
-                    # For aggregators, ensure ALL incoming edges are from executed nodes
-                    incoming_edges = [e for e in edges if e.target == node.id]
-                    all_sources_ready = all(e.source in executed_deps for e in incoming_edges)
-
-                    if all_sources_ready and deps.issubset(executed_deps):
-                        ready_nodes.append(node)
-                elif node.type == 'step':
+                if node.type == 'step':
                     # For step nodes, check if they have multiple inputs - if so, wait for ALL dependencies
                     incoming_edges = [e for e in edges if e.target == node.id]
 
@@ -245,7 +238,6 @@ class WorkflowExecutionService:
                     'start': 0,
                     'step': 1,
                     'chatOutput': 2,
-                    'aggregator': 1.5,  # Between step and chatOutput
                     'conditional': 3  # After chatOutput nodes
                 }.get(node.type, 999)
                 return (type_priority, node.step_number or 0)
@@ -293,7 +285,7 @@ class WorkflowExecutionService:
 
     async def _should_execute_node(self, node: ExecutionNode, context: WorkflowExecutionContext, workflow: Workflow) -> bool:
         """
-        Determine if a node should be executed based on aggregator routing decisions.
+        Determine if a node should be executed based on conditional routing decisions.
 
         Args:
             node: The node to check
@@ -307,12 +299,12 @@ class WorkflowExecutionService:
         if node.type == 'start':
             return True
 
-        # Always execute aggregator and conditional nodes when their dependencies are ready
+        # Always execute conditional nodes when their dependencies are ready
         # (they make routing decisions and shouldn't be filtered by routing logic)
-        if node.type in ['aggregator', 'conditional']:
+        if node.type == 'conditional':
             return True
 
-        # Check if this node is connected from an aggregator via conditional routing
+        # Check if this node is connected from a conditional node via routing
         edges = await database_sync_to_async(lambda: list(workflow.edges.all()))()
 
         # Find edges that target this node
@@ -330,10 +322,10 @@ class WorkflowExecutionService:
                     source_result.metadata.get('skipped')):
                     return False
 
-                # Check if the source node is an aggregator or conditional type
+                # Check if the source node is a conditional type
                 source_nodes = [n for n in await database_sync_to_async(lambda: list(workflow.nodes.all()))() if n.node_id == source_node_id]
-                if source_nodes and source_nodes[0].node_type in ['aggregator', 'conditional']:
-                    # If source is an aggregator or conditional node with routing decision
+                if source_nodes and source_nodes[0].node_type == 'conditional':
+                    # If source is a conditional node with routing decision
                     if (hasattr(source_result, 'metadata') and
                         source_result.metadata and
                         'routing_decision' in source_result.metadata):
@@ -342,8 +334,7 @@ class WorkflowExecutionService:
                         edge_handle = edge.source_handle
 
                         # Check if routing decision matches the edge handle
-                        # Handle formats for different node types:
-                        # - Aggregator: 'output-good', 'output-bad', 'output-average' or 'true', 'false'
+                        # Handle format for conditional nodes:
                         # - Conditional: 'output-Route A', 'output-Route B' (exact route names)
                         is_match = False
                         if edge_handle:
@@ -353,16 +344,6 @@ class WorkflowExecutionService:
                                 # routing_decision contains the exact route name
                                 expected_handle = f"output-{routing_decision}"
                                 is_match = (edge_handle == expected_handle)
-                            else:
-                                # For aggregator nodes: existing logic
-                                edge_handle_lower = edge_handle.lower()
-                                if edge_handle_lower.startswith('output-'):
-                                    # For quantitative decisions: extract the decision part after 'output-'
-                                    expected_decision = edge_handle_lower[7:]  # Remove 'output-' prefix
-                                    is_match = (routing_decision == expected_decision)
-                                else:
-                                    # For qualitative decisions: direct match
-                                    is_match = (routing_decision == edge_handle_lower)
 
                         # Only execute if the routing decision matches the edge handle
                         if not is_match:

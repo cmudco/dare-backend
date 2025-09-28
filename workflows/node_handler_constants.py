@@ -6,12 +6,6 @@ used in node execution logic.
 """
 
 
-class ScoringThresholds:
-    """Scoring thresholds for quantitative aggregator node evaluation."""
-    QUANTITATIVE_BAD_MAX = 40
-    QUANTITATIVE_AVERAGE_MAX = 70
-    QUANTITATIVE_GOOD_MIN = 71
-
 
 class DefaultValues:
     """Default values for workflow execution."""

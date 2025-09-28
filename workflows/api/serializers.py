@@ -4,7 +4,7 @@ from files.api.serializers import FileSerializer
 from workflows.models import (
     Workflow, WorkflowRun, WorkflowRunStep,  # WorkflowStepSnippet,
     # Graph-driven models
-    StepNodeData, StartNodeData, ChatOutputNodeData, AggregatorNodeData, ConditionalNodeData,
+    StepNodeData, StartNodeData, ChatOutputNodeData, ConditionalNodeData,
     WorkflowNode, WorkflowEdge
 )
 from workflows.constants import WorkflowRunStepStatus
@@ -130,10 +130,6 @@ class ChatOutputNodeDataSerializer(serializers.ModelSerializer):
         fields = ['step_number', 'status', 'response', 'error']
 
 
-class AggregatorNodeDataSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = AggregatorNodeData
-        fields = ['scoring_mode', 'custom_prompt', 'step_number']
 
 
 class ConditionalNodeDataSerializer(serializers.ModelSerializer):
@@ -297,7 +293,6 @@ class WorkflowNodeSerializer(serializers.ModelSerializer):
             'step': StepNodeDataSerializer,
             'start': StartNodeDataSerializer,
             'chatOutput': ChatOutputNodeDataSerializer,
-            'aggregator': AggregatorNodeDataSerializer,
             'conditional': ConditionalNodeDataSerializer,
         }
 
@@ -325,7 +320,6 @@ class WorkflowNodeSerializer(serializers.ModelSerializer):
                 'step': StepNodeDataSerializer,
                 'start': StartNodeDataSerializer,
                 'chatOutput': ChatOutputNodeDataSerializer,
-                'aggregator': AggregatorNodeDataSerializer,
                 'conditional': ConditionalNodeDataSerializer,
             }
             serializer_class = data_serializer_map.get(instance.node_type)

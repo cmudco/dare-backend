@@ -2,7 +2,7 @@
 Node type handlers for workflow execution.
 
 This module provides specialized handlers for different types of workflow nodes,
-including step nodes, aggregator nodes, and output nodes. Each handler encapsulates
+including step nodes, conditional nodes, and output nodes. Each handler encapsulates
 the specific logic and requirements for executing that node type.
 """
 import logging
@@ -16,10 +16,10 @@ from channels.db import database_sync_to_async
 
 from workflows.models import (
     WorkflowNode, WorkflowRun, WorkflowRunStep,
-    StepNodeData, AggregatorNodeData, ChatOutputNodeData, StartNodeData, ConditionalNodeData
+    StepNodeData, ChatOutputNodeData, StartNodeData, ConditionalNodeData
 )
 from workflows.constants import WorkflowRunStepStatus
-from workflows.node_handler_constants import ScoringThresholds, DefaultValues
+from workflows.node_handler_constants import DefaultValues
 # ExecutionNode is now defined locally
 from core.services.llm_service import LLMService
 from conversations.models import LLM
@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 class ExecutionNode:
     """Simplified node representation for execution planning."""
     id: str
-    type: str  # 'start', 'step', 'chatOutput', 'aggregator', 'conditional'
+    type: str  # 'start', 'step', 'chatOutput', 'conditional'
     step_number: Optional[int]  # For step and output nodes
     db_node: WorkflowNode
     next_node_id: Optional[str] = None
@@ -368,195 +368,6 @@ class StepNodeHandler(BaseNodeHandler):
         return step
 
 
-class AggregatorNodeHandler(BaseNodeHandler):
-    """Handler for 'aggregator' type nodes - combines and evaluates multiple inputs."""
-
-    def can_handle(self, node_type: str) -> bool:
-        return node_type == 'aggregator'
-
-    async def execute(self, node: ExecutionNode, context: NodeExecutionContext) -> NodeExecutionResult:
-        """Execute an aggregator node by combining multiple inputs and evaluating them."""
-        start_time = timezone.now()
-
-        try:
-            # Get aggregator data
-            aggregator_data = await database_sync_to_async(lambda: node.db_node.data_object)()
-            if not aggregator_data or not isinstance(aggregator_data, AggregatorNodeData):
-                return NodeExecutionResult(
-                    success=False,
-                    error="Invalid aggregator node data"
-                )
-
-            # Get workflow to find direct input nodes to this aggregator
-            workflow = await database_sync_to_async(lambda: context.workflow_run.workflow)()
-            edges = await database_sync_to_async(lambda: list(workflow.edges.all()))()
-            
-            # Find nodes that directly connect TO this aggregator
-            direct_inputs = set()
-            for edge in edges:
-                if edge.target == node.id:
-                    direct_inputs.add(edge.source)
-
-            # Only collect results from direct input nodes
-            previous_outputs = []
-            for input_node_id in direct_inputs:
-                if input_node_id in context.previous_results:
-                    result_data = context.previous_results[input_node_id]
-                    if isinstance(result_data, dict) and 'output' in result_data and result_data['output']:
-                        previous_outputs.append(f"Result from {input_node_id}: {result_data['output']}")
-
-            if not previous_outputs:
-                return NodeExecutionResult(
-                    success=False,
-                    error="No previous results to aggregate"
-                )
-
-            # Prepare aggregation message based on scoring mode
-            combined_input = "\n\n".join(previous_outputs)
-            evaluation_prompt = aggregator_data.custom_prompt or (
-                "Evaluate the quality of the responses and provide a score based on accuracy, relevance, and clarity."
-            )
-
-            if aggregator_data.scoring_mode == 'quantitative':
-                # For quantitative scoring, expect numerical output for routing
-                scoring_instruction = f"""Provide a quantitative score from 0-100 and categorize it:
-- 0-{ScoringThresholds.QUANTITATIVE_BAD_MAX}: bad
-- {ScoringThresholds.QUANTITATIVE_BAD_MAX + 1}-{ScoringThresholds.QUANTITATIVE_AVERAGE_MAX}: average
-- {ScoringThresholds.QUANTITATIVE_GOOD_MIN}-100: good
-
-End your response with: ROUTING_DECISION: [good|bad|average]"""
-            else:
-                # For qualitative scoring, expect true/false decision
-                scoring_instruction = """Provide a qualitative assessment and make a decision:
-- If the results pass your evaluation criteria, respond with true
-- If the results fail your evaluation criteria, respond with false
-
-End your response with: ROUTING_DECISION: [true|false]"""
-
-            message = f"""{evaluation_prompt}
-
-{scoring_instruction}
-
-Please evaluate the following results:
-
-{combined_input}
-
-Provide your evaluation with reasoning and end with the routing decision."""
-
-            # Get default LLM for aggregation - try Claude first to avoid OpenAI connection issues
-            llm = await database_sync_to_async(
-                lambda: LLM.objects.filter(provider="claude").first()
-            )()
-
-            if not llm:
-                llm = await database_sync_to_async(
-                    lambda: LLM.objects.filter(provider=DefaultValues.DEFAULT_LLM_PROVIDER).first()
-                )()
-
-            # Get user for LLM service
-            workflow = await database_sync_to_async(lambda: context.workflow_run.workflow)()
-            user = await database_sync_to_async(lambda: workflow.user)()
-
-            # Execute LLM query for aggregation
-            response_generator = self.llm_service.query(
-                message=message,
-                conversation=None,
-                llm=llm,
-                file_ids=None,
-                embedding_ids=None,
-                user_id=user.id,
-                prompt_id=None,
-                message_obj=None,
-                workflow_run_step_obj=None,
-                max_tokens=2048,
-                temperature=0.3  # Lower temperature for more consistent evaluation
-            )
-
-            # Collect response with proper error handling
-            full_response = ""
-            token_usage = {}
-
-            try:
-                async for chunk, usage in response_generator:
-                    if chunk:  # Only add non-empty chunks
-                        full_response += chunk
-                    if usage:
-                        token_usage = usage
-
-            except Exception as stream_error:
-                raise  # Re-raise to be caught by outer exception handler
-
-            # Extract routing decision from response
-            routing_decision = self._extract_routing_decision(full_response, aggregator_data.scoring_mode)
-
-            end_time = timezone.now()
-            execution_time = (end_time - start_time).total_seconds()
-
-            logger.info(f"Successfully executed aggregator node {node.id} in {execution_time:.2f}s. Routing: {routing_decision}")
-
-            return NodeExecutionResult(
-                success=True,
-                output=full_response,
-                token_usage=token_usage,
-                execution_time=execution_time,
-                metadata={
-                    'scoring_mode': aggregator_data.scoring_mode,
-                    'aggregated_results_count': len(previous_outputs),
-                    'routing_decision': routing_decision
-                }
-            )
-
-        except Exception as e:
-            logger.error(f"Failed to execute aggregator node {node.id}: {str(e)}", exc_info=True)
-
-            end_time = timezone.now()
-            execution_time = (end_time - start_time).total_seconds()
-
-            return NodeExecutionResult(
-                success=False,
-                error=str(e),
-                execution_time=execution_time
-            )
-
-    def _extract_routing_decision(self, response: str, scoring_mode: str) -> str:
-        """Extract routing decision from aggregator response."""
-        try:
-            # Look for ROUTING_DECISION: pattern
-            import re
-            pattern = r'ROUTING_DECISION:\s*(\w+)'
-            match = re.search(pattern, response, re.IGNORECASE)
-
-            if match:
-                decision = match.group(1).lower()
-
-                # Validate decision based on scoring mode
-                if scoring_mode == 'quantitative':
-                    valid_decisions = ['good', 'bad', 'average']
-                else:  # qualitative
-                    valid_decisions = ['true', 'false']
-
-                if decision in valid_decisions:
-                    return decision
-
-            # Fallback: try to extract from common patterns
-            response_lower = response.lower()
-
-            if scoring_mode == 'quantitative':
-                if 'good' in response_lower or 'excellent' in response_lower:
-                    return 'good'
-                elif 'bad' in response_lower or 'poor' in response_lower or 'fail' in response_lower:
-                    return 'bad'
-                else:
-                    return 'average'
-            else:  # qualitative
-                if 'true' in response_lower or 'pass' in response_lower or 'yes' in response_lower:
-                    return 'true'
-                else:
-                    return 'false'
-
-        except Exception:
-            # Default fallback
-            return 'average' if scoring_mode == 'quantitative' else 'false'
 
 
 class OutputNodeHandler(BaseNodeHandler):
@@ -899,7 +710,6 @@ class NodeHandlerRegistry:
     def _register_default_handlers(self):
         """Register the default node handlers."""
         self.register_handler(StepNodeHandler())
-        self.register_handler(AggregatorNodeHandler())
         self.register_handler(ConditionalNodeHandler())
         self.register_handler(OutputNodeHandler())
         self.register_handler(StartNodeHandler())

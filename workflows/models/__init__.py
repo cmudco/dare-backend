@@ -4,7 +4,6 @@ from .nodes import (
     StepNodeData,
     StartNodeData,
     ChatOutputNodeData,
-    AggregatorNodeData,
     ConditionalNodeData,
 )
 
@@ -25,7 +24,6 @@ __all__ = [
     'StepNodeData',
     'StartNodeData',
     'ChatOutputNodeData',
-    'AggregatorNodeData',
     'ConditionalNodeData',
     'WorkflowNode',
     'WorkflowEdge',

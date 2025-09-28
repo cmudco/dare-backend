@@ -18,7 +18,7 @@ from workflows.constants import WorkflowRunStepStatus
 from workflows.models import (
     Workflow, WorkflowRun, WorkflowRunStep,
     # New graph-driven models
-    WorkflowNode, WorkflowEdge, StepNodeData, StartNodeData, ChatOutputNodeData, AggregatorNodeData
+    WorkflowNode, WorkflowEdge, StepNodeData, StartNodeData, ChatOutputNodeData
 )
 from workflows.services import WorkflowCloningService
 from django_rq import enqueue

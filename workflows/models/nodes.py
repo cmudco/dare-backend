@@ -147,32 +147,6 @@ class ChatOutputNodeData(BaseNodeData):
         return f"Output for Step {self.step_number}"
 
 
-class AggregatorNodeData(BaseNodeData):
-    """Data model for 'aggregator' type nodes."""
-    scoring_mode = models.CharField(
-        max_length=20,
-        choices=[('quantitative', 'Quantitative'), ('qualitative', 'Qualitative')],
-        default='quantitative',
-        help_text="Scoring mode: quantitative (0-100) or qualitative (true/false)"
-    )
-    custom_prompt = models.TextField(
-        default='Evaluate the quality of the responses and provide a score based on accuracy, relevance, and clarity.',
-        help_text="Custom evaluation prompt for the aggregator"
-    )
-    step_number = models.PositiveIntegerField(
-        help_text="Step number for this aggregator node"
-    )
-
-    def to_dict(self):
-        return {
-            'scoringMode': self.scoring_mode,
-            'customPrompt': self.custom_prompt,
-            'stepNumber': self.step_number,
-        }
-
-    def __str__(self):
-        return f"Aggregator {self.step_number}: {self.scoring_mode}"
-
 
 class ConditionalNodeData(BaseNodeData):
     """Data model for 'conditional' type nodes."""
