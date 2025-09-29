@@ -219,28 +219,39 @@ class WorkflowRunViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get'], url_path='export-pdf')
     def export_pdf(self, request, pk=None):
         """Export workflow run results as a PDF."""
-        
+
         try:
             workflow_run = self.get_object()
-            
+
             # Get and process steps for markdown content
-            steps = workflow_run.steps.all().order_by('order')
+            steps = workflow_run.steps.all().order_by('order').select_related('step_node')
             processed_steps = []
-            
+
             for step in steps:
-                processed_step = step
+                # Get step data from the new node-based structure
+                step_data = step.step_data  # Uses @property that gets data from step_node
+
                 # Convert markdown to HTML for prompts and responses
-                if step.step.prompt and step.step.prompt.content:
-                    step.step.prompt.content = markdown.markdown(
-                        step.step.prompt.content,
+                if step_data and step_data.prompt and step_data.prompt.content:
+                    # Create attributes on the step object for template access
+                    step.prompt_content_html = markdown.markdown(
+                        step_data.prompt.content,
                         extensions=['markdown.extensions.fenced_code', 'markdown.extensions.tables', 'markdown.extensions.nl2br']
                     )
+                    step.prompt_title = step_data.prompt.title if hasattr(step_data.prompt, 'title') else 'Untitled Prompt'
+                else:
+                    step.prompt_content_html = ''
+                    step.prompt_title = 'No Prompt'
+
                 if step.response:
-                    step.response = markdown.markdown(
+                    step.response_html = markdown.markdown(
                         step.response,
                         extensions=['markdown.extensions.fenced_code', 'markdown.extensions.tables', 'markdown.extensions.nl2br']
                     )
-                processed_steps.append(processed_step)
+                else:
+                    step.response_html = ''
+
+                processed_steps.append(step)
             
             # Prepare context for template
             context = {
