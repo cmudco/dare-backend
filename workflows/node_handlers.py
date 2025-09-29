@@ -178,6 +178,29 @@ class StepNodeHandler(BaseNodeHandler):
                 if usage:
                     token_usage = usage
 
+            # Process billing for this step
+            if token_usage and token_usage.get('input_tokens') and token_usage.get('output_tokens'):
+                try:
+                    from core.services.billing_service import BillingService
+                    billing_service = BillingService()
+
+                    user = await database_sync_to_async(lambda: context.workflow_run.user)()
+                    billing_success = await database_sync_to_async(
+                        billing_service.process_workflow_billing
+                    )(
+                        user=user,
+                        llm=step_data.llm,
+                        input_tokens=token_usage['input_tokens'],
+                        output_tokens=token_usage['output_tokens'],
+                        step_node_id=node.db_node.id
+                    )
+
+                    if not billing_success:
+                        logger.warning(f"Billing failed for step {node.id}, but continuing execution")
+                except Exception as billing_error:
+                    logger.error(f"Billing error for step {node.id}: {str(billing_error)}")
+                    # Continue execution even if billing fails
+
             # Update workflow run step with results
             await database_sync_to_async(
                 lambda: WorkflowRunStep.objects.filter(id=workflow_run_step.id).update(
@@ -590,6 +613,28 @@ Provide your reasoning and end with: ROUTING_DECISION: [{conditional_data.route_
 
             except Exception as stream_error:
                 raise
+
+            # Process billing for this conditional node
+            if token_usage and token_usage.get('input_tokens') and token_usage.get('output_tokens'):
+                try:
+                    from core.services.billing_service import BillingService
+                    billing_service = BillingService()
+
+                    billing_success = await database_sync_to_async(
+                        billing_service.process_workflow_billing
+                    )(
+                        user=user,
+                        llm=llm,
+                        input_tokens=token_usage['input_tokens'],
+                        output_tokens=token_usage['output_tokens'],
+                        step_node_id=node.db_node.id
+                    )
+
+                    if not billing_success:
+                        logger.warning(f"Billing failed for conditional node {node.id}, but continuing execution")
+                except Exception as billing_error:
+                    logger.error(f"Billing error for conditional node {node.id}: {str(billing_error)}")
+                    # Continue execution even if billing fails
 
             # Extract routing decision from response
             routing_decision = self._extract_routing_decision(
