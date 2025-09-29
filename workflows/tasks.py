@@ -1,4 +1,5 @@
 import logging
+import asyncio
 from django_rq import job
 from django.utils import timezone
 
@@ -23,7 +24,6 @@ def execute_workflow_run(workflow_run_id):
 
         # Run the async execution in a new event loop
         def run_workflow_execution():
-            import asyncio
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:

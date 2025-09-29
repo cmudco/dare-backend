@@ -22,10 +22,30 @@ from workflows.constants import WorkflowRunStepStatus
 from workflows.node_handler_constants import DefaultValues
 # ExecutionNode is now defined locally
 from core.services.llm_service import LLMService
+from core.services.billing_service import BillingService
 from conversations.models import LLM
 
 
 logger = logging.getLogger(__name__)
+
+
+def categorize_error(exception: Exception) -> tuple[str, str]:
+    """
+    Categorize exception into error type and category.
+
+    Returns:
+        tuple: (error_category, error_type_name)
+    """
+    error_type = type(exception).__name__
+
+    if isinstance(exception, (ValidationError, ValueError)):
+        error_category = "Validation error"
+    elif isinstance(exception, (ConnectionError, TimeoutError)):
+        error_category = "Service error"
+    else:
+        error_category = "Unexpected error"
+
+    return error_category, error_type
 
 
 @dataclass
@@ -181,7 +201,6 @@ class StepNodeHandler(BaseNodeHandler):
             # Process billing for this step
             if token_usage and token_usage.get('input_tokens') and token_usage.get('output_tokens'):
                 try:
-                    from core.services.billing_service import BillingService
                     billing_service = BillingService()
 
                     user = await database_sync_to_async(lambda: context.workflow_run.user)()
@@ -221,62 +240,10 @@ class StepNodeHandler(BaseNodeHandler):
                 execution_time=execution_time
             )
 
-        except (ValidationError, ValueError) as e:
-            logger.error(f"Validation error in step {node.id}: {str(e)}", exc_info=True)
-            # Handle validation/value errors
-            error_msg = f"Validation error: {str(e)}"
-
-            # Update workflow run step with error
-            try:
-                workflow_run_step = await self._get_or_create_workflow_run_step(context.workflow_run, node)
-                await database_sync_to_async(
-                    lambda: WorkflowRunStep.objects.filter(id=workflow_run_step.id).update(
-                        status=WorkflowRunStepStatus.FAILED,
-                        error=error_msg
-                    )
-                )()
-            except:
-                pass
-
-            end_time = timezone.now()
-            execution_time = (end_time - start_time).total_seconds()
-
-            return NodeExecutionResult(
-                success=False,
-                error=error_msg,
-                execution_time=execution_time
-            )
-
-        except (ConnectionError, TimeoutError) as e:
-            logger.error(f"Service connection error in step {node.id}: {str(e)}", exc_info=True)
-            # Handle network/service errors
-            error_msg = f"Service error: {str(e)}"
-
-            # Update workflow run step with error
-            try:
-                workflow_run_step = await self._get_or_create_workflow_run_step(context.workflow_run, node)
-                await database_sync_to_async(
-                    lambda: WorkflowRunStep.objects.filter(id=workflow_run_step.id).update(
-                        status=WorkflowRunStepStatus.FAILED,
-                        error=error_msg
-                    )
-                )()
-            except:
-                pass
-
-            end_time = timezone.now()
-            execution_time = (end_time - start_time).total_seconds()
-
-            return NodeExecutionResult(
-                success=False,
-                error=error_msg,
-                execution_time=execution_time
-            )
-
         except Exception as e:
-            logger.error(f"Unexpected error in step {node.id}: {str(e)}", exc_info=True)
-            # Handle unknown errors
-            error_msg = f"Unexpected error: {str(e)}"
+            error_category, error_type = categorize_error(e)
+            error_msg = f"{error_category}: {str(e)}"
+            logger.error(f"{error_category} in step {node.id} ({error_type}): {str(e)}", exc_info=True)
 
             # Update workflow run step with error
             try:
@@ -287,8 +254,8 @@ class StepNodeHandler(BaseNodeHandler):
                         error=error_msg
                     )
                 )()
-            except:
-                pass
+            except Exception as update_error:
+                logger.error(f"Failed to update step status: {str(update_error)}")
 
             end_time = timezone.now()
             execution_time = (end_time - start_time).total_seconds()
@@ -436,11 +403,13 @@ class OutputNodeHandler(BaseNodeHandler):
             )
 
         except Exception as e:
-            logger.error(f"Failed to execute output node {node.id}: {str(e)}", exc_info=True)
+            error_category, error_type = categorize_error(e)
+            error_msg = f"{error_category}: {str(e)}"
+            logger.error(f"{error_category} in output node {node.id} ({error_type}): {str(e)}", exc_info=True)
 
             return NodeExecutionResult(
                 success=False,
-                error=str(e)
+                error=error_msg
             )
 
 
@@ -474,11 +443,13 @@ class StartNodeHandler(BaseNodeHandler):
             )
 
         except Exception as e:
-            logger.error(f"Failed to execute start node {node.id}: {str(e)}", exc_info=True)
+            error_category, error_type = categorize_error(e)
+            error_msg = f"{error_category}: {str(e)}"
+            logger.error(f"{error_category} in start node {node.id} ({error_type}): {str(e)}", exc_info=True)
 
             return NodeExecutionResult(
                 success=False,
-                error=str(e)
+                error=error_msg
             )
 
 
@@ -555,7 +526,7 @@ class ConditionalNodeHandler(BaseNodeHandler):
                     error="No input provided to conditional node"
                 )
 
-            # Prepare evaluation message with custom prompt and route information
+            # Prepare strict evaluation message - force single word response
             route_a_desc = conditional_data.route_a_description or f"Choose {conditional_data.route_a_name}"
             route_b_desc = conditional_data.route_b_description or f"Choose {conditional_data.route_b_name}"
 
@@ -563,14 +534,16 @@ class ConditionalNodeHandler(BaseNodeHandler):
 
             message = f"""{evaluation_prompt}
 
-Based on the following input, choose one of these routes:
-- Route A ({conditional_data.route_a_name}): {route_a_desc}
-- Route B ({conditional_data.route_b_name}): {route_b_desc}
+Based on the following input, choose EXACTLY ONE route by responding with ONLY the route name (no explanation, no other text):
+
+Route Options:
+- {conditional_data.route_a_name}: {route_a_desc}
+- {conditional_data.route_b_name}: {route_b_desc}
 
 Input to evaluate:
 {input_output}
 
-Provide your reasoning and end with: ROUTING_DECISION: [{conditional_data.route_a_name}|{conditional_data.route_b_name}]"""
+Response format: Reply with ONLY "{conditional_data.route_a_name}" or "{conditional_data.route_b_name}" - nothing else."""
 
             # Get LLM for evaluation - prefer Claude for consistent evaluation
             llm = await database_sync_to_async(
@@ -596,8 +569,8 @@ Provide your reasoning and end with: ROUTING_DECISION: [{conditional_data.route_
                 prompt_id=None,
                 message_obj=None,
                 workflow_run_step_obj=None,
-                max_tokens=1024,
-                temperature=0.3  # Lower temperature for more consistent routing decisions
+                max_tokens=10,  # Only need single word response
+                temperature=0.1  # Very low temperature for deterministic routing
             )
 
             # Collect response
@@ -617,7 +590,6 @@ Provide your reasoning and end with: ROUTING_DECISION: [{conditional_data.route_
             # Process billing for this conditional node
             if token_usage and token_usage.get('input_tokens') and token_usage.get('output_tokens'):
                 try:
-                    from core.services.billing_service import BillingService
                     billing_service = BillingService()
 
                     billing_success = await database_sync_to_async(
@@ -636,12 +608,22 @@ Provide your reasoning and end with: ROUTING_DECISION: [{conditional_data.route_
                     logger.error(f"Billing error for conditional node {node.id}: {str(billing_error)}")
                     # Continue execution even if billing fails
 
-            # Extract routing decision from response
-            routing_decision = self._extract_routing_decision(
-                full_response,
-                conditional_data.route_a_name,
-                conditional_data.route_b_name
-            )
+            # Extract routing decision - simple cleanup since we forced single-word response
+            routing_decision = full_response.strip()
+
+            # Validate decision matches one of the routes (case-insensitive)
+            route_a_lower = conditional_data.route_a_name.lower()
+            route_b_lower = conditional_data.route_b_name.lower()
+            decision_lower = routing_decision.lower()
+
+            if decision_lower == route_a_lower or route_a_lower in decision_lower:
+                routing_decision = conditional_data.route_a_name
+            elif decision_lower == route_b_lower or route_b_lower in decision_lower:
+                routing_decision = conditional_data.route_b_name
+            else:
+                # Default to route A if response is unclear
+                logger.warning(f"Unclear routing decision '{routing_decision}' for node {node.id}, defaulting to {conditional_data.route_a_name}")
+                routing_decision = conditional_data.route_a_name
 
             # Update workflow run step with results
             await database_sync_to_async(
@@ -671,64 +653,29 @@ Provide your reasoning and end with: ROUTING_DECISION: [{conditional_data.route_
             )
 
         except Exception as e:
-            logger.error(f"Failed to execute conditional node {node.id}: {str(e)}", exc_info=True)
+            error_category, error_type = categorize_error(e)
+            error_msg = f"{error_category}: {str(e)}"
+            logger.error(f"{error_category} in conditional node {node.id} ({error_type}): {str(e)}", exc_info=True)
 
             # Update workflow run step with error
             try:
                 await database_sync_to_async(
                     lambda: WorkflowRunStep.objects.filter(id=workflow_run_step.id).update(
                         status=WorkflowRunStepStatus.FAILED,
-                        error=str(e)
+                        error=error_msg
                     )
                 )()
-            except:
-                pass
+            except Exception as update_error:
+                logger.error(f"Failed to update conditional step status: {str(update_error)}")
 
             end_time = timezone.now()
             execution_time = (end_time - start_time).total_seconds()
 
             return NodeExecutionResult(
                 success=False,
-                error=str(e),
+                error=error_msg,
                 execution_time=execution_time
             )
-
-    def _extract_routing_decision(self, response: str, route_a_name: str, route_b_name: str) -> str:
-        """Extract routing decision from conditional response."""
-        try:
-            # Look for ROUTING_DECISION: pattern with the exact route names
-            import re
-            pattern = rf'ROUTING_DECISION:\s*(?:\[)?({re.escape(route_a_name)}|{re.escape(route_b_name)})(?:\])?'
-            match = re.search(pattern, response, re.IGNORECASE)
-
-            if match:
-                decision = match.group(1)
-                # Return the decision as provided (maintaining case)
-                if decision.lower() == route_a_name.lower():
-                    return route_a_name
-                elif decision.lower() == route_b_name.lower():
-                    return route_b_name
-
-            # Fallback: search for route names in the response
-            response_lower = response.lower()
-            route_a_lower = route_a_name.lower()
-            route_b_lower = route_b_name.lower()
-
-            # Count occurrences to determine intent
-            a_count = response_lower.count(route_a_lower)
-            b_count = response_lower.count(route_b_lower)
-
-            if a_count > b_count:
-                return route_a_name
-            elif b_count > a_count:
-                return route_b_name
-            else:
-                # Default to route A if no clear decision
-                return route_a_name
-
-        except Exception:
-            # Default fallback to route A
-            return route_a_name
 
     @database_sync_to_async
     def _get_or_create_workflow_run_step(self, workflow_run: WorkflowRun, node: ExecutionNode, step_number: int) -> WorkflowRunStep:

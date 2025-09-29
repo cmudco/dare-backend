@@ -10,6 +10,7 @@ from django.template.loader import render_to_string
 from django.utils import timezone
 from django.contrib.contenttypes.models import ContentType
 from common.permissions import IsOwner
+import traceback
 from workflows.api.serializers import (
     WorkflowRunSerializer, WorkflowSerializer,
     WorkflowNodeSerializer, WorkflowEdgeSerializer,
@@ -285,7 +286,6 @@ class WorkflowRunViewSet(viewsets.ModelViewSet):
             return response
 
         except Exception as e:
-            import traceback
             traceback.print_exc()
             return Response(
                 {'error': f'Failed to generate PDF: {str(e)}'},
