@@ -51,16 +51,20 @@ class WorkflowViewSet(viewsets.ModelViewSet):
 
             # Upsert nodes if provided
             nodes = request.data.get('nodes', None)
+
             if nodes is not None:
                 existing_nodes = {n.node_id: n for n in instance.nodes.all()}
+
                 seen_ids = set()
                 for n in nodes:
                     node_id = n.get('node_id') or n.get('id')
                     if not node_id:
                         continue
+
                     seen_ids.add(node_id)
                     existing = existing_nodes.get(node_id)
                     payload = {**n, 'workflow': instance.id}
+
                     if existing:
                         ser = WorkflowNodeSerializer(existing, data=payload, partial=True)
                         ser.is_valid(raise_exception=True)
@@ -69,22 +73,29 @@ class WorkflowViewSet(viewsets.ModelViewSet):
                         ser = WorkflowNodeSerializer(data=payload)
                         ser.is_valid(raise_exception=True)
                         ser.save()
+
                 # Delete nodes that are not in payload
-                for n in instance.nodes.exclude(node_id__in=seen_ids):
-                    n.delete()
+                nodes_to_delete = instance.nodes.exclude(node_id__in=seen_ids)
+                if nodes_to_delete.exists():
+                    for n in nodes_to_delete:
+                        n.delete()
 
             # Upsert edges if provided
             edges = request.data.get('edges', None)
+
             if edges is not None:
                 existing_edges = {e.edge_id: e for e in instance.edges.all()}
+
                 seen_eids = set()
                 for e in edges:
                     edge_id = e.get('edge_id') or e.get('id')
                     if not edge_id:
                         continue
+
                     seen_eids.add(edge_id)
                     existing_e = existing_edges.get(edge_id)
                     payload = {**e, 'workflow': instance.id}
+
                     if existing_e:
                         ser = WorkflowEdgeSerializer(existing_e, data=payload, partial=True)
                         ser.is_valid(raise_exception=True)
@@ -93,9 +104,12 @@ class WorkflowViewSet(viewsets.ModelViewSet):
                         ser = WorkflowEdgeSerializer(data=payload)
                         ser.is_valid(raise_exception=True)
                         ser.save()
+
                 # Delete edges not in payload
-                for e in instance.edges.exclude(edge_id__in=seen_eids):
-                    e.delete()
+                edges_to_delete = instance.edges.exclude(edge_id__in=seen_eids)
+                if edges_to_delete.exists():
+                    for e in edges_to_delete:
+                        e.delete()
 
             # Return full workflow with nodes/edges
             output = self.get_serializer(instance).data
@@ -273,53 +287,4 @@ class WorkflowRunViewSet(viewsets.ModelViewSet):
 # ==========================================
 
 # NewWorkflowViewSet removed - WorkflowViewSet now handles both legacy and graph-driven workflows
-
-
-class WorkflowNodeViewSet(viewsets.ModelViewSet):
-    """Manage React Flow nodes in workflows."""
-    serializer_class = WorkflowNodeSerializer
-    permission_classes = [IsAuthenticated]
-
-    def get_queryset(self):
-        return WorkflowNode.objects.filter(workflow__user=self.request.user)
-
-    # Default create/update are sufficient; ownership enforced below
-
-    def perform_create(self, serializer):
-        workflow = serializer.validated_data.get('workflow')
-        if not workflow or workflow.user != self.request.user:
-            raise PermissionDenied("Invalid workflow or not owned by user")
-        serializer.save()
-
-    def perform_update(self, serializer):
-        instance = self.get_object()
-        if instance.workflow.user != self.request.user:
-            raise PermissionDenied("Not allowed to modify this node")
-        # prevent changing workflow ownership via update
-        serializer.validated_data.pop('workflow', None)
-        serializer.save()
-
-
-class WorkflowEdgeViewSet(viewsets.ModelViewSet):
-    """Manage React Flow edges in workflows."""
-    serializer_class = WorkflowEdgeSerializer
-    permission_classes = [IsAuthenticated]
-
-    def get_queryset(self):
-        return WorkflowEdge.objects.filter(workflow__user=self.request.user)
-
-    # Default create/update are sufficient; ownership enforced below
-
-    def perform_create(self, serializer):
-        workflow = serializer.validated_data.get('workflow')
-        if not workflow or workflow.user != self.request.user:
-            raise PermissionDenied("Invalid workflow or not owned by user")
-        serializer.save()
-
-    def perform_update(self, serializer):
-        instance = self.get_object()
-        if instance.workflow.user != self.request.user:
-            raise PermissionDenied("Not allowed to modify this edge")
-        # prevent changing workflow via update
-        serializer.validated_data.pop('workflow', None)
-        serializer.save()
+# WorkflowNodeViewSet and WorkflowEdgeViewSet removed - nodes/edges are managed via nested data in WorkflowViewSet
