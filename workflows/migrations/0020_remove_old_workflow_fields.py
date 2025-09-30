@@ -4,6 +4,121 @@
 from django.db import migrations
 
 
+def remove_old_workflow_fields(apps, schema_editor):
+    """
+    Remove old fields from Workflow table if they exist.
+    This is safe to run even if fields were already removed (e.g., after rollback).
+    """
+    # Check which fields exist
+    with schema_editor.connection.cursor() as cursor:
+        cursor.execute("PRAGMA table_info(workflows_workflow);")
+        existing_columns = {row[1] for row in cursor.fetchall()}
+
+    fields_to_remove = ['layout', 'viewport', 'title', 'description', 'mode']
+    fields_present = [f for f in fields_to_remove if f in existing_columns]
+
+    if not fields_present:
+        print("✅ No old fields to remove (already cleaned up)")
+        return
+
+    # Remove fields using raw SQL (SQLite requires table recreation)
+    with schema_editor.connection.cursor() as cursor:
+        # Get columns to keep
+        cursor.execute("PRAGMA table_info(workflows_workflow);")
+        all_columns = [row[1] for row in cursor.fetchall()]
+        keep_columns = [col for col in all_columns if col not in fields_to_remove]
+        keep_columns_str = ', '.join(keep_columns)
+
+        # Build the new table structure with only the columns we want to keep
+        # These are the expected columns after removing legacy fields
+        expected_columns = {
+            'id': 'INTEGER PRIMARY KEY AUTOINCREMENT',
+            'created_at': 'datetime NOT NULL',
+            'updated_at': 'datetime NOT NULL',
+            'is_active': 'bool NOT NULL',
+            'is_deleted': 'bool NOT NULL',
+            'user_id': 'bigint NOT NULL REFERENCES users_user(id) DEFERRABLE INITIALLY DEFERRED',
+            'version': 'integer unsigned NOT NULL CHECK (version >= 0)',
+            'parent_id': 'bigint REFERENCES workflows_workflow(id) DEFERRABLE INITIALLY DEFERRED',
+            'viewport_x': 'REAL NOT NULL',
+            'viewport_y': 'REAL NOT NULL',
+            'viewport_zoom': 'REAL NOT NULL',
+        }
+
+        # Build CREATE statement with only kept columns
+        new_table_columns = []
+        for col in keep_columns:
+            if col in expected_columns:
+                new_table_columns.append(f"{col} {expected_columns[col]}")
+
+        create_statement = f"""
+            CREATE TABLE workflows_workflow_new (
+                {', '.join(new_table_columns)}
+            );
+        """
+
+        cursor.execute(create_statement)
+
+        # Copy data
+        cursor.execute(f"""
+            INSERT INTO workflows_workflow_new ({keep_columns_str})
+            SELECT {keep_columns_str} FROM workflows_workflow;
+        """)
+
+        # Replace table
+        cursor.execute("DROP TABLE workflows_workflow;")
+        cursor.execute("ALTER TABLE workflows_workflow_new RENAME TO workflows_workflow;")
+
+    print(f"✅ Removed old workflow fields: {', '.join(fields_present)}")
+
+
+def reverse_remove_fields(apps, schema_editor):
+    """
+    Reverse migration - add fields back.
+    Note: This won't restore data, just the schema.
+    """
+    with schema_editor.connection.cursor() as cursor:
+        # Check if fields are already missing
+        cursor.execute("PRAGMA table_info(workflows_workflow);")
+        existing_columns = {row[1] for row in cursor.fetchall()}
+
+        if 'title' in existing_columns:
+            print("Fields already exist, skipping reverse migration")
+            return
+
+        # Recreate table with old fields
+        cursor.execute("""
+            CREATE TABLE workflows_workflow_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at datetime NOT NULL,
+                updated_at datetime NOT NULL,
+                is_active bool NOT NULL,
+                is_deleted bool NOT NULL,
+                title varchar(255) NOT NULL DEFAULT '',
+                description TEXT NOT NULL DEFAULT '',
+                mode INTEGER NOT NULL DEFAULT 1,
+                layout TEXT,
+                viewport TEXT,
+                user_id bigint NOT NULL REFERENCES users_user(id) DEFERRABLE INITIALLY DEFERRED,
+                version integer unsigned NOT NULL CHECK (version >= 0),
+                parent_id bigint REFERENCES workflows_workflow(id) DEFERRABLE INITIALLY DEFERRED
+            );
+        """)
+
+        # Copy existing data
+        all_columns = [row[1] for row in cursor.execute("PRAGMA table_info(workflows_workflow);").fetchall()]
+        columns_str = ', '.join(all_columns)
+        cursor.execute(f"""
+            INSERT INTO workflows_workflow_new ({columns_str})
+            SELECT {columns_str} FROM workflows_workflow;
+        """)
+
+        cursor.execute("DROP TABLE workflows_workflow;")
+        cursor.execute("ALTER TABLE workflows_workflow_new RENAME TO workflows_workflow;")
+
+    print("✅ Restored old workflow fields")
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -11,14 +126,5 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        # Remove old fields that have been migrated to node-based structure
-        # - layout, viewport: replaced by viewport_x/y/zoom (added in 0017)
-        migrations.RemoveField(
-            model_name="workflow",
-            name="layout",
-        ),
-        migrations.RemoveField(
-            model_name="workflow",
-            name="viewport",
-        ),
+        migrations.RunPython(remove_old_workflow_fields, reverse_remove_fields),
     ]
