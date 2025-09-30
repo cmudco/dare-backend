@@ -30,20 +30,58 @@ def migrate_workflows_to_nodes(apps, schema_editor):
 
     workflows_migrated = 0
 
-    # Get all workflows using only_() to avoid querying non-existent fields
-    # At this point in migration, Workflow table only has: id, created_at, updated_at,
-    # is_active, is_deleted, user_id, version, parent_id, layout, viewport, viewport_x/y/zoom
-    for workflow in Workflow._default_manager.only('id', 'user_id').all():
+    # Check if old fields exist in Workflow table
+    # They should exist in normal migrations, but may not exist if rollback was done
+    with schema_editor.connection.cursor() as cursor:
+        cursor.execute("PRAGMA table_info(workflows_workflow);")
+        workflow_columns = {row[1] for row in cursor.fetchall()}
+
+    has_legacy_fields = {'title', 'description', 'mode'}.issubset(workflow_columns)
+
+    # Get all workflow IDs using raw SQL to avoid ORM model field issues
+    with schema_editor.connection.cursor() as cursor:
+        if has_legacy_fields:
+            cursor.execute("SELECT id, title, description, mode FROM workflows_workflow")
+            workflow_rows = cursor.fetchall()
+        else:
+            cursor.execute("SELECT id FROM workflows_workflow")
+            workflow_rows = [(row[0], None, None, None) for row in cursor.fetchall()]
+
+    # Process each workflow
+    for workflow_row in workflow_rows:
+        workflow_id = workflow_row[0]
+
         # Skip if already has nodes (avoid duplicate migration)
-        if WorkflowNode._default_manager.filter(workflow=workflow).exists():
+        if WorkflowNode._default_manager.filter(workflow_id=workflow_id).exists():
             continue
 
-        # Create StartNodeData with default values (old workflows don't have title/description)
-        start_data = StartNodeData._default_manager.create(
-            title='Untitled Workflow',
-            description='',
-            mode='sequential'
-        )
+        # Create a minimal workflow instance just for FK references
+        # We use _state to create an instance without loading from DB
+        workflow = Workflow(id=workflow_id)
+        workflow._state.adding = False  # Mark as existing record, not new
+
+        # Migrate title/description/mode from Workflow to StartNodeData if they exist
+        if has_legacy_fields:
+            title = workflow_row[1] or 'Untitled Workflow'
+            description = workflow_row[2] or ''
+            mode_int = workflow_row[3]
+
+            # Convert mode integer to string
+            mode_map = {1: 'sequential', 2: 'parallel'}
+            mode_str = mode_map.get(mode_int, 'sequential')
+
+            start_data = StartNodeData._default_manager.create(
+                title=title,
+                description=description,
+                mode=mode_str
+            )
+        else:
+            # Legacy fields don't exist (e.g., after rollback), use defaults
+            start_data = StartNodeData._default_manager.create(
+                title='Untitled Workflow',
+                description='',
+                mode='sequential'
+            )
 
         # Create start node
         start_node = WorkflowNode._default_manager.create(
