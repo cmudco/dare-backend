@@ -14,7 +14,7 @@ class GeminiService:
         self.is_reasoning = llm.is_reasoning
 
     async def stream_chat_completion(
-        self, messages: List[Dict[str, str]], max_tokens: int = 1024, temperature: float = 0.7
+        self, messages: List[Dict[str, str]], max_tokens: int = 1024, temperature: float = 0.7, images: List[Dict] = None
     ) -> AsyncGenerator[Tuple[str, Dict], None]:
         """
         Streams chat completions from Google Gemini API.
@@ -33,9 +33,11 @@ class GeminiService:
         Raises:
             Exception: If an error occurs during the API call, yields an error message and logs the exception.
         """
+        images = images or []
+
         try:
             # Convert messages to Gemini format
-            gemini_messages = self._convert_messages_to_gemini_format(messages)
+            gemini_messages = self._convert_messages_to_gemini_format(messages, images)
 
             # Configure generation parameters
             generation_config = genai.types.GenerationConfig(
@@ -79,35 +81,44 @@ class GeminiService:
             logger.error(f"Error in Gemini stream_chat_completion: {e}")
             yield f"Error: {str(e)}", None
 
-    def _convert_messages_to_gemini_format(self, messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    def _convert_messages_to_gemini_format(self, messages: List[Dict[str, str]], images: List[Dict] = None) -> List[Dict[str, str]]:
         """
-        Convert messages from OpenAI format to Gemini format.
+        Convert messages from OpenAI format to Gemini format with optional vision support.
 
-        Args:
-            messages (List[Dict[str, str]]): Messages in OpenAI format
-
-        Returns:
-            List[Dict[str, str]]: Messages in Gemini format
+        Gemini expects: {"role": "user/model", "parts": ["text", {"inline_data": {...}}]}
+        Note: Gemini requires base64 WITHOUT the data URL prefix.
         """
         gemini_messages = []
+        images = images or []
 
-        for message in messages:
+        for idx, message in enumerate(messages):
             role = message.get("role", "user")
             content = message.get("content", "")
 
             # Map OpenAI roles to Gemini roles
-            if role == "assistant":
-                gemini_role = "model"
-            elif role == "system":
-                # Gemini doesn't have a system role, so we'll prepend system messages to the first user message
-                gemini_role = "user"
-                content = f"System: {content}"
-            else:  # user
-                gemini_role = "user"
+            gemini_role = {
+                "assistant": "model",
+                "system": "user",  # Gemini doesn't have system role
+                "user": "user"
+            }.get(role, "user")
 
-            gemini_messages.append({
-                "role": gemini_role,
-                "parts": [content]
-            })
+            # Prepend "System:" label if it's a system message
+            if role == "system":
+                content = f"System: {content}"
+
+            parts = [content]
+
+            # Add vision content to the last user message
+            if idx == len(messages) - 1 and role == "user" and images:
+                parts.extend([
+                    {
+                        "inline_data": {
+                            "mime_type": img["type"],
+                            "data": img["preview"].split(",")[1] if "," in img["preview"] else img["preview"]
+                        }
+                    } for img in images
+                ])
+
+            gemini_messages.append({"role": gemini_role, "parts": parts})
 
         return gemini_messages

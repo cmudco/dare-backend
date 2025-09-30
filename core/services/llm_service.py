@@ -46,6 +46,7 @@ class LLMService:
         referenced_conversation_history_limit: int = 10,
         message_obj: Message = None,
         workflow_run_step_obj=None,
+        images: list = None,  # Vision support: list of dicts with 'preview' (base64), 'name', 'type'
         # New optional params for SocraticBooks-style prompt construction
         socratic_mode: bool = False,
         bot_meta: Dict = None,
@@ -94,7 +95,7 @@ class LLMService:
                     )
 
                 ai_service = self._get_ai_service(llm)
-                async for chunk, usage in ai_service.stream_chat_completion(messages, max_tokens, temperature):
+                async for chunk, usage in ai_service.stream_chat_completion(messages, max_tokens, temperature, images=images):
                     yield chunk, usage
                 return
 
@@ -154,7 +155,7 @@ class LLMService:
             messages.append({"role": "user", "content": f"User's message: {message}"})
 
             ai_service = self._get_ai_service(llm)
-            async for chunk, usage in ai_service.stream_chat_completion(messages, max_tokens, temperature):
+            async for chunk, usage in ai_service.stream_chat_completion(messages, max_tokens, temperature, images=images):
                 yield chunk, usage
 
         except Exception as e:
