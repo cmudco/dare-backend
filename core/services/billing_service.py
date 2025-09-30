@@ -6,7 +6,7 @@ from channels.db import database_sync_to_async
 from billing.constants import TransactionTypeChoice
 from billing.models import Transaction, Wallet
 from conversations.models import LLM, Message
-from workflows.models import Step, Workflow, WorkflowRun
+from workflows.models import Workflow, WorkflowRun, WorkflowNode
 
 import logging
 
@@ -160,7 +160,7 @@ class BillingService:
             logger.exception(f"Error finalizing message: {str(e)}")
             raise ValidationError({"error": "billing_error", "message": "Failed to process billing"})
 
-    def process_workflow_billing(self, user: 'User', llm: LLM, input_tokens: int, output_tokens: int, step_id: int) -> bool:
+    def process_workflow_billing(self, user: 'User', llm: LLM, input_tokens: int, output_tokens: int, step_node_id: int) -> bool:
         """Process billing for a workflow step."""
         try:
             cost = self._calculate_cost(llm, input_tokens, output_tokens)
@@ -173,11 +173,13 @@ class BillingService:
                 logger.error(f"Wallet not found for user: {user.id}")
                 return False
 
-            step = Step.objects.get(id=step_id)
-            workflows = step.workflows.all()
-            workflow = workflows.first() if workflows.exists() else None
+            step_node = WorkflowNode.objects.get(id=step_node_id)
+            workflow = step_node.workflow
 
-            step_order = step.order
+            # Get step number from node data if available
+            step_number = getattr(step_node.data_object, 'step_number', None) if step_node.data_object else None
+            step_order = step_number or 1
+
             workflow_title = workflow.title if workflow else "Unknown Workflow"
 
             transaction_message = f"Workflow {workflow.id} : Title - {workflow_title} | Step #{step_order} "
