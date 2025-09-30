@@ -153,6 +153,23 @@ class Migration(migrations.Migration):
             constraint=models.UniqueConstraint(fields=("workflow", "edge_id"), name="unique_workflow_edge"),
         ),
 
-        # NOTE: layout and viewport fields kept temporarily for 0019 data migration
+        # Add viewport fields to replace the old viewport JSONField
+        migrations.AddField(
+            model_name='workflow',
+            name='viewport_x',
+            field=models.FloatField(default=0.0, help_text='Viewport X position'),
+        ),
+        migrations.AddField(
+            model_name='workflow',
+            name='viewport_y',
+            field=models.FloatField(default=0.0, help_text='Viewport Y position'),
+        ),
+        migrations.AddField(
+            model_name='workflow',
+            name='viewport_zoom',
+            field=models.FloatField(default=1.0, help_text='Viewport zoom level'),
+        ),
+
+        # NOTE: layout, viewport, title, description, mode fields kept temporarily for 0019 data migration
         # They will be removed in 0020
     ]
