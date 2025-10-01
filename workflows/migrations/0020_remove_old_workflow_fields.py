@@ -4,15 +4,31 @@
 from django.db import migrations
 
 
+def get_table_columns(cursor, db_vendor, table_name):
+    """Helper function to get table columns for any database"""
+    if db_vendor == 'sqlite':
+        cursor.execute(f"PRAGMA table_info({table_name});")
+        return {row[1] for row in cursor.fetchall()}
+    else:
+        # PostgreSQL, MySQL, etc.
+        cursor.execute("""
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_name = %s
+        """, [table_name])
+        return {row[0] for row in cursor.fetchall()}
+
+
 def remove_old_workflow_fields(apps, schema_editor):
     """
     Remove old fields from Workflow table if they exist.
     This is safe to run even if fields were already removed (e.g., after rollback).
     """
+    db_vendor = schema_editor.connection.vendor
+
     # Check which fields exist
     with schema_editor.connection.cursor() as cursor:
-        cursor.execute("PRAGMA table_info(workflows_workflow);")
-        existing_columns = {row[1] for row in cursor.fetchall()}
+        existing_columns = get_table_columns(cursor, db_vendor, 'workflows_workflow')
 
     fields_to_remove = ['layout', 'viewport', 'title', 'description', 'mode']
     fields_present = [f for f in fields_to_remove if f in existing_columns]
@@ -21,53 +37,54 @@ def remove_old_workflow_fields(apps, schema_editor):
         print("✅ No old fields to remove (already cleaned up)")
         return
 
-    # Remove fields using raw SQL (SQLite requires table recreation)
-    with schema_editor.connection.cursor() as cursor:
-        # Get columns to keep
-        cursor.execute("PRAGMA table_info(workflows_workflow);")
-        all_columns = [row[1] for row in cursor.fetchall()]
-        keep_columns = [col for col in all_columns if col not in fields_to_remove]
-        keep_columns_str = ', '.join(keep_columns)
+    # Remove fields - different approach for SQLite vs PostgreSQL
+    if db_vendor == 'sqlite':
+        # SQLite requires table recreation (doesn't support DROP COLUMN)
+        with schema_editor.connection.cursor() as cursor:
+            # Get columns to keep
+            all_columns_data = cursor.execute("PRAGMA table_info(workflows_workflow);").fetchall()
+            all_columns = [row[1] for row in all_columns_data]
+            keep_columns = [col for col in all_columns if col not in fields_to_remove]
+            keep_columns_str = ', '.join(keep_columns)
 
-        # Build the new table structure with only the columns we want to keep
-        # These are the expected columns after removing legacy fields
-        expected_columns = {
-            'id': 'INTEGER PRIMARY KEY AUTOINCREMENT',
-            'created_at': 'datetime NOT NULL',
-            'updated_at': 'datetime NOT NULL',
-            'is_active': 'bool NOT NULL',
-            'is_deleted': 'bool NOT NULL',
-            'user_id': 'bigint NOT NULL REFERENCES users_user(id) DEFERRABLE INITIALLY DEFERRED',
-            'version': 'integer unsigned NOT NULL CHECK (version >= 0)',
-            'parent_id': 'bigint REFERENCES workflows_workflow(id) DEFERRABLE INITIALLY DEFERRED',
-            'viewport_x': 'REAL NOT NULL',
-            'viewport_y': 'REAL NOT NULL',
-            'viewport_zoom': 'REAL NOT NULL',
-        }
+            # Build the new table structure with only the columns we want to keep
+            expected_columns = {
+                'id': 'INTEGER PRIMARY KEY AUTOINCREMENT',
+                'created_at': 'datetime NOT NULL',
+                'updated_at': 'datetime NOT NULL',
+                'is_active': 'bool NOT NULL',
+                'is_deleted': 'bool NOT NULL',
+                'user_id': 'bigint NOT NULL REFERENCES users_user(id) DEFERRABLE INITIALLY DEFERRED',
+                'version': 'integer unsigned NOT NULL CHECK (version >= 0)',
+                'parent_id': 'bigint REFERENCES workflows_workflow(id) DEFERRABLE INITIALLY DEFERRED',
+                'viewport_x': 'REAL NOT NULL',
+                'viewport_y': 'REAL NOT NULL',
+                'viewport_zoom': 'REAL NOT NULL',
+            }
 
-        # Build CREATE statement with only kept columns
-        new_table_columns = []
-        for col in keep_columns:
-            if col in expected_columns:
-                new_table_columns.append(f"{col} {expected_columns[col]}")
+            new_table_columns = []
+            for col in keep_columns:
+                if col in expected_columns:
+                    new_table_columns.append(f"{col} {expected_columns[col]}")
 
-        create_statement = f"""
-            CREATE TABLE workflows_workflow_new (
-                {', '.join(new_table_columns)}
-            );
-        """
+            create_statement = f"""
+                CREATE TABLE workflows_workflow_new (
+                    {', '.join(new_table_columns)}
+                );
+            """
 
-        cursor.execute(create_statement)
-
-        # Copy data
-        cursor.execute(f"""
-            INSERT INTO workflows_workflow_new ({keep_columns_str})
-            SELECT {keep_columns_str} FROM workflows_workflow;
-        """)
-
-        # Replace table
-        cursor.execute("DROP TABLE workflows_workflow;")
-        cursor.execute("ALTER TABLE workflows_workflow_new RENAME TO workflows_workflow;")
+            cursor.execute(create_statement)
+            cursor.execute(f"""
+                INSERT INTO workflows_workflow_new ({keep_columns_str})
+                SELECT {keep_columns_str} FROM workflows_workflow;
+            """)
+            cursor.execute("DROP TABLE workflows_workflow;")
+            cursor.execute("ALTER TABLE workflows_workflow_new RENAME TO workflows_workflow;")
+    else:
+        # PostgreSQL, MySQL - use ALTER TABLE DROP COLUMN
+        with schema_editor.connection.cursor() as cursor:
+            for field in fields_present:
+                cursor.execute(f"ALTER TABLE workflows_workflow DROP COLUMN {field};")
 
     print(f"✅ Removed old workflow fields: {', '.join(fields_present)}")
 
@@ -77,44 +94,54 @@ def reverse_remove_fields(apps, schema_editor):
     Reverse migration - add fields back.
     Note: This won't restore data, just the schema.
     """
+    db_vendor = schema_editor.connection.vendor
+
     with schema_editor.connection.cursor() as cursor:
         # Check if fields are already missing
-        cursor.execute("PRAGMA table_info(workflows_workflow);")
-        existing_columns = {row[1] for row in cursor.fetchall()}
+        existing_columns = get_table_columns(cursor, db_vendor, 'workflows_workflow')
 
         if 'title' in existing_columns:
             print("Fields already exist, skipping reverse migration")
             return
 
-        # Recreate table with old fields
-        cursor.execute("""
-            CREATE TABLE workflows_workflow_new (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                created_at datetime NOT NULL,
-                updated_at datetime NOT NULL,
-                is_active bool NOT NULL,
-                is_deleted bool NOT NULL,
-                title varchar(255) NOT NULL DEFAULT '',
-                description TEXT NOT NULL DEFAULT '',
-                mode INTEGER NOT NULL DEFAULT 1,
-                layout TEXT,
-                viewport TEXT,
-                user_id bigint NOT NULL REFERENCES users_user(id) DEFERRABLE INITIALLY DEFERRED,
-                version integer unsigned NOT NULL CHECK (version >= 0),
-                parent_id bigint REFERENCES workflows_workflow(id) DEFERRABLE INITIALLY DEFERRED
-            );
-        """)
+        if db_vendor == 'sqlite':
+            # SQLite - recreate table
+            cursor.execute("""
+                CREATE TABLE workflows_workflow_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    created_at datetime NOT NULL,
+                    updated_at datetime NOT NULL,
+                    is_active bool NOT NULL,
+                    is_deleted bool NOT NULL,
+                    title varchar(255) NOT NULL DEFAULT '',
+                    description TEXT NOT NULL DEFAULT '',
+                    mode INTEGER NOT NULL DEFAULT 1,
+                    layout TEXT,
+                    viewport TEXT,
+                    user_id bigint NOT NULL REFERENCES users_user(id) DEFERRABLE INITIALLY DEFERRED,
+                    version integer unsigned NOT NULL CHECK (version >= 0),
+                    parent_id bigint REFERENCES workflows_workflow(id) DEFERRABLE INITIALLY DEFERRED,
+                    viewport_x REAL NOT NULL DEFAULT 0.0,
+                    viewport_y REAL NOT NULL DEFAULT 0.0,
+                    viewport_zoom REAL NOT NULL DEFAULT 1.0
+                );
+            """)
 
-        # Copy existing data
-        all_columns = [row[1] for row in cursor.execute("PRAGMA table_info(workflows_workflow);").fetchall()]
-        columns_str = ', '.join(all_columns)
-        cursor.execute(f"""
-            INSERT INTO workflows_workflow_new ({columns_str})
-            SELECT {columns_str} FROM workflows_workflow;
-        """)
-
-        cursor.execute("DROP TABLE workflows_workflow;")
-        cursor.execute("ALTER TABLE workflows_workflow_new RENAME TO workflows_workflow;")
+            all_columns = [row[1] for row in cursor.execute("PRAGMA table_info(workflows_workflow);").fetchall()]
+            columns_str = ', '.join(all_columns)
+            cursor.execute(f"""
+                INSERT INTO workflows_workflow_new ({columns_str})
+                SELECT {columns_str} FROM workflows_workflow;
+            """)
+            cursor.execute("DROP TABLE workflows_workflow;")
+            cursor.execute("ALTER TABLE workflows_workflow_new RENAME TO workflows_workflow;")
+        else:
+            # PostgreSQL - use ALTER TABLE ADD COLUMN
+            cursor.execute("ALTER TABLE workflows_workflow ADD COLUMN title varchar(255) NOT NULL DEFAULT '';")
+            cursor.execute("ALTER TABLE workflows_workflow ADD COLUMN description TEXT NOT NULL DEFAULT '';")
+            cursor.execute("ALTER TABLE workflows_workflow ADD COLUMN mode INTEGER NOT NULL DEFAULT 1;")
+            cursor.execute("ALTER TABLE workflows_workflow ADD COLUMN layout JSONB;")
+            cursor.execute("ALTER TABLE workflows_workflow ADD COLUMN viewport JSONB;")
 
     print("✅ Restored old workflow fields")
 

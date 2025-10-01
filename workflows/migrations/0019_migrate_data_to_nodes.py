@@ -33,8 +33,20 @@ def migrate_workflows_to_nodes(apps, schema_editor):
     # Check if old fields exist in Workflow table
     # They should exist in normal migrations, but may not exist if rollback was done
     with schema_editor.connection.cursor() as cursor:
-        cursor.execute("PRAGMA table_info(workflows_workflow);")
-        workflow_columns = {row[1] for row in cursor.fetchall()}
+        # Use database-specific query to check columns
+        db_vendor = schema_editor.connection.vendor
+
+        if db_vendor == 'sqlite':
+            cursor.execute("PRAGMA table_info(workflows_workflow);")
+            workflow_columns = {row[1] for row in cursor.fetchall()}
+        else:
+            # For PostgreSQL, MySQL, and other databases - use information_schema
+            cursor.execute("""
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_name = 'workflows_workflow'
+            """)
+            workflow_columns = {row[0] for row in cursor.fetchall()}
 
     has_legacy_fields = {'title', 'description', 'mode'}.issubset(workflow_columns)
 
