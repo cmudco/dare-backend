@@ -5,14 +5,30 @@
 from django.db import migrations
 
 
+def get_table_columns(cursor, db_vendor, table_name):
+    """Helper function to get table columns for any database"""
+    if db_vendor == 'sqlite':
+        cursor.execute(f"PRAGMA table_info({table_name});")
+        return {row[1] for row in cursor.fetchall()}
+    else:
+        # PostgreSQL, MySQL, etc.
+        cursor.execute("""
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_name = %s
+        """, [table_name])
+        return {row[0] for row in cursor.fetchall()}
+
+
 def cleanup_legacy_fields(apps, schema_editor):
     """
     Remove title/description/mode fields from Workflow table if they still exist.
     This is a safety net for environments where migration 0020 didn't fully clean up.
     """
+    db_vendor = schema_editor.connection.vendor
+
     with schema_editor.connection.cursor() as cursor:
-        cursor.execute("PRAGMA table_info(workflows_workflow);")
-        existing_columns = {row[1] for row in cursor.fetchall()}
+        existing_columns = get_table_columns(cursor, db_vendor, 'workflows_workflow')
 
     legacy_fields = {'title', 'description', 'mode'}
     fields_to_remove = legacy_fields & existing_columns
@@ -24,54 +40,56 @@ def cleanup_legacy_fields(apps, schema_editor):
     print(f"⚠️  Found legacy fields still present: {', '.join(fields_to_remove)}")
     print("   Cleaning them up now...")
 
-    # Remove legacy fields by recreating table
-    with schema_editor.connection.cursor() as cursor:
-        # Get all columns
-        cursor.execute("PRAGMA table_info(workflows_workflow);")
-        all_columns = [row[1] for row in cursor.fetchall()]
+    if db_vendor == 'sqlite':
+        # SQLite - recreate table
+        with schema_editor.connection.cursor() as cursor:
+            # Get all columns
+            all_columns_data = cursor.execute("PRAGMA table_info(workflows_workflow);").fetchall()
+            all_columns = [row[1] for row in all_columns_data]
 
-        # Keep only non-legacy columns
-        keep_columns = [col for col in all_columns if col not in legacy_fields]
-        keep_columns_str = ', '.join(keep_columns)
+            # Keep only non-legacy columns
+            keep_columns = [col for col in all_columns if col not in legacy_fields]
+            keep_columns_str = ', '.join(keep_columns)
 
-        # Define expected final schema
-        expected_schema = {
-            'id': 'INTEGER PRIMARY KEY AUTOINCREMENT',
-            'created_at': 'datetime NOT NULL',
-            'updated_at': 'datetime NOT NULL',
-            'is_active': 'bool NOT NULL',
-            'is_deleted': 'bool NOT NULL',
-            'user_id': 'bigint NOT NULL REFERENCES users_user(id) DEFERRABLE INITIALLY DEFERRED',
-            'version': 'integer unsigned NOT NULL CHECK (version >= 0)',
-            'parent_id': 'bigint REFERENCES workflows_workflow(id) DEFERRABLE INITIALLY DEFERRED',
-            'viewport_x': 'REAL NOT NULL',
-            'viewport_y': 'REAL NOT NULL',
-            'viewport_zoom': 'REAL NOT NULL',
-        }
+            # Define expected final schema
+            expected_schema = {
+                'id': 'INTEGER PRIMARY KEY AUTOINCREMENT',
+                'created_at': 'datetime NOT NULL',
+                'updated_at': 'datetime NOT NULL',
+                'is_active': 'bool NOT NULL',
+                'is_deleted': 'bool NOT NULL',
+                'user_id': 'bigint NOT NULL REFERENCES users_user(id) DEFERRABLE INITIALLY DEFERRED',
+                'version': 'integer unsigned NOT NULL CHECK (version >= 0)',
+                'parent_id': 'bigint REFERENCES workflows_workflow(id) DEFERRABLE INITIALLY DEFERRED',
+                'viewport_x': 'REAL NOT NULL',
+                'viewport_y': 'REAL NOT NULL',
+                'viewport_zoom': 'REAL NOT NULL',
+            }
 
-        # Build CREATE statement with only kept columns
-        new_table_columns = []
-        for col in keep_columns:
-            if col in expected_schema:
-                new_table_columns.append(f"{col} {expected_schema[col]}")
+            # Build CREATE statement with only kept columns
+            new_table_columns = []
+            for col in keep_columns:
+                if col in expected_schema:
+                    new_table_columns.append(f"{col} {expected_schema[col]}")
 
-        create_statement = f"""
-            CREATE TABLE workflows_workflow_new (
-                {', '.join(new_table_columns)}
-            );
-        """
+            create_statement = f"""
+                CREATE TABLE workflows_workflow_new (
+                    {', '.join(new_table_columns)}
+                );
+            """
 
-        cursor.execute(create_statement)
-
-        # Copy data
-        cursor.execute(f"""
-            INSERT INTO workflows_workflow_new ({keep_columns_str})
-            SELECT {keep_columns_str} FROM workflows_workflow;
-        """)
-
-        # Replace table
-        cursor.execute("DROP TABLE workflows_workflow;")
-        cursor.execute("ALTER TABLE workflows_workflow_new RENAME TO workflows_workflow;")
+            cursor.execute(create_statement)
+            cursor.execute(f"""
+                INSERT INTO workflows_workflow_new ({keep_columns_str})
+                SELECT {keep_columns_str} FROM workflows_workflow;
+            """)
+            cursor.execute("DROP TABLE workflows_workflow;")
+            cursor.execute("ALTER TABLE workflows_workflow_new RENAME TO workflows_workflow;")
+    else:
+        # PostgreSQL - use ALTER TABLE DROP COLUMN
+        with schema_editor.connection.cursor() as cursor:
+            for field in fields_to_remove:
+                cursor.execute(f"ALTER TABLE workflows_workflow DROP COLUMN {field};")
 
     print(f"✅ Cleaned up legacy fields: {', '.join(fields_to_remove)}")
 
