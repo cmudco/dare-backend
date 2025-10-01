@@ -6,14 +6,30 @@
 from django.db import migrations, models
 
 
+def get_table_columns(cursor, db_vendor, table_name):
+    """Helper function to get table columns for any database"""
+    if db_vendor == 'sqlite':
+        cursor.execute(f"PRAGMA table_info({table_name});")
+        return {row[1] for row in cursor.fetchall()}
+    else:
+        # PostgreSQL, MySQL, etc.
+        cursor.execute("""
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_name = %s
+        """, [table_name])
+        return {row[0] for row in cursor.fetchall()}
+
+
 def add_viewport_fields_if_missing(apps, schema_editor):
     """
     Add viewport_x/y/zoom fields only if they don't already exist.
     This handles the case where 0018 was run before it was updated to add these fields.
     """
+    db_vendor = schema_editor.connection.vendor
+
     with schema_editor.connection.cursor() as cursor:
-        cursor.execute("PRAGMA table_info(workflows_workflow);")
-        existing_columns = {row[1] for row in cursor.fetchall()}
+        existing_columns = get_table_columns(cursor, db_vendor, 'workflows_workflow')
 
     viewport_fields = {'viewport_x', 'viewport_y', 'viewport_zoom'}
     missing_fields = viewport_fields - existing_columns
@@ -23,21 +39,21 @@ def add_viewport_fields_if_missing(apps, schema_editor):
         return
 
     # Add missing fields
-    Workflow = apps.get_model('workflows', 'Workflow')
     for field_name in missing_fields:
-        if field_name == 'viewport_x':
-            field = models.FloatField(default=0.0, help_text='Viewport X position')
-        elif field_name == 'viewport_y':
-            field = models.FloatField(default=0.0, help_text='Viewport Y position')
-        elif field_name == 'viewport_zoom':
-            field = models.FloatField(default=1.0, help_text='Viewport zoom level')
+        default_value = 0.0 if 'zoom' not in field_name else 1.0
 
         with schema_editor.connection.cursor() as cursor:
-            default_value = 0.0 if 'zoom' not in field_name else 1.0
-            cursor.execute(f"""
-                ALTER TABLE workflows_workflow 
-                ADD COLUMN {field_name} REAL NOT NULL DEFAULT {default_value}
-            """)
+            if db_vendor == 'sqlite':
+                cursor.execute(f"""
+                    ALTER TABLE workflows_workflow
+                    ADD COLUMN {field_name} REAL NOT NULL DEFAULT {default_value}
+                """)
+            else:
+                # PostgreSQL uses DOUBLE PRECISION instead of REAL
+                cursor.execute(f"""
+                    ALTER TABLE workflows_workflow
+                    ADD COLUMN {field_name} DOUBLE PRECISION NOT NULL DEFAULT {default_value}
+                """)
         print(f"✅ Added missing field: {field_name}")
 
 
