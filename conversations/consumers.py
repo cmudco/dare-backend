@@ -209,6 +209,8 @@ Provide your assessment in a clear, encouraging format that helps track their pr
                 referenced_conversation_ids=message_data["referenced_conversation_ids"],
                 referenced_conversation_history_limit=message_data["referenced_conversation_history_limit"],
                 message_obj=message_obj,
+                # Vision support
+                images=message_data.get("images", []),
                 # SocraticBooks-style prompt construction (when applicable)
                 socratic_mode=(self.platform == AuthSourceChoice.SOCRATIC_BOTS and not message_data.get("prompt_id")),
                 advanced_mode=bool(message_data.get("is_advanced")),
@@ -369,6 +371,8 @@ Provide your assessment in a clear, encouraging format that helps track their pr
             "max_context_snippets": data.get("max_context_snippets", self.DEFAULT_MAX_CONTEXT_SNIPPETS),
             "document_similarity_threshold": data.get("document_similarity_threshold", self.DEFAULT_DOCUMENT_SIMILARITY_THRESHOLD),
             "history_limit": data.get("history_limit", self.DEFAULT_HISTORY_LIMIT),
+            # Vision support: base64 encoded images
+            "images": data.get("images", []),  # List of {preview: str, name: str, type: str}
             # Socratic-only optional fields
             "enable_progress": data.get("enable_progress"),
             "tracking_prompt": data.get("tracking_prompt", ""),
