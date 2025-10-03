@@ -13,7 +13,7 @@ class ClaudeService:
         self.is_reasoning = llm.is_reasoning
 
     async def stream_chat_completion(
-        self, messages: List[Dict[str, str]], max_tokens: int = 1024, temperature: float = 0.7
+        self, messages: List[Dict[str, str]], max_tokens: int = 1024, temperature: float = 0.7, images: List[Dict] = None
     ) -> AsyncGenerator[Tuple[str, Dict], None]:
         """
         Streams chat completions from the Claude API.
@@ -34,11 +34,14 @@ class ClaudeService:
         Raises:
             Exception: If an error occurs during the API call, yields an error message and logs the exception.
         """
+        if images:
+            messages = self._add_vision_to_messages(messages, images)
+
         try:
             # Extract system messages and regular messages
             system_message = None
             filtered_messages = []
-            
+
             for message in messages:
                 if message.get('role') == 'system':
                     # Take the last system message if multiple exist
@@ -111,6 +114,30 @@ class ClaudeService:
         async for chunk, _ in self.stream_chat_completion(messages, max_tokens, temperature):
             response_text += chunk
         return response_text
+
+    def _add_vision_to_messages(self, messages: List[Dict], images: List[Dict]) -> List[Dict]:
+        """
+        Add vision content to the last user message in Claude format.
+
+        Claude expects: {"type": "image", "source": {"type": "base64", "media_type": "...", "data": "..."}}
+        Note: Claude requires base64 WITHOUT the data URL prefix.
+        """
+        for i in range(len(messages) - 1, -1, -1):
+            if messages[i].get("role") == "user":
+                text_content = messages[i]["content"]
+                messages[i]["content"] = [
+                    {"type": "text", "text": text_content},
+                    *[{
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": img["type"],
+                            "data": img["preview"].split(",")[1] if "," in img["preview"] else img["preview"]
+                        }
+                    } for img in images]
+                ]
+                break
+        return messages
 
     def _format_error(self, e: Exception) -> str:
         """Extract a concise error message from Anthropic exceptions.

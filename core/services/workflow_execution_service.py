@@ -57,7 +57,6 @@ class WorkflowExecutionService:
         """
         try:
             workflow = await database_sync_to_async(lambda: workflow_run.workflow)()
-
             context = WorkflowExecutionContext(
                 workflow_run=workflow_run,
                 workflow=workflow,
