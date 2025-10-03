@@ -250,7 +250,6 @@ class WorkflowNodeSerializer(serializers.ModelSerializer):
         for ck, sk in cc.items():
             if ck in mapped and sk not in mapped:
                 mapped[sk] = mapped.pop(ck)
-
         # Coerce nullable-like CharFields to empty strings
         for k in ['source_position', 'target_position', 'drag_handle', 'class_name']:
             if mapped.get(k, None) is None:

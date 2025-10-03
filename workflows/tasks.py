@@ -6,6 +6,9 @@ from django.utils import timezone
 from .models import WorkflowRun
 from core.services.workflow_execution_service import WorkflowExecutionService
 
+# Import new node handler-based execution service
+from core.services.workflow_execution_service import WorkflowExecutionService
+
 
 @job('default', timeout=600)
 def execute_workflow_run(workflow_run_id):

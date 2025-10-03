@@ -21,6 +21,10 @@ class LLM(models.Model):
         help_text="Provider of the LLM (e.g., OpenAI, Claude)."
     )
     is_reasoning = models.BooleanField(default=False, help_text="Whether the model supports reasoning.")
+    supports_vision = models.BooleanField(
+        default=True,
+        help_text="Whether the model supports vision/image analysis (e.g., GPT-4V, Claude 3+, Gemini Pro Vision)."
+    )
 
     input_token_rate_per_million = models.DecimalField(
             max_digits=10,
