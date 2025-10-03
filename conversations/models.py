@@ -103,6 +103,10 @@ class Conversation(BaseModel):
     temperature = models.FloatField(default=0.7, help_text="Temperature setting for the LLM.")
     max_tokens = models.PositiveIntegerField(default=2048, help_text="Maximum tokens for LLM responses.")
     history_limit = models.PositiveIntegerField(default=20, help_text="Maximum number of messages to include in conversation history.")
+    web_search_enabled = models.BooleanField(
+        default=False,
+        help_text="Enable real-time web search for up-to-date information."
+    )
     prompt = models.ForeignKey(
         'prompts.Prompt',
         on_delete=models.SET_NULL,
@@ -181,6 +185,7 @@ class Conversation(BaseModel):
                 temperature=self.temperature,
                 max_tokens=self.max_tokens,
                 history_limit=self.history_limit,
+                web_search_enabled=self.web_search_enabled,
                 prompt=self.prompt,
                 sort_order=self.sort_order
             )

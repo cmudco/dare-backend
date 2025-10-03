@@ -191,6 +191,11 @@ Provide your assessment in a clear, encouraging format that helps track their pr
             ai_response_accumulator = ""
             token_usage = None
 
+            # Use conversation's web_search_enabled as fallback if not provided in message
+            web_search_enabled = message_data.get("web_search_enabled")
+            if web_search_enabled is None:
+                web_search_enabled = self.conversation.web_search_enabled
+
             async for chunk, usage in self.llm_service.query(
                 message_data["message"],
                 self.conversation,
@@ -215,6 +220,7 @@ Provide your assessment in a clear, encouraging format that helps track their pr
                 socratic_mode=(self.platform == AuthSourceChoice.SOCRATIC_BOTS and not message_data.get("prompt_id")),
                 advanced_mode=bool(message_data.get("is_advanced")),
                 bot_meta=message_data.get("bot_meta") or {},
+                web_search_enabled=web_search_enabled,
             ):
                 if usage:
                     token_usage = usage
@@ -227,7 +233,7 @@ Provide your assessment in a clear, encouraging format that helps track their pr
                         )
                         return
 
-                if chunk.strip():
+                if chunk and chunk.strip():
                     ai_response_accumulator += chunk
                     payload = {
                         "type": "ai_stream",
@@ -377,6 +383,7 @@ Provide your assessment in a clear, encouraging format that helps track their pr
             "max_context_snippets": data.get("max_context_snippets", self.DEFAULT_MAX_CONTEXT_SNIPPETS),
             "document_similarity_threshold": data.get("document_similarity_threshold", self.DEFAULT_DOCUMENT_SIMILARITY_THRESHOLD),
             "history_limit": data.get("history_limit", self.DEFAULT_HISTORY_LIMIT),
+            "web_search_enabled": data.get("web_search_enabled"),
             # Vision support: base64 encoded images
             "images": data.get("images", []),  # List of {preview: str, name: str, type: str}
             # Socratic-only optional fields

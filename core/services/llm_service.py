@@ -15,7 +15,7 @@ from core.services.vector_service import get_vector_service_async
 class AIService(ABC):
     """Abstract base class for AI services."""
     @abstractmethod
-    async def stream_chat_completion(self, messages: list, max_tokens: int, temperature: float) -> AsyncGenerator[Tuple[str, Dict], None]:
+    async def stream_chat_completion(self, messages: list, max_tokens: int, temperature: float, images: list = None, tools: list = None) -> AsyncGenerator[Tuple[str, Dict], None]:
         pass
 
 class LLMService:
@@ -51,6 +51,7 @@ class LLMService:
         socratic_mode: bool = False,
         bot_meta: Dict = None,
         advanced_mode: bool = False,
+        web_search_enabled: bool = False,
     ) -> AsyncGenerator[Tuple[str, Dict], None]:
         """Generate AI response with context."""
         try:
@@ -94,8 +95,11 @@ class LLMService:
                         bot_meta=bot_meta or {},
                     )
 
+                # Get web search tools if enabled
+                tools = self._get_web_search_tools(llm) if web_search_enabled else None
+
                 ai_service = self._get_ai_service(llm)
-                async for chunk, usage in ai_service.stream_chat_completion(messages, max_tokens, temperature, images=images):
+                async for chunk, usage in ai_service.stream_chat_completion(messages, max_tokens, temperature, images=images, tools=tools):
                     yield chunk, usage
                 return
 
@@ -154,8 +158,11 @@ class LLMService:
             messages.extend([msg for msg in conversation_history if msg["content"].strip()])
             messages.append({"role": "user", "content": f"User's message: {message}"})
 
+            # Get web search tools if enabled
+            tools = self._get_web_search_tools(llm) if web_search_enabled else None
+
             ai_service = self._get_ai_service(llm)
-            async for chunk, usage in ai_service.stream_chat_completion(messages, max_tokens, temperature, images=images):
+            async for chunk, usage in ai_service.stream_chat_completion(messages, max_tokens, temperature, images=images, tools=tools):
                 yield chunk, usage
 
         except Exception as e:
@@ -258,6 +265,21 @@ class LLMService:
         elif llm.provider == Provider.LLAMA.value:
             return LlamaService(llm=llm)
         return ClaudeService(llm=llm)
+
+    def _get_web_search_tools(self, llm: LLM) -> list:
+        """Get web search tools based on the LLM provider."""
+        tool = None
+        if llm.provider == Provider.OPENAI.value:
+            openai_service = OpenAIService(llm)
+            tool = openai_service.get_web_search_tool()
+        elif llm.provider == Provider.CLAUDE.value:
+            tool = ClaudeService.get_web_search_tool()
+        elif llm.provider == Provider.GEMINI.value:
+            tool = GeminiService.get_web_search_tool()
+        # LLaMA service doesn't support web search tools
+
+        # Return tool only if it's not None
+        return [tool] if tool is not None else []
 
     # -------- SocraticBooks helpers --------
     async def _build_socratic_messages(

@@ -1,6 +1,6 @@
 import logging
 import asyncio
-from typing import AsyncGenerator, Dict, List, Tuple
+from typing import AsyncGenerator, Dict, List, Tuple, Optional
 import google.generativeai as genai
 from config import env
 from conversations.models import LLM
@@ -14,7 +14,7 @@ class GeminiService:
         self.is_reasoning = llm.is_reasoning
 
     async def stream_chat_completion(
-        self, messages: List[Dict[str, str]], max_tokens: int = 1024, temperature: float = 0.7, images: List[Dict] = None
+        self, messages: List[Dict[str, str]], max_tokens: int = 1024, temperature: float = 0.7, images: List[Dict] = None, tools: Optional[List[Dict]] = None
     ) -> AsyncGenerator[Tuple[str, Dict], None]:
         """
         Streams chat completions from Google Gemini API.
@@ -47,11 +47,35 @@ class GeminiService:
 
                         # Generate streaming response in thread pool
             def generate_sync():
-                return self.model.generate_content(
-                    gemini_messages,
-                    generation_config=generation_config,
-                    stream=True
-                )
+                # Check if Google Search is requested
+                has_google_search = tools and any("google_search" in str(tool) for tool in tools)
+
+                if has_google_search:
+                    # Use Google Search grounding with the correct API format
+                    try:
+                        from google.generativeai.types import Tool, GoogleSearch
+                        search_tool = Tool(google_search=GoogleSearch())
+
+                        return self.model.generate_content(
+                            gemini_messages,
+                            generation_config=generation_config,
+                            tools=[search_tool],
+                            stream=True
+                        )
+                    except Exception as tool_error:
+                        logger.warning(f"Google Search tool initialization failed: {tool_error}. Falling back to regular generation")
+                        # Fallback to regular generation without search
+                        return self.model.generate_content(
+                            gemini_messages,
+                            generation_config=generation_config,
+                            stream=True
+                        )
+                else:
+                    return self.model.generate_content(
+                        gemini_messages,
+                        generation_config=generation_config,
+                        stream=True
+                    )
 
             response = await asyncio.to_thread(generate_sync)
 
@@ -122,3 +146,8 @@ class GeminiService:
             gemini_messages.append({"role": gemini_role, "parts": parts})
 
         return gemini_messages
+
+    @staticmethod
+    def get_web_search_tool():
+        """Get the native Google Search tool definition for Gemini API."""
+        return {"google_search": {}}
