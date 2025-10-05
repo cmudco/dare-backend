@@ -307,6 +307,12 @@ Provide your assessment in a clear, encouraging format that helps track their pr
 
     async def _generate_conversation_title(self, user_message: str):
         """Generate and send conversation title for the first message."""
+        
+        await database_sync_to_async(self.conversation.refresh_from_db)()
+
+        if self.conversation.title not in (None, "", "New Chat"):
+            return
+
         title = await self.conversation_service.generate_title(user_message)
         await self.conversation_service.update_conversation_title(self.conversation, title)
         await self.send(json.dumps(camelize({"type": "conversation_title", "title": title})))
