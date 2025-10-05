@@ -61,12 +61,19 @@ class Transaction(TimeStampMixin):
 
     llm = models.ForeignKey(
         LLM,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
         related_name="transactions",
         verbose_name=("Model"),
         help_text=("Model used in the transaction"),
         null=True,
         blank=True,
+    )
+    llm_name = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        verbose_name=("Model Name"),
+        help_text=("Name of the LLM model used (stored for historical reference)"),
     )
     amount = models.DecimalField(
         max_digits=10,
@@ -118,6 +125,8 @@ class Transaction(TimeStampMixin):
         is_new = self.pk is None
 
         if is_new:
+            if self.llm and not self.llm_name:
+                self.llm_name = self.llm.name
             try:
                 wallet = self.user.wallet
             except self.user.wallet.RelatedObjectDoesNotExist:
@@ -145,4 +154,5 @@ class Transaction(TimeStampMixin):
         Returns a string representation of the transaction.
         """
         token_info = f", {self.input_tokens} input, {self.output_tokens} output tokens" if self.input_tokens is not None and self.output_tokens is not None else ""
-        return f"{self.user.email}: {self.get_type_display()} - {self.display_amount}{token_info}"
+        model_info = f" ({self.llm_name})" if self.llm_name else ""
+        return f"{self.user.email}: {self.get_type_display()} - {self.display_amount}{model_info}{token_info}"
