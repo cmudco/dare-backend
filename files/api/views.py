@@ -10,6 +10,7 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.views import APIView
 from django.http import Http404
+from django.db.models.functions import Lower
 
 from core.services.document_processor import DocumentProcessor
 from core.services.file_upload_service import FileUploadService
@@ -31,7 +32,7 @@ class FileViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         return File.active_objects.filter(
             user=self.request.user
-        ).order_by('-id')
+        ).order_by(Lower('name'))
 
     def create(self, request):
         uploaded_files = request.FILES.getlist('files')
@@ -260,7 +261,7 @@ class FolderViewSet(viewsets.ModelViewSet):
     parser_classes = (MultiPartParser, FormParser, JSONParser)
 
     def get_queryset(self):
-        return Folder.objects.filter(user=self.request.user).order_by('name')
+        return Folder.objects.filter(user=self.request.user).order_by(Lower('name'))
 
     def create(self, request):
         """
