@@ -92,15 +92,19 @@ class OpenAIService:
                         if hasattr(chunk, 'delta') and chunk.delta:
                             yield chunk.delta, None
                     elif chunk.type == 'response.completed':
-                        if hasattr(chunk, 'response') and hasattr(chunk.response, 'usage'):
-                            usage = {
-                                "input_tokens": chunk.response.usage.input_tokens,
-                                "output_tokens": chunk.response.usage.output_tokens,
-                                "total_tokens": chunk.response.usage.total_tokens
-                            }
-                            yield "", usage
-                        else:
-                            yield "", None
+                        # Usage is available in response.completed event
+                        if hasattr(chunk, 'response') and hasattr(chunk.response, 'usage') and chunk.response.usage:
+                            usage_obj = chunk.response.usage
+                            input_tokens = getattr(usage_obj, 'input_tokens', None)
+                            output_tokens = getattr(usage_obj, 'output_tokens', None)
+
+                            if input_tokens is not None and output_tokens is not None:
+                                usage = {
+                                    "input_tokens": input_tokens,
+                                    "output_tokens": output_tokens,
+                                    "total_tokens": input_tokens + output_tokens
+                                }
+                                yield "", usage
             else:
                 # Handle Chat Completions API format
                 if chunk.choices and chunk.choices[0].delta.content:
@@ -208,7 +212,8 @@ class OpenAIService:
 
         return f"OpenAI error: {str(e)}"
 
-    def get_web_search_tool(self):
+    @staticmethod
+    def get_web_search_tool():
         """Get web search tool indicator for OpenAI.
 
         OpenAI uses the Responses API with tools=[{"type": "web_search"}].

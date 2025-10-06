@@ -191,11 +191,6 @@ Provide your assessment in a clear, encouraging format that helps track their pr
             ai_response_accumulator = ""
             token_usage = None
 
-            # Use conversation's web_search_enabled as fallback if not provided in message
-            web_search_enabled = message_data.get("web_search_enabled")
-            if web_search_enabled is None:
-                web_search_enabled = self.conversation.web_search_enabled
-
             async for chunk, usage in self.llm_service.query(
                 message_data["message"],
                 self.conversation,
@@ -214,13 +209,11 @@ Provide your assessment in a clear, encouraging format that helps track their pr
                 referenced_conversation_ids=message_data["referenced_conversation_ids"],
                 referenced_conversation_history_limit=message_data["referenced_conversation_history_limit"],
                 message_obj=message_obj,
-                # Vision support
                 images=message_data.get("images", []),
-                # SocraticBooks-style prompt construction (when applicable)
                 socratic_mode=(self.platform == AuthSourceChoice.SOCRATIC_BOTS and not message_data.get("prompt_id")),
                 advanced_mode=bool(message_data.get("is_advanced")),
                 bot_meta=message_data.get("bot_meta") or {},
-                web_search_enabled=web_search_enabled,
+                web_search_enabled=message_data.get("web_search_enabled") or self.conversation.web_search_enabled,
             ):
                 if usage:
                     token_usage = usage
