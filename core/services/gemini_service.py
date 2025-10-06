@@ -1,5 +1,6 @@
 import logging
 import asyncio
+import base64
 from typing import AsyncGenerator, Dict, List, Tuple, Optional
 from google import genai
 from google.genai import types
@@ -36,10 +37,11 @@ class GeminiService:
         Raises:
             Exception: If an error occurs during the API call, yields an error message and logs the exception.
         """
-        images = images or []
+        if images:
+            messages = self._add_vision_to_messages(messages, images)
 
         try:
-            contents = self._convert_messages_to_contents(messages, images)
+            contents = self._convert_messages_to_contents(messages)
 
             generation_config = types.GenerateContentConfig(
                 temperature=temperature,
@@ -112,32 +114,60 @@ class GeminiService:
             response_text += chunk
         return response_text
 
-    def _convert_messages_to_contents(self, messages: List[Dict[str, str]], images: List[Dict] = None) -> str:
-        """
-        Convert messages from OpenAI format to Gemini content string.
+    def _convert_messages_to_contents(self, messages: List[Dict[str, str]]):
+        """Convert messages to Gemini format (string for text-only, Parts for multimodal)."""
+        has_multimodal = any(isinstance(msg.get("content"), list) for msg in messages)
 
-        The new google-genai SDK accepts a simple string for contents when using generate_content_stream.
-        For multi-turn conversations, we combine messages into a single prompt.
-        """
-        images = images or []
+        if not has_multimodal:
+            # Simple text format
+            return "\n\n".join([
+                f"{msg.get('role', 'user').capitalize()}: {msg.get('content', '')}"
+                for msg in messages
+            ]).strip()
 
-        combined_text = ""
+        # Multimodal format - build list of Part objects
+        parts = []
         for message in messages:
-            role = message.get("role", "user")
+            role = message.get("role", "user").capitalize()
             content = message.get("content", "")
 
-            if role == "system":
-                combined_text += f"System: {content}\n\n"
-            elif role == "user":
-                combined_text += f"User: {content}\n\n"
-            elif role == "assistant":
-                combined_text += f"Assistant: {content}\n\n"
+            if isinstance(content, str):
+                parts.append(types.Part(text=f"{role}: {content}\n\n"))
+                continue
 
-        combined_text = combined_text.strip()
+            # Process structured content (text + images)
+            for item in content:
+                if item.get("type") == "text":
+                    parts.append(types.Part(text=f"{role}: {item['text']}\n\n"))
+                elif item.get("type") == "image_url":
+                    image_url = item.get("image_url", {}).get("url", "")
+                    if "base64," in image_url:
+                        mime_type, base64_data = image_url.split("base64,", 1)
+                        mime_type = mime_type.split(":")[1].split(";")[0]
+                        parts.append(types.Part(
+                            inline_data=types.Blob(
+                                mime_type=mime_type,
+                                data=base64.b64decode(base64_data)
+                            )
+                        ))
 
-        # For now, return text only. Vision support can be added later using types.Part
-        # when needed with types.Part(text=...) and types.Part(inline_data=...)
-        return combined_text
+        return parts
+
+    def _add_vision_to_messages(self, messages: List[Dict], images: List[Dict]) -> List[Dict]:
+        """
+        Add vision content to the last user message in Gemini format.
+
+        Gemini expects structured content with text and inline_data parts.
+        """
+        for i in range(len(messages) - 1, -1, -1):
+            if messages[i].get("role") == "user":
+                text_content = messages[i]["content"]
+                messages[i]["content"] = [
+                    {"type": "text", "text": text_content},
+                    *[{"type": "image_url", "image_url": {"url": img["preview"]}} for img in images]
+                ]
+                break
+        return messages
 
     @staticmethod
     def get_web_search_tool():

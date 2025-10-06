@@ -54,16 +54,35 @@ class OpenAIService:
 
     async def _stream_with_web_search(self, messages: List[Dict[str, str]]):
         """Stream using Responses API with web search enabled."""
-        input_text = "\n".join([f"{msg['role']}: {msg['content']}" for msg in messages])
+        has_multimodal = messages and isinstance(messages[-1].get("content"), list)
 
-        kwargs = {
-            "model": self.model,
-            "input": input_text,
-            "tools": [{"type": "web_search"}],
-            "stream": True,
-        }
+        if not has_multimodal:
+            # Simple text format
+            input_data = "\n".join([f"{msg['role']}: {msg['content']}" for msg in messages])
+        else:
+            # Multimodal format - build structured content array
+            input_data = []
+            for msg in messages:
+                role_prefix = f"{msg['role']}: "
+                content = msg.get("content", "")
 
-        return await self.client.responses.create(**kwargs)
+                if isinstance(content, str):
+                    input_data.append({"type": "text", "text": role_prefix + content})
+                    continue
+
+                # Process structured content (text + images)
+                for item in content:
+                    if item.get("type") == "text":
+                        input_data.append({"type": "text", "text": role_prefix + item["text"]})
+                    elif item.get("type") == "image_url":
+                        input_data.append({"type": "image_url", "image_url": item["image_url"]["url"]})
+
+        return await self.client.responses.create(
+            model=self.model,
+            input=input_data,
+            tools=[{"type": "web_search"}],
+            stream=True
+        )
 
     async def _stream_chat_completions(self, messages: List[Dict[str, str]], max_tokens: int, temperature: float):
         """Stream using Chat Completions API."""
