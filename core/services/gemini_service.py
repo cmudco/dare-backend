@@ -1,7 +1,9 @@
 import logging
 import asyncio
-from typing import AsyncGenerator, Dict, List, Tuple
-import google.generativeai as genai
+import base64
+from typing import AsyncGenerator, Dict, List, Tuple, Optional
+from google import genai
+from google.genai import types
 from config import env
 from conversations.models import LLM
 
@@ -9,15 +11,15 @@ logger = logging.getLogger(__name__)
 
 class GeminiService:
     def __init__(self, llm: LLM):
-        genai.configure(api_key=env.GEMINI_API_KEY)
-        self.model = genai.GenerativeModel(llm.identifier)
+        self.client = genai.Client(api_key=env.GEMINI_API_KEY)
+        self.model_identifier = llm.identifier
         self.is_reasoning = llm.is_reasoning
 
     async def stream_chat_completion(
-        self, messages: List[Dict[str, str]], max_tokens: int = 1024, temperature: float = 0.7, images: List[Dict] = None
+        self, messages: List[Dict[str, str]], max_tokens: int = 1024, temperature: float = 0.7, images: List[Dict] = None, tools: Optional[List[Dict]] = None
     ) -> AsyncGenerator[Tuple[str, Dict], None]:
         """
-        Streams chat completions from Google Gemini API.
+        Streams chat completions from Google Gemini API using the new google-genai SDK.
 
         This method sends a list of messages to the Gemini API and yields response chunks as they are
         received in real-time. It handles streaming events and extracts text content from the response.
@@ -26,6 +28,8 @@ class GeminiService:
             messages (List[Dict[str, str]]): A list of message dictionaries with 'role' and 'content' keys.
             max_tokens (int, optional): Maximum number of tokens to generate. Defaults to 1024.
             temperature (float, optional): Controls randomness of the output (0.0 to 1.0). Defaults to 0.7.
+            images (List[Dict], optional): List of image dictionaries for vision support.
+            tools (Optional[List[Dict]], optional): List of tools including google_search support.
 
         Yields:
             Tuple[str, Dict]: Text chunk and usage data (or None if usage not available)
@@ -33,40 +37,44 @@ class GeminiService:
         Raises:
             Exception: If an error occurs during the API call, yields an error message and logs the exception.
         """
-        images = images or []
+        if images:
+            messages = self._add_vision_to_messages(messages, images)
 
         try:
-            # Convert messages to Gemini format
-            gemini_messages = self._convert_messages_to_gemini_format(messages, images)
+            contents = self._convert_messages_to_contents(messages)
 
-            # Configure generation parameters
-            generation_config = genai.types.GenerationConfig(
-                max_output_tokens=max_tokens,
+            generation_config = types.GenerateContentConfig(
                 temperature=temperature,
+                max_output_tokens=max_tokens,
             )
 
-                        # Generate streaming response in thread pool
+            has_google_search = tools and any("google_search" in str(tool) for tool in tools)
+
+            if has_google_search:
+                generation_config.tools = [types.Tool(google_search=types.GoogleSearch())]
+
             def generate_sync():
-                return self.model.generate_content(
-                    gemini_messages,
-                    generation_config=generation_config,
-                    stream=True
+                return self.client.models.generate_content_stream(
+                    model=self.model_identifier,
+                    contents=contents,
+                    config=generation_config,
                 )
 
-            response = await asyncio.to_thread(generate_sync)
+            response_stream = await asyncio.to_thread(generate_sync)
 
             input_tokens = None
             output_tokens = None
 
-            # Process chunks in thread pool to avoid blocking
-            for chunk in response:
-                if chunk.text:
+            for chunk in response_stream:
+                if hasattr(chunk, 'text') and chunk.text:
                     yield chunk.text, None
 
-                # Extract token usage information if available
-                if hasattr(chunk, 'usage_metadata'):
-                    input_tokens = chunk.usage_metadata.prompt_token_count
-                    output_tokens = chunk.usage_metadata.candidates_token_count
+                if hasattr(chunk, 'usage_metadata') and chunk.usage_metadata:
+                    usage = chunk.usage_metadata
+                    if hasattr(usage, 'prompt_token_count'):
+                        input_tokens = usage.prompt_token_count
+                    if hasattr(usage, 'candidates_token_count'):
+                        output_tokens = usage.candidates_token_count
 
             # Yield final usage data
             if input_tokens is not None and output_tokens is not None:
@@ -81,44 +89,87 @@ class GeminiService:
             logger.error(f"Error in Gemini stream_chat_completion: {e}")
             yield f"Error: {str(e)}", None
 
-    def _convert_messages_to_gemini_format(self, messages: List[Dict[str, str]], images: List[Dict] = None) -> List[Dict[str, str]]:
+    async def get_chat_completion(
+        self, messages: List[Dict[str, str]], max_tokens: int = 1024, temperature: float = 0.7
+    ) -> str:
         """
-        Convert messages from OpenAI format to Gemini format with optional vision support.
+        Retrieves a complete chat completion from Google Gemini API.
 
-        Gemini expects: {"role": "user/model", "parts": ["text", {"inline_data": {...}}]}
-        Note: Gemini requires base64 WITHOUT the data URL prefix.
+        This method uses the streaming functionality to collect all response chunks into a single string.
+        It serves as a convenience wrapper around `stream_chat_completion`.
+
+        Args:
+            messages (List[Dict[str, str]]): A list of message dictionaries with 'role' and 'content' keys.
+            max_tokens (int, optional): Maximum number of tokens to generate. Defaults to 1024.
+            temperature (float, optional): Controls randomness of the output (0.0 to 1.0). Defaults to 0.7.
+
+        Returns:
+            str: The complete generated response text.
+
+        Raises:
+            Exception: If an error occurs, the error message is included in the returned string and logged.
         """
-        gemini_messages = []
-        images = images or []
+        response_text = ""
+        async for chunk, _ in self.stream_chat_completion(messages, max_tokens, temperature):
+            response_text += chunk
+        return response_text
 
-        for idx, message in enumerate(messages):
-            role = message.get("role", "user")
+    def _convert_messages_to_contents(self, messages: List[Dict[str, str]]):
+        """Convert messages to Gemini format (string for text-only, Parts for multimodal)."""
+        has_multimodal = any(isinstance(msg.get("content"), list) for msg in messages)
+
+        if not has_multimodal:
+            # Simple text format
+            return "\n\n".join([
+                f"{msg.get('role', 'user').capitalize()}: {msg.get('content', '')}"
+                for msg in messages
+            ]).strip()
+
+        # Multimodal format - build list of Part objects
+        parts = []
+        for message in messages:
+            role = message.get("role", "user").capitalize()
             content = message.get("content", "")
 
-            # Map OpenAI roles to Gemini roles
-            gemini_role = {
-                "assistant": "model",
-                "system": "user",  # Gemini doesn't have system role
-                "user": "user"
-            }.get(role, "user")
+            if isinstance(content, str):
+                parts.append(types.Part(text=f"{role}: {content}\n\n"))
+                continue
 
-            # Prepend "System:" label if it's a system message
-            if role == "system":
-                content = f"System: {content}"
+            # Process structured content (text + images)
+            for item in content:
+                if item.get("type") == "text":
+                    parts.append(types.Part(text=f"{role}: {item['text']}\n\n"))
+                elif item.get("type") == "image_url":
+                    image_url = item.get("image_url", {}).get("url", "")
+                    if "base64," in image_url:
+                        mime_type, base64_data = image_url.split("base64,", 1)
+                        mime_type = mime_type.split(":")[1].split(";")[0]
+                        parts.append(types.Part(
+                            inline_data=types.Blob(
+                                mime_type=mime_type,
+                                data=base64.b64decode(base64_data)
+                            )
+                        ))
 
-            parts = [content]
+        return parts
 
-            # Add vision content to the last user message
-            if idx == len(messages) - 1 and role == "user" and images:
-                parts.extend([
-                    {
-                        "inline_data": {
-                            "mime_type": img["type"],
-                            "data": img["preview"].split(",")[1] if "," in img["preview"] else img["preview"]
-                        }
-                    } for img in images
-                ])
+    def _add_vision_to_messages(self, messages: List[Dict], images: List[Dict]) -> List[Dict]:
+        """
+        Add vision content to the last user message in Gemini format.
 
-            gemini_messages.append({"role": gemini_role, "parts": parts})
+        Gemini expects structured content with text and inline_data parts.
+        """
+        for i in range(len(messages) - 1, -1, -1):
+            if messages[i].get("role") == "user":
+                text_content = messages[i]["content"]
+                messages[i]["content"] = [
+                    {"type": "text", "text": text_content},
+                    *[{"type": "image_url", "image_url": {"url": img["preview"]}} for img in images]
+                ]
+                break
+        return messages
 
-        return gemini_messages
+    @staticmethod
+    def get_web_search_tool():
+        """Get the native Google Search tool definition for Gemini API."""
+        return {"google_search": {}}

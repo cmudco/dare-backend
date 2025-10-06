@@ -1,5 +1,5 @@
 import logging
-from typing import AsyncGenerator, Dict, List, Tuple
+from typing import AsyncGenerator, Dict, List, Tuple, Optional
 from anthropic import AsyncAnthropic
 from config import env
 from conversations.models import LLM
@@ -13,7 +13,7 @@ class ClaudeService:
         self.is_reasoning = llm.is_reasoning
 
     async def stream_chat_completion(
-        self, messages: List[Dict[str, str]], max_tokens: int = 1024, temperature: float = 0.7, images: List[Dict] = None
+        self, messages: List[Dict[str, str]], max_tokens: int = 1024, temperature: float = 0.7, images: List[Dict] = None, tools: Optional[List[Dict]] = None
     ) -> AsyncGenerator[Tuple[str, Dict], None]:
         """
         Streams chat completions from the Claude API.
@@ -61,14 +61,24 @@ class ClaudeService:
             # Add system parameter only if system message exists
             if system_message:
                 call_params["system"] = system_message
-            
+
+            # Add tools if provided (for web search support)
+            if tools:
+                call_params["tools"] = tools
+
             stream = await self.client.messages.create(**call_params)
             usage = None
             input_tokens = None
 
             async for event in stream:
                 if event.type == "content_block_delta":
-                    yield event.delta.text, None
+                    # Handle text deltas
+                    if hasattr(event.delta, 'text'):
+                        yield event.delta.text, None
+                elif event.type == "content_block_start":
+                    pass  # Tool use events handled internally by Claude
+                elif event.type == "content_block_stop":
+                    pass  # Block completion events
                 elif event.type == "message_start" and hasattr(event, 'message') and hasattr(event.message, 'usage'):
                     input_tokens = event.message.usage.input_tokens
                 elif event.type == "message_delta" and hasattr(event, 'usage'):
@@ -216,3 +226,12 @@ class ClaudeService:
             return f"Claude error: {msg_attr}"
 
         return f"Claude error: {str(e)}"
+
+    @staticmethod
+    def get_web_search_tool():
+        """Get the native web search tool definition for Claude API."""
+        return {
+            "type": "web_search_20250305",
+            "name": "web_search",
+            "max_uses": 5
+        }
