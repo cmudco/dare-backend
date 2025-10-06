@@ -26,6 +26,7 @@ class OpenAIService:
             messages (List[Dict[str, str]]): A list of message dictionaries with 'role' and 'content' keys.
             max_tokens (int, optional): Maximum number of tokens to generate. Defaults to 1024.
             temperature (float, optional): Controls randomness of the output (0.0 to 1.0). Defaults to 0.7.
+            tools (Optional[List[Dict]]): If provided and contains web search indicator, enables web search
 
         Yields:
             Tuple[str, Dict]: Text chunk and usage data (or None if usage not available)
@@ -37,45 +38,80 @@ class OpenAIService:
             messages = self._add_vision_to_messages(messages, images)
 
         try:
-            kwargs = {
-                "model": self.model,
-                "messages": messages,
-                "stream": True,
-                "stream_options": {"include_usage": True},
-            }
-            if not self.is_reasoning:
-                kwargs["max_tokens"] = max_tokens
-                kwargs["temperature"] = temperature
+            web_search_enabled = tools and len(tools) > 0
+
+            if web_search_enabled:
+                response = await self._stream_with_web_search(messages)
             else:
-                kwargs["max_completion_tokens"] = max_tokens
+                response = await self._stream_chat_completions(messages, max_tokens, temperature)
 
-            # Add tools if provided (for web search support)
-            if tools:
-                kwargs["tools"] = tools
+            async for chunk, usage in self._process_stream_chunks(response, web_search_enabled):
+                yield chunk, usage
 
-            response = await self.client.chat.completions.create(**kwargs)
+        except Exception as e:
+            logging.getLogger(__name__).exception("OpenAI streaming error")
+            yield f"Error: {self._format_error(e)}", None
 
-            async for chunk in response:
+    async def _stream_with_web_search(self, messages: List[Dict[str, str]]):
+        """Stream using Responses API with web search enabled."""
+        input_text = "\n".join([f"{msg['role']}: {msg['content']}" for msg in messages])
+
+        kwargs = {
+            "model": self.model,
+            "input": input_text,
+            "tools": [{"type": "web_search"}],
+            "stream": True,
+        }
+
+        return await self.client.responses.create(**kwargs)
+
+    async def _stream_chat_completions(self, messages: List[Dict[str, str]], max_tokens: int, temperature: float):
+        """Stream using Chat Completions API."""
+        kwargs = {
+            "model": self.model,
+            "messages": messages,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+
+        if not self.is_reasoning:
+            kwargs["max_tokens"] = max_tokens
+            kwargs["temperature"] = temperature
+        else:
+            kwargs["max_completion_tokens"] = max_tokens
+
+        return await self.client.chat.completions.create(**kwargs)
+
+    async def _process_stream_chunks(self, response, web_search_enabled: bool) -> AsyncGenerator[Tuple[str, Dict], None]:
+        """Process stream chunks from either Responses API or Chat Completions API."""
+        async for chunk in response:
+            if web_search_enabled:
+                # Handle Responses API format
+                if hasattr(chunk, 'type'):
+                    if chunk.type == 'response.output_text.delta':
+                        if hasattr(chunk, 'delta') and chunk.delta:
+                            yield chunk.delta, None
+                    elif chunk.type == 'response.completed':
+                        if hasattr(chunk, 'response') and hasattr(chunk.response, 'usage'):
+                            usage = {
+                                "input_tokens": chunk.response.usage.input_tokens,
+                                "output_tokens": chunk.response.usage.output_tokens,
+                                "total_tokens": chunk.response.usage.total_tokens
+                            }
+                            yield "", usage
+                        else:
+                            yield "", None
+            else:
+                # Handle Chat Completions API format
                 if chunk.choices and chunk.choices[0].delta.content:
                     yield chunk.choices[0].delta.content, None
-                elif chunk.choices and chunk.choices[0].delta.tool_calls:
-                    # Log tool usage (web search happening natively)
-                    for tool_call in chunk.choices[0].delta.tool_calls:
-                        if hasattr(tool_call, 'function') and tool_call.function.name:
-                            logging.getLogger(__name__).info(f"OpenAI using tool: {tool_call.function.name}")
-                        elif hasattr(tool_call, 'type'):
-                            logging.getLogger(__name__).info(f"OpenAI using tool: {tool_call.type}")
                 if chunk.usage:
                     usage = {
                         "input_tokens": chunk.usage.prompt_tokens,
                         "output_tokens": chunk.usage.completion_tokens,
                         "total_tokens": chunk.usage.total_tokens
                     }
-            yield "", usage
-
-        except Exception as e:
-            logging.getLogger(__name__).exception("OpenAI streaming error")
-            yield f"Error: {self._format_error(e)}", None
+                    yield "", usage
 
     async def get_chat_completion(
         self, messages: List[Dict[str, str]], max_tokens: int = 1024, temperature: float = 0.7
@@ -173,28 +209,10 @@ class OpenAIService:
         return f"OpenAI error: {str(e)}"
 
     def get_web_search_tool(self):
-        """Get the native web search tool definition for OpenAI."""
-        # OpenAI web search is primarily supported via the Responses API
-        # For chat completions, we use function calling as a workaround
-        # Supported models: gpt-4o and gpt-4-turbo series
-        web_search_supported_models = ['gpt-4o', 'gpt-4-turbo']
-        if not any(supported in self.model.lower() for supported in web_search_supported_models):
-            return None
+        """Get web search tool indicator for OpenAI.
 
-        return {
-            "type": "function",
-            "function": {
-                "name": "web_search",
-                "description": "Search the web for real-time information and up-to-date content",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "The search query to execute"
-                        }
-                    },
-                    "required": ["query"]
-                }
-            }
-        }
+        OpenAI uses the Responses API with tools=[{"type": "web_search"}].
+        Supported on all models via the Responses API.
+        Returns a marker dict to indicate web search should be enabled.
+        """
+        return {"type": "web_search"}

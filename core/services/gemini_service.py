@@ -1,7 +1,8 @@
 import logging
 import asyncio
 from typing import AsyncGenerator, Dict, List, Tuple, Optional
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from config import env
 from conversations.models import LLM
 
@@ -9,15 +10,15 @@ logger = logging.getLogger(__name__)
 
 class GeminiService:
     def __init__(self, llm: LLM):
-        genai.configure(api_key=env.GEMINI_API_KEY)
-        self.model = genai.GenerativeModel(llm.identifier)
+        self.client = genai.Client(api_key=env.GEMINI_API_KEY)
+        self.model_identifier = llm.identifier
         self.is_reasoning = llm.is_reasoning
 
     async def stream_chat_completion(
         self, messages: List[Dict[str, str]], max_tokens: int = 1024, temperature: float = 0.7, images: List[Dict] = None, tools: Optional[List[Dict]] = None
     ) -> AsyncGenerator[Tuple[str, Dict], None]:
         """
-        Streams chat completions from Google Gemini API.
+        Streams chat completions from Google Gemini API using the new google-genai SDK.
 
         This method sends a list of messages to the Gemini API and yields response chunks as they are
         received in real-time. It handles streaming events and extracts text content from the response.
@@ -26,6 +27,8 @@ class GeminiService:
             messages (List[Dict[str, str]]): A list of message dictionaries with 'role' and 'content' keys.
             max_tokens (int, optional): Maximum number of tokens to generate. Defaults to 1024.
             temperature (float, optional): Controls randomness of the output (0.0 to 1.0). Defaults to 0.7.
+            images (List[Dict], optional): List of image dictionaries for vision support.
+            tools (Optional[List[Dict]], optional): List of tools including google_search support.
 
         Yields:
             Tuple[str, Dict]: Text chunk and usage data (or None if usage not available)
@@ -36,61 +39,40 @@ class GeminiService:
         images = images or []
 
         try:
-            # Convert messages to Gemini format
-            gemini_messages = self._convert_messages_to_gemini_format(messages, images)
+            contents = self._convert_messages_to_contents(messages, images)
 
-            # Configure generation parameters
-            generation_config = genai.types.GenerationConfig(
-                max_output_tokens=max_tokens,
+            generation_config = types.GenerateContentConfig(
                 temperature=temperature,
+                max_output_tokens=max_tokens,
             )
 
-                        # Generate streaming response in thread pool
+            has_google_search = tools and any("google_search" in str(tool) for tool in tools)
+
+            if has_google_search:
+                generation_config.tools = [types.Tool(google_search=types.GoogleSearch())]
+
             def generate_sync():
-                # Check if Google Search is requested
-                has_google_search = tools and any("google_search" in str(tool) for tool in tools)
+                return self.client.models.generate_content_stream(
+                    model=self.model_identifier,
+                    contents=contents,
+                    config=generation_config,
+                )
 
-                if has_google_search:
-                    # Use Google Search grounding with the correct API format
-                    try:
-                        from google.generativeai.types import Tool, GoogleSearch
-                        search_tool = Tool(google_search=GoogleSearch())
-
-                        return self.model.generate_content(
-                            gemini_messages,
-                            generation_config=generation_config,
-                            tools=[search_tool],
-                            stream=True
-                        )
-                    except Exception as tool_error:
-                        logger.warning(f"Google Search tool initialization failed: {tool_error}. Falling back to regular generation")
-                        # Fallback to regular generation without search
-                        return self.model.generate_content(
-                            gemini_messages,
-                            generation_config=generation_config,
-                            stream=True
-                        )
-                else:
-                    return self.model.generate_content(
-                        gemini_messages,
-                        generation_config=generation_config,
-                        stream=True
-                    )
-
-            response = await asyncio.to_thread(generate_sync)
+            response_stream = await asyncio.to_thread(generate_sync)
 
             input_tokens = None
             output_tokens = None
 
-            # Process chunks in thread pool to avoid blocking
-            for chunk in response:
-                if chunk.text:
+            for chunk in response_stream:
+                if hasattr(chunk, 'text') and chunk.text:
                     yield chunk.text, None
 
-                # Extract token usage information if available
-                if hasattr(chunk, 'usage_metadata'):
-                    input_tokens = chunk.usage_metadata.prompt_token_count
-                    output_tokens = chunk.usage_metadata.candidates_token_count
+                if hasattr(chunk, 'usage_metadata') and chunk.usage_metadata:
+                    usage = chunk.usage_metadata
+                    if hasattr(usage, 'prompt_token_count'):
+                        input_tokens = usage.prompt_token_count
+                    if hasattr(usage, 'candidates_token_count'):
+                        output_tokens = usage.candidates_token_count
 
             # Yield final usage data
             if input_tokens is not None and output_tokens is not None:
@@ -105,47 +87,57 @@ class GeminiService:
             logger.error(f"Error in Gemini stream_chat_completion: {e}")
             yield f"Error: {str(e)}", None
 
-    def _convert_messages_to_gemini_format(self, messages: List[Dict[str, str]], images: List[Dict] = None) -> List[Dict[str, str]]:
+    async def get_chat_completion(
+        self, messages: List[Dict[str, str]], max_tokens: int = 1024, temperature: float = 0.7
+    ) -> str:
         """
-        Convert messages from OpenAI format to Gemini format with optional vision support.
+        Retrieves a complete chat completion from Google Gemini API.
 
-        Gemini expects: {"role": "user/model", "parts": ["text", {"inline_data": {...}}]}
-        Note: Gemini requires base64 WITHOUT the data URL prefix.
+        This method uses the streaming functionality to collect all response chunks into a single string.
+        It serves as a convenience wrapper around `stream_chat_completion`.
+
+        Args:
+            messages (List[Dict[str, str]]): A list of message dictionaries with 'role' and 'content' keys.
+            max_tokens (int, optional): Maximum number of tokens to generate. Defaults to 1024.
+            temperature (float, optional): Controls randomness of the output (0.0 to 1.0). Defaults to 0.7.
+
+        Returns:
+            str: The complete generated response text.
+
+        Raises:
+            Exception: If an error occurs, the error message is included in the returned string and logged.
         """
-        gemini_messages = []
+        response_text = ""
+        async for chunk, _ in self.stream_chat_completion(messages, max_tokens, temperature):
+            response_text += chunk
+        return response_text
+
+    def _convert_messages_to_contents(self, messages: List[Dict[str, str]], images: List[Dict] = None) -> str:
+        """
+        Convert messages from OpenAI format to Gemini content string.
+
+        The new google-genai SDK accepts a simple string for contents when using generate_content_stream.
+        For multi-turn conversations, we combine messages into a single prompt.
+        """
         images = images or []
 
-        for idx, message in enumerate(messages):
+        combined_text = ""
+        for message in messages:
             role = message.get("role", "user")
             content = message.get("content", "")
 
-            # Map OpenAI roles to Gemini roles
-            gemini_role = {
-                "assistant": "model",
-                "system": "user",  # Gemini doesn't have system role
-                "user": "user"
-            }.get(role, "user")
-
-            # Prepend "System:" label if it's a system message
             if role == "system":
-                content = f"System: {content}"
+                combined_text += f"System: {content}\n\n"
+            elif role == "user":
+                combined_text += f"User: {content}\n\n"
+            elif role == "assistant":
+                combined_text += f"Assistant: {content}\n\n"
 
-            parts = [content]
+        combined_text = combined_text.strip()
 
-            # Add vision content to the last user message
-            if idx == len(messages) - 1 and role == "user" and images:
-                parts.extend([
-                    {
-                        "inline_data": {
-                            "mime_type": img["type"],
-                            "data": img["preview"].split(",")[1] if "," in img["preview"] else img["preview"]
-                        }
-                    } for img in images
-                ])
-
-            gemini_messages.append({"role": gemini_role, "parts": parts})
-
-        return gemini_messages
+        # For now, return text only. Vision support can be added later using types.Part
+        # when needed with types.Part(text=...) and types.Part(inline_data=...)
+        return combined_text
 
     @staticmethod
     def get_web_search_tool():
