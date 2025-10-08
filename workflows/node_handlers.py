@@ -460,7 +460,7 @@ class ConditionalNodeHandler(BaseNodeHandler):
         return node_type == 'conditional'
 
     async def execute(self, node: ExecutionNode, context: NodeExecutionContext) -> NodeExecutionResult:
-        """Execute a conditional node by evaluating input with AI and choosing a route."""
+        """Execute a conditional node by evaluating input with AI or human and choosing a route."""
         start_time = timezone.now()
 
         try:
@@ -526,24 +526,48 @@ class ConditionalNodeHandler(BaseNodeHandler):
                     error="No input provided to conditional node"
                 )
 
-            # Prepare strict evaluation message - force single word response
-            route_a_desc = conditional_data.route_a_description or f"Choose {conditional_data.route_a_name}"
-            route_b_desc = conditional_data.route_b_description or f"Choose {conditional_data.route_b_name}"
+            # Get routes (supports n routes with backward compatibility)
+            routes = await database_sync_to_async(lambda: conditional_data.get_routes())()
+            
+            if not routes or len(routes) == 0:
+                return NodeExecutionResult(
+                    success=False,
+                    error="No routes defined for conditional node"
+                )
 
-            evaluation_prompt = conditional_data.custom_prompt or "Evaluate the input and choose the appropriate route."
+            # Check if human validation is required
+            require_human_validation = await database_sync_to_async(lambda: conditional_data.require_human_validation)()
+            
+            if require_human_validation:
+                return await self._handle_human_validation(
+                    node, conditional_data, context, input_output, 
+                    workflow_run_step, routes, start_time
+                )
+
+            # Prepare AI evaluation message with n routes support
+            evaluation_prompt = await database_sync_to_async(lambda: conditional_data.custom_prompt)()
+            evaluation_prompt = evaluation_prompt or "Evaluate the input and choose the appropriate route."
+
+            # Build route options dynamically for n routes
+            route_options = "\n".join([
+                f"- {route['name']}: {route.get('description', route['name'])}"
+                for route in routes
+            ])
+            
+            route_names = [route['name'] for route in routes]
+            route_names_str = '", "'.join(route_names)
 
             message = f"""{evaluation_prompt}
 
 Based on the following input, choose EXACTLY ONE route by responding with ONLY the route name (no explanation, no other text):
 
 Route Options:
-- {conditional_data.route_a_name}: {route_a_desc}
-- {conditional_data.route_b_name}: {route_b_desc}
+{route_options}
 
 Input to evaluate:
 {input_output}
 
-Response format: Reply with ONLY "{conditional_data.route_a_name}" or "{conditional_data.route_b_name}" - nothing else."""
+Response format: Reply with ONLY one of: "{route_names_str}" - nothing else."""
 
             # Get LLM for evaluation - prefer Claude for consistent evaluation
             llm = await database_sync_to_async(
@@ -612,18 +636,22 @@ Response format: Reply with ONLY "{conditional_data.route_a_name}" or "{conditio
             routing_decision = full_response.strip()
 
             # Validate decision matches one of the routes (case-insensitive)
-            route_a_lower = conditional_data.route_a_name.lower()
-            route_b_lower = conditional_data.route_b_name.lower()
             decision_lower = routing_decision.lower()
-
-            if decision_lower == route_a_lower or route_a_lower in decision_lower:
-                routing_decision = conditional_data.route_a_name
-            elif decision_lower == route_b_lower or route_b_lower in decision_lower:
-                routing_decision = conditional_data.route_b_name
-            else:
-                # Default to route A if response is unclear
-                logger.warning(f"Unclear routing decision '{routing_decision}' for node {node.id}, defaulting to {conditional_data.route_a_name}")
-                routing_decision = conditional_data.route_a_name
+            matched_route = None
+            
+            for route in routes:
+                route_name_lower = route['name'].lower()
+                
+                if decision_lower == route_name_lower or route_name_lower in decision_lower:
+                    matched_route = route['name']
+                    break
+            
+            if not matched_route:
+                # Default to first route if response is unclear
+                logger.warning(f"Unclear routing decision '{routing_decision}' for node {node.id}, defaulting to {routes[0]['name']}")
+                matched_route = routes[0]['name']
+            
+            routing_decision = matched_route
 
             # Update workflow run step with results
             await database_sync_to_async(
@@ -640,15 +668,15 @@ Response format: Reply with ONLY "{conditional_data.route_a_name}" or "{conditio
 
             return NodeExecutionResult(
                 success=True,
-                output=routing_decision,  # Return just the routing decision, not the full response
+                output=routing_decision,  # Return just the routing decision
                 token_usage=token_usage,
                 execution_time=execution_time,
                 metadata={
                     'routing_decision': routing_decision,
-                    'route_a_name': conditional_data.route_a_name,
-                    'route_b_name': conditional_data.route_b_name,
+                    'available_routes': [r['name'] for r in routes],
                     'evaluated_input_length': len(input_output),
-                    'full_response': full_response  # Store full response in metadata for debugging
+                    'full_response': full_response,  # Store full response in metadata for debugging
+                    'is_human_validated': False
                 }
             )
 
@@ -675,6 +703,62 @@ Response format: Reply with ONLY "{conditional_data.route_a_name}" or "{conditio
                 success=False,
                 error=error_msg,
                 execution_time=execution_time
+            )
+
+    async def _handle_human_validation(
+        self, 
+        node: ExecutionNode, 
+        conditional_data, 
+        context: NodeExecutionContext,
+        input_output: str,
+        workflow_run_step: WorkflowRunStep,
+        routes: list,
+        start_time
+    ) -> NodeExecutionResult:
+        """
+        Handle human validation by pausing execution and waiting for user input.
+        
+        This will pause the workflow and wait for the user to make a routing decision
+        via the API endpoint.
+        """
+        try:
+            # Format route options for display
+            route_options_text = ', '.join([r['name'] for r in routes])
+            
+            # Update step status to PENDING_HUMAN_INPUT
+            await database_sync_to_async(
+                lambda: WorkflowRunStep.objects.filter(id=workflow_run_step.id).update(
+                    status=WorkflowRunStepStatus.PENDING_HUMAN_INPUT,
+                    response=f"Waiting for user to choose route. Available options: {route_options_text}"
+                )
+            )()
+            
+            end_time = timezone.now()
+            execution_time = (end_time - start_time).total_seconds()
+            
+            logger.info(f"Conditional node {node.id} requires human validation. Pausing workflow.")
+            
+            # Return special result that pauses execution
+            # The workflow execution service will detect this and halt
+            return NodeExecutionResult(
+                success=False,  # Marks as incomplete to pause workflow
+                error="PENDING_HUMAN_INPUT",  # Special error code
+                execution_time=execution_time,
+                metadata={
+                    'pending_human_validation': True,
+                    'available_routes': routes,
+                    'evaluated_input': input_output,
+                    'evaluated_input_length': len(input_output),
+                    'node_id': node.id,
+                    'step_number': conditional_data.step_number,
+                    'custom_prompt': conditional_data.custom_prompt
+                }
+            )
+        except Exception as e:
+            logger.error(f"Error setting up human validation for node {node.id}: {str(e)}", exc_info=True)
+            return NodeExecutionResult(
+                success=False,
+                error=f"Failed to set up human validation: {str(e)}"
             )
 
     @database_sync_to_async

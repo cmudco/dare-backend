@@ -45,6 +45,175 @@ class WorkflowExecutionService:
         """Initialize the execution service."""
         pass
 
+    async def resume_workflow_after_human_validation(
+        self, 
+        workflow_run: WorkflowRun, 
+        node_id: str, 
+        chosen_route: str
+    ) -> Dict[str, Any]:
+        """
+        Resume workflow execution after human validation choice.
+        
+        Args:
+            workflow_run: The workflow run to resume
+            node_id: The conditional node ID that was waiting for input
+            chosen_route: The route name chosen by the user
+            
+        Returns:
+            Dict containing execution results
+        """
+        try:
+            workflow = await database_sync_to_async(lambda: workflow_run.workflow)()
+            
+            # Get the conditional node's step
+            conditional_step = await database_sync_to_async(
+                lambda: WorkflowRunStep.objects.filter(
+                    workflow_run=workflow_run,
+                    step_node__node_id=node_id,
+                    status=WorkflowRunStepStatus.PENDING_HUMAN_INPUT
+                ).first()
+            )()
+            
+            if not conditional_step:
+                return {
+                    'success': False,
+                    'error': 'No pending human validation found for this node',
+                    'results': {}
+                }
+            
+            # Update the conditional step with user's choice
+            await database_sync_to_async(
+                lambda: WorkflowRunStep.objects.filter(id=conditional_step.id).update(
+                    status=WorkflowRunStepStatus.COMPLETED,
+                    response=chosen_route
+                )
+            )()
+            
+            logger.info(f"Resuming workflow {workflow_run.id} from node {node_id} with route: {chosen_route}")
+            
+            # Build context with results from steps executed so far
+            context = WorkflowExecutionContext(
+                workflow_run=workflow_run,
+                workflow=workflow,
+                node_results={}
+            )
+            
+            # Rebuild node_results from completed steps
+            all_steps = await database_sync_to_async(
+                lambda: list(WorkflowRunStep.objects.filter(workflow_run=workflow_run))
+            )()
+            
+            for step in all_steps:
+                step_node = await database_sync_to_async(lambda: step.step_node)()
+                if step_node:
+                    node_id_str = await database_sync_to_async(lambda: step_node.node_id)()
+                    
+                    # Add to context based on status
+                    if step.status == WorkflowRunStepStatus.COMPLETED:
+                        context.node_results[node_id_str] = NodeExecutionResult(
+                            success=True,
+                            output=step.response,
+                            metadata={
+                                'is_human_validated': step_node.node_type == 'conditional',
+                                'routing_decision': step.response if step_node.node_type == 'conditional' else None
+                            }
+                        )
+                    elif step.status == WorkflowRunStepStatus.SKIPPED:
+                        context.node_results[node_id_str] = NodeExecutionResult(
+                            success=True,
+                            output=None,
+                            metadata={'skipped': True}
+                        )
+            
+            # Get all workflow nodes and continue from where we left off
+            nodes = await self._get_ordered_workflow_nodes(workflow)
+            
+            # Find the index of the conditional node
+            conditional_node_idx = next((i for i, n in enumerate(nodes) if n.id == node_id), -1)
+            
+            if conditional_node_idx == -1:
+                return {
+                    'success': False,
+                    'error': f'Could not find node {node_id} in workflow',
+                    'results': {}
+                }
+            
+            # Continue execution from the next node
+            failed_count = 0
+            executed_nodes = set(context.node_results.keys())
+            skipped_nodes = set()
+            pending_human_input = False
+            
+            for node in nodes[conditional_node_idx + 1:]:
+                # Check if this node should be executed based on routing decisions
+                should_execute = await self._should_execute_node(node, context, workflow)
+                
+                if not should_execute:
+                    skipped_nodes.add(node.id)
+                    context.node_results[node.id] = NodeExecutionResult(
+                        success=True,
+                        output=None,
+                        metadata={'skipped': True, 'reason': 'routing_decision'}
+                    )
+                    
+                    if node.type == 'step':
+                        await self._update_step_status_to_skipped(workflow_run, node)
+                    elif node.type == 'chatOutput':
+                        await self._clear_output_node_data(node)
+                    
+                    continue
+                
+                executed_nodes.add(node.id)
+                result = await self._execute_node(node, context)
+                context.node_results[node.id] = result
+                
+                # Check if another human validation is needed
+                if (not result.success and 
+                    result.error == "PENDING_HUMAN_INPUT" and
+                    result.metadata and 
+                    result.metadata.get('pending_human_validation')):
+                    
+                    pending_human_input = True
+                    logger.info(f"Workflow {workflow_run.id} paused again at node {node.id}")
+                    break
+                
+                if not result.success:
+                    failed_count += 1
+                else:
+                    context.current_context = result.output
+            
+            # Update workflow run status
+            if pending_human_input:
+                final_status = 'pending_human_input'
+            else:
+                final_status = 'completed' if failed_count == 0 else 'failed'
+                await self._update_workflow_run_status(workflow_run, final_status)
+            
+            return {
+                'success': failed_count == 0 and not pending_human_input,
+                'pending_human_input': pending_human_input,
+                'total_nodes': len(nodes),
+                'executed_nodes': len(executed_nodes),
+                'skipped_nodes': len(skipped_nodes),
+                'failed_nodes': failed_count,
+                'results': {node_id: {
+                    'success': result.success,
+                    'output': result.output,
+                    'error': result.error,
+                    'token_usage': result.token_usage,
+                    'skipped': result.metadata.get('skipped', False) if result.metadata else False,
+                    'pending_human_validation': result.metadata.get('pending_human_validation', False) if result.metadata else False
+                } for node_id, result in context.node_results.items()}
+            }
+            
+        except Exception as e:
+            logger.error(f"Workflow resume failed: {str(e)}", exc_info=True)
+            return {
+                'success': False,
+                'error': str(e),
+                'results': {}
+            }
+
     async def execute_workflow(self, workflow_run: WorkflowRun) -> Dict[str, Any]:
         """
         Execute a complete workflow using node handlers.
@@ -77,6 +246,7 @@ class WorkflowExecutionService:
             failed_count = 0
             executed_nodes = set()  # Track which nodes have been executed
             skipped_nodes = set()   # Track which nodes were skipped due to routing
+            pending_human_input = False  # Track if workflow is waiting for human input
 
             for i, node in enumerate(nodes, 1):
                 # Check if this node should be executed based on routing decisions
@@ -103,17 +273,35 @@ class WorkflowExecutionService:
                 result = await self._execute_node(node, context)
                 context.node_results[node.id] = result
 
+                # Check if this node is waiting for human input
+                if (not result.success and 
+                    result.error == "PENDING_HUMAN_INPUT" and
+                    result.metadata and 
+                    result.metadata.get('pending_human_validation')):
+                    
+                    pending_human_input = True
+                    logger.info(f"Workflow {workflow_run.id} paused at node {node.id} - waiting for human validation")
+                    
+                    # Don't mark as failed, just pause execution here
+                    # The workflow will resume when user submits their choice
+                    break  # Stop executing further nodes
+                
                 if not result.success:
                     failed_count += 1
                 else:
                     context.current_context = result.output
 
             # Update workflow run status
-            final_status = 'completed' if failed_count == 0 else 'failed'
-            await self._update_workflow_run_status(workflow_run, final_status)
+            if pending_human_input:
+                # Don't update ended_at, workflow is paused
+                final_status = 'pending_human_input'
+            else:
+                final_status = 'completed' if failed_count == 0 else 'failed'
+                await self._update_workflow_run_status(workflow_run, final_status)
 
             results_dict = {
-                'success': failed_count == 0,
+                'success': failed_count == 0 and not pending_human_input,
+                'pending_human_input': pending_human_input,
                 'total_nodes': len(nodes),
                 'executed_nodes': len(executed_nodes),
                 'skipped_nodes': len(skipped_nodes),
@@ -123,7 +311,8 @@ class WorkflowExecutionService:
                     'output': result.output,
                     'error': result.error,
                     'token_usage': result.token_usage,
-                    'skipped': result.metadata.get('skipped', False) if result.metadata else False
+                    'skipped': result.metadata.get('skipped', False) if result.metadata else False,
+                    'pending_human_validation': result.metadata.get('pending_human_validation', False) if result.metadata else False
                 } for node_id, result in context.node_results.items()}
             }
 

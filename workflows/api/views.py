@@ -23,7 +23,7 @@ from workflows.models import (
 )
 from workflows.services import WorkflowCloningService
 from django_rq import enqueue
-from workflows.tasks import execute_workflow_run
+from workflows.tasks import execute_workflow_run, resume_workflow_run
 import weasyprint
 import tempfile
 import os
@@ -216,6 +216,112 @@ class WorkflowRunViewSet(viewsets.ModelViewSet):
 
         serializer = self.get_serializer(workflow_run)
         return Response(serializer.data, status=201)
+
+    @action(detail=True, methods=['post'], url_path='submit-human-validation')
+    def submit_human_validation(self, request, pk=None):
+        """
+        Submit user's route choice for a conditional node requiring human validation.
+        
+        Expected request data:
+        {
+            "node_id": "conditional_node_123",
+            "chosen_route": "Route A"
+        }
+        """
+        workflow_run = self.get_object()
+        node_id = request.data.get('node_id')
+        chosen_route = request.data.get('chosen_route')
+        
+        if not node_id:
+            return Response({'error': 'node_id is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        if not chosen_route:
+            return Response({'error': 'chosen_route is required'}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Find the conditional step waiting for input
+        try:
+            conditional_step = WorkflowRunStep.objects.get(
+                workflow_run=workflow_run,
+                step_node__node_id=node_id,
+                status=WorkflowRunStepStatus.PENDING_HUMAN_INPUT
+            )
+        except WorkflowRunStep.DoesNotExist:
+            return Response(
+                {'error': f'No pending validation found for node {node_id}'}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Validate that the chosen route is valid for this conditional node
+        from workflows.models import ConditionalNodeData
+        conditional_data = conditional_step.step_node.data_object
+        
+        if not isinstance(conditional_data, ConditionalNodeData):
+            return Response(
+                {'error': 'Invalid node type - expected conditional node'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Get available routes
+        available_routes = conditional_data.get_routes()
+        route_names = [r['name'] for r in available_routes]
+        
+        if chosen_route not in route_names:
+            return Response(
+                {
+                    'error': f'Invalid route choice. Available routes: {", ".join(route_names)}',
+                    'available_routes': available_routes
+                }, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Enqueue the resume task
+        enqueue(resume_workflow_run, workflow_run.id, node_id, chosen_route)
+        
+        return Response({
+            'message': 'Route chosen successfully. Workflow will resume execution.',
+            'chosen_route': chosen_route,
+            'node_id': node_id,
+            'workflow_run_id': workflow_run.id
+        }, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['get'], url_path='pending-validations')
+    def get_pending_validations(self, request, pk=None):
+        """
+        Get all conditional nodes in this workflow run that are waiting for human validation.
+        
+        Returns a list of pending validations with route options.
+        """
+        workflow_run = self.get_object()
+        
+        # Find all steps waiting for human input
+        pending_steps = WorkflowRunStep.objects.filter(
+            workflow_run=workflow_run,
+            status=WorkflowRunStepStatus.PENDING_HUMAN_INPUT
+        ).select_related('step_node')
+        
+        validations = []
+        from workflows.models import ConditionalNodeData
+        
+        for step in pending_steps:
+            conditional_data = step.step_node.data_object
+            
+            if isinstance(conditional_data, ConditionalNodeData):
+                available_routes = conditional_data.get_routes()
+                
+                validations.append({
+                    'node_id': step.step_node.node_id,
+                    'step_number': conditional_data.step_number,
+                    'custom_prompt': conditional_data.custom_prompt,
+                    'available_routes': available_routes,
+                    'current_response': step.response,
+                    'step_id': step.id
+                })
+        
+        return Response({
+            'workflow_run_id': workflow_run.id,
+            'pending_validations': validations,
+            'count': len(validations)
+        }, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['get'], url_path='export-pdf')
     def export_pdf(self, request, pk=None):
