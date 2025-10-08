@@ -327,46 +327,46 @@
         {% for step in steps %}
         <div class="step">
             <div class="step-header">
-                <span class="step-title">{{ step.order }}. {{ step.step.prompt.title }}</span>
+                <span class="step-title">{{ step.order }}. {{ step.prompt_title }}</span>
                 <span class="status-badge status-{{ step.status|lower }}">{{ step.status }}</span>
             </div>
-            
+
             <div class="step-content">
                 <div class="metadata">
                     <div class="metadata-item">
                         <span class="metadata-label">Model</span>
                         <div class="metadata-value">
-                            {% if step.step.llm %}{{ step.step.llm.name }}{% else %}Default{% endif %}
+                            {% if step.step_data.llm %}{{ step.step_data.llm.name }}{% else %}Default{% endif %}
                         </div>
                     </div>
                     <div class="metadata-item">
                         <span class="metadata-label">Temperature</span>
-                        <div class="metadata-value">{{ step.step.temperature|default:"0.7" }}</div>
+                        <div class="metadata-value">{{ step.step_data.temperature|default:"0.7" }}</div>
                     </div>
                     <div class="metadata-item">
                         <span class="metadata-label">Max Tokens</span>
-                        <div class="metadata-value">{{ step.step.max_tokens|default:"2048" }}</div>
+                        <div class="metadata-value">{{ step.step_data.max_tokens|default:"2048" }}</div>
                     </div>
                     <div class="metadata-item">
                         <span class="metadata-label">Executed</span>
                         <div class="metadata-value">{{ step.created_at|date:"M j, g:i A" }}</div>
                     </div>
                 </div>
-                
-                {% if step.step.prompt.content %}
+
+                {% if step.prompt_content_html %}
                 <div class="content-section">
                     <div class="content-label">Prompt</div>
-                    <div class="content-text">{{ step.step.prompt.content|safe }}</div>
+                    <div class="content-text">{{ step.prompt_content_html|safe }}</div>
                 </div>
                 {% endif %}
-                
-                {% if step.response %}
+
+                {% if step.response_html %}
                 <div class="content-section">
                     <div class="content-label">Response</div>
-                    <div class="content-text">{{ step.response|safe }}</div>
+                    <div class="content-text">{{ step.response_html|safe }}</div>
                 </div>
                 {% endif %}
-                
+
                 {% if step.error %}
                 <div class="content-section">
                     <div class="content-label">Error</div>

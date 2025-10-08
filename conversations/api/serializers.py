@@ -39,6 +39,7 @@ class ConversationSerializer(serializers.ModelSerializer):
             'temperature',
             'max_tokens',
             'history_limit',
+            'web_search_enabled',
             'prompt',
             'prompt_id',
             'sort_order',
