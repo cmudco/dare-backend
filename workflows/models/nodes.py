@@ -149,42 +149,91 @@ class ChatOutputNodeData(BaseNodeData):
 
 
 class ConditionalNodeData(BaseNodeData):
-    """Data model for 'conditional' type nodes."""
+    """Data model for 'conditional' type nodes - supports n routes and human validation."""
     custom_prompt = models.TextField(
         default='Evaluate the input and choose the appropriate route.',
         help_text="Custom evaluation prompt for routing decision"
     )
-    route_a_name = models.CharField(
-        max_length=100,
-        default='Route A',
-        help_text="Name for route A output"
-    )
-    route_b_name = models.CharField(
-        max_length=100,
-        default='Route B',
-        help_text="Name for route B output"
-    )
-    route_a_description = models.TextField(
+    
+    # New: Support for n routes as JSON array
+    routes = models.JSONField(
+        default=list,
         blank=True,
-        help_text="Optional description for route A"
+        help_text="List of route definitions: [{'name': 'Route A', 'description': '...'}, ...]"
     )
-    route_b_description = models.TextField(
-        blank=True,
-        help_text="Optional description for route B"
+    
+    # New: Human validation flag
+    require_human_validation = models.BooleanField(
+        default=False,
+        help_text="If true, pause execution and ask user to choose route"
     )
+    
     step_number = models.PositiveIntegerField(
         help_text="Step number for execution ordering"
     )
+    
+    # DEPRECATED: Keep for backward compatibility during migration
+    route_a_name = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        help_text="DEPRECATED: Use routes field instead"
+    )
+    route_b_name = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        help_text="DEPRECATED: Use routes field instead"
+    )
+    route_a_description = models.TextField(
+        blank=True,
+        help_text="DEPRECATED: Use routes field instead"
+    )
+    route_b_description = models.TextField(
+        blank=True,
+        help_text="DEPRECATED: Use routes field instead"
+    )
+
+    def get_routes(self):
+        """Get routes with backward compatibility for old route_a/route_b fields."""
+        if self.routes and len(self.routes) > 0:
+            return self.routes
+        
+        # Fallback to old fields for backward compatibility
+        legacy_routes = []
+        if self.route_a_name:
+            legacy_routes.append({
+                'name': self.route_a_name,
+                'description': self.route_a_description or ''
+            })
+        if self.route_b_name:
+            legacy_routes.append({
+                'name': self.route_b_name,
+                'description': self.route_b_description or ''
+            })
+        
+        return legacy_routes if legacy_routes else [
+            {'name': 'Route A', 'description': ''},
+            {'name': 'Route B', 'description': ''}
+        ]
 
     def to_dict(self):
+        routes = self.get_routes()
         return {
             'customPrompt': self.custom_prompt,
-            'routeAName': self.route_a_name,
-            'routeBName': self.route_b_name,
-            'routeADescription': self.route_a_description,
-            'routeBDescription': self.route_b_description,
+            'routes': routes,
+            'requireHumanValidation': self.require_human_validation,
             'stepNumber': self.step_number,
+            # Backward compatibility fields
+            'routeAName': routes[0]['name'] if len(routes) > 0 else '',
+            'routeBName': routes[1]['name'] if len(routes) > 1 else '',
+            'routeADescription': routes[0].get('description', '') if len(routes) > 0 else '',
+            'routeBDescription': routes[1].get('description', '') if len(routes) > 1 else '',
         }
 
     def __str__(self):
-        return f"Conditional {self.step_number}: {self.route_a_name} / {self.route_b_name}"
+        routes = self.get_routes()
+        route_names = ' / '.join([r['name'] for r in routes[:3]])
+        if len(routes) > 3:
+            route_names += f' (+{len(routes) - 3} more)'
+        return f"Conditional {self.step_number}: {route_names}"
