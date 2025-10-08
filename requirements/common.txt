@@ -37,15 +37,15 @@ markdown~=3.7
 # Pinecone
 pinecone~=6.0.1
 
-# OpenAI
-openai~=1.65.2
+# OpenAI (2.0+ required for Responses API with web search)
+openai~=2.1.0
 tiktoken~=0.8.0
 
-# Claude/Anthropic
-anthropic==0.49.0
+# Claude/Anthropic (0.69.0+ includes web fetch, code execution)
+anthropic~=0.69.0
 
-# Google Gemini
-google-generativeai~=0.8.3
+# Google Gemini (new unified SDK)
+google-genai~=1.0.0
 
 # LLaMA (via Ollama)
 ollama~=0.4.2
