@@ -209,10 +209,11 @@ Provide your assessment in a clear, encouraging format that helps track their pr
                 referenced_conversation_ids=message_data["referenced_conversation_ids"],
                 referenced_conversation_history_limit=message_data["referenced_conversation_history_limit"],
                 message_obj=message_obj,
-                # SocraticBooks-style prompt construction (when applicable)
+                images=message_data.get("images", []),
                 socratic_mode=(self.platform == AuthSourceChoice.SOCRATIC_BOTS and not message_data.get("prompt_id")),
                 advanced_mode=bool(message_data.get("is_advanced")),
                 bot_meta=message_data.get("bot_meta") or {},
+                web_search_enabled=message_data.get("web_search_enabled") or self.conversation.web_search_enabled,
             ):
                 if usage:
                     token_usage = usage
@@ -225,7 +226,7 @@ Provide your assessment in a clear, encouraging format that helps track their pr
                         )
                         return
 
-                if chunk.strip():
+                if chunk and chunk.strip():
                     ai_response_accumulator += chunk
                     payload = {
                         "type": "ai_stream",
@@ -305,6 +306,12 @@ Provide your assessment in a clear, encouraging format that helps track their pr
 
     async def _generate_conversation_title(self, user_message: str):
         """Generate and send conversation title for the first message."""
+        
+        await database_sync_to_async(self.conversation.refresh_from_db)()
+
+        if self.conversation.title not in (None, "", "New Chat"):
+            return
+
         title = await self.conversation_service.generate_title(user_message)
         await self.conversation_service.update_conversation_title(self.conversation, title)
         await self.send(json.dumps(camelize({"type": "conversation_title", "title": title})))
@@ -369,6 +376,9 @@ Provide your assessment in a clear, encouraging format that helps track their pr
             "max_context_snippets": data.get("max_context_snippets", self.DEFAULT_MAX_CONTEXT_SNIPPETS),
             "document_similarity_threshold": data.get("document_similarity_threshold", self.DEFAULT_DOCUMENT_SIMILARITY_THRESHOLD),
             "history_limit": data.get("history_limit", self.DEFAULT_HISTORY_LIMIT),
+            "web_search_enabled": data.get("web_search_enabled"),
+            # Vision support: base64 encoded images
+            "images": data.get("images", []),  # List of {preview: str, name: str, type: str}
             # Socratic-only optional fields
             "enable_progress": data.get("enable_progress"),
             "tracking_prompt": data.get("tracking_prompt", ""),

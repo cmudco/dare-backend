@@ -15,7 +15,7 @@ from core.services.vector_service import get_vector_service_async
 class AIService(ABC):
     """Abstract base class for AI services."""
     @abstractmethod
-    async def stream_chat_completion(self, messages: list, max_tokens: int, temperature: float) -> AsyncGenerator[Tuple[str, Dict], None]:
+    async def stream_chat_completion(self, messages: list, max_tokens: int, temperature: float, images: list = None, tools: list = None) -> AsyncGenerator[Tuple[str, Dict], None]:
         pass
 
 class LLMService:
@@ -46,10 +46,12 @@ class LLMService:
         referenced_conversation_history_limit: int = 10,
         message_obj: Message = None,
         workflow_run_step_obj=None,
+        images: list = None,  # Vision support: list of dicts with 'preview' (base64), 'name', 'type'
         # New optional params for SocraticBooks-style prompt construction
         socratic_mode: bool = False,
         bot_meta: Dict = None,
         advanced_mode: bool = False,
+        web_search_enabled: bool = False,
     ) -> AsyncGenerator[Tuple[str, Dict], None]:
         """Generate AI response with context."""
         try:
@@ -60,41 +62,27 @@ class LLMService:
 
             # If Socratic mode is enabled, construct prompts using SocraticBooks logic
             if socratic_mode:
-                if advanced_mode:
-                    messages = await self._build_advanced_messages(
-                        message=message,
-                        conversation=conversation,
-                        user_id=user_id,
-                        file_ids=[],
-                        embedding_ids=file_ids or [],
-                        tag_ids=tag_ids or [],
-                        folder_ids=folder_ids or [],
-                        history_limit=history_limit,
-                        max_context_snippets=max_context_snippets,
-                        document_similarity_threshold=document_similarity_threshold,
-                        message_obj=message_obj,
-                        workflow_run_step_obj=workflow_run_step_obj,
-                        bot_meta=bot_meta or {},
-                    )
-                else:
-                    messages = await self._build_socratic_messages(
-                        message=message,
-                        conversation=conversation,
-                        user_id=user_id,
-                        file_ids=[],
-                        embedding_ids=file_ids or [], # using file_ids for now, will update SB FE once stable
-                        tag_ids=[],
-                        folder_ids=[],
-                        history_limit=history_limit,
-                        max_context_snippets=max_context_snippets,
-                        document_similarity_threshold=document_similarity_threshold,
-                        message_obj=message_obj,
-                        workflow_run_step_obj=workflow_run_step_obj,
-                        bot_meta=bot_meta or {},
-                    )
+                messages = await (
+                    self._build_advanced_messages if advanced_mode else self._build_socratic_messages
+                )(
+                    message=message,
+                    conversation=conversation,
+                    user_id=user_id,
+                    file_ids=[],
+                    embedding_ids=file_ids or [],
+                    tag_ids=tag_ids or [] if advanced_mode else [],
+                    folder_ids=folder_ids or [] if advanced_mode else [],
+                    history_limit=history_limit,
+                    max_context_snippets=max_context_snippets,
+                    document_similarity_threshold=document_similarity_threshold,
+                    message_obj=message_obj,
+                    workflow_run_step_obj=workflow_run_step_obj,
+                    bot_meta=bot_meta or {},
+                )
 
                 ai_service = self._get_ai_service(llm)
-                async for chunk, usage in ai_service.stream_chat_completion(messages, max_tokens, temperature):
+                tools = self._get_web_search_tools(llm) if web_search_enabled else None
+                async for chunk, usage in ai_service.stream_chat_completion(messages, max_tokens, temperature, images=images, tools=tools):
                     yield chunk, usage
                 return
 
@@ -154,7 +142,8 @@ class LLMService:
             messages.append({"role": "user", "content": f"User's message: {message}"})
 
             ai_service = self._get_ai_service(llm)
-            async for chunk, usage in ai_service.stream_chat_completion(messages, max_tokens, temperature):
+            tools = self._get_web_search_tools(llm) if web_search_enabled else None
+            async for chunk, usage in ai_service.stream_chat_completion(messages, max_tokens, temperature, images=images, tools=tools):
                 yield chunk, usage
 
         except Exception as e:
@@ -257,6 +246,20 @@ class LLMService:
         elif llm.provider == Provider.LLAMA.value:
             return LlamaService(llm=llm)
         return ClaudeService(llm=llm)
+
+    def _get_web_search_tools(self, llm: LLM) -> list:
+        """Get web search tools based on the LLM provider.
+
+        All three providers (OpenAI, Claude, Gemini) support native web search.
+        """
+        provider_tools = {
+            Provider.OPENAI.value: OpenAIService.get_web_search_tool,
+            Provider.CLAUDE.value: ClaudeService.get_web_search_tool,
+            Provider.GEMINI.value: GeminiService.get_web_search_tool,
+        }
+
+        tool_func = provider_tools.get(llm.provider)
+        return [tool_func()] if tool_func else []
 
     # -------- SocraticBooks helpers --------
     async def _build_socratic_messages(
