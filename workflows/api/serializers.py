@@ -178,15 +178,15 @@ class ChatOutputNodeDataSerializer(serializers.ModelSerializer):
 class ConditionalNodeDataSerializer(serializers.ModelSerializer):
     # Use routes field by default, but support legacy fields for backward compatibility
     routes = serializers.JSONField(required=False, allow_null=True)
-    
+
     class Meta:
         model = ConditionalNodeData
         fields = [
-            'custom_prompt', 'routes', 'require_human_validation', 'step_number',
+            'custom_prompt', 'llm', 'routes', 'require_human_validation', 'step_number',
             # Legacy fields for backward compatibility
             'route_a_name', 'route_b_name', 'route_a_description', 'route_b_description'
         ]
-        
+
     def to_representation(self, instance):
         """Include computed routes via get_routes() method."""
         data = super().to_representation(instance)
