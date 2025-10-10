@@ -154,18 +154,26 @@ class ConditionalNodeData(BaseNodeData):
         default='Evaluate the input and choose the appropriate route.',
         help_text="Custom evaluation prompt for routing decision"
     )
-    
+
+    llm = models.ForeignKey(
+        'conversations.LLM',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        help_text="Language model for routing evaluation"
+    )
+
     routes = models.JSONField(
         default=list,
         blank=True,
         help_text="List of route definitions: [{'name': 'Route A', 'description': '...'}, ...]"
     )
-    
+
     require_human_validation = models.BooleanField(
         default=False,
         help_text="If true, pause execution and ask user to choose route"
     )
-    
+
     step_number = models.PositiveIntegerField(
         help_text="Step number for execution ordering"
     )
@@ -198,6 +206,7 @@ class ConditionalNodeData(BaseNodeData):
     def to_dict(self):
         return {
             'customPrompt': self.custom_prompt,
+            'llm': self.llm.id if self.llm else None,
             'routes': self.get_routes(),
             'requireHumanValidation': self.require_human_validation,
             'stepNumber': self.step_number,
