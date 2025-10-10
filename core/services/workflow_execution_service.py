@@ -81,13 +81,22 @@ class WorkflowExecutionService:
                     'results': {}
                 }
             
-            # Update the conditional step with user's choice
-            await database_sync_to_async(
-                lambda: WorkflowRunStep.objects.filter(id=conditional_step.id).update(
+            # Update the conditional step with user's choice, preserving existing metadata
+            @database_sync_to_async
+            def update_step_with_choice():
+                step = WorkflowRunStep.objects.get(id=conditional_step.id)
+                # Preserve existing metadata (AI analysis) and update with user's choice
+                existing_metadata = step.metadata or {}
+                existing_metadata['user_choice'] = chosen_route
+                existing_metadata['is_human_validated'] = True
+
+                WorkflowRunStep.objects.filter(id=conditional_step.id).update(
                     status=WorkflowRunStepStatus.COMPLETED,
-                    response=chosen_route
+                    response=chosen_route,
+                    metadata=existing_metadata
                 )
-            )()
+
+            await update_step_with_choice()
             
             logger.info(f"Resuming workflow {workflow_run.id} from node {node_id} with route: {chosen_route}")
             

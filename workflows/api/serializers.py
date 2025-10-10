@@ -29,8 +29,8 @@ class WorkflowRunStepSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = WorkflowRunStep
-        fields = ['id', 'step_node', 'order', 'status', 'response', 'error', 'created_at', 'updated_at']  # removed 'snippets'
-        read_only_fields = ['id', 'created_at', 'updated_at']  # removed 'snippets'
+        fields = ['id', 'step_node', 'order', 'status', 'response', 'error', 'metadata', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
 
 class WorkflowRunSerializer(serializers.ModelSerializer):
     steps = WorkflowRunStepSerializer(many=True, read_only=True)
@@ -63,28 +63,35 @@ class WorkflowRunSerializer(serializers.ModelSerializer):
         return obj.steps.filter(status=WorkflowRunStepStatus.PENDING_HUMAN_INPUT).exists()
     
     def get_pending_validations(self, obj):
-        """Get all pending validations with route information."""
+        """Get all pending validations with route information and AI analysis."""
         pending_steps = obj.steps.filter(
             status=WorkflowRunStepStatus.PENDING_HUMAN_INPUT
         ).select_related('step_node')
-        
+
         validations = []
-        
+
         for step in pending_steps:
             conditional_data = step.step_node.data_object if step.step_node else None
-            
+
             if conditional_data and isinstance(conditional_data, ConditionalNodeData):
                 available_routes = conditional_data.get_routes()
-                
+
+                # Extract AI analysis and recommendation from metadata
+                metadata = step.metadata or {}
+                ai_recommendation = metadata.get('ai_recommendation')
+                ai_analysis = metadata.get('analysis')
+
                 validations.append({
                     'node_id': step.step_node.node_id,
                     'step_number': conditional_data.step_number,
                     'custom_prompt': conditional_data.custom_prompt,
                     'available_routes': available_routes,
                     'current_response': step.response,
-                    'step_id': step.id
+                    'step_id': step.id,
+                    'ai_recommendation': ai_recommendation,  # AI's suggested route
+                    'ai_analysis': ai_analysis  # AI's reasoning
                 })
-        
+
         return validations
 
 # StepSerializer removed - using graph-driven architecture only

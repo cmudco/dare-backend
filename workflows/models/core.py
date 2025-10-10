@@ -199,6 +199,12 @@ class WorkflowRunStep(TimeStampMixin):
         blank=True,
         help_text="Error message if step failed."
     )
+    metadata = models.JSONField(
+        null=True,
+        blank=True,
+        default=dict,
+        help_text="Additional metadata about step execution (e.g., AI analysis, routing decisions)"
+    )
 
     class Meta:
         ordering = ['order']
