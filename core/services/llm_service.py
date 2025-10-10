@@ -43,7 +43,6 @@ class LLMService:
         document_similarity_threshold: float = 0.5,
         history_limit: int = 20,
         referenced_conversation_ids: list = None,
-        referenced_conversation_history_limit: int = 10,
         message_obj: Message = None,
         workflow_run_step_obj=None,
         images: list = None,  # Vision support: list of dicts with 'preview' (base64), 'name', 'type'
@@ -53,7 +52,10 @@ class LLMService:
         advanced_mode: bool = False,
         web_search_enabled: bool = False,
     ) -> AsyncGenerator[Tuple[str, Dict], None]:
-        """Generate AI response with context."""
+        """Generate AI response with context.
+
+        Note: Referenced conversations always include full history (no limit).
+        """
         try:
             llm = llm or LLM.objects.filter(is_active=True).first()
             if not llm:
@@ -97,7 +99,7 @@ class LLMService:
                 referenced_context = await self.get_referenced_conversations_context(
                     referenced_conversation_ids,
                     user_id,
-                    referenced_conversation_history_limit
+                    None
                 )
                 if referenced_context:
                     messages.append({"role": "user", "content": referenced_context})
@@ -204,8 +206,14 @@ class LLMService:
         return file_contents
 
     @database_sync_to_async
-    def get_referenced_conversations_context(self, conversation_ids: list, user_id: int, history_limit: int = 10) -> str:
-        """Fetch context from referenced conversations."""
+    def get_referenced_conversations_context(self, conversation_ids: list, user_id: int, history_limit: int = None) -> str:
+        """Fetch context from referenced conversations.
+
+        Args:
+            conversation_ids: List of conversation IDs to fetch
+            user_id: User ID for filtering
+            history_limit: Optional limit for messages (None = all messages)
+        """
         if not conversation_ids:
             return ""
 
@@ -216,9 +224,14 @@ class LLMService:
         )
 
         for conversation in conversations:
-            messages = Message.active_objects.filter(
+            messages_query = Message.active_objects.filter(
                 conversation=conversation
-            ).order_by('-created_at')[:history_limit]
+            ).order_by('-created_at')
+
+            if history_limit is not None:
+                messages_query = messages_query[:history_limit]
+
+            messages = list(messages_query)
 
             if messages:
                 conversation_title = conversation.title or "Untitled Conversation"
