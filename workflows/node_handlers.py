@@ -21,6 +21,7 @@ from workflows.models import (
 )
 from workflows.constants import WorkflowRunStepStatus
 from workflows.node_handler_constants import DefaultValues
+from workflows.services.conditional_prompt_service import ConditionalPromptService
 # ExecutionNode is now defined locally
 from core.services.llm_service import LLMService
 from core.services.billing_service import BillingService
@@ -542,43 +543,29 @@ class ConditionalNodeHandler(BaseNodeHandler):
             # If human validation is required, we still want AI analysis to inform the user
             # So we continue to run the AI evaluation below, then pause for human decision
 
-            # Prepare AI evaluation message with XML structured output
-            evaluation_prompt = await database_sync_to_async(lambda: conditional_data.custom_prompt)()
-            evaluation_prompt = evaluation_prompt or "Evaluate the input and choose the appropriate route."
-
-            # Build route options in XML format for n routes
-            route_xml_elements = "\n".join([
-                f'<route name="{route["name"]}">{route.get("description", route["name"])}</route>'
-                for route in routes
-            ])
-
-            message = f"""{evaluation_prompt}
-
-Based on the following input, evaluate and choose the most appropriate route.
-
-<routes>
-{route_xml_elements}
-</routes>
-
-<input>
-{input_output}
-</input>
-
-Analyze the input carefully and respond in this EXACT format (do not deviate):
-<analysis>
-[Brief reasoning for your choice - 1-2 sentences]
-</analysis>
-<decision>[EXACT route name from the routes listed above]</decision>"""
-
-            # Get LLM for evaluation - prefer Claude for consistent evaluation
-            llm = await database_sync_to_async(
-                lambda: LLM.objects.filter(provider="claude").first()
-            )()
+            # Get LLM for evaluation - use configured LLM or fallback to default
+            llm = await database_sync_to_async(lambda: conditional_data.llm)()
 
             if not llm:
+                # Fallback to first available LLM
                 llm = await database_sync_to_async(
                     lambda: LLM.objects.filter(provider=DefaultValues.DEFAULT_LLM_PROVIDER).first()
                 )()
+
+            # Get LLM provider for prompt generation
+            llm_provider = await database_sync_to_async(lambda: llm.provider)()
+
+            # Prepare AI evaluation message using provider-specific prompt service
+            evaluation_prompt = await database_sync_to_async(lambda: conditional_data.custom_prompt)()
+            evaluation_prompt = evaluation_prompt or "Evaluate the input and choose the appropriate route."
+
+            # Generate provider-specific prompt
+            message = ConditionalPromptService.get_prompt_for_provider(
+                provider=llm_provider,
+                evaluation_prompt=evaluation_prompt,
+                routes=routes,
+                input_text=input_output
+            )
 
             # Get user for LLM service
             user = await database_sync_to_async(lambda: workflow.user)()
