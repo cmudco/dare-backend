@@ -1,5 +1,6 @@
 from django.contrib import admin
 from django.contrib.auth import get_user_model
+from django.utils.html import format_html
 
 from .models import LLM, Conversation, Message, ModelGroup
 
@@ -29,6 +30,87 @@ class MessageAdmin(admin.ModelAdmin):
     def short_message(self, obj):
         return obj.short_message
     short_message.short_description = "Message"
+
+# Dedicated admin view for messages with feedback
+class MessageWithFeedbackAdmin(admin.ModelAdmin):
+    """Dedicated admin view showing only messages with feedback"""
+    list_display = ("id", "short_message", "conversation_link", "sender_name", "feedback_indicator", "feedback_preview", "created_at")
+    search_fields = ("message", "conversation__conversation_id", "conversation__title", "sender", "feedback_text")
+    list_filter = ("sender_type", "feedback_type", "created_at", "llm")
+    ordering = ("-created_at",)
+    readonly_fields = ("created_at", "updated_at", "input_tokens", "output_tokens", "cost")
+    list_per_page = 50
+
+    fieldsets = (
+        ("Message Info", {
+            "fields": ("conversation", "sender_type", "sender", "message", "llm")
+        }),
+        ("Feedback", {
+            "fields": ("feedback_type", "feedback_text"),
+            "description": "User feedback for this message"
+        }),
+        ("Message History", {
+            "fields": ("is_edited", "is_regenerated", "original_message"),
+            "classes": ("collapse",)
+        }),
+        ("Usage & Metrics", {
+            "fields": ("input_tokens", "output_tokens", "cost"),
+            "classes": ("collapse",)
+        }),
+        ("Related Data", {
+            "fields": ("files", "tags", "learning_progress_data"),
+            "classes": ("collapse",)
+        }),
+        ("Timestamps", {
+            "fields": ("created_at", "updated_at"),
+            "classes": ("collapse",)
+        }),
+    )
+
+    filter_horizontal = ("files", "tags")
+
+    def short_message(self, obj):
+        msg = obj.message[:50] + "..." if len(obj.message) > 50 else obj.message
+        return format_html('<span title="{}">{}</span>', obj.message, msg)
+    short_message.short_description = "Message"
+
+    def conversation_link(self, obj):
+        return format_html(
+            '<a href="/admin/conversations/conversation/{}/change/">{}</a>',
+            obj.conversation.id,
+            obj.conversation.title or obj.conversation.conversation_id
+        )
+    conversation_link.short_description = "Conversation"
+
+    def feedback_indicator(self, obj):
+        if obj.feedback_type == 'like':
+            return format_html('<span style="color: green; font-size: 18px;">👍</span>')
+        elif obj.feedback_type == 'dislike':
+            return format_html('<span style="color: red; font-size: 18px;">👎</span>')
+        return format_html('<span style="color: gray;">—</span>')
+    feedback_indicator.short_description = "Feedback"
+    feedback_indicator.admin_order_field = "feedback_type"
+
+    def feedback_preview(self, obj):
+        if obj.feedback_text:
+            preview = obj.feedback_text[:60] + "..." if len(obj.feedback_text) > 60 else obj.feedback_text
+            return format_html('<span title="{}">{}</span>', obj.feedback_text, preview)
+        return format_html('<span style="color: gray; font-style: italic;">No text</span>')
+    feedback_preview.short_description = "Feedback Text"
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        # Only show messages that have feedback and optimize queries
+        return qs.filter(feedback_type__isnull=False).select_related('conversation', 'llm', 'conversation__user')
+
+# Register the feedback-specific view with a proxy model
+class MessageWithFeedback(Message):
+    class Meta:
+        proxy = True
+        verbose_name = "Message with Feedback"
+        verbose_name_plural = "Messages with Feedback"
+
+admin.site.register(MessageWithFeedback, MessageWithFeedbackAdmin)
 
 @admin.register(ModelGroup)
 class ModelGroupAdmin(admin.ModelAdmin):
