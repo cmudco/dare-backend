@@ -177,27 +177,6 @@ class ConditionalNodeData(BaseNodeData):
     step_number = models.PositiveIntegerField(
         help_text="Step number for execution ordering"
     )
-    
-    route_a_name = models.CharField(
-        max_length=100,
-        blank=True,
-        null=True,
-        help_text="DEPRECATED: Use routes field instead"
-    )
-    route_b_name = models.CharField(
-        max_length=100,
-        blank=True,
-        null=True,
-        help_text="DEPRECATED: Use routes field instead"
-    )
-    route_a_description = models.TextField(
-        blank=True,
-        help_text="DEPRECATED: Use routes field instead"
-    )
-    route_b_description = models.TextField(
-        blank=True,
-        help_text="DEPRECATED: Use routes field instead"
-    )
 
     def get_routes(self):
         """Get routes for conditional node."""
