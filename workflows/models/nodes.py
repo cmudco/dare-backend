@@ -155,14 +155,12 @@ class ConditionalNodeData(BaseNodeData):
         help_text="Custom evaluation prompt for routing decision"
     )
     
-    # New: Support for n routes as JSON array
     routes = models.JSONField(
         default=list,
         blank=True,
         help_text="List of route definitions: [{'name': 'Route A', 'description': '...'}, ...]"
     )
     
-    # New: Human validation flag
     require_human_validation = models.BooleanField(
         default=False,
         help_text="If true, pause execution and ask user to choose route"
@@ -172,7 +170,6 @@ class ConditionalNodeData(BaseNodeData):
         help_text="Step number for execution ordering"
     )
     
-    # DEPRECATED: Keep for backward compatibility during migration
     route_a_name = models.CharField(
         max_length=100,
         blank=True,
@@ -199,7 +196,6 @@ class ConditionalNodeData(BaseNodeData):
         if self.routes and len(self.routes) > 0:
             return self.routes
         
-        # Fallback to old fields for backward compatibility
         legacy_routes = []
         if self.route_a_name:
             legacy_routes.append({
@@ -224,7 +220,6 @@ class ConditionalNodeData(BaseNodeData):
             'routes': routes,
             'requireHumanValidation': self.require_human_validation,
             'stepNumber': self.step_number,
-            # Backward compatibility fields
             'routeAName': routes[0]['name'] if len(routes) > 0 else '',
             'routeBName': routes[1]['name'] if len(routes) > 1 else '',
             'routeADescription': routes[0].get('description', '') if len(routes) > 0 else '',
