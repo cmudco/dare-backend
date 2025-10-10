@@ -59,6 +59,7 @@ class ChatOutputNodeDataAdmin(admin.ModelAdmin):
 
 @admin.register(ConditionalNodeData)
 class ConditionalNodeDataAdmin(admin.ModelAdmin):
-    list_display = ('step_number', 'route_a_name', 'route_b_name', 'created_at')
-    list_filter = ('created_at',)
-    search_fields = ('route_a_name', 'route_b_name', 'custom_prompt')
+    list_display = ('step_number', 'require_human_validation', 'created_at')
+    list_filter = ('require_human_validation', 'created_at')
+    search_fields = ('custom_prompt',)
+    readonly_fields = ('routes',)
