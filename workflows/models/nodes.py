@@ -192,38 +192,15 @@ class ConditionalNodeData(BaseNodeData):
     )
 
     def get_routes(self):
-        """Get routes with backward compatibility for old route_a/route_b fields."""
-        if self.routes and len(self.routes) > 0:
-            return self.routes
-        
-        legacy_routes = []
-        if self.route_a_name:
-            legacy_routes.append({
-                'name': self.route_a_name,
-                'description': self.route_a_description or ''
-            })
-        if self.route_b_name:
-            legacy_routes.append({
-                'name': self.route_b_name,
-                'description': self.route_b_description or ''
-            })
-        
-        return legacy_routes if legacy_routes else [
-            {'name': 'Route A', 'description': ''},
-            {'name': 'Route B', 'description': ''}
-        ]
+        """Get routes for conditional node."""
+        return self.routes if self.routes else []
 
     def to_dict(self):
-        routes = self.get_routes()
         return {
             'customPrompt': self.custom_prompt,
-            'routes': routes,
+            'routes': self.get_routes(),
             'requireHumanValidation': self.require_human_validation,
             'stepNumber': self.step_number,
-            'routeAName': routes[0]['name'] if len(routes) > 0 else '',
-            'routeBName': routes[1]['name'] if len(routes) > 1 else '',
-            'routeADescription': routes[0].get('description', '') if len(routes) > 0 else '',
-            'routeBDescription': routes[1].get('description', '') if len(routes) > 1 else '',
         }
 
     def __str__(self):
