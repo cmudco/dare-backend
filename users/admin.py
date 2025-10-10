@@ -3,6 +3,9 @@ from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
 from django.utils.translation import gettext_lazy as _
 from django.contrib import messages
 from django.contrib.admin.helpers import ActionForm
+from django.utils.html import format_html
+from django.utils import timezone
+from datetime import timedelta
 
 from users.models import User, AccessCodeGroup
 from billing.services import WalletService
@@ -117,6 +120,40 @@ class AccessCodeGroupAdmin(admin.ModelAdmin):
     actions = ["credit_groups_users"]
 
 
+class LastLoginFilter(admin.SimpleListFilter):
+    """Filter users by last login activity"""
+    title = 'last login activity'
+    parameter_name = 'last_login_activity'
+
+    def lookups(self, request, model_admin):
+        return (
+            ('never', 'Never logged in'),
+            ('7days', 'Last 7 days'),
+            ('30days', 'Last 30 days'),
+            ('90days', 'Last 90 days'),
+            ('inactive_30', 'Inactive 30+ days'),
+            ('inactive_90', 'Inactive 90+ days'),
+            ('inactive_180', 'Inactive 180+ days'),
+        )
+
+    def queryset(self, request, queryset):
+        now = timezone.now()
+        if self.value() == 'never':
+            return queryset.filter(last_login__isnull=True)
+        if self.value() == '7days':
+            return queryset.filter(last_login__gte=now - timedelta(days=7))
+        if self.value() == '30days':
+            return queryset.filter(last_login__gte=now - timedelta(days=30))
+        if self.value() == '90days':
+            return queryset.filter(last_login__gte=now - timedelta(days=90))
+        if self.value() == 'inactive_30':
+            return queryset.filter(last_login__lt=now - timedelta(days=30))
+        if self.value() == 'inactive_90':
+            return queryset.filter(last_login__lt=now - timedelta(days=90))
+        if self.value() == 'inactive_180':
+            return queryset.filter(last_login__lt=now - timedelta(days=180))
+
+
 class UserAdmin(DjangoUserAdmin):
     class CreditActionForm(ActionForm):
         amount = forms.DecimalField(
@@ -176,11 +213,78 @@ class UserAdmin(DjangoUserAdmin):
             },
         ),
     )
-    list_display = ("email", "is_staff", "is_active", "is_superuser", "access_code_group", "vector_db", "auth_source", "is_dare_accessible", "is_socratic_bots_accessible")
-    list_filter = ("is_staff", "is_superuser", "is_active", "vector_db", "access_code_group", "auth_source", "is_dare_accessible", "is_socratic_bots_accessible")
+    list_display = ("email", "last_login_display", "date_joined", "activity_status", "is_active", "is_staff", "access_code_group", "vector_db")
+    list_filter = ("is_staff", "is_superuser", "is_active", LastLoginFilter, "vector_db", "access_code_group", "auth_source", "is_dare_accessible", "is_socratic_bots_accessible")
     search_fields = ("email", "first_name", "last_name")
-    ordering = ("email",)
-    actions = ["credit_selected_users"]
+    ordering = ("-last_login",)
+    actions = ["credit_selected_users", "disable_inactive_accounts"]
+    date_hierarchy = "date_joined"
+
+    def last_login_display(self, obj):
+        if not obj.last_login:
+            return format_html('<span style="color: gray; font-style: italic;">Never</span>')
+
+        now = timezone.now()
+        diff = now - obj.last_login
+
+        if diff.days == 0:
+            color = "green"
+            status = "Today"
+        elif diff.days <= 7:
+            color = "green"
+            status = f"{diff.days}d ago"
+        elif diff.days <= 30:
+            color = "orange"
+            status = f"{diff.days}d ago"
+        elif diff.days <= 90:
+            color = "darkorange"
+            status = f"{diff.days}d ago"
+        else:
+            color = "red"
+            status = f"{diff.days}d ago"
+
+        return format_html(
+            '<span style="color: {};" title="{}">{}</span>',
+            color,
+            obj.last_login.strftime('%Y-%m-%d %H:%M'),
+            status
+        )
+    last_login_display.short_description = "Last Login"
+    last_login_display.admin_order_field = "last_login"
+
+    def activity_status(self, obj):
+        if not obj.last_login:
+            return format_html(
+                '<span style="color: #dc2626; border: 1px solid #dc2626; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500;">🔴 NEVER</span>'
+            )
+
+        now = timezone.now()
+        diff = now - obj.last_login
+
+        if diff.days <= 7:
+            return format_html(
+                '<span style="color: #16a34a; border: 1px solid #16a34a; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500;">🟢 ACTIVE</span>'
+            )
+        elif diff.days <= 30:
+            return format_html(
+                '<span style="color: #ca8a04; border: 1px solid #ca8a04; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500;">🟡 MODERATE</span>'
+            )
+        elif diff.days <= 90:
+            return format_html(
+                '<span style="color: #ea580c; border: 1px solid #ea580c; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500;">🟠 LOW</span>'
+            )
+        else:
+            return format_html(
+                '<span style="color: #dc2626; border: 1px solid #dc2626; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500;">🔴 INACTIVE</span>'
+            )
+    activity_status.short_description = "Activity"
+    activity_status.admin_order_field = "last_login"
+
+    @admin.action(description="Disable selected inactive accounts")
+    def disable_inactive_accounts(self, request, queryset):
+        """Disable user accounts that haven't been active"""
+        count = queryset.filter(is_active=True).update(is_active=False)
+        self.message_user(request, f"Disabled {count} user account(s).", level=messages.SUCCESS)
 
 
 admin.site.register(User, UserAdmin)
