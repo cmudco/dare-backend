@@ -7,7 +7,6 @@ from django.utils import timezone
 from .models import WorkflowRun
 from core.services.workflow_execution_service import WorkflowExecutionService
 
-# Import new node handler-based execution service
 from core.services.workflow_execution_service import WorkflowExecutionService
 
 # Fix for macOS RQ worker crash with httpx/requests
@@ -27,10 +26,8 @@ def execute_workflow_run(workflow_run_id):
         return
 
     try:
-        # Use the new graph-based execution service
         logger.info(f"Starting graph-based execution for workflow run {workflow_run_id}")
 
-        # Run the async execution
         service = WorkflowExecutionService()
         execution_result = asyncio.run(service.execute_workflow(workflow_run))
 
@@ -43,7 +40,6 @@ def execute_workflow_run(workflow_run_id):
 
     except Exception as e:
         logger.error(f"Workflow execution failed: {str(e)}", exc_info=True)
-        # Mark workflow as failed
         try:
             workflow_run.ended_at = timezone.now()
             workflow_run.save(update_fields=['ended_at'])
@@ -65,7 +61,6 @@ def resume_workflow_run(workflow_run_id, node_id, chosen_route):
     try:
         logger.info(f"Resuming workflow run {workflow_run_id} from node {node_id} with route: {chosen_route}")
 
-        # Run the async execution
         service = WorkflowExecutionService()
         execution_result = asyncio.run(
             service.resume_workflow_after_human_validation(workflow_run, node_id, chosen_route)

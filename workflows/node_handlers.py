@@ -537,13 +537,11 @@ class ConditionalNodeHandler(BaseNodeHandler):
                     error="No routes defined for conditional node"
                 )
 
-            # Check if human validation is required
             require_human_validation = await database_sync_to_async(lambda: conditional_data.require_human_validation)()
 
             # If human validation is required, we still want AI analysis to inform the user
             # So we continue to run the AI evaluation below, then pause for human decision
 
-            # Get LLM for evaluation - use configured LLM or fallback to default
             llm = await database_sync_to_async(lambda: conditional_data.llm)()
 
             if not llm:
@@ -552,14 +550,11 @@ class ConditionalNodeHandler(BaseNodeHandler):
                     lambda: LLM.objects.filter(provider=DefaultValues.DEFAULT_LLM_PROVIDER).first()
                 )()
 
-            # Get LLM provider for prompt generation
             llm_provider = await database_sync_to_async(lambda: llm.provider)()
 
-            # Prepare AI evaluation message using provider-specific prompt service
             evaluation_prompt = await database_sync_to_async(lambda: conditional_data.custom_prompt)()
             evaluation_prompt = evaluation_prompt or "Evaluate the input and choose the appropriate route."
 
-            # Generate provider-specific prompt
             message = ConditionalPromptService.get_prompt_for_provider(
                 provider=llm_provider,
                 evaluation_prompt=evaluation_prompt,
@@ -567,10 +562,8 @@ class ConditionalNodeHandler(BaseNodeHandler):
                 input_text=input_output
             )
 
-            # Get user for LLM service
             user = await database_sync_to_async(lambda: workflow.user)()
 
-            # Execute LLM query for routing decision
             response_generator = self.llm_service.query(
                 message=message,
                 conversation=None,
@@ -581,11 +574,10 @@ class ConditionalNodeHandler(BaseNodeHandler):
                 prompt_id=None,
                 message_obj=None,
                 workflow_run_step_obj=None,
-                max_tokens=100,  # Sufficient for structured XML response with analysis
-                temperature=0.1  # Very low temperature for deterministic routing
+                max_tokens=100,
+                temperature=0.1
             )
 
-            # Collect response
             full_response = ""
             token_usage = {}
 
@@ -599,7 +591,6 @@ class ConditionalNodeHandler(BaseNodeHandler):
             except Exception as stream_error:
                 raise
 
-            # Process billing for this conditional node
             if token_usage and token_usage.get('input_tokens') and token_usage.get('output_tokens'):
                 try:
                     billing_service = BillingService()
@@ -618,23 +609,18 @@ class ConditionalNodeHandler(BaseNodeHandler):
                         logger.warning(f"Billing failed for conditional node {node.id}, but continuing execution")
                 except Exception as billing_error:
                     logger.error(f"Billing error for conditional node {node.id}: {str(billing_error)}")
-                    # Continue execution even if billing fails
 
-            # Parse XML response to extract routing decision
             routing_decision = None
             analysis_text = None
 
             try:
-                # Wrap response in root element for XML parsing
                 xml_response = f"<root>{full_response.strip()}</root>"
                 root = ET.fromstring(xml_response)
 
-                # Extract decision element
                 decision_elem = root.find('.//decision')
                 if decision_elem is not None and decision_elem.text:
                     routing_decision = decision_elem.text.strip()
 
-                # Extract analysis for logging/debugging
                 analysis_elem = root.find('.//analysis')
                 if analysis_elem is not None and analysis_elem.text:
                     analysis_text = analysis_elem.text.strip()
@@ -643,7 +629,6 @@ class ConditionalNodeHandler(BaseNodeHandler):
             except ET.ParseError as parse_error:
                 logger.warning(f"Failed to parse XML response for node {node.id}: {parse_error}. Raw response: {full_response}")
 
-            # Validate decision matches one of the route names exactly
             route_names = [r['name'] for r in routes]
 
             if routing_decision not in route_names:
@@ -653,19 +638,17 @@ class ConditionalNodeHandler(BaseNodeHandler):
                 )
                 routing_decision = routes[0]['name']
 
-            # Check if human validation is required - if yes, pause here with AI recommendation
             if require_human_validation:
-                # Store AI's recommendation in metadata but pause for human decision
                 await database_sync_to_async(
                     lambda: WorkflowRunStep.objects.filter(id=workflow_run_step.id).update(
                         status=WorkflowRunStepStatus.PENDING_HUMAN_INPUT,
-                        response=f"AI recommends: {routing_decision}",  # Show AI's recommendation
+                        response=f"AI recommends: {routing_decision}",
                         metadata={
-                            'ai_recommendation': routing_decision,  # What AI thinks is best
-                            'analysis': analysis_text,  # AI's reasoning
+                            'ai_recommendation': routing_decision,
+                            'analysis': analysis_text,
                             'available_routes': [r['name'] for r in routes],
                             'full_response': full_response,
-                            'is_human_validated': True,  # Waiting for human validation
+                            'is_human_validated': True,
                             'pending_human_decision': True
                         }
                     )
@@ -678,8 +661,8 @@ class ConditionalNodeHandler(BaseNodeHandler):
 
                 # Return special result that pauses execution
                 return NodeExecutionResult(
-                    success=False,  # Marks as incomplete to pause workflow
-                    error="PENDING_HUMAN_INPUT",  # Special error code
+                    success=False,
+                    error="PENDING_HUMAN_INPUT",
                     execution_time=execution_time,
                     metadata={
                         'pending_human_validation': True,
@@ -699,12 +682,12 @@ class ConditionalNodeHandler(BaseNodeHandler):
             await database_sync_to_async(
                 lambda: WorkflowRunStep.objects.filter(id=workflow_run_step.id).update(
                     status=WorkflowRunStepStatus.COMPLETED,
-                    response=routing_decision,  # Store the routing decision
+                    response=routing_decision,
                     metadata={
                         'routing_decision': routing_decision,
-                        'analysis': analysis_text,  # AI's reasoning
+                        'analysis': analysis_text,
                         'available_routes': [r['name'] for r in routes],
-                        'full_response': full_response,  # Store full XML response for debugging
+                        'full_response': full_response,
                         'is_human_validated': False
                     }
                 )
@@ -717,15 +700,15 @@ class ConditionalNodeHandler(BaseNodeHandler):
 
             return NodeExecutionResult(
                 success=True,
-                output=routing_decision,  # Return just the routing decision
+                output=routing_decision,
                 token_usage=token_usage,
                 execution_time=execution_time,
                 metadata={
                     'routing_decision': routing_decision,
                     'available_routes': [r['name'] for r in routes],
                     'evaluated_input_length': len(input_output),
-                    'analysis': analysis_text,  # Store AI's reasoning
-                    'full_response': full_response,  # Store full response in metadata for debugging
+                    'analysis': analysis_text,
+                    'full_response': full_response,
                     'is_human_validated': False
                 }
             )
@@ -735,7 +718,6 @@ class ConditionalNodeHandler(BaseNodeHandler):
             error_msg = f"{error_category}: {str(e)}"
             logger.error(f"{error_category} in conditional node {node.id} ({error_type}): {str(e)}", exc_info=True)
 
-            # Update workflow run step with error
             try:
                 await database_sync_to_async(
                     lambda: WorkflowRunStep.objects.filter(id=workflow_run_step.id).update(

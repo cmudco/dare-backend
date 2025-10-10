@@ -107,7 +107,6 @@ class ConditionalPromptService:
         Returns:
             XML-formatted prompt string
         """
-        # Build route options in XML format
         route_xml_elements = "\n".join([
             f'<route name="{route["name"]}">{route.get("description", route["name"])}</route>'
             for route in routes
@@ -165,7 +164,6 @@ Analyze the input carefully and respond in this EXACT format (do not deviate):
                 evaluation_prompt, routes, input_text
             )
         else:
-            # Fallback to XML format for unknown providers
             return ConditionalPromptService._get_xml_prompt(
                 evaluation_prompt, routes, input_text
             )
