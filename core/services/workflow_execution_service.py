@@ -291,9 +291,7 @@ class WorkflowExecutionService:
                     pending_human_input = True
                     logger.info(f"Workflow {workflow_run.id} paused at node {node.id} - waiting for human validation")
                     
-                    # Don't mark as failed, just pause execution here
-                    # The workflow will resume when user submits their choice
-                    break  # Stop executing further nodes
+                    break
                 
                 if not result.success:
                     failed_count += 1
