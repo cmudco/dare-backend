@@ -143,12 +143,20 @@ class WorkflowRun(BaseModel):
         steps = self.steps.all()
         if not steps:
             return WorkflowRunStepStatus.RUNNING
+        
+        # Check if any step is waiting for human input - this takes precedence
+        if any(step.status == WorkflowRunStepStatus.PENDING_HUMAN_INPUT for step in steps):
+            return WorkflowRunStepStatus.PENDING_HUMAN_INPUT
+        
+        # Check for failures
         if any(step.status == WorkflowRunStepStatus.FAILED for step in steps):
             return WorkflowRunStepStatus.FAILED
+        
         # Consider both COMPLETED and SKIPPED as finished states
         finished_statuses = {WorkflowRunStepStatus.COMPLETED, WorkflowRunStepStatus.SKIPPED}
         if all(step.status in finished_statuses for step in steps):
             return WorkflowRunStepStatus.COMPLETED
+        
         return WorkflowRunStepStatus.RUNNING
 
     def __str__(self):
@@ -190,6 +198,12 @@ class WorkflowRunStep(TimeStampMixin):
         null=True,
         blank=True,
         help_text="Error message if step failed."
+    )
+    metadata = models.JSONField(
+        null=True,
+        blank=True,
+        default=dict,
+        help_text="Additional metadata about step execution (e.g., AI analysis, routing decisions)"
     )
 
     class Meta:

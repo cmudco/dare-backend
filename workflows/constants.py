@@ -12,3 +12,4 @@ class WorkflowRunStepStatus(models.TextChoices):
     COMPLETED = 'completed', 'Completed'
     FAILED = 'failed', 'Failed'
     SKIPPED = 'skipped', 'Skipped'
+    PENDING_HUMAN_INPUT = 'pending_human_input', 'Pending Human Input'
