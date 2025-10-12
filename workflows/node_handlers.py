@@ -6,6 +6,7 @@ including step nodes, conditional nodes, and output nodes. Each handler encapsul
 the specific logic and requirements for executing that node type.
 """
 import logging
+import xml.etree.ElementTree as ET
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Any, AsyncGenerator, Tuple
 from dataclasses import dataclass
@@ -20,6 +21,7 @@ from workflows.models import (
 )
 from workflows.constants import WorkflowRunStepStatus
 from workflows.node_handler_constants import DefaultValues
+from workflows.services.conditional_prompt_service import ConditionalPromptService
 # ExecutionNode is now defined locally
 from core.services.llm_service import LLMService
 from core.services.billing_service import BillingService
@@ -460,7 +462,7 @@ class ConditionalNodeHandler(BaseNodeHandler):
         return node_type == 'conditional'
 
     async def execute(self, node: ExecutionNode, context: NodeExecutionContext) -> NodeExecutionResult:
-        """Execute a conditional node by evaluating input with AI and choosing a route."""
+        """Execute a conditional node by evaluating input with AI or human and choosing a route."""
         start_time = timezone.now()
 
         try:
@@ -526,39 +528,42 @@ class ConditionalNodeHandler(BaseNodeHandler):
                     error="No input provided to conditional node"
                 )
 
-            # Prepare strict evaluation message - force single word response
-            route_a_desc = conditional_data.route_a_description or f"Choose {conditional_data.route_a_name}"
-            route_b_desc = conditional_data.route_b_description or f"Choose {conditional_data.route_b_name}"
+            # Get routes (supports n routes with backward compatibility)
+            routes = await database_sync_to_async(lambda: conditional_data.get_routes())()
+            
+            if not routes or len(routes) == 0:
+                return NodeExecutionResult(
+                    success=False,
+                    error="No routes defined for conditional node"
+                )
 
-            evaluation_prompt = conditional_data.custom_prompt or "Evaluate the input and choose the appropriate route."
+            require_human_validation = await database_sync_to_async(lambda: conditional_data.require_human_validation)()
 
-            message = f"""{evaluation_prompt}
+            # If human validation is required, we still want AI analysis to inform the user
+            # So we continue to run the AI evaluation below, then pause for human decision
 
-Based on the following input, choose EXACTLY ONE route by responding with ONLY the route name (no explanation, no other text):
-
-Route Options:
-- {conditional_data.route_a_name}: {route_a_desc}
-- {conditional_data.route_b_name}: {route_b_desc}
-
-Input to evaluate:
-{input_output}
-
-Response format: Reply with ONLY "{conditional_data.route_a_name}" or "{conditional_data.route_b_name}" - nothing else."""
-
-            # Get LLM for evaluation - prefer Claude for consistent evaluation
-            llm = await database_sync_to_async(
-                lambda: LLM.objects.filter(provider="claude").first()
-            )()
+            llm = await database_sync_to_async(lambda: conditional_data.llm)()
 
             if not llm:
+                # Fallback to first available LLM
                 llm = await database_sync_to_async(
                     lambda: LLM.objects.filter(provider=DefaultValues.DEFAULT_LLM_PROVIDER).first()
                 )()
 
-            # Get user for LLM service
+            llm_provider = await database_sync_to_async(lambda: llm.provider)()
+
+            evaluation_prompt = await database_sync_to_async(lambda: conditional_data.custom_prompt)()
+            evaluation_prompt = evaluation_prompt or "Evaluate the input and choose the appropriate route."
+
+            message = ConditionalPromptService.get_prompt_for_provider(
+                provider=llm_provider,
+                evaluation_prompt=evaluation_prompt,
+                routes=routes,
+                input_text=input_output
+            )
+
             user = await database_sync_to_async(lambda: workflow.user)()
 
-            # Execute LLM query for routing decision
             response_generator = self.llm_service.query(
                 message=message,
                 conversation=None,
@@ -569,11 +574,10 @@ Response format: Reply with ONLY "{conditional_data.route_a_name}" or "{conditio
                 prompt_id=None,
                 message_obj=None,
                 workflow_run_step_obj=None,
-                max_tokens=10,  # Only need single word response
-                temperature=0.1  # Very low temperature for deterministic routing
+                max_tokens=100,
+                temperature=0.1
             )
 
-            # Collect response
             full_response = ""
             token_usage = {}
 
@@ -587,7 +591,6 @@ Response format: Reply with ONLY "{conditional_data.route_a_name}" or "{conditio
             except Exception as stream_error:
                 raise
 
-            # Process billing for this conditional node
             if token_usage and token_usage.get('input_tokens') and token_usage.get('output_tokens'):
                 try:
                     billing_service = BillingService()
@@ -606,30 +609,87 @@ Response format: Reply with ONLY "{conditional_data.route_a_name}" or "{conditio
                         logger.warning(f"Billing failed for conditional node {node.id}, but continuing execution")
                 except Exception as billing_error:
                     logger.error(f"Billing error for conditional node {node.id}: {str(billing_error)}")
-                    # Continue execution even if billing fails
 
-            # Extract routing decision - simple cleanup since we forced single-word response
-            routing_decision = full_response.strip()
+            routing_decision = None
+            analysis_text = None
 
-            # Validate decision matches one of the routes (case-insensitive)
-            route_a_lower = conditional_data.route_a_name.lower()
-            route_b_lower = conditional_data.route_b_name.lower()
-            decision_lower = routing_decision.lower()
+            try:
+                xml_response = f"<root>{full_response.strip()}</root>"
+                root = ET.fromstring(xml_response)
 
-            if decision_lower == route_a_lower or route_a_lower in decision_lower:
-                routing_decision = conditional_data.route_a_name
-            elif decision_lower == route_b_lower or route_b_lower in decision_lower:
-                routing_decision = conditional_data.route_b_name
-            else:
-                # Default to route A if response is unclear
-                logger.warning(f"Unclear routing decision '{routing_decision}' for node {node.id}, defaulting to {conditional_data.route_a_name}")
-                routing_decision = conditional_data.route_a_name
+                decision_elem = root.find('.//decision')
+                if decision_elem is not None and decision_elem.text:
+                    routing_decision = decision_elem.text.strip()
 
-            # Update workflow run step with results
+                analysis_elem = root.find('.//analysis')
+                if analysis_elem is not None and analysis_elem.text:
+                    analysis_text = analysis_elem.text.strip()
+                    logger.info(f"Conditional node {node.id} analysis: {analysis_text}")
+
+            except ET.ParseError as parse_error:
+                logger.warning(f"Failed to parse XML response for node {node.id}: {parse_error}. Raw response: {full_response}")
+
+            route_names = [r['name'] for r in routes]
+
+            if routing_decision not in route_names:
+                logger.warning(
+                    f"Invalid or missing routing decision '{routing_decision}' for node {node.id}. "
+                    f"Valid routes: {route_names}. Defaulting to {routes[0]['name']}."
+                )
+                routing_decision = routes[0]['name']
+
+            if require_human_validation:
+                await database_sync_to_async(
+                    lambda: WorkflowRunStep.objects.filter(id=workflow_run_step.id).update(
+                        status=WorkflowRunStepStatus.PENDING_HUMAN_INPUT,
+                        response=f"AI recommends: {routing_decision}",
+                        metadata={
+                            'ai_recommendation': routing_decision,
+                            'analysis': analysis_text,
+                            'available_routes': [r['name'] for r in routes],
+                            'full_response': full_response,
+                            'is_human_validated': True,
+                            'pending_human_decision': True
+                        }
+                    )
+                )()
+
+                end_time = timezone.now()
+                execution_time = (end_time - start_time).total_seconds()
+
+                logger.info(f"Conditional node {node.id} requires human validation. AI recommends: {routing_decision}")
+
+                # Return special result that pauses execution
+                return NodeExecutionResult(
+                    success=False,
+                    error="PENDING_HUMAN_INPUT",
+                    execution_time=execution_time,
+                    metadata={
+                        'pending_human_validation': True,
+                        'ai_recommendation': routing_decision,
+                        'analysis': analysis_text,
+                        'available_routes': routes,
+                        'evaluated_input': input_output,
+                        'evaluated_input_length': len(input_output),
+                        'node_id': node.id,
+                        'step_number': conditional_data.step_number,
+                        'custom_prompt': conditional_data.custom_prompt
+                    }
+                )
+
+            # No human validation required - proceed with AI decision
+            # Update workflow run step with results and metadata
             await database_sync_to_async(
                 lambda: WorkflowRunStep.objects.filter(id=workflow_run_step.id).update(
                     status=WorkflowRunStepStatus.COMPLETED,
-                    response=routing_decision  # Store the routing decision, not the full response
+                    response=routing_decision,
+                    metadata={
+                        'routing_decision': routing_decision,
+                        'analysis': analysis_text,
+                        'available_routes': [r['name'] for r in routes],
+                        'full_response': full_response,
+                        'is_human_validated': False
+                    }
                 )
             )()
 
@@ -640,15 +700,16 @@ Response format: Reply with ONLY "{conditional_data.route_a_name}" or "{conditio
 
             return NodeExecutionResult(
                 success=True,
-                output=routing_decision,  # Return just the routing decision, not the full response
+                output=routing_decision,
                 token_usage=token_usage,
                 execution_time=execution_time,
                 metadata={
                     'routing_decision': routing_decision,
-                    'route_a_name': conditional_data.route_a_name,
-                    'route_b_name': conditional_data.route_b_name,
+                    'available_routes': [r['name'] for r in routes],
                     'evaluated_input_length': len(input_output),
-                    'full_response': full_response  # Store full response in metadata for debugging
+                    'analysis': analysis_text,
+                    'full_response': full_response,
+                    'is_human_validated': False
                 }
             )
 
@@ -657,7 +718,6 @@ Response format: Reply with ONLY "{conditional_data.route_a_name}" or "{conditio
             error_msg = f"{error_category}: {str(e)}"
             logger.error(f"{error_category} in conditional node {node.id} ({error_type}): {str(e)}", exc_info=True)
 
-            # Update workflow run step with error
             try:
                 await database_sync_to_async(
                     lambda: WorkflowRunStep.objects.filter(id=workflow_run_step.id).update(

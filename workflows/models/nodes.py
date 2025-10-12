@@ -149,42 +149,51 @@ class ChatOutputNodeData(BaseNodeData):
 
 
 class ConditionalNodeData(BaseNodeData):
-    """Data model for 'conditional' type nodes."""
+    """Data model for 'conditional' type nodes - supports n routes and human validation."""
     custom_prompt = models.TextField(
         default='Evaluate the input and choose the appropriate route.',
         help_text="Custom evaluation prompt for routing decision"
     )
-    route_a_name = models.CharField(
-        max_length=100,
-        default='Route A',
-        help_text="Name for route A output"
-    )
-    route_b_name = models.CharField(
-        max_length=100,
-        default='Route B',
-        help_text="Name for route B output"
-    )
-    route_a_description = models.TextField(
+
+    llm = models.ForeignKey(
+        'conversations.LLM',
+        on_delete=models.SET_NULL,
+        null=True,
         blank=True,
-        help_text="Optional description for route A"
+        help_text="Language model for routing evaluation"
     )
-    route_b_description = models.TextField(
+
+    routes = models.JSONField(
+        default=list,
         blank=True,
-        help_text="Optional description for route B"
+        help_text="List of route definitions: [{'name': 'Route A', 'description': '...'}, ...]"
     )
+
+    require_human_validation = models.BooleanField(
+        default=False,
+        help_text="If true, pause execution and ask user to choose route"
+    )
+
     step_number = models.PositiveIntegerField(
         help_text="Step number for execution ordering"
     )
 
+    def get_routes(self):
+        """Get routes for conditional node."""
+        return self.routes if self.routes else []
+
     def to_dict(self):
         return {
             'customPrompt': self.custom_prompt,
-            'routeAName': self.route_a_name,
-            'routeBName': self.route_b_name,
-            'routeADescription': self.route_a_description,
-            'routeBDescription': self.route_b_description,
+            'llm': self.llm.id if self.llm else None,
+            'routes': self.get_routes(),
+            'requireHumanValidation': self.require_human_validation,
             'stepNumber': self.step_number,
         }
 
     def __str__(self):
-        return f"Conditional {self.step_number}: {self.route_a_name} / {self.route_b_name}"
+        routes = self.get_routes()
+        route_names = ' / '.join([r['name'] for r in routes[:3]])
+        if len(routes) > 3:
+            route_names += f' (+{len(routes) - 3} more)'
+        return f"Conditional {self.step_number}: {route_names}"
