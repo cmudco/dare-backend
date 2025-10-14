@@ -158,6 +158,10 @@ class WorkflowExecutionService:
                 should_execute = await self._should_execute_node(node, context, workflow)
                 
                 if not should_execute:
+                    logger.info(
+                        "Skipping node %s due to routing decision",
+                        node.id,
+                    )
                     skipped_nodes.add(node.id)
                     context.node_results[node.id] = NodeExecutionResult(
                         success=True,
@@ -262,6 +266,10 @@ class WorkflowExecutionService:
                 should_execute = await self._should_execute_node(node, context, workflow)
 
                 if not should_execute:
+                    logger.info(
+                        "Skipping node %s (resume) due to routing decision",
+                        node.id,
+                    )
                     skipped_nodes.add(node.id)
                     # Add skipped node result to context
                     context.node_results[node.id] = NodeExecutionResult(
@@ -499,55 +507,86 @@ class WorkflowExecutionService:
         if node.type == 'conditional':
             return True
 
-        # Check if this node is connected from a conditional node via routing
+        # Evaluate routing constraints across all incoming edges.
         edges = await database_sync_to_async(lambda: list(workflow.edges.all()))()
+        nodes = await database_sync_to_async(lambda: list(workflow.nodes.all()))()
 
-        # Find edges that target this node
         incoming_edges = [edge for edge in edges if edge.target == node.id]
+
+        has_routing_edge = False
+        any_routing_match = False
+        any_non_routing_valid = False
+        any_source_available = False
 
         for edge in incoming_edges:
             source_node_id = edge.source
+            source_node = next((n for n in nodes if n.node_id == source_node_id), None)
+            if not source_node:
+                continue
 
-            # Check if the source node has been processed (executed or skipped)
-            if source_node_id in context.node_results:
-                source_result = context.node_results[source_node_id]
+            # Only consider processed sources
+            if source_node_id not in context.node_results:
+                continue
 
-                # If source node was skipped, also skip this node
-                if (hasattr(source_result, 'metadata') and source_result.metadata and
-                    source_result.metadata.get('skipped')):
-                    return False
+            source_result = context.node_results[source_node_id]
 
-                # Check if the source node is a conditional type
-                source_nodes = [n for n in await database_sync_to_async(lambda: list(workflow.nodes.all()))() if n.node_id == source_node_id]
-                if source_nodes and source_nodes[0].node_type == 'conditional':
-                    # If source is a conditional node with routing decision
-                    if (hasattr(source_result, 'metadata') and
-                        source_result.metadata and
-                        'routing_decision' in source_result.metadata):
+            # Track if any non-skipped source exists
+            is_skipped = bool(getattr(source_result, 'metadata', None) and source_result.metadata.get('skipped'))
+            if not is_skipped:
+                any_source_available = True
 
-                        routing_decision = source_result.metadata['routing_decision']
-                        edge_handle = edge.source_handle
+            # Conditional routing
+            if source_node.node_type == 'conditional':
+                edge_handle = edge.source_handle
+                routing_decision = None
+                if getattr(source_result, 'metadata', None):
+                    routing_decision = source_result.metadata.get('routing_decision')
+                if edge_handle and routing_decision is not None:
+                    has_routing_edge = True
+                    expected = f"output-{routing_decision}"
+                    match = (edge_handle == expected)
+                    any_routing_match = any_routing_match or match
+                else:
+                    # No handle or decision; treat as non-routing valid if source not skipped
+                    any_non_routing_valid = any_non_routing_valid or (not is_skipped)
+                continue
 
-                        # Check if routing decision matches the edge handle
-                        # Handle format for conditional nodes:
-                        # - Conditional: 'output-Route A', 'output-Route B' (exact route names)
-                        is_match = False
-                        if edge_handle:
-                            source_node = source_nodes[0]
-                            if source_node.node_type == 'conditional':
-                                # For conditional nodes: handle format is 'output-{route_name}'
-                                # routing_decision contains the exact route name
-                                expected_handle = f"output-{routing_decision}"
-                                is_match = (edge_handle == expected_handle)
+            # Structured step routing (route handles on step)
+            if source_node.node_type == 'step' and edge.source_handle:
+                edge_handle = edge.source_handle
+                if isinstance(source_result.output, (str, bytes)) and edge_handle.startswith('output-'):
+                    has_routing_edge = True
+                    route_value = source_result.output.decode('utf-8') if isinstance(source_result.output, bytes) else str(source_result.output)
+                    route_value = route_value.strip()
+                    expected = f"output-{route_value}"
+                    match = (edge_handle == expected)
+                    logger.debug(
+                        "Routing via structured step %s -> %s: route_value='%s', edge_handle='%s', match=%s",
+                        source_node_id,
+                        node.id,
+                        route_value,
+                        edge_handle,
+                        match,
+                    )
+                    any_routing_match = any_routing_match or match
+                else:
+                    # Step source with no routing constraint on this edge
+                    any_non_routing_valid = any_non_routing_valid or (not is_skipped)
+                continue
 
-                        # Only execute if the routing decision matches the edge handle
-                        if not is_match:
-                            return False
-                        else:
-                            return True
+            # Non-routing edge (e.g., chatOutput -> step)
+            any_non_routing_valid = any_non_routing_valid or (not is_skipped)
 
-        # If no conditional routing applies, execute the node
-        return True
+        # If we have routing-controlled edges, execute only if at least one matches
+        if has_routing_edge:
+            return any_routing_match
+
+        # Otherwise, execute if any source is valid and available
+        if any_non_routing_valid:
+            return True
+
+        # If no available sources, skip
+        return False
 
     @database_sync_to_async
     def _update_workflow_run_status(self, workflow_run: WorkflowRun, status: str):

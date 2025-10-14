@@ -4,7 +4,7 @@ from files.api.serializers import FileSerializer
 from workflows.models import (
     Workflow, WorkflowRun, WorkflowRunStep,  # WorkflowStepSnippet,
     # Graph-driven models
-    StepNodeData, StartNodeData, ChatOutputNodeData, ConditionalNodeData,
+    StepNodeData, StartNodeData, ChatOutputNodeData, ConditionalNodeData, StructuredOutputNodeData,
     WorkflowNode, WorkflowEdge
 )
 from workflows.constants import WorkflowRunStepStatus
@@ -157,7 +157,7 @@ class StepNodeDataSerializer(serializers.ModelSerializer):
             'prompt', 'content_files', 'embedding_files', 'llm', 'step_number',
             'max_tokens', 'temperature', 'max_context_snippets',
             'document_similarity_threshold', 'use_previous_step_files',
-            'use_previous_step_embeddings'
+            'use_previous_step_embeddings', 'text_input', 'use_structured_output_node'
         ]
 
 
@@ -173,6 +173,21 @@ class ChatOutputNodeDataSerializer(serializers.ModelSerializer):
         fields = ['step_number', 'status', 'response', 'error']
 
 
+
+
+class StructuredOutputNodeDataSerializer(serializers.ModelSerializer):
+    routes = serializers.JSONField(required=False, allow_null=True)
+
+    class Meta:
+        model = StructuredOutputNodeData
+        fields = ['routes', 'step_number']
+
+    def to_representation(self, instance):
+        """Include computed routes via get_routes() method."""
+        data = super().to_representation(instance)
+        # Always include the computed routes
+        data['routes'] = instance.get_routes()
+        return data
 
 
 class ConditionalNodeDataSerializer(serializers.ModelSerializer):
@@ -345,6 +360,7 @@ class WorkflowNodeSerializer(serializers.ModelSerializer):
             'start': StartNodeDataSerializer,
             'chatOutput': ChatOutputNodeDataSerializer,
             'conditional': ConditionalNodeDataSerializer,
+            'structuredOutput': StructuredOutputNodeDataSerializer,
         }
 
         serializer_class = data_serializer_map.get(node_type)
@@ -375,6 +391,7 @@ class WorkflowNodeSerializer(serializers.ModelSerializer):
                 'start': StartNodeDataSerializer,
                 'chatOutput': ChatOutputNodeDataSerializer,
                 'conditional': ConditionalNodeDataSerializer,
+                'structuredOutput': StructuredOutputNodeDataSerializer,
             }
             serializer_class = data_serializer_map.get(instance.node_type)
 
