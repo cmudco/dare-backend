@@ -3,7 +3,6 @@ from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
 from django.utils.translation import gettext_lazy as _
 from django.contrib import messages
 from django.contrib.admin.helpers import ActionForm
-from django.utils.html import format_html
 from django.utils import timezone
 from datetime import timedelta
 
@@ -12,6 +11,13 @@ from billing.services import WalletService
 from django import forms
 from decimal import Decimal
 from users.constants import VectorDBChoice, AuthSourceChoice, ScopeChoice
+from users.admin_constants import (
+    LAST_LOGIN_DISPLAY_RULES,
+    LAST_LOGIN_DISPLAY_DEFAULT,
+    ACTIVITY_LEVELS,
+    ACTIVITY_NEVER_STATE,
+)
+from core.helpers.admin_utils import render_span, render_status_badge
 
 
 class UserInline(admin.TabularInline):
@@ -222,61 +228,46 @@ class UserAdmin(DjangoUserAdmin):
 
     def last_login_display(self, obj):
         if not obj.last_login:
-            return format_html('<span style="color: gray; font-style: italic;">Never</span>')
+            return render_span("Never", color="gray", italic=True)
 
-        now = timezone.now()
-        diff = now - obj.last_login
+        diff_days = (timezone.now() - obj.last_login).days
+        color, template = next(
+            (
+                (color, template)
+                for threshold, color, template in LAST_LOGIN_DISPLAY_RULES
+                if diff_days <= threshold
+            ),
+            LAST_LOGIN_DISPLAY_DEFAULT,
+        )
+        status = template.format(days=diff_days)
 
-        if diff.days == 0:
-            color = "green"
-            status = "Today"
-        elif diff.days <= 7:
-            color = "green"
-            status = f"{diff.days}d ago"
-        elif diff.days <= 30:
-            color = "orange"
-            status = f"{diff.days}d ago"
-        elif diff.days <= 90:
-            color = "darkorange"
-            status = f"{diff.days}d ago"
-        else:
-            color = "red"
-            status = f"{diff.days}d ago"
-
-        return format_html(
-            '<span style="color: {};" title="{}">{}</span>',
-            color,
-            obj.last_login.strftime('%Y-%m-%d %H:%M'),
-            status
+        return render_span(
+            status,
+            color=color,
+            title=obj.last_login.strftime('%Y-%m-%d %H:%M'),
         )
     last_login_display.short_description = "Last Login"
     last_login_display.admin_order_field = "last_login"
 
     def activity_status(self, obj):
         if not obj.last_login:
-            return format_html(
-                '<span style="color: #dc2626; border: 1px solid #dc2626; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500;">🔴 NEVER</span>'
-            )
-
-        now = timezone.now()
-        diff = now - obj.last_login
-
-        if diff.days <= 7:
-            return format_html(
-                '<span style="color: #16a34a; border: 1px solid #16a34a; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500;">🟢 ACTIVE</span>'
-            )
-        elif diff.days <= 30:
-            return format_html(
-                '<span style="color: #ca8a04; border: 1px solid #ca8a04; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500;">🟡 MODERATE</span>'
-            )
-        elif diff.days <= 90:
-            return format_html(
-                '<span style="color: #ea580c; border: 1px solid #ea580c; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500;">🟠 LOW</span>'
-            )
+            state = ACTIVITY_NEVER_STATE
         else:
-            return format_html(
-                '<span style="color: #dc2626; border: 1px solid #dc2626; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500;">🔴 INACTIVE</span>'
+            days_since_login = (timezone.now() - obj.last_login).days
+            state = next(
+                (
+                    level
+                    for level in ACTIVITY_LEVELS
+                    if days_since_login <= level["days"]
+                ),
+                ACTIVITY_LEVELS[-1],
             )
+
+        return render_status_badge(
+            state["label"],
+            color=state["color"],
+            emoji=state["emoji"],
+        )
     activity_status.short_description = "Activity"
     activity_status.admin_order_field = "last_login"
 
