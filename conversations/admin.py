@@ -1,8 +1,16 @@
 from django.contrib import admin
 from django.contrib.auth import get_user_model
-from django.utils.html import format_html
+from django.urls import reverse
 
+from core.helpers.admin_utils import (
+    render_empty_placeholder,
+    render_feedback_icon,
+    render_link,
+    render_tooltip_span,
+    truncate_text,
+)
 from .models import LLM, Conversation, Message, ModelGroup
+from .proxy_models import MessageWithFeedback
 
 User = get_user_model()
 
@@ -31,7 +39,7 @@ class MessageAdmin(admin.ModelAdmin):
         return obj.short_message
     short_message.short_description = "Message"
 
-# Dedicated admin view for messages with feedback
+@admin.register(MessageWithFeedback)
 class MessageWithFeedbackAdmin(admin.ModelAdmin):
     """Dedicated admin view showing only messages with feedback"""
     list_display = ("id", "short_message", "conversation_link", "sender_name", "feedback_indicator", "feedback_preview", "created_at")
@@ -70,47 +78,28 @@ class MessageWithFeedbackAdmin(admin.ModelAdmin):
     filter_horizontal = ("files", "tags")
 
     def short_message(self, obj):
-        msg = obj.message[:50] + "..." if len(obj.message) > 50 else obj.message
-        return format_html('<span title="{}">{}</span>', obj.message, msg)
+        preview = truncate_text(obj.message, 50)
+        return render_tooltip_span(obj.message, preview)
     short_message.short_description = "Message"
 
     def conversation_link(self, obj):
-        return format_html(
-            '<a href="/admin/conversations/conversation/{}/change/">{}</a>',
-            obj.conversation.id,
-            obj.conversation.title or obj.conversation.conversation_id
-        )
+        conversation = obj.conversation
+        url = reverse("admin:conversations_conversation_change", args=[conversation.pk])
+        text = conversation.title or conversation.conversation_id
+        return render_link(url, text)
     conversation_link.short_description = "Conversation"
 
     def feedback_indicator(self, obj):
-        if obj.feedback_type == 'like':
-            return format_html('<span style="color: green; font-size: 18px;">👍</span>')
-        elif obj.feedback_type == 'dislike':
-            return format_html('<span style="color: red; font-size: 18px;">👎</span>')
-        return format_html('<span style="color: gray;">—</span>')
+        return render_feedback_icon(obj.feedback_type)
     feedback_indicator.short_description = "Feedback"
     feedback_indicator.admin_order_field = "feedback_type"
 
     def feedback_preview(self, obj):
         if obj.feedback_text:
-            preview = obj.feedback_text[:60] + "..." if len(obj.feedback_text) > 60 else obj.feedback_text
-            return format_html('<span title="{}">{}</span>', obj.feedback_text, preview)
-        return format_html('<span style="color: gray; font-style: italic;">No text</span>')
+            preview = truncate_text(obj.feedback_text, 60)
+            return render_tooltip_span(obj.feedback_text, preview)
+        return render_empty_placeholder()
     feedback_preview.short_description = "Feedback Text"
-
-    def get_queryset(self, request):
-        qs = super().get_queryset(request)
-        # Only show messages that have feedback and optimize queries
-        return qs.filter(feedback_type__isnull=False).select_related('conversation', 'llm', 'conversation__user')
-
-# Register the feedback-specific view with a proxy model
-class MessageWithFeedback(Message):
-    class Meta:
-        proxy = True
-        verbose_name = "Message with Feedback"
-        verbose_name_plural = "Messages with Feedback"
-
-admin.site.register(MessageWithFeedback, MessageWithFeedbackAdmin)
 
 @admin.register(ModelGroup)
 class ModelGroupAdmin(admin.ModelAdmin):
