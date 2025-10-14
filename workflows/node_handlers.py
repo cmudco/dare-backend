@@ -6,6 +6,7 @@ including step nodes, conditional nodes, and output nodes. Each handler encapsul
 the specific logic and requirements for executing that node type.
 """
 import logging
+import re
 import xml.etree.ElementTree as ET
 from abc import ABC, abstractmethod
 from typing import Dict, List, Optional, Any, AsyncGenerator, Tuple
@@ -158,6 +159,63 @@ class StepNodeHandler(BaseNodeHandler):
             # Prepare the message
             message = await self._prepare_message(step_data, context)
 
+            # If this step uses a Structured Output node, fetch allowed routes and
+            # add strict instruction to return only one of them
+            use_structured = await database_sync_to_async(lambda: step_data.use_structured_output_node)()
+            allowed_routes: list[str] = []
+            if use_structured:
+                def _resolve_structured_routes():
+                    # Resolve allowed routes for a Structured Output node connected to this step
+                    wf_run = context.workflow_run
+                    wf = wf_run.workflow
+                    # Find structuredOutput -> this step
+                    for e in wf.edges.all():
+                        if e.target == node.id:
+                            src_node = wf.nodes.filter(node_id=e.source, node_type='structuredOutput').first()
+                            if src_node and src_node.data_object:
+                                try:
+                                    routes = src_node.data_object.get_routes()
+                                    return [str(r.get('name', '')).strip() for r in routes if r and r.get('name')]
+                                except Exception:
+                                    return []
+                    return []
+
+                try:
+                    allowed_routes = await database_sync_to_async(_resolve_structured_routes)()
+                except Exception as route_err:
+                    logger.warning(f"Failed to resolve structured routes for step {node.id}: {route_err}")
+
+            if use_structured and allowed_routes:
+                default_choice = allowed_routes[0]
+                instruction = (
+                    "\n\nROUTE SELECTION INSTRUCTIONS:\n"
+                    f"Choose exactly one of: {', '.join(allowed_routes)}.\n"
+                    "Return only the exact value with no quotes, punctuation, or explanation.\n"
+                    f"If you are unsure or lack context, choose '{default_choice}'."
+                )
+                message = f"{message}{instruction}"
+            try:
+                logger.debug(
+                    "Step %s message preview (first 300 chars): %s",
+                    node.id,
+                    (message or "")[:300],
+                )
+            except Exception:
+                pass
+
+            try:
+                logger.debug(
+                    "Step %s: use_structured_output_node=%s, text_input_len=%s, content_files=%s, embedding_files=%s",
+                    node.id,
+                    getattr(step_data, 'use_structured_output_node', False),
+                    len(getattr(step_data, 'text_input', '') or ''),
+                    await database_sync_to_async(lambda: step_data.content_files.count())(),
+                    await database_sync_to_async(lambda: step_data.embedding_files.count())(),
+                )
+            except Exception:
+                # Don't break execution if debug logging fails
+                pass
+
             # Get LLM configuration
             llm = await self._get_llm_for_step(step_data)
 
@@ -200,6 +258,41 @@ class StepNodeHandler(BaseNodeHandler):
                 if usage:
                     token_usage = usage
 
+            raw_response = (full_response or "")
+
+            # If structured output is enabled, normalize the response to one allowed route
+            selected_route = None
+            if use_structured and allowed_routes:
+                s = raw_response.strip().strip('"').strip("'")
+                s = s.splitlines()[0].strip() if s else s
+                # direct match
+                if s in allowed_routes:
+                    selected_route = s
+                else:
+                    # case-insensitive match
+                    lower_map = {r.lower(): r for r in allowed_routes}
+                    if s.lower() in lower_map:
+                        selected_route = lower_map[s.lower()]
+                    else:
+                        # try first token
+                        token = re.split(r"[^A-Za-z0-9_\-\.]+", s)[0] if s else ""
+                        if token in allowed_routes:
+                            selected_route = token
+                        elif token.lower() in lower_map:
+                            selected_route = lower_map[token.lower()]
+                        else:
+                            # default to first route to keep flow moving
+                            selected_route = allowed_routes[0]
+                            logger.warning(
+                                "Step %s returned non-matching structured output '%s'; defaulting to '%s'",
+                                node.id,
+                                s,
+                                selected_route,
+                            )
+
+                # Overwrite full_response with the selected route for routing
+                full_response = selected_route
+
             # Process billing for this step
             if token_usage and token_usage.get('input_tokens') and token_usage.get('output_tokens'):
                 try:
@@ -223,12 +316,37 @@ class StepNodeHandler(BaseNodeHandler):
                     # Continue execution even if billing fails
 
             # Update workflow run step with results
-            await database_sync_to_async(
-                lambda: WorkflowRunStep.objects.filter(id=workflow_run_step.id).update(
-                    status=WorkflowRunStepStatus.COMPLETED,
-                    response=full_response
-                )
-            )()
+            def _update_step_completed():
+                route_value = (full_response or "").strip()
+                update_kwargs = {
+                    'status': WorkflowRunStepStatus.COMPLETED,
+                    'response': full_response,
+                }
+                try:
+                    if getattr(step_data, 'use_structured_output_node', False):
+                        # Preserve existing metadata and augment with selected_route
+                        step = WorkflowRunStep.objects.get(id=workflow_run_step.id)
+                        md = step.metadata or {}
+                        md.update({
+                            'selected_route': route_value,
+                            'use_structured_output_node': True,
+                        })
+                        # Preserve raw response if different
+                        if use_structured and allowed_routes:
+                            md.setdefault('raw_response', raw_response)
+                        update_kwargs['metadata'] = md
+                        logger.debug(
+                            "Step %s completed with structured route: '%s'",
+                            node.id,
+                            route_value,
+                        )
+                except Exception:
+                    # If metadata update fails, continue with status/response only
+                    pass
+
+                WorkflowRunStep.objects.filter(id=workflow_run_step.id).update(**update_kwargs)
+
+            await database_sync_to_async(_update_step_completed)()
 
             end_time = timezone.now()
             execution_time = (end_time - start_time).total_seconds()
@@ -300,29 +418,38 @@ class StepNodeHandler(BaseNodeHandler):
                         previous_outputs.append(f"Result from {node_id}:\n{result_data['output']}")
 
         # Build message based on available inputs
+        text_input = await database_sync_to_async(lambda: step_data.text_input or "")()
+
         if previous_outputs:
             if len(previous_outputs) == 1:
                 # Single input - use traditional format
                 combined_input = previous_outputs[0].replace(f"Result from {list(context.previous_results.keys())[0]}:\n", "")
-                if prompt_content:
-                    message = f"{prompt_content}\n\nPrevious step result:\n{combined_input}"
+                base = f"{prompt_content}\n\nPrevious step result:\n{combined_input}" if prompt_content else combined_input
+                if text_input.strip():
+                    message = f"{base}\n\nAdditional input:\n{text_input.strip()}"
                 else:
-                    message = combined_input
+                    message = base
             else:
                 # Multiple inputs - combine all results
                 combined_input = "\n\n".join(previous_outputs)
-                if prompt_content:
-                    message = f"{prompt_content}\n\nResults from previous steps:\n{combined_input}"
+                base = f"{prompt_content}\n\nResults from previous steps:\n{combined_input}" if prompt_content else combined_input
+                if text_input.strip():
+                    message = f"{base}\n\nAdditional input:\n{text_input.strip()}"
                 else:
-                    message = combined_input
+                    message = base
         elif context.current_input:
             # Fallback to current_input for backward compatibility
-            if prompt_content:
-                message = f"{prompt_content}\n\nPrevious step result:\n{context.current_input}"
+            base = f"{prompt_content}\n\nPrevious step result:\n{context.current_input}" if prompt_content else context.current_input
+            if text_input.strip():
+                message = f"{base}\n\nAdditional input:\n{text_input.strip()}"
             else:
-                message = context.current_input
+                message = base
         else:
-            message = prompt_content or DefaultValues.DEFAULT_TASK_MESSAGE
+            base = prompt_content or DefaultValues.DEFAULT_TASK_MESSAGE
+            if text_input.strip():
+                message = f"{base}\n\nAdditional input:\n{text_input.strip()}"
+            else:
+                message = base
 
         return message
 

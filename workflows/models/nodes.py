@@ -68,6 +68,15 @@ class StepNodeData(BaseNodeData):
         default=False,
         help_text="Inherit embeddings from previous step"
     )
+    text_input = models.TextField(
+        blank=True,
+        default='',
+        help_text="Optional text input to be passed directly to the LLM"
+    )
+    use_structured_output_node = models.BooleanField(
+        default=False,
+        help_text="If true, this step uses a separate StructuredOutputNode for routing"
+    )
 
     def to_dict(self):
         """Convert to React Flow node data format."""
@@ -83,6 +92,8 @@ class StepNodeData(BaseNodeData):
             'documentSimilarityThreshold': self.document_similarity_threshold,
             'usePreviousStepFiles': self.use_previous_step_files,
             'usePreviousStepEmbeddings': self.use_previous_step_embeddings,
+            'textInput': self.text_input,
+            'useStructuredOutputNode': self.use_structured_output_node,
         }
 
     def __str__(self):
@@ -146,6 +157,35 @@ class ChatOutputNodeData(BaseNodeData):
     def __str__(self):
         return f"Output for Step {self.step_number}"
 
+
+
+class StructuredOutputNodeData(BaseNodeData):
+    """Data model for 'structuredOutput' type nodes - defines output routes for step nodes."""
+    routes = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="List of route definitions: [{'name': '1', 'description': '...'}, ...]"
+    )
+    step_number = models.PositiveIntegerField(
+        help_text="Step number for execution ordering"
+    )
+
+    def get_routes(self):
+        """Get routes for structured output node."""
+        return self.routes if self.routes else []
+
+    def to_dict(self):
+        return {
+            'routes': self.get_routes(),
+            'stepNumber': self.step_number,
+        }
+
+    def __str__(self):
+        routes = self.get_routes()
+        route_names = ' / '.join([r['name'] for r in routes[:3]])
+        if len(routes) > 3:
+            route_names += f' (+{len(routes) - 3} more)'
+        return f"Structured Output {self.step_number}: {route_names}"
 
 
 class ConditionalNodeData(BaseNodeData):
