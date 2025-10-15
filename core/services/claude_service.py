@@ -99,7 +99,11 @@ class ClaudeService:
             yield f"Error: {self._format_error(e)}", None
 
     async def get_chat_completion(
-        self, messages: List[Dict[str, str]], max_tokens: int = 1024, temperature: float = 0.7
+        self,
+        messages: List[Dict[str, str]],
+        max_tokens: int = 1024,
+        temperature: float = 0.7,
+        structured_spec: Optional[Dict] = None,
     ) -> str:
         """
         Retrieves a complete chat completion from the Claude API.
@@ -120,6 +124,7 @@ class ClaudeService:
         Raises:
             Exception: If an error occurs, the error message is included in the returned string and logged.
         """
+        # Note: For structured_spec, we currently rely on prompt-level instructions (XML) from callers.
         response_text = ""
         async for chunk, _ in self.stream_chat_completion(messages, max_tokens, temperature):
             response_text += chunk

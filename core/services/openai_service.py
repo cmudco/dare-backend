@@ -1,4 +1,5 @@
 from typing import AsyncGenerator, List, Dict, Tuple, Optional
+import json
 import logging
 from openai import AsyncOpenAI
 from config import env
@@ -137,7 +138,11 @@ class OpenAIService:
                     yield "", usage
 
     async def get_chat_completion(
-        self, messages: List[Dict[str, str]], max_tokens: int = 1024, temperature: float = 0.7
+        self,
+        messages: List[Dict[str, str]],
+        max_tokens: int = 1024,
+        temperature: float = 0.7,
+        structured_spec: Optional[Dict] = None,
     ) -> str:
         """
         Retrieves a complete chat completion from OpenAI's GPT model.
@@ -156,6 +161,47 @@ class OpenAIService:
         Raises:
             Exception: If an error occurs, the error message is included in the returned string.
         """
+        # If structured spec is provided, use Responses API with JSON schema
+        if structured_spec and structured_spec.get('type') == 'enum_route':
+            # Build simple input text from messages
+            has_multimodal = messages and isinstance(messages[-1].get("content"), list)
+            if not has_multimodal:
+                input_data = "\n".join([f"{m['role']}: {m.get('content','')}" for m in messages])
+            else:
+                # Fallback: flatten to text only
+                flat = []
+                for m in messages:
+                    content = m.get('content', '')
+                    if isinstance(content, str):
+                        flat.append(f"{m['role']}: {content}")
+                input_data = "\n".join(flat)
+
+            enum_vals = structured_spec.get('values') or []
+            json_schema = {
+                "name": "RouteSelection",
+                "schema": {
+                    "type": "object",
+                    "properties": {"route": {"type": "string", "enum": enum_vals}},
+                    "required": ["route"],
+                    "additionalProperties": False,
+                },
+                "strict": True,
+            }
+            resp = await self.client.responses.create(
+                model=self.model,
+                input=input_data,
+                response_format={"type": "json_schema", "json_schema": json_schema},
+            )
+            # Extract text and parse JSON (latest SDK provides output_text)
+            text_out = getattr(resp, 'output_text', None)
+            try:
+                data = json.loads(text_out) if text_out else {}
+                route = data.get('route')
+                return str(route) if route is not None else ""
+            except Exception:
+                return text_out or ""
+
+        # Default: stream and aggregate
         response_text = ""
         async for chunk, _ in self.stream_chat_completion(messages, max_tokens, temperature):
             response_text += chunk
