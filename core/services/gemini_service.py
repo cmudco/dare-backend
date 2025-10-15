@@ -115,39 +115,42 @@ class GeminiService:
             Exception: If an error occurs, the error message is included in the returned string and logged.
         """
         # Structured outputs via response_schema
-        if structured_spec and structured_spec.get('type') == 'enum_route':
-            contents = self._convert_messages_to_contents(messages)
-            enum_vals = structured_spec.get('values') or []
-            generation_config = types.GenerateContentConfig(
-                temperature=temperature,
-                max_output_tokens=max_tokens,
-                response_mime_type='application/json',
-                response_schema=types.Schema(
-                    type=types.Type.OBJECT,
-                    properties={
-                        'route': types.Schema(type=types.Type.STRING, enum=enum_vals)
-                    },
-                    required=['route']
-                )
-            )
-
-            def generate_sync():
-                return self.client.models.generate_content(
-                    model=self.model_identifier,
-                    contents=contents,
-                    config=generation_config,
+        if structured_spec:
+            from core.services.schema_transformer import SchemaTransformer
+            
+            response_mime_type, response_schema = SchemaTransformer.transform_for_gemini(structured_spec)
+            
+            if response_mime_type and response_schema:
+                contents = self._convert_messages_to_contents(messages)
+                generation_config = types.GenerateContentConfig(
+                    temperature=temperature,
+                    max_output_tokens=max_tokens,
+                    response_mime_type=response_mime_type,
+                    response_schema=response_schema
                 )
 
-            resp = await asyncio.to_thread(generate_sync)
-            text_out = getattr(resp, 'text', None)
-            # Try to parse JSON
-            try:
-                data = json.loads(text_out) if text_out else {}
-                route = data.get('route')
-                return str(route) if route is not None else ""
-            except Exception:
-                return text_out or ""
+                def generate_sync():
+                    return self.client.models.generate_content(
+                        model=self.model_identifier,
+                        contents=contents,
+                        config=generation_config,
+                    )
 
+                resp = await asyncio.to_thread(generate_sync)
+                text_out = getattr(resp, 'text', None)
+                
+                # Try to parse JSON and extract value
+                if text_out:
+                    try:
+                        data = json.loads(text_out)
+                        field_name = structured_spec.get('field', 'route')
+                        value = data.get(field_name)
+                        return str(value) if value is not None else text_out
+                    except Exception:
+                        return text_out
+                return ""
+
+        # Default: stream and aggregate
         response_text = ""
         async for chunk, _ in self.stream_chat_completion(messages, max_tokens, temperature):
             response_text += chunk
