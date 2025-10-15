@@ -117,6 +117,7 @@ class ClaudeService:
             messages (List[Dict[str, str]]): A list of message dictionaries with 'role' and 'content' keys.
             max_tokens (int, optional): Maximum number of tokens to generate. Defaults to 1024.
             temperature (float, optional): Controls randomness of the output (0.0 to 1.0). Defaults to 0.7.
+            structured_spec (Optional[Dict]): Unified schema spec for structured outputs
 
         Returns:
             str: The complete generated response text.
@@ -124,7 +125,21 @@ class ClaudeService:
         Raises:
             Exception: If an error occurs, the error message is included in the returned string and logged.
         """
-        # Note: For structured_spec, we currently rely on prompt-level instructions (XML) from callers.
+        # Claude doesn't have native structured outputs, use prompt engineering
+        if structured_spec:
+            from core.services.schema_transformer import SchemaTransformer
+            
+            instruction = SchemaTransformer.transform_for_claude(structured_spec)
+            
+            if instruction:
+                # Append instruction to last user message
+                for i in range(len(messages) - 1, -1, -1):
+                    if messages[i].get('role') in ['user', 'assistant']:
+                        messages[i] = messages[i].copy()  # Don't mutate original
+                        messages[i]['content'] = messages[i].get('content', '') + instruction
+                        break
+        
+        # Use streaming to collect response
         response_text = ""
         async for chunk, _ in self.stream_chat_completion(messages, max_tokens, temperature):
             response_text += chunk

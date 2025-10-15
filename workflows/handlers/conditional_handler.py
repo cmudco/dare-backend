@@ -8,31 +8,31 @@ import xml.etree.ElementTree as ET
 from channels.db import database_sync_to_async
 from django.utils import timezone
 
-from workflows.handlers.base import (
-    BaseNodeHandler,
-    ExecutionNode,
-    NodeExecutionContext,
-    NodeExecutionResult,
-    categorize_error,
-)
+from workflows.handlers.execution_base import BaseExecutionHandler
+from workflows.handlers.base import ExecutionNode, NodeExecutionContext, NodeExecutionResult
 from workflows.models import WorkflowNode, WorkflowRun, WorkflowRunStep, ConditionalNodeData
 from workflows.constants import WorkflowRunStepStatus
 from workflows.node_handler_constants import DefaultValues
 from workflows.services.conditional_prompt_service import ConditionalPromptService
-from core.services.billing_service import BillingService
 from conversations.models import LLM
 
 
 logger = logging.getLogger(__name__)
 
 
-class ConditionalNodeHandler(BaseNodeHandler):
+class ConditionalNodeHandler(BaseExecutionHandler):
     """
     Handler for 'conditional' type nodes.
 
     This handler evaluates input using AI and routes workflow execution
     based on the routing decision. Supports human validation mode where
     AI provides a recommendation but execution pauses for human approval.
+    
+    Uses BaseExecutionHandler for:
+    - Billing processing
+    - Status updates
+    - Error handling
+    - Token usage collection
     """
 
     def can_handle(self, node_type: str) -> bool:
@@ -50,7 +50,7 @@ class ConditionalNodeHandler(BaseNodeHandler):
         This handler:
         1. Gets input from previous node
         2. Evaluates input using configured LLM
-        3. Parses XML response to extract routing decision
+        3. Parses response to extract routing decision
         4. Either returns decision or pauses for human validation
 
         Args:
@@ -75,18 +75,21 @@ class ConditionalNodeHandler(BaseNodeHandler):
                 )
 
             # Get or create workflow run step for conditional node
+            step_number = await database_sync_to_async(
+                lambda: conditional_data.step_number
+            )()
+            
             workflow_run_step = await self._get_or_create_workflow_run_step(
                 context.workflow_run,
                 node,
-                conditional_data.step_number
+                step_number
             )
 
-            # Update status to running
-            await database_sync_to_async(
-                lambda: WorkflowRunStep.objects.filter(id=workflow_run_step.id).update(
-                    status=WorkflowRunStepStatus.RUNNING
-                )
-            )()
+            # Update status to running using base handler
+            await self._update_step_status(
+                workflow_run_step,
+                WorkflowRunStepStatus.RUNNING
+            )
 
             # Get input from direct dependencies only
             input_output = await self._get_input_from_dependencies(node, context)
@@ -116,6 +119,21 @@ class ConditionalNodeHandler(BaseNodeHandler):
                 context.workflow_run
             )
 
+            # Process billing using base handler
+            llm = await database_sync_to_async(lambda: conditional_data.llm)()
+            if not llm:
+                llm = await database_sync_to_async(
+                    lambda: LLM.objects.filter(provider=DefaultValues.DEFAULT_LLM_PROVIDER).first()
+                )()
+            
+            user = await self._get_user_from_workflow_run(context.workflow_run)
+            await self._process_billing(
+                token_usage=token_usage,
+                llm=llm,
+                user=user,
+                step_node_id=None  # Conditional nodes don't have step_node_id
+            )
+
             # Check if human validation is required
             require_human_validation = await database_sync_to_async(
                 lambda: conditional_data.require_human_validation
@@ -134,11 +152,19 @@ class ConditionalNodeHandler(BaseNodeHandler):
                 )
 
             # No human validation required - proceed with AI decision
-            await self._update_step_completed(
+            # Update step with metadata using base handler
+            metadata = {
+                'routing_decision': routing_decision,
+                'analysis': analysis_text,
+                'available_routes': [r['name'] for r in routes],
+                'is_human_validated': False
+            }
+            
+            await self._update_step_status(
                 workflow_run_step,
-                routing_decision,
-                analysis_text,
-                routes
+                WorkflowRunStepStatus.COMPLETED,
+                response=routing_decision,
+                metadata=metadata
             )
 
             end_time = timezone.now()
@@ -164,32 +190,25 @@ class ConditionalNodeHandler(BaseNodeHandler):
             )
 
         except Exception as e:
-            error_category, error_type = categorize_error(e)
-            error_msg = f"{error_category}: {str(e)}"
-            logger.error(
-                f"{error_category} in conditional node {node.id} ({error_type}): {str(e)}",
-                exc_info=True
-            )
-
+            # Use base handler error building
+            result = self._build_error_result(e, node, start_time)
+            
             # Update workflow run step with error
             try:
-                await database_sync_to_async(
-                    lambda: WorkflowRunStep.objects.filter(id=workflow_run_step.id).update(
-                        status=WorkflowRunStepStatus.FAILED,
-                        error=error_msg
-                    )
-                )()
+                workflow_run_step = await self._get_or_create_workflow_run_step(
+                    context.workflow_run,
+                    node,
+                    0
+                )
+                await self._update_step_status(
+                    workflow_run_step,
+                    WorkflowRunStepStatus.FAILED,
+                    error=result.error
+                )
             except Exception as update_error:
                 logger.error(f"Failed to update conditional step status: {str(update_error)}")
-
-            end_time = timezone.now()
-            execution_time = (end_time - start_time).total_seconds()
-
-            return NodeExecutionResult(
-                success=False,
-                error=error_msg,
-                execution_time=execution_time
-            )
+            
+            return result
 
     async def _get_input_from_dependencies(
         self,
@@ -290,7 +309,7 @@ class ConditionalNodeHandler(BaseNodeHandler):
             input_text=input_text
         )
 
-        # Get user for billing
+        # Get user for LLM query
         workflow = await database_sync_to_async(lambda: workflow_run.workflow)()
         user = await database_sync_to_async(lambda: workflow.user)()
 
@@ -309,35 +328,10 @@ class ConditionalNodeHandler(BaseNodeHandler):
             temperature=0.1
         )
 
-        # Collect response
-        full_response = ""
-        token_usage = {}
-
-        async for chunk, usage in response_generator:
-            if chunk:
-                full_response += chunk
-            if usage:
-                token_usage = usage
-
-        # Process billing
-        if token_usage and token_usage.get('input_tokens') and token_usage.get('output_tokens'):
-            try:
-                billing_service = BillingService()
-
-                billing_success = await database_sync_to_async(
-                    billing_service.process_workflow_billing
-                )(
-                    user=user,
-                    llm=llm,
-                    input_tokens=token_usage['input_tokens'],
-                    output_tokens=token_usage['output_tokens'],
-                    step_node_id=None  # Conditional nodes don't have step_node_id
-                )
-
-                if not billing_success:
-                    logger.warning("Billing failed for conditional node, but continuing execution")
-            except Exception as billing_error:
-                logger.error(f"Billing error: {str(billing_error)}")
+        # Use base handler to collect response
+        full_response, token_usage = await self._execute_llm_query_with_collection(
+            response_generator
+        )
 
         # Parse XML response
         routing_decision, analysis_text = self._parse_xml_response(full_response, routes)
@@ -414,19 +408,21 @@ class ConditionalNodeHandler(BaseNodeHandler):
         Returns:
             NodeExecutionResult with pending human input status
         """
-        await database_sync_to_async(
-            lambda: WorkflowRunStep.objects.filter(id=workflow_run_step.id).update(
-                status=WorkflowRunStepStatus.PENDING_HUMAN_INPUT,
-                response=f"AI recommends: {routing_decision}",
-                metadata={
-                    'ai_recommendation': routing_decision,
-                    'analysis': analysis_text,
-                    'available_routes': [r['name'] for r in routes],
-                    'is_human_validated': True,
-                    'pending_human_decision': True
-                }
-            )
-        )()
+        # Use base handler to update step status with metadata
+        metadata = {
+            'ai_recommendation': routing_decision,
+            'analysis': analysis_text,
+            'available_routes': [r['name'] for r in routes],
+            'is_human_validated': True,
+            'pending_human_decision': True
+        }
+        
+        await self._update_step_status(
+            workflow_run_step,
+            WorkflowRunStepStatus.PENDING_HUMAN_INPUT,
+            response=f"AI recommends: {routing_decision}",
+            metadata=metadata
+        )
 
         end_time = timezone.now()
         execution_time = (end_time - start_time).total_seconds()
@@ -435,6 +431,10 @@ class ConditionalNodeHandler(BaseNodeHandler):
             f"Conditional node {node.id} requires human validation. "
             f"AI recommends: {routing_decision}"
         )
+
+        # Get step_number and custom_prompt
+        step_number = await database_sync_to_async(lambda: conditional_data.step_number)()
+        custom_prompt = await database_sync_to_async(lambda: conditional_data.custom_prompt)()
 
         # Return special result that pauses execution
         return NodeExecutionResult(
@@ -449,8 +449,8 @@ class ConditionalNodeHandler(BaseNodeHandler):
                 'evaluated_input': input_output,
                 'evaluated_input_length': len(input_output),
                 'node_id': node.id,
-                'step_number': conditional_data.step_number,
-                'custom_prompt': conditional_data.custom_prompt
+                'step_number': step_number,
+                'custom_prompt': custom_prompt
             }
         )
 
@@ -464,49 +464,26 @@ class ConditionalNodeHandler(BaseNodeHandler):
         """
         Update workflow run step as completed.
 
+        NOTE: This method is deprecated - use base handler's _update_step_status instead.
+        Kept for backward compatibility during transition.
+        
         Args:
             workflow_run_step: WorkflowRunStep to update
             routing_decision: Final routing decision
             analysis_text: AI analysis
             routes: Available routes
         """
-        await database_sync_to_async(
-            lambda: WorkflowRunStep.objects.filter(id=workflow_run_step.id).update(
-                status=WorkflowRunStepStatus.COMPLETED,
-                response=routing_decision,
-                metadata={
-                    'routing_decision': routing_decision,
-                    'analysis': analysis_text,
-                    'available_routes': [r['name'] for r in routes],
-                    'is_human_validated': False
-                }
-            )
-        )()
-
-    @database_sync_to_async
-    def _get_or_create_workflow_run_step(
-        self,
-        workflow_run: WorkflowRun,
-        node: ExecutionNode,
-        step_number: int
-    ) -> WorkflowRunStep:
-        """
-        Get or create a WorkflowRunStep for the conditional node.
-
-        Args:
-            workflow_run: The workflow run instance
-            node: The execution node
-            step_number: Step number for ordering
-
-        Returns:
-            WorkflowRunStep instance
-        """
-        step, created = WorkflowRunStep.objects.get_or_create(
-            workflow_run=workflow_run,
-            step_node=node.db_node,
-            defaults={
-                'order': step_number,
-                'status': WorkflowRunStepStatus.PENDING
-            }
+        # Use base handler method instead
+        metadata = {
+            'routing_decision': routing_decision,
+            'analysis': analysis_text,
+            'available_routes': [r['name'] for r in routes],
+            'is_human_validated': False
+        }
+        
+        await self._update_step_status(
+            workflow_run_step,
+            WorkflowRunStepStatus.COMPLETED,
+            response=routing_decision,
+            metadata=metadata
         )
-        return step
