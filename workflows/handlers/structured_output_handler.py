@@ -164,24 +164,25 @@ class StructuredOutputHandler:
     @staticmethod
     def build_structured_spec(allowed_routes: List[str]) -> Optional[Dict[str, Any]]:
         """
-        Build structured output specification for LLM services.
+        Build unified structured output specification.
 
-        Creates a specification that can be used by LLM services that support
-        structured outputs (e.g., OpenAI's structured outputs, Gemini's response schema).
+        Creates a specification that can be used by the schema transformer
+        to generate provider-specific formats.
 
         Args:
             allowed_routes: List of valid route names
 
         Returns:
-            Structured spec dictionary or None if not applicable
+            Unified structured spec dictionary or None if not applicable
         """
         if not allowed_routes:
             return None
 
         return {
-            'type': 'enum_route',
+            'type': 'enum',
             'field': 'route',
             'values': allowed_routes,
+            'description': 'Route selection decision',
             'enforce': True,
         }
 

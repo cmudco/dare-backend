@@ -154,6 +154,7 @@ class OpenAIService:
             messages (List[Dict[str, str]]): A list of message dictionaries with 'role' and 'content' keys.
             max_tokens (int, optional): Maximum number of tokens to generate. Defaults to 1024.
             temperature (float, optional): Controls randomness of the output (0.0 to 1.0). Defaults to 0.7.
+            structured_spec (Optional[Dict]): Unified schema spec for structured outputs
 
         Returns:
             str: The complete generated response text.
@@ -161,45 +162,43 @@ class OpenAIService:
         Raises:
             Exception: If an error occurs, the error message is included in the returned string.
         """
-        # If structured spec is provided, use Responses API with JSON schema
-        if structured_spec and structured_spec.get('type') == 'enum_route':
-            # Build simple input text from messages
-            has_multimodal = messages and isinstance(messages[-1].get("content"), list)
-            if not has_multimodal:
-                input_data = "\n".join([f"{m['role']}: {m.get('content','')}" for m in messages])
-            else:
-                # Fallback: flatten to text only
-                flat = []
-                for m in messages:
-                    content = m.get('content', '')
-                    if isinstance(content, str):
-                        flat.append(f"{m['role']}: {content}")
-                input_data = "\n".join(flat)
+        # If structured spec is provided, use native OpenAI structured outputs
+        if structured_spec:
+            from core.services.schema_transformer import SchemaTransformer
+            
+            response_format = SchemaTransformer.transform_for_openai(structured_spec)
+            
+            if response_format:
+                # Use Responses API for structured outputs
+                has_multimodal = messages and isinstance(messages[-1].get("content"), list)
+                if not has_multimodal:
+                    input_data = "\n".join([f"{m['role']}: {m.get('content','')}" for m in messages])
+                else:
+                    # Fallback: flatten to text only for structured outputs
+                    flat = []
+                    for m in messages:
+                        content = m.get('content', '')
+                        if isinstance(content, str):
+                            flat.append(f"{m['role']}: {content}")
+                    input_data = "\n".join(flat)
 
-            enum_vals = structured_spec.get('values') or []
-            json_schema = {
-                "name": "RouteSelection",
-                "schema": {
-                    "type": "object",
-                    "properties": {"route": {"type": "string", "enum": enum_vals}},
-                    "required": ["route"],
-                    "additionalProperties": False,
-                },
-                "strict": True,
-            }
-            resp = await self.client.responses.create(
-                model=self.model,
-                input=input_data,
-                response_format={"type": "json_schema", "json_schema": json_schema},
-            )
-            # Extract text and parse JSON (latest SDK provides output_text)
-            text_out = getattr(resp, 'output_text', None)
-            try:
-                data = json.loads(text_out) if text_out else {}
-                route = data.get('route')
-                return str(route) if route is not None else ""
-            except Exception:
-                return text_out or ""
+                resp = await self.client.responses.create(
+                    model=self.model,
+                    input=input_data,
+                    response_format=response_format,
+                )
+                
+                # Extract text and parse JSON
+                text_out = getattr(resp, 'output_text', None)
+                if text_out:
+                    try:
+                        data = json.loads(text_out)
+                        field_name = structured_spec.get('field', 'route')
+                        value = data.get(field_name)
+                        return str(value) if value is not None else text_out
+                    except Exception:
+                        return text_out
+                return ""
 
         # Default: stream and aggregate
         response_text = ""

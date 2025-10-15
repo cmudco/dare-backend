@@ -9,25 +9,19 @@ from typing import Dict, Optional
 from channels.db import database_sync_to_async
 from django.utils import timezone
 
-from workflows.handlers.base import (
-    BaseNodeHandler,
-    ExecutionNode,
-    NodeExecutionContext,
-    NodeExecutionResult,
-    categorize_error,
-)
+from workflows.handlers.execution_base import BaseExecutionHandler
+from workflows.handlers.base import ExecutionNode, NodeExecutionContext, NodeExecutionResult
 from workflows.handlers.structured_output_handler import StructuredOutputHandler
 from workflows.models import WorkflowNode, WorkflowRun, WorkflowRunStep, StepNodeData
 from workflows.constants import WorkflowRunStepStatus
 from workflows.node_handler_constants import DefaultValues
-from core.services.billing_service import BillingService
 from conversations.models import LLM
 
 
 logger = logging.getLogger(__name__)
 
 
-class StepNodeHandler(BaseNodeHandler):
+class StepNodeHandler(BaseExecutionHandler):
     """
     Handler for 'step' type nodes.
 
@@ -36,8 +30,7 @@ class StepNodeHandler(BaseNodeHandler):
     2. Handles structured output configuration if applicable
     3. Executes LLM query with appropriate parameters
     4. Processes and normalizes responses
-    5. Handles billing for token usage
-    6. Updates workflow run step status
+    5. Uses base handler for billing and status updates
 
     The handler supports both regular text output and structured routing output.
     """
@@ -110,16 +103,22 @@ class StepNodeHandler(BaseNodeHandler):
                 )
 
                 if allowed_routes:
-                    # Add routing instructions to message
-                    route_instruction = self.structured_handler.build_route_instruction(
-                        allowed_routes
-                    )
-                    message = f"{message}{route_instruction}"
-
-                    # Build structured spec for LLM services that support it
+                    # Build structured spec for LLM services
                     structured_spec = self.structured_handler.build_structured_spec(
                         allowed_routes
                     )
+                    
+                    # For providers without native support, add instructions to message
+                    llm = await self._get_llm_for_step(step_data)
+                    llm_provider = await database_sync_to_async(lambda: llm.provider)()
+                    
+                    from core.services.schema_transformer import SchemaTransformer
+                    if not SchemaTransformer.supports_native_structured_output(llm_provider):
+                        # Fallback: append route instruction to message
+                        route_instruction = self.structured_handler.build_route_instruction(
+                            allowed_routes
+                        )
+                        message = f"{message}{route_instruction}"
 
             # Log debug information
             await self._log_step_debug_info(step_data, node.id, use_structured)
@@ -142,22 +141,32 @@ class StepNodeHandler(BaseNodeHandler):
                     node.id
                 )
 
-            # Process billing
+            # Process billing using base handler
+            user = await self._get_user_from_workflow_run(context.workflow_run)
+            llm = await self._get_llm_for_step(step_data)
+            
             await self._process_billing(
                 token_usage=token_usage,
-                step_data=step_data,
-                node=node,
-                workflow_run=context.workflow_run
+                llm=llm,
+                user=user,
+                step_node_id=node.db_node.id
             )
 
             # Update workflow run step with results
-            await self._update_step_completed(
+            metadata = None
+            if use_structured:
+                metadata = self.structured_handler.create_metadata_for_step(
+                    selected_route=final_response,
+                    raw_response=raw_response,
+                    allowed_routes=allowed_routes,
+                    use_structured=True
+                )
+            
+            await self._update_step_status(
                 workflow_run_step=workflow_run_step,
+                status=WorkflowRunStepStatus.COMPLETED,
                 response=final_response,
-                raw_response=raw_response,
-                use_structured=use_structured,
-                allowed_routes=allowed_routes,
-                step_data=step_data
+                metadata=metadata
             )
 
             end_time = timezone.now()
@@ -175,9 +184,24 @@ class StepNodeHandler(BaseNodeHandler):
             )
 
         except Exception as e:
-            return await self._handle_execution_error(
-                e, node, context, workflow_run_step, start_time
-            )
+            # Use base handler error building
+            result = self._build_error_result(e, node, start_time)
+            
+            # Update workflow run step with error
+            try:
+                workflow_run_step = await self._get_or_create_workflow_run_step(
+                    context.workflow_run,
+                    node
+                )
+                await self._update_step_status(
+                    workflow_run_step,
+                    WorkflowRunStepStatus.FAILED,
+                    error=result.error
+                )
+            except Exception as update_error:
+                logger.error(f"Failed to update step status: {str(update_error)}")
+            
+            return result
 
     async def _prepare_message(
         self,
@@ -318,7 +342,7 @@ class StepNodeHandler(BaseNodeHandler):
             message: Prepared message for LLM
             context: Execution context
             workflow_run_step: Workflow run step for tracking
-            structured_spec: Optional structured output specification
+            structured_spec: Optional unified structured output specification
 
         Returns:
             tuple: (response_text, token_usage)
@@ -362,109 +386,8 @@ class StepNodeHandler(BaseNodeHandler):
             structured_spec=structured_spec,
         )
 
-        # Collect response
-        full_response = ""
-        token_usage = {}
-
-        async for chunk, usage in response_generator:
-            full_response += chunk
-            if usage:
-                token_usage = usage
-
-        return full_response, token_usage
-
-    async def _process_billing(
-        self,
-        token_usage: Dict,
-        step_data: StepNodeData,
-        node: ExecutionNode,
-        workflow_run: WorkflowRun
-    ):
-        """
-        Process billing for token usage.
-
-        Args:
-            token_usage: Token usage statistics
-            step_data: Step node configuration
-            node: Execution node
-            workflow_run: Current workflow run
-        """
-        if not token_usage or not token_usage.get('input_tokens') or not token_usage.get('output_tokens'):
-            return
-
-        try:
-            billing_service = BillingService()
-
-            user = await database_sync_to_async(lambda: workflow_run.user)()
-
-            billing_success = await database_sync_to_async(
-                billing_service.process_workflow_billing
-            )(
-                user=user,
-                llm=step_data.llm,
-                input_tokens=token_usage['input_tokens'],
-                output_tokens=token_usage['output_tokens'],
-                step_node_id=node.db_node.id
-            )
-
-            if not billing_success:
-                logger.warning(
-                    f"Billing failed for step {node.id}, but continuing execution"
-                )
-
-        except Exception as billing_error:
-            logger.error(f"Billing error for step {node.id}: {str(billing_error)}")
-            # Continue execution even if billing fails
-
-    async def _update_step_completed(
-        self,
-        workflow_run_step: WorkflowRunStep,
-        response: str,
-        raw_response: str,
-        use_structured: bool,
-        allowed_routes: list,
-        step_data: StepNodeData
-    ):
-        """
-        Update workflow run step as completed.
-
-        Args:
-            workflow_run_step: Workflow run step to update
-            response: Final response (normalized if structured)
-            raw_response: Raw LLM response
-            use_structured: Whether structured output was used
-            allowed_routes: List of allowed routes
-            step_data: Step node configuration
-        """
-        def _update():
-            update_kwargs = {
-                'status': WorkflowRunStepStatus.COMPLETED,
-                'response': response,
-            }
-
-            try:
-                if use_structured:
-                    # Build metadata for structured output
-                    metadata = self.structured_handler.create_metadata_for_step(
-                        selected_route=response,
-                        raw_response=raw_response,
-                        allowed_routes=allowed_routes,
-                        use_structured=True
-                    )
-
-                    # Preserve existing metadata and merge
-                    step = WorkflowRunStep.objects.get(id=workflow_run_step.id)
-                    existing_metadata = step.metadata or {}
-                    existing_metadata.update(metadata)
-                    update_kwargs['metadata'] = existing_metadata
-
-            except Exception as e:
-                # If metadata update fails, continue with status/response only
-                logger.warning(f"Failed to update metadata: {e}")
-
-            WorkflowRunStep.objects.filter(id=workflow_run_step.id).update(**update_kwargs)
-
-        await database_sync_to_async(_update)()
+        # Use base handler to collect response
+        return await self._execute_llm_query_with_collection(response_generator)
 
     async def _get_llm_for_step(self, step_data: StepNodeData) -> LLM:
         """
@@ -524,99 +447,3 @@ class StepNodeHandler(BaseNodeHandler):
         except Exception:
             # Don't break execution if debug logging fails
             pass
-
-    async def _update_step_status(
-        self,
-        workflow_run_step: WorkflowRunStep,
-        status: str
-    ):
-        """
-        Update workflow run step status.
-
-        Args:
-            workflow_run_step: Workflow run step to update
-            status: New status
-        """
-        await database_sync_to_async(
-            lambda: WorkflowRunStep.objects.filter(id=workflow_run_step.id).update(
-                status=status
-            )
-        )()
-
-    async def _handle_execution_error(
-        self,
-        exception: Exception,
-        node: ExecutionNode,
-        context: NodeExecutionContext,
-        workflow_run_step: WorkflowRunStep,
-        start_time
-    ) -> NodeExecutionResult:
-        """
-        Handle execution errors and update workflow run step.
-
-        Args:
-            exception: The exception that occurred
-            node: Execution node
-            context: Execution context
-            workflow_run_step: Workflow run step to update
-            start_time: Execution start time
-
-        Returns:
-            NodeExecutionResult with error information
-        """
-        error_category, error_type = categorize_error(exception)
-        error_msg = f"{error_category}: {str(exception)}"
-        logger.error(
-            f"{error_category} in step {node.id} ({error_type}): {str(exception)}",
-            exc_info=True
-        )
-
-        # Update workflow run step with error
-        try:
-            workflow_run_step = await self._get_or_create_workflow_run_step(
-                context.workflow_run,
-                node
-            )
-            await database_sync_to_async(
-                lambda: WorkflowRunStep.objects.filter(id=workflow_run_step.id).update(
-                    status=WorkflowRunStepStatus.FAILED,
-                    error=error_msg
-                )
-            )()
-        except Exception as update_error:
-            logger.error(f"Failed to update step status: {str(update_error)}")
-
-        end_time = timezone.now()
-        execution_time = (end_time - start_time).total_seconds()
-
-        return NodeExecutionResult(
-            success=False,
-            error=error_msg,
-            execution_time=execution_time
-        )
-
-    @database_sync_to_async
-    def _get_or_create_workflow_run_step(
-        self,
-        workflow_run: WorkflowRun,
-        node: ExecutionNode
-    ) -> WorkflowRunStep:
-        """
-        Get or create a WorkflowRunStep for the step node.
-
-        Args:
-            workflow_run: The workflow run instance
-            node: The execution node
-
-        Returns:
-            WorkflowRunStep instance
-        """
-        step, created = WorkflowRunStep.objects.get_or_create(
-            workflow_run=workflow_run,
-            step_node=node.db_node,
-            defaults={
-                'order': node.step_number or 0,
-                'status': WorkflowRunStepStatus.PENDING
-            }
-        )
-        return step
