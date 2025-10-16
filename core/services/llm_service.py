@@ -7,6 +7,7 @@ from core.services.openai_service import OpenAIService
 from core.services.claude_service import ClaudeService
 from core.services.gemini_service import GeminiService
 from core.services.llama_service import LlamaService
+from core.services.file_processor import FileProcessor
 from typing import AsyncGenerator, Dict, Tuple, Optional, Any
 from files.models import File, Folder
 from prompts.models import Prompt
@@ -27,7 +28,6 @@ class LLMService:
 
     def __init__(self):
         self.document_processor = DocumentProcessor(vector_service=None)
-        from core.services.file_processor import FileProcessor
         self.file_processor = FileProcessor()
 
     async def query(
