@@ -8,6 +8,7 @@ from core.config.processing import CHUNK_SIZE, OVERLAP_SIZE
 from users.managers import UserManager
 from users.constants import VectorDBChoice, AuthSourceChoice, ScopeChoice
 from prompts.models import Prompt
+from api_keys.constants import BillingModeChoice
 
 class AccessCodeGroup(TimeStampMixin):
     """
@@ -143,6 +144,15 @@ class User(AbstractUser, IsDeletedMixin):
         default=False,
         verbose_name=_("SocraticBots Access"),
         help_text=_("Whether this user can access SocraticBots platform")
+    )
+
+    # Billing mode - determines how user pays for API usage
+    billing_mode = models.CharField(
+        max_length=20,
+        choices=BillingModeChoice.choices,
+        default=BillingModeChoice.WALLET,
+        verbose_name=_("Billing Mode"),
+        help_text=_("How the user pays for API usage: wallet credits or own API keys")
     )
 
     objects = UserManager()

@@ -21,6 +21,8 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
     default_prompt = serializers.SerializerMethodField()
     model_group = serializers.SerializerMethodField()
     auth_source = serializers.ChoiceField(choices=AuthSourceChoice.choices, read_only=True)
+    billing_mode = serializers.CharField(read_only=True)
+    billing_mode_display = serializers.CharField(source='get_billing_mode_display', read_only=True)
 
     class Meta:
         model = User
@@ -33,9 +35,11 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
             "model_group",
             "auth_source",
             "is_dare_accessible",
-            "is_socratic_bots_accessible"
+            "is_socratic_bots_accessible",
+            "billing_mode",
+            "billing_mode_display"
         ]
-        read_only_fields = ["id", "auth_source"]
+        read_only_fields = ["id", "auth_source", "billing_mode", "billing_mode_display"]
 
     def get_default_prompt(self, obj):
         if obj.default_prompt:

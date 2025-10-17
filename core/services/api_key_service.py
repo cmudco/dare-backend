@@ -2,11 +2,12 @@
 API Key Resolution Service
 
 Provides centralized access to provider API keys with fallback mechanism:
-1. First, try to fetch from database (ProviderAPIKey model)
-2. If not found or inactive, fallback to environment variables
-3. Raise error if no key found anywhere
+1. For users in OWN_API billing mode: use their UserProviderAPIKey
+2. For users in WALLET billing mode: use admin's ProviderAPIKey
+3. Fallback to environment variables if needed
+4. Raise error if no key found anywhere
 
-This allows gradual migration from env-based to database-based key management.
+This allows both user-provided keys and platform keys to coexist.
 
 Supports both sync and async contexts via sync_to_async wrapper.
 """
@@ -140,3 +141,102 @@ def get_all_configured_providers() -> list:
             configured.append(provider.value)
 
     return configured
+
+
+# ===== NEW: User-Specific API Key Resolution =====
+
+def get_provider_api_key_for_user_sync(provider: str, user) -> str:
+    """
+    Get API key for a provider based on user's billing mode.
+
+    Resolution logic:
+    1. If user.billing_mode == OWN_API: Use user's UserProviderAPIKey
+    2. If user.billing_mode == WALLET: Use admin's ProviderAPIKey (system key)
+    3. Fallback to environment variables
+    4. Raise error if no key found
+
+    Args:
+        provider: Provider identifier (e.g., 'openai', 'claude', 'gemini', 'llama')
+        user: User instance
+
+    Returns:
+        API key string
+
+    Raises:
+        ValueError: If no appropriate API key is found
+
+    Example:
+        >>> api_key = get_provider_api_key_for_user_sync(Provider.OPENAI.value, request.user)
+        >>> client = OpenAI(api_key=api_key)
+    """
+    # Avoid circular import
+    from api_keys.models import UserProviderAPIKey
+    from api_keys.constants import BillingModeChoice
+
+    # Check user's billing mode
+    if user.billing_mode == BillingModeChoice.OWN_API:
+        # User wants to use their own API key
+        try:
+            user_key = UserProviderAPIKey.active_objects.get(
+                user=user,
+                provider=provider
+            )
+            if user_key.api_key:
+                logger.info(f"Using user's own API key for provider: {provider} (user: {user.email})")
+                return user_key.api_key
+            else:
+                raise ValueError(
+                    f"User {user.email} is in OWN_API mode but has no API key set for provider '{provider}'. "
+                    f"Please add an API key in settings or switch to WALLET mode."
+                )
+        except UserProviderAPIKey.DoesNotExist:
+            raise ValueError(
+                f"User {user.email} is in OWN_API mode but has no API key record for provider '{provider}'."
+            )
+
+    # WALLET mode: Use admin's system key (existing logic)
+    logger.info(f"Using system API key for provider: {provider} (user: {user.email} in WALLET mode)")
+    return get_provider_api_key_sync(provider)
+
+
+async def get_provider_api_key_for_user(provider: str, user) -> str:
+    """
+    Async version: Get API key for a provider based on user's billing mode.
+
+    This is the async-safe version that can be called from async contexts (WebSockets, async views).
+
+    Args:
+        provider: Provider identifier (e.g., 'openai', 'claude', 'gemini', 'llama')
+        user: User instance
+
+    Returns:
+        API key string
+
+    Raises:
+        ValueError: If no appropriate API key is found
+
+    Example:
+        >>> api_key = await get_provider_api_key_for_user(Provider.OPENAI.value, request.user)
+        >>> client = AsyncOpenAI(api_key=api_key)
+    """
+    return await sync_to_async(get_provider_api_key_for_user_sync)(provider, user)
+
+
+def user_has_provider_api_key(provider: str, user) -> bool:
+    """
+    Check if a user has access to an API key for a specific provider.
+
+    Considers both user's own keys (OWN_API mode) and system keys (WALLET mode).
+
+    Args:
+        provider: Provider identifier
+        user: User instance
+
+    Returns:
+        True if user can access an API key for this provider, False otherwise
+    """
+    try:
+        get_provider_api_key_for_user_sync(provider, user)
+        return True
+    except ValueError:
+        return False
