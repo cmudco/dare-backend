@@ -5,6 +5,7 @@ from django.core.exceptions import ValidationError
 from channels.db import database_sync_to_async
 from conversations.models import LLM, Message, Conversation
 from core.services.openai_service import OpenAIService
+from core.services.api_key_service import get_provider_api_key
 from conversations.constants import SenderType
 from conversations.api.serializers import MessageSerializer
 from djangorestframework_camel_case.util import camelize
@@ -130,7 +131,8 @@ class ConversationService:
         ]
 
         llm = await self.get_gpt_35_turbo_model()
-        ai_service = OpenAIService(llm=llm)
+        api_key = await get_provider_api_key(llm.provider)
+        ai_service = OpenAIService(llm=llm, api_key=api_key)
         try:
             return await ai_service.get_chat_completion(messages)
         except Exception as e:

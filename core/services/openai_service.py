@@ -13,6 +13,7 @@ from openai import AsyncOpenAI
 
 from config import env
 from conversations.models import LLM
+from core.services.api_key_service import get_provider_api_key
 from core.services.llm_utils import (
     OpenAIMessageFormatter,
     OpenAIVisionHandler,
@@ -30,14 +31,19 @@ logger = logging.getLogger(__name__)
 class OpenAIService:
     """Service for interacting with OpenAI's GPT models."""
 
-    def __init__(self, llm: LLM):
+    def __init__(self, llm: LLM, api_key: Optional[str] = None):
         """
         Initialize OpenAI service.
 
         Args:
             llm: LLM model instance with configuration
+            api_key: Optional API key override. If not provided, uses provider key resolution
         """
-        self.client = AsyncOpenAI(api_key=env.OPENAI_API_KEY)
+        # Use provided key or fetch from provider key service
+        if api_key is None:
+            api_key = get_provider_api_key(llm.provider)
+
+        self.client = AsyncOpenAI(api_key=api_key)
         self.model = llm.identifier
         self.is_reasoning = llm.is_reasoning
 
