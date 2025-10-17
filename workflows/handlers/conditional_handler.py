@@ -148,7 +148,7 @@ class ConditionalNodeHandler(BaseExecutionHandler):
 
             # Process billing using base handler
             await self._process_conditional_billing(
-                conditional_data, context.workflow_run, token_usage
+                conditional_data, context.workflow_run, node, token_usage
             )
 
             # Check if human validation is required
@@ -392,6 +392,7 @@ class ConditionalNodeHandler(BaseExecutionHandler):
         self,
         conditional_data: ConditionalNodeData,
         workflow_run: WorkflowRun,
+        node: ExecutionNode,
         token_usage: Optional[Dict]
     ):
         """
@@ -400,16 +401,19 @@ class ConditionalNodeHandler(BaseExecutionHandler):
         Args:
             conditional_data: Conditional node configuration
             workflow_run: Current workflow run
+            node: The execution node (to get db_node.id for billing)
             token_usage: Token usage from LLM call
         """
         llm = await self._get_llm_for_conditional(conditional_data)
         user = await self._get_user_from_workflow_run(workflow_run)
+        
+        node_db_id = await database_sync_to_async(lambda: node.db_node.id)()
 
         await self._process_billing(
             token_usage=token_usage,
             llm=llm,
             user=user,
-            step_node_id=None  # Conditional nodes don't have step_node_id
+            step_node_id=node_db_id
         )
 
     async def _get_llm_for_conditional(
