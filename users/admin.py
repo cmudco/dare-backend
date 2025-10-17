@@ -159,6 +159,12 @@ class UserAdmin(DjangoUserAdmin):
                 continue
 
         self.message_user(request, f"Credited {count} user(s) with ${amount}.", level=messages.SUCCESS)
+
+    def onboarding_status(self, obj):
+        return "✓" if obj.is_onboarding_completed else "✗"
+    onboarding_status.short_description = "Onboarded"
+
+
     fieldsets = (
         (None, {"fields": ("email", "password", "is_active", "is_staff", "is_superuser")}),
         (
@@ -170,6 +176,10 @@ class UserAdmin(DjangoUserAdmin):
                 )
             },
         ),
+        (_("Onboarding Information"), {
+              "fields": ("role", "industry", "purpose", "referral_source", "is_onboarding_completed"),
+              "classes": ("collapse",)
+        }),
         (_("Access Control"), {"fields": ("access_code_group",)}),
         (_("Vector Database Settings"), {"fields": ("vector_db",)}),
         (_("Platform Settings"), {
@@ -186,7 +196,7 @@ class UserAdmin(DjangoUserAdmin):
             },
         ),
     )
-    list_display = ("email", "last_login_display", "date_joined", "activity_status", "is_active", "is_staff", "access_code_group", "vector_db")
+    list_display = ("email", "last_login_display", "date_joined", "activity_status", "is_active", "is_staff", "onboarding_status", "access_code_group", "vector_db")
     list_filter = ("is_staff", "is_superuser", "is_active", LastLoginFilter, "vector_db", "access_code_group", "auth_source", "is_dare_accessible", "is_socratic_bots_accessible")
     search_fields = ("email", "first_name", "last_name")
     ordering = ("-last_login",)

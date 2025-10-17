@@ -126,6 +126,36 @@ class User(AbstractUser, IsDeletedMixin):
         verbose_name=_("Overlap Size"),
         help_text=_("Size of overlap between text chunks")
     )
+    # Additional fields sourced from onboarding form
+    role = models.TextField(
+        blank=True,
+        null=True,
+        verbose_name=_("Role/Profession/Student"),
+        help_text=_("User's role, profession, or student status")
+    )
+    industry = models.TextField(
+        blank=True,
+        null=True,
+        verbose_name=_("Industry/Major"),
+        help_text=_("User's industry, domain of study, or academic major")
+    )
+    purpose = models.TextField(
+        blank=True,
+        null=True,
+        verbose_name=_("Goals of using DARE"),
+        help_text=_("User's goals for using DARE")
+    )
+    referral_source = models.TextField(
+        blank=True,
+        null=True,
+        verbose_name=_("Referral Source"),
+        help_text=_("Where did you hear about DARE?/What class were you assigned access to DARE?")
+    )
+    is_onboarding_completed = models.BooleanField(
+        default=False,
+        verbose_name=_("Onboarding Completed"),
+        help_text=_("Whether the user has completed the onboarding process")
+    )
 
     # Platform-specific authentication fields
     auth_source = models.CharField(
@@ -178,3 +208,11 @@ class User(AbstractUser, IsDeletedMixin):
         """
         self.is_active = True
         self.save(update_fields=["is_active"])
+
+    def save(self, *args, **kwargs):
+        """
+        Auto-set onboarding completed if all fields are filled
+        """
+        if self.role and self.industry and self.purpose and self.referral_source:
+            self.is_onboarding_completed = True
+        super().save(*args, **kwargs)
