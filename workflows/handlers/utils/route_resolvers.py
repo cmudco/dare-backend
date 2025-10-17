@@ -152,11 +152,9 @@ class RouteNormalizer:
         """
         Normalize LLM response to match one of the allowed routes.
 
-        Applies multiple strategies to match the LLM's response:
-        1. Exact match
-        2. Case-insensitive match (if not case_sensitive)
-        3. First token extraction and match
-        4. Fallback to default (first route)
+        Uses two strategies:
+        1. XML extraction - Checks for common XML tags (route, decision, choice, selection)
+        2. Fallback to default - Uses first route if no match found
 
         Args:
             raw_response: The raw response from the LLM
@@ -171,44 +169,40 @@ class RouteNormalizer:
             logger.warning(f"No allowed routes provided for node {node_id}")
             return raw_response, raw_response
 
-        # Clean response - remove quotes, whitespace, take first line
+        # Clean response - remove quotes and whitespace
         cleaned = raw_response.strip().strip('"').strip("'")
         cleaned = cleaned.splitlines()[0].strip() if cleaned else cleaned
 
-        # Strategy 1: Direct exact match
+        # Strategy 1: Direct match (for native structured outputs like Gemini/OpenAI)
         if cleaned in allowed_routes:
-            logger.debug(f"Route '{cleaned}' matched via exact match")
+            logger.debug(f"Route '{cleaned}' matched directly")
             return cleaned, raw_response
-
-        # Strategy 2: Case-insensitive match
+        
+        # Try case-insensitive match
         if not case_sensitive:
             lower_map = {r.lower(): r for r in allowed_routes}
             if cleaned.lower() in lower_map:
                 matched_route = lower_map[cleaned.lower()]
-                logger.debug(
-                    f"Route '{cleaned}' matched via case-insensitive to '{matched_route}'"
-                )
+                logger.debug(f"Route '{cleaned}' matched case-insensitive to '{matched_route}'")
                 return matched_route, raw_response
 
-        # Strategy 3: Extract first token and try matching
-        token = re.split(r"[^A-Za-z0-9_\-\.]+", cleaned)[0] if cleaned else ""
-        if token:
-            # Try exact token match
-            if token in allowed_routes:
-                logger.debug(f"Route matched via first token: '{token}'")
-                return token, raw_response
+        # Strategy 2: XML extraction (for Claude and other providers that wrap in XML)
+        for tag_name in ['route', 'decision', 'choice', 'selection']:
+            xml_content = XMLTag.extract_tag_content(raw_response, tag_name)
+            if xml_content:
+                # Try exact match
+                if xml_content in allowed_routes:
+                    logger.debug(f"Route '{xml_content}' extracted from <{tag_name}> tag")
+                    return xml_content, raw_response
+                # Try case-insensitive match
+                if not case_sensitive:
+                    lower_map = {r.lower(): r for r in allowed_routes}
+                    if xml_content.lower() in lower_map:
+                        matched_route = lower_map[xml_content.lower()]
+                        logger.debug(f"Route '{xml_content}' from <{tag_name}> matched to '{matched_route}'")
+                        return matched_route, raw_response
 
-            # Try case-insensitive token match
-            if not case_sensitive:
-                lower_map = {r.lower(): r for r in allowed_routes}
-                if token.lower() in lower_map:
-                    matched_route = lower_map[token.lower()]
-                    logger.debug(
-                        f"Route token '{token}' matched case-insensitive to '{matched_route}'"
-                    )
-                    return matched_route, raw_response
-
-        # Strategy 4: Fallback to default (first route)
+        # Strategy 3: Fallback to default (first route)
         default_route = allowed_routes[0]
         logger.warning(
             f"Node {node_id} returned non-matching response '{cleaned}'; "
