@@ -7,6 +7,7 @@ from django.conf import settings
 from django.core.validators import MinValueValidator
 from common.managers import ActiveObjectsManager
 from common.models import BaseModel, TimeStampMixin
+from core.fields import EncryptedCharField
 from .constants import Provider, SenderType, FeedbackType, ConversationSource
 
 
@@ -81,6 +82,48 @@ class ModelGroup(models.Model):
         verbose_name = "Model Group"
         verbose_name_plural = "Model Groups"
         ordering = ['name']
+
+
+class ProviderAPIKey(BaseModel):
+    """
+    Store API keys for LLM providers.
+    Managed by admins only via Django admin.
+    Each provider can have one active API key per DARE instance.
+
+    Inherits from BaseModel:
+    - is_active: Whether this API key should be used
+    - is_deleted: Soft delete support
+    - created_at, updated_at: Automatic timestamps
+    """
+    provider = models.CharField(
+        max_length=20,
+        choices=Provider.choices(),
+        unique=True,
+        help_text="LLM provider (e.g., OpenAI, Anthropic, Google, Meta)"
+    )
+    api_key = EncryptedCharField(
+        max_length=500,
+        help_text="API key for this provider (stored encrypted using AES-256)"
+    )
+
+    active_objects = ActiveObjectsManager()
+
+    class Meta:
+        verbose_name = "Provider API Key"
+        verbose_name_plural = "Provider API Keys"
+        ordering = ['provider']
+
+    def __str__(self):
+        return f"{self.get_provider_display()} API Key"
+
+    def get_masked_key(self):
+        """
+        Return a masked version of the API key showing only the last 4 characters.
+        Used for display in admin interface.
+        """
+        if self.api_key and len(self.api_key) > 4:
+            return f"***{self.api_key[-4:]}"
+        return "***"
 
 
 class Conversation(BaseModel):

@@ -8,6 +8,7 @@ from core.services.claude_service import ClaudeService
 from core.services.gemini_service import GeminiService
 from core.services.llama_service import LlamaService
 from core.services.file_processor import FileProcessor
+from core.services.api_key_service import get_provider_api_key
 from typing import AsyncGenerator, Dict, Tuple, Optional, Any
 from files.models import File, Folder
 from prompts.models import Prompt
@@ -87,7 +88,7 @@ class LLMService:
                     bot_meta=bot_meta or {},
                 )
 
-                ai_service = self._get_ai_service(llm)
+                ai_service = await self._get_ai_service(llm)
                 tools = self._get_web_search_tools(llm) if web_search_enabled else None
                 if structured_spec:
                     text = await ai_service.get_chat_completion(messages, max_tokens, temperature, structured_spec=structured_spec)
@@ -152,7 +153,7 @@ class LLMService:
             messages.extend([msg for msg in conversation_history if msg["content"].strip()])
             messages.append({"role": "user", "content": f"User's message: {message}"})
 
-            ai_service = self._get_ai_service(llm)
+            ai_service = await self._get_ai_service(llm)
             tools = self._get_web_search_tools(llm) if web_search_enabled else None
             if structured_spec:
                 text = await ai_service.get_chat_completion(messages, max_tokens, temperature, structured_spec=structured_spec)
@@ -262,16 +263,22 @@ class LLMService:
 
         return ""
 
-    def _get_ai_service(self, llm: LLM) -> AIService:
+    async def _get_ai_service(self, llm: LLM) -> AIService:
+        """
+        Get the appropriate AI service for the given LLM.
+        Fetches API key asynchronously to support async contexts.
+        """
+        api_key = await get_provider_api_key(llm.provider)
+
         if llm.provider == Provider.OPENAI.value:
-            return OpenAIService(llm=llm)
+            return OpenAIService(llm=llm, api_key=api_key)
         elif llm.provider == Provider.CLAUDE.value:
-            return ClaudeService(llm=llm)
+            return ClaudeService(llm=llm, api_key=api_key)
         elif llm.provider == Provider.GEMINI.value:
-            return GeminiService(llm=llm)
+            return GeminiService(llm=llm, api_key=api_key)
         elif llm.provider == Provider.LLAMA.value:
-            return LlamaService(llm=llm)
-        return ClaudeService(llm=llm)
+            return LlamaService(llm=llm, api_key=api_key)
+        return ClaudeService(llm=llm, api_key=api_key)
 
     def _get_web_search_tools(self, llm: LLM) -> list:
         """Get web search tools based on the LLM provider.
