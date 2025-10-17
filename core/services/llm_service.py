@@ -8,7 +8,7 @@ from core.services.claude_service import ClaudeService
 from core.services.gemini_service import GeminiService
 from core.services.llama_service import LlamaService
 from core.services.file_processor import FileProcessor
-from core.services.api_key_service import get_provider_api_key
+from core.services.api_key_service import get_provider_api_key, get_provider_api_key_for_user
 from typing import AsyncGenerator, Dict, Tuple, Optional, Any
 from files.models import File, Folder
 from prompts.models import Prompt
@@ -68,6 +68,9 @@ class LLMService:
                 yield "Error: No active LLM found", None
                 return
 
+            # Get user object for API key resolution
+            user = await self._get_user(conversation, user_id)
+
             # If Socratic mode is enabled, construct prompts using SocraticBooks logic
             if socratic_mode:
                 messages = await (
@@ -88,7 +91,7 @@ class LLMService:
                     bot_meta=bot_meta or {},
                 )
 
-                ai_service = await self._get_ai_service(llm)
+                ai_service = await self._get_ai_service(llm, user)
                 tools = self._get_web_search_tools(llm) if web_search_enabled else None
                 if structured_spec:
                     text = await ai_service.get_chat_completion(messages, max_tokens, temperature, structured_spec=structured_spec)
@@ -153,7 +156,7 @@ class LLMService:
             messages.extend([msg for msg in conversation_history if msg["content"].strip()])
             messages.append({"role": "user", "content": f"User's message: {message}"})
 
-            ai_service = await self._get_ai_service(llm)
+            ai_service = await self._get_ai_service(llm, user)
             tools = self._get_web_search_tools(llm) if web_search_enabled else None
             if structured_spec:
                 text = await ai_service.get_chat_completion(messages, max_tokens, temperature, structured_spec=structured_spec)
@@ -263,12 +266,49 @@ class LLMService:
 
         return ""
 
-    async def _get_ai_service(self, llm: LLM) -> AIService:
+    @database_sync_to_async
+    def _get_user(self, conversation, user_id):
+        """
+        Get user object from conversation or user_id.
+
+        Args:
+            conversation: Conversation instance (may have user relation)
+            user_id: User ID
+
+        Returns:
+            User instance or None
+        """
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+
+        # Try to get user from conversation first
+        if conversation and hasattr(conversation, 'user'):
+            return conversation.user
+
+        # Fallback to user_id
+        if user_id:
+            try:
+                return User.objects.get(id=user_id)
+            except User.DoesNotExist:
+                pass
+
+        return None
+
+    async def _get_ai_service(self, llm: LLM, user=None) -> AIService:
         """
         Get the appropriate AI service for the given LLM.
-        Fetches API key asynchronously to support async contexts.
+        Fetches API key asynchronously based on user's billing mode.
+
+        Args:
+            llm: The LLM model to use
+            user: Optional user instance. If provided, uses user-specific key resolution
+                  based on billing_mode. If None, falls back to system keys.
         """
-        api_key = await get_provider_api_key(llm.provider)
+        # Use user-aware key resolution if user is provided
+        if user:
+            api_key = await get_provider_api_key_for_user(llm.provider, user)
+        else:
+            api_key = await get_provider_api_key(llm.provider)
 
         if llm.provider == Provider.OPENAI.value:
             return OpenAIService(llm=llm, api_key=api_key)

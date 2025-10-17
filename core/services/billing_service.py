@@ -7,6 +7,7 @@ from billing.constants import TransactionTypeChoice
 from billing.models import Transaction, Wallet
 from conversations.models import LLM, Message
 from workflows.models import Workflow, WorkflowRun, WorkflowNode
+from api_keys.constants import BillingModeChoice
 
 import logging
 
@@ -18,8 +19,18 @@ class BillingService:
     """Handles wallet balance checks and transaction processing."""
 
     async def check_sufficient_credits(self, user: 'User', llm: LLM, estimated_input_tokens: int = 500, estimated_output_tokens: int = 1000) -> bool:
-        """Check if user has sufficient credits for estimated usage."""
+        """
+        Check if user has sufficient credits for estimated usage.
+
+        For users in OWN_API mode: Always returns True (they use their own API keys)
+        For users in WALLET mode: Checks wallet balance
+        """
         try:
+            billing_mode = await database_sync_to_async(lambda: user.billing_mode)()
+            if billing_mode == BillingModeChoice.OWN_API:
+                logger.info(f"User {user.id} in OWN_API mode - skipping wallet balance check")
+                return True
+
             wallet = await self._get_user_wallet(user)
             if not wallet:
                 logger.error(f"Wallet not found for user: {user.id}")
@@ -108,13 +119,19 @@ class BillingService:
             return False, {"error": "credit_check_error", "message": "Error checking credits"}
 
     def finalize_ai_message(self, message_obj: Message, ai_response: str, token_usage: Dict) -> Message:
+        """
+        Finalize AI message and handle billing based on user's billing mode.
+
+        For OWN_API mode: Creates tracking transaction with $0.00 amount
+        For WALLET mode: Deducts from user's wallet
+        """
         if not message_obj:
             return None
 
         try:
             message_obj.message = ai_response
             cost = Decimal('0.000000')
-            
+
             if token_usage:
                 message_obj.input_tokens = token_usage.get("input_tokens", 0)
                 message_obj.output_tokens = token_usage.get("output_tokens", 0)
@@ -123,34 +140,53 @@ class BillingService:
                     cost = self._calculate_cost(llm, message_obj.input_tokens, message_obj.output_tokens)
                     message_obj.cost = cost
                     logger.debug(f"Input tokens: {message_obj.input_tokens}, Output tokens: {message_obj.output_tokens}, Cost: {cost}")
+
                     if cost > Decimal('0.00'):
                         user = message_obj.conversation.user
-                        wallet = getattr(user, 'wallet', None)
-                        if not wallet:
-                            raise ValidationError({
-                                "error": "wallet_not_found",
-                                "message": "User wallet not found"
-                            })
-                        if wallet.balance < cost:
-                            raise ValidationError({
-                                "error": "insufficient_balance",
-                                "message": "Insufficient wallet balance",
-                                "current_balance": str(wallet.balance),
-                                "required_amount": str(cost)
-                            })
 
-                        with db_transaction.atomic():
-                            transaction_message = f"Message {message_obj.id}: {message_obj.message[:100]}"
-                            Transaction.objects.create(
-                                user=user,
-                                amount=cost,
-                                llm=llm,
-                                type=TransactionTypeChoice.DEBIT,
-                                message=transaction_message,
-                                input_tokens=message_obj.input_tokens,
-                                output_tokens=message_obj.output_tokens
-                            )
-                            wallet.refresh_from_db()
+                        # Check user's billing mode
+                        if user.billing_mode == BillingModeChoice.OWN_API:
+                            # User is using their own API key - create tracking transaction with $0
+                            logger.info(f"User {user.id} in OWN_API mode - creating tracking transaction")
+                            with db_transaction.atomic():
+                                transaction_message = f"Message {message_obj.id}: {message_obj.message[:100]} (Own API Key)"
+                                Transaction.objects.create(
+                                    user=user,
+                                    amount=Decimal('0.00'),
+                                    llm=llm,
+                                    type=TransactionTypeChoice.DEBIT,
+                                    message=transaction_message,
+                                    input_tokens=message_obj.input_tokens,
+                                    output_tokens=message_obj.output_tokens
+                                )
+                        else:
+                            # WALLET mode - charge user's wallet
+                            wallet = getattr(user, 'wallet', None)
+                            if not wallet:
+                                raise ValidationError({
+                                    "error": "wallet_not_found",
+                                    "message": "User wallet not found"
+                                })
+                            if wallet.balance < cost:
+                                raise ValidationError({
+                                    "error": "insufficient_balance",
+                                    "message": "Insufficient wallet balance",
+                                    "current_balance": str(wallet.balance),
+                                    "required_amount": str(cost)
+                                })
+
+                            with db_transaction.atomic():
+                                transaction_message = f"Message {message_obj.id}: {message_obj.message[:100]}"
+                                Transaction.objects.create(
+                                    user=user,
+                                    amount=cost,
+                                    llm=llm,
+                                    type=TransactionTypeChoice.DEBIT,
+                                    message=transaction_message,
+                                    input_tokens=message_obj.input_tokens,
+                                    output_tokens=message_obj.output_tokens
+                                )
+                                wallet.refresh_from_db()
             message_obj.save()
             return message_obj
         except ValidationError as e:
