@@ -33,13 +33,18 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
             "vector_db",
             "default_prompt",
             "model_group",
+            "role",
+            "industry",
+            "purpose",
+            "referral_source",
+            "is_onboarding_completed",
             "auth_source",
             "is_dare_accessible",
             "is_socratic_bots_accessible",
             "billing_mode",
             "billing_mode_display"
         ]
-        read_only_fields = ["id", "auth_source", "billing_mode", "billing_mode_display"]
+        read_only_fields = ["id", "auth_source", "billing_mode", "billing_mode_display", "is_onboarding_completed"]
 
     def get_default_prompt(self, obj):
         if obj.default_prompt:
