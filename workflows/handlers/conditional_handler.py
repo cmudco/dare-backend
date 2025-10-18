@@ -2,9 +2,11 @@
 Conditional node handler for workflow execution.
 
 This handler routes workflow execution based on AI evaluation or human validation.
+
+Refactored to use utility modules following LLM provider patterns.
 """
 import logging
-import xml.etree.ElementTree as ET
+from typing import Optional, Tuple, Dict, Any, List
 from channels.db import database_sync_to_async
 from django.utils import timezone
 
@@ -12,9 +14,22 @@ from workflows.handlers.execution_base import BaseExecutionHandler
 from workflows.handlers.base import ExecutionNode, NodeExecutionContext, NodeExecutionResult
 from workflows.models import WorkflowNode, WorkflowRun, WorkflowRunStep, ConditionalNodeData
 from workflows.constants import WorkflowRunStepStatus
-from workflows.node_handler_constants import DefaultValues
 from workflows.services.conditional_prompt_service import ConditionalPromptService
 from conversations.models import LLM
+
+# Import new utility modules
+from workflows.handlers.utils import (
+    NodeType,
+    LLMDefaults,
+    ErrorCode,
+    MetadataKey,
+    ErrorResultBuilder,
+    NodeDataValidator,
+    InputValidator,
+    ConditionalMessagePreparer,
+    RouteNormalizer,
+    LLMConfig,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -24,20 +39,33 @@ class ConditionalNodeHandler(BaseExecutionHandler):
     """
     Handler for 'conditional' type nodes.
 
-    This handler evaluates input using AI and routes workflow execution
-    based on the routing decision. Supports human validation mode where
-    AI provides a recommendation but execution pauses for human approval.
-    
-    Uses BaseExecutionHandler for:
-    - Billing processing
-    - Status updates
-    - Error handling
-    - Token usage collection
+    This handler orchestrates conditional routing by:
+    1. Validating node configuration and extracting input
+    2. Evaluating input using AI with configured LLM
+    3. Parsing routing decisions with XML extraction
+    4. Handling human validation workflows when required
+    5. Processing billing and status updates via base handler
+
+    Enhanced with utility modules for better code quality, maintainability,
+    and consistency with LLM provider patterns.
+
+    Human Validation Mode:
+        When enabled, AI provides a recommendation but workflow execution pauses
+        for human approval. The workflow service must call resume_workflow_after_human_validation
+        to continue execution with the user's choice.
     """
 
     def can_handle(self, node_type: str) -> bool:
-        """Check if this handler can process 'conditional' nodes."""
-        return node_type == 'conditional'
+        """
+        Check if this handler can process the given node type.
+
+        Args:
+            node_type: The type of node to check
+
+        Returns:
+            True if node_type is 'conditional', False otherwise
+        """
+        return node_type == NodeType.CONDITIONAL
 
     async def execute(
         self,
@@ -47,57 +75,55 @@ class ConditionalNodeHandler(BaseExecutionHandler):
         """
         Execute a conditional node by evaluating input and choosing a route.
 
-        This handler:
-        1. Gets input from previous node
-        2. Evaluates input using configured LLM
-        3. Parses response to extract routing decision
-        4. Either returns decision or pauses for human validation
+        This method orchestrates the complete conditional execution workflow including
+        input validation, AI evaluation, decision parsing, human validation handling,
+        billing, and result processing.
 
         Args:
             node: The conditional node to execute
-            context: Execution context with previous results
+            context: Execution context with previous results and workflow info
 
         Returns:
-            NodeExecutionResult with routing decision or pending human input
+            NodeExecutionResult with routing decision, or pending human input status
         """
         start_time = timezone.now()
+        correlation_id = f"conditional-{node.id}"
 
         try:
-            # Get conditional data from database
-            conditional_data = await database_sync_to_async(
-                lambda: node.db_node.data_object
-            )()
-
-            if not conditional_data or not isinstance(conditional_data, ConditionalNodeData):
-                return NodeExecutionResult(
-                    success=False,
-                    error="Invalid conditional node data"
+            # Validate and get conditional configuration
+            conditional_data = await self._get_and_validate_conditional_data(node)
+            if conditional_data is None:
+                return ErrorResultBuilder.build_validation_error_result(
+                    node_id=node.id,
+                    node_type=NodeType.CONDITIONAL,
+                    validation_message="Invalid or missing conditional node data"
                 )
 
             # Get or create workflow run step for conditional node
             step_number = await database_sync_to_async(
                 lambda: conditional_data.step_number
             )()
-            
+
             workflow_run_step = await self._get_or_create_workflow_run_step(
                 context.workflow_run,
                 node,
                 step_number
             )
 
-            # Update status to running using base handler
+            # Update status to running
             await self._update_step_status(
                 workflow_run_step,
                 WorkflowRunStepStatus.RUNNING
             )
 
-            # Get input from direct dependencies only
-            input_output = await self._get_input_from_dependencies(node, context)
+            logger.info(f"[{correlation_id}] Starting conditional node execution")
 
+            # Extract and validate input using utility
+            input_output = await self._extract_conditional_input(node, context)
             if not input_output:
-                return NodeExecutionResult(
-                    success=False,
-                    error="No input provided to conditional node"
+                return ErrorResultBuilder.build_error_result(
+                    Exception("No input provided to conditional node"),
+                    context={'node_id': node.id, 'node_type': NodeType.CONDITIONAL}
                 )
 
             # Get routes configuration
@@ -106,32 +132,23 @@ class ConditionalNodeHandler(BaseExecutionHandler):
             )()
 
             if not routes or len(routes) == 0:
-                return NodeExecutionResult(
-                    success=False,
-                    error="No routes defined for conditional node"
+                return ErrorResultBuilder.build_error_result(
+                    Exception("No routes defined for conditional node"),
+                    context={'node_id': node.id, 'node_type': NodeType.CONDITIONAL}
                 )
 
             # Evaluate routing decision using LLM
-            routing_decision, analysis_text, token_usage = await self._evaluate_routing(
+            routing_decision, analysis_text, token_usage = await self._evaluate_routing_decision(
                 conditional_data,
                 routes,
                 input_output,
-                context.workflow_run
+                context.workflow_run,
+                correlation_id
             )
 
             # Process billing using base handler
-            llm = await database_sync_to_async(lambda: conditional_data.llm)()
-            if not llm:
-                llm = await database_sync_to_async(
-                    lambda: LLM.objects.filter(provider=DefaultValues.DEFAULT_LLM_PROVIDER).first()
-                )()
-            
-            user = await self._get_user_from_workflow_run(context.workflow_run)
-            await self._process_billing(
-                token_usage=token_usage,
-                llm=llm,
-                user=user,
-                step_node_id=None  # Conditional nodes don't have step_node_id
+            await self._process_conditional_billing(
+                conditional_data, context.workflow_run, node, token_usage
             )
 
             # Check if human validation is required
@@ -141,25 +158,25 @@ class ConditionalNodeHandler(BaseExecutionHandler):
 
             if require_human_validation:
                 return await self._handle_human_validation_required(
-                    workflow_run_step,
-                    routing_decision,
-                    analysis_text,
-                    routes,
-                    input_output,
-                    node,
-                    conditional_data,
-                    start_time
+                    workflow_run_step=workflow_run_step,
+                    routing_decision=routing_decision,
+                    analysis_text=analysis_text,
+                    routes=routes,
+                    input_output=input_output,
+                    node=node,
+                    conditional_data=conditional_data,
+                    start_time=start_time,
+                    correlation_id=correlation_id
                 )
 
             # No human validation required - proceed with AI decision
-            # Update step with metadata using base handler
             metadata = {
-                'routing_decision': routing_decision,
+                MetadataKey.ROUTING_DECISION: routing_decision,
                 'analysis': analysis_text,
-                'available_routes': [r['name'] for r in routes],
-                'is_human_validated': False
+                MetadataKey.AVAILABLE_ROUTES: [r['name'] for r in routes],
+                MetadataKey.IS_HUMAN_VALIDATED: False
             }
-            
+
             await self._update_step_status(
                 workflow_run_step,
                 WorkflowRunStepStatus.COMPLETED,
@@ -171,7 +188,7 @@ class ConditionalNodeHandler(BaseExecutionHandler):
             execution_time = (end_time - start_time).total_seconds()
 
             logger.info(
-                f"Successfully executed conditional node {node.id} in {execution_time:.2f}s. "
+                f"[{correlation_id}] Successfully executed conditional node in {execution_time:.2f}s. "
                 f"Routing: {routing_decision}"
             )
 
@@ -181,18 +198,23 @@ class ConditionalNodeHandler(BaseExecutionHandler):
                 token_usage=token_usage,
                 execution_time=execution_time,
                 metadata={
-                    'routing_decision': routing_decision,
-                    'available_routes': [r['name'] for r in routes],
+                    MetadataKey.ROUTING_DECISION: routing_decision,
+                    MetadataKey.AVAILABLE_ROUTES: [r['name'] for r in routes],
                     'evaluated_input_length': len(input_output),
                     'analysis': analysis_text,
-                    'is_human_validated': False
+                    MetadataKey.IS_HUMAN_VALIDATED: False
                 }
             )
 
         except Exception as e:
-            # Use base handler error building
+            # Use utility for error handling
+            logger.error(
+                f"[{correlation_id}] Conditional node execution failed: {str(e)}",
+                exc_info=True
+            )
+
             result = self._build_error_result(e, node, start_time)
-            
+
             # Update workflow run step with error
             try:
                 workflow_run_step = await self._get_or_create_workflow_run_step(
@@ -206,73 +228,95 @@ class ConditionalNodeHandler(BaseExecutionHandler):
                     error=result.error
                 )
             except Exception as update_error:
-                logger.error(f"Failed to update conditional step status: {str(update_error)}")
-            
+                logger.error(
+                    f"[{correlation_id}] Failed to update conditional step status: {str(update_error)}"
+                )
+
             return result
 
-    async def _get_input_from_dependencies(
+    # ==================== Private Helper Methods ====================
+
+    async def _get_and_validate_conditional_data(
+        self, node: ExecutionNode
+    ) -> Optional[ConditionalNodeData]:
+        """
+        Get and validate conditional node data.
+
+        Args:
+            node: The execution node
+
+        Returns:
+            ConditionalNodeData if valid, None otherwise
+        """
+        conditional_data = await database_sync_to_async(
+            lambda: node.db_node.data_object
+        )()
+
+        if not NodeDataValidator.validate_node_data_type(
+            conditional_data, ConditionalNodeData, node.id
+        ):
+            return None
+
+        return conditional_data
+
+    async def _extract_conditional_input(
         self,
         node: ExecutionNode,
         context: NodeExecutionContext
-    ) -> str:
+    ) -> Optional[str]:
         """
-        Get input from direct node dependencies.
+        Extract input from dependencies for conditional evaluation.
 
-        Conditional nodes can only accept input from a single source to avoid
-        ambiguity in routing decisions.
+        Conditional nodes require exactly one input source to avoid ambiguity.
+        Uses ConditionalMessagePreparer utility for extraction.
 
         Args:
             node: The conditional node
             context: Execution context with previous results
 
         Returns:
-            Input string from the single direct dependency
+            Input string if valid, None otherwise
         """
-        # Get the workflow and edges to find direct input dependencies
+        # Get direct input dependencies from workflow graph
         workflow = await database_sync_to_async(
             lambda: context.workflow_run.workflow
         )()
         edges = await database_sync_to_async(lambda: list(workflow.edges.all()))()
 
         # Find nodes that directly connect TO this conditional node
-        direct_inputs = []
-        for edge in edges:
-            if edge.target == node.id:
-                direct_inputs.append(edge.source)
+        direct_inputs = [edge.source for edge in edges if edge.target == node.id]
 
-        # Validate that we have input from the single direct source
-        input_output = None
-        if context.previous_results and direct_inputs:
-            valid_outputs = []
+        # Filter previous results to only include direct dependencies
+        direct_previous_results = {
+            node_id: result
+            for node_id, result in (context.previous_results or {}).items()
+            if node_id in direct_inputs
+        }
 
-            for input_node_id in direct_inputs:
-                if input_node_id in context.previous_results:
-                    result_data = context.previous_results[input_node_id]
+        # Use utility to extract single input
+        success, error, input_text = ConditionalMessagePreparer.extract_single_input_from_results(
+            direct_previous_results
+        )
 
-                    if result_data and isinstance(result_data, dict) and result_data.get('output'):
-                        metadata = result_data.get('metadata') or {}
-                        is_skipped = metadata.get('skipped', False)
+        if not success:
+            # Try fallback to current_input for backward compatibility
+            if context.current_input:
+                logger.debug(f"Using fallback current_input for conditional node {node.id}")
+                return context.current_input
 
-                        if not is_skipped:
-                            valid_outputs.append(result_data['output'])
+            logger.warning(f"Failed to extract input for conditional node {node.id}: {error}")
+            return None
 
-            if len(valid_outputs) == 1:
-                input_output = valid_outputs[0]
-            elif len(valid_outputs) > 1:
-                raise ValueError("Conditional nodes can only accept input from a single source")
+        return input_text
 
-        if not input_output and context.current_input:
-            input_output = context.current_input
-
-        return input_output
-
-    async def _evaluate_routing(
+    async def _evaluate_routing_decision(
         self,
         conditional_data: ConditionalNodeData,
-        routes: list,
+        routes: List[Dict],
         input_text: str,
-        workflow_run: WorkflowRun
-    ) -> tuple[str, str, dict]:
+        workflow_run: WorkflowRun,
+        correlation_id: str
+    ) -> Tuple[str, Optional[str], Optional[Dict]]:
         """
         Evaluate routing decision using LLM.
 
@@ -281,22 +325,16 @@ class ConditionalNodeHandler(BaseExecutionHandler):
             routes: List of available routes
             input_text: Input to evaluate
             workflow_run: Current workflow run
+            correlation_id: Correlation ID for logging
 
         Returns:
-            tuple: (routing_decision, analysis_text, token_usage)
+            Tuple of (routing_decision, analysis_text, token_usage)
         """
         # Get LLM configuration
-        llm = await database_sync_to_async(lambda: conditional_data.llm)()
-
-        if not llm:
-            # Fallback to first available LLM
-            llm = await database_sync_to_async(
-                lambda: LLM.objects.filter(provider=DefaultValues.DEFAULT_LLM_PROVIDER).first()
-            )()
-
+        llm = await self._get_llm_for_conditional(conditional_data)
         llm_provider = await database_sync_to_async(lambda: llm.provider)()
 
-        # Build evaluation prompt
+        # Build evaluation prompt using service
         evaluation_prompt = await database_sync_to_async(
             lambda: conditional_data.custom_prompt
         )()
@@ -309,11 +347,13 @@ class ConditionalNodeHandler(BaseExecutionHandler):
             input_text=input_text
         )
 
+        logger.debug(f"[{correlation_id}] Evaluating routing with LLM: {llm.identifier}")
+
         # Get user for LLM query
         workflow = await database_sync_to_async(lambda: workflow_run.workflow)()
         user = await database_sync_to_async(lambda: workflow.user)()
 
-        # Execute LLM query
+        # Execute LLM query with conditional configuration
         response_generator = self.llm_service.query(
             message=message,
             conversation=None,
@@ -324,8 +364,8 @@ class ConditionalNodeHandler(BaseExecutionHandler):
             prompt_id=None,
             message_obj=None,
             workflow_run_step_obj=None,
-            max_tokens=100,
-            temperature=0.1
+            max_tokens=LLMDefaults.CONDITIONAL_MAX_TOKENS,
+            temperature=LLMDefaults.CONDITIONAL_TEMPERATURE
         )
 
         # Use base handler to collect response
@@ -333,90 +373,131 @@ class ConditionalNodeHandler(BaseExecutionHandler):
             response_generator
         )
 
-        # Parse XML response
-        routing_decision, analysis_text = self._parse_xml_response(full_response, routes)
+        logger.debug(f"[{correlation_id}] LLM response received, parsing routing decision")
+
+        # Parse response using utility
+        route_names = [r['name'] for r in routes]
+        routing_decision, analysis_text = RouteNormalizer.extract_route_from_xml(
+            full_response, route_names, f"conditional-{conditional_data.id}"
+        )
+
+        # Validate and fallback if needed
+        if not routing_decision:
+            logger.warning(f"[{correlation_id}] Failed to extract routing decision, using default")
+            routing_decision = route_names[0]
 
         return routing_decision, analysis_text, token_usage
 
-    def _parse_xml_response(self, response: str, routes: list) -> tuple[str, str]:
+    async def _process_conditional_billing(
+        self,
+        conditional_data: ConditionalNodeData,
+        workflow_run: WorkflowRun,
+        node: ExecutionNode,
+        token_usage: Optional[Dict]
+    ):
         """
-        Parse XML response from LLM to extract routing decision and analysis.
+        Process billing for the conditional execution.
 
         Args:
-            response: XML response from LLM
-            routes: Available routes
+            conditional_data: Conditional node configuration
+            workflow_run: Current workflow run
+            node: The execution node (to get db_node.id for billing)
+            token_usage: Token usage from LLM call
+        """
+        llm = await self._get_llm_for_conditional(conditional_data)
+        user = await self._get_user_from_workflow_run(workflow_run)
+        
+        node_db_id = await database_sync_to_async(lambda: node.db_node.id)()
+
+        await self._process_billing(
+            token_usage=token_usage,
+            llm=llm,
+            user=user,
+            step_node_id=node_db_id
+        )
+
+    async def _get_llm_for_conditional(
+        self, conditional_data: ConditionalNodeData
+    ) -> LLM:
+        """
+        Get the LLM to use for this conditional node.
+
+        Returns the LLM configured for this conditional, or falls back to
+        the first available default provider model.
+
+        Args:
+            conditional_data: Conditional node configuration
 
         Returns:
-            tuple: (routing_decision, analysis_text)
+            LLM instance
+
+        Raises:
+            ValueError: If no LLM can be determined
         """
-        routing_decision = None
-        analysis_text = None
+        llm = await database_sync_to_async(lambda: conditional_data.llm)()
 
-        try:
-            xml_response = f"<root>{response.strip()}</root>"
-            root = ET.fromstring(xml_response)
+        if llm:
+            return llm
 
-            decision_elem = root.find('.//decision')
-            if decision_elem is not None and decision_elem.text:
-                routing_decision = decision_elem.text.strip()
+        # Fallback to default provider
+        logger.warning(
+            f"No LLM configured for conditional, falling back to {LLMDefaults.DEFAULT_PROVIDER}"
+        )
 
-            analysis_elem = root.find('.//analysis')
-            if analysis_elem is not None and analysis_elem.text:
-                analysis_text = analysis_elem.text.strip()
+        default_llm = await database_sync_to_async(
+            lambda: LLM.objects.filter(
+                provider=LLMDefaults.DEFAULT_PROVIDER
+            ).first()
+        )()
 
-        except ET.ParseError as parse_error:
-            logger.warning(
-                f"Failed to parse XML response: {parse_error}. Raw response: {response}"
+        if not default_llm:
+            raise ValueError(
+                f"No LLM configured and no {LLMDefaults.DEFAULT_PROVIDER} LLM available"
             )
 
-        # Validate routing decision
-        route_names = [r['name'] for r in routes]
-
-        if routing_decision not in route_names:
-            logger.warning(
-                f"Invalid or missing routing decision '{routing_decision}'. "
-                f"Valid routes: {route_names}. Defaulting to {routes[0]['name']}."
-            )
-            routing_decision = routes[0]['name']
-
-        return routing_decision, analysis_text
+        return default_llm
 
     async def _handle_human_validation_required(
         self,
         workflow_run_step: WorkflowRunStep,
         routing_decision: str,
-        analysis_text: str,
-        routes: list,
+        analysis_text: Optional[str],
+        routes: List[Dict],
         input_output: str,
         node: ExecutionNode,
         conditional_data: ConditionalNodeData,
-        start_time
+        start_time,
+        correlation_id: str
     ) -> NodeExecutionResult:
         """
         Handle case where human validation is required.
 
+        Updates workflow step status to PENDING_HUMAN_INPUT and returns
+        a special error result that pauses workflow execution.
+
         Args:
             workflow_run_step: WorkflowRunStep to update
             routing_decision: AI recommended route
-            analysis_text: AI analysis
+            analysis_text: AI analysis (optional)
             routes: Available routes
             input_output: Evaluated input
             node: Execution node
             conditional_data: Conditional node data
             start_time: Execution start time
+            correlation_id: Correlation ID for logging
 
         Returns:
             NodeExecutionResult with pending human input status
         """
-        # Use base handler to update step status with metadata
+        # Build metadata using utility constants
         metadata = {
-            'ai_recommendation': routing_decision,
-            'analysis': analysis_text,
-            'available_routes': [r['name'] for r in routes],
-            'is_human_validated': True,
-            'pending_human_decision': True
+            MetadataKey.AI_RECOMMENDATION: routing_decision,
+            'analysis': analysis_text or "",
+            MetadataKey.AVAILABLE_ROUTES: [r['name'] for r in routes],
+            MetadataKey.IS_HUMAN_VALIDATED: True,
+            MetadataKey.PENDING_HUMAN_VALIDATION: True
         }
-        
+
         await self._update_step_status(
             workflow_run_step,
             WorkflowRunStepStatus.PENDING_HUMAN_INPUT,
@@ -428,62 +509,32 @@ class ConditionalNodeHandler(BaseExecutionHandler):
         execution_time = (end_time - start_time).total_seconds()
 
         logger.info(
-            f"Conditional node {node.id} requires human validation. "
+            f"[{correlation_id}] Conditional node requires human validation. "
             f"AI recommends: {routing_decision}"
         )
 
-        # Get step_number and custom_prompt
-        step_number = await database_sync_to_async(lambda: conditional_data.step_number)()
-        custom_prompt = await database_sync_to_async(lambda: conditional_data.custom_prompt)()
+        # Get additional data for frontend
+        step_number = await database_sync_to_async(
+            lambda: conditional_data.step_number
+        )()
+        custom_prompt = await database_sync_to_async(
+            lambda: conditional_data.custom_prompt
+        )()
 
         # Return special result that pauses execution
         return NodeExecutionResult(
             success=False,
-            error="PENDING_HUMAN_INPUT",
+            error=ErrorCode.PENDING_HUMAN_INPUT,
             execution_time=execution_time,
             metadata={
-                'pending_human_validation': True,
-                'ai_recommendation': routing_decision,
-                'analysis': analysis_text,
-                'available_routes': routes,
+                MetadataKey.PENDING_HUMAN_VALIDATION: True,
+                MetadataKey.AI_RECOMMENDATION: routing_decision,
+                MetadataKey.AI_ANALYSIS: analysis_text or "",
+                MetadataKey.AVAILABLE_ROUTES: routes,
                 'evaluated_input': input_output,
                 'evaluated_input_length': len(input_output),
                 'node_id': node.id,
                 'step_number': step_number,
                 'custom_prompt': custom_prompt
             }
-        )
-
-    async def _update_step_completed(
-        self,
-        workflow_run_step: WorkflowRunStep,
-        routing_decision: str,
-        analysis_text: str,
-        routes: list
-    ):
-        """
-        Update workflow run step as completed.
-
-        NOTE: This method is deprecated - use base handler's _update_step_status instead.
-        Kept for backward compatibility during transition.
-        
-        Args:
-            workflow_run_step: WorkflowRunStep to update
-            routing_decision: Final routing decision
-            analysis_text: AI analysis
-            routes: Available routes
-        """
-        # Use base handler method instead
-        metadata = {
-            'routing_decision': routing_decision,
-            'analysis': analysis_text,
-            'available_routes': [r['name'] for r in routes],
-            'is_human_validated': False
-        }
-        
-        await self._update_step_status(
-            workflow_run_step,
-            WorkflowRunStepStatus.COMPLETED,
-            response=routing_decision,
-            metadata=metadata
         )
