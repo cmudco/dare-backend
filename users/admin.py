@@ -3,12 +3,22 @@ from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
 from django.utils.translation import gettext_lazy as _
 from django.contrib import messages
 from django.contrib.admin.helpers import ActionForm
+from django.utils import timezone
+from datetime import timedelta
 
 from users.models import User, AccessCodeGroup
 from billing.services import WalletService
 from django import forms
 from decimal import Decimal
 from users.constants import VectorDBChoice, AuthSourceChoice, ScopeChoice
+from users.filters import LastLoginFilter
+from users.admin_constants import (
+    LAST_LOGIN_DISPLAY_RULES,
+    LAST_LOGIN_DISPLAY_DEFAULT,
+    ACTIVITY_LEVELS,
+    ACTIVITY_NEVER_STATE,
+)
+from core.helpers.admin_utils import render_span, render_status_badge
 
 
 class UserInline(admin.TabularInline):
@@ -176,11 +186,63 @@ class UserAdmin(DjangoUserAdmin):
             },
         ),
     )
-    list_display = ("email", "is_staff", "is_active", "is_superuser", "access_code_group", "vector_db", "auth_source", "is_dare_accessible", "is_socratic_bots_accessible")
-    list_filter = ("is_staff", "is_superuser", "is_active", "vector_db", "access_code_group", "auth_source", "is_dare_accessible", "is_socratic_bots_accessible")
+    list_display = ("email", "last_login_display", "date_joined", "activity_status", "is_active", "is_staff", "access_code_group", "vector_db")
+    list_filter = ("is_staff", "is_superuser", "is_active", LastLoginFilter, "vector_db", "access_code_group", "auth_source", "is_dare_accessible", "is_socratic_bots_accessible")
     search_fields = ("email", "first_name", "last_name")
-    ordering = ("email",)
-    actions = ["credit_selected_users"]
+    ordering = ("-last_login",)
+    actions = ["credit_selected_users", "disable_inactive_accounts"]
+    date_hierarchy = "date_joined"
+
+    def last_login_display(self, obj):
+        if not obj.last_login:
+            return render_span("Never", color="gray", italic=True)
+
+        diff_days = (timezone.now() - obj.last_login).days
+        color, template = next(
+            (
+                (color, template)
+                for threshold, color, template in LAST_LOGIN_DISPLAY_RULES
+                if diff_days <= threshold
+            ),
+            LAST_LOGIN_DISPLAY_DEFAULT,
+        )
+        status = template.format(days=diff_days)
+
+        return render_span(
+            status,
+            color=color,
+            title=obj.last_login.strftime('%Y-%m-%d %H:%M'),
+        )
+    last_login_display.short_description = "Last Login"
+    last_login_display.admin_order_field = "last_login"
+
+    def activity_status(self, obj):
+        if not obj.last_login:
+            state = ACTIVITY_NEVER_STATE
+        else:
+            days_since_login = (timezone.now() - obj.last_login).days
+            state = next(
+                (
+                    level
+                    for level in ACTIVITY_LEVELS
+                    if days_since_login <= level["days"]
+                ),
+                ACTIVITY_LEVELS[-1],
+            )
+
+        return render_status_badge(
+            state["label"],
+            color=state["color"],
+            emoji=state["emoji"],
+        )
+    activity_status.short_description = "Activity"
+    activity_status.admin_order_field = "last_login"
+
+    @admin.action(description="Disable selected inactive accounts")
+    def disable_inactive_accounts(self, request, queryset):
+        """Disable user accounts that haven't been active"""
+        count = queryset.filter(is_active=True).update(is_active=False)
+        self.message_user(request, f"Disabled {count} user account(s).", level=messages.SUCCESS)
 
 
 admin.site.register(User, UserAdmin)
