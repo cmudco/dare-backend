@@ -3,13 +3,14 @@ from django.contrib.auth import get_user_model
 from django.urls import reverse
 
 from core.helpers.admin_utils import (
+    render_code_block,
     render_empty_placeholder,
     render_feedback_icon,
     render_link,
     render_tooltip_span,
     truncate_text,
 )
-from .models import LLM, Conversation, Message, ModelGroup
+from .models import LLM, Conversation, Message, ModelGroup, ProviderAPIKey
 from .proxy_models import MessageWithFeedback
 
 User = get_user_model()
@@ -175,10 +176,7 @@ class ProviderAPIKeyAdmin(admin.ModelAdmin):
     def masked_key_display(self, obj):
         """Display masked API key showing only last 4 characters"""
         masked = obj.get_masked_key()
-        return format_html(
-            '<code style="background-color: #f0f0f0; padding: 2px 6px; border-radius: 3px;">{}</code>',
-            masked
-        )
+        return render_code_block(masked)
     masked_key_display.short_description = "API Key"
 
     def has_delete_permission(self, request, obj=None):
