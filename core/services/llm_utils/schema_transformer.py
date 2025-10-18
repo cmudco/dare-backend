@@ -4,8 +4,12 @@ Schema transformer for unified structured output handling.
 This module provides transformation between a unified schema format
 and provider-specific structured output formats.
 """
+import json
 import logging
+import re
 from typing import Dict, Any, Optional, List
+
+from google.genai import types
 from conversations.constants import Provider
 
 
@@ -93,15 +97,13 @@ class SchemaTransformer:
     def transform_for_gemini(schema: Dict[str, Any]):
         """
         Transform unified schema to Gemini's response_schema format.
-        
+
         Args:
             schema: Unified schema definition
-        
+
         Returns:
             Tuple of (response_mime_type, response_schema) for Gemini
         """
-        from google.genai import types
-        
         if not schema or schema.get('type') != 'enum':
             return None, None
 
@@ -172,18 +174,15 @@ class SchemaTransformer:
     ) -> str:
         """
         Extract the structured value from a provider's response.
-        
+
         Args:
             response: Raw response from LLM
             schema: Original unified schema
             provider: Provider name
-        
+
         Returns:
             Extracted value (or fallback to first valid value)
         """
-        import json
-        import re
-        
         field_name = schema.get('field', 'route')
         allowed_values = schema.get('values', [])
         
@@ -238,7 +237,6 @@ class SchemaTransformer:
             return lower_map[cleaned.lower()]
 
         # Strategy 3: Extract first token
-        import re
         tokens = re.split(r"[^A-Za-z0-9_\-\.]+", cleaned)
         for token in tokens:
             if token in allowed_values:
