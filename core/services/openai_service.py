@@ -244,55 +244,66 @@ class OpenAIService:
             stream = self.stream_chat_completion(messages)
             return await StreamAggregator.aggregate_stream(stream)
 
-        # Generate with structured output
-        response = await self._generate_with_structure(
-            messages,
-            response_format
-        )
+        try:
+            response = await self._generate_with_chat_completions_structure(
+                messages,
+                response_format
+            )
 
-        # Extract and return field value
-        return self._extract_field_value(response, structured_spec)
+            return self._extract_field_value(response, structured_spec)
+        except Exception as e:
+            logger.error(f"OpenAI structured output error: {str(e)}", exc_info=True)
+            error_message = OpenAIErrorHandler.format_error(e)
+            return f"Error: {error_message}"
 
-    async def _generate_with_structure(
+    async def _generate_with_chat_completions_structure(
         self,
         messages: List[Dict],
         response_format: Dict
     ):
         """
-        Generate completion with response format.
+        Generate completion with response format using chat.completions API.
+        
+        Note: Structured outputs must use chat.completions.create(), not responses.create()
+        The responses API doesn't support the response_format parameter.
 
         Args:
             messages: List of messages
             response_format: Response format specification
 
         Returns:
-            OpenAI response
+            OpenAI response with structured output
         """
-        # Flatten to text-only for structured outputs
-        input_data = OpenAIMessageFormatter.format_for_responses_api(messages)
-
-        if not isinstance(input_data, str):
-            # Has multimodal - flatten to text
-            input_data = OpenAIMessageFormatter.flatten_to_text(messages)
-
-        return await self.client.responses.create(
-            model=self.model,
-            input=input_data,
-            response_format=response_format,
-        )
+        params = {
+            "model": self.model,
+            "messages": messages,
+            "response_format": response_format,
+        }
+        
+        if self.is_reasoning:
+            params["max_completion_tokens"] = 1024
+        else:
+            params["max_tokens"] = 1024
+            params["temperature"] = 0.0 
+        
+        return await self.client.chat.completions.create(**params)
 
     def _extract_field_value(self, response, structured_spec: Dict) -> str:
         """
         Extract field value from structured response.
 
         Args:
-            response: OpenAI response object
+            response: OpenAI response object (from chat.completions.create)
             structured_spec: Schema specification with field name
 
         Returns:
             Extracted value as string
         """
-        text_out = getattr(response, 'output_text', None)
+        try:
+            text_out = response.choices[0].message.content
+        except (AttributeError, IndexError):
+            logger.warning("Failed to extract content from OpenAI structured response")
+            return ""
 
         if not text_out:
             return ""

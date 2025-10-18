@@ -3,20 +3,34 @@ Step node handler for workflow execution.
 
 This handler executes LLM calls with configured parameters and handles
 structured outputs when connected to StructuredOutput nodes.
+
+Refactored to use utility modules following LLM provider patterns.
 """
 import logging
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 from channels.db import database_sync_to_async
 from django.utils import timezone
 
 from workflows.handlers.execution_base import BaseExecutionHandler
 from workflows.handlers.base import ExecutionNode, NodeExecutionContext, NodeExecutionResult
-from workflows.handlers.structured_output_handler import StructuredOutputHandler
 from workflows.models import WorkflowNode, WorkflowRun, WorkflowRunStep, StepNodeData
 from workflows.constants import WorkflowRunStepStatus
-from workflows.node_handler_constants import DefaultValues
 from conversations.models import LLM
 from core.services.llm_utils import SchemaTransformer
+
+# Import new utility modules
+from workflows.handlers.utils import (
+    NodeType,
+    LLMDefaults,
+    ErrorResultBuilder,
+    NodeDataValidator,
+    StepMessagePreparer,
+    RouteResolver,
+    RouteNormalizer,
+    StructuredOutputBuilder,
+    RouteInstructionBuilder,
+    MetadataKey,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -26,24 +40,29 @@ class StepNodeHandler(BaseExecutionHandler):
     """
     Handler for 'step' type nodes.
 
-    This handler:
-    1. Prepares messages from prompts and context
-    2. Handles structured output configuration if applicable
-    3. Executes LLM query with appropriate parameters
-    4. Processes and normalizes responses
-    5. Uses base handler for billing and status updates
+    This handler orchestrates step node execution by:
+    1. Validating node configuration
+    2. Preparing messages using StepMessagePreparer utility
+    3. Handling structured output with RouteResolver utilities
+    4. Executing LLM queries with proper error handling
+    5. Processing billing and status updates via base handler
+    6. Normalizing responses for structured routing
 
-    The handler supports both regular text output and structured routing output.
+    Enhanced with utility modules for better code quality, maintainability,
+    and consistency with LLM provider patterns.
     """
 
-    def __init__(self):
-        """Initialize with LLM service and structured output handler."""
-        super().__init__()
-        self.structured_handler = StructuredOutputHandler()
-
     def can_handle(self, node_type: str) -> bool:
-        """Check if this handler can process 'step' nodes."""
-        return node_type == 'step'
+        """
+        Check if this handler can process the given node type.
+
+        Args:
+            node_type: The type of node to check
+
+        Returns:
+            True if node_type is 'step', False otherwise
+        """
+        return node_type == NodeType.STEP
 
     async def execute(
         self,
@@ -53,28 +72,31 @@ class StepNodeHandler(BaseExecutionHandler):
         """
         Execute a step node by calling the LLM with configured parameters.
 
+        This method orchestrates the complete step execution workflow including
+        message preparation, structured output handling, LLM execution, billing,
+        and result processing.
+
         Args:
             node: The step node to execute
-            context: Execution context with previous results
+            context: Execution context with previous results and workflow info
 
         Returns:
-            NodeExecutionResult with LLM response and metadata
+            NodeExecutionResult with LLM response, token usage, and metadata
         """
         start_time = timezone.now()
+        correlation_id = f"step-{node.id}"
 
         try:
-            # Get step configuration
-            step_data = await database_sync_to_async(
-                lambda: node.db_node.data_object
-            )()
-
-            if not step_data or not isinstance(step_data, StepNodeData):
-                return NodeExecutionResult(
-                    success=False,
-                    error="Invalid step node data"
+            # Validate and get step configuration
+            step_data = await self._get_and_validate_step_data(node)
+            if step_data is None:
+                return ErrorResultBuilder.build_validation_error_result(
+                    node_id=node.id,
+                    node_type=NodeType.STEP,
+                    validation_message="Invalid or missing step node data"
                 )
 
-            # Get or create workflow run step
+            # Get or create workflow run step for tracking
             workflow_run_step = await self._get_or_create_workflow_run_step(
                 context.workflow_run,
                 node
@@ -86,82 +108,48 @@ class StepNodeHandler(BaseExecutionHandler):
                 WorkflowRunStepStatus.RUNNING
             )
 
-            # Prepare message for LLM
-            message = await self._prepare_message(step_data, context)
+            logger.info(f"[{correlation_id}] Starting step node execution")
+
+            # Prepare message using utility
+            message = await self._prepare_message_for_step(step_data, context)
 
             # Handle structured output configuration
-            use_structured = await database_sync_to_async(
-                lambda: step_data.use_structured_output_node
-            )()
-
-            allowed_routes = []
-            structured_spec = None
-
-            if use_structured:
-                allowed_routes = await self.structured_handler.resolve_routes_for_step(
-                    context.workflow_run,
-                    node.id
-                )
-
-                if allowed_routes:
-                    # Build structured spec for LLM services
-                    structured_spec = self.structured_handler.build_structured_spec(
-                        allowed_routes
-                    )
-                    
-                    # For providers without native support, add instructions to message
-                    llm = await self._get_llm_for_step(step_data)
-                    llm_provider = await database_sync_to_async(lambda: llm.provider)()
-
-                    if not SchemaTransformer.supports_native_structured_output(llm_provider):
-                        # Fallback: append route instruction to message
-                        route_instruction = self.structured_handler.build_route_instruction(
-                            allowed_routes
-                        )
-                        message = f"{message}{route_instruction}"
+            structured_config = await self._handle_structured_output(
+                step_data, node.id, context.workflow_run, message
+            )
 
             # Log debug information
-            await self._log_step_debug_info(step_data, node.id, use_structured)
+            await self._log_step_debug_info(
+                step_data, node.id, structured_config['use_structured']
+            )
 
             # Execute LLM query
             raw_response, token_usage = await self._execute_llm_query(
                 step_data=step_data,
-                message=message,
+                message=structured_config['final_message'],
                 context=context,
                 workflow_run_step=workflow_run_step,
-                structured_spec=structured_spec
+                structured_spec=structured_config['structured_spec']
             )
 
             # Normalize response if using structured output
-            final_response = raw_response
-            if use_structured and allowed_routes:
-                final_response, _ = self.structured_handler.normalize_route_response(
-                    raw_response,
-                    allowed_routes,
-                    node.id
-                )
+            final_response = await self._normalize_response_if_structured(
+                raw_response=raw_response,
+                structured_config=structured_config,
+                node_id=node.id
+            )
 
             # Process billing using base handler
-            user = await self._get_user_from_workflow_run(context.workflow_run)
-            llm = await self._get_llm_for_step(step_data)
-            
-            await self._process_billing(
-                token_usage=token_usage,
-                llm=llm,
-                user=user,
-                step_node_id=node.db_node.id
+            await self._process_step_billing(
+                step_data, context.workflow_run, node, token_usage
+            )
+
+            # Create metadata for structured output
+            metadata = self._create_step_metadata(
+                final_response, raw_response, structured_config
             )
 
             # Update workflow run step with results
-            metadata = None
-            if use_structured:
-                metadata = self.structured_handler.create_metadata_for_step(
-                    selected_route=final_response,
-                    raw_response=raw_response,
-                    allowed_routes=allowed_routes,
-                    use_structured=True
-                )
-            
             await self._update_step_status(
                 workflow_run_step=workflow_run_step,
                 status=WorkflowRunStepStatus.COMPLETED,
@@ -169,24 +157,31 @@ class StepNodeHandler(BaseExecutionHandler):
                 metadata=metadata
             )
 
+            # Calculate execution time
             end_time = timezone.now()
             execution_time = (end_time - start_time).total_seconds()
 
             logger.info(
-                f"Successfully executed step node {node.id} in {execution_time:.2f}s"
+                f"[{correlation_id}] Successfully executed step node in {execution_time:.2f}s"
             )
 
             return NodeExecutionResult(
                 success=True,
                 output=final_response,
                 token_usage=token_usage,
-                execution_time=execution_time
+                execution_time=execution_time,
+                metadata=metadata
             )
 
         except Exception as e:
-            # Use base handler error building
+            # Use utility for error handling
+            logger.error(
+                f"[{correlation_id}] Step node execution failed: {str(e)}",
+                exc_info=True
+            )
+
             result = self._build_error_result(e, node, start_time)
-            
+
             # Update workflow run step with error
             try:
                 workflow_run_step = await self._get_or_create_workflow_run_step(
@@ -199,132 +194,224 @@ class StepNodeHandler(BaseExecutionHandler):
                     error=result.error
                 )
             except Exception as update_error:
-                logger.error(f"Failed to update step status: {str(update_error)}")
-            
+                logger.error(
+                    f"[{correlation_id}] Failed to update step status: {str(update_error)}"
+                )
+
             return result
 
-    async def _prepare_message(
+    # ==================== Private Helper Methods ====================
+
+    async def _get_and_validate_step_data(
+        self, node: ExecutionNode
+    ) -> Optional[StepNodeData]:
+        """
+        Get and validate step node data.
+
+        Args:
+            node: The execution node
+
+        Returns:
+            StepNodeData if valid, None otherwise
+        """
+        step_data = await database_sync_to_async(
+            lambda: node.db_node.data_object
+        )()
+
+        if not NodeDataValidator.validate_node_data_type(
+            step_data, StepNodeData, node.id
+        ):
+            return None
+
+        return step_data
+
+    async def _prepare_message_for_step(
         self,
         step_data: StepNodeData,
         context: NodeExecutionContext
     ) -> str:
         """
-        Prepare the message for LLM based on step configuration and context.
-
-        This method combines:
-        - Step's prompt content
-        - Previous step results
-        - Text input from step configuration
+        Prepare message for LLM using StepMessagePreparer utility.
 
         Args:
             step_data: Step node configuration
-            context: Execution context with previous results
+            context: Execution context
 
         Returns:
             Formatted message ready for LLM processing
         """
-        # Get base prompt content
+        # Get prompt content
         prompt_content = ""
         prompt = await database_sync_to_async(lambda: step_data.prompt)()
         if prompt:
             prompt_content = await database_sync_to_async(lambda: prompt.content)()
 
-        # Get text input from step configuration
+        # Get text input
         text_input = await database_sync_to_async(
             lambda: step_data.text_input or ""
         )()
 
-        # Collect previous outputs from direct dependencies
-        previous_outputs = []
-        if context.previous_results:
-            for node_id, result_data in context.previous_results.items():
-                if self._is_valid_result(result_data):
-                    previous_outputs.append(f"Result from {node_id}:\n{result_data['output']}")
-
-        # Build message based on available inputs
-        if previous_outputs:
-            if len(previous_outputs) == 1:
-                # Single input - use traditional format
-                combined_input = previous_outputs[0].replace(
-                    f"Result from {list(context.previous_results.keys())[0]}:\n", ""
-                )
-                base = self._combine_prompt_and_input(prompt_content, combined_input, "Previous step result")
-            else:
-                # Multiple inputs - combine all results
-                combined_input = "\n\n".join(previous_outputs)
-                base = self._combine_prompt_and_input(prompt_content, combined_input, "Results from previous steps")
-
-            # Add text input if present
-            message = self._add_additional_input(base, text_input)
-
-        elif context.current_input:
-            # Fallback to current_input for backward compatibility
-            base = self._combine_prompt_and_input(prompt_content, context.current_input, "Previous step result")
-            message = self._add_additional_input(base, text_input)
-
-        else:
-            # No previous input - use prompt and text input
-            base = prompt_content or DefaultValues.DEFAULT_TASK_MESSAGE
-            message = self._add_additional_input(base, text_input)
+        # Use utility to prepare message
+        message = await StepMessagePreparer.prepare_message(
+            prompt_content=prompt_content,
+            text_input=text_input,
+            previous_results=context.previous_results,
+            current_input=context.current_input
+        )
 
         return message
 
-    def _is_valid_result(self, result_data: Dict) -> bool:
+    async def _handle_structured_output(
+        self,
+        step_data: StepNodeData,
+        node_id: str,
+        workflow_run: WorkflowRun,
+        base_message: str
+    ) -> Dict[str, Any]:
         """
-        Check if result data is valid and not skipped.
+        Handle structured output configuration for the step.
 
         Args:
-            result_data: Result data dictionary
+            step_data: Step node configuration
+            node_id: Step node ID
+            workflow_run: Current workflow run
+            base_message: Base message to potentially augment
 
         Returns:
-            bool: True if result is valid and not skipped
+            Dictionary with structured output configuration:
+                - use_structured: bool
+                - allowed_routes: List[str]
+                - structured_spec: Optional[Dict]
+                - final_message: str (possibly augmented with instructions)
         """
-        if not result_data or not isinstance(result_data, dict):
-            return False
+        use_structured = await database_sync_to_async(
+            lambda: step_data.use_structured_output_node
+        )()
 
-        if not result_data.get('output'):
-            return False
+        config = {
+            'use_structured': use_structured,
+            'allowed_routes': [],
+            'structured_spec': None,
+            'final_message': base_message
+        }
 
-        metadata = result_data.get('metadata') or {}
-        is_skipped = metadata.get('skipped', False)
+        if not use_structured:
+            return config
 
-        return not is_skipped
+        # Resolve routes using utility
+        allowed_routes = await RouteResolver.resolve_routes_for_step(
+            workflow_run, node_id
+        )
 
-    def _combine_prompt_and_input(
+        if not allowed_routes:
+            logger.warning(f"Step {node_id} has structured output enabled but no routes found")
+            return config
+
+        config['allowed_routes'] = allowed_routes
+
+        # Build structured spec using utility
+        config['structured_spec'] = StructuredOutputBuilder.build_structured_spec(
+            allowed_routes
+        )
+
+        # Check if provider supports native structured output
+        llm = await self._get_llm_for_step(step_data)
+        llm_provider = await database_sync_to_async(lambda: llm.provider)()
+
+        if not SchemaTransformer.supports_native_structured_output(llm_provider):
+            # Fallback: append route instruction to message
+            instruction = RouteInstructionBuilder.build_simple_instruction(
+                allowed_routes
+            )
+            config['final_message'] = f"{base_message}{instruction}"
+            logger.debug(
+                f"Provider {llm_provider} doesn't support native structured output, "
+                "added instructions to message"
+            )
+
+        return config
+
+    async def _normalize_response_if_structured(
         self,
-        prompt_content: str,
-        input_text: str,
-        input_label: str
+        raw_response: str,
+        structured_config: Dict[str, Any],
+        node_id: str
     ) -> str:
         """
-        Combine prompt content with input text.
+        Normalize response if structured output is being used.
 
         Args:
-            prompt_content: Base prompt text
-            input_text: Input to combine
-            input_label: Label for the input section
+            raw_response: Raw LLM response
+            structured_config: Structured output configuration
+            node_id: Node ID for logging
 
         Returns:
-            Combined text
+            Normalized response (matches route if structured, else raw)
         """
-        if prompt_content:
-            return f"{prompt_content}\n\n{input_label}:\n{input_text}"
-        return input_text
+        if not structured_config['use_structured'] or not structured_config['allowed_routes']:
+            return raw_response
 
-    def _add_additional_input(self, base: str, text_input: str) -> str:
+        # Use utility for normalization
+        normalized, _ = RouteNormalizer.normalize_route_response(
+            raw_response,
+            structured_config['allowed_routes'],
+            node_id
+        )
+
+        return normalized
+
+    async def _process_step_billing(
+        self,
+        step_data: StepNodeData,
+        workflow_run: WorkflowRun,
+        node: ExecutionNode,
+        token_usage: Optional[Dict]
+    ):
         """
-        Add additional text input to base message.
+        Process billing for the step execution.
 
         Args:
-            base: Base message
-            text_input: Additional text input
+            step_data: Step node configuration
+            workflow_run: Current workflow run
+            node: Execution node
+            token_usage: Token usage from LLM call
+        """
+        user = await self._get_user_from_workflow_run(workflow_run)
+        llm = await self._get_llm_for_step(step_data)
+
+        await self._process_billing(
+            token_usage=token_usage,
+            llm=llm,
+            user=user,
+            step_node_id=node.db_node.id
+        )
+
+    def _create_step_metadata(
+        self,
+        final_response: str,
+        raw_response: str,
+        structured_config: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Create metadata dictionary for step results.
+
+        Args:
+            final_response: Normalized final response
+            raw_response: Raw LLM response
+            structured_config: Structured output configuration
 
         Returns:
-            Message with additional input if present
+            Metadata dictionary if structured output used, None otherwise
         """
-        if text_input.strip():
-            return f"{base}\n\nAdditional input:\n{text_input.strip()}"
-        return base
+        if not structured_config['use_structured']:
+            return None
+
+        return StructuredOutputBuilder.create_route_metadata(
+            selected_route=final_response,
+            raw_response=raw_response,
+            allowed_routes=structured_config['allowed_routes'],
+            use_structured=True
+        )
 
     async def _execute_llm_query(
         self,
@@ -337,6 +424,8 @@ class StepNodeHandler(BaseExecutionHandler):
         """
         Execute LLM query and collect response.
 
+        Uses the base LLM service query method for execution.
+
         Args:
             step_data: Step node configuration
             message: Prepared message for LLM
@@ -345,7 +434,7 @@ class StepNodeHandler(BaseExecutionHandler):
             structured_spec: Optional unified structured output specification
 
         Returns:
-            tuple: (response_text, token_usage)
+            Tuple of (response_text, token_usage)
         """
         # Get LLM configuration
         llm = await self._get_llm_for_step(step_data)
@@ -368,7 +457,7 @@ class StepNodeHandler(BaseExecutionHandler):
             lambda: step_data.prompt.id if step_data.prompt else None
         )()
 
-        # Execute LLM query
+        # Execute LLM query via base service
         response_generator = self.llm_service.query(
             message=message,
             conversation=None,
@@ -394,24 +483,39 @@ class StepNodeHandler(BaseExecutionHandler):
         Get the LLM to use for this step.
 
         Returns the LLM configured for this step, or falls back to the first
-        available OpenAI model if no LLM is specifically configured.
+        available default provider model if no LLM is specifically configured.
 
         Args:
             step_data: Step node configuration
 
         Returns:
             LLM instance
+
+        Raises:
+            ValueError: If no LLM can be determined
         """
         llm = await database_sync_to_async(lambda: step_data.llm)()
 
-        if not llm:
-            llm = await database_sync_to_async(
-                lambda: LLM.objects.filter(
-                    provider=DefaultValues.DEFAULT_LLM_PROVIDER
-                ).first()
-            )()
+        if llm:
+            return llm
 
-        return llm
+        # Fallback to default provider
+        logger.warning(
+            f"No LLM configured for step, falling back to {LLMDefaults.DEFAULT_PROVIDER}"
+        )
+
+        default_llm = await database_sync_to_async(
+            lambda: LLM.objects.filter(
+                provider=LLMDefaults.DEFAULT_PROVIDER
+            ).first()
+        )()
+
+        if not default_llm:
+            raise ValueError(
+                f"No LLM configured and no {LLMDefaults.DEFAULT_PROVIDER} LLM available"
+            )
+
+        return default_llm
 
     async def _log_step_debug_info(
         self,
@@ -436,14 +540,13 @@ class StepNodeHandler(BaseExecutionHandler):
                 lambda: step_data.embedding_files.count()
             )()
 
-            self.structured_handler.log_structured_output_debug(
-                step_node_id=step_node_id,
-                use_structured=use_structured,
-                text_input_len=text_input_len,
-                content_files_count=content_files_count,
-                embedding_files_count=embedding_files_count
+            logger.debug(
+                f"Step {step_node_id}: use_structured={use_structured}, "
+                f"text_input_len={text_input_len}, "
+                f"content_files={content_files_count}, "
+                f"embedding_files={embedding_files_count}"
             )
 
-        except Exception:
+        except Exception as e:
             # Don't break execution if debug logging fails
-            pass
+            logger.warning(f"Failed to log debug info: {e}")
