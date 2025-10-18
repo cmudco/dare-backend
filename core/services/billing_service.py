@@ -160,8 +160,8 @@ class BillingService:
             logger.exception(f"Error finalizing message: {str(e)}")
             raise ValidationError({"error": "billing_error", "message": "Failed to process billing"})
 
-    def process_workflow_billing(self, user: 'User', llm: LLM, input_tokens: int, output_tokens: int, step_node_id: int) -> bool:
-        """Process billing for a workflow step."""
+    def process_workflow_billing(self, user: 'User', llm: LLM, input_tokens: int, output_tokens: int, step_node_id: int = None) -> bool:
+        """Process billing for a workflow step or conditional node."""
         try:
             cost = self._calculate_cost(llm, input_tokens, output_tokens)
 
@@ -173,16 +173,22 @@ class BillingService:
                 logger.error(f"Wallet not found for user: {user.id}")
                 return False
 
-            step_node = WorkflowNode.objects.get(id=step_node_id)
-            workflow = step_node.workflow
-
-            # Get step number from node data if available
-            step_number = getattr(step_node.data_object, 'step_number', None) if step_node.data_object else None
-            step_order = step_number or 1
+            if step_node_id:
+                step_node = WorkflowNode.objects.get(id=step_node_id)
+                workflow = step_node.workflow
+                step_number = getattr(step_node.data_object, 'step_number', None) if step_node.data_object else None
+                step_order = step_number or 1
+            else:
+                workflow = None
+                step_order = 0
 
             workflow_title = workflow.title if workflow else "Unknown Workflow"
+            workflow_id = workflow.id if workflow else "N/A"
 
-            transaction_message = f"Workflow {workflow.id} : Title - {workflow_title} | Step #{step_order} "
+            if step_order > 0:
+                transaction_message = f"Workflow {workflow_id} : Title - {workflow_title} | Step #{step_order} "
+            else:
+                transaction_message = f"Workflow {workflow_id} : Title - {workflow_title} | Conditional Node "
 
             if wallet.balance < cost:
                 amount_to_deduct = wallet.balance

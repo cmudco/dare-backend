@@ -7,7 +7,8 @@ from core.services.openai_service import OpenAIService
 from core.services.claude_service import ClaudeService
 from core.services.gemini_service import GeminiService
 from core.services.llama_service import LlamaService
-from typing import AsyncGenerator, Dict, Tuple
+from core.services.file_processor import FileProcessor
+from typing import AsyncGenerator, Dict, Tuple, Optional, Any
 from files.models import File, Folder
 from prompts.models import Prompt
 from core.services.vector_service import get_vector_service_async
@@ -17,13 +18,16 @@ class AIService(ABC):
     @abstractmethod
     async def stream_chat_completion(self, messages: list, max_tokens: int, temperature: float, images: list = None, tools: list = None) -> AsyncGenerator[Tuple[str, Dict], None]:
         pass
+    @abstractmethod
+    async def get_chat_completion(self, messages: list, max_tokens: int, temperature: float, structured_spec: Optional[Dict[str, Any]] = None) -> str:
+        """Non-streaming chat completion, optionally honoring structured outputs spec."""
+        pass
 
 class LLMService:
     """Service for handling AI message generation with document context."""
 
     def __init__(self):
         self.document_processor = DocumentProcessor(vector_service=None)
-        from core.services.file_processor import FileProcessor
         self.file_processor = FileProcessor()
 
     async def query(
@@ -52,6 +56,7 @@ class LLMService:
         bot_meta: Dict = None,
         advanced_mode: bool = False,
         web_search_enabled: bool = False,
+        structured_spec: Optional[Dict[str, Any]] = None,
     ) -> AsyncGenerator[Tuple[str, Dict], None]:
         """Generate AI response with context."""
         try:
@@ -82,8 +87,12 @@ class LLMService:
 
                 ai_service = self._get_ai_service(llm)
                 tools = self._get_web_search_tools(llm) if web_search_enabled else None
-                async for chunk, usage in ai_service.stream_chat_completion(messages, max_tokens, temperature, images=images, tools=tools):
-                    yield chunk, usage
+                if structured_spec:
+                    text = await ai_service.get_chat_completion(messages, max_tokens, temperature, structured_spec=structured_spec)
+                    yield text, None
+                else:
+                    async for chunk, usage in ai_service.stream_chat_completion(messages, max_tokens, temperature, images=images, tools=tools):
+                        yield chunk, usage
                 return
 
             conversation_history = await self.get_conversation_history(conversation, limit=history_limit) if conversation else []
@@ -143,8 +152,12 @@ class LLMService:
 
             ai_service = self._get_ai_service(llm)
             tools = self._get_web_search_tools(llm) if web_search_enabled else None
-            async for chunk, usage in ai_service.stream_chat_completion(messages, max_tokens, temperature, images=images, tools=tools):
-                yield chunk, usage
+            if structured_spec:
+                text = await ai_service.get_chat_completion(messages, max_tokens, temperature, structured_spec=structured_spec)
+                yield text, None
+            else:
+                async for chunk, usage in ai_service.stream_chat_completion(messages, max_tokens, temperature, images=images, tools=tools):
+                    yield chunk, usage
 
         except Exception as e:
             yield f"Error: {str(e)}", None
