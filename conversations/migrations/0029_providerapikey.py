@@ -8,7 +8,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("conversations", "0027_add_web_search_enabled"),
+        ("conversations", "0028_messagewithfeedback"),
     ]
 
     operations = [
