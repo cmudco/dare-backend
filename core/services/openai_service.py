@@ -1,141 +1,96 @@
-from typing import AsyncGenerator, List, Dict, Tuple, Optional
+"""
+OpenAI LLM service implementation.
+
+This service provides a clean, readable interface for interacting with OpenAI's
+GPT models, including support for streaming, vision, web search, and structured outputs.
+"""
+
 import json
 import logging
+from typing import AsyncGenerator, List, Dict, Tuple, Optional
+
 from openai import AsyncOpenAI
+
 from config import env
 from conversations.models import LLM
+from core.services.llm_utils import (
+    OpenAIMessageFormatter,
+    OpenAIVisionHandler,
+    OpenAIErrorHandler,
+    OpenAIStreamProcessor,
+    OpenAIWebSearchTools,
+    WebSearchTools,
+    StreamAggregator,
+    SchemaTransformer,
+)
+
+logger = logging.getLogger(__name__)
+
 
 class OpenAIService:
-    """Service for interacting with OpenAI's GPT models with optional streaming."""
+    """Service for interacting with OpenAI's GPT models."""
 
     def __init__(self, llm: LLM):
+        """
+        Initialize OpenAI service.
+
+        Args:
+            llm: LLM model instance with configuration
+        """
         self.client = AsyncOpenAI(api_key=env.OPENAI_API_KEY)
         self.model = llm.identifier
         self.is_reasoning = llm.is_reasoning
 
     async def stream_chat_completion(
-        self, messages: List[Dict[str, str]], max_tokens: int = 1024, temperature: float = 0.7, images: List[Dict] = None, tools: Optional[List[Dict]] = None
+        self,
+        messages: List[Dict[str, str]],
+        max_tokens: int = 1024,
+        temperature: float = 0.7,
+        images: List[Dict] = None,
+        tools: Optional[List[Dict]] = None
     ) -> AsyncGenerator[Tuple[str, Dict], None]:
         """
-        Streams chat completions from OpenAI's GPT model.
+        Stream chat completions from OpenAI's GPT model.
 
-        This method sends a list of messages to the OpenAI API and yields the response chunks
-        as they are received. It supports both reasoning and non-reasoning models, adjusting
-        parameters accordingly.
+        This is the main public method for streaming responses. It orchestrates
+        the entire streaming process with clear separation of concerns.
 
         Args:
-            messages (List[Dict[str, str]]): A list of message dictionaries with 'role' and 'content' keys.
-            max_tokens (int, optional): Maximum number of tokens to generate. Defaults to 1024.
-            temperature (float, optional): Controls randomness of the output (0.0 to 1.0). Defaults to 0.7.
-            tools (Optional[List[Dict]]): If provided and contains web search indicator, enables web search
+            messages: List of message dictionaries with 'role' and 'content'
+            max_tokens: Maximum number of tokens to generate
+            temperature: Controls randomness (0.0 to 1.0)
+            images: List of image dicts for vision support
+            tools: Optional tools list for web search
 
         Yields:
-            Tuple[str, Dict]: Text chunk and usage data (or None if usage not available)
-
-        Raises:
-            Exception: If an error occurs during the API call, yields an error message.
+            Tuple of (text_chunk, usage_data)
         """
-        if images:
-            messages = self._add_vision_to_messages(messages, images)
-
         try:
-            web_search_enabled = tools and len(tools) > 0
+            # Step 1: Prepare messages with vision if needed
+            prepared_messages = self._prepare_messages(messages, images)
+
+            # Step 2: Create appropriate stream (web search vs regular)
+            web_search_enabled = WebSearchTools.has_web_search(tools)
 
             if web_search_enabled:
-                response = await self._stream_with_web_search(messages)
+                response = await self._stream_with_web_search(prepared_messages)
+                processor = OpenAIStreamProcessor.process_responses_api_stream
             else:
-                response = await self._stream_chat_completions(messages, max_tokens, temperature)
+                response = await self._stream_chat_completions(
+                    prepared_messages,
+                    max_tokens,
+                    temperature
+                )
+                processor = OpenAIStreamProcessor.process_chat_completion_stream
 
-            async for chunk, usage in self._process_stream_chunks(response, web_search_enabled):
+            # Step 3: Process and yield stream chunks
+            async for chunk, usage in processor(response):
                 yield chunk, usage
 
         except Exception as e:
-            logging.getLogger(__name__).exception("OpenAI streaming error")
-            yield f"Error: {self._format_error(e)}", None
-
-    async def _stream_with_web_search(self, messages: List[Dict[str, str]]):
-        """Stream using Responses API with web search enabled."""
-        has_multimodal = messages and isinstance(messages[-1].get("content"), list)
-
-        if not has_multimodal:
-            # Simple text format
-            input_data = "\n".join([f"{msg['role']}: {msg['content']}" for msg in messages])
-        else:
-            # Multimodal format - build structured content array
-            input_data = []
-            for msg in messages:
-                role_prefix = f"{msg['role']}: "
-                content = msg.get("content", "")
-
-                if isinstance(content, str):
-                    input_data.append({"type": "text", "text": role_prefix + content})
-                    continue
-
-                # Process structured content (text + images)
-                for item in content:
-                    if item.get("type") == "text":
-                        input_data.append({"type": "text", "text": role_prefix + item["text"]})
-                    elif item.get("type") == "image_url":
-                        input_data.append({"type": "image_url", "image_url": item["image_url"]["url"]})
-
-        return await self.client.responses.create(
-            model=self.model,
-            input=input_data,
-            tools=[{"type": "web_search"}],
-            stream=True
-        )
-
-    async def _stream_chat_completions(self, messages: List[Dict[str, str]], max_tokens: int, temperature: float):
-        """Stream using Chat Completions API."""
-        kwargs = {
-            "model": self.model,
-            "messages": messages,
-            "stream": True,
-            "stream_options": {"include_usage": True},
-        }
-
-        if not self.is_reasoning:
-            kwargs["max_tokens"] = max_tokens
-            kwargs["temperature"] = temperature
-        else:
-            kwargs["max_completion_tokens"] = max_tokens
-
-        return await self.client.chat.completions.create(**kwargs)
-
-    async def _process_stream_chunks(self, response, web_search_enabled: bool) -> AsyncGenerator[Tuple[str, Dict], None]:
-        """Process stream chunks from either Responses API or Chat Completions API."""
-        async for chunk in response:
-            if web_search_enabled:
-                # Handle Responses API format
-                if hasattr(chunk, 'type'):
-                    if chunk.type == 'response.output_text.delta':
-                        if hasattr(chunk, 'delta') and chunk.delta:
-                            yield chunk.delta, None
-                    elif chunk.type == 'response.completed':
-                        # Usage is available in response.completed event
-                        if hasattr(chunk, 'response') and hasattr(chunk.response, 'usage') and chunk.response.usage:
-                            usage_obj = chunk.response.usage
-                            input_tokens = getattr(usage_obj, 'input_tokens', None)
-                            output_tokens = getattr(usage_obj, 'output_tokens', None)
-
-                            if input_tokens is not None and output_tokens is not None:
-                                usage = {
-                                    "input_tokens": input_tokens,
-                                    "output_tokens": output_tokens,
-                                    "total_tokens": input_tokens + output_tokens
-                                }
-                                yield "", usage
-            else:
-                # Handle Chat Completions API format
-                if chunk.choices and chunk.choices[0].delta.content:
-                    yield chunk.choices[0].delta.content, None
-                if chunk.usage:
-                    usage = {
-                        "input_tokens": chunk.usage.prompt_tokens,
-                        "output_tokens": chunk.usage.completion_tokens,
-                        "total_tokens": chunk.usage.total_tokens
-                    }
-                    yield "", usage
+            logger.exception("OpenAI streaming error")
+            error_message = OpenAIErrorHandler.format_error(e)
+            yield f"Error: {error_message}", None
 
     async def get_chat_completion(
         self,
@@ -145,143 +100,221 @@ class OpenAIService:
         structured_spec: Optional[Dict] = None,
     ) -> str:
         """
-        Retrieves a complete chat completion from OpenAI's GPT model.
+        Get a complete (non-streaming) chat completion.
 
-        This method uses the streaming functionality to collect all response chunks into a single string.
-        It is a convenience wrapper around `stream_chat_completion`.
+        This method handles both regular completions and structured outputs.
 
         Args:
-            messages (List[Dict[str, str]]): A list of message dictionaries with 'role' and 'content' keys.
-            max_tokens (int, optional): Maximum number of tokens to generate. Defaults to 1024.
-            temperature (float, optional): Controls randomness of the output (0.0 to 1.0). Defaults to 0.7.
-            structured_spec (Optional[Dict]): Unified schema spec for structured outputs
+            messages: List of message dictionaries
+            max_tokens: Maximum number of tokens to generate
+            temperature: Controls randomness (0.0 to 1.0)
+            structured_spec: Optional schema specification for structured outputs
 
         Returns:
-            str: The complete generated response text.
-
-        Raises:
-            Exception: If an error occurs, the error message is included in the returned string.
+            Complete generated response text
         """
-        # If structured spec is provided, use native OpenAI structured outputs
         if structured_spec:
-            from core.services.schema_transformer import SchemaTransformer
-            
-            response_format = SchemaTransformer.transform_for_openai(structured_spec)
-            
-            if response_format:
-                # Use Responses API for structured outputs
-                has_multimodal = messages and isinstance(messages[-1].get("content"), list)
-                if not has_multimodal:
-                    input_data = "\n".join([f"{m['role']}: {m.get('content','')}" for m in messages])
-                else:
-                    # Fallback: flatten to text only for structured outputs
-                    flat = []
-                    for m in messages:
-                        content = m.get('content', '')
-                        if isinstance(content, str):
-                            flat.append(f"{m['role']}: {content}")
-                    input_data = "\n".join(flat)
+            return await self._get_structured_completion(
+                messages,
+                structured_spec
+            )
 
-                resp = await self.client.responses.create(
-                    model=self.model,
-                    input=input_data,
-                    response_format=response_format,
-                )
-                
-                # Extract text and parse JSON
-                text_out = getattr(resp, 'output_text', None)
-                if text_out:
-                    try:
-                        data = json.loads(text_out)
-                        field_name = structured_spec.get('field', 'route')
-                        value = data.get(field_name)
-                        return str(value) if value is not None else text_out
-                    except Exception:
-                        return text_out
-                return ""
+        # Default: use streaming and aggregate
+        stream = self.stream_chat_completion(messages, max_tokens, temperature)
+        return await StreamAggregator.aggregate_stream(stream)
 
-        # Default: stream and aggregate
-        response_text = ""
-        async for chunk, _ in self.stream_chat_completion(messages, max_tokens, temperature):
-            response_text += chunk
-        return response_text
+    # ==================== Private Methods ====================
 
-    def _add_vision_to_messages(self, messages: List[Dict], images: List[Dict]) -> List[Dict]:
+    def _prepare_messages(
+        self,
+        messages: List[Dict],
+        images: Optional[List[Dict]]
+    ) -> List[Dict]:
         """
-        Add vision content to the last user message in OpenAI format.
+        Prepare messages by adding vision content if needed.
 
-        OpenAI expects: {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,..."}}
+        Args:
+            messages: Original messages
+            images: Optional images to add
+
+        Returns:
+            Messages with vision content added
         """
-        for i in range(len(messages) - 1, -1, -1):
-            if messages[i].get("role") == "user":
-                text_content = messages[i]["content"]
-                messages[i]["content"] = [
-                    {"type": "text", "text": text_content},
-                    *[{"type": "image_url", "image_url": {"url": img["preview"]}} for img in images]
-                ]
-                break
-        return messages
+        if not images:
+            return messages
 
-    def _format_error(self, e: Exception) -> str:
-        """Extract a concise error message from OpenAI/HTTP exceptions.
+        return OpenAIVisionHandler.add_images_to_messages(messages, images)
 
-        Tries common shapes (OpenAI error payloads, httpx/requests responses),
-        then falls back to str(e).
+    async def _stream_with_web_search(self, messages: List[Dict[str, str]]):
         """
-        # Check for overloaded condition first and short-circuit with a friendly message
+        Stream using Responses API with web search enabled.
+
+        Args:
+            messages: Prepared messages
+
+        Returns:
+            OpenAI Responses API stream
+        """
+        input_data = OpenAIMessageFormatter.format_for_responses_api(messages)
+
+        return await self.client.responses.create(
+            model=self.model,
+            input=input_data,
+            tools=[{"type": "web_search"}],
+            stream=True
+        )
+
+    async def _stream_chat_completions(
+        self,
+        messages: List[Dict[str, str]],
+        max_tokens: int,
+        temperature: float
+    ):
+        """
+        Stream using Chat Completions API.
+
+        Args:
+            messages: Prepared messages
+            max_tokens: Max tokens to generate
+            temperature: Temperature setting
+
+        Returns:
+            OpenAI Chat Completions stream
+        """
+        kwargs = self._build_chat_completion_params(
+            messages,
+            max_tokens,
+            temperature
+        )
+
+        return await self.client.chat.completions.create(**kwargs)
+
+    def _build_chat_completion_params(
+        self,
+        messages: List[Dict],
+        max_tokens: int,
+        temperature: float
+    ) -> Dict:
+        """
+        Build parameters for chat completion API call.
+
+        Args:
+            messages: List of messages
+            max_tokens: Max tokens to generate
+            temperature: Temperature setting
+
+        Returns:
+            Parameters dictionary
+        """
+        params = {
+            "model": self.model,
+            "messages": messages,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+
+        # Reasoning models use different parameter names
+        if self.is_reasoning:
+            params["max_completion_tokens"] = max_tokens
+        else:
+            params["max_tokens"] = max_tokens
+            params["temperature"] = temperature
+
+        return params
+
+    async def _get_structured_completion(
+        self,
+        messages: List[Dict],
+        structured_spec: Dict
+    ) -> str:
+        """
+        Get structured output using OpenAI response format.
+
+        Args:
+            messages: List of messages
+            structured_spec: Schema specification
+
+        Returns:
+            Extracted field value as string
+        """
+        response_format = SchemaTransformer.transform_for_openai(structured_spec)
+
+        if not response_format:
+            # Fallback to regular completion
+            stream = self.stream_chat_completion(messages)
+            return await StreamAggregator.aggregate_stream(stream)
+
+        # Generate with structured output
+        response = await self._generate_with_structure(
+            messages,
+            response_format
+        )
+
+        # Extract and return field value
+        return self._extract_field_value(response, structured_spec)
+
+    async def _generate_with_structure(
+        self,
+        messages: List[Dict],
+        response_format: Dict
+    ):
+        """
+        Generate completion with response format.
+
+        Args:
+            messages: List of messages
+            response_format: Response format specification
+
+        Returns:
+            OpenAI response
+        """
+        # Flatten to text-only for structured outputs
+        input_data = OpenAIMessageFormatter.format_for_responses_api(messages)
+
+        if not isinstance(input_data, str):
+            # Has multimodal - flatten to text
+            input_data = OpenAIMessageFormatter.flatten_to_text(messages)
+
+        return await self.client.responses.create(
+            model=self.model,
+            input=input_data,
+            response_format=response_format,
+        )
+
+    def _extract_field_value(self, response, structured_spec: Dict) -> str:
+        """
+        Extract field value from structured response.
+
+        Args:
+            response: OpenAI response object
+            structured_spec: Schema specification with field name
+
+        Returns:
+            Extracted value as string
+        """
+        text_out = getattr(response, 'output_text', None)
+
+        if not text_out:
+            return ""
+
         try:
-            resp = getattr(e, "response", None)
-            if resp is not None:
-                try:
-                    data = resp.json()
-                    if isinstance(data, dict):
-                        err = data.get("error")
-                        if isinstance(err, dict):
-                            err_type = (err.get("type") or "").lower()
-                            if err_type == "overloaded_error":
-                                return "Due to high traffic, openai services are un-available"
-                except Exception:
-                    pass
-            if "overload" in str(e).lower():
-                return "Due to high traffic, openai services are un-available"
+            data = json.loads(text_out)
+            field_name = structured_spec.get('field', 'route')
+            value = data.get(field_name)
+            return str(value) if value is not None else text_out
         except Exception:
-            pass
+            return text_out
 
-        # OpenAI errors often expose a response with JSON body
-        resp = getattr(e, "response", None)
-        if resp is not None:
-            try:
-                data = resp.json()
-                if isinstance(data, dict):
-                    err = data.get("error")
-                    if isinstance(err, dict):
-                        msg = err.get("message") or err.get("code") or err.get("type")
-                        if isinstance(msg, str) and msg:
-                            return f"OpenAI error: {msg}"
-                    for key in ("message", "detail", "error"):
-                        val = data.get(key)
-                        if isinstance(val, str) and val:
-                            return f"OpenAI error: {val}"
-            except Exception:
-                try:
-                    text = getattr(resp, "text", "")
-                    if text:
-                        return f"OpenAI error: {text[:200]}"
-                except Exception:
-                    pass
-
-        msg = getattr(e, "message", None)
-        if isinstance(msg, str) and msg:
-            return f"OpenAI error: {msg}"
-
-        return f"OpenAI error: {str(e)}"
+    # ==================== Static Methods ====================
 
     @staticmethod
-    def get_web_search_tool():
-        """Get web search tool indicator for OpenAI.
+    def get_web_search_tool() -> Dict:
+        """
+        Get web search tool indicator for OpenAI.
 
         OpenAI uses the Responses API with tools=[{"type": "web_search"}].
-        Supported on all models via the Responses API.
-        Returns a marker dict to indicate web search should be enabled.
+
+        Returns:
+            Web search tool dictionary
         """
-        return {"type": "web_search"}
+        return OpenAIWebSearchTools.get_tool_definition()

@@ -16,6 +16,7 @@ from workflows.models import WorkflowNode, WorkflowRun, WorkflowRunStep, StepNod
 from workflows.constants import WorkflowRunStepStatus
 from workflows.node_handler_constants import DefaultValues
 from conversations.models import LLM
+from core.services.llm_utils import SchemaTransformer
 
 
 logger = logging.getLogger(__name__)
@@ -111,8 +112,7 @@ class StepNodeHandler(BaseExecutionHandler):
                     # For providers without native support, add instructions to message
                     llm = await self._get_llm_for_step(step_data)
                     llm_provider = await database_sync_to_async(lambda: llm.provider)()
-                    
-                    from core.services.schema_transformer import SchemaTransformer
+
                     if not SchemaTransformer.supports_native_structured_output(llm_provider):
                         # Fallback: append route instruction to message
                         route_instruction = self.structured_handler.build_route_instruction(
