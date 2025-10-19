@@ -360,7 +360,7 @@ class ConditionalNodeHandler(BaseExecutionHandler):
             llm=llm,
             file_ids=None,
             embedding_ids=None,
-            user_id=user.id,
+            user=user,
             prompt_id=None,
             message_obj=None,
             workflow_run_step_obj=None,
