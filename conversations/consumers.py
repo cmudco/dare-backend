@@ -199,7 +199,7 @@ Provide your assessment in a clear, encouraging format that helps track their pr
                 message_data["embedding_ids"],
                 message_data["tag_ids"],
                 message_data["folder_ids"],
-                user_id=self.user.id,
+                user=self.user,
                 prompt_id=message_data["prompt_id"],
                 temperature=message_data["temperature"],
                 max_tokens=message_data["max_tokens"],
