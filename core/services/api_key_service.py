@@ -19,6 +19,8 @@ from asgiref.sync import sync_to_async
 from config import env
 from conversations.constants import Provider
 from conversations.models import ProviderAPIKey
+from api_keys.models import UserProviderAPIKey
+from api_keys.constants import BillingModeChoice
 
 logger = logging.getLogger(__name__)
 
@@ -169,10 +171,6 @@ def get_provider_api_key_for_user_sync(provider: str, user) -> str:
         >>> api_key = get_provider_api_key_for_user_sync(Provider.OPENAI.value, request.user)
         >>> client = OpenAI(api_key=api_key)
     """
-    # Avoid circular import
-    from api_keys.models import UserProviderAPIKey
-    from api_keys.constants import BillingModeChoice
-
     # Check user's billing mode
     if user.billing_mode == BillingModeChoice.OWN_API:
         # User wants to use their own API key

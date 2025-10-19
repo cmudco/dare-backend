@@ -40,7 +40,7 @@ class LLMService:
         embedding_ids: list = None,
         tag_ids: list = None,
         folder_ids: list = None,
-        user_id: int = None,
+        user = None,
         prompt_id: str = None,
         temperature: float = 0.7,
         max_tokens: int = 8000,
@@ -60,6 +60,9 @@ class LLMService:
     ) -> AsyncGenerator[Tuple[str, Dict], None]:
         """Generate AI response with context.
 
+        Args:
+            user: User object for API key resolution and file access
+
         Note: Referenced conversations always include full history (no limit).
         """
         try:
@@ -68,9 +71,6 @@ class LLMService:
                 yield "Error: No active LLM found", None
                 return
 
-            # Get user object for API key resolution
-            user = await self._get_user(conversation, user_id)
-
             # If Socratic mode is enabled, construct prompts using SocraticBooks logic
             if socratic_mode:
                 messages = await (
@@ -78,7 +78,7 @@ class LLMService:
                 )(
                     message=message,
                     conversation=conversation,
-                    user_id=user_id,
+                    user_id=user.id if user else None,
                     file_ids=[],
                     embedding_ids=file_ids or [],
                     tag_ids=tag_ids or [] if advanced_mode else [],
@@ -111,7 +111,7 @@ class LLMService:
             if referenced_conversation_ids:
                 referenced_context = await self.get_referenced_conversations_context(
                     referenced_conversation_ids,
-                    user_id,
+                    user.id if user else None,
                     None
                 )
                 if referenced_context:
@@ -125,6 +125,7 @@ class LLMService:
 
             if embedding_ids or tag_ids or folder_ids:
                 all_embedding_file_ids = set(embedding_ids or [])
+                user_id = user.id if user else None
                 if tag_ids:
                     tagged_file_ids = await self.get_files_from_tags(tag_ids, user_id)
                     all_embedding_file_ids.update(tagged_file_ids)
@@ -265,34 +266,6 @@ class LLMService:
             return f"Referenced conversation context for additional background:\n\n{full_context}"
 
         return ""
-
-    @database_sync_to_async
-    def _get_user(self, conversation, user_id):
-        """
-        Get user object from conversation or user_id.
-
-        Args:
-            conversation: Conversation instance (may have user relation)
-            user_id: User ID
-
-        Returns:
-            User instance or None
-        """
-        from django.contrib.auth import get_user_model
-        User = get_user_model()
-
-        # Try to get user from conversation first
-        if conversation and hasattr(conversation, 'user'):
-            return conversation.user
-
-        # Fallback to user_id
-        if user_id:
-            try:
-                return User.objects.get(id=user_id)
-            except User.DoesNotExist:
-                pass
-
-        return None
 
     async def _get_ai_service(self, llm: LLM, user=None) -> AIService:
         """
