@@ -11,10 +11,37 @@ from files.tasks import process_file_embeddings
 logger = logging.getLogger(__name__)
 
 
+# Media file MIME type prefixes
+MEDIA_MIME_TYPES = {
+    'image': ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp', 'image/tiff', 'image/svg+xml'],
+    'video': ['video/mp4', 'video/webm', 'video/quicktime', 'video/x-msvideo', 'video/mpeg', 'video/ogg']
+}
+
+
 class FileUploadService:
     """
     Service for handling file uploads with validation and background processing.
     """
+
+    @staticmethod
+    def detect_media_type(content_type: str) -> tuple[bool, Optional[str]]:
+        """
+        Detect if file is a media file (image/video) and return its type.
+
+        Args:
+            content_type: MIME type of the file
+
+        Returns:
+            tuple: (is_media, media_type) where media_type is 'image', 'video', or None
+        """
+        if not content_type:
+            return False, None
+
+        for media_type, mime_types in MEDIA_MIME_TYPES.items():
+            if content_type in mime_types or any(content_type.startswith(mt.split('/')[0] + '/') for mt in mime_types):
+                return True, media_type
+
+        return False, 'document'
 
     @staticmethod
     def validate_file(uploaded_file, file_name: str) -> tuple[bool, Optional[str]]:
@@ -53,14 +80,23 @@ class FileUploadService:
         """
         is_valid, error_message = FileUploadService.validate_file(uploaded_file, file_name)
 
+        # Detect if this is a media file (image/video)
+        is_media, media_type = FileUploadService.detect_media_type(uploaded_file.content_type)
+
+        # Media files should be marked as PROCESSED immediately (no vectorization needed)
+        # Document files go through PROCESSING status and background job
+        file_status = FileStatus.FAILED if not is_valid else (FileStatus.PROCESSED if is_media else FileStatus.PROCESSING)
+
         file_data = {
             'file': uploaded_file,
             'name': file_name,
             'file_type': uploaded_file.content_type,
             'size': uploaded_file.size,
             'user': user,
-            'status': FileStatus.FAILED if not is_valid else FileStatus.PROCESSING,
-            'vector_db_source': user.vector_db
+            'status': file_status,
+            'vector_db_source': user.vector_db if not is_media else None,  # No vector DB for media files
+            'is_media': is_media,
+            'media_type': media_type
         }
 
         file_instance = File.active_objects.create(**file_data)
@@ -69,16 +105,20 @@ class FileUploadService:
             tags = Tag.objects.filter(id__in=tag_ids)
             file_instance.tags.add(*tags)
 
-        if is_valid:
+        # Only queue background processing job for non-media files (documents)
+        if is_valid and not is_media:
             try:
                 job = enqueue(process_file_embeddings, file_instance.id, chunk_size, overlap_size)
                 file_instance.job_id = job.id
                 file_instance.save(update_fields=['job_id'])
+                logger.info(f"Queued document processing for file '{file_name}'")
             except Exception as e:
                 file_instance.status = FileStatus.FAILED
                 file_instance.save(update_fields=['status'])
                 logger.error(f"Error processing file '{file_name}': {str(e)}")
                 raise Exception(f"Error processing file '{file_name}': {str(e)}")
+        elif is_media:
+            logger.info(f"Media file '{file_name}' ({media_type}) uploaded successfully - skipping vectorization")
 
         return file_instance
 

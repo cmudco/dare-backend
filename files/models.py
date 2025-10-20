@@ -113,6 +113,21 @@ class File(BaseModel):
         null=True,
         help_text="Error message if file processing failed"
     )
+    is_media = models.BooleanField(
+        default=False,
+        help_text="Flag indicating if this file is a media file (image/video) that should not be vectorized"
+    )
+    media_type = models.CharField(
+        max_length=50,
+        blank=True,
+        null=True,
+        choices=[
+            ('image', 'Image'),
+            ('video', 'Video'),
+            ('document', 'Document')
+        ],
+        help_text="Type of media file: image, video, or document"
+    )
 
     active_objects = ActiveObjectsManager()
 
