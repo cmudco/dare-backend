@@ -71,6 +71,18 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
         representation["name"] = full_name
         return representation
 
+    def update(self, instance, validated_data):
+        instance = super().update(instance, validated_data)
+    
+        # Only check if any onboarding field was updated
+        onboarding_fields = {'role', 'industry', 'purpose', 'referral_source'}
+        if onboarding_fields.intersection(validated_data.keys()):
+            # Auto-set if all fields are now complete
+            if instance.role and instance.industry and instance.purpose and instance.referral_source:
+                instance.is_onboarding_completed = True
+                instance.save(update_fields=['is_onboarding_completed'])
+        return instance
+
 
 class CustomRegisterSerializer(RegisterSerializer):
     name = serializers.CharField(max_length=255, required=True)
