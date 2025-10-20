@@ -208,11 +208,3 @@ class User(AbstractUser, IsDeletedMixin):
         """
         self.is_active = True
         self.save(update_fields=["is_active"])
-
-    def save(self, *args, **kwargs):
-        """
-        Auto-set onboarding completed if all fields are filled
-        """
-        if self.role and self.industry and self.purpose and self.referral_source:
-            self.is_onboarding_completed = True
-        super().save(*args, **kwargs)
