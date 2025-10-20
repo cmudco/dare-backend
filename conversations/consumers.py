@@ -209,6 +209,7 @@ Provide your assessment in a clear, encouraging format that helps track their pr
                 referenced_conversation_ids=message_data["referenced_conversation_ids"],
                 message_obj=message_obj,
                 images=message_data.get("images", []),
+                media_ids=message_data.get("media_ids", []),  # NEW: Media file IDs
                 socratic_mode=(self.platform == AuthSourceChoice.SOCRATIC_BOTS and not message_data.get("prompt_id")),
                 advanced_mode=bool(message_data.get("is_advanced")),
                 bot_meta=message_data.get("bot_meta") or {},
@@ -364,6 +365,7 @@ Provide your assessment in a clear, encouraging format that helps track their pr
             "sender_type": data.get("sender_type", SenderType.PLAYER),
             "file_ids": data.get("file_ids", []),
             "embedding_ids": data.get("embedding_ids", []),
+            "media_ids": data.get("media_ids", []),  # NEW: Media files (images/videos)
             "tag_ids": data.get("tag_ids", []),
             "folder_ids": data.get("folder_ids", []),
             "referenced_conversation_ids": data.get("referenced_conversation_ids", []),
