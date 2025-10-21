@@ -62,6 +62,7 @@ class LLMService:
         bot_meta: Dict = None,
         advanced_mode: bool = False,
         web_search_enabled: bool = False,
+        image_generation_enabled: bool = False,
         structured_spec: Optional[Dict[str, Any]] = None,
     ) -> AsyncGenerator[Tuple[str, Dict], None]:
         """Generate AI response with context.
@@ -110,6 +111,25 @@ class LLMService:
                     messages = await self.add_video_transcriptions_to_context(all_images, messages, user)
 
                 ai_service = await self._get_ai_service(llm, user)
+
+                # Route to image generation if enabled
+                if image_generation_enabled:
+                    if llm.provider != Provider.OPENAI.value:
+                        yield "Error: Image generation only supports OpenAI DALL-E models", None
+                        return
+
+                    model = llm.identifier if llm.identifier in ["dall-e-3", "dall-e-2"] else "dall-e-3"
+
+                    async for chunk, usage in ai_service.generate_image(
+                        prompt=message,
+                        model=model,
+                        size="1024x1024",
+                        quality="standard",
+                        style="vivid"
+                    ):
+                        yield chunk, usage
+                    return
+
                 tools = self._get_web_search_tools(llm) if web_search_enabled else None
                 if structured_spec:
                     text = await ai_service.get_chat_completion(messages, max_tokens, temperature, structured_spec=structured_spec)
@@ -188,6 +208,26 @@ class LLMService:
                 messages = await self.add_video_transcriptions_to_context(all_images, messages, user)
 
             ai_service = await self._get_ai_service(llm, user)
+
+            # Route to image generation if enabled
+            if image_generation_enabled:
+                if llm.provider != Provider.OPENAI.value:
+                    yield "Error: Image generation only supports OpenAI DALL-E models", None
+                    return
+
+                # Extract DALL-E model from LLM identifier (dall-e-3, dall-e-2)
+                model = llm.identifier if llm.identifier in ["dall-e-3", "dall-e-2"] else "dall-e-3"
+
+                async for chunk, usage in ai_service.generate_image(
+                    prompt=message,
+                    model=model,
+                    size="1024x1024",
+                    quality="standard",
+                    style="vivid"
+                ):
+                    yield chunk, usage
+                return
+
             tools = self._get_web_search_tools(llm) if web_search_enabled else None
             if structured_spec:
                 text = await ai_service.get_chat_completion(messages, max_tokens, temperature, structured_spec=structured_spec)
