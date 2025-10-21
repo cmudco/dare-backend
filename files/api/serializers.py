@@ -16,7 +16,11 @@ class FileSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = File
-        fields = ['id', 'user', 'name', 'file', 'file_type', 'size', 'tags', 'job_id', 'status', 'vector_db_source', 'error_message', 'is_media', 'media_type']
+        fields = [
+            'id', 'user', 'name', 'file', 'file_type', 'size', 'tags', 'job_id', 'status',
+            'vector_db_source', 'error_message', 'is_media', 'media_type',
+            'is_generated', 'generation_prompt', 'revised_prompt', 'generation_params'
+        ]
 
     def get_size(self, obj):
         return obj.file.size if obj.file else None

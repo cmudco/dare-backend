@@ -5,8 +5,10 @@ This service provides a clean, readable interface for interacting with OpenAI's
 GPT models, including support for streaming, vision, web search, and structured outputs.
 """
 
+import base64
 import json
 import logging
+from decimal import Decimal
 from typing import AsyncGenerator, List, Dict, Tuple, Optional
 
 from openai import AsyncOpenAI
@@ -321,6 +323,104 @@ class OpenAIService:
             return str(value) if value is not None else text_out
         except Exception:
             return text_out
+
+    async def generate_image(
+        self,
+        prompt: str,
+        model: str = "dall-e-3",
+        size: str = "1024x1024",
+        quality: str = "standard",
+        style: str = "vivid"
+    ) -> AsyncGenerator[Tuple[str, Dict], None]:
+        """
+        Generate an image using DALL-E and stream the result like chat completions.
+
+        This follows the same pattern as stream_chat_completion to integrate cleanly
+        with the existing message flow.
+
+        Args:
+            prompt: Text description of the image to generate
+            model: DALL-E model ("dall-e-3" or "dall-e-2")
+            size: Image size
+            quality: Image quality
+            style: Image style
+
+        Yields:
+            Tuple of (status_message, metadata_dict)
+        """
+        try:
+            # Yield initial status
+            yield "Generating image...", None
+
+            # Build request parameters
+            request_params = {
+                "model": model,
+                "prompt": prompt,
+                "size": size,
+                "response_format": "b64_json",
+                "n": 1,
+            }
+
+            # Add quality and style for DALL-E 3
+            if model == "dall-e-3":
+                request_params["quality"] = quality
+                request_params["style"] = style
+
+            # Call OpenAI Images API
+            response = await self.client.images.generate(**request_params)
+
+            # Extract response data
+            image_data = response.data[0]
+            revised_prompt = getattr(image_data, 'revised_prompt', prompt)
+            image_bytes = base64.b64decode(image_data.b64_json)
+
+            # Calculate cost
+            cost = self._calculate_dalle_cost(model, size, quality)
+
+            # Yield final result with metadata
+            metadata = {
+                "image_bytes": image_bytes,
+                "revised_prompt": revised_prompt,
+                "cost": cost,
+                "model": model,
+                "size": size,
+                "quality": quality,
+                "style": style,
+                "input_tokens": 0,  # Images don't use tokens
+                "output_tokens": 0,
+            }
+
+            yield "Image generated successfully", metadata
+
+        except Exception as e:
+            logger.exception("DALL-E generation error")
+            error_message = OpenAIErrorHandler.format_error(e)
+            yield f"Error: {error_message}", None
+
+    def _calculate_dalle_cost(self, model: str, size: str, quality: str) -> Decimal:
+        """Calculate DALL-E generation cost."""
+        pricing = {
+            "dall-e-3": {
+                "1024x1024": {"standard": Decimal("0.040"), "hd": Decimal("0.080")},
+                "1024x1792": {"standard": Decimal("0.080"), "hd": Decimal("0.120")},
+                "1792x1024": {"standard": Decimal("0.080"), "hd": Decimal("0.120")},
+            },
+            "dall-e-2": {
+                "1024x1024": {"standard": Decimal("0.020")},
+                "512x512": {"standard": Decimal("0.018")},
+                "256x256": {"standard": Decimal("0.016")},
+            },
+        }
+
+        try:
+            model_pricing = pricing.get(model, pricing["dall-e-3"])
+            size_pricing = model_pricing.get(size, model_pricing["1024x1024"])
+
+            if isinstance(size_pricing, dict):
+                return size_pricing.get(quality, size_pricing.get("standard", Decimal("0.040")))
+            return size_pricing
+        except Exception:
+            return Decimal("0.040")
 
     # ==================== Static Methods ====================
 
