@@ -15,6 +15,7 @@ from files.models import File, Folder
 from prompts.models import Prompt
 from core.services.vector_service import get_vector_service_async
 import logging
+import base64
 
 logger = logging.getLogger(__name__)
 
@@ -268,7 +269,6 @@ class LLMService:
         if not media_ids:
             return []
 
-        import base64
         media_images = []
 
         # Fetch media files from database
@@ -296,9 +296,6 @@ class LLMService:
                     'type': media_file.file_type
                 })
             except Exception as e:
-                # Log error but continue with other files
-                import logging
-                logger = logging.getLogger(__name__)
                 logger.error(f"Error reading media file {media_file.id}: {str(e)}")
                 continue
 
