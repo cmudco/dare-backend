@@ -9,7 +9,8 @@ from core.services.api_key_service import get_provider_api_key
 from conversations.constants import SenderType
 from conversations.api.serializers import MessageSerializer
 from djangorestframework_camel_case.util import camelize
-
+from files.models import File, Tag
+from core.services.billing_service import BillingService
 from users.models import User
 
 class ConversationService:
@@ -79,9 +80,8 @@ class ConversationService:
         )()
 
         all_file_ids = list(set((file_ids or []) + (embedding_ids or [])))
-        
+
         if all_file_ids:
-            from files.models import File
             files = await database_sync_to_async(
                 lambda: list(File.active_objects.filter(pk__in=all_file_ids, user=conversation.user))
             )()
@@ -89,7 +89,6 @@ class ConversationService:
                 await database_sync_to_async(lambda: message.files.add(*files))()
 
         if tag_ids:
-            from files.models import Tag
             tags = await database_sync_to_async(
                 lambda: list(Tag.objects.filter(pk__in=tag_ids, user=conversation.user))
             )()
@@ -171,6 +170,5 @@ class ConversationService:
 
     def finalize_ai_message_with_billing(self, message_obj: Message, ai_response: str, token_usage: Dict) -> Message:
         """Finalize AI message with billing (delegated to BillingService)."""
-        from core.services.billing_service import BillingService
         billing_service = BillingService()
         return billing_service.finalize_ai_message(message_obj, ai_response, token_usage)

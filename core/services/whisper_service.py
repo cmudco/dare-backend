@@ -13,6 +13,7 @@ from typing import Optional, Dict
 from openai import AsyncOpenAI
 from config import env
 from core.services.api_key_service import get_provider_api_key
+from conversations.constants import Provider
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +29,6 @@ class WhisperService:
             api_key: Optional OpenAI API key. If not provided, uses system key
         """
         if api_key is None:
-            from conversations.constants import Provider
             api_key = get_provider_api_key(Provider.OPENAI.value)
 
         self.client = AsyncOpenAI(api_key=api_key)
