@@ -10,9 +10,12 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from pydantic import ValidationError
 from asgiref.sync import sync_to_async
 from djangorestframework_camel_case.util import camelize
+from django.core.files.base import ContentFile
 import asyncio
 
 from conversations.models import Conversation, Message, LLM
+from files.models import File
+from files.constants import FileStatus
 from core.services.conversation_service import ConversationService
 from core.services.llm_service import LLMService
 from core.services.billing_service import BillingService
@@ -184,12 +187,14 @@ Provide your assessment in a clear, encouraging format that helps track their pr
             logger.exception(f"Error in handle_regenerate_response: {str(e)}")
             await self.send_error("regenerate_error", "Failed to regenerate response")
 
+
     async def _stream_ai_response(self, message_data: Dict[str, Any], message_obj: Message, llm: LLM, regenerate: bool = False):
         """Stream AI response and handle billing."""
         try:
             bot_message_id = str(message_obj.id)
             ai_response_accumulator = ""
             token_usage = None
+            generated_image_data = None
 
             async for chunk, usage in self.llm_service.query(
                 message_data["message"],
@@ -199,7 +204,7 @@ Provide your assessment in a clear, encouraging format that helps track their pr
                 message_data["embedding_ids"],
                 message_data["tag_ids"],
                 message_data["folder_ids"],
-                user_id=self.user.id,
+                user=self.user,
                 prompt_id=message_data["prompt_id"],
                 temperature=message_data["temperature"],
                 max_tokens=message_data["max_tokens"],
@@ -209,13 +214,38 @@ Provide your assessment in a clear, encouraging format that helps track their pr
                 referenced_conversation_ids=message_data["referenced_conversation_ids"],
                 message_obj=message_obj,
                 images=message_data.get("images", []),
+                media_ids=message_data.get("media_ids", []),  # NEW: Media file IDs
                 socratic_mode=(self.platform == AuthSourceChoice.SOCRATIC_BOTS and not message_data.get("prompt_id")),
                 advanced_mode=bool(message_data.get("is_advanced")),
                 bot_meta=message_data.get("bot_meta") or {},
                 web_search_enabled=message_data.get("web_search_enabled") or self.conversation.web_search_enabled,
+                image_generation_enabled=message_data.get("image_generation_enabled") or self.conversation.image_generation_enabled,
             ):
                 if usage:
                     token_usage = usage
+
+                    # Handle generated image
+                    if usage.get("image_bytes"):
+                        generated_file = await self._save_generated_image(
+                            image_bytes=usage["image_bytes"],
+                            prompt=message_data["message"],
+                            metadata=usage
+                        )
+                        if generated_file:
+                            await database_sync_to_async(message_obj.files.add)(generated_file)
+                            generated_image_data = {
+                                "fileId": generated_file.id,
+                                "filename": generated_file.name,
+                                "fileUrl": generated_file.file.url,
+                                "prompt": message_data["message"],
+                                "revisedPrompt": usage.get("revised_prompt", ""),
+                                "cost": str(usage.get("cost", "0.040")),
+                                "model": usage.get("model", "dall-e-3"),
+                                "size": usage.get("size", "1024x1024"),
+                                "quality": usage.get("quality", "standard"),
+                                "style": usage.get("style", "vivid"),
+                            }
+
                     can_continue, error_response = await self.billing_service.check_streaming_credit_usage(
                         self.user, llm, token_usage
                     )
@@ -241,7 +271,7 @@ Provide your assessment in a clear, encouraging format that helps track their pr
                     await self.send(json.dumps(camelize(payload)))
 
             if ai_response_accumulator.strip():
-                await self._finalize_message(message_obj, ai_response_accumulator, token_usage, regenerate)
+                await self._finalize_message(message_obj, ai_response_accumulator, token_usage, regenerate, generated_image_data)
                 # Socratic-only sequential progress stream
                 if not regenerate and should_run_learning_progress(self.platform, message_data.get("enable_progress")):
                     await self._run_learning_progress_stream(message_data, message_obj, llm)
@@ -249,7 +279,48 @@ Provide your assessment in a clear, encouraging format that helps track their pr
             logger.exception(f"Error streaming AI response: {str(e)}")
             await self.send_error("stream_error", "Failed to stream AI response")
 
-    async def _finalize_message(self, message_obj: Message, ai_response: str, token_usage: Dict, regenerate: bool):
+    @database_sync_to_async
+    def _save_generated_image(self, image_bytes: bytes, prompt: str, metadata: Dict) -> Optional[File]:
+        """Save AI-generated image as a File object."""
+        try:
+            from datetime import datetime
+
+            # Generate filename
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"dalle_generated_{timestamp}.png"
+
+            # Create File object
+            file_obj = File(
+                user=self.user,
+                name=filename,
+                file_type="image/png",
+                size=len(image_bytes),
+                status=FileStatus.PROCESSED,
+                is_media=True,
+                media_type='generated_image',
+                is_generated=True,
+                generation_prompt=prompt,
+                revised_prompt=metadata.get('revised_prompt', ''),
+                generation_params={
+                    'model': metadata.get('model', 'dall-e-3'),
+                    'size': metadata.get('size', '1024x1024'),
+                    'quality': metadata.get('quality', 'standard'),
+                    'style': metadata.get('style', 'vivid'),
+                }
+            )
+
+            # Save the image file
+            file_obj.file.save(filename, ContentFile(image_bytes), save=False)
+            file_obj.save()
+
+            logger.info(f"Saved generated image as File ID: {file_obj.id}")
+            return file_obj
+
+        except Exception as e:
+            logger.exception(f"Error saving generated image: {str(e)}")
+            return None
+
+    async def _finalize_message(self, message_obj: Message, ai_response: str, token_usage: Dict, regenerate: bool, generated_image_data: Dict = None):
         """Finalize AI message with billing and send final response."""
         try:
             if regenerate and not message_obj.original_message:
@@ -262,7 +333,8 @@ Provide your assessment in a clear, encouraging format that helps track their pr
             if regenerate:
                 updated_message.is_regenerated = True
                 await database_sync_to_async(updated_message.save)(update_fields=['is_regenerated'])
-            await self.send(await self._format_message(updated_message, streaming=False, regenerate=regenerate))
+
+            await self.send(await self._format_message(updated_message, streaming=False, regenerate=regenerate, generated_image=generated_image_data))
         except (ValidationError, DjangoValidationError) as e:
             logger.error(f"Validation error finalizing message: {str(e)}")
             await self.send_error("insufficient_balance", "Insufficient wallet balance", details={"error": str(e)})
@@ -315,9 +387,14 @@ Provide your assessment in a clear, encouraging format that helps track their pr
         await self.conversation_service.update_conversation_title(self.conversation, title)
         await self.send(json.dumps(camelize({"type": "conversation_title", "title": title})))
 
-    async def _format_message(self, message_obj: Message, is_sender: bool = False, streaming: bool = False, regenerate: bool = False):
+    async def _format_message(self, message_obj: Message, is_sender: bool = False, streaming: bool = False, regenerate: bool = False, generated_image: Dict = None):
         """Format message for WebSocket response."""
-        serialized_data = await database_sync_to_async(lambda: MessageSerializer(message_obj).data)()
+        @database_sync_to_async
+        def serialize_message():
+            message = Message.active_objects.prefetch_related('files', 'tags', 'snippets__file').get(id=message_obj.id)
+            return MessageSerializer(message).data
+
+        serialized_data = await serialize_message()
         llm_id = await database_sync_to_async(lambda: getattr(message_obj.llm, 'id', None))()
         cost = await database_sync_to_async(lambda: message_obj.cost)()
         input_tokens = await database_sync_to_async(lambda: message_obj.input_tokens)()
@@ -346,6 +423,7 @@ Provide your assessment in a clear, encouraging format that helps track their pr
             "inputTokens": input_tokens,
             "outputTokens": output_tokens,
             "learningProgressData": learning_progress_data or {},
+            "generatedImage": generated_image
         }
         return json.dumps(camelize(response))
 
@@ -364,6 +442,7 @@ Provide your assessment in a clear, encouraging format that helps track their pr
             "sender_type": data.get("sender_type", SenderType.PLAYER),
             "file_ids": data.get("file_ids", []),
             "embedding_ids": data.get("embedding_ids", []),
+            "media_ids": data.get("media_ids", []),  # NEW: Media files (images/videos)
             "tag_ids": data.get("tag_ids", []),
             "folder_ids": data.get("folder_ids", []),
             "referenced_conversation_ids": data.get("referenced_conversation_ids", []),

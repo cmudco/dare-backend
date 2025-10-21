@@ -21,6 +21,7 @@ app_paths = [
     path("", include("workflows.urls", namespace="workflows")),
     path("", include("billing.urls", namespace="billing")),
     path("", include("notifications.urls", namespace="notifications")),
+    path("", include("api_keys.urls")),
 
 ]
 

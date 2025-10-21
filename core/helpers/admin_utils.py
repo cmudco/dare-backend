@@ -80,3 +80,16 @@ def render_status_badge(label: str, *, color: str, emoji: Optional[str] = None) 
         color=color,
         content=content,
     )
+
+
+def render_code_block(text: str) -> str:
+    """
+    Render a code-style block with monospace font and background.
+
+    Uses CSS variables that automatically adapt to Django admin's light/dark theme.
+    """
+    return format_html(
+        '<code style="background-color: var(--darkened-bg); color: var(--body-fg); '
+        'padding: 2px 6px; border-radius: 3px; font-family: monospace;">{}</code>',
+        text,
+    )

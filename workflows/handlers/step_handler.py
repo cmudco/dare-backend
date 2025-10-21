@@ -464,7 +464,7 @@ class StepNodeHandler(BaseExecutionHandler):
             llm=llm,
             file_ids=content_file_ids if content_file_ids else None,
             embedding_ids=embedding_file_ids if embedding_file_ids else None,
-            user_id=user.id,
+            user=user,
             prompt_id=prompt_id,
             message_obj=None,
             workflow_run_step_obj=workflow_run_step,
