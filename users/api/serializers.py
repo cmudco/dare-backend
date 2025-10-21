@@ -33,13 +33,18 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
             "vector_db",
             "default_prompt",
             "model_group",
+            "role",
+            "industry",
+            "purpose",
+            "referral_source",
+            "is_onboarding_completed",
             "auth_source",
             "is_dare_accessible",
             "is_socratic_bots_accessible",
             "billing_mode",
             "billing_mode_display"
         ]
-        read_only_fields = ["id", "auth_source", "billing_mode", "billing_mode_display"]
+        read_only_fields = ["id", "auth_source", "billing_mode", "billing_mode_display", "is_onboarding_completed"]
 
     def get_default_prompt(self, obj):
         if obj.default_prompt:
@@ -65,6 +70,18 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
         full_name = f"{instance.first_name} {instance.last_name}".strip()
         representation["name"] = full_name
         return representation
+
+    def update(self, instance, validated_data):
+        instance = super().update(instance, validated_data)
+    
+        # Only check if any onboarding field was updated
+        onboarding_fields = {'role', 'industry', 'purpose', 'referral_source'}
+        if onboarding_fields.intersection(validated_data.keys()):
+            # Auto-set if all fields are now complete
+            if instance.role and instance.industry and instance.purpose and instance.referral_source:
+                instance.is_onboarding_completed = True
+                instance.save(update_fields=['is_onboarding_completed'])
+        return instance
 
 
 class CustomRegisterSerializer(RegisterSerializer):
