@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from django.utils import timezone
 
-from notifications.models import Notification
+from notifications.models import Notification, UserNotificationReadStatus
 from notifications.constants import NotificationStatus, NotificationDeliveryType, NotificationCategory
 
 
@@ -48,7 +48,6 @@ class NotificationListSerializer(serializers.ModelSerializer):
                 return obj.read_at
             elif obj.user is None:
                 try:
-                    from notifications.models import UserNotificationReadStatus
                     user_read_status = UserNotificationReadStatus.objects.get(
                         user=user, notification=obj
                     )
@@ -106,7 +105,6 @@ class NotificationDetailSerializer(serializers.ModelSerializer):
                 return obj.read_at
             elif obj.user is None:
                 try:
-                    from notifications.models import UserNotificationReadStatus
                     user_read_status = UserNotificationReadStatus.objects.get(
                         user=user, notification=obj
                     )

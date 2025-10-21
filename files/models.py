@@ -113,6 +113,50 @@ class File(BaseModel):
         null=True,
         help_text="Error message if file processing failed"
     )
+    is_media = models.BooleanField(
+        default=False,
+        help_text="Flag indicating if this file is a media file (image/video) that should not be vectorized"
+    )
+    media_type = models.CharField(
+        max_length=50,
+        blank=True,
+        null=True,
+        choices=[
+            ('image', 'Image'),
+            ('video', 'Video'),
+            ('document', 'Document'),
+            ('generated_image', 'Generated Image')
+        ],
+        help_text="Type of media file: image, video, document, or generated_image"
+    )
+
+    # AI Image Generation Fields
+    is_generated = models.BooleanField(
+        default=False,
+        help_text="Flag indicating if this file was AI-generated (e.g., via DALL-E)"
+    )
+    generation_prompt = models.TextField(
+        blank=True,
+        null=True,
+        help_text="Original prompt used to generate this image (for AI-generated images)"
+    )
+    revised_prompt = models.TextField(
+        blank=True,
+        null=True,
+        help_text="Revised/enhanced prompt returned by DALL-E during generation"
+    )
+    generation_params = models.JSONField(
+        blank=True,
+        null=True,
+        help_text="Generation parameters: model, size, quality, style, etc."
+    )
+    generation_cost = models.DecimalField(
+        max_digits=10,
+        decimal_places=6,
+        null=True,
+        blank=True,
+        help_text="Cost in USD for generating this image"
+    )
 
     active_objects = ActiveObjectsManager()
 

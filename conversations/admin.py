@@ -3,13 +3,14 @@ from django.contrib.auth import get_user_model
 from django.urls import reverse
 
 from core.helpers.admin_utils import (
+    render_code_block,
     render_empty_placeholder,
     render_feedback_icon,
     render_link,
     render_tooltip_span,
     truncate_text,
 )
-from .models import LLM, Conversation, Message, ModelGroup
+from .models import LLM, Conversation, Message, ModelGroup, ProviderAPIKey
 from .proxy_models import MessageWithFeedback
 
 User = get_user_model()
@@ -128,3 +129,64 @@ class ModelGroupAdmin(admin.ModelAdmin):
         # Count users linked via AccessCodeGroup -> ModelGroup using module-level User
         return User.objects.filter(access_code_group__model_group=obj).count()
     user_count.short_description = "Users"
+
+
+@admin.register(ProviderAPIKey)
+class ProviderAPIKeyAdmin(admin.ModelAdmin):
+    """
+    Admin interface for managing provider API keys.
+
+    Features:
+    - Display masked API keys for security
+    - Allow activation/deactivation of keys
+    - Search and filter by provider
+    - Prevent deletion of active keys by non-superusers
+    """
+    list_display = ("provider_display", "masked_key_display", "is_active", "created_at", "updated_at")
+    list_filter = ("provider", "is_active", "created_at")
+    search_fields = ("provider",)
+    list_editable = ("is_active",)
+    ordering = ("provider",)
+
+    fieldsets = (
+        (None, {
+            "fields": ("provider", "api_key", "is_active"),
+            "description": "Configure API keys for different LLM providers. Keys are encrypted in the database."
+        }),
+        ("Timestamps", {
+            "fields": ("created_at", "updated_at"),
+            "classes": ("collapse",)
+        }),
+    )
+
+    readonly_fields = ("created_at", "updated_at")
+
+    def provider_display(self, obj):
+        """Display provider name with icon/badge"""
+        provider_icons = {
+            "openai": "🤖",
+            "claude": "🧠",
+            "gemini": "✨",
+            "llama": "🦙",
+        }
+        icon = provider_icons.get(obj.provider, "🔑")
+        return f"{icon} {obj.get_provider_display()}"
+    provider_display.short_description = "Provider"
+
+    def masked_key_display(self, obj):
+        """Display masked API key showing only last 4 characters"""
+        masked = obj.get_masked_key()
+        return render_code_block(masked)
+    masked_key_display.short_description = "API Key"
+
+    def has_delete_permission(self, request, obj=None):
+        """Only superusers can delete API keys"""
+        if obj and obj.is_active and not request.user.is_superuser:
+            return False
+        return request.user.is_superuser
+
+    def get_readonly_fields(self, request, obj=None):
+        """Make provider field readonly when editing existing keys"""
+        if obj:  # Editing existing key
+            return self.readonly_fields + ("provider",)
+        return self.readonly_fields
