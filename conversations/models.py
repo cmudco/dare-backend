@@ -150,6 +150,23 @@ class Conversation(BaseModel):
         default=False,
         help_text="Enable real-time web search for up-to-date information."
     )
+    image_generation_enabled = models.BooleanField(
+        default=False,
+        help_text="Enable AI image generation for this conversation."
+    )
+    selected_model = models.ForeignKey(
+        LLM,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="conversations_using_model",
+        help_text="Selected LLM model for this conversation."
+    )
+    selected_media_ids = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="List of selected media file IDs for this conversation."
+    )
     prompt = models.ForeignKey(
         'prompts.Prompt',
         on_delete=models.SET_NULL,
@@ -229,6 +246,9 @@ class Conversation(BaseModel):
                 max_tokens=self.max_tokens,
                 history_limit=self.history_limit,
                 web_search_enabled=self.web_search_enabled,
+                image_generation_enabled=self.image_generation_enabled,
+                selected_model=self.selected_model,
+                selected_media_ids=self.selected_media_ids.copy() if self.selected_media_ids else [],
                 prompt=self.prompt,
                 sort_order=self.sort_order
             )

@@ -20,6 +20,12 @@ class ConversationSerializer(serializers.ModelSerializer):
         allow_null=True,
         write_only=True
     )
+    selected_model = serializers.PrimaryKeyRelatedField(
+        queryset=LLM.objects.all(),
+        required=False,
+        allow_null=True,
+        read_only=False
+    )
     conversation_id = serializers.CharField(
         required=False,
         allow_blank=True,
@@ -40,6 +46,9 @@ class ConversationSerializer(serializers.ModelSerializer):
             'max_tokens',
             'history_limit',
             'web_search_enabled',
+            'image_generation_enabled',
+            'selected_model',
+            'selected_media_ids',
             'prompt',
             'prompt_id',
             'sort_order',

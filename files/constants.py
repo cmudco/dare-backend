@@ -8,6 +8,9 @@ ALLOWED_FILES = [
     'pptx', 'ppt',
     'jpg', 'jpeg', 'png', 'gif', 'bmp', 'tiff', 'webp',
 
+    # Video extensions (no vectorization - media files only)
+    'mp4', 'webm', 'quicktime', 'x-msvideo', 'mpeg', 'ogg',
+
     # MIME suffixes
     'plain', 'rtf', 'html', 'xml',
     'vnd.openxmlformats-officedocument.wordprocessingml.document',
