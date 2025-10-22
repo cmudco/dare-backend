@@ -26,6 +26,10 @@ class LLM(models.Model):
         default=True,
         help_text="Whether the model supports vision/image analysis (e.g., GPT-4V, Claude 3+, Gemini Pro Vision)."
     )
+    is_image_generator = models.BooleanField(
+        default=False,
+        help_text="Whether the model is an image generation model (e.g., DALL-E)."
+    )
 
     input_token_rate_per_million = models.DecimalField(
             max_digits=10,
