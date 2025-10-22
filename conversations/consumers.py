@@ -220,6 +220,7 @@ Provide your assessment in a clear, encouraging format that helps track their pr
                 bot_meta=message_data.get("bot_meta") or {},
                 web_search_enabled=message_data.get("web_search_enabled") or self.conversation.web_search_enabled,
                 image_generation_enabled=message_data.get("image_generation_enabled") or self.conversation.image_generation_enabled,
+                image_generation_settings=message_data.get("image_generation_settings"),
             ):
                 if usage:
                     token_usage = usage
@@ -454,6 +455,8 @@ Provide your assessment in a clear, encouraging format that helps track their pr
             "document_similarity_threshold": data.get("document_similarity_threshold", self.DEFAULT_DOCUMENT_SIMILARITY_THRESHOLD),
             "history_limit": data.get("history_limit", self.DEFAULT_HISTORY_LIMIT),
             "web_search_enabled": data.get("web_search_enabled"),
+            "image_generation_enabled": data.get("image_generation_enabled"),
+            "image_generation_settings": data.get("image_generation_settings"),
             # Vision support: base64 encoded images
             "images": data.get("images", []),  # List of {preview: str, name: str, type: str}
             # Socratic-only optional fields
