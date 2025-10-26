@@ -29,6 +29,10 @@ def process_file_embeddings(file_id, chunk_size=None, overlap_size=None):
     except Exception as e:
         return
 
+    # Skip vectorization for media files (images/videos)
+    if file.is_media:
+        return
+
     try:
         file.status = FileStatus.PROCESSING
         file.error_message = None

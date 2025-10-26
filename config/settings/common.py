@@ -47,6 +47,7 @@ LOCAL_APPS = [
     "email_logs",
     "billing",
     "notifications",
+    "api_keys",
 ]
 
 THIRD_PARTY_APPS = [

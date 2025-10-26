@@ -1,5 +1,5 @@
 import logging
-from typing import AsyncGenerator, Dict, List, Tuple
+from typing import AsyncGenerator, Dict, List, Tuple, Optional
 import ollama
 from config import env
 from conversations.models import LLM
@@ -7,7 +7,15 @@ from conversations.models import LLM
 logger = logging.getLogger(__name__)
 
 class LlamaService:
-    def __init__(self, llm: LLM):
+    def __init__(self, llm: LLM, api_key: Optional[str] = None):
+        """
+        Initialize LLaMA service.
+
+        Args:
+            llm: LLM model instance with configuration
+            api_key: Not used for Ollama (local service), kept for interface consistency
+        """
+        # Ollama is a local service and doesn't require an API key
         self.client = ollama.AsyncClient(host=env.OLLAMA_HOST)
         self.model = llm.identifier
         self.is_reasoning = llm.is_reasoning

@@ -121,10 +121,9 @@ class WorkflowCloningService:
         elif isinstance(data_object, ConditionalNodeData):
             return ConditionalNodeData.objects.create(
                 custom_prompt=data_object.custom_prompt,
-                route_a_name=data_object.route_a_name,
-                route_b_name=data_object.route_b_name,
-                route_a_description=data_object.route_a_description,
-                route_b_description=data_object.route_b_description,
+                llm=data_object.llm,
+                routes=data_object.routes,
+                require_human_validation=data_object.require_human_validation,
                 step_number=data_object.step_number
             )
         return None

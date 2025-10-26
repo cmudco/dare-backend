@@ -1,237 +1,281 @@
+"""
+Claude LLM service implementation.
+
+This service provides a clean, readable interface for interacting with Anthropic's
+Claude models, including support for streaming, vision, web search, and structured outputs.
+"""
+
 import logging
 from typing import AsyncGenerator, Dict, List, Tuple, Optional
+
 from anthropic import AsyncAnthropic
+
 from config import env
 from conversations.models import LLM
+from core.services.api_key_service import get_provider_api_key
+from core.services.llm_utils import (
+    MessageFormatter,
+    ClaudeVisionHandler,
+    ClaudeErrorHandler,
+    ClaudeStreamProcessor,
+    ClaudeWebSearchTools,
+    StreamAggregator,
+    SchemaTransformer,
+)
 
 logger = logging.getLogger(__name__)
 
+
 class ClaudeService:
-    def __init__(self, llm: LLM):
-        self.client = AsyncAnthropic(api_key=env.CLAUDE_API_KEY)
+    """Service for interacting with Anthropic's Claude models."""
+
+    def __init__(self, llm: LLM, api_key: Optional[str] = None):
+        """
+        Initialize Claude service.
+
+        Args:
+            llm: LLM model instance with configuration
+            api_key: Optional API key override. If not provided, uses provider key resolution
+        """
+        # Use provided key or fetch from provider key service
+        if api_key is None:
+            api_key = get_provider_api_key(llm.provider)
+
+        self.client = AsyncAnthropic(api_key=api_key)
         self.model = llm.identifier
         self.is_reasoning = llm.is_reasoning
 
     async def stream_chat_completion(
-        self, messages: List[Dict[str, str]], max_tokens: int = 1024, temperature: float = 0.7, images: List[Dict] = None, tools: Optional[List[Dict]] = None
+        self,
+        messages: List[Dict[str, str]],
+        max_tokens: int = 1024,
+        temperature: float = 0.7,
+        images: List[Dict] = None,
+        tools: Optional[List[Dict]] = None
     ) -> AsyncGenerator[Tuple[str, Dict], None]:
         """
-        Streams chat completions from the Claude API.
+        Stream chat completions from Claude API.
 
-        This method sends a list of messages to the Claude API and yields response chunks as they are
-        received in real-time. It handles streaming events and extracts text content from the response.
-        
-        System messages are automatically extracted from the messages list and passed as the system parameter.
+        This is the main public method for streaming responses. It orchestrates
+        the entire streaming process with clear separation of concerns.
 
         Args:
-            messages (List[Dict[str, str]]): A list of message dictionaries with 'role' and 'content' keys.
-            max_tokens (int, optional): Maximum number of tokens to generate. Defaults to 1024.
-            temperature (float, optional): Controls randomness of the output (0.0 to 1.0). Defaults to 0.7.
+            messages: List of message dictionaries with 'role' and 'content'
+            max_tokens: Maximum number of tokens to generate
+            temperature: Controls randomness (0.0 to 1.0)
+            images: List of image dicts for vision support
+            tools: Optional tools for web search support
 
         Yields:
-            Tuple[str, Dict]: Text chunk and usage data (or None if usage not available)
-
-        Raises:
-            Exception: If an error occurs during the API call, yields an error message and logs the exception.
+            Tuple of (text_chunk, usage_data)
         """
-        if images:
-            messages = self._add_vision_to_messages(messages, images)
-
         try:
-            # Extract system messages and regular messages
-            system_message = None
-            filtered_messages = []
+            # Step 1: Prepare messages with vision if needed
+            prepared_messages = self._prepare_messages(messages, images)
 
-            for message in messages:
-                if message.get('role') == 'system':
-                    # Take the last system message if multiple exist
-                    system_message = message.get('content', '')
-                else:
-                    filtered_messages.append(message)
-            
-            # Prepare API call parameters
-            call_params = {
-                "model": self.model,
-                "max_tokens": max_tokens,
-                "messages": filtered_messages,
-                "temperature": temperature,
-                "stream": True
-            }
-            
-            # Add system parameter only if system message exists
-            if system_message:
-                call_params["system"] = system_message
+            # Step 2: Create streaming response
+            stream = await self._create_stream(
+                prepared_messages,
+                max_tokens,
+                temperature,
+                tools
+            )
 
-            # Add tools if provided (for web search support)
-            if tools:
-                call_params["tools"] = tools
-
-            stream = await self.client.messages.create(**call_params)
-            usage = None
-            input_tokens = None
-
-            async for event in stream:
-                if event.type == "content_block_delta":
-                    # Handle text deltas
-                    if hasattr(event.delta, 'text'):
-                        yield event.delta.text, None
-                elif event.type == "content_block_start":
-                    pass  # Tool use events handled internally by Claude
-                elif event.type == "content_block_stop":
-                    pass  # Block completion events
-                elif event.type == "message_start" and hasattr(event, 'message') and hasattr(event.message, 'usage'):
-                    input_tokens = event.message.usage.input_tokens
-                elif event.type == "message_delta" and hasattr(event, 'usage'):
-                    output_tokens = event.usage.output_tokens
-                    if input_tokens is not None:
-                        usage = {
-                            "input_tokens": input_tokens,
-                            "output_tokens": output_tokens,
-                            "total_tokens": input_tokens + output_tokens
-                        }
-                        yield "", usage
-
-            if not usage:
-                yield "", None
+            # Step 3: Process and yield stream chunks
+            async for chunk, usage in ClaudeStreamProcessor.process_stream(stream):
+                yield chunk, usage
 
         except Exception as e:
             logger.exception(f"Error streaming chat completion: {str(e)}")
-            yield f"Error: {self._format_error(e)}", None
+            error_message = ClaudeErrorHandler.format_error(e)
+            yield f"Error: {error_message}", None
 
     async def get_chat_completion(
-        self, messages: List[Dict[str, str]], max_tokens: int = 1024, temperature: float = 0.7
+        self,
+        messages: List[Dict[str, str]],
+        max_tokens: int = 1024,
+        temperature: float = 0.7,
+        structured_spec: Optional[Dict] = None,
     ) -> str:
         """
-        Retrieves a complete chat completion from the Claude API.
+        Get a complete (non-streaming) chat completion.
 
-        This method uses the streaming functionality to collect all response chunks into a single string.
-        It serves as a convenience wrapper around `stream_chat_completion`.
-        
-        System messages are automatically handled by the streaming method.
+        This method handles both regular completions and structured outputs.
 
         Args:
-            messages (List[Dict[str, str]]): A list of message dictionaries with 'role' and 'content' keys.
-            max_tokens (int, optional): Maximum number of tokens to generate. Defaults to 1024.
-            temperature (float, optional): Controls randomness of the output (0.0 to 1.0). Defaults to 0.7.
+            messages: List of message dictionaries
+            max_tokens: Maximum number of tokens to generate
+            temperature: Controls randomness (0.0 to 1.0)
+            structured_spec: Optional schema specification for structured outputs
 
         Returns:
-            str: The complete generated response text.
-
-        Raises:
-            Exception: If an error occurs, the error message is included in the returned string and logged.
+            Complete generated response text
         """
-        response_text = ""
-        async for chunk, _ in self.stream_chat_completion(messages, max_tokens, temperature):
-            response_text += chunk
-        return response_text
+        if structured_spec:
+            return await self._get_structured_completion(
+                messages,
+                max_tokens,
+                temperature,
+                structured_spec
+            )
 
-    def _add_vision_to_messages(self, messages: List[Dict], images: List[Dict]) -> List[Dict]:
-        """
-        Add vision content to the last user message in Claude format.
+        # Default: use streaming and aggregate
+        stream = self.stream_chat_completion(messages, max_tokens, temperature)
+        return await StreamAggregator.aggregate_stream(stream)
 
-        Claude expects: {"type": "image", "source": {"type": "base64", "media_type": "...", "data": "..."}}
-        Note: Claude requires base64 WITHOUT the data URL prefix.
+    # ==================== Private Methods ====================
+
+    def _prepare_messages(
+        self,
+        messages: List[Dict],
+        images: Optional[List[Dict]]
+    ) -> List[Dict]:
         """
+        Prepare messages by adding vision content if needed.
+
+        Args:
+            messages: Original messages
+            images: Optional images to add
+
+        Returns:
+            Messages with vision content added
+        """
+        if not images:
+            return messages
+
+        return ClaudeVisionHandler.add_images_to_messages(messages, images)
+
+    async def _create_stream(
+        self,
+        messages: List[Dict],
+        max_tokens: int,
+        temperature: float,
+        tools: Optional[List[Dict]]
+    ):
+        """
+        Create Claude streaming response.
+
+        Args:
+            messages: Prepared messages
+            max_tokens: Max tokens to generate
+            temperature: Temperature setting
+            tools: Optional tools configuration
+
+        Returns:
+            Claude message stream
+        """
+        call_params = self._build_stream_params(
+            messages,
+            max_tokens,
+            temperature,
+            tools
+        )
+
+        return await self.client.messages.create(**call_params)
+
+    def _build_stream_params(
+        self,
+        messages: List[Dict],
+        max_tokens: int,
+        temperature: float,
+        tools: Optional[List[Dict]]
+    ) -> Dict:
+        """
+        Build parameters for Claude stream API call.
+
+        Args:
+            messages: List of messages
+            max_tokens: Max tokens to generate
+            temperature: Temperature setting
+            tools: Optional tools configuration
+
+        Returns:
+            API call parameters dictionary
+        """
+        # Extract system message (Claude requires it separately)
+        system_message, filtered_messages = MessageFormatter.extract_system_messages(messages)
+
+        params = {
+            "model": self.model,
+            "max_tokens": max_tokens,
+            "messages": filtered_messages,
+            "temperature": temperature,
+            "stream": True
+        }
+
+        # Add system message if present
+        if system_message:
+            params["system"] = system_message
+
+        # Add tools if provided
+        if tools:
+            params["tools"] = tools
+
+        return params
+
+    async def _get_structured_completion(
+        self,
+        messages: List[Dict],
+        max_tokens: int,
+        temperature: float,
+        structured_spec: Dict
+    ) -> str:
+        """
+        Get structured output using prompt engineering.
+
+        Claude doesn't have native structured outputs, so we use prompt engineering.
+
+        Args:
+            messages: List of messages
+            max_tokens: Max tokens to generate
+            temperature: Temperature setting
+            structured_spec: Schema specification
+
+        Returns:
+            Generated response with instructions appended
+        """
+        instruction = SchemaTransformer.transform_for_claude(structured_spec)
+
+        if instruction:
+            messages = self._append_instruction_to_messages(messages, instruction)
+
+        # Use streaming and aggregate
+        stream = self.stream_chat_completion(messages, max_tokens, temperature)
+        return await StreamAggregator.aggregate_stream(stream)
+
+    def _append_instruction_to_messages(
+        self,
+        messages: List[Dict],
+        instruction: str
+    ) -> List[Dict]:
+        """
+        Append instruction to the last user/assistant message.
+
+        Args:
+            messages: List of messages
+            instruction: Instruction to append
+
+        Returns:
+            Modified messages list
+        """
+        # Find last user/assistant message and append instruction
         for i in range(len(messages) - 1, -1, -1):
-            if messages[i].get("role") == "user":
-                text_content = messages[i]["content"]
-                messages[i]["content"] = [
-                    {"type": "text", "text": text_content},
-                    *[{
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": img["type"],
-                            "data": img["preview"].split(",")[1] if "," in img["preview"] else img["preview"]
-                        }
-                    } for img in images]
-                ]
+            if messages[i].get('role') in ['user', 'assistant']:
+                # Copy to avoid mutating original
+                messages[i] = messages[i].copy()
+                messages[i]['content'] = messages[i].get('content', '') + instruction
                 break
+
         return messages
 
-    def _format_error(self, e: Exception) -> str:
-        """Extract a concise error message from Anthropic exceptions.
-
-        Handles typical Anthropic APIStatusError shapes to avoid dumping full dicts.
-        """
-        # Check for overloaded condition first and short-circuit with a friendly message
-        try:
-            body = getattr(e, "body", None)
-            if isinstance(body, dict):
-                err = body.get("error")
-                if isinstance(err, dict):
-                    err_type = (err.get("type") or "").lower()
-                    if err_type == "overloaded_error":
-                        return "Due to high traffic, claude services are un-available"
-
-            resp = getattr(e, "response", None)
-            if resp is not None:
-                try:
-                    data = resp.json()
-                    if isinstance(data, dict):
-                        err = data.get("error")
-                        if isinstance(err, dict):
-                            err_type = (err.get("type") or "").lower()
-                            if err_type == "overloaded_error":
-                                return "Due to high traffic, claude services are un-available"
-                except Exception:
-                    pass
-
-            if "overload" in str(e).lower():
-                return "Due to high traffic, claude services are un-available"
-        except Exception:
-            pass
-
-        # Anthropic errors often expose a 'body' dict with nested 'error'
-        body = getattr(e, "body", None)
-        if isinstance(body, dict):
-            err = body.get("error")
-            if isinstance(err, dict):
-                msg = err.get("message")
-                err_type = err.get("type")
-                if isinstance(msg, str) and msg:
-                    if err_type:
-                        return f"Claude error ({err_type}): {msg}"
-                    return f"Claude error: {msg}"
-            for key in ("message", "detail", "error"):
-                val = body.get(key)
-                if isinstance(val, str) and val:
-                    return f"Claude error: {val}"
-
-        # Some exceptions carry an HTTP response with JSON
-        resp = getattr(e, "response", None)
-        if resp is not None:
-            try:
-                data = resp.json()
-                if isinstance(data, dict):
-                    err = data.get("error")
-                    if isinstance(err, dict):
-                        msg = err.get("message") or err.get("type")
-                        if isinstance(msg, str) and msg:
-                            return f"Claude error: {msg}"
-                    for key in ("message", "detail", "error"):
-                        val = data.get(key)
-                        if isinstance(val, str) and val:
-                            return f"Claude error: {val}"
-            except Exception:
-                try:
-                    text = getattr(resp, "text", "")
-                    if text:
-                        return f"Claude error: {text[:200]}"
-                except Exception:
-                    pass
-
-        msg_attr = getattr(e, "message", None)
-        if isinstance(msg_attr, str) and msg_attr:
-            return f"Claude error: {msg_attr}"
-
-        return f"Claude error: {str(e)}"
+    # ==================== Static Methods ====================
 
     @staticmethod
-    def get_web_search_tool():
-        """Get the native web search tool definition for Claude API."""
-        return {
-            "type": "web_search_20250305",
-            "name": "web_search",
-            "max_uses": 5
-        }
+    def get_web_search_tool() -> Dict:
+        """
+        Get the native web search tool definition for Claude API.
+
+        Returns:
+            Web search tool dictionary
+        """
+        return ClaudeWebSearchTools.get_tool_definition()
