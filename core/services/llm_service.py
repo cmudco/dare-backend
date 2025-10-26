@@ -7,15 +7,26 @@ from core.services.openai_service import OpenAIService
 from core.services.claude_service import ClaudeService
 from core.services.gemini_service import GeminiService
 from core.services.llama_service import LlamaService
-from typing import AsyncGenerator, Dict, Tuple
+from core.services.file_processor import FileProcessor
+from core.services.whisper_service import WhisperService
+from core.services.api_key_service import get_provider_api_key, get_provider_api_key_for_user
+from typing import AsyncGenerator, Dict, Tuple, Optional, Any, List
 from files.models import File, Folder
 from prompts.models import Prompt
 from core.services.vector_service import get_vector_service_async
+import logging
+import base64
+
+logger = logging.getLogger(__name__)
 
 class AIService(ABC):
     """Abstract base class for AI services."""
     @abstractmethod
     async def stream_chat_completion(self, messages: list, max_tokens: int, temperature: float, images: list = None, tools: list = None) -> AsyncGenerator[Tuple[str, Dict], None]:
+        pass
+    @abstractmethod
+    async def get_chat_completion(self, messages: list, max_tokens: int, temperature: float, structured_spec: Optional[Dict[str, Any]] = None) -> str:
+        """Non-streaming chat completion, optionally honoring structured outputs spec."""
         pass
 
 class LLMService:
@@ -23,7 +34,6 @@ class LLMService:
 
     def __init__(self):
         self.document_processor = DocumentProcessor(vector_service=None)
-        from core.services.file_processor import FileProcessor
         self.file_processor = FileProcessor()
 
     async def query(
@@ -35,7 +45,7 @@ class LLMService:
         embedding_ids: list = None,
         tag_ids: list = None,
         folder_ids: list = None,
-        user_id: int = None,
+        user = None,
         prompt_id: str = None,
         temperature: float = 0.7,
         max_tokens: int = 8000,
@@ -43,17 +53,26 @@ class LLMService:
         document_similarity_threshold: float = 0.5,
         history_limit: int = 20,
         referenced_conversation_ids: list = None,
-        referenced_conversation_history_limit: int = 10,
         message_obj: Message = None,
         workflow_run_step_obj=None,
         images: list = None,  # Vision support: list of dicts with 'preview' (base64), 'name', 'type'
+        media_ids: list = None,  # NEW: Media file IDs (images/videos) - persistent files from upload
         # New optional params for SocraticBooks-style prompt construction
         socratic_mode: bool = False,
         bot_meta: Dict = None,
         advanced_mode: bool = False,
         web_search_enabled: bool = False,
+        image_generation_enabled: bool = False,
+        image_generation_settings: Optional[Dict[str, Any]] = None,
+        structured_spec: Optional[Dict[str, Any]] = None,
     ) -> AsyncGenerator[Tuple[str, Dict], None]:
-        """Generate AI response with context."""
+        """Generate AI response with context.
+
+        Args:
+            user: User object for API key resolution and file access
+
+        Note: Referenced conversations always include full history (no limit).
+        """
         try:
             llm = llm or LLM.objects.filter(is_active=True).first()
             if not llm:
@@ -67,7 +86,7 @@ class LLMService:
                 )(
                     message=message,
                     conversation=conversation,
-                    user_id=user_id,
+                    user_id=user.id if user else None,
                     file_ids=[],
                     embedding_ids=file_ids or [],
                     tag_ids=tag_ids or [] if advanced_mode else [],
@@ -80,10 +99,44 @@ class LLMService:
                     bot_meta=bot_meta or {},
                 )
 
-                ai_service = self._get_ai_service(llm)
+                # Process media files and combine with temporary images for Socratic mode
+                all_images = images or []
+                if media_ids:
+                    user_id = user.id if user else None
+                    if user_id:
+                        media_images = await self.get_media_files_as_images(media_ids, user_id)
+                        all_images = all_images + media_images
+
+                # Add video transcriptions to message context (for audio content)
+                if all_images:
+                    messages = await self.add_video_transcriptions_to_context(all_images, messages, user)
+
+                ai_service = await self._get_ai_service(llm, user)
+
+                # Route to image generation if enabled
+                if image_generation_enabled:
+                    model = llm.identifier if llm.identifier in ["dall-e-3", "dall-e-2"] else "dall-e-3"
+                    size = image_generation_settings.get("size")
+                    quality = image_generation_settings.get("quality")
+                    style = image_generation_settings.get("style")
+
+                    async for chunk, usage in ai_service.generate_image(
+                        prompt=message,
+                        model=model,
+                        size=size,
+                        quality=quality,
+                        style=style
+                    ):
+                        yield chunk, usage
+                    return
+
                 tools = self._get_web_search_tools(llm) if web_search_enabled else None
-                async for chunk, usage in ai_service.stream_chat_completion(messages, max_tokens, temperature, images=images, tools=tools):
-                    yield chunk, usage
+                if structured_spec:
+                    text = await ai_service.get_chat_completion(messages, max_tokens, temperature, structured_spec=structured_spec)
+                    yield text, None
+                else:
+                    async for chunk, usage in ai_service.stream_chat_completion(messages, max_tokens, temperature, images=all_images, tools=tools):
+                        yield chunk, usage
                 return
 
             conversation_history = await self.get_conversation_history(conversation, limit=history_limit) if conversation else []
@@ -96,8 +149,8 @@ class LLMService:
             if referenced_conversation_ids:
                 referenced_context = await self.get_referenced_conversations_context(
                     referenced_conversation_ids,
-                    user_id,
-                    referenced_conversation_history_limit
+                    user.id if user else None,
+                    None
                 )
                 if referenced_context:
                     messages.append({"role": "user", "content": referenced_context})
@@ -110,6 +163,7 @@ class LLMService:
 
             if embedding_ids or tag_ids or folder_ids:
                 all_embedding_file_ids = set(embedding_ids or [])
+                user_id = user.id if user else None
                 if tag_ids:
                     tagged_file_ids = await self.get_files_from_tags(tag_ids, user_id)
                     all_embedding_file_ids.update(tagged_file_ids)
@@ -141,10 +195,45 @@ class LLMService:
             messages.extend([msg for msg in conversation_history if msg["content"].strip()])
             messages.append({"role": "user", "content": f"User's message: {message}"})
 
-            ai_service = self._get_ai_service(llm)
+            # Process media files and combine with temporary images
+            all_images = images or []
+            if media_ids:
+                user_id = user.id if user else None
+                if user_id:
+                    media_images = await self.get_media_files_as_images(media_ids, user_id)
+                    all_images = all_images + media_images
+
+            # Add video transcriptions to message context (for audio content)
+            if all_images:
+                messages = await self.add_video_transcriptions_to_context(all_images, messages, user)
+
+            ai_service = await self._get_ai_service(llm, user)
+
+            # Route to image generation if enabled
+            if image_generation_enabled:
+                # Extract DALL-E model from LLM identifier (dall-e-3, dall-e-2)
+                model = llm.identifier if llm.identifier in ["dall-e-3", "dall-e-2"] else "dall-e-3"
+                size = image_generation_settings.get("size")
+                quality = image_generation_settings.get("quality")
+                style = image_generation_settings.get("style")
+
+                async for chunk, usage in ai_service.generate_image(
+                    prompt=message,
+                    model=model,
+                    size=size,
+                    quality=quality,
+                    style=style
+                ):
+                    yield chunk, usage
+                return
+
             tools = self._get_web_search_tools(llm) if web_search_enabled else None
-            async for chunk, usage in ai_service.stream_chat_completion(messages, max_tokens, temperature, images=images, tools=tools):
-                yield chunk, usage
+            if structured_spec:
+                text = await ai_service.get_chat_completion(messages, max_tokens, temperature, structured_spec=structured_spec)
+                yield text, None
+            else:
+                async for chunk, usage in ai_service.stream_chat_completion(messages, max_tokens, temperature, images=all_images, tools=tools):
+                    yield chunk, usage
 
         except Exception as e:
             yield f"Error: {str(e)}", None
@@ -204,8 +293,133 @@ class LLMService:
         return file_contents
 
     @database_sync_to_async
-    def get_referenced_conversations_context(self, conversation_ids: list, user_id: int, history_limit: int = 10) -> str:
-        """Fetch context from referenced conversations."""
+    def get_media_files_as_images(self, media_ids: list, user_id: int) -> list:
+        """
+        Convert media file IDs to image format for LLM vision API.
+        Reads media files from disk and converts to base64 data URLs.
+
+        Args:
+            media_ids: List of media file IDs
+            user_id: User ID for filtering
+
+        Returns:
+            List of dicts with 'preview' (base64 data URL), 'name', 'type'
+        """
+        if not media_ids:
+            return []
+
+        media_images = []
+
+        # Fetch media files from database
+        media_files = File.active_objects.filter(
+            id__in=media_ids,
+            user_id=user_id,
+            is_media=True  # Only media files
+        )
+
+        for media_file in media_files:
+            try:
+                # Read file from disk
+                with media_file.file.open('rb') as f:
+                    file_data = f.read()
+
+                # Convert to base64
+                base64_data = base64.b64encode(file_data).decode('utf-8')
+
+                # Create data URL
+                data_url = f"data:{media_file.file_type};base64,{base64_data}"
+
+                media_images.append({
+                    'preview': data_url,
+                    'name': media_file.name or media_file.file.name,
+                    'type': media_file.file_type
+                })
+            except Exception as e:
+                logger.error(f"Error reading media file {media_file.id}: {str(e)}")
+                continue
+
+        return media_images
+
+    async def add_video_transcriptions_to_context(
+        self,
+        media_items: List[Dict],
+        messages: List[Dict],
+        user=None
+    ) -> List[Dict]:
+        """
+        Add video transcriptions to message context for LLMs.
+
+        Extracts and transcribes audio from videos, then adds the transcriptions
+        to the message context so LLMs have access to the spoken content.
+
+        Args:
+            media_items: List of media dicts with 'preview', 'type', 'name'
+            messages: List of message dictionaries
+            user: Optional user for API key resolution
+
+        Returns:
+            Updated messages list with video transcriptions added
+        """
+        # Separate videos from images
+        videos = [item for item in media_items if item.get('type', '').startswith('video/')]
+
+        if not videos:
+            return messages
+
+        try:
+            # Initialize Whisper service
+            if user:
+                api_key = await get_provider_api_key_for_user(Provider.OPENAI.value, user)
+            else:
+                api_key = await get_provider_api_key(Provider.OPENAI.value)
+
+            whisper_service = WhisperService(api_key=api_key)
+
+            # Transcribe all videos
+            transcriptions = await whisper_service.transcribe_multiple_videos(videos)
+
+            # Filter out failed transcriptions and build context
+            successful_transcriptions = []
+            for video_name, transcription in transcriptions.items():
+                if transcription:
+                    successful_transcriptions.append(
+                        f"Video '{video_name}' audio transcription:\n{transcription}"
+                    )
+
+            # Add transcriptions to messages before the last user message
+            if successful_transcriptions:
+                transcription_context = (
+                    "=== Video Audio Transcriptions ===\n\n"
+                    + "\n\n".join(successful_transcriptions)
+                    + "\n\n=== End of Video Transcriptions ===\n"
+                )
+
+                # Find last user message and insert transcription before it
+                for i in range(len(messages) - 1, -1, -1):
+                    if messages[i].get("role") == "user":
+                        messages.insert(i, {
+                            "role": "user",
+                            "content": transcription_context
+                        })
+                        break
+
+                logger.info(f"Added transcriptions for {len(successful_transcriptions)} video(s)")
+
+        except Exception as e:
+            logger.error(f"Error transcribing videos: {str(e)}")
+            # Don't fail the entire request if transcription fails
+
+        return messages
+
+    @database_sync_to_async
+    def get_referenced_conversations_context(self, conversation_ids: list, user_id: int, history_limit: int = None) -> str:
+        """Fetch context from referenced conversations.
+
+        Args:
+            conversation_ids: List of conversation IDs to fetch
+            user_id: User ID for filtering
+            history_limit: Optional limit for messages (None = all messages)
+        """
         if not conversation_ids:
             return ""
 
@@ -216,9 +430,14 @@ class LLMService:
         )
 
         for conversation in conversations:
-            messages = Message.active_objects.filter(
+            messages_query = Message.active_objects.filter(
                 conversation=conversation
-            ).order_by('-created_at')[:history_limit]
+            ).order_by('-created_at')
+
+            if history_limit is not None:
+                messages_query = messages_query[:history_limit]
+
+            messages = list(messages_query)
 
             if messages:
                 conversation_title = conversation.title or "Untitled Conversation"
@@ -236,16 +455,31 @@ class LLMService:
 
         return ""
 
-    def _get_ai_service(self, llm: LLM) -> AIService:
+    async def _get_ai_service(self, llm: LLM, user=None) -> AIService:
+        """
+        Get the appropriate AI service for the given LLM.
+        Fetches API key asynchronously based on user's billing mode.
+
+        Args:
+            llm: The LLM model to use
+            user: Optional user instance. If provided, uses user-specific key resolution
+                  based on billing_mode. If None, falls back to system keys.
+        """
+        # Use user-aware key resolution if user is provided
+        if user:
+            api_key = await get_provider_api_key_for_user(llm.provider, user)
+        else:
+            api_key = await get_provider_api_key(llm.provider)
+
         if llm.provider == Provider.OPENAI.value:
-            return OpenAIService(llm=llm)
+            return OpenAIService(llm=llm, api_key=api_key)
         elif llm.provider == Provider.CLAUDE.value:
-            return ClaudeService(llm=llm)
+            return ClaudeService(llm=llm, api_key=api_key)
         elif llm.provider == Provider.GEMINI.value:
-            return GeminiService(llm=llm)
+            return GeminiService(llm=llm, api_key=api_key)
         elif llm.provider == Provider.LLAMA.value:
-            return LlamaService(llm=llm)
-        return ClaudeService(llm=llm)
+            return LlamaService(llm=llm, api_key=api_key)
+        return ClaudeService(llm=llm, api_key=api_key)
 
     def _get_web_search_tools(self, llm: LLM) -> list:
         """Get web search tools based on the LLM provider.
