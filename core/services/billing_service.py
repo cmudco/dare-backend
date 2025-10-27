@@ -99,7 +99,8 @@ class BillingService:
                             amount=amount_to_deduct,
                             type=TransactionTypeChoice.DEBIT,
                             input_tokens=input_tokens,
-                            output_tokens=output_tokens
+                            output_tokens=output_tokens,
+                            billing_mode=user.billing_mode
                         )
                     )()
                     await database_sync_to_async(lambda: wallet.refresh_from_db())()
@@ -170,7 +171,8 @@ class BillingService:
                                     type=TransactionTypeChoice.DEBIT,
                                     message=transaction_message,
                                     input_tokens=message_obj.input_tokens,
-                                    output_tokens=message_obj.output_tokens
+                                    output_tokens=message_obj.output_tokens,
+                                    billing_mode=BillingModeChoice.OWN_API
                                 )
                         else:
                             # WALLET mode - charge user's wallet
@@ -201,7 +203,8 @@ class BillingService:
                                     type=TransactionTypeChoice.DEBIT,
                                     message=transaction_message,
                                     input_tokens=message_obj.input_tokens,
-                                    output_tokens=message_obj.output_tokens
+                                    output_tokens=message_obj.output_tokens,
+                                    billing_mode=BillingModeChoice.WALLET
                                 )
                                 wallet.refresh_from_db()
             message_obj.save()
@@ -254,7 +257,8 @@ class BillingService:
                             amount=amount_to_deduct,
                             type=TransactionTypeChoice.DEBIT,
                             input_tokens=input_tokens,
-                            output_tokens=output_tokens
+                            output_tokens=output_tokens,
+                            billing_mode=user.billing_mode
                         )
                         wallet.balance = Decimal('0')
                         wallet.save()
@@ -268,7 +272,8 @@ class BillingService:
                         llm=llm,
                         type=TransactionTypeChoice.DEBIT,
                         input_tokens=input_tokens,
-                        output_tokens=output_tokens
+                        output_tokens=output_tokens,
+                        billing_mode=user.billing_mode
                     )
                     wallet.refresh_from_db()
                 return True
@@ -379,7 +384,8 @@ class BillingService:
                     user=user,
                     message=description,
                     amount=amount,
-                    type=TransactionTypeChoice.DEBIT
+                    type=TransactionTypeChoice.DEBIT,
+                    billing_mode=user.billing_mode
                 )
             )()
 
