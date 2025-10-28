@@ -20,6 +20,7 @@ from core.services.conversation_service import ConversationService
 from core.services.llm_service import LLMService
 from core.services.billing_service import BillingService
 from core.services.learning_progress_service import LearningProgressService
+from core.services.dtos import LLMQueryRequestBuilder
 from .constants import SenderType
 from conversations.api.serializers import MessageSerializer
 from users.utils import detect_platform_from_scope, should_run_learning_progress
@@ -196,32 +197,19 @@ Provide your assessment in a clear, encouraging format that helps track their pr
             token_usage = None
             generated_image_data = None
 
-            async for chunk, usage in self.llm_service.query(
-                message_data["message"],
-                self.conversation,
-                llm,
-                message_data["file_ids"],
-                message_data["embedding_ids"],
-                message_data["tag_ids"],
-                message_data["folder_ids"],
+            # Build LLM query request using DTO builder
+            # Builder automatically applies conversation-level defaults
+            request = LLMQueryRequestBuilder.from_message_data(
+                message=message_data["message"],
+                conversation=self.conversation,
                 user=self.user,
-                prompt_id=message_data["prompt_id"],
-                temperature=message_data["temperature"],
-                max_tokens=message_data["max_tokens"],
-                max_context_snippets=message_data["max_context_snippets"],
-                document_similarity_threshold=message_data["document_similarity_threshold"],
-                history_limit=message_data["history_limit"],
-                referenced_conversation_ids=message_data["referenced_conversation_ids"],
+                message_data=message_data,
+                llm=llm,
                 message_obj=message_obj,
-                images=message_data.get("images", []),
-                media_ids=message_data.get("media_ids", []),  # NEW: Media file IDs
-                socratic_mode=(self.platform == AuthSourceChoice.SOCRATIC_BOTS and not message_data.get("prompt_id")),
-                advanced_mode=bool(message_data.get("is_advanced")),
-                bot_meta=message_data.get("bot_meta") or {},
-                web_search_enabled=message_data.get("web_search_enabled") or self.conversation.web_search_enabled,
-                image_generation_enabled=message_data.get("image_generation_enabled") or self.conversation.image_generation_enabled,
-                image_generation_settings=message_data.get("image_generation_settings"),
-            ):
+                platform=self.platform,
+            )
+
+            async for chunk, usage in self.llm_service.query(request):
                 if usage:
                     token_usage = usage
 
