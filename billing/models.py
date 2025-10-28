@@ -5,6 +5,7 @@ from billing.constants import TransactionTypeChoice
 from common.models import TimeStampMixin
 from conversations.models import LLM
 from users.models import User
+from api_keys.constants import BillingModeChoice
 
 class Wallet(TimeStampMixin):
     """
@@ -100,6 +101,13 @@ class Transaction(TimeStampMixin):
         verbose_name=("Output Tokens"),
         help_text=("Number of output tokens used in the transaction"),
     )
+    billing_mode = models.CharField(
+        max_length=20,
+        choices=BillingModeChoice.choices,
+        default=BillingModeChoice.WALLET,
+        verbose_name=("Billing Mode"),
+        help_text=("Billing mode used for this transaction: wallet or own API keys"),
+    )
 
     class Meta:
         verbose_name = ("Transaction")
@@ -109,6 +117,8 @@ class Transaction(TimeStampMixin):
     def display_amount(self):
         if self.amount is None:
             return "No amount"
+        if self.amount == Decimal('0'):
+            return "$0.00"
         if abs(self.amount) >= Decimal('0.01'):
             return f"${self.amount:.2f}"
         else:
