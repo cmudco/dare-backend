@@ -31,6 +31,11 @@ class ConversationSerializer(serializers.ModelSerializer):
         allow_blank=True,
         help_text="Optional conversation ID. Auto-generated if not provided."
     )
+    bot_id = serializers.IntegerField(
+        required=False,
+        allow_null=True,
+        help_text="Associated Socratic Bot ID (only for SocraticBots source)."
+    )
 
     class Meta:
         model = Conversation
@@ -38,6 +43,7 @@ class ConversationSerializer(serializers.ModelSerializer):
             'conversation_id',
             'title',
             'source',
+            'bot_id',
             'created_at',
             'user',
             'max_context_snippets',

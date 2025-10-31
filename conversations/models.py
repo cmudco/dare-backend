@@ -145,6 +145,11 @@ class Conversation(BaseModel):
         default=ConversationSource.DARE,
         help_text="Platform source where the conversation was created (DARE or SocraticBots)."
     )
+    bot_id = models.IntegerField(
+        null=True,
+        blank=True,
+        help_text="Associated Socratic Bot ID (only populated for SocraticBots source)."
+    )
     max_context_snippets = models.PositiveIntegerField(default=4, help_text="Maximum number of context snippets to retrieve.")
     document_similarity_threshold = models.FloatField(default=0.2, help_text="Similarity threshold for document retrieval.")
     temperature = models.FloatField(default=0.7, help_text="Temperature setting for the LLM.")

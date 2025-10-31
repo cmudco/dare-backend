@@ -26,10 +26,17 @@ class ConversationViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         # Filter conversations based on platform source
         platform_source = detect_platform_from_request(self.request)
-        return Conversation.active_objects.filter(
+        queryset = Conversation.active_objects.filter(
             user=self.request.user,
             source=platform_source
-        ).order_by('sort_order', '-created_at')
+        )
+
+        # Optional filtering by bot_id (for Socratic Books queries)
+        bot_id = self.request.query_params.get('bot_id', None)
+        if bot_id is not None:
+            queryset = queryset.filter(bot_id=bot_id)
+
+        return queryset.order_by('sort_order', '-created_at')
 
     def perform_create(self, serializer):
         platform_source = detect_platform_from_request(self.request)
