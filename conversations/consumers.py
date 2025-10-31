@@ -1,6 +1,9 @@
 import json
 import logging
 import uuid
+import asyncio
+import os
+import requests
 from typing import Optional, Dict, Any
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
@@ -11,7 +14,6 @@ from pydantic import ValidationError
 from asgiref.sync import sync_to_async
 from djangorestframework_camel_case.util import camelize
 from django.core.files.base import ContentFile
-import asyncio
 
 from conversations.models import Conversation, Message, LLM
 from files.models import File
@@ -323,6 +325,10 @@ Provide your assessment in a clear, encouraging format that helps track their pr
                 updated_message.is_regenerated = True
                 await database_sync_to_async(updated_message.save)(update_fields=['is_regenerated'])
 
+            # Update bot budget if this is a public bot conversation
+            if self.conversation.bot_id and self.conversation.user is None:
+                await self._update_bot_budget(updated_message.cost)
+
             await self.send(await self._format_message(updated_message, streaming=False, regenerate=regenerate, generated_image=generated_image_data))
         except (ValidationError, DjangoValidationError) as e:
             logger.error(f"Validation error finalizing message: {str(e)}")
@@ -611,3 +617,312 @@ Provide your assessment in a clear, encouraging format that helps track their pr
                 "conversationId": str(self.conversation.id),
                 "assessment": None
             })))
+
+    async def _update_bot_budget(self, cost):
+        """
+        Update Socratic Bot budget for public bot conversations.
+        Makes HTTP call to Socratic Books backend (runs in thread pool to avoid blocking).
+        """
+        if cost is None or cost == 0:
+            return
+
+        # Run in thread pool to avoid blocking the async event loop
+        await sync_to_async(self._update_bot_budget_sync)(cost)
+
+    def _update_bot_budget_sync(self, cost):
+        """
+        Synchronous budget update to Socratic Books backend.
+        Called via sync_to_async to run in thread pool.
+        """
+        try:
+            socratic_backend_url = os.getenv('SOCRATIC_BOTS_BACKEND_URL', 'http://localhost:8001')
+            url = f"{socratic_backend_url}/api/bots/internal/update-budget/"
+
+            data = {
+                'bot_id': self.conversation.bot_id,
+                'cost': float(cost)
+            }
+
+            response = requests.post(url, json=data, timeout=5)
+
+            if response.status_code == 200:
+                logger.info(f"Updated budget for bot {self.conversation.bot_id}: +${cost}")
+            else:
+                logger.error(f"Failed to update bot budget: HTTP {response.status_code}")
+
+        except requests.Timeout:
+            logger.error(f"Timeout updating bot budget for bot {self.conversation.bot_id}")
+        except Exception as e:
+            logger.exception(f"Error updating bot budget: {str(e)}")
+            # Non-fatal - don't block the conversation
+
+
+class PublicBotConsumer(ChatConsumer):
+    """
+    WebSocket consumer for public bot conversations (no user authentication required).
+    Uses anonymous_session_id instead of user for validation.
+    Inherits all chat functionality from ChatConsumer.
+    """
+
+    async def connect(self):
+        """Initialize WebSocket connection for public bot (no auth required)."""
+        try:
+            # Get conversation_id from URL
+            self.conversation_id = self.scope["url_route"]["kwargs"].get("conversation_id")
+
+            # Get session_id from query string
+            query_string = self.scope.get('query_string', b'').decode()
+            params = dict(param.split('=') for param in query_string.split('&') if '=' in param)
+            session_id = params.get('session_id')
+
+            if not session_id:
+                logger.warning(f"No session_id provided for public bot conversation {self.conversation_id}")
+                raise DenyConnection("session_id is required")
+
+            # Get conversation and validate it belongs to this session
+            self.conversation = await self.conversation_service.get_conversation_by_id(self.conversation_id)
+
+            if not self.conversation:
+                logger.warning(f"Invalid conversation_id: {self.conversation_id}")
+                raise DenyConnection("Invalid conversation_id")
+
+            # Verify this conversation belongs to this anonymous session
+            if self.conversation.anonymous_session_id != session_id:
+                logger.warning(f"Session mismatch for conversation {self.conversation_id}")
+                raise DenyConnection("Invalid session for this conversation")
+
+            # Verify conversation has no user (is public)
+            if self.conversation.user is not None:
+                logger.warning(f"Conversation {self.conversation_id} is not a public conversation")
+                raise DenyConnection("Not a public conversation")
+
+            # Set user to None for public conversations
+            self.user = None
+
+            # Detect platform from ASGI scope headers
+            self.platform = detect_platform_from_scope(self.scope)
+
+            await self.accept()
+            await self.load_conversation_history()
+
+        except DenyConnection as e:
+            logger.error(f"Public bot connection denied: {str(e)}")
+            await self.close(code=4000)
+        except Exception as e:
+            logger.exception(f"Error during public bot connect: {str(e)}")
+            await self.close(code=4001)
+
+    async def handle_new_message(self, data: Dict[str, Any]):
+        """Process new user message for public bot (skip billing checks)."""
+        try:
+            message_data = self._validate_message_data(data)
+            llm = await self._get_llm(message_data.get("llm_id"))
+
+            # Skip billing check for public bots - bot budget will be updated instead
+
+            message_obj = await self.conversation_service.create_message(
+                self.conversation,
+                message_data["sender_type"],
+                message_data["message"],
+                "Anonymous User"
+            )
+            await self.send(await self._format_message(message_obj, is_sender=True))
+
+            if await self.conversation_service.is_first_message(self.conversation):
+                asyncio.create_task(self._generate_conversation_title(message_data["message"]))
+
+            bot_message_obj = await self.conversation_service.create_message(
+                self.conversation,
+                SenderType.AI_ASSISTANT,
+                "",
+                "AI Assistant",
+                message_data["file_ids"],
+                message_data["tag_ids"],
+                message_data["embedding_ids"],
+                llm
+            )
+            await self.send(await self._format_message(bot_message_obj, streaming=True))
+
+            await self._stream_ai_response(message_data, bot_message_obj, llm)
+        except ValidationError as e:
+            await self.send_error("validation_error", str(e))
+        except Exception as e:
+            logger.exception(f"Error in handle_new_message (public): {str(e)}")
+            await self.send_error("ai_response_error", "Failed to generate AI response")
+
+    async def handle_regenerate_response(self, data: Dict[str, Any]):
+        """Regenerate an AI response for public bot (skip billing checks)."""
+        try:
+            message_id = data.get("message_id")
+            if not message_id:
+                await self.send_error("missing_data", "Missing message_id")
+                return
+
+            ai_message = await database_sync_to_async(
+                lambda: Message.active_objects.select_related('llm').filter(
+                    id=message_id, sender_type=SenderType.AI_ASSISTANT
+                ).first()
+            )()
+            if not ai_message:
+                await self.send_error("invalid_message", "AI message not found")
+                return
+
+            preceding_user_message = await self._get_preceding_user_message(ai_message)
+            if not preceding_user_message:
+                await self.send_error("no_user_message", "No preceding user message found")
+                return
+
+            llm = await self._get_llm(data.get("llm_id"), default=ai_message.llm)
+
+            # Skip billing check for public bots
+
+            message_data = self._validate_message_data(data, default_message=preceding_user_message.message)
+            await self._stream_ai_response(message_data, ai_message, llm, regenerate=True)
+        except Exception as e:
+            logger.exception(f"Error in handle_regenerate_response (public): {str(e)}")
+            await self.send_error("regenerate_error", "Failed to regenerate response")
+
+    async def _stream_ai_response(self, message_data: Dict[str, Any], message_obj: Message, llm: LLM, regenerate: bool = False):
+        """Stream AI response for public bot (skip billing checks during streaming)."""
+        try:
+            bot_message_id = str(message_obj.id)
+            ai_response_accumulator = ""
+            token_usage = None
+            generated_image_data = None
+
+            # Build LLM query request using DTO builder
+            request = LLMQueryRequestBuilder.from_message_data(
+                message=message_data["message"],
+                conversation=self.conversation,
+                user=None,  # No user for public bots
+                message_data=message_data,
+                llm=llm,
+                message_obj=message_obj,
+                platform=self.platform,
+            )
+
+            async for chunk, usage in self.llm_service.query(request):
+                if usage:
+                    token_usage = usage
+
+                    # Handle generated image (if supported)
+                    if usage.get("image_bytes"):
+                        generated_file = await self._save_generated_image_public(
+                            image_bytes=usage["image_bytes"],
+                            prompt=message_data["message"],
+                            metadata=usage
+                        )
+                        if generated_file:
+                            await database_sync_to_async(message_obj.files.add)(generated_file)
+                            generated_image_data = {
+                                "fileId": generated_file.id,
+                                "filename": generated_file.name,
+                                "fileUrl": generated_file.file.url,
+                                "prompt": message_data["message"],
+                                "revisedPrompt": usage.get("revised_prompt", ""),
+                                "cost": str(usage.get("cost", "0.040")),
+                                "model": usage.get("model", "dall-e-3"),
+                                "size": usage.get("size", "1024x1024"),
+                                "quality": usage.get("quality", "standard"),
+                                "style": usage.get("style", "vivid"),
+                            }
+
+                    # Skip billing check during streaming for public bots
+
+                if chunk and chunk.strip():
+                    ai_response_accumulator += chunk
+                    payload = {
+                        "type": "ai_stream",
+                        "id": bot_message_id,
+                        "message": ai_response_accumulator,
+                        "senderName": "AI Assistant",
+                        "senderType": SenderType.AI_ASSISTANT,
+                        "isSender": False,
+                        "streaming": True,
+                        "regenerate": regenerate,
+                        "date": message_obj.created_at.isoformat(),
+                    }
+                    await self.send(json.dumps(camelize(payload)))
+
+            if ai_response_accumulator.strip():
+                await self._finalize_message_public(message_obj, ai_response_accumulator, token_usage, regenerate, generated_image_data)
+                # Skip learning progress for public bots
+        except Exception as e:
+            logger.exception(f"Error streaming AI response (public): {str(e)}")
+            await self.send_error("stream_error", "Failed to stream AI response")
+
+    async def _finalize_message_public(self, message_obj: Message, ai_response: str, token_usage: Dict, regenerate: bool, generated_image_data: Dict = None):
+        """Finalize AI message for public bot (skip billing, update bot budget)."""
+        try:
+            if regenerate and not message_obj.original_message:
+                message_obj.original_message = message_obj.message
+                await database_sync_to_async(message_obj.save)(update_fields=['original_message'])
+
+            # Update message without billing
+            message_obj.message = ai_response
+            if token_usage:
+                message_obj.input_tokens = token_usage.get('input_tokens', 0)
+                message_obj.output_tokens = token_usage.get('output_tokens', 0)
+
+                # Calculate cost
+                if message_obj.llm and (message_obj.input_tokens or message_obj.output_tokens):
+                    llm = message_obj.llm
+                    input_rate = llm.input_token_rate_per_million / 1000000
+                    output_rate = llm.output_token_rate_per_million / 1000000
+                    cost = (message_obj.input_tokens * input_rate) + (message_obj.output_tokens * output_rate)
+                    message_obj.cost = cost
+
+            if regenerate:
+                message_obj.is_regenerated = True
+
+            await database_sync_to_async(message_obj.save)()
+
+            # Update bot budget if this is a public bot conversation
+            if self.conversation.bot_id and self.conversation.user is None and message_obj.cost:
+                await self._update_bot_budget(message_obj.cost)
+
+            await self.send(await self._format_message(message_obj, streaming=False, regenerate=regenerate, generated_image=generated_image_data))
+        except Exception as e:
+            logger.exception(f"Error finalizing message (public): {str(e)}")
+            await self.send_error("finalize_error", "Failed to finalize message")
+
+    @database_sync_to_async
+    def _save_generated_image_public(self, image_bytes: bytes, prompt: str, metadata: Dict) -> Optional[File]:
+        """Save AI-generated image for public bot (no user)."""
+        try:
+            from datetime import datetime
+
+            # Generate filename
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"dalle_public_{timestamp}.png"
+
+            # Create File object without user
+            file_obj = File(
+                user=None,  # No user for public bots
+                name=filename,
+                file_type="image/png",
+                size=len(image_bytes),
+                status=FileStatus.PROCESSED,
+                is_media=True,
+                media_type='generated_image',
+                is_generated=True,
+                generation_prompt=prompt,
+                revised_prompt=metadata.get('revised_prompt', ''),
+                generation_params={
+                    'model': metadata.get('model', 'dall-e-3'),
+                    'size': metadata.get('size', '1024x1024'),
+                    'quality': metadata.get('quality', 'standard'),
+                    'style': metadata.get('style', 'vivid'),
+                }
+            )
+
+            # Save the image file
+            file_obj.file.save(filename, ContentFile(image_bytes), save=False)
+            file_obj.save()
+
+            logger.info(f"Saved generated image as File ID: {file_obj.id} (public bot)")
+            return file_obj
+
+        except Exception as e:
+            logger.exception(f"Error saving generated image (public): {str(e)}")
+            return None

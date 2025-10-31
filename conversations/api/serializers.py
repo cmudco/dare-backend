@@ -11,7 +11,7 @@ class LLMSerializer(serializers.ModelSerializer):
         fields = ['id', 'name', 'identifier', 'provider', 'description', 'is_reasoning', 'is_image_generator', 'input_token_rate_per_million', 'output_token_rate_per_million']
 
 class ConversationSerializer(serializers.ModelSerializer):
-    user = serializers.ReadOnlyField(source='user.email')
+    user = serializers.SerializerMethodField()
     prompt = PromptSerializer(read_only=True)
     prompt_id = serializers.PrimaryKeyRelatedField(
         queryset=Prompt.active_objects.all(),
@@ -36,6 +36,16 @@ class ConversationSerializer(serializers.ModelSerializer):
         allow_null=True,
         help_text="Associated Socratic Bot ID (only for SocraticBots source)."
     )
+    anonymous_session_id = serializers.CharField(
+        required=False,
+        allow_null=True,
+        allow_blank=True,
+        help_text="Session ID for anonymous public bot conversations."
+    )
+
+    def get_user(self, obj):
+        """Return user email or None for anonymous conversations."""
+        return obj.user.email if obj.user else None
 
     class Meta:
         model = Conversation
@@ -44,6 +54,7 @@ class ConversationSerializer(serializers.ModelSerializer):
             'title',
             'source',
             'bot_id',
+            'anonymous_session_id',
             'created_at',
             'user',
             'max_context_snippets',
