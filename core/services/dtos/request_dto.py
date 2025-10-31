@@ -33,7 +33,7 @@ class LLMQueryRequest:
     """
     # Required fields
     message: str
-    user: Any  # User model - using Any to avoid circular imports
+    user: Optional[Any] = None  # User model - using Any to avoid circular imports (can be None for public bots)
 
     # Semi-required (can be None for workflow execution)
     conversation: Optional[Any] = None  # Conversation model
@@ -51,8 +51,10 @@ class LLMQueryRequest:
         """Validate request data."""
         if not self.message or not self.message.strip():
             raise ValueError("Message cannot be empty")
-        if not self.user:
-            raise ValueError("User is required")
+        # User can be None for public bot conversations
+        # Validation: user is required UNLESS conversation has no user (public bot)
+        if not self.user and self.conversation and hasattr(self.conversation, 'user') and self.conversation.user is not None:
+            raise ValueError("User is required for authenticated conversations")
 
     def is_socratic_mode(self) -> bool:
         """Check if Socratic mode is enabled."""

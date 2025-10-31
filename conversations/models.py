@@ -135,7 +135,9 @@ class Conversation(BaseModel):
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name="conversations",
-        help_text="User who owns this conversation."
+        null=True,
+        blank=True,
+        help_text="User who owns this conversation. Null for public bot conversations."
     )
     conversation_id = models.CharField(max_length=50, unique=True, help_text="Unique conversation ID.")
     title = models.CharField(max_length=255, blank=True, null=True, help_text="Title of the conversation.")
@@ -149,6 +151,13 @@ class Conversation(BaseModel):
         null=True,
         blank=True,
         help_text="Associated Socratic Bot ID (only populated for SocraticBots source)."
+    )
+    anonymous_session_id = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="Session ID for anonymous public bot conversations."
     )
     max_context_snippets = models.PositiveIntegerField(default=4, help_text="Maximum number of context snippets to retrieve.")
     document_similarity_threshold = models.FloatField(default=0.2, help_text="Similarity threshold for document retrieval.")
