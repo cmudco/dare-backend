@@ -89,7 +89,7 @@ If there is no current status, follow the system prompt to make a new status rep
                 {"role": "user", "content": user_message},
             ]
 
-            ai_service = self._get_ai_service(llm)
+            ai_service = await self._get_ai_service(llm)
             async for chunk, usage in ai_service.stream_chat_completion(
                 messages=messages,
                 max_tokens=max_tokens,
@@ -119,9 +119,9 @@ If there is no current status, follow the system prompt to make a new status rep
             metadata=metadata or {},
         )
 
-    def _get_ai_service(self, llm: LLM) -> AIService:
+    async def _get_ai_service(self, llm: LLM) -> AIService:
         """Return the provider-specific AI service for the given LLM."""
-        return self.llm_service._get_ai_service(llm)
+        return await self.llm_service._get_ai_service(llm)
 
     @database_sync_to_async
     def _get_default_progress_llm(self) -> LLM:

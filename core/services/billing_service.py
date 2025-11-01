@@ -216,6 +216,57 @@ class BillingService:
             logger.exception(f"Error finalizing message: {str(e)}")
             raise ValidationError({"error": "billing_error", "message": "Failed to process billing"})
 
+    def finalize_ai_message_no_billing(self, message_obj: Message, ai_response: str, token_usage: Dict) -> tuple[Message, Decimal]:
+        """
+        Finalize AI message WITHOUT billing (for public bot conversations).
+
+        Calculates cost and updates message with token usage, but does NOT:
+        - Create transactions
+        - Deduct from wallet
+        - Check billing mode
+
+        Used by PublicBotConsumer where bot budget is tracked separately.
+
+        Args:
+            message_obj: Message object to finalize
+            ai_response: AI response text
+            token_usage: Dictionary with input_tokens, output_tokens, and optional cost
+
+        Returns:
+            Tuple of (updated_message, calculated_cost)
+        """
+        if not message_obj:
+            return None, Decimal('0')
+
+        try:
+            message_obj.message = ai_response
+            cost = Decimal('0.000000')
+
+            if token_usage:
+                message_obj.input_tokens = token_usage.get("input_tokens", 0)
+                message_obj.output_tokens = token_usage.get("output_tokens", 0)
+                llm = message_obj.llm
+
+                if llm:
+                    # Check if direct cost is provided (e.g., for image generation)
+                    if 'cost' in token_usage:
+                        cost = Decimal(str(token_usage['cost']))
+                    else:
+                        cost = self._calculate_cost(llm, message_obj.input_tokens, message_obj.output_tokens)
+
+                    message_obj.cost = cost
+                    logger.debug(
+                        f"Public bot message - Input tokens: {message_obj.input_tokens}, "
+                        f"Output tokens: {message_obj.output_tokens}, Cost: {cost}"
+                    )
+
+            message_obj.save()
+            return message_obj, cost
+
+        except Exception as e:
+            logger.exception(f"Error finalizing message (no billing): {str(e)}")
+            raise ValidationError({"error": "finalization_error", "message": "Failed to finalize message"})
+
     def process_workflow_billing(self, user: 'User', llm: LLM, input_tokens: int, output_tokens: int, step_node_id: int = None) -> bool:
         """Process billing for a workflow step or conditional node."""
         try:
