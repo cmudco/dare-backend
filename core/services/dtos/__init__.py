@@ -7,6 +7,7 @@ from .socratic_dto import SocraticConfig
 from .message_context_dto import MessageBuildContext
 from .request_dto import LLMQueryRequest, LLMQueryChunk
 from .builder import LLMQueryRequestBuilder
+from .websocket_dto import BillingCheckResult, MessageFinalizationResult
 
 __all__ = [
     "ContextConfig",
@@ -17,4 +18,6 @@ __all__ = [
     "LLMQueryRequest",
     "LLMQueryChunk",
     "LLMQueryRequestBuilder",
+    "BillingCheckResult",
+    "MessageFinalizationResult",
 ]
