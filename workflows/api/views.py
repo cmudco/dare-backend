@@ -223,21 +223,22 @@ class WorkflowRunViewSet(viewsets.ModelViewSet):
         Submit user's route choice for a node requiring human validation.
         Handles both ConditionalNode and StructuredOutputNode.
 
-        Expected request data:
+        Expected request data (frontend sends camelCase, DRF parser converts to snake_case):
         {
             "node_id": "conditional_node_123" or "structured-output-1",
             "chosen_route": "Route A"
         }
         """
         workflow_run = self.get_object()
-        node_id = request.data.get('nodeId') or request.data.get('node_id')
-        chosen_route = request.data.get('chosenRoute') or request.data.get('chosen_route')
+        # CamelCaseJSONParser automatically converts incoming camelCase to snake_case
+        node_id = request.data.get('node_id')
+        chosen_route = request.data.get('chosen_route')
 
         if not node_id:
-            return Response({'error': 'nodeId is required'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'node_id is required'}, status=status.HTTP_400_BAD_REQUEST)
 
         if not chosen_route:
-            return Response({'error': 'chosenRoute is required'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'chosen_route is required'}, status=status.HTTP_400_BAD_REQUEST)
 
         # Find the step waiting for input
         # For ConditionalNode: step_node__node_id matches node_id directly
