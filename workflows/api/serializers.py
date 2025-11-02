@@ -71,26 +71,76 @@ class WorkflowRunSerializer(serializers.ModelSerializer):
         validations = []
 
         for step in pending_steps:
-            conditional_data = step.step_node.data_object if step.step_node else None
+            step_data = step.step_node.data_object if step.step_node else None
 
-            if conditional_data and isinstance(conditional_data, ConditionalNodeData):
-                available_routes = conditional_data.get_routes()
+            # Check if step uses structured output - MUST use snake_case (backend)
+            metadata = step.metadata or {}
+            uses_structured_output = metadata.get('use_structured_output_node', False)
+
+            # Handle ConditionalNode validations
+            if step_data and isinstance(step_data, ConditionalNodeData):
+                available_routes = step_data.get_routes()
 
                 # Extract AI analysis and recommendation from metadata
-                metadata = step.metadata or {}
-                ai_recommendation = metadata.get('ai_recommendation')
+                ai_recommendation = metadata.get('aiRecommendation') or metadata.get('ai_recommendation')
                 ai_analysis = metadata.get('analysis')
+
+                # Get prompt content if prompt exists
+                prompt_content = step_data.prompt.content if step_data.prompt else "Evaluate the input and choose the appropriate route."
 
                 validations.append({
                     'node_id': step.step_node.node_id,
-                    'step_number': conditional_data.step_number,
-                    'custom_prompt': conditional_data.custom_prompt,
+                    'step_number': step_data.step_number,
+                    'custom_prompt': prompt_content,  # For backward compatibility with frontend
                     'available_routes': available_routes,
                     'current_response': step.response,
                     'step_id': step.id,
                     'ai_recommendation': ai_recommendation,  # AI's suggested route
                     'ai_analysis': ai_analysis  # AI's reasoning
                 })
+
+            # Handle StructuredOutputNode validations
+            elif uses_structured_output:
+                # For structured output, we need to find the StructuredOutputNodeData
+                # by looking at edges connecting to this step
+                from workflows.models import WorkflowEdge, StructuredOutputNodeData
+
+                # Find the structured output node connected to this step
+                incoming_edges = WorkflowEdge.objects.filter(
+                    workflow=obj.workflow,
+                    target=step.step_node.node_id
+                )
+
+                structured_node = None
+                structured_node_id = None
+                for edge in incoming_edges:
+                    node = obj.workflow.nodes.filter(
+                        node_id=edge.source,
+                        node_type='structuredOutput'
+                    ).first()
+                    if node and node.data_object:
+                        structured_node = node.data_object
+                        structured_node_id = node.node_id
+                        break
+
+                if structured_node and isinstance(structured_node, StructuredOutputNodeData):
+                    available_routes = structured_node.get_routes()
+                    ai_recommendation = metadata.get('aiRecommendation') or metadata.get('ai_recommendation')
+                    ai_analysis = metadata.get('analysis')
+
+                    # Get prompt content
+                    prompt_content = structured_node.prompt.content if structured_node.prompt else "Evaluate the input and choose the appropriate route."
+
+                    validations.append({
+                        'node_id': structured_node_id,  # Use StructuredOutputNode's ID, not Step node's ID
+                        'step_number': step_data.step_number if step_data else step.order,
+                        'custom_prompt': prompt_content,
+                        'available_routes': available_routes,
+                        'current_response': step.response,
+                        'step_id': step.id,
+                        'ai_recommendation': ai_recommendation,
+                        'ai_analysis': ai_analysis
+                    })
 
         return validations
 
@@ -180,7 +230,7 @@ class StructuredOutputNodeDataSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = StructuredOutputNodeData
-        fields = ['routes', 'step_number']
+        fields = ['prompt', 'llm', 'routes', 'require_human_validation', 'step_number']
 
     def to_representation(self, instance):
         """Include computed routes via get_routes() method."""
@@ -196,7 +246,7 @@ class ConditionalNodeDataSerializer(serializers.ModelSerializer):
     class Meta:
         model = ConditionalNodeData
         fields = [
-            'custom_prompt', 'llm', 'routes', 'require_human_validation', 'step_number'
+            'prompt', 'llm', 'routes', 'require_human_validation', 'step_number'
         ]
 
     def to_representation(self, instance):

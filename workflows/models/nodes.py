@@ -161,6 +161,13 @@ class ChatOutputNodeData(BaseNodeData):
 
 class StructuredOutputNodeData(BaseNodeData):
     """Data model for 'structuredOutput' type nodes - defines output routes for step nodes."""
+    prompt = models.ForeignKey(
+        'prompts.Prompt',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        help_text="Prompt template for routing evaluation"
+    )
     routes = models.JSONField(
         default=list,
         blank=True,
@@ -178,7 +185,7 @@ class StructuredOutputNodeData(BaseNodeData):
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        help_text="Language model for routing evaluation (used when human validation is enabled)"
+        help_text="Language model for routing evaluation"
     )
 
     def get_routes(self):
@@ -187,6 +194,7 @@ class StructuredOutputNodeData(BaseNodeData):
 
     def to_dict(self):
         return {
+            'prompt': self.prompt.id if self.prompt else None,
             'routes': self.get_routes(),
             'stepNumber': self.step_number,
             'requireHumanValidation': self.require_human_validation,
@@ -203,9 +211,12 @@ class StructuredOutputNodeData(BaseNodeData):
 
 class ConditionalNodeData(BaseNodeData):
     """Data model for 'conditional' type nodes - supports n routes and human validation."""
-    custom_prompt = models.TextField(
-        default='Evaluate the input and choose the appropriate route.',
-        help_text="Custom evaluation prompt for routing decision"
+    prompt = models.ForeignKey(
+        'prompts.Prompt',
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        help_text="Prompt template for routing evaluation"
     )
 
     llm = models.ForeignKey(
@@ -237,7 +248,7 @@ class ConditionalNodeData(BaseNodeData):
 
     def to_dict(self):
         return {
-            'customPrompt': self.custom_prompt,
+            'prompt': self.prompt.id if self.prompt else None,
             'llm': self.llm.id if self.llm else None,
             'routes': self.get_routes(),
             'requireHumanValidation': self.require_human_validation,

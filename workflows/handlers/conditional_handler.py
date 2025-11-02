@@ -174,7 +174,7 @@ class ConditionalNodeHandler(BaseExecutionHandler):
             metadata = {
                 MetadataKey.ROUTING_DECISION: routing_decision,
                 'analysis': analysis_text,
-                MetadataKey.AVAILABLE_ROUTES: [r['name'] for r in routes],
+                MetadataKey.AVAILABLE_ROUTES: routes,  # Full route objects
                 MetadataKey.IS_HUMAN_VALIDATED: False
             }
 
@@ -200,7 +200,7 @@ class ConditionalNodeHandler(BaseExecutionHandler):
                 execution_time=execution_time,
                 metadata={
                     MetadataKey.ROUTING_DECISION: routing_decision,
-                    MetadataKey.AVAILABLE_ROUTES: [r['name'] for r in routes],
+                    MetadataKey.AVAILABLE_ROUTES: routes,  # Full route objects
                     'evaluated_input_length': len(input_output),
                     'analysis': analysis_text,
                     MetadataKey.IS_HUMAN_VALIDATED: False
@@ -336,10 +336,12 @@ class ConditionalNodeHandler(BaseExecutionHandler):
         llm_provider = await database_sync_to_async(lambda: llm.provider)()
 
         # Build evaluation prompt using service
-        evaluation_prompt = await database_sync_to_async(
-            lambda: conditional_data.custom_prompt
+        prompt_obj = await database_sync_to_async(
+            lambda: conditional_data.prompt
         )()
-        evaluation_prompt = evaluation_prompt or "Evaluate the input and choose the appropriate route."
+        evaluation_prompt = await database_sync_to_async(
+            lambda: prompt_obj.content if prompt_obj else "Evaluate the input and choose the appropriate route."
+        )()
 
         message = ConditionalPromptService.get_prompt_for_provider(
             provider=llm_provider,
@@ -487,12 +489,14 @@ class ConditionalNodeHandler(BaseExecutionHandler):
             NodeExecutionResult with pending human input status
         """
         # Build metadata using utility constants
+        # NOTE: All keys MUST be snake_case - DRF converts to camelCase for frontend
         metadata = {
             MetadataKey.AI_RECOMMENDATION: routing_decision,
             'analysis': analysis_text or "",
-            MetadataKey.AVAILABLE_ROUTES: [r['name'] for r in routes],
+            MetadataKey.AVAILABLE_ROUTES: routes,  # Full route objects with name/description
             MetadataKey.IS_HUMAN_VALIDATED: True,
-            MetadataKey.PENDING_HUMAN_VALIDATION: True
+            MetadataKey.PENDING_HUMAN_VALIDATION: True,
+            'selected_route': routing_decision  # Initially set to AI recommendation, updated when user chooses
         }
 
         await self._update_step_status(
@@ -514,8 +518,11 @@ class ConditionalNodeHandler(BaseExecutionHandler):
         step_number = await database_sync_to_async(
             lambda: conditional_data.step_number
         )()
+        prompt_obj = await database_sync_to_async(
+            lambda: conditional_data.prompt
+        )()
         custom_prompt = await database_sync_to_async(
-            lambda: conditional_data.custom_prompt
+            lambda: prompt_obj.content if prompt_obj else ""
         )()
 
         # Return special result that pauses execution
