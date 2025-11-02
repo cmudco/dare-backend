@@ -8,6 +8,7 @@ from billing.api.serializers import WalletSerializer, TransactionSerializer
 from billing.models import Transaction
 from billing.constants import TransactionTypeChoice
 from common.pagination import CustomPageNumberPagination
+from users.utils import detect_platform_from_request
 
 class BillingViewSet(viewsets.ViewSet):
     """
@@ -28,10 +29,17 @@ class BillingViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['get'])
     def transactions(self, request):
         """
-        List all transactions for the authenticated user.
+        List all transactions for the authenticated user filtered by platform.
+
+        Each platform (DARE or SocraticBots) only sees its own transactions.
         """
+        # Detect platform from request headers
+        platform = detect_platform_from_request(request)
+
+        # Filter transactions by user AND platform
         queryset = Transaction.objects.filter(
-            user=request.user
+            user=request.user,
+            platform=platform
         ).order_by('-created_at')
 
         page = self.paginate_queryset(queryset)
@@ -45,12 +53,19 @@ class BillingViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['get'])
     def model_stats(self, request):
         """
-        Get per-model token usage and cost statistics for the authenticated user.
+        Get per-model token usage and cost statistics for the authenticated user
+        filtered by platform.
+
+        Each platform (DARE or SocraticBots) only sees its own statistics.
         """
+        # Detect platform from request headers
+        platform = detect_platform_from_request(request)
+
         per_model_stats = Transaction.objects.filter(
             user=request.user,
             type=TransactionTypeChoice.DEBIT,
-            llm__isnull=False
+            llm__isnull=False,
+            platform=platform
         ).values(
             'llm__id',
             'llm__name',
@@ -85,7 +100,8 @@ class BillingViewSet(viewsets.ViewSet):
         overall_stats = Transaction.objects.filter(
             user=request.user,
             type=TransactionTypeChoice.DEBIT,
-            llm__isnull=False
+            llm__isnull=False,
+            platform=platform
         ).aggregate(
             total_cost=Sum('amount'),
             total_input_tokens=Sum('input_tokens'),
@@ -110,12 +126,18 @@ class BillingViewSet(viewsets.ViewSet):
     @action(detail=True, methods=['get'], url_path='transactions/(?P<transaction_id>[^/.]+)')
     def transaction_detail(self, request, pk=None, transaction_id=None):
         """
-        Retrieve a specific transaction.
+        Retrieve a specific transaction filtered by platform.
+
+        Users can only view transactions from their current platform.
         """
+        # Detect platform from request headers
+        platform = detect_platform_from_request(request)
+
         try:
             transaction = Transaction.objects.get(
                 id=transaction_id,
-                user=request.user
+                user=request.user,
+                platform=platform
             )
             serializer = TransactionSerializer(transaction)
             return Response(serializer.data)
