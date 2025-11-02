@@ -169,6 +169,17 @@ class StructuredOutputNodeData(BaseNodeData):
     step_number = models.PositiveIntegerField(
         help_text="Step number for execution ordering"
     )
+    require_human_validation = models.BooleanField(
+        default=False,
+        help_text="If true, pause execution and ask user to choose route"
+    )
+    llm = models.ForeignKey(
+        'conversations.LLM',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        help_text="Language model for routing evaluation (used when human validation is enabled)"
+    )
 
     def get_routes(self):
         """Get routes for structured output node."""
@@ -178,6 +189,8 @@ class StructuredOutputNodeData(BaseNodeData):
         return {
             'routes': self.get_routes(),
             'stepNumber': self.step_number,
+            'requireHumanValidation': self.require_human_validation,
+            'llm': self.llm.id if self.llm else None,
         }
 
     def __str__(self):
