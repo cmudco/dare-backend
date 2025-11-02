@@ -389,7 +389,7 @@ class MessageCoordinator:
 
             # Finalize with appropriate billing strategy
             if self.user:
-                # Authenticated user - use wallet billing
+                # Authenticated user - use wallet billing (platform auto-detected from conversation)
                 finalized_message = await database_sync_to_async(
                     self.billing_service.finalize_ai_message
                 )(message_obj, ai_response, token_usage or {})
@@ -458,7 +458,7 @@ class MessageCoordinator:
             error_response: Error details from billing service
         """
         try:
-            # Finalize partial message
+            # Finalize partial message (platform auto-detected from conversation)
             await database_sync_to_async(
                 self.billing_service.finalize_ai_message
             )(message_obj, ai_response, token_usage)

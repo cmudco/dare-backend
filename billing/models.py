@@ -5,6 +5,7 @@ from billing.constants import TransactionTypeChoice
 from common.models import TimeStampMixin
 from conversations.models import LLM
 from users.models import User
+from users.constants import AuthSourceChoice
 from api_keys.constants import BillingModeChoice
 
 class Wallet(TimeStampMixin):
@@ -108,6 +109,13 @@ class Transaction(TimeStampMixin):
         verbose_name=("Billing Mode"),
         help_text=("Billing mode used for this transaction: wallet or own API keys"),
     )
+    platform = models.CharField(
+        max_length=50,
+        choices=AuthSourceChoice.choices,
+        default=AuthSourceChoice.DARE,
+        verbose_name=("Platform"),
+        help_text=("Platform where this transaction originated: DARE or SocraticBots"),
+    )
 
     class Meta:
         verbose_name = ("Transaction")
@@ -131,6 +139,10 @@ class Transaction(TimeStampMixin):
     def save(self, *args, **kwargs):
         """
         Override save method to handle balance deduction for debit transactions.
+
+        Platform-specific behavior:
+        - DARE transactions: Deduct from/add to user's wallet balance
+        - SocraticBots transactions: Record only (no wallet impact)
         """
         is_new = self.pk is None
 
@@ -142,20 +154,23 @@ class Transaction(TimeStampMixin):
             except self.user.wallet.RelatedObjectDoesNotExist:
                 wallet = Wallet.objects.create(user=self.user, balance=Decimal('5.00'))
 
-            current_balance = wallet.balance
-            if self.type == TransactionTypeChoice.DEBIT:
-                if wallet.balance < self.amount:
-                    raise ValidationError({
-                        'error': ['insufficient_balance'],
-                        'message': ['Insufficient wallet balance'],
-                        'current_balance': [str(wallet.balance)],
-                        'required_amount': [str(self.amount)]
-                    })
-                wallet.balance -= self.amount
-            elif self.type == TransactionTypeChoice.CREDIT:
-                wallet.balance += self.amount
+            # Only modify wallet balance for DARE platform transactions
+            if self.platform == AuthSourceChoice.DARE:
+                current_balance = wallet.balance
+                if self.type == TransactionTypeChoice.DEBIT:
+                    if wallet.balance < self.amount:
+                        raise ValidationError({
+                            'error': ['insufficient_balance'],
+                            'message': ['Insufficient wallet balance'],
+                            'current_balance': [str(wallet.balance)],
+                            'required_amount': [str(self.amount)]
+                        })
+                    wallet.balance -= self.amount
+                elif self.type == TransactionTypeChoice.CREDIT:
+                    wallet.balance += self.amount
 
-            wallet.save(update_fields=['balance'])
+                wallet.save(update_fields=['balance'])
+            # SocraticBots transactions are recorded but don't affect wallet balance
 
         super().save(*args, **kwargs)
 
