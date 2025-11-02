@@ -220,7 +220,7 @@ class RouteNormalizer:
         """
         Extract routing decision and analysis from XML-formatted response.
 
-        Used primarily for conditional nodes with human validation.
+        Supports both ConditionalNode (<decision>) and StructuredOutputNode (<route>) formats.
 
         Args:
             xml_response: XML-formatted LLM response
@@ -231,10 +231,14 @@ class RouteNormalizer:
             Tuple of (decision, analysis) or (None, None) if extraction fails
         """
         try:
-            # Extract decision tag
+            # Extract decision tag - try both <decision> (ConditionalNode) and <route> (StructuredOutputNode)
             decision = XMLTag.extract_tag_content(xml_response, XMLTag.DECISION)
             if not decision:
-                logger.warning(f"No <{XMLTag.DECISION}> tag found in response")
+                # Try <route> tag for StructuredOutputNode
+                decision = XMLTag.extract_tag_content(xml_response, 'route')
+
+            if not decision:
+                logger.warning(f"No <{XMLTag.DECISION}> or <route> tag found in response")
                 return None, None
 
             # Extract analysis tag (optional)
@@ -357,27 +361,42 @@ class RouteInstructionBuilder:
         default_route: Optional[str] = None
     ) -> str:
         """
-        Build simple route selection instruction.
+        Build route selection instruction with XML format (EXACT match to ConditionalNode).
+
+        Uses EXACT same format as ConditionalNode (conditional_prompt_service.py).
 
         Args:
             allowed_routes: List of valid route names
             default_route: Default route if uncertain (uses first route if None)
 
         Returns:
-            Formatted instruction string
+            Formatted instruction string with XML format matching ConditionalNode
         """
         if not allowed_routes:
             return ""
 
-        default = default_route or allowed_routes[0]
-        route_list = ", ".join(allowed_routes)
+        # Build route list in XML format EXACTLY like ConditionalNode does
+        route_xml_elements = "\n".join([
+            f'<route name="{route}">{route}</route>'
+            for route in allowed_routes
+        ])
 
-        instruction = (
-            "\n\nROUTE SELECTION INSTRUCTIONS:\n"
-            f"Choose exactly one of: {route_list}.\n"
-            "Return only the exact value with no quotes, punctuation, or explanation.\n"
-            f"If you are unsure or lack context, choose '{default}'."
-        )
+        # EXACT same format as ConditionalNode (conditional_prompt_service.py lines 115-131)
+        # ConditionalNode puts this AFTER the user prompt with "Based on the following input..."
+        # StructuredOutputNode appends this AFTER the step execution
+        instruction = f"""
+
+Based on your response above, choose the most appropriate route.
+
+<routes>
+{route_xml_elements}
+</routes>
+
+Analyze your response carefully and respond in this EXACT format (do not deviate):
+<analysis>
+[Brief reasoning for your choice - 1-2 sentences]
+</analysis>
+<route>[EXACT route name from the routes listed above]</route>"""
 
         return instruction
 

@@ -122,7 +122,7 @@ class WorkflowCloningService:
             )
         elif isinstance(data_object, ConditionalNodeData):
             return ConditionalNodeData.objects.create(
-                custom_prompt=data_object.custom_prompt,
+                prompt=data_object.prompt,
                 llm=data_object.llm,
                 routes=data_object.routes,
                 require_human_validation=data_object.require_human_validation,
@@ -130,6 +130,7 @@ class WorkflowCloningService:
             )
         elif isinstance(data_object, StructuredOutputNodeData):
             return StructuredOutputNodeData.objects.create(
+                prompt=data_object.prompt,
                 routes=data_object.routes,
                 step_number=data_object.step_number,
                 require_human_validation=data_object.require_human_validation,
