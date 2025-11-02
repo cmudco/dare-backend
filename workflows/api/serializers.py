@@ -8,6 +8,7 @@ from workflows.models import (
     WorkflowNode, WorkflowEdge
 )
 from workflows.constants import WorkflowRunStepStatus
+from workflows.handlers.utils import MetadataKey
 
 
 # TEMPORARILY COMMENTED OUT - TABLE MISSING
@@ -75,14 +76,14 @@ class WorkflowRunSerializer(serializers.ModelSerializer):
 
             # Check if step uses structured output - MUST use snake_case (backend)
             metadata = step.metadata or {}
-            uses_structured_output = metadata.get('use_structured_output_node', False)
+            uses_structured_output = metadata.get(MetadataKey.USE_STRUCTURED_OUTPUT_NODE, False)
 
             # Handle ConditionalNode validations
             if step_data and isinstance(step_data, ConditionalNodeData):
                 available_routes = step_data.get_routes()
 
-                ai_recommendation = metadata.get('ai_recommendation')
-                ai_analysis = metadata.get('analysis')
+                ai_recommendation = metadata.get(MetadataKey.AI_RECOMMENDATION)
+                ai_analysis = metadata.get(MetadataKey.ANALYSIS)
 
                 # Get prompt content if prompt exists
                 prompt_content = step_data.prompt.content if step_data.prompt else "Evaluate the input and choose the appropriate route."
@@ -124,9 +125,8 @@ class WorkflowRunSerializer(serializers.ModelSerializer):
 
                 if structured_node and isinstance(structured_node, StructuredOutputNodeData):
                     available_routes = structured_node.get_routes()
-                    # Backend uses snake_case for metadata keys
-                    ai_recommendation = metadata.get('ai_recommendation')
-                    ai_analysis = metadata.get('analysis')
+                    ai_recommendation = metadata.get(MetadataKey.AI_RECOMMENDATION)
+                    ai_analysis = metadata.get(MetadataKey.ANALYSIS)
 
                     # Get prompt content
                     prompt_content = structured_node.prompt.content if structured_node.prompt else "Evaluate the input and choose the appropriate route."
