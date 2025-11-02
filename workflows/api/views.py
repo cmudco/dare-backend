@@ -19,9 +19,11 @@ from workflows.constants import WorkflowRunStepStatus
 from workflows.models import (
     Workflow, WorkflowRun, WorkflowRunStep,
     # New graph-driven models
-    WorkflowNode, WorkflowEdge, StepNodeData, StartNodeData, ChatOutputNodeData
+    WorkflowNode, WorkflowEdge, StepNodeData, StartNodeData, ChatOutputNodeData,
+    ConditionalNodeData, StructuredOutputNodeData
 )
 from workflows.services import WorkflowCloningService
+from workflows.handlers.utils import MetadataKey
 from django_rq import enqueue
 from workflows.tasks import execute_workflow_run, resume_workflow_run
 import weasyprint
@@ -221,110 +223,45 @@ class WorkflowRunViewSet(viewsets.ModelViewSet):
     def submit_human_validation(self, request, pk=None):
         """
         Submit user's route choice for a node requiring human validation.
-        Handles both ConditionalNode and StructuredOutputNode.
 
-        Expected request data (frontend sends camelCase, DRF parser converts to snake_case):
-        {
-            "node_id": "conditional_node_123" or "structured-output-1",
-            "chosen_route": "Route A"
-        }
+        Handles both ConditionalNode and StructuredOutputNode validations.
+        Frontend sends: {"nodeId": "...", "chosenRoute": "..."}
+        DRF CamelCaseJSONParser converts to: {"node_id": "...", "chosen_route": "..."}
         """
         workflow_run = self.get_object()
-        # CamelCaseJSONParser automatically converts incoming camelCase to snake_case
         node_id = request.data.get('node_id')
         chosen_route = request.data.get('chosen_route')
 
+        # Validate required fields
         if not node_id:
-            return Response({'error': 'node_id is required'}, status=status.HTTP_400_BAD_REQUEST)
-
+            return Response(
+                {'error': 'node_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
         if not chosen_route:
-            return Response({'error': 'chosen_route is required'}, status=status.HTTP_400_BAD_REQUEST)
-
-        # Find the step waiting for input
-        # For ConditionalNode: step_node__node_id matches node_id directly
-        # For StructuredOutputNode: need to check metadata
-        pending_step = None
-
-        # First try direct match (ConditionalNode case)
-        try:
-            pending_step = WorkflowRunStep.objects.get(
-                workflow_run=workflow_run,
-                step_node__node_id=node_id,
-                status=WorkflowRunStepStatus.PENDING_HUMAN_INPUT
-            )
-        except WorkflowRunStep.DoesNotExist:
-            # Try StructuredOutputNode case - find by metadata flag (MUST USE SNAKE_CASE)
-            pending_steps = WorkflowRunStep.objects.filter(
-                workflow_run=workflow_run,
-                status=WorkflowRunStepStatus.PENDING_HUMAN_INPUT
+            return Response(
+                {'error': 'chosen_route is required'},
+                status=status.HTTP_400_BAD_REQUEST
             )
 
-            for step in pending_steps:
-                metadata = step.metadata or {}
-
-                # MUST USE SNAKE_CASE - backend stores as use_structured_output_node
-                if metadata.get('use_structured_output_node'):
-                    # Check if the structured output node ID matches
-                    from workflows.models import WorkflowEdge
-                    incoming_edges = WorkflowEdge.objects.filter(
-                        workflow=workflow_run.workflow,
-                        target=step.step_node.node_id
-                    )
-
-                    for edge in incoming_edges:
-                        if edge.source == node_id:
-                            pending_step = step
-                            break
-
-                    if pending_step:
-                        break
-
+        # Find pending validation step
+        pending_step = self._find_pending_validation_step(workflow_run, node_id)
         if not pending_step:
             return Response(
                 {'error': f'No pending validation found for node {node_id}'},
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        # Validate that the chosen route is valid
-        from workflows.models import ConditionalNodeData, StructuredOutputNodeData, StepNodeData
-        step_data = pending_step.step_node.data_object
-
-        # Determine which type of validation this is
-        if isinstance(step_data, ConditionalNodeData):
-            available_routes = step_data.get_routes()
-        elif isinstance(step_data, StepNodeData) and pending_step.metadata.get('use_structured_output_node'):
-            # Find the StructuredOutputNode
-            from workflows.models import WorkflowEdge
-            incoming_edges = WorkflowEdge.objects.filter(
-                workflow=workflow_run.workflow,
-                target=pending_step.step_node.node_id
-            )
-
-            structured_node = None
-            for edge in incoming_edges:
-                node = workflow_run.workflow.nodes.filter(
-                    node_id=edge.source,
-                    node_type='structuredOutput'
-                ).first()
-                if node and node.data_object:
-                    structured_node = node.data_object
-                    break
-
-            if structured_node and isinstance(structured_node, StructuredOutputNodeData):
-                available_routes = structured_node.get_routes()
-            else:
-                return Response(
-                    {'error': 'Could not find StructuredOutputNode'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-        else:
+        # Get available routes for validation
+        available_routes = self._get_available_routes(workflow_run, pending_step, node_id)
+        if available_routes is None:
             return Response(
-                {'error': 'Invalid node type - expected conditional or structured output node'},
+                {'error': 'Could not determine available routes for this node'},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        # Validate chosen route
         route_names = [r['name'] for r in available_routes]
-
         if chosen_route not in route_names:
             return Response(
                 {
@@ -334,9 +271,8 @@ class WorkflowRunViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Enqueue the resume task - use step node's ID for routing
-        resume_node_id = pending_step.step_node.node_id
-        enqueue(resume_workflow_run, workflow_run.id, resume_node_id, chosen_route)
+        # Resume workflow execution
+        enqueue(resume_workflow_run, workflow_run.id, pending_step.step_node.node_id, chosen_route)
 
         return Response({
             'message': 'Route chosen successfully. Workflow will resume execution.',
@@ -344,6 +280,71 @@ class WorkflowRunViewSet(viewsets.ModelViewSet):
             'node_id': node_id,
             'workflow_run_id': workflow_run.id
         }, status=status.HTTP_200_OK)
+
+    def _find_pending_validation_step(self, workflow_run, node_id):
+        """
+        Find the WorkflowRunStep waiting for human validation.
+
+        Returns:
+            WorkflowRunStep or None
+        """
+        # Try direct match (ConditionalNode case)
+        pending_step = WorkflowRunStep.objects.filter(
+            workflow_run=workflow_run,
+            step_node__node_id=node_id,
+            status=WorkflowRunStepStatus.PENDING_HUMAN_INPUT
+        ).first()
+
+        if pending_step:
+            return pending_step
+
+        # Try StructuredOutputNode case - find step with metadata flag
+        pending_steps = WorkflowRunStep.objects.filter(
+            workflow_run=workflow_run,
+            status=WorkflowRunStepStatus.PENDING_HUMAN_INPUT
+        ).select_related('step_node')
+
+        for step in pending_steps:
+            metadata = step.metadata or {}
+            if not metadata.get(MetadataKey.USE_STRUCTURED_OUTPUT_NODE):
+                continue
+
+            # Check if this step connects to the requested structured output node
+            edge_exists = WorkflowEdge.objects.filter(
+                workflow=workflow_run.workflow,
+                source=node_id,
+                target=step.step_node.node_id
+            ).exists()
+
+            if edge_exists:
+                return step
+
+        return None
+
+    def _get_available_routes(self, workflow_run, pending_step, node_id):
+        """
+        Get available routes for the pending validation.
+
+        Returns:
+            List of route dicts [{"name": "...", "description": "..."}] or None if error
+        """
+        step_data = pending_step.step_node.data_object
+
+        # ConditionalNode: routes are directly on the node
+        if isinstance(step_data, ConditionalNodeData):
+            return step_data.get_routes()
+
+        # StructuredOutputNode: need to find the connected structured output node
+        if isinstance(step_data, StepNodeData) and pending_step.metadata.get(MetadataKey.USE_STRUCTURED_OUTPUT_NODE):
+            structured_node = workflow_run.workflow.nodes.filter(
+                node_id=node_id,
+                node_type='structuredOutput'
+            ).first()
+
+            if structured_node and structured_node.data_object:
+                return structured_node.data_object.get_routes()
+
+        return None
 
     @action(detail=True, methods=['get'], url_path='pending-validations')
     def get_pending_validations(self, request, pk=None):
@@ -359,10 +360,9 @@ class WorkflowRunViewSet(viewsets.ModelViewSet):
             workflow_run=workflow_run,
             status=WorkflowRunStepStatus.PENDING_HUMAN_INPUT
         ).select_related('step_node')
-        
+
         validations = []
-        from workflows.models import ConditionalNodeData
-        
+
         for step in pending_steps:
             conditional_data = step.step_node.data_object
             

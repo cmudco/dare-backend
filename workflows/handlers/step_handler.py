@@ -657,13 +657,13 @@ class StepNodeHandler(BaseExecutionHandler):
         # Build metadata - MUST use snake_case (DRF converts to camelCase for frontend)
         metadata = {
             MetadataKey.AI_RECOMMENDATION: routing_decision,
-            'analysis': ai_analysis,  # XML-extracted analysis or fallback
+            MetadataKey.ANALYSIS: ai_analysis,  # XML-extracted analysis or fallback
             MetadataKey.AVAILABLE_ROUTES: routes,  # Array of route objects, not just names
             MetadataKey.IS_HUMAN_VALIDATED: True,
             MetadataKey.PENDING_HUMAN_VALIDATION: True,
-            'selected_route': routing_decision,  # SNAKE_CASE - DRF converts to selectedRoute
-            'raw_response': raw_response,  # SNAKE_CASE - DRF converts to rawResponse
-            'use_structured_output_node': True  # SNAKE_CASE - DRF converts to useStructuredOutputNode
+            MetadataKey.SELECTED_ROUTE: routing_decision,
+            MetadataKey.RAW_RESPONSE: raw_response,
+            MetadataKey.USE_STRUCTURED_OUTPUT_NODE: True
         }
 
         await self._update_step_status(
@@ -700,7 +700,7 @@ class StepNodeHandler(BaseExecutionHandler):
                 'node_id': node.id,
                 'step_number': step_number,
                 'custom_prompt': '',  # Structured output doesn't have custom prompts
-                'raw_response': raw_response,
-                'selected_route': routing_decision
+                MetadataKey.RAW_RESPONSE: raw_response,
+                MetadataKey.SELECTED_ROUTE: routing_decision
             }
         )
