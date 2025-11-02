@@ -20,7 +20,7 @@ class BotBudgetService:
     """Service for managing bot budget updates via Socratic Books backend API."""
 
     # Configuration
-    SOCRATIC_BACKEND_URL = os.getenv('SOCRATIC_BOTS_BACKEND_URL', 'http://localhost:8001')
+    SOCRATIC_BACKEND_URL = os.getenv('SOCRATIC_BOTS_BACKEND_URL')
     REQUEST_TIMEOUT = 5  # seconds
 
     @classmethod

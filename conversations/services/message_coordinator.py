@@ -506,38 +506,95 @@ class MessageCoordinator:
                 return
 
             progress_accumulator = ""
+            last_usage = None
 
             # Stream progress assessment
-            async for chunk in self.learning_progress_service.stream_learning_progress(
+            async for chunk, usage in self.learning_progress_service.assess_learning_progress(
                 conversation=self.conversation,
-                message=message_obj,
-                user_input=message_data["message"],
-                llm=progress_llm,
-                tracking_prompt=message_data.get("tracking_prompt", ""),
+                last_message=message_obj,
                 learning_goals=message_data.get("learning_goals", ""),
+                tracking_prompt=message_data.get("tracking_prompt", ""),
+                llm=progress_llm,
+                max_tokens=2048,
+                temperature=0.7,
+                conversation_history_limit=80,
                 bot_meta=message_data.get("bot_meta", {}),
-                is_advanced=message_data.get("is_advanced", False),
             ):
+                # Track usage for billing (authenticated users only)
+                if usage:
+                    last_usage = usage
+                    # Skip billing check for public bots (user is None)
+                    if self.user:
+                        can_continue, _ = await self.billing_service.check_streaming_credit_usage(
+                            self.user, progress_llm, usage
+                        )
+                        if not can_continue:
+                            error_payload = WebSocketResponseService.format_progress_error(
+                                "Insufficient credits during progress assessment"
+                            )
+                            await self.send(error_payload)
+                            return
+
                 if chunk and chunk.strip():
                     progress_accumulator += chunk
                     progress_payload = WebSocketResponseService.format_progress_chunk(
+                        conversation_id=str(self.conversation.id),
                         message_id=str(message_obj.id),
-                        chunk=progress_accumulator,
-                        is_complete=False,
+                        chunk=chunk,
                     )
                     await self.send(progress_payload)
 
             # Save assessment and send completion
             if progress_accumulator.strip():
-                assessment_data = await self.learning_progress_service.save_learning_assessment(
-                    message=message_obj,
-                    assessment_text=progress_accumulator,
-                    bot_meta=message_data.get("bot_meta", {}),
+                # Build usage metadata for frontend
+                def _build_usage(u: dict):
+                    if not isinstance(u, dict):
+                        return u
+                    inp = u.get("input_tokens") or u.get("prompt_tokens") or 0
+                    out = u.get("output_tokens") or u.get("completion_tokens") or 0
+                    tot = (inp or 0) + (out or 0)
+                    u_with_totals = dict(u)
+                    u_with_totals["total_tokens"] = tot
+                    return u_with_totals
+
+                metadata = {
+                    "llm_model": getattr(progress_llm, "identifier", None),
+                    "usage": _build_usage(last_usage) if last_usage else None,
+                    "platform": self.platform or "DARE",
+                    "tracking_prompt_used": message_data.get("tracking_prompt", "")[:100],
+                }
+
+                # Save assessment to database (already decorated with @database_sync_to_async)
+                assessment = await self.learning_progress_service._save_progress_assessment(
+                    conversation=self.conversation,
+                    content=progress_accumulator,
+                    learning_goals=message_data.get("learning_goals", ""),
+                    last_message=message_obj,
+                    metadata=metadata,
                 )
 
+                # Update message with learning progress data
+                def _update_msg():
+                    message_obj.learning_progress_data = {
+                        "progress_assessment_id": str(getattr(assessment, "id", "")),
+                        "learning_goals": message_data.get("learning_goals", ""),
+                        "tracking_prompt": message_data.get("tracking_prompt", ""),
+                        "llm_id": getattr(progress_llm, "id", None),
+                        "input_tokens": (last_usage or {}).get("input_tokens"),
+                        "output_tokens": (last_usage or {}).get("output_tokens"),
+                        "status": "completed",
+                    }
+                    message_obj.save(update_fields=["learning_progress_data"])
+                    return message_obj
+
+                await database_sync_to_async(_update_msg)()
+
+                # Send completion notification
                 completion_payload = WebSocketResponseService.format_progress_complete(
+                    conversation_id=str(self.conversation.id),
                     message_id=str(message_obj.id),
-                    assessment_data=assessment_data,
+                    input_tokens=last_usage.get("input_tokens") if last_usage else None,
+                    output_tokens=last_usage.get("output_tokens") if last_usage else None,
                 )
                 await self.send(completion_payload)
 

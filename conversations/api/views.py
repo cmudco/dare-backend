@@ -24,46 +24,33 @@ class ConversationViewSet(viewsets.ModelViewSet):
     lookup_field = 'conversation_id'
 
     def get_queryset(self):
-        print("=== get_queryset called ===")
-        # Filter conversations based on platform source
         platform_source = detect_platform_from_request(self.request)
-        print(f"Platform source: {platform_source}")
 
         # Check if querying for anonymous session
         anonymous_session_id = self.request.query_params.get('anonymous_session_id', None)
-        print(f"Anonymous session ID: {anonymous_session_id}")
 
         if anonymous_session_id:
             # For anonymous sessions, filter by session_id instead of user
-            print(f"Filtering by anonymous session ID: {anonymous_session_id}")
             queryset = Conversation.active_objects.filter(
                 anonymous_session_id=anonymous_session_id,
                 source=platform_source
             )
         else:
             # For authenticated users - ensure user is authenticated before filtering
-            print(f"Request user: {self.request.user}")
-            print(f"Has user attr: {hasattr(self.request, 'user')}")
-            print(f"User is authenticated: {hasattr(self.request.user, 'is_authenticated') and self.request.user.is_authenticated}")
-
             if hasattr(self.request, 'user') and self.request.user and hasattr(self.request.user, 'is_authenticated') and self.request.user.is_authenticated:
-                print(f"Filtering by authenticated user: {self.request.user}")
                 queryset = Conversation.active_objects.filter(
                     user=self.request.user,
                     source=platform_source
                 )
             else:
                 # No user and no anonymous session - return empty queryset
-                print("No user and no anonymous session - returning empty queryset")
                 queryset = Conversation.active_objects.none()
 
         # Optional filtering by bot_id (for Socratic Books queries)
         bot_id = self.request.query_params.get('bot_id', None)
         if bot_id is not None:
-            print(f"Filtering by bot_id: {bot_id}")
             queryset = queryset.filter(bot_id=bot_id)
 
-        print(f"Final queryset count: {queryset.count()}")
         return queryset.order_by('sort_order', '-created_at')
 
     def perform_create(self, serializer):

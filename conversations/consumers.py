@@ -61,16 +61,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 send_callback=self.send,
             )
 
-            print(f"🔌 WebSocket CONNECTED: user={self.user.id}, conversation={self.conversation_id}, platform={self.platform}")
+            logger.info(f"WebSocket connected: user={self.user.id}, conversation={self.conversation_id}, platform={self.platform}")
             await self.accept()
 
             # Load conversation history using coordinator
             await self.coordinator.send_conversation_history()
 
             # Also send the latest learning progress assessment if available
-            print(f"🔌 About to call send_latest_progress...")
             await self.coordinator.send_latest_learning_progress()
-            print(f"🔌 Connection setup complete")
         except DenyConnection as e:
             logger.error(f"Connection denied: {str(e)}")
             await self.close(code=4000)
@@ -80,36 +78,28 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
     async def receive(self, text_data: str = None, bytes_data: bytes = None):
         """Handle incoming WebSocket messages."""
-        print(f"📨 RECEIVE called: {text_data[:200]}...")
         try:
             data = json.loads(text_data)
             action = data.get("action")
-            print(f"📨 Action: {action}")
+
             if action == "edit_message":
-                print(f"📨 Routing to handle_edit_message")
                 await self.handle_edit_message(data)
             elif action == "regenerate_response":
-                print(f"📨 Routing to handle_regenerate_response")
                 await self.handle_regenerate_response(data)
             else:
-                print(f"📨 Routing to handle_new_message")
                 await self.handle_new_message(data)
-            print(f"📨 RECEIVE completed successfully")
         except json.JSONDecodeError as e:
-            print(f"❌ JSON DECODE ERROR: {e}")
+            logger.error(f"JSON decode error: {e}")
             await self.send_error(ErrorCode.INVALID_JSON, ErrorMessage.INVALID_JSON)
         except Exception as e:
-            print(f"❌ RECEIVE EXCEPTION: {e}")
             logger.exception(f"Error processing message: {str(e)}")
             await self.send_error(ErrorCode.PROCESSING_ERROR, ErrorMessage.PROCESSING_ERROR)
 
     async def handle_new_message(self, data: Dict[str, Any]):
         """Process new user message and stream AI response using MessageCoordinator."""
-        print(f"💬 handle_new_message CALLED")
         try:
             # Validate message data
             message_data = self._validate_message_data(data)
-            print(f"💬 message_data validated: enable_progress={message_data.get('enable_progress')}")
 
             # Delegate to MessageCoordinator which handles:
             # - Billing checks
@@ -121,7 +111,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 message_data=message_data,
                 sender_name=self.user.email,
             )
-            print(f"💬 handle_new_message completed")
         except ValidationError as e:
             await self.send_error(ErrorCode.VALIDATION_ERROR, str(e))
         except Exception as e:
@@ -158,7 +147,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
     async def handle_regenerate_response(self, data: Dict[str, Any]):
         """Regenerate an AI response using MessageCoordinator."""
-        print(f"🔄 handle_regenerate_response CALLED")
         try:
             # Validate message data
             message_data = self._validate_message_data(data, default_message="")
@@ -166,13 +154,12 @@ class ChatConsumer(AsyncWebsocketConsumer):
             # Delegate to MessageCoordinator which handles:
             # - Finding the preceding user message
             # - Billing checks
-            # - Creating new AI message
+            # - Reusing existing AI message
             # - Streaming regenerated response
-            # - Marking old message as regenerated
+            # - Marking message as regenerated
             await self.coordinator.handle_regenerate_response(
                 message_data=message_data,
             )
-            print(f"🔄 handle_regenerate_response completed")
         except Exception as e:
             logger.exception(f"Error in handle_regenerate_response: {str(e)}")
             await self.send_error(ErrorCode.REGENERATE_ERROR, ErrorMessage.REGENERATE_ERROR)
@@ -241,12 +228,14 @@ class PublicBotConsumer(ChatConsumer):
                 send_callback=self.send,
             )
 
-            print(f"🤖 PUBLIC BOT WebSocket CONNECTED: conversation={self.conversation_id}, platform={self.platform}, bot_id={self.conversation.bot_id}")
+            logger.info(f"Public bot WebSocket connected: conversation={self.conversation_id}, platform={self.platform}, bot_id={self.conversation.bot_id}")
             await self.accept()
 
             # Load conversation history using coordinator
             await self.coordinator.send_conversation_history()
-            print(f"🤖 PUBLIC BOT connection setup complete")
+
+            # Also send the latest learning progress assessment if available
+            await self.coordinator.send_latest_learning_progress()
 
         except DenyConnection as e:
             logger.error(f"Public bot connection denied: {str(e)}")
@@ -257,11 +246,9 @@ class PublicBotConsumer(ChatConsumer):
 
     async def handle_new_message(self, data: Dict[str, Any]):
         """Process new user message for public bot using MessageCoordinator."""
-        print(f"🤖 PUBLIC BOT handle_new_message CALLED")
         try:
             # Validate message data
             message_data = self._validate_message_data(data)
-            print(f"🤖 message_data validated: enable_progress={message_data.get('enable_progress')}")
 
             # Delegate to MessageCoordinator which handles:
             # - Message creation (no billing for public bots)
@@ -273,7 +260,6 @@ class PublicBotConsumer(ChatConsumer):
                 message_data=message_data,
                 sender_name=DEFAULT_ANONYMOUS_USER_NAME,
             )
-            print(f"🤖 PUBLIC BOT handle_new_message completed")
         except ValidationError as e:
             await self.send_error(ErrorCode.VALIDATION_ERROR, str(e))
         except Exception as e:
@@ -282,7 +268,6 @@ class PublicBotConsumer(ChatConsumer):
 
     async def handle_regenerate_response(self, data: Dict[str, Any]):
         """Regenerate an AI response for public bot using MessageCoordinator."""
-        print(f"🔄 PUBLIC BOT handle_regenerate_response CALLED")
         try:
             # Validate message data
             message_data = self._validate_message_data(data, default_message="")
@@ -291,7 +276,6 @@ class PublicBotConsumer(ChatConsumer):
             await self.coordinator.handle_regenerate_response(
                 message_data=message_data,
             )
-            print(f"🔄 PUBLIC BOT handle_regenerate_response completed")
         except Exception as e:
             logger.exception(f"Error in handle_regenerate_response (public): {str(e)}")
             await self.send_error(ErrorCode.REGENERATE_ERROR, ErrorMessage.REGENERATE_ERROR)
