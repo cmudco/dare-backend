@@ -81,8 +81,7 @@ class WorkflowRunSerializer(serializers.ModelSerializer):
             if step_data and isinstance(step_data, ConditionalNodeData):
                 available_routes = step_data.get_routes()
 
-                # Extract AI analysis and recommendation from metadata
-                ai_recommendation = metadata.get('aiRecommendation') or metadata.get('ai_recommendation')
+                ai_recommendation = metadata.get('ai_recommendation')
                 ai_analysis = metadata.get('analysis')
 
                 # Get prompt content if prompt exists
@@ -125,7 +124,8 @@ class WorkflowRunSerializer(serializers.ModelSerializer):
 
                 if structured_node and isinstance(structured_node, StructuredOutputNodeData):
                     available_routes = structured_node.get_routes()
-                    ai_recommendation = metadata.get('aiRecommendation') or metadata.get('ai_recommendation')
+                    # Backend uses snake_case for metadata keys
+                    ai_recommendation = metadata.get('ai_recommendation')
                     ai_analysis = metadata.get('analysis')
 
                     # Get prompt content
