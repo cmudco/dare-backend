@@ -1,14 +1,15 @@
-from rest_framework import serializers
 from django.contrib.contenttypes.models import ContentType
+from rest_framework import serializers
+
 from files.api.serializers import FileSerializer
+from workflows.constants import WorkflowRunStepStatus
+from workflows.handlers.utils import MetadataKey
 from workflows.models import (
     Workflow, WorkflowRun, WorkflowRunStep,  # WorkflowStepSnippet,
     # Graph-driven models
     StepNodeData, StartNodeData, ChatOutputNodeData, ConditionalNodeData, StructuredOutputNodeData,
     WorkflowNode, WorkflowEdge
 )
-from workflows.constants import WorkflowRunStepStatus
-from workflows.handlers.utils import MetadataKey
 
 
 # TEMPORARILY COMMENTED OUT - TABLE MISSING
@@ -103,7 +104,6 @@ class WorkflowRunSerializer(serializers.ModelSerializer):
             elif uses_structured_output:
                 # For structured output, we need to find the StructuredOutputNodeData
                 # by looking at edges connecting to this step
-                from workflows.models import WorkflowEdge, StructuredOutputNodeData
 
                 # Find the structured output node connected to this step
                 incoming_edges = WorkflowEdge.objects.filter(

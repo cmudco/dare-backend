@@ -6,10 +6,11 @@ testable components following the pattern from LLM provider message formatters.
 """
 import logging
 from typing import Dict, List, Optional, Any
+
 from channels.db import database_sync_to_async
 
+from .constants import ErrorMessage, PromptTemplate
 from .validation_helpers import MetadataValidator
-from .constants import ErrorMessage
 
 
 logger = logging.getLogger(__name__)
@@ -230,14 +231,12 @@ class ConditionalMessagePreparer(MessagePreparer):
 
         if include_analysis:
             # XML format with analysis
-            from .constants import PromptTemplate
             return PromptTemplate.CONDITIONAL_EVALUATION_WITH_ANALYSIS.format(
                 routes=routes_formatted,
                 input_text=input_text
             )
         else:
             # Simple format
-            from .constants import PromptTemplate
             return PromptTemplate.CONDITIONAL_EVALUATION.format(
                 routes=routes_formatted,
                 input_text=input_text
@@ -307,8 +306,6 @@ class StructuredOutputMessagePreparer(MessagePreparer):
         Returns:
             Message with routing instructions appended
         """
-        from .constants import PromptTemplate
-
         if default_route is None and available_routes:
             default_route = available_routes[0]
 

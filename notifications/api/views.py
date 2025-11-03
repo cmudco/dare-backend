@@ -1,4 +1,4 @@
-from django.db.models import Q, Case, When, CharField, Value
+from django.db.models import Q, Case, When, CharField, Value, OuterRef, Subquery
 from django.utils import timezone
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
@@ -35,10 +35,7 @@ class NotificationViewSet(viewsets.ModelViewSet):
         queryset = Notification.active_objects.filter(
             Q(user=user) | Q(user__isnull=True)
         ).select_related('user').prefetch_related('user_read_statuses')
-        
-        # For filtering, we need to use a subquery approach since Case with joins can be unreliable
-        from django.db.models import OuterRef, Subquery
-        
+
         # Subquery to get user's read status for global notifications
         user_read_status_subquery = UserNotificationReadStatus.objects.filter(
             user=user,
