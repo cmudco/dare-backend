@@ -10,6 +10,7 @@ from core.services.llama_service import LlamaService
 from core.services.file_processor import FileProcessor
 from core.services.whisper_service import WhisperService
 from core.services.api_key_service import get_provider_api_key, get_provider_api_key_for_user
+from core.services.dtos import LLMQueryRequest, LLMQueryChunk, MessageBuildContext
 from typing import AsyncGenerator, Dict, Tuple, Optional, Any, List
 from files.models import File, Folder
 from prompts.models import Prompt
@@ -38,205 +39,291 @@ class LLMService:
 
     async def query(
         self,
-        message: str,
-        conversation: 'Conversation',
-        llm: LLM = None,
-        file_ids: list = None,
-        embedding_ids: list = None,
-        tag_ids: list = None,
-        folder_ids: list = None,
-        user = None,
-        prompt_id: str = None,
-        temperature: float = 0.7,
-        max_tokens: int = 8000,
-        max_context_snippets: int = 4,
-        document_similarity_threshold: float = 0.5,
-        history_limit: int = 20,
-        referenced_conversation_ids: list = None,
-        message_obj: Message = None,
-        workflow_run_step_obj=None,
-        images: list = None,  # Vision support: list of dicts with 'preview' (base64), 'name', 'type'
-        media_ids: list = None,  # NEW: Media file IDs (images/videos) - persistent files from upload
-        # New optional params for SocraticBooks-style prompt construction
-        socratic_mode: bool = False,
-        bot_meta: Dict = None,
-        advanced_mode: bool = False,
-        web_search_enabled: bool = False,
-        image_generation_enabled: bool = False,
-        image_generation_settings: Optional[Dict[str, Any]] = None,
-        structured_spec: Optional[Dict[str, Any]] = None,
+        request: LLMQueryRequest,
     ) -> AsyncGenerator[Tuple[str, Dict], None]:
-        """Generate AI response with context.
+        """Generate AI response with context using DTO-based request.
+
+        This is the main orchestrator method that delegates to specialized methods.
 
         Args:
-            user: User object for API key resolution and file access
+            request: LLMQueryRequest containing all query parameters
 
-        Note: Referenced conversations always include full history (no limit).
+        Yields:
+            Tuple of (chunk: str, usage: Dict) for streaming responses
         """
         try:
-            llm = llm or LLM.objects.filter(is_active=True).first()
-            if not llm:
-                yield "Error: No active LLM found", None
-                return
+            llm = await self._resolve_llm(request)
+            messages = await self._build_messages_for_request(request, llm)
+            all_images = await self._process_media_files(request)
 
-            # If Socratic mode is enabled, construct prompts using SocraticBooks logic
-            if socratic_mode:
-                messages = await (
-                    self._build_advanced_messages if advanced_mode else self._build_socratic_messages
-                )(
-                    message=message,
-                    conversation=conversation,
-                    user_id=user.id if user else None,
-                    file_ids=[],
-                    embedding_ids=file_ids or [],
-                    tag_ids=tag_ids or [] if advanced_mode else [],
-                    folder_ids=folder_ids or [] if advanced_mode else [],
-                    history_limit=history_limit,
-                    max_context_snippets=max_context_snippets,
-                    document_similarity_threshold=document_similarity_threshold,
-                    message_obj=message_obj,
-                    workflow_run_step_obj=workflow_run_step_obj,
-                    bot_meta=bot_meta or {},
-                )
-
-                # Process media files and combine with temporary images for Socratic mode
-                all_images = images or []
-                if media_ids:
-                    user_id = user.id if user else None
-                    if user_id:
-                        media_images = await self.get_media_files_as_images(media_ids, user_id)
-                        all_images = all_images + media_images
-
-                # Add video transcriptions to message context (for audio content)
-                if all_images:
-                    messages = await self.add_video_transcriptions_to_context(all_images, messages, user)
-
-                ai_service = await self._get_ai_service(llm, user)
-
-                # Route to image generation if enabled
-                if image_generation_enabled:
-                    model = llm.identifier if llm.identifier in ["dall-e-3", "dall-e-2"] else "dall-e-3"
-                    size = image_generation_settings.get("size")
-                    quality = image_generation_settings.get("quality")
-                    style = image_generation_settings.get("style")
-
-                    async for chunk, usage in ai_service.generate_image(
-                        prompt=message,
-                        model=model,
-                        size=size,
-                        quality=quality,
-                        style=style
-                    ):
-                        yield chunk, usage
-                    return
-
-                tools = self._get_web_search_tools(llm) if web_search_enabled else None
-                if structured_spec:
-                    text = await ai_service.get_chat_completion(messages, max_tokens, temperature, structured_spec=structured_spec)
-                    yield text, None
-                else:
-                    async for chunk, usage in ai_service.stream_chat_completion(messages, max_tokens, temperature, images=all_images, tools=tools):
-                        yield chunk, usage
-                return
-
-            conversation_history = await self.get_conversation_history(conversation, limit=history_limit) if conversation else []
-            prompt = await self.get_prompt(prompt_id)
-            messages = []
-
-            if prompt and prompt.strip():
-                messages.append({"role": "assistant", "content": f"Prompt: {prompt}"})
-
-            if referenced_conversation_ids:
-                referenced_context = await self.get_referenced_conversations_context(
-                    referenced_conversation_ids,
-                    user.id if user else None,
-                    None
-                )
-                if referenced_context:
-                    messages.append({"role": "user", "content": referenced_context})
-
-            if file_ids:
-                file_contents = await self.get_full_file_contents(file_ids,)
-                if file_contents:
-                    for file_content in file_contents:
-                        messages.append({"role": "user", "content": file_content})
-
-            if embedding_ids or tag_ids or folder_ids:
-                all_embedding_file_ids = set(embedding_ids or [])
-                user_id = user.id if user else None
-                if tag_ids:
-                    tagged_file_ids = await self.get_files_from_tags(tag_ids, user_id)
-                    all_embedding_file_ids.update(tagged_file_ids)
-                if folder_ids:
-                    folder_file_ids = await self.get_files_from_folders(folder_ids, user_id)
-                    all_embedding_file_ids.update(folder_file_ids)
-
-                if all_embedding_file_ids:
-                    if user_id and user_id != self.document_processor.user_id:
-                        self.document_processor.user_id = user_id
-                        self.document_processor.vector_service = await get_vector_service_async(user_id)
-
-                    effective_threshold = 0.05 if socratic_mode else document_similarity_threshold
-
-                    context = await self.document_processor.search_similar_documents(
-                        query_text=message,
-                        file_ids=list(all_embedding_file_ids),
-                        user_id=user_id,
-                        top_k=max_context_snippets,
-                        similarity_threshold=effective_threshold,
-                        message_obj=message_obj,
-                        workflow_run_step_obj=workflow_run_step_obj
-                    )
-                    if context:
-                        for part in context.split("\n\n"):
-                            if part.strip():
-                                messages.append({"role": "user", "content": part})
-
-            messages.extend([msg for msg in conversation_history if msg["content"].strip()])
-            messages.append({"role": "user", "content": f"User's message: {message}"})
-
-            # Process media files and combine with temporary images
-            all_images = images or []
-            if media_ids:
-                user_id = user.id if user else None
-                if user_id:
-                    media_images = await self.get_media_files_as_images(media_ids, user_id)
-                    all_images = all_images + media_images
-
-            # Add video transcriptions to message context (for audio content)
-            if all_images:
-                messages = await self.add_video_transcriptions_to_context(all_images, messages, user)
-
-            ai_service = await self._get_ai_service(llm, user)
-
-            # Route to image generation if enabled
-            if image_generation_enabled:
-                # Extract DALL-E model from LLM identifier (dall-e-3, dall-e-2)
-                model = llm.identifier if llm.identifier in ["dall-e-3", "dall-e-2"] else "dall-e-3"
-                size = image_generation_settings.get("size")
-                quality = image_generation_settings.get("quality")
-                style = image_generation_settings.get("style")
-
-                async for chunk, usage in ai_service.generate_image(
-                    prompt=message,
-                    model=model,
-                    size=size,
-                    quality=quality,
-                    style=style
-                ):
+            if request.requires_image_generation():
+                async for chunk, usage in self._execute_image_generation(request, llm):
                     yield chunk, usage
-                return
-
-            tools = self._get_web_search_tools(llm) if web_search_enabled else None
-            if structured_spec:
-                text = await ai_service.get_chat_completion(messages, max_tokens, temperature, structured_spec=structured_spec)
-                yield text, None
             else:
-                async for chunk, usage in ai_service.stream_chat_completion(messages, max_tokens, temperature, images=all_images, tools=tools):
+                async for chunk, usage in self._execute_llm_completion(request, llm, messages, all_images):
                     yield chunk, usage
 
         except Exception as e:
             yield f"Error: {str(e)}", None
+
+    # ========== Query Orchestration Methods ==========
+
+    async def _resolve_llm(self, request: LLMQueryRequest) -> LLM:
+        """Resolve the LLM model to use for this request.
+
+        Args:
+            request: LLMQueryRequest containing optional LLM
+
+        Returns:
+            LLM model instance
+
+        Raises:
+            ValueError: If no LLM is found
+        """
+        llm = request.llm or LLM.objects.filter(is_active=True).first()
+        if not llm:
+            raise ValueError("No active LLM found")
+        return llm
+
+    async def _build_messages_for_request(
+        self,
+        request: LLMQueryRequest,
+        llm: LLM
+    ) -> List[Dict[str, str]]:
+        """Build messages array based on request type (Socratic vs Standard).
+
+        Args:
+            request: LLMQueryRequest containing message and context
+            llm: Resolved LLM model
+
+        Returns:
+            List of message dictionaries for LLM
+        """
+        if request.is_socratic_mode():
+            return await self._build_socratic_mode_messages(request)
+        else:
+            return await self._build_standard_messages(request)
+
+    async def _build_socratic_mode_messages(
+        self,
+        request: LLMQueryRequest
+    ) -> List[Dict[str, str]]:
+        """Build messages for Socratic teaching mode.
+
+        Args:
+            request: LLMQueryRequest with Socratic config
+
+        Returns:
+            List of message dictionaries
+        """
+        build_context = MessageBuildContext.from_request(request)
+
+        if request.is_advanced_mode():
+            return await self._build_advanced_messages(build_context)
+        else:
+            return await self._build_socratic_messages(build_context)
+
+    async def _build_standard_messages(
+        self,
+        request: LLMQueryRequest
+    ) -> List[Dict[str, str]]:
+        """Build messages for standard (non-Socratic) mode.
+
+        Args:
+            request: LLMQueryRequest with context and files
+
+        Returns:
+            List of message dictionaries
+        """
+        messages = []
+
+        prompt = await self.get_prompt(request.generation.prompt_id)
+        if prompt and prompt.strip():
+            messages.append({"role": "assistant", "content": f"Prompt: {prompt}"})
+
+        if request.context.referenced_conversation_ids:
+            referenced_context = await self.get_referenced_conversations_context(
+                request.context.referenced_conversation_ids,
+                request.user.id if request.user else None,
+                None
+            )
+            if referenced_context:
+                messages.append({"role": "user", "content": referenced_context})
+
+        if request.context.file_ids:
+            file_contents = await self.get_full_file_contents(request.context.file_ids)
+            if file_contents:
+                for file_content in file_contents:
+                    messages.append({"role": "user", "content": file_content})
+
+        await self._add_semantic_context_to_messages(request, messages)
+
+        conversation_history = await self.get_conversation_history(
+            request.conversation,
+            limit=request.context.history_limit
+        ) if request.conversation else []
+        messages.extend([msg for msg in conversation_history if msg["content"].strip()])
+
+        messages.append({"role": "user", "content": f"User's message: {request.message}"})
+
+        return messages
+
+    async def _add_semantic_context_to_messages(
+        self,
+        request: LLMQueryRequest,
+        messages: List[Dict[str, str]]
+    ) -> None:
+        """Add semantic search results to messages array.
+
+        Args:
+            request: LLMQueryRequest with context config
+            messages: Messages list to append to (modified in place)
+        """
+        if not (request.context.embedding_ids or request.context.tag_ids or request.context.folder_ids):
+            return
+
+        all_embedding_file_ids = set(request.context.embedding_ids or [])
+        user_id = request.user.id if request.user else None
+
+        if request.context.tag_ids:
+            tagged_file_ids = await self.get_files_from_tags(request.context.tag_ids, user_id)
+            all_embedding_file_ids.update(tagged_file_ids)
+
+        if request.context.folder_ids:
+            folder_file_ids = await self.get_files_from_folders(request.context.folder_ids, user_id)
+            all_embedding_file_ids.update(folder_file_ids)
+
+        if not all_embedding_file_ids:
+            return
+
+        if user_id and user_id != self.document_processor.user_id:
+            self.document_processor.user_id = user_id
+            self.document_processor.vector_service = await get_vector_service_async(user_id)
+
+        effective_threshold = (
+            0.05 if request.is_socratic_mode()
+            else request.context.document_similarity_threshold
+        )
+
+        context = await self.document_processor.search_similar_documents(
+            query_text=request.message,
+            file_ids=list(all_embedding_file_ids),
+            user_id=user_id,
+            top_k=request.context.max_context_snippets,
+            similarity_threshold=effective_threshold,
+            message_obj=request.message_obj,
+            workflow_run_step_obj=request.workflow_run_step_obj
+        )
+
+        if context:
+            for part in context.split("\n\n"):
+                if part.strip():
+                    messages.append({"role": "user", "content": part})
+
+    async def _process_media_files(self, request: LLMQueryRequest) -> List[Dict]:
+        """Process and combine all media files (images and videos).
+
+        Args:
+            request: LLMQueryRequest with media config
+
+        Returns:
+            List of processed image dictionaries (images and videos combined)
+        """
+        all_images = request.media.images or []
+
+        if request.media.media_ids:
+            user_id = request.user.id if request.user else None
+            if user_id:
+                media_images = await self.get_media_files_as_images(
+                    request.media.media_ids,
+                    user_id
+                )
+                all_images = all_images + media_images
+
+        return all_images
+
+    async def _execute_image_generation(
+        self,
+        request: LLMQueryRequest,
+        llm: LLM
+    ) -> AsyncGenerator[Tuple[str, Dict], None]:
+        """Execute image generation request.
+
+        Args:
+            request: LLMQueryRequest with image generation settings
+            llm: LLM model (must be DALL-E)
+
+        Yields:
+            Tuple of (chunk: str, usage: Dict)
+        """
+        ai_service = await self._get_ai_service(llm, request.user)
+
+        # Extract DALL-E model from LLM identifier
+        model = llm.identifier if llm.identifier in ["dall-e-3", "dall-e-2"] else "dall-e-3"
+
+        settings = request.generation.image_generation_settings or {}
+        size = settings.get("size")
+        quality = settings.get("quality")
+        style = settings.get("style")
+
+        async for chunk, usage in ai_service.generate_image(
+            prompt=request.message,
+            model=model,
+            size=size,
+            quality=quality,
+            style=style
+        ):
+            yield chunk, usage
+
+    async def _execute_llm_completion(
+        self,
+        request: LLMQueryRequest,
+        llm: LLM,
+        messages: List[Dict[str, str]],
+        all_images: List[Dict]
+    ) -> AsyncGenerator[Tuple[str, Dict], None]:
+        """Execute LLM completion (streaming or structured).
+
+        Args:
+            request: LLMQueryRequest with generation config
+            llm: Resolved LLM model
+            messages: Built messages array
+            all_images: Processed media files
+
+        Yields:
+            Tuple of (chunk: str, usage: Dict)
+        """
+        if all_images:
+            messages = await self.add_video_transcriptions_to_context(
+                all_images,
+                messages,
+                request.user
+            )
+
+        ai_service = await self._get_ai_service(llm, request.user)
+        tools = self._get_web_search_tools(llm) if request.requires_web_search() else None
+
+        if request.generation.structured_spec:
+            # Structured output (non-streaming)
+            text = await ai_service.get_chat_completion(
+                messages,
+                request.generation.max_tokens,
+                request.generation.temperature,
+                structured_spec=request.generation.structured_spec
+            )
+            yield text, None
+        else:
+            # Standard streaming completion
+            async for chunk, usage in ai_service.stream_chat_completion(
+                messages,
+                request.generation.max_tokens,
+                request.generation.temperature,
+                images=all_images,
+                tools=tools
+            ):
+                yield chunk, usage
+
+    # ========== End Query Orchestration Methods ==========
 
     @database_sync_to_async
     def get_prompt(self, prompt_id: str = None) -> str:
@@ -498,25 +585,20 @@ class LLMService:
     # -------- SocraticBooks helpers --------
     async def _build_socratic_messages(
         self,
-        message: str,
-        conversation: 'Conversation',
-        user_id: int,
-        file_ids: list,
-        embedding_ids: list,
-        tag_ids: list,
-        folder_ids: list,
-        history_limit: int,
-        max_context_snippets: int,
-        document_similarity_threshold: float,
-        message_obj: Message,
-        workflow_run_step_obj,
-        bot_meta: Dict,
+        context: MessageBuildContext,
     ) -> list:
-        """Build messages array in the classic SocraticBooks format."""
-        subject = (bot_meta or {}).get("subject", "")
-        topic = (bot_meta or {}).get("topic", "")
-        learning_goals = (bot_meta or {}).get("learning_goals", "No specific learning goals defined.")
-        chat_prompt = (bot_meta or {}).get("chat_prompt", "Provide a helpful, educational response.")
+        """Build messages array in the classic SocraticBooks format.
+
+        Args:
+            context: MessageBuildContext with all necessary data
+
+        Returns:
+            List of message dictionaries for LLM
+        """
+        subject = context.subject
+        topic = context.topic
+        learning_goals = context.learning_goals
+        chat_prompt = context.chat_prompt
 
         # System prompt
         prompt_start = (
@@ -531,7 +613,10 @@ class LLMService:
         )
 
         # Conversation history as simple transcript
-        history_list = await self.get_conversation_history(conversation, limit=history_limit) if conversation else []
+        history_list = await self.get_conversation_history(
+            context.conversation,
+            limit=context.history_limit
+        ) if context.conversation else []
         transcript_parts = []
         for h in history_list:
             role_name = "User" if h["role"] == "user" else "Assistant"
@@ -543,23 +628,23 @@ class LLMService:
         file_context_parts = []
 
         # Retrieve contextual snippets using embedding_ids (avoid full file reads)
-        if embedding_ids:
-            if user_id and user_id != self.document_processor.user_id:
-                self.document_processor.user_id = user_id
-                self.document_processor.vector_service = await get_vector_service_async(user_id)
+        if context.embedding_ids:
+            if context.user_id and context.user_id != self.document_processor.user_id:
+                self.document_processor.user_id = context.user_id
+                self.document_processor.vector_service = await get_vector_service_async(context.user_id)
 
-            context = await self.document_processor.search_similar_documents(
-                query_text=message,
-                file_ids=embedding_ids,
-                user_id=user_id,
-                top_k=max_context_snippets,
-                similarity_threshold=document_similarity_threshold,
-                message_obj=message_obj,
-                workflow_run_step_obj=workflow_run_step_obj
+            doc_context = await self.document_processor.search_similar_documents(
+                query_text=context.message,
+                file_ids=context.embedding_ids,
+                user_id=context.user_id,
+                top_k=context.max_context_snippets,
+                similarity_threshold=context.document_similarity_threshold,
+                message_obj=context.message_obj,
+                workflow_run_step_obj=context.workflow_run_step_obj
             )
-            # print("context", context)
-            if context:
-                for part in context.split("\n\n"):
+            # print("context", doc_context)
+            if doc_context:
+                for part in doc_context.split("\n\n"):
                     if part.strip():
                         file_context_parts.append(part)
 
@@ -573,7 +658,7 @@ class LLMService:
             f"{file_context_text}\n"
             "And the recent conversation history:\n"
             f"{conversation_history_text}\n"
-            f"Question: {message}\n"
+            f"Question: {context.message}\n"
         )
 
         return [
@@ -584,29 +669,27 @@ class LLMService:
     # -------- Advanced Prompt helpers --------
     async def _build_advanced_messages(
         self,
-        message: str,
-        conversation: 'Conversation',
-        user_id: int,
-        file_ids: list,
-        embedding_ids: list,
-        tag_ids: list,
-        folder_ids: list,
-        history_limit: int,
-        max_context_snippets: int,
-        document_similarity_threshold: float,
-        message_obj: Message,
-        workflow_run_step_obj,
-        bot_meta: Dict,
+        context: MessageBuildContext,
     ) -> list:
-        """Build messages using the Advanced Prompt construction provided."""
-        title = (bot_meta or {}).get("title") or (conversation.title if conversation and conversation.title else "Untitled Conversation")
-        subject = (bot_meta or {}).get("subject", "")
-        topic = (bot_meta or {}).get("topic", "")
-        learning_goals = (bot_meta or {}).get("learning_goals", "No specific learning goals defined.")
-        chat_prompt = (bot_meta or {}).get("chat_prompt", "Provide a helpful, educational response.")
+        """Build messages using the Advanced Prompt construction provided.
+
+        Args:
+            context: MessageBuildContext with all necessary data
+
+        Returns:
+            List of message dictionaries for LLM
+        """
+        title = context.title or (context.conversation.title if context.conversation and context.conversation.title else "Untitled Conversation")
+        subject = context.subject
+        topic = context.topic
+        learning_goals = context.learning_goals
+        chat_prompt = context.chat_prompt
 
         # Conversation history as a readable transcript
-        history_list = await self.get_conversation_history(conversation, limit=history_limit) if conversation else []
+        history_list = await self.get_conversation_history(
+            context.conversation,
+            limit=context.history_limit
+        ) if context.conversation else []
         transcript_parts = []
         for h in history_list:
             role_name = "User" if h["role"] == "user" else "Assistant"
@@ -618,23 +701,23 @@ class LLMService:
         # Build relevant content using embedding-based retrieval (avoid full file reads)
         relevant_sections = []
 
-        if embedding_ids:
-            if user_id and user_id != self.document_processor.user_id:
-                self.document_processor.user_id = user_id
-                self.document_processor.vector_service = await get_vector_service_async(user_id)
+        if context.embedding_ids:
+            if context.user_id and context.user_id != self.document_processor.user_id:
+                self.document_processor.user_id = context.user_id
+                self.document_processor.vector_service = await get_vector_service_async(context.user_id)
 
-            context = await self.document_processor.search_similar_documents(
-                query_text=message,
-                file_ids=embedding_ids,
-                user_id=user_id,
-                top_k=max_context_snippets,
-                similarity_threshold=document_similarity_threshold,
-                message_obj=message_obj,
-                workflow_run_step_obj=workflow_run_step_obj
+            doc_context = await self.document_processor.search_similar_documents(
+                query_text=context.message,
+                file_ids=context.embedding_ids,
+                user_id=context.user_id,
+                top_k=context.max_context_snippets,
+                similarity_threshold=context.document_similarity_threshold,
+                message_obj=context.message_obj,
+                workflow_run_step_obj=context.workflow_run_step_obj
             )
-            # print("context", len(context))
-            if context:
-                for part in context.split("\n\n"):
+            # print("context", len(doc_context))
+            if doc_context:
+                for part in doc_context.split("\n\n"):
                     if part.strip():
                         relevant_sections.append(part)
 
@@ -648,12 +731,12 @@ class LLMService:
             f"This is a conversation on {title} (Subject: {subject}, Topic: {topic}).\n"
             f"We are trying to teach the following learning goals:\n{learning_goals}\n\n"
             f"{relevant_content_text}\n"
-            f"The latest user message was: \"{message}\"\n\n"
+            f"The latest user message was: \"{context.message}\"\n\n"
             f"Please respond according to these directions:\n{chat_prompt}"
         )
 
         # Include the user message as a separate turn to comply with chat APIs
         return [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": message},
+            {"role": "user", "content": context.message},
         ]

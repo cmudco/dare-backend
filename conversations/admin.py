@@ -23,9 +23,9 @@ class LLMAdmin(admin.ModelAdmin):
 
 @admin.register(Conversation)
 class ConversationAdmin(admin.ModelAdmin):
-    list_display = ("conversation_id", "user", "title", "sort_order", "created_at")
+    list_display = ("conversation_id", "user", "title", "source", "sort_order", "created_at")
     search_fields = ("conversation_id", "user__email", "title")
-    list_filter = ("created_at",)
+    list_filter = ("created_at", "source")
     ordering = ("sort_order", "-created_at")
     list_editable = ("sort_order",)
 
