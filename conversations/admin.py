@@ -45,7 +45,7 @@ class MessageWithFeedbackAdmin(admin.ModelAdmin):
     """Dedicated admin view showing only messages with feedback"""
     list_display = ("id", "short_message", "conversation_link", "sender_name", "feedback_indicator", "feedback_preview", "created_at")
     search_fields = ("message", "conversation__conversation_id", "conversation__title", "sender", "feedback_text")
-    list_filter = ("sender_type", "feedback_type", "created_at", "llm")
+    list_filter = ("sender_type", "feedback_type", "feedback_source", "created_at", "llm")
     ordering = ("-created_at",)
     readonly_fields = ("created_at", "updated_at", "input_tokens", "output_tokens", "cost")
     list_per_page = 50
@@ -55,7 +55,7 @@ class MessageWithFeedbackAdmin(admin.ModelAdmin):
             "fields": ("conversation", "sender_type", "sender", "message", "llm")
         }),
         ("Feedback", {
-            "fields": ("feedback_type", "feedback_text"),
+            "fields": ("feedback_type", "feedback_text", "feedback_source"),
             "description": "User feedback for this message"
         }),
         ("Message History", {

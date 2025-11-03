@@ -198,6 +198,20 @@ class Conversation(BaseModel):
         blank=True,
         help_text="Learning-specific metadata including goals, tracking settings, and educational context."
     )
+    # Auto-feedback tracking
+    feedback_auto_prompt_count = models.IntegerField(
+        default=0,
+        help_text="Number of times auto-feedback prompt has been shown for this conversation"
+    )
+    feedback_last_prompt_message_count = models.IntegerField(
+        default=0,
+        help_text="Message count when feedback prompt was last shown"
+    )
+    feedback_last_prompt_timestamp = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Timestamp when feedback prompt was last shown"
+    )
 
     active_objects = ActiveObjectsManager()
 
@@ -386,6 +400,18 @@ class Message(BaseModel):
         blank=True,
         null=True,
         help_text="Optional feedback text provided by the user."
+    )
+    feedback_source = models.CharField(
+        max_length=10,
+        choices=[
+            ('thumbs', 'Thumbs Click'),
+            ('manual', 'Manual Feedback Button'),
+            ('auto', 'Automatic Prompt')
+        ],
+        null=True,
+        blank=True,
+        default='thumbs',
+        help_text="Source that triggered the feedback submission"
     )
     is_edited = models.BooleanField(
         default=False,
