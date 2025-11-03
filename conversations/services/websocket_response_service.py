@@ -8,9 +8,12 @@ dictionaries with camelCase keys.
 
 import logging
 from typing import Dict, Any, Optional, List
+
 from channels.db import database_sync_to_async
-from conversations.models import Message
+
+from conversations.api.serializers import MessageSerializer
 from conversations.constants import SenderType
+from conversations.models import Message
 
 logger = logging.getLogger(__name__)
 
@@ -69,8 +72,6 @@ class WebSocketResponseService:
             Dictionary with camelCase keys ready for JSON serialization
         """
         # Use MessageSerializer for proper formatting
-        from conversations.api.serializers import MessageSerializer
-
         @database_sync_to_async
         def serialize_message():
             msg = Message.active_objects.prefetch_related('files', 'tags', 'snippets__file').get(id=message.id)
