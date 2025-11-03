@@ -128,9 +128,11 @@ class MetadataKey:
     USER_CHOICE = "user_choice"
     AI_RECOMMENDATION = "ai_recommendation"
     AI_ANALYSIS = "ai_analysis"
+    ANALYSIS = "analysis"  # General analysis text (AI reasoning)
     AVAILABLE_ROUTES = "available_routes"
     RAW_RESPONSE = "raw_response"
     SELECTED_ROUTE = "selected_route"
+    USE_STRUCTURED_OUTPUT_NODE = "use_structured_output_node"
     EXECUTION_TIME = "execution_time"
     TOKEN_USAGE = "token_usage"
     ERROR_CATEGORY = "error_category"
