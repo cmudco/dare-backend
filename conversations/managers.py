@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from django.db import models
+from django.db.models import Q
 
 
 class MessageWithFeedbackManager(models.Manager):
@@ -12,6 +13,9 @@ class MessageWithFeedbackManager(models.Manager):
         return (
             super()
             .get_queryset()
-            .filter(feedback_type__isnull=False)
+            .filter(
+              Q(feedback_type__isnull=False) |
+              Q(feedback_text__isnull=False, feedback_text__gt='')
+            )
             .select_related("conversation", "conversation__user", "llm")
         )
