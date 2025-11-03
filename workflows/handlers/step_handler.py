@@ -17,6 +17,7 @@ from workflows.models import WorkflowNode, WorkflowRun, WorkflowRunStep, StepNod
 from workflows.constants import WorkflowRunStepStatus
 from conversations.models import LLM
 from core.services.llm_utils import SchemaTransformer
+from core.services.dtos import LLMQueryRequestBuilder
 
 # Import new utility modules
 from workflows.handlers.utils import (
@@ -457,23 +458,23 @@ class StepNodeHandler(BaseExecutionHandler):
             lambda: step_data.prompt.id if step_data.prompt else None
         )()
 
-        # Execute LLM query via base service
-        response_generator = self.llm_service.query(
+        # Execute LLM query via base service using DTO builder
+        request = LLMQueryRequestBuilder.from_workflow_data(
             message=message,
-            conversation=None,
+            user=user,
             llm=llm,
             file_ids=content_file_ids if content_file_ids else None,
             embedding_ids=embedding_file_ids if embedding_file_ids else None,
-            user=user,
             prompt_id=prompt_id,
-            message_obj=None,
-            workflow_run_step_obj=workflow_run_step,
-            max_tokens=step_data.max_tokens,
             temperature=step_data.temperature,
+            max_tokens=step_data.max_tokens,
             max_context_snippets=step_data.max_context_snippets,
             document_similarity_threshold=step_data.document_similarity_threshold,
+            workflow_run_step_obj=workflow_run_step,
             structured_spec=structured_spec,
         )
+
+        response_generator = self.llm_service.query(request)
 
         # Use base handler to collect response
         return await self._execute_llm_query_with_collection(response_generator)

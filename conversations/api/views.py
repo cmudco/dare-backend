@@ -1,7 +1,7 @@
 from rest_framework import viewsets, generics, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.http import HttpResponse
 from django.template.loader import render_to_string
 from django.utils import timezone
@@ -20,22 +20,48 @@ from decimal import Decimal
 class ConversationViewSet(viewsets.ModelViewSet):
     """Endpoint for listing, retrieving, creating and updating chat conversations."""
     serializer_class = ConversationSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]  # Allow both authenticated and anonymous access
     lookup_field = 'conversation_id'
 
     def get_queryset(self):
-        # Filter conversations based on platform source
         platform_source = detect_platform_from_request(self.request)
-        return Conversation.active_objects.filter(
-            user=self.request.user,
-            source=platform_source
-        ).order_by('sort_order', '-created_at')
+
+        # Check if querying for anonymous session
+        anonymous_session_id = self.request.query_params.get('anonymous_session_id', None)
+
+        if anonymous_session_id:
+            # For anonymous sessions, filter by session_id instead of user
+            queryset = Conversation.active_objects.filter(
+                anonymous_session_id=anonymous_session_id,
+                source=platform_source
+            )
+        else:
+            # For authenticated users - ensure user is authenticated before filtering
+            if hasattr(self.request, 'user') and self.request.user and hasattr(self.request.user, 'is_authenticated') and self.request.user.is_authenticated:
+                queryset = Conversation.active_objects.filter(
+                    user=self.request.user,
+                    source=platform_source
+                )
+            else:
+                # No user and no anonymous session - return empty queryset
+                queryset = Conversation.active_objects.none()
+
+        # Optional filtering by bot_id (for Socratic Books queries)
+        bot_id = self.request.query_params.get('bot_id', None)
+        if bot_id is not None:
+            queryset = queryset.filter(bot_id=bot_id)
+
+        return queryset.order_by('sort_order', '-created_at')
 
     def perform_create(self, serializer):
         platform_source = detect_platform_from_request(self.request)
-        serializer.save(user=self.request.user, source=platform_source)
-        if self.request.user.default_prompt:
-            serializer.instance.prompt = self.request.user.default_prompt
+        # For public bots, user can be null
+        user = None
+        if hasattr(self.request, 'user') and self.request.user and self.request.user.is_authenticated:
+            user = self.request.user
+        serializer.save(user=user, source=platform_source)
+        if user and hasattr(user, 'default_prompt') and user.default_prompt:
+            serializer.instance.prompt = user.default_prompt
             serializer.instance.save()
 
     @action(detail=False, methods=['patch'], url_path='update-sort-order')
