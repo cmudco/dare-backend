@@ -16,6 +16,7 @@ from workflows.models import WorkflowNode, WorkflowRun, WorkflowRunStep, Conditi
 from workflows.constants import WorkflowRunStepStatus
 from workflows.services.conditional_prompt_service import ConditionalPromptService
 from conversations.models import LLM
+from core.services.dtos import LLMQueryRequestBuilder
 
 # Import new utility modules
 from workflows.handlers.utils import (
@@ -353,20 +354,16 @@ class ConditionalNodeHandler(BaseExecutionHandler):
         workflow = await database_sync_to_async(lambda: workflow_run.workflow)()
         user = await database_sync_to_async(lambda: workflow.user)()
 
-        # Execute LLM query with conditional configuration
-        response_generator = self.llm_service.query(
+        # Execute LLM query with conditional configuration using DTO builder
+        request = LLMQueryRequestBuilder.from_workflow_data(
             message=message,
-            conversation=None,
-            llm=llm,
-            file_ids=None,
-            embedding_ids=None,
             user=user,
-            prompt_id=None,
-            message_obj=None,
-            workflow_run_step_obj=None,
+            llm=llm,
             max_tokens=LLMDefaults.CONDITIONAL_MAX_TOKENS,
-            temperature=LLMDefaults.CONDITIONAL_TEMPERATURE
+            temperature=LLMDefaults.CONDITIONAL_TEMPERATURE,
         )
+
+        response_generator = self.llm_service.query(request)
 
         # Use base handler to collect response
         full_response, token_usage = await self._execute_llm_query_with_collection(
