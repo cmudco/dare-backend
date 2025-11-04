@@ -38,7 +38,17 @@ class WorkflowViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, IsOwner]
 
     def get_queryset(self):
-        return Workflow.active_objects.filter(user=self.request.user).order_by('-created_at')
+        return Workflow.active_objects.filter(
+            user=self.request.user
+        ).prefetch_related(
+            Prefetch(
+                'nodes',
+                queryset=WorkflowNode.objects.filter(node_type='start').select_related('data_content_type'),
+                to_attr='_cached_start_nodes'
+            ),
+            'nodes',
+            'edges'
+        ).order_by('-created_at')
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)

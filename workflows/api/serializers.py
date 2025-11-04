@@ -70,77 +70,60 @@ class WorkflowRunSerializer(serializers.ModelSerializer):
             status=WorkflowRunStepStatus.PENDING_HUMAN_INPUT
         ).select_related('step_node')
 
+        workflow = obj.workflow
+        edges_by_target = {e.target: e for e in workflow.edges.all()}
+        nodes_by_id = {n.node_id: n for n in workflow.nodes.all()}
+
         validations = []
 
         for step in pending_steps:
             step_data = step.step_node.data_object if step.step_node else None
 
-            # Check if step uses structured output - MUST use snake_case (backend)
             metadata = step.metadata or {}
             uses_structured_output = metadata.get(MetadataKey.USE_STRUCTURED_OUTPUT_NODE, False)
 
-            # Handle ConditionalNode validations
             if step_data and isinstance(step_data, ConditionalNodeData):
                 available_routes = step_data.get_routes()
 
                 ai_recommendation = metadata.get(MetadataKey.AI_RECOMMENDATION)
                 ai_analysis = metadata.get(MetadataKey.ANALYSIS)
 
-                # Get prompt content if prompt exists
                 prompt_content = step_data.prompt.content if step_data.prompt else "Evaluate the input and choose the appropriate route."
 
                 validations.append({
                     'node_id': step.step_node.node_id,
                     'step_number': step_data.step_number,
-                    'custom_prompt': prompt_content,  # For backward compatibility with frontend
+                    'custom_prompt': prompt_content,
                     'available_routes': available_routes,
                     'current_response': step.response,
                     'step_id': step.id,
-                    'ai_recommendation': ai_recommendation,  # AI's suggested route
-                    'ai_analysis': ai_analysis  # AI's reasoning
+                    'ai_recommendation': ai_recommendation,
+                    'ai_analysis': ai_analysis
                 })
 
-            # Handle StructuredOutputNode validations
             elif uses_structured_output:
-                # For structured output, we need to find the StructuredOutputNodeData
-                # by looking at edges connecting to this step
-
-                # Find the structured output node connected to this step
-                incoming_edges = WorkflowEdge.objects.filter(
-                    workflow=obj.workflow,
-                    target=step.step_node.node_id
-                )
-
-                structured_node = None
-                structured_node_id = None
-                for edge in incoming_edges:
-                    node = obj.workflow.nodes.filter(
-                        node_id=edge.source,
-                        node_type='structuredOutput'
-                    ).first()
-                    if node and node.data_object:
+                edge = edges_by_target.get(step.step_node.node_id)
+                if edge:
+                    node = nodes_by_id.get(edge.source)
+                    if node and node.node_type == 'structuredOutput':
                         structured_node = node.data_object
-                        structured_node_id = node.node_id
-                        break
+                        if structured_node and isinstance(structured_node, StructuredOutputNodeData):
+                            available_routes = structured_node.get_routes()
+                            ai_recommendation = metadata.get(MetadataKey.AI_RECOMMENDATION)
+                            ai_analysis = metadata.get(MetadataKey.ANALYSIS)
 
-                if structured_node and isinstance(structured_node, StructuredOutputNodeData):
-                    available_routes = structured_node.get_routes()
-                    ai_recommendation = metadata.get(MetadataKey.AI_RECOMMENDATION)
-                    ai_analysis = metadata.get(MetadataKey.ANALYSIS)
+                            prompt_content = structured_node.prompt.content if structured_node.prompt else "Evaluate the input and choose the appropriate route."
 
-                    # Get prompt content
-                    prompt_content = structured_node.prompt.content if structured_node.prompt else "Evaluate the input and choose the appropriate route."
-
-                    validations.append({
-                        'node_id': structured_node_id,  # Use StructuredOutputNode's ID, not Step node's ID
-                        'step_number': step_data.step_number if step_data else step.order,
-                        'custom_prompt': prompt_content,
-                        'available_routes': available_routes,
-                        'current_response': step.response,
-                        'step_id': step.id,
-                        'ai_recommendation': ai_recommendation,
-                        'ai_analysis': ai_analysis
-                    })
+                            validations.append({
+                                'node_id': node.node_id,
+                                'step_number': step_data.step_number if step_data else step.order,
+                                'custom_prompt': prompt_content,
+                                'available_routes': available_routes,
+                                'current_response': step.response,
+                                'step_id': step.id,
+                                'ai_recommendation': ai_recommendation,
+                                'ai_analysis': ai_analysis
+                            })
 
         return validations
 
