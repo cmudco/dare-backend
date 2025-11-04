@@ -4,12 +4,15 @@ LLM execution utilities for workflow handlers.
 This module provides standardized patterns for LLM calls with error handling,
 retry logic, and response processing following LLM provider patterns.
 """
-import logging
 import asyncio
-from typing import Dict, List, Optional, Any, AsyncGenerator, Tuple
-from dataclasses import dataclass
+import logging
 import time
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Any, AsyncGenerator, Tuple
 
+from channels.db import database_sync_to_async
+
+from conversations.models import LLM
 from .constants import LLMDefaults, RetryConfig, LogConfig
 from .error_handlers import RetryHelper, WorkflowErrorHandler
 from .validation_helpers import LLMConfigValidator
@@ -324,9 +327,6 @@ class LLMSelector:
         Raises:
             ValueError: If no LLM can be determined
         """
-        from channels.db import database_sync_to_async
-        from conversations.models import LLM
-
         # Try to get LLM from node data
         llm = await database_sync_to_async(lambda: node_data.llm)()
 

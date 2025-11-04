@@ -10,8 +10,24 @@ Provider Video Support:
 - Gemini: Full native video support
 """
 
-from typing import Dict, List, Tuple
+import base64
+import io
 import logging
+import os
+import tempfile
+from typing import Dict, List, Tuple
+
+# Optional dependencies for video processing
+try:
+    import cv2
+    import numpy as np
+    from PIL import Image
+    CV2_AVAILABLE = True
+except ImportError:
+    CV2_AVAILABLE = False
+    cv2 = None
+    np = None
+    Image = None
 
 logger = logging.getLogger(__name__)
 
@@ -138,13 +154,7 @@ class OpenAIVisionHandler:
         Returns:
             List of frame dictionaries with 'preview' (base64 data URL)
         """
-        try:
-            import cv2
-            import numpy as np
-            import base64
-            import io
-            from PIL import Image
-        except ImportError:
+        if not CV2_AVAILABLE:
             logger.error("OpenCV or PIL not installed - cannot extract video frames")
             return []
 
@@ -163,7 +173,6 @@ class OpenAIVisionHandler:
                 video_bytes = base64.b64decode(base64_data)
 
                 # Write to temporary file (OpenCV needs file path)
-                import tempfile
                 with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as tmp_file:
                     tmp_file.write(video_bytes)
                     tmp_file_path = tmp_file.name
@@ -214,7 +223,6 @@ class OpenAIVisionHandler:
                 cap.release()
 
                 # Clean up temp file
-                import os
                 os.unlink(tmp_file_path)
 
             except Exception as e:

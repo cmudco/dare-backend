@@ -1,15 +1,18 @@
+import logging
+from decimal import Decimal
+
 from dj_rest_auth.registration.serializers import RegisterSerializer
 from dj_rest_auth.serializers import UserDetailsSerializer, LoginSerializer
 from django.contrib.auth import get_user_model, authenticate
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
+
+from billing.models import Wallet
+from billing.services import WalletService
 from prompts.api.serializers import PromptSerializer
 from users.constants import VectorDBChoice, AuthSourceChoice, ScopeChoice
 from users.models import AccessCodeGroup
-from billing.services import WalletService
-from decimal import Decimal
 from users.utils import detect_platform_from_request, get_platform_access_permission
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -210,7 +213,6 @@ class CustomRegisterSerializer(RegisterSerializer):
             # Ensure wallet exists with $0 from signal; create with $0 if missing
             wallet = getattr(user, 'wallet', None)
             if wallet is None:
-                from billing.models import Wallet
                 wallet = Wallet.objects.create(user=user, balance=Decimal('0.00'))
 
             if code_group and getattr(code_group, 'initial_wallet_credit', None) is not None:

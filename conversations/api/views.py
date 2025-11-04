@@ -1,19 +1,22 @@
-from rest_framework import viewsets, generics, status
-from rest_framework.decorators import action
-from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated, AllowAny
+import logging
+import markdown
+import os
+import tempfile
+import weasyprint
+from decimal import Decimal
+
+from django.db import transaction
 from django.http import HttpResponse
 from django.template.loader import render_to_string
 from django.utils import timezone
-from django.db import transaction
+from rest_framework import viewsets, generics, status
+from rest_framework.decorators import action
+from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.response import Response
+
 from conversations.models import Message, Conversation, LLM, Snippet
-from .serializers import MessageSerializer, ConversationSerializer, LLMSerializer
 from users.utils import detect_platform_from_request
-import weasyprint
-import tempfile
-import os
-import markdown
-from decimal import Decimal
+from .serializers import MessageSerializer, ConversationSerializer, LLMSerializer
 
 
 
@@ -127,14 +130,14 @@ class ConversationViewSet(viewsets.ModelViewSet):
         deleted_conversations = []
         failed_conversations = []
 
+        logger = logging.getLogger(__name__)
+
         for conversation in conversations:
             try:
                 conversation_data = {"conversation_id": conversation.conversation_id, "title": conversation.title}
                 self.perform_destroy(conversation)
                 deleted_conversations.append(conversation_data)
             except Exception as e:
-                import logging
-                logger = logging.getLogger(__name__)
                 logger.error(f"Error deleting conversation ID {conversation.conversation_id}: {str(e)}")
                 failed_conversations.append({"conversation_id": conversation.conversation_id, "error": str(e)})
 
@@ -168,7 +171,6 @@ class ConversationViewSet(viewsets.ModelViewSet):
                 return Response(serializer.data, status=status.HTTP_201_CREATED)
 
         except Exception as e:
-            import logging
             logger = logging.getLogger(__name__)
             logger.error(f"Error cloning conversation {conversation_id}: {str(e)}")
             return Response(
@@ -285,9 +287,8 @@ class ConversationViewSet(viewsets.ModelViewSet):
             response['Content-Length'] = len(pdf_content)
             
             return response
-            
+
         except Exception as e:
-            import logging
             logger = logging.getLogger(__name__)
             logger.error(f"Error exporting conversation {conversation_id} to PDF: {str(e)}")
             return Response(

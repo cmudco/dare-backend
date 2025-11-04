@@ -5,6 +5,7 @@ This module centralizes all magic strings, default values, and configuration
 constants used across workflow handlers, following the pattern established
 in the LLM provider utilities.
 """
+import re
 from typing import Dict, Any
 
 
@@ -57,7 +58,6 @@ class XMLTag:
         Returns:
             Extracted content or empty string if not found
         """
-        import re
         pattern = f"<{tag_name}>(.*?)</{tag_name}>"
         match = re.search(pattern, xml_string, re.DOTALL | re.IGNORECASE)
         if match:
