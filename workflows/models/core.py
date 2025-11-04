@@ -72,7 +72,11 @@ class Workflow(BaseModel):
     @property
     def title(self):
         """Get workflow title from StartNodeData."""
-        start_node = self.nodes.filter(node_type='start').first()
+        if hasattr(self, '_cached_start_nodes') and self._cached_start_nodes:
+            start_node = self._cached_start_nodes[0]
+        else:
+            start_node = self.nodes.filter(node_type='start').first()
+
         if start_node and start_node.typed_data:
             return start_node.typed_data.title
         return ''
@@ -80,7 +84,11 @@ class Workflow(BaseModel):
     @property
     def description(self):
         """Get workflow description from StartNodeData."""
-        start_node = self.nodes.filter(node_type='start').first()
+        if hasattr(self, '_cached_start_nodes') and self._cached_start_nodes:
+            start_node = self._cached_start_nodes[0]
+        else:
+            start_node = self.nodes.filter(node_type='start').first()
+
         if start_node and start_node.typed_data:
             return start_node.typed_data.description
         return ''
@@ -88,7 +96,11 @@ class Workflow(BaseModel):
     @property
     def mode(self):
         """Get workflow mode from StartNodeData."""
-        start_node = self.nodes.filter(node_type='start').first()
+        if hasattr(self, '_cached_start_nodes') and self._cached_start_nodes:
+            start_node = self._cached_start_nodes[0]
+        else:
+            start_node = self.nodes.filter(node_type='start').first()
+
         if start_node and start_node.typed_data:
             mode_str = start_node.typed_data.mode
             return 2 if mode_str == 'parallel' else 1
