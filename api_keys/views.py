@@ -53,18 +53,33 @@ class UserProviderAPIKeyViewSet(viewsets.ReadOnlyModelViewSet):
             "api_key": "sk-..."
         }
 
-        Returns the updated key information (with masked key).
+        The API key will be validated with the provider before saving.
+        If validation fails, an error response will be returned.
+
+        Returns the updated key information (with masked key) on success.
         """
         serializer = UserProviderAPIKeyUpdateSerializer(
             data=request.data,
             context={'request': request}
         )
+
         serializer.is_valid(raise_exception=True)
+
         user_provider_key = serializer.save()
 
-        # Return the updated key info
+        validation_result = serializer.context.get('validation_result')
+
         response_serializer = UserProviderAPIKeySerializer(user_provider_key)
-        return Response(response_serializer.data, status=status.HTTP_200_OK)
+        response_data = response_serializer.data
+
+        if validation_result:
+            response_data['validation'] = {
+                'validated': True,
+                'message': validation_result.message,
+                'details': validation_result.details
+            }
+
+        return Response(response_data, status=status.HTTP_200_OK)
 
     def destroy(self, request, provider=None):
         """
