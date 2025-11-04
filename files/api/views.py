@@ -11,6 +11,7 @@ from rest_framework import status
 from rest_framework.views import APIView
 from django.http import Http404
 from django.db.models.functions import Lower
+from django.db.models import Count, Q, Prefetch
 
 from core.services.document_processor import DocumentProcessor
 from core.services.file_upload_service import FileUploadService
@@ -250,7 +251,19 @@ class TagViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, IsOwner]
 
     def get_queryset(self):
-        return Tag.objects.filter(user=self.request.user).union(Tag.objects.filter(user=None)).order_by('label')
+        user = self.request.user
+        return Tag.objects.filter(
+            Q(user=user) | Q(user=None)
+        ).annotate(
+            file_count=Count(
+                'files',
+                filter=Q(
+                    files__user=user,
+                    files__is_deleted=False,
+                    files__is_active=True
+                )
+            )
+        ).order_by('label')
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
@@ -261,7 +274,16 @@ class FolderViewSet(viewsets.ModelViewSet):
     parser_classes = (MultiPartParser, FormParser, JSONParser)
 
     def get_queryset(self):
-        return Folder.objects.filter(user=self.request.user).order_by(Lower('name'))
+        return Folder.objects.filter(
+            user=self.request.user
+        ).prefetch_related(
+            Prefetch(
+                'files',
+                queryset=File.active_objects.prefetch_related('tags')
+            )
+        ).annotate(
+            file_count=Count('files', filter=Q(files__is_deleted=False, files__is_active=True))
+        ).order_by(Lower('name'))
 
     def create(self, request):
         """
