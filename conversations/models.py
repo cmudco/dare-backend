@@ -1,10 +1,12 @@
-from decimal import Decimal
 import random
 import string
+from decimal import Decimal
 
-from django.db import models
 from django.conf import settings
 from django.core.validators import MinValueValidator
+from django.db import models, transaction
+from django.utils import timezone
+
 from common.managers import ActiveObjectsManager
 from common.models import BaseModel, TimeStampMixin
 from core.fields import EncryptedCharField
@@ -242,8 +244,6 @@ class Conversation(BaseModel):
         Returns:
             Conversation: The cloned conversation instance
         """
-        from django.db import transaction
-
         with transaction.atomic():
             # Determine cloned title
             if custom_title:
