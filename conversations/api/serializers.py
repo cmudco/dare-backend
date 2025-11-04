@@ -71,6 +71,9 @@ class ConversationSerializer(serializers.ModelSerializer):
             'sort_order',
             'selected_embedding_ids',
             'selected_file_ids',
+            'feedback_auto_prompt_count',
+            'feedback_last_prompt_message_count',
+            'feedback_last_prompt_timestamp',
         ]
         read_only_fields = ['created_at', 'user', 'prompt']
 
@@ -116,6 +119,7 @@ class MessageSerializer(serializers.ModelSerializer):
             'created_at',
             'feedback_type',
             'feedback_text',
+            'feedback_source',
             'is_edited',
             'is_regenerated',
             'original_message',
