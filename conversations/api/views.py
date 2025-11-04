@@ -29,32 +29,27 @@ class ConversationViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         platform_source = detect_platform_from_request(self.request)
 
-        # Check if querying for anonymous session
         anonymous_session_id = self.request.query_params.get('anonymous_session_id', None)
 
         if anonymous_session_id:
-            # For anonymous sessions, filter by session_id instead of user
             queryset = Conversation.active_objects.filter(
                 anonymous_session_id=anonymous_session_id,
                 source=platform_source
             )
         else:
-            # For authenticated users - ensure user is authenticated before filtering
             if hasattr(self.request, 'user') and self.request.user and hasattr(self.request.user, 'is_authenticated') and self.request.user.is_authenticated:
                 queryset = Conversation.active_objects.filter(
                     user=self.request.user,
                     source=platform_source
                 )
             else:
-                # No user and no anonymous session - return empty queryset
                 queryset = Conversation.active_objects.none()
 
-        # Optional filtering by bot_id (for Socratic Books queries)
         bot_id = self.request.query_params.get('bot_id', None)
         if bot_id is not None:
             queryset = queryset.filter(bot_id=bot_id)
 
-        return queryset.order_by('sort_order', '-created_at')
+        return queryset.select_related('selected_model', 'prompt').order_by('sort_order', '-created_at')
 
     def perform_create(self, serializer):
         platform_source = detect_platform_from_request(self.request)
@@ -303,7 +298,11 @@ class MessageViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return Message.active_objects.filter(conversation__user=self.request.user)
+        return Message.active_objects.filter(
+            conversation__user=self.request.user
+        ).select_related('llm', 'conversation').prefetch_related(
+            'files', 'tags', 'snippets__file'
+        )
 
     def get_serializer_context(self):
         context = super().get_serializer_context()
