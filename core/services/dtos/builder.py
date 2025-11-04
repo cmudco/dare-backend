@@ -93,7 +93,8 @@ class LLMQueryRequestBuilder:
             workflow_run_step_obj=workflow_run_step_obj,
         )
 
-        # Apply conversation-level defaults automatically
+        # Message-level settings from frontend always take precedence.
+        # Keeping the call for code clarity and potential future use.
         if conversation:
             request = request.with_conversation_defaults(conversation)
 

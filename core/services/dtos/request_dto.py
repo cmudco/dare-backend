@@ -75,23 +75,20 @@ class LLMQueryRequest:
     def with_conversation_defaults(self, conversation: Any) -> 'LLMQueryRequest':
         """Apply conversation-level defaults for generation settings.
 
-        This should be called after building the request to merge conversation defaults.
+        Note: This method now simply returns self unchanged because message-level
+        settings (sent from frontend) always take precedence over conversation-level
+        database values. The frontend always sends the current state of toggles,
+        so we trust that instead of potentially stale conversation database values.
 
         Args:
-            conversation: Conversation model with web_search_enabled and image_generation_enabled
+            conversation: Conversation model (ignored, kept for API compatibility)
 
         Returns:
-            New LLMQueryRequest with merged generation settings
+            Self (unchanged) - message-level settings take precedence
         """
-        if not conversation:
-            return self
-
-        merged_generation = self.generation.merge_with_conversation_defaults(
-            conversation_web_search=getattr(conversation, 'web_search_enabled', False),
-            conversation_image_generation=getattr(conversation, 'image_generation_enabled', False),
-        )
-
-        return replace(self, generation=merged_generation)
+        # Message-level settings from frontend always take precedence
+        # No need to merge with conversation defaults
+        return self
 
 
 @dataclass
