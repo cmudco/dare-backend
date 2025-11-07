@@ -139,6 +139,9 @@ class WorkflowNode(TimeStampMixin):
     class Meta:
         unique_together = ['workflow', 'node_id']
         ordering = ['node_id']
+        indexes = [
+            models.Index(fields=['node_type'], name='wf_node_type_idx'),
+        ]
 
     @property
     def data(self):
