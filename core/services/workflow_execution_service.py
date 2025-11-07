@@ -301,7 +301,7 @@ class WorkflowExecutionService:
                 continue
 
             executed_nodes.add(node.id)
-            result = await self._execute_node(node, context)
+            result = await self._execute_node(node, context, workflow)
             context.node_results[node.id] = result
 
             # Check if this node is waiting for human input
@@ -332,7 +332,8 @@ class WorkflowExecutionService:
     async def _execute_node(
         self,
         node: ExecutionNode,
-        context: WorkflowExecutionContext
+        context: WorkflowExecutionContext,
+        workflow: Workflow = None
     ) -> NodeExecutionResult:
         """
         Execute a single node using the appropriate handler.
@@ -340,15 +341,21 @@ class WorkflowExecutionService:
         Args:
             node: The node to execute
             context: Execution context
+            workflow: The workflow being executed (optional, for parallel mode filtering)
 
         Returns:
             NodeExecutionResult with execution outcome
         """
+        # For parallel workflows, only pass results from dependency nodes
+        filtered_results = await self._get_node_dependency_results(
+            node, context, workflow
+        )
+
         # Create node execution context for handler
         node_context = NodeExecutionContext(
             workflow_run=context.workflow_run,
             previous_results=WorkflowContextBuilder.prepare_node_execution_context(
-                context.node_results
+                filtered_results
             ),
             current_input=context.current_context
         )
@@ -356,6 +363,47 @@ class WorkflowExecutionService:
         # Execute using handler registry
         result = await node_handler_registry.execute_node(node, node_context)
         return result
+
+    async def _get_node_dependency_results(
+        self,
+        node: ExecutionNode,
+        context: WorkflowExecutionContext,
+        workflow: Workflow = None
+    ) -> Dict[str, NodeExecutionResult]:
+        """
+        Get only the results from nodes that this node depends on.
+
+        For parallel workflows, this filters out sibling node results
+        to ensure true parallelism and independence.
+
+        Args:
+            node: The node to get dependencies for
+            context: Execution context with all results
+            workflow: The workflow being executed
+
+        Returns:
+            Dictionary with only relevant node results
+        """
+        # If no workflow provided, return all results (sequential mode)
+        if not workflow:
+            return context.node_results
+
+        # Get all edges from workflow
+        edges = await database_sync_to_async(lambda: list(workflow.edges.all()))()
+
+        # Find all nodes that this node depends on (incoming edges)
+        dependency_node_ids = {
+            edge.source for edge in edges if edge.target == node.id
+        }
+
+        # Filter results to only include dependency nodes
+        filtered_results = {
+            node_id: result
+            for node_id, result in context.node_results.items()
+            if node_id in dependency_node_ids or dependency_node_ids == set()
+        }
+
+        return filtered_results
 
     async def _should_execute_node(
         self,
