@@ -4,6 +4,7 @@ Serializers for API Keys app
 from rest_framework import serializers
 from api_keys.models import UserProviderAPIKey
 from api_keys.constants import BillingModeChoice
+from api_keys.services import APIKeyValidationService
 
 
 class UserProviderAPIKeySerializer(serializers.ModelSerializer):
@@ -41,6 +42,8 @@ class UserProviderAPIKeyUpdateSerializer(serializers.Serializer):
 
     Only accepts the provider and api_key fields.
     The user is determined from the request context.
+
+    Validates the API key by making a test request to the provider's API.
     """
     provider = serializers.ChoiceField(
         choices=['openai', 'claude', 'gemini', 'llama'],
@@ -61,11 +64,32 @@ class UserProviderAPIKeyUpdateSerializer(serializers.Serializer):
             raise serializers.ValidationError("API key cannot be empty")
         return value.strip()
 
+    def validate(self, attrs):
+        """
+        Validate the API key by making a test request to the provider.
+
+        This ensures the key is valid before saving it to the database.
+        """
+        provider = attrs.get('provider')
+        api_key = attrs.get('api_key')
+
+        validation_result = APIKeyValidationService.validate_api_key(provider, api_key)
+
+        if not validation_result.is_valid:
+            raise serializers.ValidationError({
+                'api_key': validation_result.user_friendly_message
+            })
+
+        self.context['validation_result'] = validation_result
+
+        return attrs
+
     def create(self, validated_data):
         """
         Create or update the API key for the user and provider.
 
         The user is taken from the request context.
+        The API key has already been validated at this point.
         """
         user = self.context['request'].user
         provider = validated_data['provider']

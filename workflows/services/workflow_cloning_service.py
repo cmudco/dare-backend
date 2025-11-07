@@ -9,7 +9,7 @@ from django.contrib.contenttypes.models import ContentType
 
 from workflows.models import (
     Workflow, WorkflowNode, WorkflowEdge,
-    StartNodeData, StepNodeData, ChatOutputNodeData, ConditionalNodeData
+    StartNodeData, StepNodeData, ChatOutputNodeData, ConditionalNodeData, StructuredOutputNodeData
 )
 
 
@@ -105,7 +105,9 @@ class WorkflowCloningService:
                 max_context_snippets=data_object.max_context_snippets,
                 document_similarity_threshold=data_object.document_similarity_threshold,
                 use_previous_step_files=data_object.use_previous_step_files,
-                use_previous_step_embeddings=data_object.use_previous_step_embeddings
+                use_previous_step_embeddings=data_object.use_previous_step_embeddings,
+                text_input=data_object.text_input,
+                use_structured_output_node=data_object.use_structured_output_node
             )
             # Clone many-to-many relationships
             cloned_data.content_files.set(data_object.content_files.all())
@@ -120,11 +122,19 @@ class WorkflowCloningService:
             )
         elif isinstance(data_object, ConditionalNodeData):
             return ConditionalNodeData.objects.create(
-                custom_prompt=data_object.custom_prompt,
+                prompt=data_object.prompt,
                 llm=data_object.llm,
                 routes=data_object.routes,
                 require_human_validation=data_object.require_human_validation,
                 step_number=data_object.step_number
+            )
+        elif isinstance(data_object, StructuredOutputNodeData):
+            return StructuredOutputNodeData.objects.create(
+                prompt=data_object.prompt,
+                routes=data_object.routes,
+                step_number=data_object.step_number,
+                require_human_validation=data_object.require_human_validation,
+                llm=data_object.llm
             )
         return None
 

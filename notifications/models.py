@@ -105,12 +105,10 @@ class Notification(BaseModel):
         """Check if the notification has expired"""
         if not self.expires_at:
             return False
-        from django.utils import timezone
         return timezone.now() > self.expires_at
 
     def mark_as_read(self):
         """Mark notification as read"""
-        from django.utils import timezone
         self.status = NotificationStatus.READ
         self.read_at = timezone.now()
         self.save(update_fields=['status', 'read_at'])

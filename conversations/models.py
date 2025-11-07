@@ -1,10 +1,12 @@
-from decimal import Decimal
 import random
 import string
+from decimal import Decimal
 
-from django.db import models
 from django.conf import settings
 from django.core.validators import MinValueValidator
+from django.db import models, transaction
+from django.utils import timezone
+
 from common.managers import ActiveObjectsManager
 from common.models import BaseModel, TimeStampMixin
 from core.fields import EncryptedCharField
@@ -135,7 +137,9 @@ class Conversation(BaseModel):
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
         related_name="conversations",
-        help_text="User who owns this conversation."
+        null=True,
+        blank=True,
+        help_text="User who owns this conversation. Null for public bot conversations."
     )
     conversation_id = models.CharField(max_length=50, unique=True, help_text="Unique conversation ID.")
     title = models.CharField(max_length=255, blank=True, null=True, help_text="Title of the conversation.")
@@ -144,6 +148,18 @@ class Conversation(BaseModel):
         choices=ConversationSource.choices,
         default=ConversationSource.DARE,
         help_text="Platform source where the conversation was created (DARE or SocraticBots)."
+    )
+    bot_id = models.IntegerField(
+        null=True,
+        blank=True,
+        help_text="Associated Socratic Bot ID (only populated for SocraticBots source)."
+    )
+    anonymous_session_id = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="Session ID for anonymous public bot conversations."
     )
     max_context_snippets = models.PositiveIntegerField(default=4, help_text="Maximum number of context snippets to retrieve.")
     document_similarity_threshold = models.FloatField(default=0.2, help_text="Similarity threshold for document retrieval.")
@@ -198,6 +214,20 @@ class Conversation(BaseModel):
         blank=True,
         help_text="Learning-specific metadata including goals, tracking settings, and educational context."
     )
+    # Auto-feedback tracking
+    feedback_auto_prompt_count = models.IntegerField(
+        default=0,
+        help_text="Number of times auto-feedback prompt has been shown for this conversation"
+    )
+    feedback_last_prompt_message_count = models.IntegerField(
+        default=0,
+        help_text="Message count when feedback prompt was last shown"
+    )
+    feedback_last_prompt_timestamp = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Timestamp when feedback prompt was last shown"
+    )
 
     active_objects = ActiveObjectsManager()
 
@@ -228,8 +258,6 @@ class Conversation(BaseModel):
         Returns:
             Conversation: The cloned conversation instance
         """
-        from django.db import transaction
-
         with transaction.atomic():
             # Determine cloned title
             if custom_title:
@@ -386,6 +414,18 @@ class Message(BaseModel):
         blank=True,
         null=True,
         help_text="Optional feedback text provided by the user."
+    )
+    feedback_source = models.CharField(
+        max_length=10,
+        choices=[
+            ('thumbs', 'Thumbs Click'),
+            ('manual', 'Manual Feedback Button'),
+            ('auto', 'Automatic Prompt')
+        ],
+        null=True,
+        blank=True,
+        default='thumbs',
+        help_text="Source that triggered the feedback submission"
     )
     is_edited = models.BooleanField(
         default=False,

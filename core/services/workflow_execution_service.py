@@ -8,21 +8,21 @@ Refactored to use utility modules for better maintainability and code organizati
 """
 import asyncio
 import logging
-from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
+from typing import Dict, List, Optional, Any
 
-from django.utils import timezone
 from channels.db import database_sync_to_async
+from django.utils import timezone
 
-from workflows.models import (
-    Workflow, WorkflowRun, WorkflowRunStep, WorkflowNode
-)
-from workflows.constants import WorkflowRunStepStatus
-from workflows.node_handlers import (
-    node_handler_registry, NodeExecutionContext, NodeExecutionResult, ExecutionNode
-)
 from core.services.workflow_utils import (
     DependencySorter, RoutingEvaluator, WorkflowContextBuilder
+)
+from workflows.constants import WorkflowRunStepStatus
+from workflows.models import (
+    Workflow, WorkflowRun, WorkflowRunStep, WorkflowNode, ChatOutputNodeData
+)
+from workflows.node_handlers import (
+    node_handler_registry, NodeExecutionContext, NodeExecutionResult, ExecutionNode
 )
 
 
@@ -479,7 +479,6 @@ class WorkflowExecutionService:
     def _clear_output_node_data(self, node: ExecutionNode):
         """Clear ChatOutputNodeData for a skipped output node."""
         try:
-            from workflows.models import ChatOutputNodeData
             output_data = node.db_node.data_object
 
             if output_data and isinstance(output_data, ChatOutputNodeData):

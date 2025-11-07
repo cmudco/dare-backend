@@ -123,6 +123,8 @@ class WorkflowContextBuilder:
         """
         Update conditional step metadata with user's routing choice.
 
+        NOTE: All keys MUST be snake_case on backend - DRF converts to camelCase for frontend
+
         Args:
             existing_metadata: Existing step metadata (preserves AI analysis)
             chosen_route: User's chosen route
@@ -132,6 +134,7 @@ class WorkflowContextBuilder:
         """
         metadata = existing_metadata or {}
         metadata['user_choice'] = chosen_route
+        metadata['selected_route'] = chosen_route  # Update the selected route to user's choice
         metadata['is_human_validated'] = True
         return metadata
 

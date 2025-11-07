@@ -1,12 +1,14 @@
-from django_rq import job
 import time
 from datetime import datetime
 
+from django.contrib.auth import get_user_model
+from django_rq import job
+
 from core.services.document_processor import DocumentProcessor
 from core.services.vector_service import get_vector_service
-from .models import File
-from .constants import FileStatus
 from users.constants import VectorDBChoice
+from .constants import FileStatus
+from .models import File
 
 @job
 def process_file_embeddings(file_id, chunk_size=None, overlap_size=None):
@@ -73,7 +75,6 @@ def delete_file_vectors(file_id, user_id):
             vector_db_source = None
 
         # Get user and current preference
-        from django.contrib.auth import get_user_model
         User = get_user_model()
         user = User.objects.get(id=user_id)
         current_preference = user.vector_db

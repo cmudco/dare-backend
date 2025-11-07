@@ -14,7 +14,9 @@ class TransactionSerializer(serializers.ModelSerializer):
     display_amount = serializers.CharField(read_only=True)
     type = serializers.CharField(source="get_type_display")
     llm  = LLMSerializer(read_only=True)
+    billing_mode = serializers.CharField(source="get_billing_mode_display", read_only=True)
+    platform = serializers.CharField(source="get_platform_display", read_only=True)
 
     class Meta:
         model = Transaction
-        fields = ["id", "display_amount", "type", "message", "llm", "llm_name", "input_tokens", "output_tokens", "created_at", "updated_at", ]
+        fields = ["id", "display_amount", "type", "message", "llm", "llm_name", "input_tokens", "output_tokens", "billing_mode", "platform", "created_at", "updated_at", ]
