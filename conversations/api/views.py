@@ -1,41 +1,65 @@
-from rest_framework import viewsets, generics, status
-from rest_framework.decorators import action
-from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
+import logging
+import markdown
+import os
+import tempfile
+import weasyprint
+from decimal import Decimal
+
+from django.db import transaction
 from django.http import HttpResponse
 from django.template.loader import render_to_string
 from django.utils import timezone
-from django.db import transaction
+from rest_framework import viewsets, generics, status
+from rest_framework.decorators import action
+from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.response import Response
+
 from conversations.models import Message, Conversation, LLM, Snippet
-from .serializers import MessageSerializer, ConversationSerializer, LLMSerializer
 from users.utils import detect_platform_from_request
-import weasyprint
-import tempfile
-import os
-import markdown
-from decimal import Decimal
+from .serializers import MessageSerializer, ConversationSerializer, LLMSerializer
 
 
 
 class ConversationViewSet(viewsets.ModelViewSet):
     """Endpoint for listing, retrieving, creating and updating chat conversations."""
     serializer_class = ConversationSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]  # Allow both authenticated and anonymous access
     lookup_field = 'conversation_id'
 
     def get_queryset(self):
-        # Filter conversations based on platform source
         platform_source = detect_platform_from_request(self.request)
-        return Conversation.active_objects.filter(
-            user=self.request.user,
-            source=platform_source
-        ).order_by('sort_order', '-created_at')
+
+        anonymous_session_id = self.request.query_params.get('anonymous_session_id', None)
+
+        if anonymous_session_id:
+            queryset = Conversation.active_objects.filter(
+                anonymous_session_id=anonymous_session_id,
+                source=platform_source
+            )
+        else:
+            if hasattr(self.request, 'user') and self.request.user and hasattr(self.request.user, 'is_authenticated') and self.request.user.is_authenticated:
+                queryset = Conversation.active_objects.filter(
+                    user=self.request.user,
+                    source=platform_source
+                )
+            else:
+                queryset = Conversation.active_objects.none()
+
+        bot_id = self.request.query_params.get('bot_id', None)
+        if bot_id is not None:
+            queryset = queryset.filter(bot_id=bot_id)
+
+        return queryset.select_related('selected_model', 'prompt').order_by('sort_order', '-created_at')
 
     def perform_create(self, serializer):
         platform_source = detect_platform_from_request(self.request)
-        serializer.save(user=self.request.user, source=platform_source)
-        if self.request.user.default_prompt:
-            serializer.instance.prompt = self.request.user.default_prompt
+        # For public bots, user can be null
+        user = None
+        if hasattr(self.request, 'user') and self.request.user and self.request.user.is_authenticated:
+            user = self.request.user
+        serializer.save(user=user, source=platform_source)
+        if user and hasattr(user, 'default_prompt') and user.default_prompt:
+            serializer.instance.prompt = user.default_prompt
             serializer.instance.save()
 
     @action(detail=False, methods=['patch'], url_path='update-sort-order')
@@ -101,14 +125,14 @@ class ConversationViewSet(viewsets.ModelViewSet):
         deleted_conversations = []
         failed_conversations = []
 
+        logger = logging.getLogger(__name__)
+
         for conversation in conversations:
             try:
                 conversation_data = {"conversation_id": conversation.conversation_id, "title": conversation.title}
                 self.perform_destroy(conversation)
                 deleted_conversations.append(conversation_data)
             except Exception as e:
-                import logging
-                logger = logging.getLogger(__name__)
                 logger.error(f"Error deleting conversation ID {conversation.conversation_id}: {str(e)}")
                 failed_conversations.append({"conversation_id": conversation.conversation_id, "error": str(e)})
 
@@ -142,7 +166,6 @@ class ConversationViewSet(viewsets.ModelViewSet):
                 return Response(serializer.data, status=status.HTTP_201_CREATED)
 
         except Exception as e:
-            import logging
             logger = logging.getLogger(__name__)
             logger.error(f"Error cloning conversation {conversation_id}: {str(e)}")
             return Response(
@@ -259,9 +282,8 @@ class ConversationViewSet(viewsets.ModelViewSet):
             response['Content-Length'] = len(pdf_content)
             
             return response
-            
+
         except Exception as e:
-            import logging
             logger = logging.getLogger(__name__)
             logger.error(f"Error exporting conversation {conversation_id} to PDF: {str(e)}")
             return Response(
@@ -276,7 +298,11 @@ class MessageViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return Message.active_objects.filter(conversation__user=self.request.user)
+        return Message.active_objects.filter(
+            conversation__user=self.request.user
+        ).select_related('llm', 'conversation').prefetch_related(
+            'files', 'tags', 'snippets__file'
+        )
 
     def get_serializer_context(self):
         context = super().get_serializer_context()

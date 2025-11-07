@@ -15,8 +15,8 @@ class WalletAdmin(admin.ModelAdmin):
 
 @admin.register(Transaction)
 class TransactionAdmin(admin.ModelAdmin):
-    list_display = ('user', 'display_amount', 'type', 'llm_name', 'message', 'created_at', 'amount')
-    list_filter = ('type', 'created_at', 'llm_name')
+    list_display = ('user', 'display_amount', 'type', 'platform', 'billing_mode', 'llm_name', 'message', 'created_at', 'amount')
+    list_filter = ('type', 'platform', 'billing_mode', 'created_at', 'llm_name')
     search_fields = ('user__email', 'message', 'llm_name')
     date_hierarchy = 'created_at'
     readonly_fields = ('llm_name', 'created_at', 'updated_at')

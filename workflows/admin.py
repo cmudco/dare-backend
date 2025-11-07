@@ -61,5 +61,5 @@ class ChatOutputNodeDataAdmin(admin.ModelAdmin):
 class ConditionalNodeDataAdmin(admin.ModelAdmin):
     list_display = ('step_number', 'require_human_validation', 'created_at')
     list_filter = ('require_human_validation', 'created_at')
-    search_fields = ('custom_prompt',)
+    search_fields = ('prompt__name', 'prompt__content')
     readonly_fields = ('routes',)

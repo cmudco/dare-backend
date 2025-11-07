@@ -24,3 +24,94 @@ class FeedbackType(models.TextChoices):
 class ConversationSource(models.TextChoices):
     DARE = 'DARE', 'DARE'
     SOCRATIC_BOTS = 'SocraticBots', 'SocraticBots'
+
+class WebSocketMessageType(Enum):
+    """WebSocket message types for outgoing messages."""
+    MESSAGE = "message"
+    AI_STREAM = "ai_stream"
+    ERROR = "error"
+    PROGRESS_STREAM = "progress_stream"
+    PROGRESS_COMPLETE = "progress_complete"
+    CONVERSATION_HISTORY = "conversation_history"
+    LATEST_PROGRESS = "latest_progress"
+
+class WebSocketAction(Enum):
+    """WebSocket actions for incoming messages."""
+    NEW_MESSAGE = "new_message"
+    EDIT_MESSAGE = "edit_message"
+    REGENERATE_RESPONSE = "regenerate_response"
+    LOAD_HISTORY = "load_history"
+
+# Default message sender names
+DEFAULT_AI_SENDER_NAME = "AI Assistant"
+DEFAULT_ANONYMOUS_USER_NAME = "Anonymous User"
+DEFAULT_CONVERSATION_TITLE = "New Chat"
+
+# Default LLM configuration values
+DEFAULT_TEMPERATURE = 0.7
+DEFAULT_MAX_TOKENS = 8000
+DEFAULT_MAX_CONTEXT_SNIPPETS = 4
+DEFAULT_DOCUMENT_SIMILARITY_THRESHOLD = 0.5
+DEFAULT_HISTORY_LIMIT = 20
+
+# Default learning progress tracking prompt (for Socratic platform)
+DEFAULT_TRACKING_PROMPT = """You are an AI tutor designed to assess student learning progress. Based on the conversation history and learning goals provided, evaluate the student's understanding and provide constructive feedback.
+
+Please analyze:
+1. What concepts the student has grasped well
+2. Areas where they need improvement
+3. Specific misconceptions or gaps in understanding
+4. Recommendations for next steps in their learning journey
+
+Provide your assessment in a clear, encouraging format that helps track their progress toward the learning goals."""
+
+# Error codes and messages
+class ErrorCode:
+    """Standard error codes for WebSocket responses."""
+    # JSON/Data errors
+    INVALID_JSON = "invalid_json"
+    MISSING_DATA = "missing_data"
+    VALIDATION_ERROR = "validation_error"
+
+    # Conversation/Message errors
+    INVALID_CONVERSATION = "invalid_conversation"
+    INVALID_MESSAGE = "invalid_message"
+    INVALID_EDIT = "invalid_edit"
+    NO_USER_MESSAGE = "no_user_message"
+
+    # Billing/Credit errors
+    INSUFFICIENT_CREDITS = "insufficient_credits"
+    INSUFFICIENT_BALANCE = "insufficient_balance"
+
+    # Processing errors
+    PROCESSING_ERROR = "processing_error"
+    AI_RESPONSE_ERROR = "ai_response_error"
+    STREAM_ERROR = "stream_error"
+    REGENERATE_ERROR = "regenerate_error"
+    EDIT_ERROR = "edit_error"
+    FINALIZE_ERROR = "finalize_error"
+
+class ErrorMessage:
+    """Standard error messages for WebSocket responses."""
+    # JSON/Data errors
+    INVALID_JSON = "Invalid JSON format"
+    MISSING_DATA = "Missing required data"
+    MISSING_MESSAGE_ID = "Missing message_id"
+    MISSING_MESSAGE_CONTENT = "Missing message_id or message content"
+
+    # Conversation/Message errors
+    INVALID_CONVERSATION = "Invalid conversation_id"
+    INVALID_MESSAGE = "AI message not found"
+    NO_USER_MESSAGE = "No preceding user message found"
+
+    # Billing/Credit errors
+    INSUFFICIENT_CREDITS = "Insufficient wallet balance"
+    INSUFFICIENT_BALANCE = "Insufficient wallet balance"
+
+    # Processing errors
+    PROCESSING_ERROR = "Failed to process message"
+    AI_RESPONSE_ERROR = "Failed to generate AI response"
+    STREAM_ERROR = "Failed to stream AI response"
+    REGENERATE_ERROR = "Failed to regenerate response"
+    EDIT_ERROR = "Failed to edit message"
+    FINALIZE_ERROR = "Failed to finalize message"

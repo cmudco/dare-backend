@@ -11,7 +11,7 @@ class LLMSerializer(serializers.ModelSerializer):
         fields = ['id', 'name', 'identifier', 'provider', 'description', 'is_reasoning', 'is_image_generator', 'input_token_rate_per_million', 'output_token_rate_per_million']
 
 class ConversationSerializer(serializers.ModelSerializer):
-    user = serializers.ReadOnlyField(source='user.email')
+    user = serializers.SerializerMethodField()
     prompt = PromptSerializer(read_only=True)
     prompt_id = serializers.PrimaryKeyRelatedField(
         queryset=Prompt.active_objects.all(),
@@ -31,6 +31,21 @@ class ConversationSerializer(serializers.ModelSerializer):
         allow_blank=True,
         help_text="Optional conversation ID. Auto-generated if not provided."
     )
+    bot_id = serializers.IntegerField(
+        required=False,
+        allow_null=True,
+        help_text="Associated Socratic Bot ID (only for SocraticBots source)."
+    )
+    anonymous_session_id = serializers.CharField(
+        required=False,
+        allow_null=True,
+        allow_blank=True,
+        help_text="Session ID for anonymous public bot conversations."
+    )
+
+    def get_user(self, obj):
+        """Return user email or None for anonymous conversations."""
+        return obj.user.email if obj.user else None
 
     class Meta:
         model = Conversation
@@ -38,6 +53,8 @@ class ConversationSerializer(serializers.ModelSerializer):
             'conversation_id',
             'title',
             'source',
+            'bot_id',
+            'anonymous_session_id',
             'created_at',
             'user',
             'max_context_snippets',
@@ -54,6 +71,9 @@ class ConversationSerializer(serializers.ModelSerializer):
             'sort_order',
             'selected_embedding_ids',
             'selected_file_ids',
+            'feedback_auto_prompt_count',
+            'feedback_last_prompt_message_count',
+            'feedback_last_prompt_timestamp',
         ]
         read_only_fields = ['created_at', 'user', 'prompt']
 
@@ -99,6 +119,7 @@ class MessageSerializer(serializers.ModelSerializer):
             'created_at',
             'feedback_type',
             'feedback_text',
+            'feedback_source',
             'is_edited',
             'is_regenerated',
             'original_message',

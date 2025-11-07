@@ -103,6 +103,12 @@ class ConversationService:
             lambda: Conversation.active_objects.filter(conversation_id=conversation_id, user=user).first()
         )()
 
+    async def get_conversation_by_id(self, conversation_id: str) -> Optional[Conversation]:
+        """Retrieve a conversation by ID (no user filter, for public bots)."""
+        return await database_sync_to_async(
+            lambda: Conversation.active_objects.filter(conversation_id=conversation_id).first()
+        )()
+
     async def is_first_message(self, conversation: Conversation) -> bool:
         """Check if this is the first message in the conversation."""
         count = await database_sync_to_async(

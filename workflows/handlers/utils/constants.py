@@ -5,6 +5,7 @@ This module centralizes all magic strings, default values, and configuration
 constants used across workflow handlers, following the pattern established
 in the LLM provider utilities.
 """
+import re
 from typing import Dict, Any
 
 
@@ -57,7 +58,6 @@ class XMLTag:
         Returns:
             Extracted content or empty string if not found
         """
-        import re
         pattern = f"<{tag_name}>(.*?)</{tag_name}>"
         match = re.search(pattern, xml_string, re.DOTALL | re.IGNORECASE)
         if match:
@@ -128,9 +128,11 @@ class MetadataKey:
     USER_CHOICE = "user_choice"
     AI_RECOMMENDATION = "ai_recommendation"
     AI_ANALYSIS = "ai_analysis"
+    ANALYSIS = "analysis"  # General analysis text (AI reasoning)
     AVAILABLE_ROUTES = "available_routes"
     RAW_RESPONSE = "raw_response"
     SELECTED_ROUTE = "selected_route"
+    USE_STRUCTURED_OUTPUT_NODE = "use_structured_output_node"
     EXECUTION_TIME = "execution_time"
     TOKEN_USAGE = "token_usage"
     ERROR_CATEGORY = "error_category"

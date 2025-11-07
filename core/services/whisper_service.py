@@ -4,16 +4,18 @@ OpenAI Whisper service for audio transcription from videos.
 This service extracts audio from video files and transcribes it using OpenAI's Whisper API.
 """
 
-import logging
 import base64
-import tempfile
+import logging
 import os
+import subprocess
+import tempfile
 from typing import Optional, Dict
 
 from openai import AsyncOpenAI
+
 from config import env
-from core.services.api_key_service import get_provider_api_key
 from conversations.constants import Provider
+from core.services.api_key_service import get_provider_api_key
 
 logger = logging.getLogger(__name__)
 
@@ -103,8 +105,6 @@ class WhisperService:
             Audio file bytes (MP3) or None if extraction fails
         """
         try:
-            import subprocess
-
             # Create temporary video file
             with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as video_file:
                 video_file.write(video_bytes)

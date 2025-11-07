@@ -13,6 +13,10 @@ from workflows.handlers.base import (
     NodeExecutionContext,
     NodeExecutionResult,
 )
+from workflows.handlers.conditional_handler import ConditionalNodeHandler
+from workflows.handlers.output_handler import OutputNodeHandler
+from workflows.handlers.start_handler import StartNodeHandler
+from workflows.handlers.step_handler import StepNodeHandler
 
 
 logger = logging.getLogger(__name__)
@@ -33,16 +37,7 @@ class NodeHandlerRegistry:
         self._register_default_handlers()
 
     def _register_default_handlers(self):
-        """
-        Register the default node handlers.
-
-        Imports are done locally to avoid circular dependencies.
-        """
-        from workflows.handlers.step_handler import StepNodeHandler
-        from workflows.handlers.conditional_handler import ConditionalNodeHandler
-        from workflows.handlers.output_handler import OutputNodeHandler
-        from workflows.handlers.start_handler import StartNodeHandler
-
+        """Register the default node handlers."""
         self.register_handler(StepNodeHandler())
         self.register_handler(ConditionalNodeHandler())
         self.register_handler(OutputNodeHandler())
