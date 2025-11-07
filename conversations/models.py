@@ -341,6 +341,11 @@ class Conversation(BaseModel):
 
             return cloned_conversation
 
+    class Meta:
+        indexes = [
+            models.Index(fields=['user', 'source'], name='conv_user_source_idx'),
+        ]
+
 class Message(BaseModel):
     conversation = models.ForeignKey(
         Conversation,
@@ -468,6 +473,12 @@ class Message(BaseModel):
 
     def __str__(self):
         return f"{self.sender_name} ({self.short_message})"
+
+    class Meta:
+        indexes = [
+            models.Index(fields=['conversation', 'created_at'], name='msg_conv_created_idx'),
+            models.Index(fields=['conversation', 'sender_type'], name='msg_conv_sender_idx'),
+        ]
 
 class Snippet(BaseModel):
     """
