@@ -116,6 +116,7 @@ class LLMQueryRequestBuilder:
         document_similarity_threshold: float = 0.5,
         workflow_run_step_obj: Optional[Any] = None,
         structured_spec: Optional[Dict[str, Any]] = None,
+        web_search_enabled: bool = False,
     ) -> LLMQueryRequest:
         """Build LLMQueryRequest from workflow execution data.
 
@@ -134,6 +135,7 @@ class LLMQueryRequestBuilder:
             document_similarity_threshold: Similarity threshold
             workflow_run_step_obj: WorkflowRunStep instance
             structured_spec: JSON schema for structured output
+            web_search_enabled: Enable web search for this step
 
         Returns:
             Fully constructed LLMQueryRequest for workflow execution
@@ -153,6 +155,7 @@ class LLMQueryRequestBuilder:
             max_tokens=max_tokens,
             prompt_id=prompt_id,
             structured_spec=structured_spec,
+            web_search_enabled=web_search_enabled,
         )
 
         return LLMQueryRequest(
