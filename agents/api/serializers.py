@@ -29,9 +29,11 @@ class AgentListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Agent
         fields = [
-            'id', 'name', 'description', 'user', 'prompt_title', 'temperature',
-            'llm', 'llm_name', 'max_tokens', 'max_context_snippets',
-            'document_similarity_threshold', 'enable_web_search', 'created_at'
+            'id', 'name', 'description', 'user', 'prompt', 'prompt_title',
+            'content_files', 'embedding_files', 'llm', 'llm_name',
+            'max_tokens', 'temperature', 'max_context_snippets',
+            'document_similarity_threshold', 'enable_web_search', 'version',
+            'parent', 'created_at', 'updated_at'
         ]
 
 
