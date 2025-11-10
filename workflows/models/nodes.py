@@ -77,6 +77,10 @@ class StepNodeData(BaseNodeData):
         default=False,
         help_text="If true, this step uses a separate StructuredOutputNode for routing"
     )
+    enable_web_search = models.BooleanField(
+        default=False,
+        help_text="If true, enable web search for this step's LLM"
+    )
 
     def to_dict(self):
         """Convert to React Flow node data format."""
@@ -94,6 +98,7 @@ class StepNodeData(BaseNodeData):
             'usePreviousStepEmbeddings': self.use_previous_step_embeddings,
             'textInput': self.text_input,
             'useStructuredOutputNode': self.use_structured_output_node,
+            'enableWebSearch': self.enable_web_search,
         }
 
     def __str__(self):
