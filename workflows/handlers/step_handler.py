@@ -461,44 +461,64 @@ class StepNodeHandler(BaseExecutionHandler):
         # Get LLM configuration
         llm = await self._get_llm_for_step(step_data)
 
-        # Get file configurations
-        content_file_ids = await database_sync_to_async(
-            lambda: list(step_data.content_files.values_list('id', flat=True))
-        )()
-
-        embedding_file_ids = await database_sync_to_async(
-            lambda: list(step_data.embedding_files.values_list('id', flat=True))
-        )()
-
-        # Get user and prompt info
-        workflow = await database_sync_to_async(
-            lambda: context.workflow_run.workflow
-        )()
-        user = await database_sync_to_async(lambda: workflow.user)()
-        prompt_id = await database_sync_to_async(
-            lambda: step_data.prompt.id if step_data.prompt else None
-        )()
+        # Batch database queries for better performance
+        step_config = await self._get_step_execution_config(step_data, context)
 
         # Execute LLM query via base service using DTO builder
         request = LLMQueryRequestBuilder.from_workflow_data(
             message=message,
-            user=user,
+            user=step_config['user'],
             llm=llm,
-            file_ids=content_file_ids if content_file_ids else None,
-            embedding_ids=embedding_file_ids if embedding_file_ids else None,
-            prompt_id=prompt_id,
+            file_ids=step_config['content_file_ids'] if step_config['content_file_ids'] else None,
+            embedding_ids=step_config['embedding_file_ids'] if step_config['embedding_file_ids'] else None,
+            prompt_id=step_config['prompt_id'],
             temperature=step_data.temperature,
             max_tokens=step_data.max_tokens,
             max_context_snippets=step_data.max_context_snippets,
             document_similarity_threshold=step_data.document_similarity_threshold,
             workflow_run_step_obj=workflow_run_step,
             structured_spec=structured_spec,
+            web_search_enabled=step_config['enable_web_search'],
         )
 
         response_generator = self.llm_service.query(request)
 
         # Use base handler to collect response
         return await self._execute_llm_query_with_collection(response_generator)
+
+    async def _get_step_execution_config(
+        self,
+        step_data: StepNodeData,
+        context: NodeExecutionContext
+    ) -> Dict[str, Any]:
+        """
+        Batch database queries for step execution configuration.
+
+        Combines multiple database calls into a single async operation for better performance.
+
+        Args:
+            step_data: Step node configuration
+            context: Execution context with workflow run info
+
+        Returns:
+            Dictionary containing:
+                - user: User instance
+                - content_file_ids: List of content file IDs
+                - embedding_file_ids: List of embedding file IDs
+                - prompt_id: Prompt ID if available
+                - enable_web_search: Web search enabled flag
+        """
+        def _get_config():
+            workflow = context.workflow_run.workflow
+            return {
+                'user': workflow.user,
+                'content_file_ids': list(step_data.content_files.values_list('id', flat=True)),
+                'embedding_file_ids': list(step_data.embedding_files.values_list('id', flat=True)),
+                'prompt_id': step_data.prompt.id if step_data.prompt else None,
+                'enable_web_search': step_data.enable_web_search,
+            }
+
+        return await database_sync_to_async(_get_config)()
 
     async def _get_llm_for_step(self, step_data: StepNodeData) -> LLM:
         """
