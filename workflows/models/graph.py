@@ -140,7 +140,7 @@ class WorkflowNode(TimeStampMixin):
         unique_together = ['workflow', 'node_id']
         ordering = ['node_id']
         indexes = [
-            models.Index(fields=['node_type'], name='wf_node_type_idx'),
+            models.Index(fields=['workflow', 'node_type'], name='wf_node_type_idx'),
         ]
 
     @property
