@@ -43,6 +43,7 @@ LOCAL_APPS = [
     "core",
     "conversations",
     "prompts",
+    "agents",
     "workflows",
     "email_logs",
     "billing",

@@ -180,7 +180,15 @@ class WorkflowRunViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated, IsOwner]
 
     def get_queryset(self):
-        return WorkflowRun.active_objects.filter(user=self.request.user).order_by('-created_at')
+        # Prefetch steps with their related step_node to avoid N+1 queries
+        # and ensure step_node is properly populated in serialization
+        steps_prefetch = Prefetch(
+            'steps',
+            queryset=WorkflowRunStep.objects.select_related('step_node').order_by('order')
+        )
+        return WorkflowRun.active_objects.filter(user=self.request.user).prefetch_related(
+            steps_prefetch
+        ).select_related('workflow').order_by('-created_at')
 
     @action(detail=False, methods=['post'], url_path='run-workflow')
     def run_workflow(self, request):
