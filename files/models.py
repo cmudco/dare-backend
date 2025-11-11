@@ -160,5 +160,10 @@ class File(BaseModel):
 
     active_objects = ActiveObjectsManager()
 
+    class Meta:
+        indexes = [
+            models.Index(fields=['user', 'is_deleted', 'is_active'], name='file_user_status_idx'),
+        ]
+
     def __str__(self):
         return self.name if self.name else self.file.name
