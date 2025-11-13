@@ -19,7 +19,7 @@ jobs:
           SSH_USER: ${{ secrets.STAGING_SSH_USER }}
           SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
         run: |
-          sshpass -p "$SSH_PASSWORD" ssh -tt -o StrictHostKeyChecking=no "$SSH_USER@$SSH_HOST" << 'EOF'
+          sshpass -p "$SSH_PASSWORD" ssh -o StrictHostKeyChecking=no "$SSH_USER@$SSH_HOST" << 'EOF'
             set -e
             echo "Connected to staging server"
 
