@@ -1,0 +1,36 @@
+name: Deploy Backend to Staging Server
+
+on:
+  push:
+    branches:
+      - dev
+
+jobs:
+  deploy-backend:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Install sshpass
+        run: sudo apt-get update && sudo apt-get install -y sshpass
+
+      - name: Deploy Backend via SSH
+        env:
+          SSH_PASSWORD: ${{ secrets.STAGING_SSH_PASSWORD }}
+          SSH_USER: ${{ secrets.STAGING_SSH_USER }}
+          SSH_HOST: ${{ secrets.STAGING_SSH_HOST }}
+        run: |
+          sshpass -p "$SSH_PASSWORD" ssh -tt -o StrictHostKeyChecking=no "$SSH_USER@$SSH_HOST" << 'EOF'
+            set -e
+            echo "Connected to staging server"
+
+            echo "Navigating to backend directory..."
+            cd /home/deployer/dare
+
+            echo "Running deploy_be.sh..."
+            ./deploy_be.sh
+
+            echo "Backend deployment finished successfully."
+
+      - name: Handle failure
+        if: ${{ failure() }}
+        run: echo "Backend deployment failed. Please check logs."
