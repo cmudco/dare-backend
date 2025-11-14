@@ -31,6 +31,18 @@ class AccessCodeGroup(TimeStampMixin):
         default=True,
         help_text="Whether this access code is currently active"
     )
+    expires_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name=_("Expiration Date"),
+        help_text=_("Date and time when this access code expires. Users with this code will be deactivated after this date. Leave blank for no expiration.")
+    )
+    notes = models.TextField(
+        blank=True,
+        null=True,
+        verbose_name=_("Notes"),
+        help_text=_("Internal notes about this access code group (e.g., class name, semester, purpose)")
+    )
     scope = models.CharField(
         max_length=50,
         choices=ScopeChoice.choices,
@@ -63,12 +75,27 @@ class AccessCodeGroup(TimeStampMixin):
 
     def __str__(self):
         scope_indicator = f" [{self.get_scope_display()}]"
-        return f"Access Code: {self.access_code} ({self.current_usage}/{self.max_capacity} used){scope_indicator}"
+        expiration_indicator = ""
+        if self.expires_at:
+            from django.utils import timezone
+            if self.is_expired:
+                expiration_indicator = " [EXPIRED]"
+            else:
+                expiration_indicator = f" [Expires: {self.expires_at.strftime('%Y-%m-%d')}]"
+        return f"Access Code: {self.access_code} ({self.current_usage}/{self.max_capacity} used){scope_indicator}{expiration_indicator}"
+
+    @property
+    def is_expired(self):
+        """Check if the access code has expired"""
+        if not self.expires_at:
+            return False
+        from django.utils import timezone
+        return timezone.now() > self.expires_at
 
     @property
     def is_available(self):
         """Check if the access code can still be used"""
-        return self.is_active and self.current_usage < self.max_capacity
+        return self.is_active and self.current_usage < self.max_capacity and not self.is_expired
 
     def use_code(self):
         """Increment usage count when code is used"""
