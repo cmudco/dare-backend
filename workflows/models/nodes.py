@@ -18,6 +18,13 @@ class BaseNodeData(models.Model):
 
 class StepNodeData(BaseNodeData):
     """Data model for 'step' type nodes - replaces Step model entirely."""
+    agent = models.ForeignKey(
+        'agents.Agent',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        help_text="Agent template that was loaded for this step"
+    )
     prompt = models.ForeignKey(
         'prompts.Prompt',
         on_delete=models.PROTECT,
@@ -85,6 +92,7 @@ class StepNodeData(BaseNodeData):
     def to_dict(self):
         """Convert to React Flow node data format."""
         return {
+            'agent': self.agent.id if self.agent else None,
             'prompt': self.prompt.id if self.prompt else None,
             'contentFiles': list(self.content_files.values_list('id', flat=True)),
             'embeddingFiles': list(self.embedding_files.values_list('id', flat=True)),
