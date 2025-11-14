@@ -118,8 +118,15 @@ class CustomRegisterSerializer(RegisterSerializer):
             try:
                 code_group = AccessCodeGroup.objects.get(access_code=access_code)
                 if not code_group.is_available:
+                    # Provide specific error message based on the reason
+                    if code_group.is_expired:
+                        error_message = "This access code has expired."
+                    elif not code_group.is_active:
+                        error_message = "This access code is no longer active."
+                    else:
+                        error_message = "This access code has reached its usage limit."
                     raise serializers.ValidationError({
-                        "access_code": "This access code has reached its usage limit or is no longer active."
+                        "access_code": error_message
                     })
                 attrs['_code_group'] = code_group
             except AccessCodeGroup.DoesNotExist:
@@ -240,7 +247,20 @@ class CustomLoginSerializer(LoginSerializer):
             try:
                 user = User.objects.get(email__iexact=email)
 
+                # Check if user's access code has expired and deactivate if necessary
+                if user.access_code_group and user.access_code_group.is_expired and user.is_active:
+                    user.is_active = False
+                    user.save(update_fields=['is_active'])
+                    logger.warning(
+                        f"User {user.email} deactivated due to expired access code {user.access_code_group.access_code}"
+                    )
+
                 if not user.is_active:
+                    # Check if it's due to expired access code
+                    if user.access_code_group and user.access_code_group.is_expired:
+                        raise serializers.ValidationError(
+                            "Your account has been deactivated because your access code has expired. Please contact the administrator for assistance."
+                        )
                     raise serializers.ValidationError(
                         "Your account is currently inactive. Please contact the administrator for assistance."
                     )

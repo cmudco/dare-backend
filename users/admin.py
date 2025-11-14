@@ -34,7 +34,7 @@ class UserInline(admin.TabularInline):
 
 @admin.register(AccessCodeGroup)
 class AccessCodeGroupAdmin(admin.ModelAdmin):
-    list_display = ('access_code', 'scope', 'model_group', 'initial_wallet_credit', 'usage_display', 'is_active', 'user_count', 'created_at')
+    list_display = ('access_code', 'scope', 'model_group', 'initial_wallet_credit', 'usage_display', 'expiration_status', 'is_active', 'user_count', 'created_at')
     list_filter = ('is_active', 'scope', 'created_at', 'model_group')
     search_fields = ('access_code',)
     readonly_fields = ('current_usage', 'created_at', 'updated_at')
@@ -80,7 +80,7 @@ class AccessCodeGroupAdmin(admin.ModelAdmin):
 
     fieldsets = (
         (None, {
-            'fields': ('access_code', 'max_capacity', 'is_active')
+            'fields': ('access_code', 'max_capacity', 'is_active', 'expires_at', 'notes')
         }),
         (_('Platform Access'), {
             'fields': ('scope',),
@@ -109,6 +109,36 @@ class AccessCodeGroupAdmin(admin.ModelAdmin):
         percentage = (obj.current_usage / obj.max_capacity * 100) if obj.max_capacity > 0 else 0
         return f"{obj.current_usage}/{obj.max_capacity} ({percentage:.1f}%)"
     usage_display.short_description = "Usage"
+
+    def expiration_status(self, obj):
+        """Display expiration status with color coding"""
+        if not obj.expires_at:
+            return render_span("No Expiration", color="gray", italic=True)
+
+        if obj.is_expired:
+            return render_status_badge("EXPIRED", color="red", emoji="⚠️")
+
+        days_until_expiration = (obj.expires_at - timezone.now()).days
+
+        if days_until_expiration <= 7:
+            return render_status_badge(
+                f"{days_until_expiration}d left",
+                color="orange",
+                emoji="⏰"
+            )
+        elif days_until_expiration <= 30:
+            return render_status_badge(
+                f"{days_until_expiration}d left",
+                color="yellow",
+                emoji="📅"
+            )
+        else:
+            return render_span(
+                obj.expires_at.strftime('%Y-%m-%d'),
+                color="green"
+            )
+    expiration_status.short_description = "Expiration"
+    expiration_status.admin_order_field = "expires_at"
 
     def user_count(self, obj):
         """Display the number of users in this group"""
