@@ -300,13 +300,10 @@ class ConditionalNodeHandler(BaseExecutionHandler):
         )
 
         if not success:
-            # Try fallback to current_input for backward compatibility
-            if context.current_input:
-                logger.debug(f"Using fallback current_input for conditional node {node.id}")
-                return context.current_input
-
+            # No fallback - conditional nodes must have explicit edge-based input
             logger.warning(f"Failed to extract input for conditional node {node.id}: {error}")
             return None
+        # REMOVED: current_input fallback (use edge-based data flow)
 
         return input_text
 

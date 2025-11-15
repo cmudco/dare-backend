@@ -35,7 +35,7 @@ class WorkflowExecutionContext:
     workflow_run: WorkflowRun
     workflow: Workflow
     node_results: Dict[str, NodeExecutionResult]
-    current_context: Optional[str] = None  # Response from previous step
+    # REMOVED: current_context (use edge-based data flow instead)
 
 
 class WorkflowExecutionService:
@@ -319,8 +319,7 @@ class WorkflowExecutionService:
 
             if not result.success:
                 failed_count += 1
-            else:
-                context.current_context = result.output
+            # REMOVED: context.current_context assignment (use edge-based data flow)
 
         return {
             'failed_count': failed_count,
@@ -356,8 +355,8 @@ class WorkflowExecutionService:
             workflow_run=context.workflow_run,
             previous_results=WorkflowContextBuilder.prepare_node_execution_context(
                 filtered_results
-            ),
-            current_input=context.current_context
+            )
+            # REMOVED: current_input parameter (use edge-based data flow)
         )
 
         # Execute using handler registry

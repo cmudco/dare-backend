@@ -261,24 +261,19 @@ class InputValidator:
 
     @staticmethod
     def has_valid_input(
-        previous_results: Dict[str, Dict],
-        current_input: Optional[str]
+        previous_results: Dict[str, Dict]
+        # REMOVED: current_input parameter
     ) -> bool:
         """
-        Check if there is any valid input available.
+        Check if there is any valid input available from previous results.
 
         Args:
             previous_results: Dictionary of previous node results
-            current_input: Current input value
 
         Returns:
             True if valid input exists, False otherwise
         """
-        # Check current_input first
-        if current_input:
-            return True
-
-        # Check previous results
+        # Check previous results only (edge-based)
         if not previous_results:
             return False
 
