@@ -2,8 +2,102 @@ from decimal import Decimal
 from django.utils import timezone
 from datetime import timedelta
 from django.db import transaction
+from django.http import HttpResponse
+import csv
 from .models import Transaction, Wallet
 from .constants import TransactionTypeChoice
+
+class TransactionExportService:
+    """
+    Service class for exporting transactions to CSV format.
+    """
+
+    @staticmethod
+    def export_to_csv(queryset, filename=None):
+        """
+        Export a queryset of transactions to CSV format.
+
+        Args:
+            queryset: QuerySet of Transaction objects
+            filename: Optional custom filename (defaults to transaction-history-YYYY-MM-DD.csv)
+
+        Returns:
+            HttpResponse with CSV content
+        """
+        # Generate timestamp for filename
+        timestamp = timezone.now().strftime('%Y-%m-%d')
+        if filename is None:
+            filename = f'transaction-history-{timestamp}.csv'
+
+        # Create HTTP response with CSV headers
+        response = HttpResponse(content_type='text/csv')
+        response['Content-Disposition'] = f'attachment; filename="{filename}"'
+
+        # Create CSV writer
+        writer = csv.writer(response)
+
+        # Write CSV headers
+        writer.writerow([
+            'User Email',
+            'Amount',
+            'Type',
+            'Message',
+            'LLM',
+            'Input Tokens',
+            'Output Tokens',
+            'Billing Mode',
+            'Platform',
+            'Date',
+        ])
+
+        # Optimize query with select_related
+        optimized_queryset = queryset.select_related('user', 'llm')
+
+        # Write transaction data
+        for txn in optimized_queryset:
+            writer.writerow([
+                txn.user.email,
+                txn.display_amount,
+                txn.get_type_display(),
+                txn.message or '',
+                txn.llm_name or 'N/A',
+                txn.input_tokens if txn.input_tokens is not None else 'N/A',
+                txn.output_tokens if txn.output_tokens is not None else 'N/A',
+                txn.get_billing_mode_display(),
+                txn.get_platform_display(),
+                txn.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+            ])
+
+        return response
+
+    @staticmethod
+    def export_user_transactions(user, platform=None, start_date=None, end_date=None, filename=None):
+        """
+        Export transactions for a specific user with optional filters.
+
+        Args:
+            user: User object
+            platform: Optional platform filter (DARE/SocraticBots)
+            start_date: Optional start date filter
+            end_date: Optional end date filter
+            filename: Optional custom filename
+
+        Returns:
+            HttpResponse with CSV content
+        """
+        queryset = Transaction.objects.filter(user=user)
+
+        # Apply filters
+        if platform:
+            queryset = queryset.filter(platform=platform)
+        if start_date:
+            queryset = queryset.filter(created_at__gte=start_date)
+        if end_date:
+            queryset = queryset.filter(created_at__lte=end_date)
+
+        queryset = queryset.order_by('-created_at')
+
+        return TransactionExportService.export_to_csv(queryset, filename)
 
 class WalletService:
     """
