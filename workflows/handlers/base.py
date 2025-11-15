@@ -68,12 +68,11 @@ class NodeExecutionContext:
 
     Attributes:
         workflow_run: The current workflow run instance
-        previous_results: Results from previously executed nodes
-        current_input: Direct input to this node (for backward compatibility)
+        previous_results: Results from previously executed nodes (edge-based filtering)
     """
     workflow_run: WorkflowRun
     previous_results: Dict[str, Any]
-    current_input: Optional[str] = None
+    # REMOVED: current_input (use previous_results with edge-based filtering)
 
 
 @dataclass

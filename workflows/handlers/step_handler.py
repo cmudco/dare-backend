@@ -277,8 +277,8 @@ class StepNodeHandler(BaseExecutionHandler):
         message = await StepMessagePreparer.prepare_message(
             prompt_content=prompt_content,
             text_input=text_input,
-            previous_results=context.previous_results,
-            current_input=context.current_input
+            previous_results=context.previous_results
+            # REMOVED: current_input parameter (use edge-based data flow)
         )
 
         return message
