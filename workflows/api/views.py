@@ -216,9 +216,15 @@ class WorkflowRunViewSet(viewsets.ModelViewSet):
             'steps',
             queryset=WorkflowRunStep.objects.select_related('step_node').order_by('order')
         )
-        return WorkflowRun.active_objects.filter(user=self.request.user).prefetch_related(
+        queryset = WorkflowRun.active_objects.filter(user=self.request.user).prefetch_related(
             steps_prefetch
         ).select_related('workflow').order_by('-created_at')
+
+        workflow_id = self.request.query_params.get('workflow')
+        if workflow_id:
+            queryset = queryset.filter(workflow_id=workflow_id)
+
+        return queryset
 
     @action(detail=False, methods=['post'], url_path='run-workflow')
     def run_workflow(self, request):
