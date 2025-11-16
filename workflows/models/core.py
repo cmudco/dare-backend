@@ -142,6 +142,10 @@ class WorkflowRun(BaseModel):
         blank=True,
         help_text="Timestamp when the run ended."
     )
+    is_partial = models.BooleanField(
+        default=False,
+        help_text="Whether this is a partial run (manual step-by-step execution) or complete workflow run."
+    )
 
     objects = models.Manager()
     active_objects = ActiveObjectsManager()
@@ -172,7 +176,8 @@ class WorkflowRun(BaseModel):
         return WorkflowRunStepStatus.RUNNING
 
     def __str__(self):
-        return f"Run of {self.workflow.title} by {self.user.email} at {self.created_at}"
+        run_type = "Partial run" if self.is_partial else "Run"
+        return f"{run_type} of {self.workflow.title} by {self.user.email} at {self.created_at}"
 
 
 class WorkflowRunStep(TimeStampMixin):

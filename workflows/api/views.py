@@ -11,6 +11,7 @@ from django.utils import timezone
 from django.contrib.contenttypes.models import ContentType
 from common.permissions import IsOwner
 import traceback
+import asyncio
 from workflows.api.serializers import (
     WorkflowRunSerializer, WorkflowSerializer,
     WorkflowNodeSerializer, WorkflowEdgeSerializer,
@@ -24,6 +25,7 @@ from workflows.models import (
 )
 from workflows.services import WorkflowCloningService
 from workflows.handlers.utils import MetadataKey
+from core.services.workflow_execution_service import WorkflowExecutionService
 from django_rq import enqueue
 from workflows.tasks import execute_workflow_run, resume_workflow_run
 import weasyprint
@@ -236,6 +238,142 @@ class WorkflowRunViewSet(viewsets.ModelViewSet):
 
         serializer = self.get_serializer(workflow_run)
         return Response(serializer.data, status=201)
+
+    @action(detail=False, methods=['post'], url_path='execute-single-step')
+    def execute_single_step(self, request):
+        """
+        Execute a single workflow step for manual step-by-step execution.
+
+        Validates dependencies before execution and returns step result immediately.
+        Creates or reuses a partial WorkflowRun.
+
+        Request body:
+        {
+            "workflow_id": int,
+            "step_node_id": str,
+            "workflow_run_id": int | null  (optional, for continuing partial run)
+        }
+
+        Response:
+        {
+            "success": bool,
+            "workflow_run_id": int,
+            "step_result": {
+                "step_id": int,
+                "node_id": str,
+                "status": str,
+                "response": str,
+                "error": str | null,
+                "metadata": dict
+            } | null,
+            "missing_dependencies": [str],  (list of node IDs)
+            "error": str | null
+        }
+        """
+        workflow_id = request.data.get('workflow_id')
+        step_node_id = request.data.get('step_node_id')
+        workflow_run_id = request.data.get('workflow_run_id')
+
+        # Validate required fields
+        if not workflow_id:
+            return Response({"error": "workflow_id is required"}, status=400)
+        if not step_node_id:
+            return Response({"error": "step_node_id is required"}, status=400)
+
+        # Get workflow
+        try:
+            workflow = Workflow.active_objects.get(id=workflow_id, user=request.user)
+        except Workflow.DoesNotExist:
+            return Response({"error": "Workflow not found"}, status=404)
+
+        # Get or create partial workflow run
+        if workflow_run_id:
+            try:
+                workflow_run = WorkflowRun.objects.get(
+                    id=workflow_run_id,
+                    workflow=workflow,
+                    user=request.user,
+                    is_partial=True
+                )
+            except WorkflowRun.DoesNotExist:
+                return Response({"error": "Partial workflow run not found"}, status=404)
+        else:
+            # Create new partial run
+            workflow_run = WorkflowRun.objects.create(
+                workflow=workflow,
+                user=request.user,
+                is_partial=True
+            )
+
+        # Validate that step_node_id exists in this workflow
+        try:
+            step_node = WorkflowNode.objects.get(
+                workflow=workflow,
+                node_id=step_node_id
+            )
+        except WorkflowNode.DoesNotExist:
+            return Response(
+                {"error": f"Step node {step_node_id} not found in workflow"},
+                status=404
+            )
+
+        # Get or create WorkflowRunStep for this node
+        workflow_run_step, created = WorkflowRunStep.objects.get_or_create(
+            workflow_run=workflow_run,
+            step_node=step_node,
+            defaults={
+                'order': getattr(step_node.data_object, 'step_number', 0),
+                'status': WorkflowRunStepStatus.PENDING
+            }
+        )
+
+        # Execute single step using the service
+        service = WorkflowExecutionService()
+
+        try:
+            # Run async execution in sync context
+            result = asyncio.run(
+                service.execute_single_step(workflow_run, step_node_id)
+            )
+
+            # If execution failed due to missing dependencies
+            if not result['success'] and result['missing_dependencies']:
+                return Response({
+                    'success': False,
+                    'workflow_run_id': workflow_run.id,
+                    'step_result': None,
+                    'missing_dependencies': result['missing_dependencies'],
+                    'error': result['error']
+                }, status=400)
+
+            # Get updated step data
+            workflow_run_step.refresh_from_db()
+
+            step_result_data = {
+                'step_id': workflow_run_step.id,
+                'node_id': step_node_id,
+                'status': workflow_run_step.status,
+                'response': workflow_run_step.response,
+                'error': workflow_run_step.error,
+                'metadata': workflow_run_step.metadata or {}
+            }
+
+            return Response({
+                'success': result['success'],
+                'workflow_run_id': workflow_run.id,
+                'step_result': step_result_data,
+                'missing_dependencies': [],
+                'error': result.get('error')
+            }, status=200 if result['success'] else 400)
+
+        except Exception as e:
+            return Response({
+                'success': False,
+                'workflow_run_id': workflow_run.id,
+                'step_result': None,
+                'missing_dependencies': [],
+                'error': f'Execution error: {str(e)}'
+            }, status=500)
 
     @action(detail=True, methods=['post'], url_path='submit-human-validation')
     def submit_human_validation(self, request, pk=None):
