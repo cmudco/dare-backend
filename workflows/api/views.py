@@ -10,8 +10,10 @@ from django.template.loader import render_to_string
 from django.utils import timezone
 from django.contrib.contenttypes.models import ContentType
 from common.permissions import IsOwner
+from asgiref.sync import async_to_sync
 import traceback
 import asyncio
+import logging
 from workflows.api.serializers import (
     WorkflowRunSerializer, WorkflowSerializer,
     WorkflowNodeSerializer, WorkflowEdgeSerializer,
@@ -32,6 +34,9 @@ import weasyprint
 import tempfile
 import os
 import markdown
+
+
+logger = logging.getLogger(__name__)
 
 
 class WorkflowViewSet(viewsets.ModelViewSet):
@@ -274,6 +279,8 @@ class WorkflowRunViewSet(viewsets.ModelViewSet):
         step_node_id = request.data.get('step_node_id')
         workflow_run_id = request.data.get('workflow_run_id')
 
+        logger.info(f"Execute single step request: workflow_id={workflow_id}, step_node_id={step_node_id}, workflow_run_id={workflow_run_id}")
+
         # Validate required fields
         if not workflow_id:
             return Response({"error": "workflow_id is required"}, status=400)
@@ -331,20 +338,21 @@ class WorkflowRunViewSet(viewsets.ModelViewSet):
         service = WorkflowExecutionService()
 
         try:
-            # Run async execution in sync context
-            result = asyncio.run(
-                service.execute_single_step(workflow_run, step_node_id)
+            # Run async execution in sync context using async_to_sync
+            result = async_to_sync(service.execute_single_step)(
+                workflow_run, step_node_id
             )
 
             # If execution failed due to missing dependencies
             if not result['success'] and result['missing_dependencies']:
+                logger.warning(f"Step {step_node_id} blocked by missing dependencies: {result['missing_dependencies']}")
                 return Response({
                     'success': False,
                     'workflow_run_id': workflow_run.id,
                     'step_result': None,
                     'missing_dependencies': result['missing_dependencies'],
                     'error': result['error']
-                }, status=400)
+                }, status=200)
 
             # Get updated step data
             workflow_run_step.refresh_from_db()
@@ -358,22 +366,103 @@ class WorkflowRunViewSet(viewsets.ModelViewSet):
                 'metadata': workflow_run_step.metadata or {}
             }
 
+            logger.info(f"Step {step_node_id} execution completed with success={result['success']}")
             return Response({
                 'success': result['success'],
                 'workflow_run_id': workflow_run.id,
                 'step_result': step_result_data,
                 'missing_dependencies': [],
                 'error': result.get('error')
-            }, status=200 if result['success'] else 400)
+            }, status=200)
 
         except Exception as e:
+            logger.error(f"Exception during step {step_node_id} execution: {str(e)}", exc_info=True)
             return Response({
                 'success': False,
                 'workflow_run_id': workflow_run.id,
                 'step_result': None,
                 'missing_dependencies': [],
                 'error': f'Execution error: {str(e)}'
-            }, status=500)
+            }, status=200)
+
+    @action(detail=False, methods=['get'], url_path='get-active-partial-run')
+    def get_active_partial_run(self, request):
+        """
+        Get the most recent active partial workflow run for a specific workflow.
+
+        Query params:
+            workflow_id: int (required)
+
+        Response:
+            WorkflowRun object with steps and executed node IDs, or null if no active partial run
+        """
+        workflow_id = request.query_params.get('workflow_id')
+
+        if not workflow_id:
+            return Response({"error": "workflow_id is required"}, status=400)
+
+        try:
+            workflow = Workflow.active_objects.get(id=workflow_id, user=request.user)
+        except Workflow.DoesNotExist:
+            return Response({"error": "Workflow not found"}, status=404)
+
+        # Get the most recent partial run
+        # Note: We can't filter by status since it's a computed property
+        # Instead, we'll get the most recent and let the frontend handle it
+        partial_run = WorkflowRun.active_objects.filter(
+            workflow=workflow,
+            user=request.user,
+            is_partial=True
+        ).order_by('-created_at').first()
+
+        if not partial_run:
+            return Response({
+                'partialRun': None,
+                'executedStepNodeIds': []
+            }, status=200)
+
+        # Get all completed step node IDs from this partial run
+        completed_steps = partial_run.steps.filter(
+            status__in=['completed', 'skipped']
+        ).select_related('step_node')
+
+        executed_node_ids = [
+            step.step_node.node_id
+            for step in completed_steps
+            if step.step_node
+        ]
+
+        # Also include output nodes connected to executed steps
+        workflow_edges = workflow.edges.all()
+        for step in completed_steps:
+            if not step.step_node:
+                continue
+            # Find edges where this step is the source
+            connected_edges = [e for e in workflow_edges if e.source == step.step_node.node_id]
+            for edge in connected_edges:
+                # Check if target is an output node
+                target_node = workflow.nodes.filter(node_id=edge.target).first()
+                if target_node and target_node.node_type in ['chatOutput', 'structuredOutput']:
+                    executed_node_ids.append(edge.target)
+
+        # Serialize the partial run
+        serializer = self.get_serializer(partial_run)
+        partial_run_data = serializer.data
+
+        # Enrich steps with node_id for easier frontend mapping
+        enriched_steps = []
+        for step_data in partial_run_data.get('steps', []):
+            step = partial_run.steps.filter(id=step_data['id']).select_related('step_node').first()
+            if step and step.step_node:
+                step_data['node_id'] = step.step_node.node_id
+            enriched_steps.append(step_data)
+
+        partial_run_data['steps'] = enriched_steps
+
+        return Response({
+            'partialRun': partial_run_data,
+            'executedStepNodeIds': list(set(executed_node_ids))  # Remove duplicates
+        }, status=200)
 
     @action(detail=True, methods=['post'], url_path='submit-human-validation')
     def submit_human_validation(self, request, pk=None):
