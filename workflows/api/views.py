@@ -10,7 +10,10 @@ from django.template.loader import render_to_string
 from django.utils import timezone
 from django.contrib.contenttypes.models import ContentType
 from common.permissions import IsOwner
+from asgiref.sync import async_to_sync
 import traceback
+import asyncio
+import logging
 from workflows.api.serializers import (
     WorkflowRunSerializer, WorkflowSerializer,
     WorkflowNodeSerializer, WorkflowEdgeSerializer,
@@ -24,12 +27,16 @@ from workflows.models import (
 )
 from workflows.services import WorkflowCloningService
 from workflows.handlers.utils import MetadataKey
+from core.services.workflow_execution_service import WorkflowExecutionService
 from django_rq import enqueue
 from workflows.tasks import execute_workflow_run, resume_workflow_run
 import weasyprint
 import tempfile
 import os
 import markdown
+
+
+logger = logging.getLogger(__name__)
 
 
 class WorkflowViewSet(viewsets.ModelViewSet):
@@ -173,6 +180,29 @@ class WorkflowViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(cloned_workflow)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
+    @action(detail=True, methods=['patch'], url_path='toggle-manual-mode')
+    def toggle_manual_mode(self, request, pk=None):
+        """
+        Toggle manual mode (step-by-step execution) for a workflow.
+
+        Body:
+            manual_mode_enabled: bool (required)
+
+        Response:
+            Updated Workflow object with manual_mode_enabled field
+        """
+        workflow = self.get_object()
+        manual_mode_enabled = request.data.get('manual_mode_enabled')
+
+        if manual_mode_enabled is None:
+            return Response({"error": "manual_mode_enabled is required"}, status=400)
+
+        workflow.manual_mode_enabled = manual_mode_enabled
+        workflow.save(update_fields=['manual_mode_enabled'])
+
+        serializer = self.get_serializer(workflow)
+        return Response(serializer.data, status=200)
+
 # StepViewSet removed - steps now managed via WorkflowNode with StepNodeData
 
 class WorkflowRunViewSet(viewsets.ModelViewSet):
@@ -216,19 +246,51 @@ class WorkflowRunViewSet(viewsets.ModelViewSet):
                 status=400
             )
 
-        workflow_run = WorkflowRun.objects.create(workflow=workflow, user=request.user)
+        # Check for existing partial run when workflow has manual mode enabled
+        # If partial run exists, continue it; otherwise create new run
+        partial_run = WorkflowRun.active_objects.filter(
+            workflow=workflow,
+            user=request.user,
+            is_partial=True,
+            ended_at__isnull=True  # Only get incomplete runs
+        ).order_by('-created_at').first()
 
-        # Create WorkflowRunStep objects for each step node
-        # Note: Using new node handler system, so order will be determined at execution time
-        for step_node in step_nodes:
-            step_data = step_data_objects.get(step_node.data_object_id)
-            if step_data and isinstance(step_data, StepNodeData):
-                WorkflowRunStep.objects.create(
-                    workflow_run=workflow_run,
-                    step_node=step_node,
-                    order=step_data.step_number,
-                    status=WorkflowRunStepStatus.PENDING
-                )
+        if partial_run:
+            # Continue existing partial run
+            # Mark it as non-partial since we're completing it in full mode
+            partial_run.is_partial = False
+            partial_run.save(update_fields=['is_partial'])
+            workflow_run = partial_run
+
+            # Create WorkflowRunStep objects for steps that haven't been created yet
+            existing_step_node_ids = set(
+                workflow_run.steps.values_list('step_node_id', flat=True)
+            )
+            for step_node in step_nodes:
+                if step_node.id not in existing_step_node_ids:
+                    step_data = step_data_objects.get(step_node.data_object_id)
+                    if step_data and isinstance(step_data, StepNodeData):
+                        WorkflowRunStep.objects.create(
+                            workflow_run=workflow_run,
+                            step_node=step_node,
+                            order=step_data.step_number,
+                            status=WorkflowRunStepStatus.PENDING
+                        )
+        else:
+            # Create new workflow run
+            workflow_run = WorkflowRun.objects.create(workflow=workflow, user=request.user)
+
+            # Create WorkflowRunStep objects for each step node
+            # Note: Using new node handler system, so order will be determined at execution time
+            for step_node in step_nodes:
+                step_data = step_data_objects.get(step_node.data_object_id)
+                if step_data and isinstance(step_data, StepNodeData):
+                    WorkflowRunStep.objects.create(
+                        workflow_run=workflow_run,
+                        step_node=step_node,
+                        order=step_data.step_number,
+                        status=WorkflowRunStepStatus.PENDING
+                    )
 
         enqueue(execute_workflow_run, workflow_run.id)
 
@@ -236,6 +298,226 @@ class WorkflowRunViewSet(viewsets.ModelViewSet):
 
         serializer = self.get_serializer(workflow_run)
         return Response(serializer.data, status=201)
+
+    @action(detail=False, methods=['post'], url_path='execute-single-step')
+    def execute_single_step(self, request):
+        """
+        Execute a single workflow step for manual step-by-step execution.
+
+        Validates dependencies before execution and returns step result immediately.
+        Creates or reuses a partial WorkflowRun.
+
+        Request body:
+        {
+            "workflow_id": int,
+            "step_node_id": str,
+            "workflow_run_id": int | null  (optional, for continuing partial run)
+        }
+
+        Response:
+        {
+            "success": bool,
+            "workflow_run_id": int,
+            "step_result": {
+                "step_id": int,
+                "node_id": str,
+                "status": str,
+                "response": str,
+                "error": str | null,
+                "metadata": dict
+            } | null,
+            "missing_dependencies": [str],  (list of node IDs)
+            "error": str | null
+        }
+        """
+        workflow_id = request.data.get('workflow_id')
+        step_node_id = request.data.get('step_node_id')
+        workflow_run_id = request.data.get('workflow_run_id')
+
+        logger.info(f"Execute single step request: workflow_id={workflow_id}, step_node_id={step_node_id}, workflow_run_id={workflow_run_id}")
+
+        # Validate required fields
+        if not workflow_id:
+            return Response({"error": "workflow_id is required"}, status=400)
+        if not step_node_id:
+            return Response({"error": "step_node_id is required"}, status=400)
+
+        # Get workflow
+        try:
+            workflow = Workflow.active_objects.get(id=workflow_id, user=request.user)
+        except Workflow.DoesNotExist:
+            return Response({"error": "Workflow not found"}, status=404)
+
+        # Get or create partial workflow run
+        if workflow_run_id:
+            try:
+                workflow_run = WorkflowRun.objects.get(
+                    id=workflow_run_id,
+                    workflow=workflow,
+                    user=request.user,
+                    is_partial=True
+                )
+            except WorkflowRun.DoesNotExist:
+                return Response({"error": "Partial workflow run not found"}, status=404)
+        else:
+            # Create new partial run
+            workflow_run = WorkflowRun.objects.create(
+                workflow=workflow,
+                user=request.user,
+                is_partial=True
+            )
+
+        # Validate that step_node_id exists in this workflow
+        try:
+            step_node = WorkflowNode.objects.get(
+                workflow=workflow,
+                node_id=step_node_id
+            )
+        except WorkflowNode.DoesNotExist:
+            return Response(
+                {"error": f"Step node {step_node_id} not found in workflow"},
+                status=404
+            )
+
+        # Get or create WorkflowRunStep for this node
+        workflow_run_step, created = WorkflowRunStep.objects.get_or_create(
+            workflow_run=workflow_run,
+            step_node=step_node,
+            defaults={
+                'order': getattr(step_node.data_object, 'step_number', 0),
+                'status': WorkflowRunStepStatus.PENDING
+            }
+        )
+
+        # Execute single step using the service
+        service = WorkflowExecutionService()
+
+        try:
+            # Run async execution in sync context using async_to_sync
+            result = async_to_sync(service.execute_single_step)(
+                workflow_run, step_node_id
+            )
+
+            # If execution failed due to missing dependencies
+            if not result['success'] and result['missing_dependencies']:
+                logger.warning(f"Step {step_node_id} blocked by missing dependencies: {result['missing_dependencies']}")
+                return Response({
+                    'success': False,
+                    'workflow_run_id': workflow_run.id,
+                    'step_result': None,
+                    'missing_dependencies': result['missing_dependencies'],
+                    'error': result['error']
+                }, status=200)
+
+            # Get updated step data
+            workflow_run_step.refresh_from_db()
+
+            step_result_data = {
+                'step_id': workflow_run_step.id,
+                'node_id': step_node_id,
+                'status': workflow_run_step.status,
+                'response': workflow_run_step.response,
+                'error': workflow_run_step.error,
+                'metadata': workflow_run_step.metadata or {}
+            }
+
+            logger.info(f"Step {step_node_id} execution completed with success={result['success']}")
+            return Response({
+                'success': result['success'],
+                'workflow_run_id': workflow_run.id,
+                'step_result': step_result_data,
+                'missing_dependencies': [],
+                'error': result.get('error')
+            }, status=200)
+
+        except Exception as e:
+            logger.error(f"Exception during step {step_node_id} execution: {str(e)}", exc_info=True)
+            return Response({
+                'success': False,
+                'workflow_run_id': workflow_run.id,
+                'step_result': None,
+                'missing_dependencies': [],
+                'error': f'Execution error: {str(e)}'
+            }, status=200)
+
+    @action(detail=False, methods=['get'], url_path='get-active-partial-run')
+    def get_active_partial_run(self, request):
+        """
+        Get the most recent active partial workflow run for a specific workflow.
+
+        Query params:
+            workflow_id: int (required)
+
+        Response:
+            WorkflowRun object with steps and executed node IDs, or null if no active partial run
+        """
+        workflow_id = request.query_params.get('workflow_id')
+
+        if not workflow_id:
+            return Response({"error": "workflow_id is required"}, status=400)
+
+        try:
+            workflow = Workflow.active_objects.get(id=workflow_id, user=request.user)
+        except Workflow.DoesNotExist:
+            return Response({"error": "Workflow not found"}, status=404)
+
+        # Get the most recent partial run (incomplete runs only)
+        # An incomplete run is one where ended_at is null OR marked as is_partial=True
+        partial_run = WorkflowRun.active_objects.filter(
+            workflow=workflow,
+            user=request.user,
+            is_partial=True,
+            ended_at__isnull=True  # Only get incomplete runs
+        ).order_by('-created_at').first()
+
+        if not partial_run:
+            return Response({
+                'partialRun': None,
+                'executedStepNodeIds': []
+            }, status=200)
+
+        # Get all completed step node IDs from this partial run
+        completed_steps = partial_run.steps.filter(
+            status__in=['completed', 'skipped']
+        ).select_related('step_node')
+
+        executed_node_ids = [
+            step.step_node.node_id
+            for step in completed_steps
+            if step.step_node
+        ]
+
+        # Also include output nodes connected to executed steps
+        workflow_edges = workflow.edges.all()
+        for step in completed_steps:
+            if not step.step_node:
+                continue
+            # Find edges where this step is the source
+            connected_edges = [e for e in workflow_edges if e.source == step.step_node.node_id]
+            for edge in connected_edges:
+                # Check if target is an output node
+                target_node = workflow.nodes.filter(node_id=edge.target).first()
+                if target_node and target_node.node_type in ['chatOutput', 'structuredOutput']:
+                    executed_node_ids.append(edge.target)
+
+        # Serialize the partial run
+        serializer = self.get_serializer(partial_run)
+        partial_run_data = serializer.data
+
+        # Enrich steps with node_id for easier frontend mapping
+        enriched_steps = []
+        for step_data in partial_run_data.get('steps', []):
+            step = partial_run.steps.filter(id=step_data['id']).select_related('step_node').first()
+            if step and step.step_node:
+                step_data['node_id'] = step.step_node.node_id
+            enriched_steps.append(step_data)
+
+        partial_run_data['steps'] = enriched_steps
+
+        return Response({
+            'partialRun': partial_run_data,
+            'executedStepNodeIds': list(set(executed_node_ids))  # Remove duplicates
+        }, status=200)
 
     @action(detail=True, methods=['post'], url_path='submit-human-validation')
     def submit_human_validation(self, request, pk=None):
