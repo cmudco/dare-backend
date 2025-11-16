@@ -279,6 +279,19 @@ class WorkflowExecutionService:
         pending_human_input = False
 
         for node in nodes[start_index:]:
+            # Check if this step was already completed (for partial runs being completed)
+            already_completed = await self._is_step_already_completed(context.workflow_run, node)
+
+            if already_completed:
+                # Load the existing result from the database
+                existing_result = await self._get_existing_step_result(context.workflow_run, node)
+                context.node_results[node.id] = existing_result
+                executed_nodes.add(node.id)
+                logger.info(
+                    f"Skipping already-completed step {node.id} in workflow run {context.workflow_run.id}"
+                )
+                continue
+
             # Check if this node should be executed based on routing decisions
             should_execute = await self._should_execute_node(node, context, workflow)
 
@@ -703,6 +716,62 @@ class WorkflowExecutionService:
         if status in ['completed', 'failed']:
             workflow_run.ended_at = timezone.now()
             workflow_run.save(update_fields=['ended_at'])
+
+    @database_sync_to_async
+    def _is_step_already_completed(
+        self,
+        workflow_run: WorkflowRun,
+        node: ExecutionNode
+    ) -> bool:
+        """Check if a step was already completed (for partial runs)."""
+        if node.type != 'step':
+            return False
+
+        try:
+            step = WorkflowRunStep.objects.filter(
+                workflow_run=workflow_run,
+                step_node=node.db_node,
+                status=WorkflowRunStepStatus.COMPLETED
+            ).first()
+            return step is not None
+        except Exception as e:
+            logger.error(f"Error checking if step is completed: {e}")
+            return False
+
+    @database_sync_to_async
+    def _get_existing_step_result(
+        self,
+        workflow_run: WorkflowRun,
+        node: ExecutionNode
+    ) -> NodeExecutionResult:
+        """Get the result of an already-completed step."""
+        try:
+            step = WorkflowRunStep.objects.filter(
+                workflow_run=workflow_run,
+                step_node=node.db_node,
+                status=WorkflowRunStepStatus.COMPLETED
+            ).first()
+
+            if step:
+                return NodeExecutionResult(
+                    success=True,
+                    output=step.response,
+                    metadata=step.metadata or {}
+                )
+            else:
+                # Fallback if step not found
+                return NodeExecutionResult(
+                    success=False,
+                    output=None,
+                    error="Step not found"
+                )
+        except Exception as e:
+            logger.error(f"Error getting existing step result: {e}")
+            return NodeExecutionResult(
+                success=False,
+                output=None,
+                error=str(e)
+            )
 
     @database_sync_to_async
     def _update_step_status_to_skipped(
