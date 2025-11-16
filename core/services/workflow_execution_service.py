@@ -454,6 +454,7 @@ class WorkflowExecutionService:
                 - error: str or None
         """
         try:
+            logger.info(f"Starting single step execution for node {step_node_id} in workflow run {workflow_run.id}")
             workflow = await database_sync_to_async(lambda: workflow_run.workflow)()
 
             # Get the step node
@@ -478,6 +479,7 @@ class WorkflowExecutionService:
             )
 
             if not can_execute:
+                logger.warning(f"Cannot execute node {step_node_id}: missing dependencies {missing_deps}")
                 return {
                     'success': False,
                     'step_result': None,
@@ -488,29 +490,33 @@ class WorkflowExecutionService:
             # Rebuild execution context from already-executed steps
             context = await self._rebuild_execution_context(workflow_run, workflow)
 
-            # Get filtered dependency results for this specific node
-            ordered_nodes = await self._get_ordered_workflow_nodes(workflow)
-            dependency_results = await self._get_node_dependency_results(
-                step_node,
-                context,
-                workflow,
-                ordered_nodes
-            )
+            # Get step number from data object in async-safe way
+            step_number = await database_sync_to_async(
+                lambda: getattr(step_node.data_object, 'step_number', None)
+            )()
 
             # Create execution node
             execution_node = ExecutionNode(
-                node_id=step_node.node_id,
-                node_type=step_node.node_type,
+                id=step_node.node_id,
+                type=step_node.node_type,
+                step_number=step_number,
                 db_node=step_node
+            )
+
+            # Get filtered dependency results for this specific node
+            dependency_results = await self._get_node_dependency_results(
+                execution_node,
+                context,
+                workflow
             )
 
             # Execute the node
             node_context = NodeExecutionContext(
-                workflow=workflow,
                 workflow_run=workflow_run,
                 previous_results=dependency_results
             )
 
+            logger.info(f"Executing node {step_node_id} with handler registry")
             result = await node_handler_registry.execute_node(
                 execution_node,
                 node_context
@@ -518,6 +524,11 @@ class WorkflowExecutionService:
 
             # Store result in context
             context.node_results[step_node_id] = result
+
+            if result.success:
+                logger.info(f"Successfully executed node {step_node_id}")
+            else:
+                logger.warning(f"Node {step_node_id} execution failed: {result.error}")
 
             return {
                 'success': result.success,
@@ -567,6 +578,8 @@ class WorkflowExecutionService:
         """
         Get list of unexecuted dependency node IDs for a given step.
 
+        Only considers step nodes as dependencies (start nodes are excluded).
+
         Args:
             workflow_run: The workflow run
             step_node_id: The node_id of the step to check
@@ -588,6 +601,20 @@ class WorkflowExecutionService:
             # No dependencies, can execute
             return []
 
+        # Get all nodes to filter out non-step nodes
+        all_nodes = await database_sync_to_async(lambda: list(workflow.nodes.all()))()
+        node_types = {node.node_id: node.node_type for node in all_nodes}
+
+        # Filter to only include step nodes (exclude start, conditional, output nodes, etc.)
+        step_dependency_node_ids = [
+            dep_id for dep_id in dependency_node_ids
+            if node_types.get(dep_id) == 'step'
+        ]
+
+        if not step_dependency_node_ids:
+            # No step dependencies, can execute
+            return []
+
         # Get completed steps for this workflow run
         completed_steps = await database_sync_to_async(
             lambda: list(WorkflowRunStep.objects.filter(
@@ -601,7 +628,7 @@ class WorkflowExecutionService:
 
         # Find which dependencies are missing
         missing = [
-            dep_id for dep_id in dependency_node_ids
+            dep_id for dep_id in step_dependency_node_ids
             if dep_id not in completed_steps
         ]
 
