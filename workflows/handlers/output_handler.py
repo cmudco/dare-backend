@@ -4,6 +4,7 @@ Output node handler for workflow execution.
 This handler stores and formats final output from workflow steps.
 """
 import logging
+from typing import Optional
 from channels.db import database_sync_to_async
 
 from workflows.handlers.base import (
@@ -37,14 +38,20 @@ class OutputNodeHandler(BaseNodeHandler):
         context: NodeExecutionContext
     ) -> NodeExecutionResult:
         """
-        Execute an output node by storing the result from its corresponding step.
+        Execute an output node by retrieving result from its source step via edges.
+
+        This handler uses edge-based data flow to find the correct source node:
+        1. Find the edge pointing to this output node
+        2. Get the source node from that edge
+        3. Look up that node's result in previous_results
+        4. Use that specific result as the output content
 
         Args:
             node: The output node to execute
-            context: Execution context containing the step result
+            context: Execution context with previous results (edge-filtered)
 
         Returns:
-            NodeExecutionResult with the formatted output
+            NodeExecutionResult with the formatted output from source step
         """
         try:
             # Get output data from database
@@ -58,17 +65,31 @@ class OutputNodeHandler(BaseNodeHandler):
                     error="Invalid output node data"
                 )
 
-            # Get the input from context (should be from corresponding step node)
-            output_content = context.current_input or "No output from step"
-            status = "completed" if context.current_input else "failed"
-            error_message = "" if context.current_input else "No input received from step"
+            # NEW: Find source step node via edges
+            source_output = await self._get_source_step_output(node, context)
 
-            # Update the output node data in database
+            if source_output is None:
+                # No source found
+                await database_sync_to_async(
+                    lambda: ChatOutputNodeData.objects.filter(id=output_data.id).update(
+                        status="failed",
+                        response="",
+                        error="No input received from source step node"
+                    )
+                )()
+
+                return NodeExecutionResult(
+                    success=False,
+                    error="No input received from source step node",
+                    metadata={'output_node_updated': True, 'status': 'failed'}
+                )
+
+            # Successfully found source output
             await database_sync_to_async(
                 lambda: ChatOutputNodeData.objects.filter(id=output_data.id).update(
-                    status=status,
-                    response=output_content,
-                    error=error_message
+                    status="completed",
+                    response=source_output,
+                    error=""
                 )
             )()
 
@@ -76,10 +97,10 @@ class OutputNodeHandler(BaseNodeHandler):
 
             return NodeExecutionResult(
                 success=True,
-                output=output_content,
+                output=source_output,
                 metadata={
                     'output_node_updated': True,
-                    'status': status
+                    'status': 'completed'
                 }
             )
 
@@ -95,3 +116,48 @@ class OutputNodeHandler(BaseNodeHandler):
                 success=False,
                 error=error_msg
             )
+
+    async def _get_source_step_output(
+        self,
+        node: ExecutionNode,
+        context: NodeExecutionContext
+    ) -> Optional[str]:
+        """
+        Get output from the source step node via edge traversal.
+
+        The previous_results dict is already filtered to only direct dependencies
+        by _get_node_dependency_results(), so we just need to find the step node.
+
+        Args:
+            node: The current output node
+            context: Execution context with previous results
+
+        Returns:
+            Output string from source step, or None if not found
+        """
+        # The previous_results dict is already filtered to only direct dependencies
+        # by _get_node_dependency_results(), so we just need to find the step node
+
+        for node_id, result_data in context.previous_results.items():
+            # Check if this is a valid result from a step node
+            if not result_data:
+                continue
+
+            # Skip skipped nodes
+            metadata = result_data.get('metadata', {})
+            if metadata and metadata.get('skipped'):
+                continue
+
+            # Get the output
+            output = result_data.get('output')
+            if output:
+                logger.debug(
+                    f"Output node {node.id} found source output from node {node_id}"
+                )
+                return output
+
+        # No valid source found
+        logger.warning(
+            f"Output node {node.id} could not find source step output in previous_results"
+        )
+        return None
