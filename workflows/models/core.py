@@ -53,6 +53,10 @@ class Workflow(BaseModel):
         default=1.0,
         help_text="Viewport zoom level"
     )
+    manual_mode_enabled = models.BooleanField(
+        default=False,
+        help_text="Whether manual mode (step-by-step execution) is enabled for this workflow"
+    )
 
     objects = models.Manager()
     active_objects = ActiveObjectsManager()

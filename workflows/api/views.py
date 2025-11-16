@@ -180,6 +180,29 @@ class WorkflowViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(cloned_workflow)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
+    @action(detail=True, methods=['patch'], url_path='toggle-manual-mode')
+    def toggle_manual_mode(self, request, pk=None):
+        """
+        Toggle manual mode (step-by-step execution) for a workflow.
+
+        Body:
+            manual_mode_enabled: bool (required)
+
+        Response:
+            Updated Workflow object with manual_mode_enabled field
+        """
+        workflow = self.get_object()
+        manual_mode_enabled = request.data.get('manual_mode_enabled')
+
+        if manual_mode_enabled is None:
+            return Response({"error": "manual_mode_enabled is required"}, status=400)
+
+        workflow.manual_mode_enabled = manual_mode_enabled
+        workflow.save(update_fields=['manual_mode_enabled'])
+
+        serializer = self.get_serializer(workflow)
+        return Response(serializer.data, status=200)
+
 # StepViewSet removed - steps now managed via WorkflowNode with StepNodeData
 
 class WorkflowRunViewSet(viewsets.ModelViewSet):
@@ -223,19 +246,51 @@ class WorkflowRunViewSet(viewsets.ModelViewSet):
                 status=400
             )
 
-        workflow_run = WorkflowRun.objects.create(workflow=workflow, user=request.user)
+        # Check for existing partial run when workflow has manual mode enabled
+        # If partial run exists, continue it; otherwise create new run
+        partial_run = WorkflowRun.active_objects.filter(
+            workflow=workflow,
+            user=request.user,
+            is_partial=True,
+            ended_at__isnull=True  # Only get incomplete runs
+        ).order_by('-created_at').first()
 
-        # Create WorkflowRunStep objects for each step node
-        # Note: Using new node handler system, so order will be determined at execution time
-        for step_node in step_nodes:
-            step_data = step_data_objects.get(step_node.data_object_id)
-            if step_data and isinstance(step_data, StepNodeData):
-                WorkflowRunStep.objects.create(
-                    workflow_run=workflow_run,
-                    step_node=step_node,
-                    order=step_data.step_number,
-                    status=WorkflowRunStepStatus.PENDING
-                )
+        if partial_run:
+            # Continue existing partial run
+            # Mark it as non-partial since we're completing it in full mode
+            partial_run.is_partial = False
+            partial_run.save(update_fields=['is_partial'])
+            workflow_run = partial_run
+
+            # Create WorkflowRunStep objects for steps that haven't been created yet
+            existing_step_node_ids = set(
+                workflow_run.steps.values_list('step_node_id', flat=True)
+            )
+            for step_node in step_nodes:
+                if step_node.id not in existing_step_node_ids:
+                    step_data = step_data_objects.get(step_node.data_object_id)
+                    if step_data and isinstance(step_data, StepNodeData):
+                        WorkflowRunStep.objects.create(
+                            workflow_run=workflow_run,
+                            step_node=step_node,
+                            order=step_data.step_number,
+                            status=WorkflowRunStepStatus.PENDING
+                        )
+        else:
+            # Create new workflow run
+            workflow_run = WorkflowRun.objects.create(workflow=workflow, user=request.user)
+
+            # Create WorkflowRunStep objects for each step node
+            # Note: Using new node handler system, so order will be determined at execution time
+            for step_node in step_nodes:
+                step_data = step_data_objects.get(step_node.data_object_id)
+                if step_data and isinstance(step_data, StepNodeData):
+                    WorkflowRunStep.objects.create(
+                        workflow_run=workflow_run,
+                        step_node=step_node,
+                        order=step_data.step_number,
+                        status=WorkflowRunStepStatus.PENDING
+                    )
 
         enqueue(execute_workflow_run, workflow_run.id)
 
@@ -406,13 +461,13 @@ class WorkflowRunViewSet(viewsets.ModelViewSet):
         except Workflow.DoesNotExist:
             return Response({"error": "Workflow not found"}, status=404)
 
-        # Get the most recent partial run
-        # Note: We can't filter by status since it's a computed property
-        # Instead, we'll get the most recent and let the frontend handle it
+        # Get the most recent partial run (incomplete runs only)
+        # An incomplete run is one where ended_at is null OR marked as is_partial=True
         partial_run = WorkflowRun.active_objects.filter(
             workflow=workflow,
             user=request.user,
-            is_partial=True
+            is_partial=True,
+            ended_at__isnull=True  # Only get incomplete runs
         ).order_by('-created_at').first()
 
         if not partial_run:
