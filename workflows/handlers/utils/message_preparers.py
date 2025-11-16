@@ -130,23 +130,21 @@ class StepMessagePreparer(MessagePreparer):
     async def prepare_message(
         prompt_content: str,
         text_input: str,
-        previous_results: Dict[str, Dict],
-        current_input: Optional[str] = None
+        previous_results: Dict[str, Dict]
+        # REMOVED: current_input parameter
     ) -> str:
         """
         Prepare the message for LLM based on step configuration and context.
 
         This method combines:
         - Step's prompt content
-        - Previous step results
+        - Previous step results (from direct dependencies via edges)
         - Text input from step configuration
-        - Fallback to current_input for backward compatibility
 
         Args:
             prompt_content: The prompt content from the step configuration
             text_input: Additional text input from step configuration
-            previous_results: Dictionary of previous node results
-            current_input: Fallback current input (backward compatibility)
+            previous_results: Dictionary of previous node results (edge-filtered)
 
         Returns:
             Formatted message ready for LLM processing
@@ -181,15 +179,6 @@ class StepMessagePreparer(MessagePreparer):
                 )
 
             # Add text input if present
-            message = StepMessagePreparer.add_additional_input(base, text_input)
-
-        elif current_input:
-            # Fallback to current_input for backward compatibility
-            base = StepMessagePreparer.combine_prompt_and_input(
-                prompt_content,
-                current_input,
-                "Previous step result"
-            )
             message = StepMessagePreparer.add_additional_input(base, text_input)
 
         else:
