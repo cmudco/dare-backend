@@ -42,16 +42,19 @@ class WorkflowRunSerializer(serializers.ModelSerializer):
     workflow_description = serializers.SerializerMethodField()
     pending_validations = serializers.SerializerMethodField()
     has_pending_validation = serializers.SerializerMethodField()
+    is_partial = serializers.BooleanField(read_only=True)
 
     class Meta:
         model = WorkflowRun
         fields = [
-            'id', 'workflow', 'user', 'started_at', 'ended_at', 'status', 'steps', 
-            'workflow_title', 'workflow_description', 'pending_validations', 'has_pending_validation'
+            'id', 'workflow', 'user', 'started_at', 'ended_at', 'status', 'steps',
+            'workflow_title', 'workflow_description', 'pending_validations', 'has_pending_validation',
+            'is_partial'
         ]
         read_only_fields = [
-            'id', 'started_at', 'ended_at', 'status', 'steps', 
-            'workflow_title', 'workflow_description', 'pending_validations', 'has_pending_validation'
+            'id', 'started_at', 'ended_at', 'status', 'steps',
+            'workflow_title', 'workflow_description', 'pending_validations', 'has_pending_validation',
+            'is_partial'
         ]
 
     def get_workflow_title(self, obj):

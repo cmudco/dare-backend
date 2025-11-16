@@ -432,6 +432,181 @@ class WorkflowExecutionService:
             node, context.node_results, nodes, edges
         )
 
+    async def execute_single_step(
+        self,
+        workflow_run: WorkflowRun,
+        step_node_id: str
+    ) -> Dict[str, Any]:
+        """
+        Execute a single step node in a workflow.
+
+        Used for manual step-by-step execution. Validates dependencies before execution.
+
+        Args:
+            workflow_run: The (partial) workflow run to execute in
+            step_node_id: The node_id of the step to execute
+
+        Returns:
+            Dict containing:
+                - success: bool
+                - step_result: NodeExecutionResult or None
+                - missing_dependencies: List[str] (node IDs of unexecuted dependencies)
+                - error: str or None
+        """
+        try:
+            workflow = await database_sync_to_async(lambda: workflow_run.workflow)()
+
+            # Get the step node
+            step_node = await database_sync_to_async(
+                lambda: WorkflowNode.objects.filter(
+                    workflow=workflow,
+                    node_id=step_node_id
+                ).first()
+            )()
+
+            if not step_node:
+                return {
+                    'success': False,
+                    'step_result': None,
+                    'missing_dependencies': [],
+                    'error': f'Step node {step_node_id} not found'
+                }
+
+            # Check if dependencies are satisfied
+            can_execute, missing_deps = await self.can_execute_step(
+                workflow_run, step_node_id, workflow
+            )
+
+            if not can_execute:
+                return {
+                    'success': False,
+                    'step_result': None,
+                    'missing_dependencies': missing_deps,
+                    'error': f'Cannot execute step. Missing dependencies: {", ".join(missing_deps)}'
+                }
+
+            # Rebuild execution context from already-executed steps
+            context = await self._rebuild_execution_context(workflow_run, workflow)
+
+            # Get filtered dependency results for this specific node
+            ordered_nodes = await self._get_ordered_workflow_nodes(workflow)
+            dependency_results = await self._get_node_dependency_results(
+                step_node,
+                context,
+                workflow,
+                ordered_nodes
+            )
+
+            # Create execution node
+            execution_node = ExecutionNode(
+                node_id=step_node.node_id,
+                node_type=step_node.node_type,
+                db_node=step_node
+            )
+
+            # Execute the node
+            node_context = NodeExecutionContext(
+                workflow=workflow,
+                workflow_run=workflow_run,
+                previous_results=dependency_results
+            )
+
+            result = await node_handler_registry.execute_node(
+                execution_node,
+                node_context
+            )
+
+            # Store result in context
+            context.node_results[step_node_id] = result
+
+            return {
+                'success': result.success,
+                'step_result': result,
+                'missing_dependencies': [],
+                'error': result.error if not result.success else None
+            }
+
+        except Exception as e:
+            logger.error(f"Error executing single step {step_node_id}: {e}", exc_info=True)
+            return {
+                'success': False,
+                'step_result': None,
+                'missing_dependencies': [],
+                'error': str(e)
+            }
+
+    async def can_execute_step(
+        self,
+        workflow_run: WorkflowRun,
+        step_node_id: str,
+        workflow: Workflow
+    ) -> tuple[bool, List[str]]:
+        """
+        Check if a step can be executed based on its dependencies.
+
+        Args:
+            workflow_run: The workflow run
+            step_node_id: The node_id of the step to check
+            workflow: The workflow
+
+        Returns:
+            Tuple of (can_execute: bool, missing_dependencies: List[str])
+        """
+        missing_deps = await self.get_missing_dependencies(
+            workflow_run, step_node_id, workflow
+        )
+
+        return (len(missing_deps) == 0, missing_deps)
+
+    async def get_missing_dependencies(
+        self,
+        workflow_run: WorkflowRun,
+        step_node_id: str,
+        workflow: Workflow
+    ) -> List[str]:
+        """
+        Get list of unexecuted dependency node IDs for a given step.
+
+        Args:
+            workflow_run: The workflow run
+            step_node_id: The node_id of the step to check
+            workflow: The workflow
+
+        Returns:
+            List of node IDs that are dependencies but haven't been executed
+        """
+        # Get all edges to find dependencies (incoming edges to this node)
+        edges = await database_sync_to_async(lambda: list(workflow.edges.all()))()
+
+        # Find incoming edges (edges where this node is the target)
+        incoming_edges = [edge for edge in edges if edge.target == step_node_id]
+
+        # Get source node IDs (dependencies)
+        dependency_node_ids = [edge.source for edge in incoming_edges]
+
+        if not dependency_node_ids:
+            # No dependencies, can execute
+            return []
+
+        # Get completed steps for this workflow run
+        completed_steps = await database_sync_to_async(
+            lambda: list(WorkflowRunStep.objects.filter(
+                workflow_run=workflow_run,
+                status__in=[
+                    WorkflowRunStepStatus.COMPLETED,
+                    WorkflowRunStepStatus.SKIPPED
+                ]
+            ).values_list('step_node__node_id', flat=True))
+        )()
+
+        # Find which dependencies are missing
+        missing = [
+            dep_id for dep_id in dependency_node_ids
+            if dep_id not in completed_steps
+        ]
+
+        return missing
+
     async def _rebuild_execution_context(
         self,
         workflow_run: WorkflowRun,
