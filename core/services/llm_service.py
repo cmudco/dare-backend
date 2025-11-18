@@ -7,6 +7,7 @@ from core.services.openai_service import OpenAIService
 from core.services.claude_service import ClaudeService
 from core.services.gemini_service import GeminiService
 from core.services.llama_service import LlamaService
+from core.services.custom_llm_service import CustomLLMService
 from core.services.file_processor import FileProcessor
 from core.services.whisper_service import WhisperService
 from core.services.api_key_service import get_provider_api_key, get_provider_api_key_for_user
@@ -566,6 +567,8 @@ class LLMService:
             return GeminiService(llm=llm, api_key=api_key)
         elif llm.provider == Provider.LLAMA.value:
             return LlamaService(llm=llm, api_key=api_key)
+        elif llm.provider == Provider.CUSTOM.value:
+            return CustomLLMService(llm=llm, api_key=api_key)
         return ClaudeService(llm=llm, api_key=api_key)
 
     def _get_web_search_tools(self, llm: LLM) -> list:
