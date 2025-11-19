@@ -3,9 +3,16 @@ Dependency sorting utility for workflow execution.
 
 This module provides utilities for topologically sorting workflow nodes
 based on their dependencies to ensure proper execution order.
+
+Enhanced to support start node chaining with depth-based priority and
+cycle detection to prevent infinite loops.
 """
-from typing import List, Set, Dict
+from typing import List, Set, Dict, Tuple
+from collections import deque
 from workflows.handlers.base import ExecutionNode
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class DependencySorter:
@@ -16,6 +23,8 @@ class DependencySorter:
     - Multi-input nodes (wait for ALL dependencies)
     - Conditional nodes (single input dependency)
     - Priority-based sorting within dependency levels
+    - Start node chaining (depth-based execution order)
+    - Cycle detection to prevent infinite loops
     """
 
     @staticmethod
@@ -28,6 +37,7 @@ class DependencySorter:
 
         Conditional nodes must run before nodes that depend on their routing decisions.
         Multi-input nodes wait for ALL their dependencies before execution.
+        Start node chains execute in depth order (chain 1 before chain 2).
 
         Args:
             execution_nodes: List of nodes to sort
@@ -35,12 +45,26 @@ class DependencySorter:
 
         Returns:
             Topologically sorted list of execution nodes
+
+        Raises:
+            ValueError: If circular dependency is detected
         """
+        # Detect circular dependencies before attempting sort
+        if DependencySorter._detect_cycles(execution_nodes, edges):
+            raise ValueError(
+                "Circular dependency detected in workflow graph. "
+                "Please check start node chain connections to avoid infinite loops."
+            )
+
         # Build dependency map: node_id -> set of nodes it depends on
         dependencies = {node.id: set() for node in execution_nodes}
 
         for edge in edges:
             dependencies[edge.target].add(edge.source)
+
+        # Calculate depth for each node (distance from root start nodes)
+        # This enables proper start node chaining: Chain 1 completes before Chain 2
+        node_depths = DependencySorter._calculate_node_depths(execution_nodes, edges)
 
         # Topological sort with special handling for conditional dependencies
         sorted_nodes = []
@@ -58,8 +82,15 @@ class DependencySorter:
                 if not ready_nodes:
                     ready_nodes = [remaining_nodes[0]]  # Emergency fallback
 
-            # Sort ready nodes by priority within the same dependency level
-            ready_nodes.sort(key=DependencySorter._get_priority_sort_key)
+            # Sort ready nodes by depth, then priority, then step number
+            # Lower depth = executes first (ensures Chain 1 before Chain 2)
+            ready_nodes.sort(
+                key=lambda n: (
+                    node_depths.get(n.id, 0),
+                    DependencySorter._get_type_priority(n),
+                    n.step_number or 0
+                )
+            )
 
             # Add the first ready node to execution order
             next_node = ready_nodes[0]
@@ -123,21 +154,132 @@ class DependencySorter:
         return ready_nodes
 
     @staticmethod
-    def _get_priority_sort_key(node: ExecutionNode) -> tuple:
+    def _get_type_priority(node: ExecutionNode) -> int:
         """
-        Get sort key for priority-based sorting of nodes at same dependency level.
+        Get priority value for node type.
 
         Args:
             node: Execution node
 
         Returns:
-            Tuple for sorting (priority, step_number)
+            Priority value (lower = higher priority)
         """
-        type_priority = {
+        return {
             'start': 0,
             'step': 1,
             'chatOutput': 2,
-            'conditional': 3  # After chatOutput nodes
+            'conditional': 3
         }.get(node.type, 999)
 
-        return (type_priority, node.step_number or 0)
+    @staticmethod
+    def _calculate_node_depths(
+        execution_nodes: List[ExecutionNode],
+        edges: List
+    ) -> Dict[str, int]:
+        """
+        Calculate depth of each node from root start nodes using BFS.
+
+        Depth represents the distance from root start nodes (start nodes with no
+        incoming edges). This enables proper start node chaining where Chain 1
+        (depth 0) completes before Chain 2 (depth N) begins.
+
+        Args:
+            execution_nodes: List of nodes in the workflow
+            edges: List of workflow edges
+
+        Returns:
+            Dictionary mapping node_id to depth value
+        """
+        depths = {node.id: 0 for node in execution_nodes}
+
+        # Build adjacency list for forward traversal
+        graph = {node.id: [] for node in execution_nodes}
+        for edge in edges:
+            graph[edge.source].append(edge.target)
+
+        # Count incoming edges for each node
+        incoming_counts = {node.id: 0 for node in execution_nodes}
+        for edge in edges:
+            incoming_counts[edge.target] += 1
+
+        # Find root start nodes (start nodes with no incoming edges)
+        root_starts = [
+            node.id for node in execution_nodes
+            if node.type == 'start' and incoming_counts[node.id] == 0
+        ]
+
+        # If no root start nodes found, treat all start nodes as depth 0
+        if not root_starts:
+            root_starts = [node.id for node in execution_nodes if node.type == 'start']
+            logger.warning("No root start nodes found, treating all start nodes as depth 0")
+
+        # BFS to calculate depths from root start nodes
+        queue = deque((node_id, 0) for node_id in root_starts)
+        visited = set()
+
+        while queue:
+            node_id, depth = queue.popleft()
+
+            # Skip if already visited with a shorter path
+            if node_id in visited:
+                continue
+
+            visited.add(node_id)
+            depths[node_id] = depth
+
+            # Add neighbors with incremented depth
+            for neighbor in graph[node_id]:
+                if neighbor not in visited:
+                    queue.append((neighbor, depth + 1))
+
+        logger.debug(f"Calculated node depths: {depths}")
+        return depths
+
+    @staticmethod
+    def _detect_cycles(
+        execution_nodes: List[ExecutionNode],
+        edges: List
+    ) -> bool:
+        """
+        Detect circular dependencies in workflow graph using DFS.
+
+        Args:
+            execution_nodes: List of nodes in the workflow
+            edges: List of workflow edges
+
+        Returns:
+            True if cycle detected, False otherwise
+        """
+        # Build adjacency list
+        graph = {node.id: [] for node in execution_nodes}
+        for edge in edges:
+            graph[edge.source].append(edge.target)
+
+        visited = set()
+        rec_stack = set()
+
+        def has_cycle_dfs(node_id: str) -> bool:
+            """DFS helper to detect cycles"""
+            visited.add(node_id)
+            rec_stack.add(node_id)
+
+            # Check all neighbors
+            for neighbor in graph.get(node_id, []):
+                if neighbor not in visited:
+                    if has_cycle_dfs(neighbor):
+                        return True
+                elif neighbor in rec_stack:
+                    # Back edge detected - cycle found
+                    logger.error(f"Circular dependency detected: {node_id} -> {neighbor}")
+                    return True
+
+            rec_stack.remove(node_id)
+            return False
+
+        # Check all nodes for cycles
+        for node in execution_nodes:
+            if node.id not in visited:
+                if has_cycle_dfs(node.id):
+                    return True
+
+        return False
