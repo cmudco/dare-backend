@@ -92,16 +92,18 @@ class WorkflowContextBuilder:
 
     @staticmethod
     def prepare_node_execution_context(
-        node_results: Dict[str, NodeExecutionResult]
+        node_results: Dict[str, NodeExecutionResult],
+        node_types: Dict[str, str] = None
     ) -> Dict[str, Dict]:
         """
         Prepare previous_results dictionary for node execution context.
 
         Transforms NodeExecutionResult objects into dictionaries suitable
-        for passing to node handlers.
+        for passing to node handlers. Includes node_type for chain detection.
 
         Args:
             node_results: Dictionary of node execution results
+            node_types: Optional dictionary mapping node_id to node_type
 
         Returns:
             Dictionary formatted for NodeExecutionContext.previous_results
@@ -110,7 +112,8 @@ class WorkflowContextBuilder:
             node_id: {
                 'output': result.output,
                 'success': result.success,
-                'metadata': result.metadata
+                'metadata': result.metadata,
+                'node_type': node_types.get(node_id) if node_types else None
             }
             for node_id, result in node_results.items()
         }

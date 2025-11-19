@@ -363,11 +363,15 @@ class WorkflowExecutionService:
             node, context, workflow
         )
 
+        # Build node_types map for chain detection
+        node_types = await self._build_node_types_map(filtered_results, context)
+
         # Create node execution context for handler
         node_context = NodeExecutionContext(
             workflow_run=context.workflow_run,
             previous_results=WorkflowContextBuilder.prepare_node_execution_context(
-                filtered_results
+                filtered_results,
+                node_types=node_types
             )
             # REMOVED: current_input parameter (use edge-based data flow)
         )
@@ -375,6 +379,42 @@ class WorkflowExecutionService:
         # Execute using handler registry
         result = await node_handler_registry.execute_node(node, node_context)
         return result
+
+    async def _build_node_types_map(
+        self,
+        filtered_results: Dict[str, NodeExecutionResult],
+        context: WorkflowExecutionContext
+    ) -> Dict[str, str]:
+        """
+        Build a map of node_id to node_type for chain detection.
+
+        Args:
+            filtered_results: Results from dependency nodes
+            context: Execution context
+
+        Returns:
+            Dictionary mapping node_id to node_type
+        """
+        node_types = {}
+
+        # Get workflow to access nodes
+        workflow = await database_sync_to_async(
+            lambda: context.workflow_run.workflow
+        )()
+
+        # Get all nodes from workflow
+        all_nodes = await database_sync_to_async(
+            lambda: list(workflow.nodes.all())
+        )()
+
+        # Build map for filtered results
+        for node_id in filtered_results.keys():
+            for db_node in all_nodes:
+                if db_node.node_id == node_id:
+                    node_types[node_id] = db_node.node_type
+                    break
+
+        return node_types
 
     async def _get_node_dependency_results(
         self,
