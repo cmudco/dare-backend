@@ -1,3 +1,5 @@
+import logging
+
 from django.contrib.contenttypes.models import ContentType
 from rest_framework import serializers
 
@@ -10,6 +12,9 @@ from workflows.models import (
     StepNodeData, StartNodeData, ChatOutputNodeData, ConditionalNodeData, StructuredOutputNodeData,
     WorkflowNode, WorkflowEdge
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 # TEMPORARILY COMMENTED OUT - TABLE MISSING
@@ -42,16 +47,19 @@ class WorkflowRunSerializer(serializers.ModelSerializer):
     workflow_description = serializers.SerializerMethodField()
     pending_validations = serializers.SerializerMethodField()
     has_pending_validation = serializers.SerializerMethodField()
+    is_partial = serializers.BooleanField(read_only=True)
 
     class Meta:
         model = WorkflowRun
         fields = [
-            'id', 'workflow', 'user', 'started_at', 'ended_at', 'status', 'steps', 
-            'workflow_title', 'workflow_description', 'pending_validations', 'has_pending_validation'
+            'id', 'workflow', 'user', 'started_at', 'ended_at', 'status', 'steps',
+            'workflow_title', 'workflow_description', 'pending_validations', 'has_pending_validation',
+            'is_partial'
         ]
         read_only_fields = [
-            'id', 'started_at', 'ended_at', 'status', 'steps', 
-            'workflow_title', 'workflow_description', 'pending_validations', 'has_pending_validation'
+            'id', 'started_at', 'ended_at', 'status', 'steps',
+            'workflow_title', 'workflow_description', 'pending_validations', 'has_pending_validation',
+            'is_partial'
         ]
 
     def get_workflow_title(self, obj):
@@ -148,6 +156,7 @@ class WorkflowSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'user', 'version', 'parent', 'created_at',
             'viewport_x', 'viewport_y', 'viewport_zoom',
+            'manual_mode_enabled',
             'nodes', 'edges', 'latest_run',
             'title', 'description', 'mode', 'viewport'
         ]
@@ -187,7 +196,7 @@ class StepNodeDataSerializer(serializers.ModelSerializer):
     class Meta:
         model = StepNodeData
         fields = [
-            'prompt', 'content_files', 'embedding_files', 'llm', 'step_number',
+            'agent', 'prompt', 'content_files', 'embedding_files', 'llm', 'step_number',
             'max_tokens', 'temperature', 'max_context_snippets',
             'document_similarity_threshold', 'use_previous_step_files',
             'use_previous_step_embeddings', 'text_input', 'use_structured_output_node',
@@ -251,6 +260,49 @@ class WorkflowEdgeSerializer(serializers.ModelSerializer):
             'z_index', 'label', 'style', 'class_name', 'marker_start', 'marker_end',
             'path_options'
         ]
+
+    def validate(self, data):
+        """
+        Validate edge connections for start node chaining.
+
+        Logs warnings for:
+        - Chat Output → Start Node connections (chaining)
+        - Start Node → Start Node connections (unusual but allowed)
+        """
+        # Get workflow to access nodes
+        workflow = data.get('workflow')
+        if not workflow:
+            return data
+
+        source_id = data.get('source')
+        target_id = data.get('target')
+
+        if not source_id or not target_id:
+            return data
+
+        # Get source and target nodes
+        try:
+            source_node = workflow.nodes.get(node_id=source_id)
+            target_node = workflow.nodes.get(node_id=target_id)
+        except WorkflowNode.DoesNotExist:
+            # Nodes don't exist yet, skip validation
+            return data
+
+        # Check for Chat Output → Start Node (chaining)
+        if source_node.node_type == 'chatOutput' and target_node.node_type == 'start':
+            logger.info(
+                f"Workflow chain connection detected: {source_id} (chatOutput) → "
+                f"{target_id} (start). This will enable start node chaining."
+            )
+
+        # Check for Start → Start (unusual but allowed)
+        if source_node.node_type == 'start' and target_node.node_type == 'start':
+            logger.warning(
+                f"Start node to start node connection: {source_id} → {target_id}. "
+                f"Ensure this is intentional for workflow chaining."
+            )
+
+        return data
 
     def to_internal_value(self, data):
         # Accept both snake_case and React Flow camelCase

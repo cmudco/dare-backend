@@ -267,7 +267,9 @@ class AccessCodeCheckView(APIView):
 
             # Check if code is available
             if not code_group.is_available:
-                if not code_group.is_active:
+                if code_group.is_expired:
+                    message = "Access code exists but has expired"
+                elif not code_group.is_active:
                     message = "Access code exists but is inactive"
                 else:
                     message = "Access code exists but has reached maximum capacity"

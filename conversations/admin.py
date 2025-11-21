@@ -1,6 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth import get_user_model
 from django.urls import reverse
+from django import forms
 
 from core.helpers.admin_utils import (
     render_code_block,
@@ -17,9 +18,33 @@ User = get_user_model()
 
 @admin.register(LLM)
 class LLMAdmin(admin.ModelAdmin):
-    list_display = ("name", "identifier", "provider")
-    search_fields = ("name", "identifier")
+    list_display = ("name", "identifier", "provider", "base_url_display")
+    search_fields = ("name", "identifier", "base_url")
     list_filter = ("provider",)
+
+    fieldsets = (
+        ("Model Information", {
+            "fields": ("name", "identifier", "description", "provider")
+        }),
+        ("Custom Endpoint (for CUSTOM provider)", {
+            "fields": ("base_url",),
+            "description": "Required when provider is set to 'CUSTOM'. Enter the base URL for OpenAI-compatible endpoints (e.g., https://litellm-dev.pace.gatech.edu:4000/v1)"
+        }),
+        ("Capabilities", {
+            "fields": ("is_reasoning", "supports_vision", "is_image_generator")
+        }),
+        ("Pricing", {
+            "fields": ("input_token_rate_per_million", "output_token_rate_per_million"),
+            "classes": ("collapse",)
+        }),
+    )
+
+    def base_url_display(self, obj):
+        """Display base URL or indicate if using default provider endpoint"""
+        if obj.base_url:
+            return obj.base_url
+        return "-"
+    base_url_display.short_description = "Base URL"
 
 @admin.register(Conversation)
 class ConversationAdmin(admin.ModelAdmin):
@@ -131,10 +156,58 @@ class ModelGroupAdmin(admin.ModelAdmin):
     user_count.short_description = "Users"
 
 
+class SecureProviderAPIKeyForm(forms.ModelForm):
+    """
+    Custom form for server API key management that prevents viewing of stored keys.
+
+    SECURITY: Keys are write-only after being saved. Even admins cannot retrieve them.
+    """
+    new_api_key = forms.CharField(
+        required=False,
+        widget=forms.PasswordInput(attrs={
+            'placeholder': 'Enter new API key to update (leave blank to keep current key)',
+            'autocomplete': 'off',
+            'size': '50'
+        }),
+        label='API Key',
+        help_text='⚠️ Enter a new API key to update. Leave blank to keep the existing key. '
+                  'Keys are encrypted and cannot be retrieved once saved.'
+    )
+
+    class Meta:
+        model = ProviderAPIKey
+        fields = ['provider', 'is_active']
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Remove the original api_key field from the form
+        if 'api_key' in self.fields:
+            del self.fields['api_key']
+
+    def save(self, commit=True):
+        instance = super().save(commit=False)
+
+        # Only update the API key if a new one was provided
+        new_key = self.cleaned_data.get('new_api_key')
+        if new_key:
+            instance.api_key = new_key
+
+        if commit:
+            instance.save()
+        return instance
+
+
 @admin.register(ProviderAPIKey)
 class ProviderAPIKeyAdmin(admin.ModelAdmin):
     """
     Admin interface for managing provider API keys.
+
+    SECURITY FEATURES:
+    - API keys are NEVER displayed in full (even to superusers)
+    - Only masked versions are shown (e.g., ***xyz123)
+    - API key updates use password-style input
+    - Keys are encrypted at rest using AES-256
+    - These are SERVER keys used by the platform, not user keys
 
     Features:
     - Display masked API keys for security
@@ -142,6 +215,8 @@ class ProviderAPIKeyAdmin(admin.ModelAdmin):
     - Search and filter by provider
     - Prevent deletion of active keys by non-superusers
     """
+    form = SecureProviderAPIKeyForm
+
     list_display = ("provider_display", "masked_key_display", "is_active", "created_at", "updated_at")
     list_filter = ("provider", "is_active", "created_at")
     search_fields = ("provider",)
@@ -150,8 +225,12 @@ class ProviderAPIKeyAdmin(admin.ModelAdmin):
 
     fieldsets = (
         (None, {
-            "fields": ("provider", "api_key", "is_active"),
-            "description": "Configure API keys for different LLM providers. Keys are encrypted in the database."
+            "fields": ("provider", "is_active"),
+            "description": "🔒 SECURITY: Server API keys are encrypted and cannot be viewed once saved."
+        }),
+        ("API Key Management", {
+            "fields": ("masked_key_display", "new_api_key"),
+            "description": "Current key is shown masked. Enter a new key below to update it."
         }),
         ("Timestamps", {
             "fields": ("created_at", "updated_at"),
@@ -159,7 +238,7 @@ class ProviderAPIKeyAdmin(admin.ModelAdmin):
         }),
     )
 
-    readonly_fields = ("created_at", "updated_at")
+    readonly_fields = ("masked_key_display", "created_at", "updated_at")
 
     def provider_display(self, obj):
         """Display provider name with icon/badge"""

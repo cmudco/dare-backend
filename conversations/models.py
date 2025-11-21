@@ -23,6 +23,12 @@ class LLM(models.Model):
         default="openai",
         help_text="Provider of the LLM (e.g., OpenAI, Claude)."
     )
+    base_url = models.URLField(
+        blank=True,
+        null=True,
+        max_length=500,
+        help_text="Custom base URL for the API endpoint (required for CUSTOM provider, e.g., https://litellm-dev.pace.gatech.edu:4000/v1)."
+    )
     is_reasoning = models.BooleanField(default=False, help_text="Whether the model supports reasoning.")
     supports_vision = models.BooleanField(
         default=True,

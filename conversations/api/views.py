@@ -308,6 +308,38 @@ class MessageViewSet(viewsets.ModelViewSet):
         context = super().get_serializer_context()
         return context
 
+    @action(detail=True, methods=['post'], url_path='soft-delete')
+    def soft_delete_message(self, request, pk=None):
+        """
+        Soft delete a message by setting is_deleted to True.
+        This is a non-destructive operation that hides the message from conversation history.
+        """
+        try:
+            message = self.get_object()
+
+            message.soft_delete()
+
+            return Response(
+                {
+                    "status": "Message soft deleted successfully",
+                    "message_id": str(message.id)
+                },
+                status=status.HTTP_200_OK
+            )
+
+        except Message.DoesNotExist:
+            return Response(
+                {"error": "Message not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            logger = logging.getLogger(__name__)
+            logger.error(f"Error soft deleting message {pk}: {str(e)}")
+            return Response(
+                {"error": f"Failed to delete message: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
 class LLMViewSet(viewsets.ModelViewSet):
     """Endpoint for listing available LLM models."""
     serializer_class = LLMSerializer

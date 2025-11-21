@@ -35,7 +35,7 @@ class WorkflowExecutionContext:
     workflow_run: WorkflowRun
     workflow: Workflow
     node_results: Dict[str, NodeExecutionResult]
-    current_context: Optional[str] = None  # Response from previous step
+    # REMOVED: current_context (use edge-based data flow instead)
 
 
 class WorkflowExecutionService:
@@ -279,6 +279,19 @@ class WorkflowExecutionService:
         pending_human_input = False
 
         for node in nodes[start_index:]:
+            # Check if this step was already completed (for partial runs being completed)
+            already_completed = await self._is_step_already_completed(context.workflow_run, node)
+
+            if already_completed:
+                # Load the existing result from the database
+                existing_result = await self._get_existing_step_result(context.workflow_run, node)
+                context.node_results[node.id] = existing_result
+                executed_nodes.add(node.id)
+                logger.info(
+                    f"Skipping already-completed step {node.id} in workflow run {context.workflow_run.id}"
+                )
+                continue
+
             # Check if this node should be executed based on routing decisions
             should_execute = await self._should_execute_node(node, context, workflow)
 
@@ -319,8 +332,7 @@ class WorkflowExecutionService:
 
             if not result.success:
                 failed_count += 1
-            else:
-                context.current_context = result.output
+            # REMOVED: context.current_context assignment (use edge-based data flow)
 
         return {
             'failed_count': failed_count,
@@ -351,18 +363,58 @@ class WorkflowExecutionService:
             node, context, workflow
         )
 
+        # Build node_types map for chain detection
+        node_types = await self._build_node_types_map(filtered_results, context)
+
         # Create node execution context for handler
         node_context = NodeExecutionContext(
             workflow_run=context.workflow_run,
             previous_results=WorkflowContextBuilder.prepare_node_execution_context(
-                filtered_results
-            ),
-            current_input=context.current_context
+                filtered_results,
+                node_types=node_types
+            )
+            # REMOVED: current_input parameter (use edge-based data flow)
         )
 
         # Execute using handler registry
         result = await node_handler_registry.execute_node(node, node_context)
         return result
+
+    async def _build_node_types_map(
+        self,
+        filtered_results: Dict[str, NodeExecutionResult],
+        context: WorkflowExecutionContext
+    ) -> Dict[str, str]:
+        """
+        Build a map of node_id to node_type for chain detection.
+
+        Args:
+            filtered_results: Results from dependency nodes
+            context: Execution context
+
+        Returns:
+            Dictionary mapping node_id to node_type
+        """
+        node_types = {}
+
+        # Get workflow to access nodes
+        workflow = await database_sync_to_async(
+            lambda: context.workflow_run.workflow
+        )()
+
+        # Get all nodes from workflow
+        all_nodes = await database_sync_to_async(
+            lambda: list(workflow.nodes.all())
+        )()
+
+        # Build map for filtered results
+        for node_id in filtered_results.keys():
+            for db_node in all_nodes:
+                if db_node.node_id == node_id:
+                    node_types[node_id] = db_node.node_type
+                    break
+
+        return node_types
 
     async def _get_node_dependency_results(
         self,
@@ -433,6 +485,208 @@ class WorkflowExecutionService:
             node, context.node_results, nodes, edges
         )
 
+    async def execute_single_step(
+        self,
+        workflow_run: WorkflowRun,
+        step_node_id: str
+    ) -> Dict[str, Any]:
+        """
+        Execute a single step node in a workflow.
+
+        Used for manual step-by-step execution. Validates dependencies before execution.
+
+        Args:
+            workflow_run: The (partial) workflow run to execute in
+            step_node_id: The node_id of the step to execute
+
+        Returns:
+            Dict containing:
+                - success: bool
+                - step_result: NodeExecutionResult or None
+                - missing_dependencies: List[str] (node IDs of unexecuted dependencies)
+                - error: str or None
+        """
+        try:
+            logger.info(f"Starting single step execution for node {step_node_id} in workflow run {workflow_run.id}")
+            workflow = await database_sync_to_async(lambda: workflow_run.workflow)()
+
+            # Get the step node
+            step_node = await database_sync_to_async(
+                lambda: WorkflowNode.objects.filter(
+                    workflow=workflow,
+                    node_id=step_node_id
+                ).first()
+            )()
+
+            if not step_node:
+                return {
+                    'success': False,
+                    'step_result': None,
+                    'missing_dependencies': [],
+                    'error': f'Step node {step_node_id} not found'
+                }
+
+            # Check if dependencies are satisfied
+            can_execute, missing_deps = await self.can_execute_step(
+                workflow_run, step_node_id, workflow
+            )
+
+            if not can_execute:
+                logger.warning(f"Cannot execute node {step_node_id}: missing dependencies {missing_deps}")
+                return {
+                    'success': False,
+                    'step_result': None,
+                    'missing_dependencies': missing_deps,
+                    'error': f'Cannot execute step. Missing dependencies: {", ".join(missing_deps)}'
+                }
+
+            # Rebuild execution context from already-executed steps
+            context = await self._rebuild_execution_context(workflow_run, workflow)
+
+            # Get step number from data object in async-safe way
+            step_number = await database_sync_to_async(
+                lambda: getattr(step_node.data_object, 'step_number', None)
+            )()
+
+            # Create execution node
+            execution_node = ExecutionNode(
+                id=step_node.node_id,
+                type=step_node.node_type,
+                step_number=step_number,
+                db_node=step_node
+            )
+
+            # Get filtered dependency results for this specific node
+            dependency_results = await self._get_node_dependency_results(
+                execution_node,
+                context,
+                workflow
+            )
+
+            # Execute the node
+            node_context = NodeExecutionContext(
+                workflow_run=workflow_run,
+                previous_results=dependency_results
+            )
+
+            logger.info(f"Executing node {step_node_id} with handler registry")
+            result = await node_handler_registry.execute_node(
+                execution_node,
+                node_context
+            )
+
+            # Store result in context
+            context.node_results[step_node_id] = result
+
+            if result.success:
+                logger.info(f"Successfully executed node {step_node_id}")
+            else:
+                logger.warning(f"Node {step_node_id} execution failed: {result.error}")
+
+            return {
+                'success': result.success,
+                'step_result': result,
+                'missing_dependencies': [],
+                'error': result.error if not result.success else None
+            }
+
+        except Exception as e:
+            logger.error(f"Error executing single step {step_node_id}: {e}", exc_info=True)
+            return {
+                'success': False,
+                'step_result': None,
+                'missing_dependencies': [],
+                'error': str(e)
+            }
+
+    async def can_execute_step(
+        self,
+        workflow_run: WorkflowRun,
+        step_node_id: str,
+        workflow: Workflow
+    ) -> tuple[bool, List[str]]:
+        """
+        Check if a step can be executed based on its dependencies.
+
+        Args:
+            workflow_run: The workflow run
+            step_node_id: The node_id of the step to check
+            workflow: The workflow
+
+        Returns:
+            Tuple of (can_execute: bool, missing_dependencies: List[str])
+        """
+        missing_deps = await self.get_missing_dependencies(
+            workflow_run, step_node_id, workflow
+        )
+
+        return (len(missing_deps) == 0, missing_deps)
+
+    async def get_missing_dependencies(
+        self,
+        workflow_run: WorkflowRun,
+        step_node_id: str,
+        workflow: Workflow
+    ) -> List[str]:
+        """
+        Get list of unexecuted dependency node IDs for a given step.
+
+        Only considers step nodes as dependencies (start nodes are excluded).
+
+        Args:
+            workflow_run: The workflow run
+            step_node_id: The node_id of the step to check
+            workflow: The workflow
+
+        Returns:
+            List of node IDs that are dependencies but haven't been executed
+        """
+        # Get all edges to find dependencies (incoming edges to this node)
+        edges = await database_sync_to_async(lambda: list(workflow.edges.all()))()
+
+        # Find incoming edges (edges where this node is the target)
+        incoming_edges = [edge for edge in edges if edge.target == step_node_id]
+
+        # Get source node IDs (dependencies)
+        dependency_node_ids = [edge.source for edge in incoming_edges]
+
+        if not dependency_node_ids:
+            # No dependencies, can execute
+            return []
+
+        # Get all nodes to filter out non-step nodes
+        all_nodes = await database_sync_to_async(lambda: list(workflow.nodes.all()))()
+        node_types = {node.node_id: node.node_type for node in all_nodes}
+
+        # Filter to only include step nodes (exclude start, conditional, output nodes, etc.)
+        step_dependency_node_ids = [
+            dep_id for dep_id in dependency_node_ids
+            if node_types.get(dep_id) == 'step'
+        ]
+
+        if not step_dependency_node_ids:
+            # No step dependencies, can execute
+            return []
+
+        # Get completed steps for this workflow run
+        completed_steps = await database_sync_to_async(
+            lambda: list(WorkflowRunStep.objects.filter(
+                workflow_run=workflow_run,
+                status__in=[
+                    WorkflowRunStepStatus.COMPLETED,
+                    WorkflowRunStepStatus.SKIPPED
+                ]
+            ).values_list('step_node__node_id', flat=True))
+        )()
+
+        # Find which dependencies are missing
+        missing = [
+            dep_id for dep_id in step_dependency_node_ids
+            if dep_id not in completed_steps
+        ]
+
+        return missing
+
     async def _rebuild_execution_context(
         self,
         workflow_run: WorkflowRun,
@@ -502,6 +756,62 @@ class WorkflowExecutionService:
         if status in ['completed', 'failed']:
             workflow_run.ended_at = timezone.now()
             workflow_run.save(update_fields=['ended_at'])
+
+    @database_sync_to_async
+    def _is_step_already_completed(
+        self,
+        workflow_run: WorkflowRun,
+        node: ExecutionNode
+    ) -> bool:
+        """Check if a step was already completed (for partial runs)."""
+        if node.type != 'step':
+            return False
+
+        try:
+            step = WorkflowRunStep.objects.filter(
+                workflow_run=workflow_run,
+                step_node=node.db_node,
+                status=WorkflowRunStepStatus.COMPLETED
+            ).first()
+            return step is not None
+        except Exception as e:
+            logger.error(f"Error checking if step is completed: {e}")
+            return False
+
+    @database_sync_to_async
+    def _get_existing_step_result(
+        self,
+        workflow_run: WorkflowRun,
+        node: ExecutionNode
+    ) -> NodeExecutionResult:
+        """Get the result of an already-completed step."""
+        try:
+            step = WorkflowRunStep.objects.filter(
+                workflow_run=workflow_run,
+                step_node=node.db_node,
+                status=WorkflowRunStepStatus.COMPLETED
+            ).first()
+
+            if step:
+                return NodeExecutionResult(
+                    success=True,
+                    output=step.response,
+                    metadata=step.metadata or {}
+                )
+            else:
+                # Fallback if step not found
+                return NodeExecutionResult(
+                    success=False,
+                    output=None,
+                    error="Step not found"
+                )
+        except Exception as e:
+            logger.error(f"Error getting existing step result: {e}")
+            return NodeExecutionResult(
+                success=False,
+                output=None,
+                error=str(e)
+            )
 
     @database_sync_to_async
     def _update_step_status_to_skipped(
