@@ -18,9 +18,33 @@ User = get_user_model()
 
 @admin.register(LLM)
 class LLMAdmin(admin.ModelAdmin):
-    list_display = ("name", "identifier", "provider")
-    search_fields = ("name", "identifier")
+    list_display = ("name", "identifier", "provider", "base_url_display")
+    search_fields = ("name", "identifier", "base_url")
     list_filter = ("provider",)
+
+    fieldsets = (
+        ("Model Information", {
+            "fields": ("name", "identifier", "description", "provider")
+        }),
+        ("Custom Endpoint (for CUSTOM provider)", {
+            "fields": ("base_url",),
+            "description": "Required when provider is set to 'CUSTOM'. Enter the base URL for OpenAI-compatible endpoints (e.g., https://litellm-dev.pace.gatech.edu:4000/v1)"
+        }),
+        ("Capabilities", {
+            "fields": ("is_reasoning", "supports_vision", "is_image_generator")
+        }),
+        ("Pricing", {
+            "fields": ("input_token_rate_per_million", "output_token_rate_per_million"),
+            "classes": ("collapse",)
+        }),
+    )
+
+    def base_url_display(self, obj):
+        """Display base URL or indicate if using default provider endpoint"""
+        if obj.base_url:
+            return obj.base_url
+        return "-"
+    base_url_display.short_description = "Base URL"
 
 @admin.register(Conversation)
 class ConversationAdmin(admin.ModelAdmin):

@@ -12,6 +12,7 @@ class Provider(Enum):
     CLAUDE = "claude"
     GEMINI = "gemini"
     LLAMA = "llama"
+    CUSTOM = "custom"
 
     @classmethod
     def choices(cls):
