@@ -16,9 +16,21 @@ class LlamaService:
             api_key: Not used for Ollama (local service), kept for interface consistency
         """
         # Ollama is a local service and doesn't require an API key
-        self.client = ollama.AsyncClient(host=env.OLLAMA_HOST)
+        self._client = None
         self.model = llm.identifier
         self.is_reasoning = llm.is_reasoning
+
+    @property
+    def client(self) -> ollama.AsyncClient:
+        """
+        Lazy initialization of Ollama client.
+
+        This prevents issues with async HTTP clients in RQ background workers
+        by creating the client on first use rather than during __init__.
+        """
+        if self._client is None:
+            self._client = ollama.AsyncClient(host=env.OLLAMA_HOST)
+        return self._client
 
     async def stream_chat_completion(
         self, messages: List[Dict[str, str]], max_tokens: int = 1024, temperature: float = 0.7, images: List[Dict] = None, tools: list = None
