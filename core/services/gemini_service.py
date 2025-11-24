@@ -45,9 +45,22 @@ class GeminiService:
         if api_key is None:
             api_key = get_provider_api_key(llm.provider)
 
-        self.client = genai.Client(api_key=api_key)
+        self.api_key = api_key
+        self._client = None
         self.model_identifier = llm.identifier
         self.is_reasoning = llm.is_reasoning
+
+    @property
+    def client(self) -> genai.Client:
+        """
+        Lazy initialization of Gemini client.
+
+        This prevents issues with HTTP clients in RQ background workers
+        by creating the client on first use rather than during __init__.
+        """
+        if self._client is None:
+            self._client = genai.Client(api_key=self.api_key)
+        return self._client
 
     async def stream_chat_completion(
         self,
