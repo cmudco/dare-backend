@@ -239,16 +239,27 @@ class GeminiService:
         Returns:
             Extracted field value as string
         """
+        logger.info(
+            f"[Gemini] _get_structured_completion called with model: {self.model_identifier}, "
+            f"spec: {structured_spec}"
+        )
+
         response_mime_type, response_schema = SchemaTransformer.transform_for_gemini(
             structured_spec
+        )
+        logger.info(
+            f"[Gemini] Transformed schema - mime_type: {response_mime_type}, "
+            f"schema: {response_schema}"
         )
 
         if not response_mime_type or not response_schema:
             # Fallback to regular completion
+            logger.warning("[Gemini] No response schema generated, falling back to streaming")
             stream = self.stream_chat_completion(messages, max_tokens, temperature)
             return await StreamAggregator.aggregate_stream(stream)
 
         # Generate with schema
+        logger.info("[Gemini] Calling native structured output API with response_schema")
         response = await self._generate_with_schema(
             messages,
             max_tokens,
@@ -256,9 +267,12 @@ class GeminiService:
             response_mime_type,
             response_schema
         )
+        logger.info(f"[Gemini] Native API response received: {str(response)[:200]}...")
 
         # Extract and return field value
-        return self._extract_field_value(response, structured_spec)
+        extracted_value = self._extract_field_value(response, structured_spec)
+        logger.info(f"[Gemini] Extracted field value: {extracted_value}")
+        return extracted_value
 
     async def _generate_with_schema(
         self,
@@ -303,18 +317,28 @@ class GeminiService:
         """
         Extract field value from structured response.
 
+        For object schemas (with explanation), returns the full JSON string.
+        For enum schemas, returns just the field value.
+
         Args:
             response: Gemini response object
             structured_spec: Schema specification with field name
 
         Returns:
-            Extracted value as string
+            Extracted value as string (either single value or full JSON)
         """
         text_out = getattr(response, 'text', None)
 
         if not text_out:
             return ""
 
+        schema_type = structured_spec.get('type')
+
+        # For object schemas, return the full JSON (includes explanation)
+        if schema_type == 'object':
+            return text_out
+
+        # For legacy enum schemas, extract just the field value
         try:
             data = json.loads(text_out)
             field_name = structured_spec.get('field', 'route')

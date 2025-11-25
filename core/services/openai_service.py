@@ -258,20 +258,31 @@ class OpenAIService:
         Returns:
             Extracted field value as string
         """
+        logger.info(
+            f"[OpenAI] _get_structured_completion called with model: {self.model}, "
+            f"spec: {structured_spec}"
+        )
+
         response_format = SchemaTransformer.transform_for_openai(structured_spec)
+        logger.info(f"[OpenAI] Transformed response_format: {response_format}")
 
         if not response_format:
             # Fallback to regular completion
+            logger.warning("[OpenAI] No response_format generated, falling back to streaming")
             stream = self.stream_chat_completion(messages)
             return await StreamAggregator.aggregate_stream(stream)
 
         try:
+            logger.info("[OpenAI] Calling native structured output API with response_format")
             response = await self._generate_with_chat_completions_structure(
                 messages,
                 response_format
             )
+            logger.info(f"[OpenAI] Native API response received: {str(response)[:200]}...")
 
-            return self._extract_field_value(response, structured_spec)
+            extracted_value = self._extract_field_value(response, structured_spec)
+            logger.info(f"[OpenAI] Extracted field value: {extracted_value}")
+            return extracted_value
         except Exception as e:
             logger.error(f"OpenAI structured output error: {str(e)}", exc_info=True)
             error_message = OpenAIErrorHandler.format_error(e)
@@ -313,12 +324,15 @@ class OpenAIService:
         """
         Extract field value from structured response.
 
+        For object schemas (with explanation), returns the full JSON string.
+        For enum schemas, returns just the field value.
+
         Args:
             response: OpenAI response object (from chat.completions.create)
             structured_spec: Schema specification with field name
 
         Returns:
-            Extracted value as string
+            Extracted value as string (either single value or full JSON)
         """
         try:
             text_out = response.choices[0].message.content
@@ -329,6 +343,13 @@ class OpenAIService:
         if not text_out:
             return ""
 
+        schema_type = structured_spec.get('type')
+
+        # For object schemas, return the full JSON (includes explanation)
+        if schema_type == 'object':
+            return text_out
+
+        # For legacy enum schemas, extract just the field value
         try:
             data = json.loads(text_out)
             field_name = structured_spec.get('field', 'route')
