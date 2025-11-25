@@ -640,15 +640,9 @@ class WorkflowRunViewSet(viewsets.ModelViewSet):
         if isinstance(step_data, ConditionalNodeData):
             return step_data.get_routes()
 
-        # StructuredOutputNode: need to find the connected structured output node
-        if isinstance(step_data, StepNodeData) and pending_step.metadata.get(MetadataKey.USE_STRUCTURED_OUTPUT_NODE):
-            structured_node = workflow_run.workflow.nodes.filter(
-                node_id=node_id,
-                node_type='structuredOutput'
-            ).first()
-
-            if structured_node and structured_node.data_object:
-                return structured_node.data_object.get_routes()
+        # StructuredOutputNodeData: independent routing node with its own routes
+        if isinstance(step_data, StructuredOutputNodeData):
+            return step_data.get_routes()
 
         return None
 

@@ -80,10 +80,6 @@ class StepNodeData(BaseNodeData):
         default='',
         help_text="Optional text input to be passed directly to the LLM"
     )
-    use_structured_output_node = models.BooleanField(
-        default=False,
-        help_text="If true, this step uses a separate StructuredOutputNode for routing"
-    )
     enable_web_search = models.BooleanField(
         default=False,
         help_text="If true, enable web search for this step's LLM"
@@ -105,7 +101,6 @@ class StepNodeData(BaseNodeData):
             'usePreviousStepFiles': self.use_previous_step_files,
             'usePreviousStepEmbeddings': self.use_previous_step_embeddings,
             'textInput': self.text_input,
-            'useStructuredOutputNode': self.use_structured_output_node,
             'enableWebSearch': self.enable_web_search,
         }
 
@@ -173,13 +168,13 @@ class ChatOutputNodeData(BaseNodeData):
 
 
 class StructuredOutputNodeData(BaseNodeData):
-    """Data model for 'structuredOutput' type nodes - defines output routes for step nodes."""
+    """Data model for 'structuredOutput' type nodes - independent routing decision nodes."""
     prompt = models.ForeignKey(
         'prompts.Prompt',
         on_delete=models.PROTECT,
         null=True,
         blank=True,
-        help_text="Prompt template for routing evaluation"
+        help_text="Optional prompt template for routing evaluation (falls back to base prompt if not provided)"
     )
     routes = models.JSONField(
         default=list,
@@ -200,6 +195,11 @@ class StructuredOutputNodeData(BaseNodeData):
         blank=True,
         help_text="Language model for routing evaluation"
     )
+    text_input = models.TextField(
+        blank=True,
+        default='',
+        help_text="Optional text input to be passed directly to the LLM for routing decision"
+    )
 
     def get_routes(self):
         """Get routes for structured output node."""
@@ -212,6 +212,7 @@ class StructuredOutputNodeData(BaseNodeData):
             'stepNumber': self.step_number,
             'requireHumanValidation': self.require_human_validation,
             'llm': self.llm.id if self.llm else None,
+            'textInput': self.text_input,
         }
 
     def __str__(self):
