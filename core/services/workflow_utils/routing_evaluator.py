@@ -45,8 +45,9 @@ class RoutingEvaluator:
         if node.type == 'start':
             return True
 
-        # Always execute conditional nodes when their dependencies are ready
-        if node.type == 'conditional':
+        # Always execute conditional and structuredOutput nodes when their dependencies are ready
+        # These are routing/decision nodes that produce routing decisions for downstream nodes
+        if node.type in ('conditional', 'structuredOutput'):
             return True
 
         # Evaluate routing constraints across all incoming edges
@@ -87,7 +88,23 @@ class RoutingEvaluator:
                 any_non_routing_valid = any_non_routing_valid or evaluation_result['non_routing_valid']
                 continue
 
-            # Evaluate structured step routing
+            # Evaluate structuredOutput routing (independent routing node)
+            if source_node.node_type == 'structuredOutput':
+                evaluation_result = RoutingEvaluator._evaluate_structured_output_routing(
+                    edge, source_result, is_skipped
+                )
+                has_routing_edge = evaluation_result['has_routing']
+                any_routing_match = any_routing_match or evaluation_result['matches']
+                any_non_routing_valid = any_non_routing_valid or evaluation_result['non_routing_valid']
+
+                logger.info(
+                    f"StructuredOutput routing for target node {node.id}: "
+                    f"has_routing={has_routing_edge}, matches={evaluation_result['matches']}, "
+                    f"edge_handle={edge.source_handle}"
+                )
+                continue
+
+            # Evaluate structured step routing (legacy step-based routing)
             if source_node.node_type == 'step' and edge.source_handle:
                 evaluation_result = RoutingEvaluator._evaluate_structured_step_routing(
                     edge, source_result, source_node_id, node.id, is_skipped
@@ -101,14 +118,21 @@ class RoutingEvaluator:
             any_non_routing_valid = any_non_routing_valid or (not is_skipped)
 
         # Decision logic
+        should_execute = False
         if has_routing_edge:
-            return any_routing_match
+            should_execute = any_routing_match
+        elif any_non_routing_valid:
+            should_execute = True
+        else:
+            should_execute = False
 
-        if any_non_routing_valid:
-            return True
+        logger.info(
+            f"Routing decision for node {node.id}: execute={should_execute}, "
+            f"has_routing_edge={has_routing_edge}, any_routing_match={any_routing_match}, "
+            f"any_non_routing_valid={any_non_routing_valid}"
+        )
 
-        # If no available sources, skip
-        return False
+        return should_execute
 
     @staticmethod
     def _evaluate_conditional_routing(
@@ -137,6 +161,60 @@ class RoutingEvaluator:
             # This is a routing edge
             expected = f"output-{routing_decision}"
             match = (edge_handle == expected)
+            return {
+                'has_routing': True,
+                'matches': match,
+                'non_routing_valid': False
+            }
+        else:
+            # No handle or decision; treat as non-routing valid if source not skipped
+            return {
+                'has_routing': False,
+                'matches': False,
+                'non_routing_valid': not is_skipped
+            }
+
+    @staticmethod
+    def _evaluate_structured_output_routing(
+        edge: Any,
+        source_result: NodeExecutionResult,
+        is_skipped: bool
+    ) -> Dict[str, Any]:
+        """
+        Evaluate routing for structuredOutput node sources.
+
+        StructuredOutput nodes use route-{name} handle format with selected_route metadata.
+
+        Args:
+            edge: The edge being evaluated
+            source_result: Result from the structured output node
+            is_skipped: Whether the source was skipped
+
+        Returns:
+            Dict with routing evaluation results
+        """
+        edge_handle = edge.source_handle
+        selected_route = None
+
+        # Check for selected_route in metadata
+        if getattr(source_result, 'metadata', None):
+            selected_route = source_result.metadata.get('selected_route')
+            logger.info(
+                f"StructuredOutput metadata check: metadata={source_result.metadata}, "
+                f"selected_route={selected_route}, edge_handle={edge_handle}"
+            )
+
+        if edge_handle and selected_route is not None:
+            # StructuredOutput nodes use output-{name} format (e.g., output-good, output-bad)
+            # Same as conditional nodes
+            expected = f"output-{selected_route}"
+            match = (edge_handle == expected)
+
+            logger.debug(
+                f"Routing via structuredOutput: selected_route='{selected_route}', "
+                f"edge_handle='{edge_handle}', match={match}"
+            )
+
             return {
                 'has_routing': True,
                 'matches': match,

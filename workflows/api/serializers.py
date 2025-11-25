@@ -88,8 +88,8 @@ class WorkflowRunSerializer(serializers.ModelSerializer):
             step_data = step.step_node.data_object if step.step_node else None
 
             metadata = step.metadata or {}
-            uses_structured_output = metadata.get(MetadataKey.USE_STRUCTURED_OUTPUT_NODE, False)
 
+            # Handle ConditionalNodeData
             if step_data and isinstance(step_data, ConditionalNodeData):
                 available_routes = step_data.get_routes()
 
@@ -109,29 +109,26 @@ class WorkflowRunSerializer(serializers.ModelSerializer):
                     'ai_analysis': ai_analysis
                 })
 
-            elif uses_structured_output:
-                edge = edges_by_target.get(step.step_node.node_id)
-                if edge:
-                    node = nodes_by_id.get(edge.source)
-                    if node and node.node_type == 'structuredOutput':
-                        structured_node = node.data_object
-                        if structured_node and isinstance(structured_node, StructuredOutputNodeData):
-                            available_routes = structured_node.get_routes()
-                            ai_recommendation = metadata.get(MetadataKey.AI_RECOMMENDATION)
-                            ai_analysis = metadata.get(MetadataKey.ANALYSIS)
+            # Handle StructuredOutputNodeData (independent routing node)
+            elif step_data and isinstance(step_data, StructuredOutputNodeData):
+                available_routes = step_data.get_routes()
 
-                            prompt_content = structured_node.prompt.content if structured_node.prompt else "Evaluate the input and choose the appropriate route."
+                # Use 'explanation' instead of 'analysis' for structured output nodes
+                ai_recommendation = metadata.get('ai_recommendation')
+                ai_analysis = metadata.get('explanation') or metadata.get(MetadataKey.ANALYSIS)
 
-                            validations.append({
-                                'node_id': node.node_id,
-                                'step_number': step_data.step_number if step_data else step.order,
-                                'custom_prompt': prompt_content,
-                                'available_routes': available_routes,
-                                'current_response': step.response,
-                                'step_id': step.id,
-                                'ai_recommendation': ai_recommendation,
-                                'ai_analysis': ai_analysis
-                            })
+                prompt_content = step_data.prompt.content if step_data.prompt else "Evaluate the input and choose the appropriate route."
+
+                validations.append({
+                    'node_id': step.step_node.node_id,
+                    'step_number': step_data.step_number,
+                    'custom_prompt': prompt_content,
+                    'available_routes': available_routes,
+                    'current_response': step.response,
+                    'step_id': step.id,
+                    'ai_recommendation': ai_recommendation,
+                    'ai_analysis': ai_analysis
+                })
 
         return validations
 
@@ -199,7 +196,7 @@ class StepNodeDataSerializer(serializers.ModelSerializer):
             'agent', 'prompt', 'content_files', 'embedding_files', 'llm', 'step_number',
             'max_tokens', 'temperature', 'max_context_snippets',
             'document_similarity_threshold', 'use_previous_step_files',
-            'use_previous_step_embeddings', 'text_input', 'use_structured_output_node',
+            'use_previous_step_embeddings', 'text_input',
             'enable_web_search'
         ]
 
@@ -223,7 +220,7 @@ class StructuredOutputNodeDataSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = StructuredOutputNodeData
-        fields = ['prompt', 'llm', 'routes', 'require_human_validation', 'step_number']
+        fields = ['prompt', 'llm', 'routes', 'require_human_validation', 'step_number', 'text_input']
 
     def to_representation(self, instance):
         """Include computed routes via get_routes() method."""
