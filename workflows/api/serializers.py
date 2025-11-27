@@ -153,7 +153,7 @@ class WorkflowSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'user', 'version', 'parent', 'created_at',
             'viewport_x', 'viewport_y', 'viewport_zoom',
-            'manual_mode_enabled',
+            'manual_mode_enabled', 'display_order',
             'nodes', 'edges', 'latest_run',
             'title', 'description', 'mode', 'viewport'
         ]
