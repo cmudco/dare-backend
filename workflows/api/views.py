@@ -55,7 +55,7 @@ class WorkflowViewSet(viewsets.ModelViewSet):
             ),
             'nodes',
             'edges'
-        ).order_by('-created_at')
+        ).order_by('display_order', '-created_at')
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)
@@ -202,6 +202,44 @@ class WorkflowViewSet(viewsets.ModelViewSet):
 
         serializer = self.get_serializer(workflow)
         return Response(serializer.data, status=200)
+
+    @action(detail=False, methods=['patch'], url_path='update-display-order')
+    def update_display_order(self, request):
+        """
+        Update the display order of multiple workflows.
+        Expected payload: [{"id": 1, "display_order": 10}, {"id": 2, "display_order": 20}, ...]
+        """
+        try:
+            updates = request.data
+            if not isinstance(updates, list):
+                return Response(
+                    {"error": "Expected a list of workflow updates"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            workflow_ids = [update.get('id') for update in updates]
+            workflows = Workflow.active_objects.filter(
+                user=request.user,
+                id__in=workflow_ids
+            )
+
+            workflow_map = {wf.id: wf for wf in workflows}
+
+            for update in updates:
+                workflow_id = update.get('id')
+                display_order = update.get('display_order')
+
+                if workflow_id in workflow_map and display_order is not None:
+                    workflow_map[workflow_id].display_order = display_order
+                    workflow_map[workflow_id].save(update_fields=['display_order'])
+
+            return Response(status=status.HTTP_204_NO_CONTENT)
+
+        except Exception as e:
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
 # StepViewSet removed - steps now managed via WorkflowNode with StepNodeData
 
