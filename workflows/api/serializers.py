@@ -3,7 +3,9 @@ import logging
 from django.contrib.contenttypes.models import ContentType
 from rest_framework import serializers
 
+from conversations.models import LLM
 from files.api.serializers import FileSerializer
+from prompts.models import Prompt
 from workflows.constants import WorkflowRunStepStatus
 from workflows.handlers.utils import MetadataKey
 from workflows.models import (
@@ -190,6 +192,18 @@ class WorkflowSerializer(serializers.ModelSerializer):
 # ==========================================
 
 class StepNodeDataSerializer(serializers.ModelSerializer):
+    # Make fields explicitly optional for save operations
+    prompt = serializers.PrimaryKeyRelatedField(
+        queryset=Prompt.active_objects.all(),
+        required=False,
+        allow_null=True
+    )
+    llm = serializers.PrimaryKeyRelatedField(
+        queryset=LLM.objects.all(),
+        required=False,
+        allow_null=True
+    )
+
     class Meta:
         model = StepNodeData
         fields = [
@@ -217,6 +231,16 @@ class ChatOutputNodeDataSerializer(serializers.ModelSerializer):
 
 class StructuredOutputNodeDataSerializer(serializers.ModelSerializer):
     routes = serializers.JSONField(required=False, allow_null=True)
+    prompt = serializers.PrimaryKeyRelatedField(
+        queryset=Prompt.active_objects.all(),
+        required=False,
+        allow_null=True
+    )
+    llm = serializers.PrimaryKeyRelatedField(
+        queryset=LLM.objects.all(),
+        required=False,
+        allow_null=True
+    )
 
     class Meta:
         model = StructuredOutputNodeData
@@ -232,6 +256,16 @@ class StructuredOutputNodeDataSerializer(serializers.ModelSerializer):
 
 class ConditionalNodeDataSerializer(serializers.ModelSerializer):
     routes = serializers.JSONField(required=False, allow_null=True)
+    prompt = serializers.PrimaryKeyRelatedField(
+        queryset=Prompt.active_objects.all(),
+        required=False,
+        allow_null=True
+    )
+    llm = serializers.PrimaryKeyRelatedField(
+        queryset=LLM.objects.all(),
+        required=False,
+        allow_null=True
+    )
 
     class Meta:
         model = ConditionalNodeData
