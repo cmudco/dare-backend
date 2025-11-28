@@ -21,7 +21,7 @@ class WorkflowValidator:
     """
 
     # Constants for route handle prefix (matches frontend constant)
-    ROUTE_HANDLE_PREFIX = 'route-'
+    ROUTE_HANDLE_PREFIX = 'output-'
 
     @staticmethod
     def validate_for_execution(workflow: Workflow) -> Tuple[bool, List[str]]:
@@ -103,13 +103,13 @@ class WorkflowValidator:
         return is_valid, errors
 
     @staticmethod
-    def _build_edge_lookup(edges) -> Dict[str, List[str]]:
-        """Build lookup dictionary: source_node_id -> [target_node_ids]"""
-        edge_lookup: Dict[str, List[str]] = {}
+    def _build_edge_lookup(edges) -> Dict[str, List]:
+        """Build lookup dictionary: source_node_id -> [edge objects]"""
+        edge_lookup: Dict[str, List] = {}
         for edge in edges:
             if edge.source not in edge_lookup:
                 edge_lookup[edge.source] = []
-            edge_lookup[edge.source].append(edge.target)
+            edge_lookup[edge.source].append(edge)
         return edge_lookup
 
     @staticmethod
@@ -207,8 +207,9 @@ class WorkflowValidator:
                     continue
 
                 # Check if step is connected to any of its output nodes
+                outgoing_targets = [edge.target for edge in edges_by_source.get(step_node.node_id, [])]
                 has_output_edge = any(
-                    output.node_id in edges_by_source.get(step_node.node_id, [])
+                    output.node_id in outgoing_targets
                     for output in outputs_for_step
                 )
 
@@ -290,28 +291,8 @@ class WorkflowValidator:
                     f"{node_label}: Can only connect from one output node"
                 )
 
-            # Validate outgoing connections
-            outgoing_edges = [
-                edge for edge in edges_by_source.get(conditional_node.node_id, [])
-                if edge.source_handle and edge.source_handle.startswith(WorkflowValidator.ROUTE_HANDLE_PREFIX)
-            ]
-
-            # Get all edges for this conditional node to check targets
-            all_outgoing_edges = []
-            for edge_target in edges_by_source.get(conditional_node.node_id, []):
-                # Find the actual edge object
-                for edge in incoming_edges + list(edges_by_source.get(conditional_node.node_id, [])):
-                    if hasattr(edge, 'target') and edge.target == edge_target:
-                        all_outgoing_edges.append(edge)
-                        break
-
-            # Actually, we need to get edge objects not just target IDs
-            # Let's use a different approach - get edges directly from conditional_node
-            from workflows.models import WorkflowEdge
-            actual_outgoing_edges = list(WorkflowEdge.objects.filter(
-                workflow=conditional_node.workflow,
-                source=conditional_node.node_id
-            ))
+            # Validate outgoing connections - edges_by_source now contains edge objects
+            actual_outgoing_edges = edges_by_source.get(conditional_node.node_id, [])
 
             # Validate each route's connections
             for route in routes:
@@ -364,7 +345,6 @@ class WorkflowValidator:
         Requirements:
             - At least 2 routes defined
             - All route names are unique and non-empty
-            - Receives exactly one input from chatOutput node
             - Routes only connect to step nodes
             - For execution: (prompt OR textInput) is provided
             - For execution: llm is selected
@@ -372,48 +352,8 @@ class WorkflowValidator:
         """
         errors: List[str] = []
 
-        # Find steps connected to structured output nodes
-        steps_with_structured = []
-        for step_node in step_nodes:
-            incoming = edges_by_target.get(step_node.node_id, [])
-            has_structured_input = any(
-                edge.source in node_lookup and
-                node_lookup[edge.source].node_type == 'structuredOutput'
-                for edge in incoming
-            )
-            if has_structured_input:
-                steps_with_structured.append(step_node)
-
-        for step_node in steps_with_structured:
-            step_data = step_node.typed_data
-            step_number = getattr(step_data, 'step_number', None)
-            step_label = f"Step {step_number}" if step_number else f"Step {step_node.node_id}"
-
-            # Find the structured output node connected to this step
-            incoming = edges_by_target.get(step_node.node_id, [])
-            structured_inputs = [
-                edge for edge in incoming
-                if edge.source in node_lookup and
-                node_lookup[edge.source].node_type == 'structuredOutput'
-            ]
-
-            if len(structured_inputs) == 0:
-                errors.append(
-                    f"{step_label} is set to use a Structured Output node but none is connected."
-                )
-                continue
-
-            if len(structured_inputs) > 1:
-                errors.append(
-                    f"{step_label} can only be connected to one Structured Output node."
-                )
-                continue
-
-            # Get the structured output node
-            structured_node = node_lookup.get(structured_inputs[0].source)
-            if not structured_node:
-                continue
-
+        # Validate each structured output node directly
+        for structured_node in structured_nodes:
             data = structured_node.typed_data
             routes = getattr(data, 'routes', []) or []
             so_step_number = getattr(data, 'step_number', None)
@@ -440,7 +380,7 @@ class WorkflowValidator:
             # Validate routes
             if len(routes) < 2:
                 errors.append(
-                    f"{step_label} Structured Output requires at least 2 routes."
+                    f"{so_label}: Must have at least 2 routes defined."
                 )
 
             # Validate route names are unique and non-empty
@@ -449,20 +389,16 @@ class WorkflowValidator:
 
             if len(non_empty_route_names) != len(routes):
                 errors.append(
-                    f"{step_label} Structured Output: All routes must have non-empty names"
+                    f"{so_label}: All routes must have non-empty names"
                 )
 
             if len(non_empty_route_names) != len(set(non_empty_route_names)):
                 errors.append(
-                    f"{step_label} Structured Output route names must be unique."
+                    f"{so_label}: Route names must be unique."
                 )
 
-            # Validate outgoing connections from the step
-            from workflows.models import WorkflowEdge
-            actual_outgoing_edges = list(WorkflowEdge.objects.filter(
-                workflow=step_node.workflow,
-                source=step_node.node_id
-            ))
+            # Get outgoing edges from the STRUCTURED OUTPUT node (not step node)
+            actual_outgoing_edges = edges_by_source.get(structured_node.node_id, [])
 
             # Validate each route's connections
             for route in routes:
@@ -484,12 +420,12 @@ class WorkflowValidator:
                     target_node = node_lookup.get(route_connections[0].target)
                     if target_node and target_node.node_type != 'step':
                         errors.append(
-                            f"{step_label} route \"{route_name}\": "
+                            f"{so_label} route \"{route_name}\": "
                             f"Must connect to a step node."
                         )
                 elif len(route_connections) > 1:
                     errors.append(
-                        f"{step_label} route \"{route_name}\": "
+                        f"{so_label} route \"{route_name}\": "
                         f"Can connect to only one step."
                     )
 
@@ -502,7 +438,7 @@ class WorkflowValidator:
 
                 if total_route_connections == 0:
                     errors.append(
-                        f"{step_label} requires at least one connected route."
+                        f"{so_label}: Must have at least one route connected to a step node"
                     )
 
         return errors
@@ -536,11 +472,11 @@ class WorkflowValidator:
 
             reachable.add(current)
 
-            # Add all targets of this node to the stack
-            targets = edges_by_source.get(current, [])
-            for target in targets:
-                if target not in reachable:
-                    stack.append(target)
+            # Add all targets of this node to the stack - edges_by_source contains edge objects
+            edges = edges_by_source.get(current, [])
+            for edge in edges:
+                if edge.target not in reachable:
+                    stack.append(edge.target)
 
         # Check that all step nodes are reachable
         for step_node in step_nodes:
