@@ -171,11 +171,12 @@ class ConditionalNodeHandler(BaseExecutionHandler):
                 )
 
             # No human validation required - proceed with AI decision
+            # NOTE: All keys use MetadataKey constants for consistency
             metadata = {
                 MetadataKey.ROUTING_DECISION: routing_decision,
-                'analysis': analysis_text,
-                MetadataKey.AVAILABLE_ROUTES: routes,  # Full route objects
-                MetadataKey.IS_HUMAN_VALIDATED: False
+                MetadataKey.ANALYSIS: analysis_text,  # Unified key
+                MetadataKey.AVAILABLE_ROUTES: routes,  # Full route objects [{name, description}]
+                MetadataKey.IS_HUMAN_VALIDATED: False,
             }
 
             await self._update_step_status(
@@ -200,10 +201,9 @@ class ConditionalNodeHandler(BaseExecutionHandler):
                 execution_time=execution_time,
                 metadata={
                     MetadataKey.ROUTING_DECISION: routing_decision,
-                    MetadataKey.AVAILABLE_ROUTES: routes,  # Full route objects
-                    'evaluated_input_length': len(input_output),
-                    'analysis': analysis_text,
-                    MetadataKey.IS_HUMAN_VALIDATED: False
+                    MetadataKey.ANALYSIS: analysis_text,  # Unified key
+                    MetadataKey.AVAILABLE_ROUTES: routes,  # Full route objects [{name, description}]
+                    MetadataKey.IS_HUMAN_VALIDATED: False,
                 }
             )
 
@@ -485,15 +485,16 @@ class ConditionalNodeHandler(BaseExecutionHandler):
         Returns:
             NodeExecutionResult with pending human input status
         """
-        # Build metadata using utility constants
+        # Build metadata using standardized MetadataKey constants
         # NOTE: All keys MUST be snake_case - DRF converts to camelCase for frontend
+        # Uses same structure as StructuredOutputNodeHandler for consistency
         metadata = {
             MetadataKey.AI_RECOMMENDATION: routing_decision,
-            'analysis': analysis_text or "",
+            MetadataKey.ANALYSIS: analysis_text or "",  # Unified key
             MetadataKey.AVAILABLE_ROUTES: routes,  # Full route objects with name/description
             MetadataKey.IS_HUMAN_VALIDATED: True,
             MetadataKey.PENDING_HUMAN_VALIDATION: True,
-            'selected_route': routing_decision  # Initially set to AI recommendation, updated when user chooses
+            MetadataKey.SELECTED_ROUTE: routing_decision,  # Initially set to AI recommendation
         }
 
         await self._update_step_status(

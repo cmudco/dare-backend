@@ -45,13 +45,29 @@ class RoutingEvaluator:
         if node.type == 'start':
             return True
 
-        # Always execute conditional and structuredOutput nodes when their dependencies are ready
-        # These are routing/decision nodes that produce routing decisions for downstream nodes
-        if node.type in ('conditional', 'structuredOutput'):
-            return True
-
         # Evaluate routing constraints across all incoming edges
         incoming_edges = [edge for edge in edges if edge.target == node.id]
+
+        # For conditional and structuredOutput nodes:
+        # Execute if at least one predecessor is NOT skipped
+        # Skip if ALL predecessors are skipped (cascade skip)
+        if node.type in ('conditional', 'structuredOutput'):
+            for edge in incoming_edges:
+                source_node_id = edge.source
+                if source_node_id in node_results:
+                    source_result = node_results[source_node_id]
+                    is_skipped = bool(
+                        getattr(source_result, 'metadata', None) and
+                        source_result.metadata.get('skipped')
+                    )
+                    if not is_skipped:
+                        # At least one predecessor is not skipped - execute this node
+                        return True
+            # All predecessors are skipped (or no results yet) - skip this node
+            logger.info(
+                f"Skipping {node.type} node {node.id}: all predecessors are skipped"
+            )
+            return False
 
         has_routing_edge = False
         any_routing_match = False
