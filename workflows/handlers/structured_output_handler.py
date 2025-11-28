@@ -221,12 +221,13 @@ class StructuredOutputNodeHandler(BaseExecutionHandler):
                 )
 
             # No human validation required - proceed with AI decision
+            # NOTE: All keys use MetadataKey constants for consistency
             metadata = {
                 MetadataKey.SELECTED_ROUTE: selected_route,
-                'explanation': explanation,
-                MetadataKey.AVAILABLE_ROUTES: route_names,
+                MetadataKey.ANALYSIS: explanation,  # Unified key
+                MetadataKey.AVAILABLE_ROUTES: routes,  # Full route objects [{name, description}]
                 MetadataKey.IS_HUMAN_VALIDATED: False,
-                'raw_response': raw_response if raw_response != selected_route else None
+                MetadataKey.RAW_RESPONSE: raw_response if raw_response != selected_route else None,
             }
 
             # Response should only be the selected route name
@@ -611,12 +612,15 @@ class StructuredOutputNodeHandler(BaseExecutionHandler):
             f"AI recommendation: {selected_route}"
         )
 
+        # Build metadata using standardized MetadataKey constants
+        # NOTE: All keys MUST be snake_case - DRF converts to camelCase for frontend
+        # Uses same structure as ConditionalNodeHandler for consistency
         metadata = {
-            'ai_recommendation': selected_route,
-            'explanation': explanation,
-            MetadataKey.AVAILABLE_ROUTES: route_names,
-            'pending_human_validation': True,
-            'raw_response': raw_response if raw_response != selected_route else None
+            MetadataKey.AI_RECOMMENDATION: selected_route,
+            MetadataKey.ANALYSIS: explanation,  # Unified key (was 'explanation')
+            MetadataKey.AVAILABLE_ROUTES: routes,  # Full route objects (was route_names)
+            MetadataKey.PENDING_HUMAN_VALIDATION: True,
+            MetadataKey.RAW_RESPONSE: raw_response if raw_response != selected_route else None,
         }
 
         await self._update_step_status(

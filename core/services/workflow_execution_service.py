@@ -310,6 +310,11 @@ class WorkflowExecutionService:
                     )
                 elif node.type == 'chatOutput':
                     await self._clear_output_node_data(node)
+                elif node.type in ('conditional', 'structuredOutput'):
+                    # Routing nodes can also be skipped if all predecessors are skipped
+                    await self._update_step_status_to_skipped(
+                        context.workflow_run, node
+                    )
 
                 continue
 
