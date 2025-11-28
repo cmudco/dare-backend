@@ -1,39 +1,39 @@
-from rest_framework import viewsets, status
-from rest_framework.decorators import action
-from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.exceptions import PermissionDenied
+import logging
+import markdown
+import os
+import tempfile
+import traceback
+
+import weasyprint
+from asgiref.sync import async_to_sync
+from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
 from django.db.models import Prefetch
 from django.http import HttpResponse
 from django.template.loader import render_to_string
 from django.utils import timezone
-from django.contrib.contenttypes.models import ContentType
+from django_rq import enqueue
+from rest_framework import viewsets, status
+from rest_framework.decorators import action
+from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
+
 from common.permissions import IsOwner
-from asgiref.sync import async_to_sync
-import traceback
-import asyncio
-import logging
+from core.services.workflow_execution_service import WorkflowExecutionService
 from workflows.api.serializers import (
     WorkflowRunSerializer, WorkflowSerializer,
     WorkflowNodeSerializer, WorkflowEdgeSerializer,
 )
 from workflows.constants import WorkflowRunStepStatus
+from workflows.handlers.utils import MetadataKey, ExecutionValidator
+from workflows.handlers.utils.workflow_validator import WorkflowValidator
 from workflows.models import (
     Workflow, WorkflowRun, WorkflowRunStep,
-    # New graph-driven models
     WorkflowNode, WorkflowEdge, StepNodeData, StartNodeData, ChatOutputNodeData,
     ConditionalNodeData, StructuredOutputNodeData
 )
 from workflows.services import WorkflowCloningService
-from workflows.handlers.utils import MetadataKey
-from core.services.workflow_execution_service import WorkflowExecutionService
-from django_rq import enqueue
 from workflows.tasks import execute_workflow_run, resume_workflow_run
-import weasyprint
-import tempfile
-import os
-import markdown
 
 
 logger = logging.getLogger(__name__)
@@ -274,6 +274,17 @@ class WorkflowRunViewSet(viewsets.ModelViewSet):
         except Workflow.DoesNotExist:
             return Response({"error": "Workflow not found"}, status=404)
 
+        # Pre-execution validation: Ensure all nodes are properly configured
+        is_valid, validation_errors = WorkflowValidator.validate_for_execution(workflow)
+        if not is_valid:
+            return Response(
+                {
+                    "error": "Workflow validation failed",
+                    "validation_errors": validation_errors,
+                },
+                status=400
+            )
+
         # Check if workflow has step nodes
         step_nodes = workflow.nodes.filter(node_type='step').select_related('data_content_type')
 
@@ -421,6 +432,25 @@ class WorkflowRunViewSet(viewsets.ModelViewSet):
             return Response(
                 {"error": f"Step node {step_node_id} not found in workflow"},
                 status=404
+            )
+
+        if step_node.node_type == 'step':
+            node_errors = ExecutionValidator._validate_step_node(step_node)
+        elif step_node.node_type == 'conditional':
+            node_errors = ExecutionValidator._validate_conditional_node(step_node)
+        elif step_node.node_type == 'structuredOutput':
+            node_errors = ExecutionValidator._validate_structured_output_node(step_node)
+        else:
+            node_errors = []
+
+        if node_errors:
+            return Response(
+                {
+                    "error": "Node validation failed. Please complete required fields.",
+                    "validation_errors": node_errors,
+                    "node_id": step_node_id
+                },
+                status=400
             )
 
         # Get or create WorkflowRunStep for this node
