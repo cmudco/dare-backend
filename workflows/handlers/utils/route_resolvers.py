@@ -152,9 +152,11 @@ class RouteNormalizer:
         """
         Normalize LLM response to match one of the allowed routes.
 
-        Uses two strategies:
-        1. XML extraction - Checks for common XML tags (route, decision, choice, selection)
-        2. Fallback to default - Uses first route if no match found
+        Uses multiple strategies:
+        1. JSON extraction - For structured outputs with object schema
+        2. Direct match - For simple string responses
+        3. XML extraction - For Claude-style wrapped responses
+        4. Fallback to default - Uses first route if no match found
 
         Args:
             raw_response: The raw response from the LLM
@@ -169,15 +171,38 @@ class RouteNormalizer:
             logger.warning(f"No allowed routes provided for node {node_id}")
             return raw_response, raw_response
 
+        # Strategy 0: JSON extraction (for object schemas with route + explanation)
+        try:
+            import json
+            data = json.loads(raw_response)
+            if isinstance(data, dict):
+                # Try to find route field (could be 'route', 'decision', 'choice', etc.)
+                for potential_field in ['route', 'decision', 'choice', 'selection']:
+                    if potential_field in data:
+                        route_value = data[potential_field]
+                        if route_value in allowed_routes:
+                            logger.debug(f"Route '{route_value}' extracted from JSON field '{potential_field}'")
+                            return route_value, raw_response
+                        # Try case-insensitive match
+                        if not case_sensitive:
+                            lower_map = {r.lower(): r for r in allowed_routes}
+                            if str(route_value).lower() in lower_map:
+                                matched_route = lower_map[str(route_value).lower()]
+                                logger.debug(f"Route '{route_value}' from JSON matched case-insensitive to '{matched_route}'")
+                                return matched_route, raw_response
+        except (json.JSONDecodeError, ValueError):
+            # Not JSON, continue with other strategies
+            pass
+
         # Clean response - remove quotes and whitespace
         cleaned = raw_response.strip().strip('"').strip("'")
         cleaned = cleaned.splitlines()[0].strip() if cleaned else cleaned
 
-        # Strategy 1: Direct match (for native structured outputs like Gemini/OpenAI)
+        # Strategy 1: Direct match (for simple string responses)
         if cleaned in allowed_routes:
             logger.debug(f"Route '{cleaned}' matched directly")
             return cleaned, raw_response
-        
+
         # Try case-insensitive match
         if not case_sensitive:
             lower_map = {r.lower(): r for r in allowed_routes}
@@ -271,7 +296,8 @@ class StructuredOutputBuilder:
     def build_structured_spec(
         allowed_routes: List[str],
         field_name: str = "route",
-        description: str = "Route selection decision"
+        description: str = "Route selection decision",
+        include_explanation: bool = True
     ) -> Optional[Dict[str, Any]]:
         """
         Build unified structured output specification.
@@ -283,6 +309,7 @@ class StructuredOutputBuilder:
             allowed_routes: List of valid route names
             field_name: Name of the field in output (default: "route")
             description: Description of the field
+            include_explanation: Whether to include explanation field (default: True)
 
         Returns:
             Unified structured spec dictionary or None if not applicable
@@ -297,13 +324,34 @@ class StructuredOutputBuilder:
             logger.warning(f"Invalid routes for structured output: {errors}")
             return None
 
-        return {
-            'type': 'enum',
-            'field': field_name,
-            'values': allowed_routes,
-            'description': description,
-            'enforce': True,
-        }
+        if include_explanation:
+            # Return object schema with route and explanation fields
+            return {
+                'type': 'object',
+                'properties': {
+                    field_name: {
+                        'type': 'enum',
+                        'values': allowed_routes,
+                        'description': description
+                    },
+                    'explanation': {
+                        'type': 'string',
+                        'description': 'Required: 1-2 sentence analysis explaining why this route was selected based on the context, configuration, or routing criteria. Must not be empty.',
+                        'minLength': 10  # Ensure non-empty explanation
+                    }
+                },
+                'required': [field_name, 'explanation'],
+                'enforce': True,
+            }
+        else:
+            # Legacy format: simple enum (backward compatibility)
+            return {
+                'type': 'enum',
+                'field': field_name,
+                'values': allowed_routes,
+                'description': description,
+                'enforce': True,
+            }
 
     @staticmethod
     def create_route_metadata(

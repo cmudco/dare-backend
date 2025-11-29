@@ -1,8 +1,8 @@
 """
 Step node handler for workflow execution.
 
-This handler executes LLM calls with configured parameters and handles
-structured outputs when connected to StructuredOutput nodes.
+This handler executes LLM calls with configured parameters for standard
+workflow step nodes.
 
 Refactored to use utility modules following LLM provider patterns.
 """
@@ -16,7 +16,6 @@ from workflows.handlers.base import ExecutionNode, NodeExecutionContext, NodeExe
 from workflows.models import WorkflowNode, WorkflowRun, WorkflowRunStep, StepNodeData
 from workflows.constants import WorkflowRunStepStatus
 from conversations.models import LLM
-from core.services.llm_utils import SchemaTransformer
 from core.services.dtos import LLMQueryRequestBuilder
 
 # Import new utility modules
@@ -27,11 +26,6 @@ from workflows.handlers.utils import (
     ErrorResultBuilder,
     NodeDataValidator,
     StepMessagePreparer,
-    RouteResolver,
-    RouteNormalizer,
-    StructuredOutputBuilder,
-    RouteInstructionBuilder,
-    MetadataKey,
 )
 
 
@@ -45,13 +39,14 @@ class StepNodeHandler(BaseExecutionHandler):
     This handler orchestrates step node execution by:
     1. Validating node configuration
     2. Preparing messages using StepMessagePreparer utility
-    3. Handling structured output with RouteResolver utilities
-    4. Executing LLM queries with proper error handling
-    5. Processing billing and status updates via base handler
-    6. Normalizing responses for structured routing
+    3. Executing LLM queries with proper error handling
+    4. Processing billing and status updates via base handler
 
     Enhanced with utility modules for better code quality, maintainability,
     and consistency with LLM provider patterns.
+
+    Note: Structured output routing is now handled by the independent
+    StructuredOutputNodeHandler, not by step nodes.
     """
 
     def can_handle(self, node_type: str) -> bool:
@@ -115,30 +110,16 @@ class StepNodeHandler(BaseExecutionHandler):
             # Prepare message using utility
             message = await self._prepare_message_for_step(step_data, context)
 
-            # Handle structured output configuration
-            structured_config = await self._handle_structured_output(
-                step_data, node.id, context.workflow_run, message
-            )
-
             # Log debug information
-            await self._log_step_debug_info(
-                step_data, node.id, structured_config['use_structured']
-            )
+            await self._log_step_debug_info(step_data, node.id)
 
             # Execute LLM query
-            raw_response, token_usage = await self._execute_llm_query(
+            response, token_usage = await self._execute_llm_query(
                 step_data=step_data,
-                message=structured_config['final_message'],
+                message=message,
                 context=context,
                 workflow_run_step=workflow_run_step,
-                structured_spec=structured_config['structured_spec']
-            )
-
-            # Normalize response if using structured output
-            final_response = await self._normalize_response_if_structured(
-                raw_response=raw_response,
-                structured_config=structured_config,
-                node_id=node.id
+                structured_spec=None
             )
 
             # Process billing using base handler
@@ -146,37 +127,12 @@ class StepNodeHandler(BaseExecutionHandler):
                 step_data, context.workflow_run, node, token_usage
             )
 
-            # Check if human validation is required for structured output
-            if structured_config['use_structured']:
-                # Get the StructuredOutputNodeData to check if human validation is required
-                require_human_validation = await self._check_structured_requires_validation(
-                    context.workflow_run,
-                    node.id
-                )
-
-                if require_human_validation:
-                    return await self._handle_structured_human_validation(
-                        workflow_run_step=workflow_run_step,
-                        routing_decision=final_response,
-                        allowed_routes=structured_config['allowed_routes'],
-                        raw_response=raw_response,
-                        node=node,
-                        step_data=step_data,
-                        start_time=start_time,
-                        correlation_id=correlation_id
-                    )
-
-            # Create metadata for structured output
-            metadata = self._create_step_metadata(
-                final_response, raw_response, structured_config
-            )
-
             # Update workflow run step with results
             await self._update_step_status(
                 workflow_run_step=workflow_run_step,
                 status=WorkflowRunStepStatus.COMPLETED,
-                response=final_response,
-                metadata=metadata
+                response=response,
+                metadata=None
             )
 
             # Calculate execution time
@@ -189,10 +145,10 @@ class StepNodeHandler(BaseExecutionHandler):
 
             return NodeExecutionResult(
                 success=True,
-                output=final_response,
+                output=response,
                 token_usage=token_usage,
                 execution_time=execution_time,
-                metadata=metadata
+                metadata=None
             )
 
         except Exception as e:
@@ -283,105 +239,6 @@ class StepNodeHandler(BaseExecutionHandler):
 
         return message
 
-    async def _handle_structured_output(
-        self,
-        step_data: StepNodeData,
-        node_id: str,
-        workflow_run: WorkflowRun,
-        base_message: str
-    ) -> Dict[str, Any]:
-        """
-        Handle structured output configuration for the step.
-
-        Args:
-            step_data: Step node configuration
-            node_id: Step node ID
-            workflow_run: Current workflow run
-            base_message: Base message to potentially augment
-
-        Returns:
-            Dictionary with structured output configuration:
-                - use_structured: bool
-                - allowed_routes: List[str]
-                - structured_spec: Optional[Dict]
-                - final_message: str (possibly augmented with instructions)
-        """
-        use_structured = await database_sync_to_async(
-            lambda: step_data.use_structured_output_node
-        )()
-
-        config = {
-            'use_structured': use_structured,
-            'allowed_routes': [],
-            'structured_spec': None,
-            'final_message': base_message
-        }
-
-        if not use_structured:
-            return config
-
-        # Resolve routes using utility
-        allowed_routes = await RouteResolver.resolve_routes_for_step(
-            workflow_run, node_id
-        )
-
-        if not allowed_routes:
-            logger.warning(f"Step {node_id} has structured output enabled but no routes found")
-            return config
-
-        config['allowed_routes'] = allowed_routes
-
-        # Build structured spec using utility
-        config['structured_spec'] = StructuredOutputBuilder.build_structured_spec(
-            allowed_routes
-        )
-
-        # Check if provider supports native structured output
-        llm = await self._get_llm_for_step(step_data)
-        llm_provider = await database_sync_to_async(lambda: llm.provider)()
-
-        if not SchemaTransformer.supports_native_structured_output(llm_provider):
-            # Fallback: append route instruction to message
-            instruction = RouteInstructionBuilder.build_simple_instruction(
-                allowed_routes
-            )
-            config['final_message'] = f"{base_message}{instruction}"
-            logger.debug(
-                f"Provider {llm_provider} doesn't support native structured output, "
-                "added instructions to message"
-            )
-
-        return config
-
-    async def _normalize_response_if_structured(
-        self,
-        raw_response: str,
-        structured_config: Dict[str, Any],
-        node_id: str
-    ) -> str:
-        """
-        Normalize response if structured output is being used.
-
-        Args:
-            raw_response: Raw LLM response
-            structured_config: Structured output configuration
-            node_id: Node ID for logging
-
-        Returns:
-            Normalized response (matches route if structured, else raw)
-        """
-        if not structured_config['use_structured'] or not structured_config['allowed_routes']:
-            return raw_response
-
-        # Use utility for normalization
-        normalized, _ = RouteNormalizer.normalize_route_response(
-            raw_response,
-            structured_config['allowed_routes'],
-            node_id
-        )
-
-        return normalized
-
     async def _process_step_billing(
         self,
         step_data: StepNodeData,
@@ -406,33 +263,6 @@ class StepNodeHandler(BaseExecutionHandler):
             llm=llm,
             user=user,
             step_node_id=node.db_node.id
-        )
-
-    def _create_step_metadata(
-        self,
-        final_response: str,
-        raw_response: str,
-        structured_config: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
-        """
-        Create metadata dictionary for step results.
-
-        Args:
-            final_response: Normalized final response
-            raw_response: Raw LLM response
-            structured_config: Structured output configuration
-
-        Returns:
-            Metadata dictionary if structured output used, None otherwise
-        """
-        if not structured_config['use_structured']:
-            return None
-
-        return StructuredOutputBuilder.create_route_metadata(
-            selected_route=final_response,
-            raw_response=raw_response,
-            allowed_routes=structured_config['allowed_routes'],
-            use_structured=True
         )
 
     async def _execute_llm_query(
@@ -562,8 +392,7 @@ class StepNodeHandler(BaseExecutionHandler):
     async def _log_step_debug_info(
         self,
         step_data: StepNodeData,
-        step_node_id: str,
-        use_structured: bool
+        step_node_id: str
     ):
         """
         Log debug information about step configuration.
@@ -571,7 +400,6 @@ class StepNodeHandler(BaseExecutionHandler):
         Args:
             step_data: Step node configuration
             step_node_id: Step node ID
-            use_structured: Whether structured output is enabled
         """
         try:
             text_input_len = len(step_data.text_input or '')
@@ -583,7 +411,7 @@ class StepNodeHandler(BaseExecutionHandler):
             )()
 
             logger.debug(
-                f"Step {step_node_id}: use_structured={use_structured}, "
+                f"Step {step_node_id}: "
                 f"text_input_len={text_input_len}, "
                 f"content_files={content_files_count}, "
                 f"embedding_files={embedding_files_count}"
@@ -592,135 +420,3 @@ class StepNodeHandler(BaseExecutionHandler):
         except Exception as e:
             # Don't break execution if debug logging fails
             logger.warning(f"Failed to log debug info: {e}")
-
-    async def _check_structured_requires_validation(
-        self,
-        workflow_run: WorkflowRun,
-        step_node_id: str
-    ) -> bool:
-        """
-        Check if the StructuredOutputNode connected to this step requires human validation.
-
-        Args:
-            workflow_run: Current workflow run
-            step_node_id: The ID of the step node
-
-        Returns:
-            True if human validation is required, False otherwise
-        """
-        def _check():
-            try:
-                workflow = workflow_run.workflow
-
-                # Find structuredOutput node that connects to this step
-                for edge in workflow.edges.all():
-                    if edge.target == step_node_id:
-                        src_node = workflow.nodes.filter(
-                            node_id=edge.source,
-                            node_type='structuredOutput'
-                        ).first()
-
-                        if src_node and src_node.data_object:
-                            # This is YOUR StructuredOutputNodeData model!
-                            return src_node.data_object.require_human_validation
-
-                return False
-
-            except Exception as e:
-                logger.error(f"Error checking if structured output requires validation: {e}")
-                return False
-
-        return await database_sync_to_async(_check)()
-
-    async def _handle_structured_human_validation(
-        self,
-        workflow_run_step: WorkflowRunStep,
-        routing_decision: str,
-        allowed_routes: list[str],
-        raw_response: str,
-        node: ExecutionNode,
-        step_data: StepNodeData,
-        start_time,
-        correlation_id: str
-    ) -> NodeExecutionResult:
-        """
-        Handle human validation for structured output nodes.
-
-        Mirrors ConditionalNode's human validation flow to ensure consistency.
-
-        Args:
-            workflow_run_step: WorkflowRunStep to update
-            routing_decision: AI recommended route
-            allowed_routes: List of available route names
-            raw_response: Raw LLM response
-            node: Execution node
-            step_data: Step node data
-            start_time: Execution start time
-            correlation_id: Correlation ID for logging
-
-        Returns:
-            NodeExecutionResult with pending human input status
-        """
-        # Build routes array with name/description format (matching ConditionalNode)
-        # For structured output, we only have route names, so description is empty
-        routes = [{'name': route, 'description': ''} for route in allowed_routes]
-
-        # Extract AI analysis from raw response using XML parsing (same as ConditionalNode)
-        # This will parse the XML and extract both the route and any analysis/reasoning
-        extracted_route, analysis_text = RouteNormalizer.extract_route_from_xml(
-            raw_response, allowed_routes, f"structured-output-{node.id}"
-        )
-
-        # Use extracted analysis if available, otherwise use simple fallback
-        ai_analysis = analysis_text or f"AI selected: {routing_decision}"
-
-        # Build metadata - MUST use snake_case (DRF converts to camelCase for frontend)
-        metadata = {
-            MetadataKey.AI_RECOMMENDATION: routing_decision,
-            MetadataKey.ANALYSIS: ai_analysis,  # XML-extracted analysis or fallback
-            MetadataKey.AVAILABLE_ROUTES: routes,  # Array of route objects, not just names
-            MetadataKey.IS_HUMAN_VALIDATED: True,
-            MetadataKey.PENDING_HUMAN_VALIDATION: True,
-            MetadataKey.SELECTED_ROUTE: routing_decision,
-            MetadataKey.RAW_RESPONSE: raw_response,
-            MetadataKey.USE_STRUCTURED_OUTPUT_NODE: True
-        }
-
-        await self._update_step_status(
-            workflow_run_step,
-            WorkflowRunStepStatus.PENDING_HUMAN_INPUT,
-            response=f"AI recommends: {routing_decision}",
-            metadata=metadata
-        )
-
-        end_time = timezone.now()
-        execution_time = (end_time - start_time).total_seconds()
-
-        logger.info(
-            f"[{correlation_id}] Structured output node requires human validation. "
-            f"AI recommends: {routing_decision}"
-        )
-
-        # Get step number for frontend
-        step_number = await database_sync_to_async(
-            lambda: step_data.step_number
-        )()
-
-        # Return special result that pauses execution (matching ConditionalNode format)
-        # NOTE: This metadata is for internal use, not sent to frontend directly
-        return NodeExecutionResult(
-            success=False,
-            error=ErrorCode.PENDING_HUMAN_INPUT,
-            execution_time=execution_time,
-            metadata={
-                MetadataKey.PENDING_HUMAN_VALIDATION: True,
-                MetadataKey.AI_RECOMMENDATION: routing_decision,
-                MetadataKey.AI_ANALYSIS: f"AI selected: {routing_decision}",
-                MetadataKey.AVAILABLE_ROUTES: routes,  # Array of route objects
-                'node_id': node.id,
-                'step_number': step_number,
-                'custom_prompt': '',  # Structured output doesn't have custom prompts
-                MetadataKey.RAW_RESPONSE: raw_response,
-                MetadataKey.SELECTED_ROUTE: routing_decision
-            }
-        )

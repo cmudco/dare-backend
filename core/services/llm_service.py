@@ -306,12 +306,17 @@ class LLMService:
 
         if request.generation.structured_spec:
             # Structured output (non-streaming)
+            logger.info(
+                f"[LLMService] Using structured output with provider: {llm.provider}, "
+                f"model: {llm.identifier}, spec: {request.generation.structured_spec}"
+            )
             text = await ai_service.get_chat_completion(
                 messages,
                 request.generation.max_tokens,
                 request.generation.temperature,
                 structured_spec=request.generation.structured_spec
             )
+            logger.info(f"[LLMService] Structured output response received: {text[:200]}...")
             yield text, None
         else:
             # Standard streaming completion

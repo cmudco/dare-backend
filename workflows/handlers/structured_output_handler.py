@@ -1,249 +1,355 @@
 """
-Structured output handler for workflow execution.
+Structured Output Node Handler for workflow execution.
 
-This module handles structured output processing, route resolution, and
-response normalization for step nodes that use structured outputs.
+This handler executes independent structured output nodes that can route workflow
+execution based on AI evaluation with structured schema enforcement.
+Extends BaseRoutingHandler for shared routing functionality.
 """
 import logging
-import re
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, Dict, Any, List
 from channels.db import database_sync_to_async
+from django.utils import timezone
+
+from workflows.handlers.base_routing_handler import BaseRoutingHandler
+from workflows.handlers.base import ExecutionNode, NodeExecutionContext, NodeExecutionResult
+from workflows.models import StructuredOutputNodeData
+from workflows.constants import WorkflowRunStepStatus
+from conversations.models import LLM
+
+from workflows.handlers.utils import (
+    NodeType,
+    MetadataKey,
+    ErrorResultBuilder,
+    NodeDataValidator,
+    InputValidator,
+)
+
 
 logger = logging.getLogger(__name__)
 
 
-class StructuredOutputHandler:
+class StructuredOutputNodeHandler(BaseRoutingHandler):
     """
-    Handler for structured output processing in workflow steps.
+    Handler for 'structuredOutput' type nodes.
 
-    This class encapsulates all logic related to:
-    - Resolving allowed routes from StructuredOutput nodes
-    - Building structured output instructions for LLMs
-    - Normalizing and validating LLM responses against allowed routes
-    - Providing fallback mechanisms when responses don't match expected routes
+    This handler orchestrates independent structured output node execution by:
+    1. Extracting input from text_input field OR previous node output
+    2. Building base prompt with route selection instructions
+    3. Optionally applying custom prompt template if configured
+    4. Evaluating input using AI with structured output schema
+    5. Handling human validation workflows when required
+
+    The node operates independently with:
+    - Optional text_input field for direct input
+    - Optional prompt template (falls back to base routing prompt)
+    - Routes configuration (name + description for UI)
+    - LLM selection for routing decision
+    - Human validation toggle
     """
 
-    @staticmethod
-    async def resolve_routes_for_step(
-        workflow_run,
-        step_node_id: str
-    ) -> List[str]:
+    def can_handle(self, node_type: str) -> bool:
+        """Check if this handler can process the given node type."""
+        return node_type == NodeType.STRUCTURED_OUTPUT
+
+    def _get_node_type_name(self) -> str:
+        """Get the human-readable name for this node type."""
+        return "structured output"
+
+    async def execute(
+        self,
+        node: ExecutionNode,
+        context: NodeExecutionContext
+    ) -> NodeExecutionResult:
         """
-        Resolve allowed routes from connected StructuredOutput node.
-
-        This method traverses the workflow graph to find any StructuredOutput
-        node that connects to the given step node, and extracts the defined routes.
+        Execute a structured output node by evaluating input and selecting a route.
 
         Args:
-            workflow_run: The current workflow run
-            step_node_id: The ID of the step node
+            node: The structured output node to execute
+            context: Execution context with previous results and workflow info
 
         Returns:
-            List of route names (strings)
+            NodeExecutionResult with routing decision and explanation, or pending human input status
         """
-        def _resolve():
+        start_time = timezone.now()
+        correlation_id = f"structured-output-{node.id}"
+
+        try:
+            # Validate and get structured output configuration
+            so_data = await self._get_node_data(node)
+            if so_data is None:
+                return ErrorResultBuilder.build_validation_error_result(
+                    node_id=node.id,
+                    node_type=NodeType.STRUCTURED_OUTPUT,
+                    validation_message="Invalid or missing structured output node data"
+                )
+
+            # Get or create workflow run step
+            step_number = await database_sync_to_async(
+                lambda: so_data.step_number
+            )()
+
+            workflow_run_step = await self._get_or_create_workflow_run_step(
+                context.workflow_run,
+                node,
+                step_number
+            )
+
+            # Update status to running
+            await self._update_step_status(
+                workflow_run_step,
+                WorkflowRunStepStatus.RUNNING
+            )
+
+            logger.info(f"[{correlation_id}] Starting structured output node execution")
+
+            # Get routes configuration
+            routes = await self._get_routes_from_node_data(so_data)
+
+            if not routes or len(routes) == 0:
+                return ErrorResultBuilder.build_error_result(
+                    Exception("No routes defined for structured output node"),
+                    context={'node_id': node.id, 'node_type': NodeType.STRUCTURED_OUTPUT}
+                )
+
+            route_names = [r['name'] for r in routes]
+
+            # Build routing prompt (includes input from text_input and/or previous node)
+            message = await self._get_prompt_for_routing(so_data, routes, route_names)
+
+            # Append previous node output if available
+            input_text = await self._get_input_for_evaluation(node, context)
+            if input_text:
+                message = f"{message}\n\nPrevious Step Output:\n{input_text}"
+
+            # Build structured output spec
+            structured_spec = self._build_structured_output_spec(route_names)
+            logger.info(
+                f"[{correlation_id}] Built structured spec for routes: {route_names}"
+            )
+
+            # Get LLM
+            llm = await self._get_llm_for_node(so_data)
+
+            # Query LLM for routing decision using shared logic
+            selected_route, analysis_text, token_usage = await self._query_llm_for_routing(
+                message=message,
+                llm=llm,
+                routes=routes,
+                route_names=route_names,
+                structured_spec=structured_spec,
+                workflow_run=context.workflow_run,
+                correlation_id=correlation_id
+            )
+
+            # Process billing
+            await self._process_routing_billing(
+                so_data, context.workflow_run, node, token_usage
+            )
+
+            # Check if human validation is required
+            require_human_validation = await database_sync_to_async(
+                lambda: so_data.require_human_validation
+            )()
+
+            if require_human_validation:
+                return await self._handle_human_validation_required(
+                    workflow_run_step=workflow_run_step,
+                    selected_route=selected_route,
+                    analysis_text=analysis_text,
+                    routes=routes,
+                    node=node,
+                    node_data=so_data,
+                    start_time=start_time,
+                    correlation_id=correlation_id
+                )
+
+            # No human validation required - proceed with AI decision
+            metadata = await self._build_routing_metadata(
+                selected_route=selected_route,
+                analysis_text=analysis_text,
+                routes=routes,
+                is_human_validated=False
+            )
+
+            await self._update_step_status(
+                workflow_run_step,
+                WorkflowRunStepStatus.COMPLETED,
+                response=selected_route,
+                metadata=metadata
+            )
+
+            end_time = timezone.now()
+            execution_time = (end_time - start_time).total_seconds()
+
+            logger.info(
+                f"[{correlation_id}] Successfully executed structured output node in {execution_time:.2f}s. "
+                f"Selected route: {selected_route}"
+            )
+
+            return NodeExecutionResult(
+                success=True,
+                output=selected_route,
+                token_usage=token_usage,
+                execution_time=execution_time,
+                metadata=metadata
+            )
+
+        except Exception as e:
+            logger.error(
+                f"[{correlation_id}] Structured output node execution failed: {str(e)}",
+                exc_info=True
+            )
+
+            result = self._build_error_result(e, node, start_time)
+
+            # Update workflow run step with error
             try:
-                workflow = workflow_run.workflow
+                workflow_run_step = await self._get_or_create_workflow_run_step(
+                    context.workflow_run,
+                    node
+                )
+                await self._update_step_status(
+                    workflow_run_step,
+                    WorkflowRunStepStatus.FAILED,
+                    error=result.error
+                )
+            except Exception as update_error:
+                logger.error(
+                    f"[{correlation_id}] Failed to update step status: {str(update_error)}"
+                )
 
-                # Find structuredOutput node that connects to this step
-                for edge in workflow.edges.all():
-                    if edge.target == step_node_id:
-                        src_node = workflow.nodes.filter(
-                            node_id=edge.source,
-                            node_type='structuredOutput'
-                        ).first()
+            return result
 
-                        if src_node and src_node.data_object:
-                            try:
-                                routes = src_node.data_object.get_routes()
-                                return [
-                                    str(r.get('name', '')).strip()
-                                    for r in routes
-                                    if r and r.get('name')
-                                ]
-                            except Exception as e:
-                                logger.warning(
-                                    f"Failed to extract routes from StructuredOutput node: {e}"
-                                )
-                                return []
+    # ==================== Abstract Method Implementations ====================
 
-                return []
+    async def _get_node_data(self, node: ExecutionNode) -> Optional[StructuredOutputNodeData]:
+        """Get and validate structured output node data."""
+        so_data = await database_sync_to_async(
+            lambda: node.db_node.data_object
+        )()
 
-            except Exception as e:
-                logger.error(f"Error resolving routes for step {step_node_id}: {e}")
-                return []
-
-        return await database_sync_to_async(_resolve)()
-
-    @staticmethod
-    def build_route_instruction(allowed_routes: List[str]) -> str:
-        """
-        Build instruction text for LLM about route selection.
-
-        Creates a clear, formatted instruction that tells the LLM exactly
-        what routes are available and how to respond.
-
-        Args:
-            allowed_routes: List of valid route names
-
-        Returns:
-            Formatted instruction string
-        """
-        if not allowed_routes:
-            return ""
-
-        default_choice = allowed_routes[0]
-
-        instruction = (
-            "\n\nROUTE SELECTION INSTRUCTIONS:\n"
-            f"Choose exactly one of: {', '.join(allowed_routes)}.\n"
-            "Return only the exact value with no quotes, punctuation, or explanation.\n"
-            f"If you are unsure or lack context, choose '{default_choice}'."
-        )
-
-        return instruction
-
-    @staticmethod
-    def normalize_route_response(
-        raw_response: str,
-        allowed_routes: List[str],
-        step_node_id: str
-    ) -> Tuple[str, str]:
-        """
-        Normalize LLM response to match one of the allowed routes.
-
-        This method applies multiple strategies to match the LLM's response
-        to an allowed route:
-        1. Exact match
-        2. Case-insensitive match
-        3. First token match
-        4. Fallback to default (first route)
-
-        Args:
-            raw_response: The raw response from the LLM
-            allowed_routes: List of valid route names
-            step_node_id: Step node ID for logging
-
-        Returns:
-            Tuple of (normalized_route, raw_response)
-        """
-        if not allowed_routes:
-            logger.warning(f"No allowed routes provided for step {step_node_id}")
-            return raw_response, raw_response
-
-        # Clean and extract first line
-        s = raw_response.strip().strip('"').strip("'")
-        s = s.splitlines()[0].strip() if s else s
-
-        # Strategy 1: Direct exact match
-        if s in allowed_routes:
-            return s, raw_response
-
-        # Strategy 2: Case-insensitive match
-        lower_map = {r.lower(): r for r in allowed_routes}
-        if s.lower() in lower_map:
-            return lower_map[s.lower()], raw_response
-
-        # Strategy 3: Extract first token and try matching
-        token = re.split(r"[^A-Za-z0-9_\-\.]+", s)[0] if s else ""
-        if token in allowed_routes:
-            return token, raw_response
-
-        if token.lower() in lower_map:
-            return lower_map[token.lower()], raw_response
-
-        # Strategy 4: Fallback to first route
-        default_route = allowed_routes[0]
-        logger.warning(
-            f"Step {step_node_id} returned non-matching structured output '{s}'; "
-            f"defaulting to '{default_route}'"
-        )
-
-        return default_route, raw_response
-
-    @staticmethod
-    def build_structured_spec(allowed_routes: List[str]) -> Optional[Dict[str, Any]]:
-        """
-        Build unified structured output specification.
-
-        Creates a specification that can be used by the schema transformer
-        to generate provider-specific formats.
-
-        Args:
-            allowed_routes: List of valid route names
-
-        Returns:
-            Unified structured spec dictionary or None if not applicable
-        """
-        if not allowed_routes:
+        if not NodeDataValidator.validate_node_data_type(
+            so_data, StructuredOutputNodeData, node.id
+        ):
             return None
 
-        return {
-            'type': 'enum',
-            'field': 'route',
-            'values': allowed_routes,
-            'description': 'Route selection decision',
-            'enforce': True,
-        }
+        return so_data
 
-    @staticmethod
-    def create_metadata_for_step(
-        selected_route: str,
-        raw_response: str,
-        allowed_routes: List[str],
-        use_structured: bool
-    ) -> Dict[str, Any]:
+    async def _get_input_for_evaluation(
+        self,
+        node: ExecutionNode,
+        context: NodeExecutionContext
+    ) -> Optional[str]:
         """
-        Create metadata dictionary for workflow run step.
+        Get input from previous node output.
+
+        StructuredOutputNode can take input from:
+        1. text_input field (handled in _get_prompt_for_routing)
+        2. Previous node output (returned here)
 
         Args:
-            selected_route: The normalized selected route
-            raw_response: The raw LLM response
-            allowed_routes: List of valid routes
-            use_structured: Whether structured output was used
+            node: The structured output node
+            context: Execution context with previous results
 
         Returns:
-            Metadata dictionary
+            Previous node output string, or None if not available
         """
-        metadata = {
-            'selected_route': selected_route,
-            'use_structured_output_node': use_structured,
-        }
+        if not context.previous_results:
+            return None
 
-        # Only include raw response if it differs from selected route
-        if raw_response != selected_route:
-            metadata['raw_response'] = raw_response
+        # Get input from previous nodes using utility
+        return InputValidator.get_input_from_results(
+            context.previous_results,
+            prefer_latest=True
+        )
 
-        if allowed_routes:
-            metadata['available_routes'] = allowed_routes
-
-        return metadata
-
-    @staticmethod
-    def log_structured_output_debug(
-        step_node_id: str,
-        use_structured: bool,
-        text_input_len: int,
-        content_files_count: int,
-        embedding_files_count: int
-    ):
+    async def _get_prompt_for_routing(
+        self,
+        node_data: StructuredOutputNodeData,
+        routes: List[Dict],
+        route_names: List[str]
+    ) -> str:
         """
-        Log debug information for structured output configuration.
+        Build the complete routing prompt for structured output node.
+
+        Combines:
+        1. Base routing prompt with available routes
+        2. Optional custom prompt template (if configured)
+        3. Optional text_input (if provided)
 
         Args:
-            step_node_id: Step node ID
-            use_structured: Whether structured output is enabled
-            text_input_len: Length of text input
-            content_files_count: Number of content files
-            embedding_files_count: Number of embedding files
+            node_data: Structured output node configuration
+            routes: List of route definitions
+            route_names: List of route names
+
+        Returns:
+            Complete prompt string
         """
-        try:
-            logger.debug(
-                f"Step {step_node_id}: use_structured_output_node={use_structured}, "
-                f"text_input_len={text_input_len}, "
-                f"content_files={content_files_count}, "
-                f"embedding_files={embedding_files_count}"
-            )
-        except Exception:
-            # Don't break execution if debug logging fails
-            pass
+        # Base prompt for routing
+        base_prompt = self._build_base_routing_prompt(route_names)
+
+        # Get optional custom prompt
+        prompt_obj = await database_sync_to_async(
+            lambda: node_data.prompt
+        )()
+        custom_prompt = await database_sync_to_async(
+            lambda: prompt_obj.content if prompt_obj else ""
+        )()
+
+        # Get optional text input
+        text_input = await database_sync_to_async(
+            lambda: node_data.text_input or ""
+        )()
+
+        # Build complete message
+        message_parts = [base_prompt]
+
+        if custom_prompt:
+            message_parts.append(f"\n\nAdditional Context:\n{custom_prompt}")
+
+        if text_input:
+            message_parts.append(f"\n\nInput:\n{text_input}")
+
+        return "\n".join(message_parts)
+
+    def _build_base_routing_prompt(self, route_names: List[str]) -> str:
+        """
+        Build the base routing prompt for structured output.
+
+        Args:
+            route_names: List of available route names
+
+        Returns:
+            Base prompt string
+        """
+        routes_list = ', '.join(route_names)
+        return (
+            f"You are a routing decision maker. Analyze the context provided and "
+            f"select the most appropriate route. You MUST provide both a route selection "
+            f"AND a brief analysis explaining your reasoning.\n\n"
+            f"Available routes: {routes_list}\n\n"
+            f"IMPORTANT: Your response MUST include:\n"
+            f"1. Selected route (exactly one of: {routes_list})\n"
+            f"2. Analysis (1-2 sentences explaining WHY you chose this route based on "
+            f"the context, prompt configuration, or routing criteria - never leave this empty)"
+        )
+
+    async def _get_llm_for_node(self, node_data: StructuredOutputNodeData) -> LLM:
+        """
+        Get the LLM configured for this structured output node.
+
+        Args:
+            node_data: Structured output node configuration
+
+        Returns:
+            LLM instance
+
+        Raises:
+            ValueError: If no LLM can be determined
+        """
+        llm = await database_sync_to_async(lambda: node_data.llm)()
+
+        if llm:
+            return llm
+
+        return await self._get_default_llm()

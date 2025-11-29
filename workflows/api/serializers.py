@@ -3,7 +3,9 @@ import logging
 from django.contrib.contenttypes.models import ContentType
 from rest_framework import serializers
 
+from conversations.models import LLM
 from files.api.serializers import FileSerializer
+from prompts.models import Prompt
 from workflows.constants import WorkflowRunStepStatus
 from workflows.handlers.utils import MetadataKey
 from workflows.models import (
@@ -12,6 +14,7 @@ from workflows.models import (
     StepNodeData, StartNodeData, ChatOutputNodeData, ConditionalNodeData, StructuredOutputNodeData,
     WorkflowNode, WorkflowEdge
 )
+from workflows.utils import convert_keys_to_snake_case
 
 
 logger = logging.getLogger(__name__)
@@ -48,18 +51,19 @@ class WorkflowRunSerializer(serializers.ModelSerializer):
     pending_validations = serializers.SerializerMethodField()
     has_pending_validation = serializers.SerializerMethodField()
     is_partial = serializers.BooleanField(read_only=True)
+    nodeStates = serializers.SerializerMethodField()  # V2 compatible - O(1) node access
 
     class Meta:
         model = WorkflowRun
         fields = [
             'id', 'workflow', 'user', 'started_at', 'ended_at', 'status', 'steps',
             'workflow_title', 'workflow_description', 'pending_validations', 'has_pending_validation',
-            'is_partial'
+            'is_partial', 'nodeStates'
         ]
         read_only_fields = [
             'id', 'started_at', 'ended_at', 'status', 'steps',
             'workflow_title', 'workflow_description', 'pending_validations', 'has_pending_validation',
-            'is_partial'
+            'is_partial', 'nodeStates'
         ]
 
     def get_workflow_title(self, obj):
@@ -67,6 +71,16 @@ class WorkflowRunSerializer(serializers.ModelSerializer):
 
     def get_workflow_description(self, obj):
         return obj.workflow.description if obj.workflow else None
+
+    def get_nodeStates(self, obj):
+        """
+        Build graph-based execution state map for V2 API compatibility.
+        Provides O(1) node access for frontend components.
+        """
+        from workflows.services import NodeExecutionStateBuilder
+
+        builder = NodeExecutionStateBuilder()
+        return builder.build_state(obj)
     
     def get_has_pending_validation(self, obj):
         """Check if this workflow run has any steps waiting for human validation."""
@@ -88,8 +102,8 @@ class WorkflowRunSerializer(serializers.ModelSerializer):
             step_data = step.step_node.data_object if step.step_node else None
 
             metadata = step.metadata or {}
-            uses_structured_output = metadata.get(MetadataKey.USE_STRUCTURED_OUTPUT_NODE, False)
 
+            # Handle ConditionalNodeData
             if step_data and isinstance(step_data, ConditionalNodeData):
                 available_routes = step_data.get_routes()
 
@@ -109,29 +123,26 @@ class WorkflowRunSerializer(serializers.ModelSerializer):
                     'ai_analysis': ai_analysis
                 })
 
-            elif uses_structured_output:
-                edge = edges_by_target.get(step.step_node.node_id)
-                if edge:
-                    node = nodes_by_id.get(edge.source)
-                    if node and node.node_type == 'structuredOutput':
-                        structured_node = node.data_object
-                        if structured_node and isinstance(structured_node, StructuredOutputNodeData):
-                            available_routes = structured_node.get_routes()
-                            ai_recommendation = metadata.get(MetadataKey.AI_RECOMMENDATION)
-                            ai_analysis = metadata.get(MetadataKey.ANALYSIS)
+            # Handle StructuredOutputNodeData (independent routing node)
+            elif step_data and isinstance(step_data, StructuredOutputNodeData):
+                available_routes = step_data.get_routes()
 
-                            prompt_content = structured_node.prompt.content if structured_node.prompt else "Evaluate the input and choose the appropriate route."
+                # Use 'explanation' instead of 'analysis' for structured output nodes
+                ai_recommendation = metadata.get('ai_recommendation')
+                ai_analysis = metadata.get('explanation') or metadata.get(MetadataKey.ANALYSIS)
 
-                            validations.append({
-                                'node_id': node.node_id,
-                                'step_number': step_data.step_number if step_data else step.order,
-                                'custom_prompt': prompt_content,
-                                'available_routes': available_routes,
-                                'current_response': step.response,
-                                'step_id': step.id,
-                                'ai_recommendation': ai_recommendation,
-                                'ai_analysis': ai_analysis
-                            })
+                prompt_content = step_data.prompt.content if step_data.prompt else "Evaluate the input and choose the appropriate route."
+
+                validations.append({
+                    'node_id': step.step_node.node_id,
+                    'step_number': step_data.step_number,
+                    'custom_prompt': prompt_content,
+                    'available_routes': available_routes,
+                    'current_response': step.response,
+                    'step_id': step.id,
+                    'ai_recommendation': ai_recommendation,
+                    'ai_analysis': ai_analysis
+                })
 
         return validations
 
@@ -156,13 +167,14 @@ class WorkflowSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'user', 'version', 'parent', 'created_at',
             'viewport_x', 'viewport_y', 'viewport_zoom',
-            'manual_mode_enabled',
+            'manual_mode_enabled', 'display_order',
             'nodes', 'edges', 'latest_run',
             'title', 'description', 'mode', 'viewport'
         ]
         read_only_fields = ['id', 'created_at', 'user', 'nodes', 'edges', 'title', 'description', 'mode', 'viewport']
 
     def get_latest_run(self, obj):
+        """Get the latest workflow run with nodeStates for O(1) node access."""
         latest_run = WorkflowRun.active_objects.filter(workflow=obj).order_by('-created_at').first()
         if latest_run:
             return WorkflowRunSerializer(latest_run).data
@@ -193,13 +205,25 @@ class WorkflowSerializer(serializers.ModelSerializer):
 # ==========================================
 
 class StepNodeDataSerializer(serializers.ModelSerializer):
+    # Make fields explicitly optional for save operations
+    prompt = serializers.PrimaryKeyRelatedField(
+        queryset=Prompt.active_objects.all(),
+        required=False,
+        allow_null=True
+    )
+    llm = serializers.PrimaryKeyRelatedField(
+        queryset=LLM.objects.all(),
+        required=False,
+        allow_null=True
+    )
+
     class Meta:
         model = StepNodeData
         fields = [
             'agent', 'prompt', 'content_files', 'embedding_files', 'llm', 'step_number',
             'max_tokens', 'temperature', 'max_context_snippets',
             'document_similarity_threshold', 'use_previous_step_files',
-            'use_previous_step_embeddings', 'text_input', 'use_structured_output_node',
+            'use_previous_step_embeddings', 'text_input',
             'enable_web_search'
         ]
 
@@ -220,10 +244,20 @@ class ChatOutputNodeDataSerializer(serializers.ModelSerializer):
 
 class StructuredOutputNodeDataSerializer(serializers.ModelSerializer):
     routes = serializers.JSONField(required=False, allow_null=True)
+    prompt = serializers.PrimaryKeyRelatedField(
+        queryset=Prompt.active_objects.all(),
+        required=False,
+        allow_null=True
+    )
+    llm = serializers.PrimaryKeyRelatedField(
+        queryset=LLM.objects.all(),
+        required=False,
+        allow_null=True
+    )
 
     class Meta:
         model = StructuredOutputNodeData
-        fields = ['prompt', 'llm', 'routes', 'require_human_validation', 'step_number']
+        fields = ['prompt', 'llm', 'routes', 'require_human_validation', 'step_number', 'text_input']
 
     def to_representation(self, instance):
         """Include computed routes via get_routes() method."""
@@ -235,6 +269,16 @@ class StructuredOutputNodeDataSerializer(serializers.ModelSerializer):
 
 class ConditionalNodeDataSerializer(serializers.ModelSerializer):
     routes = serializers.JSONField(required=False, allow_null=True)
+    prompt = serializers.PrimaryKeyRelatedField(
+        queryset=Prompt.active_objects.all(),
+        required=False,
+        allow_null=True
+    )
+    llm = serializers.PrimaryKeyRelatedField(
+        queryset=LLM.objects.all(),
+        required=False,
+        allow_null=True
+    )
 
     class Meta:
         model = ConditionalNodeData
@@ -452,9 +496,12 @@ class WorkflowNodeSerializer(serializers.ModelSerializer):
         serializer_class = data_serializer_map.get(node_type)
 
         if serializer_class:
+            # Convert camelCase keys to snake_case (frontend sends camelCase)
+            snake_case_data = convert_keys_to_snake_case(data_dict or {})
+
             # Filter incoming data to only allowed fields for the target serializer
             allowed_fields = set(getattr(serializer_class.Meta, 'fields', []))
-            filtered_data = {k: v for k, v in (data_dict or {}).items() if k in allowed_fields}
+            filtered_data = {k: v for k, v in snake_case_data.items() if k in allowed_fields}
 
             data_serializer = serializer_class(data=filtered_data)
             if data_serializer.is_valid(raise_exception=True):
@@ -482,9 +529,12 @@ class WorkflowNodeSerializer(serializers.ModelSerializer):
             serializer_class = data_serializer_map.get(instance.node_type)
 
             if serializer_class:
+                # Convert camelCase keys to snake_case (frontend sends camelCase)
+                snake_case_data = convert_keys_to_snake_case(data_dict)
+
                 # Filter incoming data to only allowed fields for the target serializer
                 allowed_fields = set(serializer_class().get_fields().keys())
-                filtered_data = {k: v for k, v in data_dict.items() if k in allowed_fields}
+                filtered_data = {k: v for k, v in snake_case_data.items() if k in allowed_fields}
 
                 # Update the existing data object
                 data_serializer = serializer_class(instance.data_object, data=filtered_data, partial=True)
@@ -501,3 +551,84 @@ class WorkflowNodeSerializer(serializers.ModelSerializer):
 # Patch WorkflowSerializer methods now that node/edge serializers are defined
 WorkflowSerializer.get_nodes = lambda self, obj: WorkflowNodeSerializer(obj.nodes.all(), many=True).data
 WorkflowSerializer.get_edges = lambda self, obj: WorkflowEdgeSerializer(obj.edges.all(), many=True).data
+
+
+# ==========================================
+# V2 API SERIALIZERS (GRAPH-BASED)
+# ==========================================
+
+class WorkflowRunV2Serializer(serializers.ModelSerializer):
+    """
+    V2 serializer for WorkflowRun with graph-based nodeStates.
+
+    Key Differences from V1:
+    - Uses `nodeStates` (dict) instead of `steps` (list)
+    - Direct O(1) node access by node_id
+    - All nodes in workflow included (execution + display)
+    - Validation context normalized across node types
+    - Consistent data shape across all endpoints
+
+    Response Structure:
+        {
+            "id": int,
+            "workflow": int,
+            "user": int,
+            "started_at": datetime,
+            "ended_at": datetime | null,
+            "status": str,
+            "nodeStates": {
+                "node-id": {
+                    "stepId": int | null,
+                    "nodeType": str,
+                    "status": str,
+                    "response": str | null,
+                    "error": str | null,
+                    "validationContext": dict | null
+                },
+                ...
+            },
+            "workflow_title": str,
+            "workflow_description": str,
+            "is_partial": bool
+        }
+    """
+
+    nodeStates = serializers.SerializerMethodField()
+    started_at = serializers.DateTimeField()
+    status = serializers.CharField()
+    workflow_title = serializers.SerializerMethodField()
+    workflow_description = serializers.SerializerMethodField()
+    is_partial = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = WorkflowRun
+        fields = [
+            'id', 'workflow', 'user', 'started_at', 'ended_at', 'status',
+            'nodeStates',  # NEW - replaces 'steps' from v1
+            'workflow_title', 'workflow_description', 'is_partial'
+        ]
+        read_only_fields = [
+            'id', 'started_at', 'ended_at', 'status', 'nodeStates',
+            'workflow_title', 'workflow_description', 'is_partial'
+        ]
+
+    def get_nodeStates(self, obj):
+        """
+        Build graph-based execution state map using NodeExecutionStateBuilder.
+
+        This is where the magic happens - transforms list-based WorkflowRunStep
+        data into a graph-based map keyed by node_id.
+
+        Performance:
+            - 3 database queries total (with prefetching)
+            - Cached at serializer level
+            - O(1) access for frontend
+        """
+        from workflows.services import NodeExecutionStateBuilder
+
+        builder = NodeExecutionStateBuilder()
+        return builder.build_state(obj)
+
+    # Reuse existing methods from v1 serializer
+    get_workflow_title = WorkflowRunSerializer.get_workflow_title
+    get_workflow_description = WorkflowRunSerializer.get_workflow_description

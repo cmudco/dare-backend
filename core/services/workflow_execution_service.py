@@ -310,6 +310,11 @@ class WorkflowExecutionService:
                     )
                 elif node.type == 'chatOutput':
                     await self._clear_output_node_data(node)
+                elif node.type in ('conditional', 'structuredOutput'):
+                    # Routing nodes can also be skipped if all predecessors are skipped
+                    await self._update_step_status_to_skipped(
+                        context.workflow_run, node
+                    )
 
                 continue
 
@@ -563,10 +568,47 @@ class WorkflowExecutionService:
                 workflow
             )
 
-            # Execute the node
+            logger.info(
+                f"[execute_single_step] Node {step_node_id} - Found {len(dependency_results)} dependency results: "
+                f"{list(dependency_results.keys())}"
+            )
+
+            # Log each dependency result for debugging
+            for dep_node_id, dep_result in dependency_results.items():
+                output_preview = (
+                    dep_result.output[:100] + "..."
+                    if dep_result.output and len(dep_result.output) > 100
+                    else dep_result.output
+                )
+                logger.info(
+                    f"[execute_single_step]   Dependency {dep_node_id}: "
+                    f"success={dep_result.success}, "
+                    f"output_length={len(dep_result.output) if dep_result.output else 0}, "
+                    f"preview='{output_preview}'"
+                )
+
+            # Build node_types map for chain detection
+            node_types = await self._build_node_types_map(dependency_results, context)
+
+            logger.info(
+                f"[execute_single_step] Node {step_node_id} - Built node_types map: {node_types}"
+            )
+
+            # Prepare context for execution
+            prepared_context = WorkflowContextBuilder.prepare_node_execution_context(
+                dependency_results,
+                node_types=node_types
+            )
+
+            logger.info(
+                f"[execute_single_step] Node {step_node_id} - Prepared context has {len(prepared_context)} entries: "
+                f"{list(prepared_context.keys())}"
+            )
+
+            # Execute the node with properly prepared context
             node_context = NodeExecutionContext(
                 workflow_run=workflow_run,
-                previous_results=dependency_results
+                previous_results=prepared_context
             )
 
             logger.info(f"Executing node {step_node_id} with handler registry")
@@ -709,9 +751,49 @@ class WorkflowExecutionService:
             lambda: list(WorkflowRunStep.objects.filter(workflow_run=workflow_run))
         )()
 
+        logger.info(
+            f"[_rebuild_execution_context] Rebuilding context for workflow_run {workflow_run.id} "
+            f"with {len(all_steps)} WorkflowRunStep records"
+        )
+
         # Rebuild node results using utility
         node_results = await WorkflowContextBuilder.rebuild_node_results_from_steps(
             all_steps
+        )
+
+        logger.info(
+            f"[_rebuild_execution_context] Rebuilt {len(node_results)} node results from steps: "
+            f"{list(node_results.keys())}"
+        )
+
+        # Also rebuild chatOutput node results (for aggregator nodes that depend on outputs)
+        # Pass step_results so chatOutput nodes can be built from their source steps
+        chatoutput_results = await self._rebuild_chatoutput_node_results(workflow, node_results)
+
+        logger.info(
+            f"[_rebuild_execution_context] Rebuilt {len(chatoutput_results)} chatOutput node results: "
+            f"{list(chatoutput_results.keys())}"
+        )
+
+        # Log each chatOutput result for debugging
+        for output_node_id, output_result in chatoutput_results.items():
+            output_preview = (
+                output_result.output[:100] + "..."
+                if output_result.output and len(output_result.output) > 100
+                else output_result.output
+            )
+            logger.info(
+                f"[_rebuild_execution_context]   ChatOutput {output_node_id}: "
+                f"success={output_result.success}, "
+                f"output_length={len(output_result.output) if output_result.output else 0}, "
+                f"preview='{output_preview}'"
+            )
+
+        node_results.update(chatoutput_results)
+
+        logger.info(
+            f"[_rebuild_execution_context] Final context has {len(node_results)} total node results: "
+            f"{list(node_results.keys())}"
         )
 
         return WorkflowExecutionContext(
@@ -719,6 +801,65 @@ class WorkflowExecutionService:
             workflow=workflow,
             node_results=node_results
         )
+
+    async def _rebuild_chatoutput_node_results(
+        self,
+        workflow: Workflow,
+        step_results: Dict[str, NodeExecutionResult] = None
+    ) -> Dict[str, NodeExecutionResult]:
+        """
+        Rebuild chatOutput node results from their connected step nodes.
+
+        In partial/manual execution mode, chatOutput nodes may not be executed
+        even though their source step nodes are. This function rebuilds output
+        node results by finding their source step nodes via edges.
+
+        Args:
+            workflow: The workflow containing chatOutput nodes
+            step_results: Already-rebuilt results from step nodes (for finding sources)
+
+        Returns:
+            Dictionary mapping chatOutput node_id to NodeExecutionResult
+        """
+        @database_sync_to_async
+        def get_chatoutput_nodes():
+            # Get all chatOutput nodes
+            output_nodes = list(workflow.nodes.filter(node_type='chatOutput'))
+
+            # Get all edges to find source->output connections
+            edges = list(workflow.edges.all())
+
+            results = {}
+
+            for output_node in output_nodes:
+                # Find the edge pointing TO this output node
+                incoming_edges = [e for e in edges if e.target == output_node.node_id]
+
+                if not incoming_edges:
+                    continue
+
+                # Get the source node ID (should be a step node)
+                source_node_id = incoming_edges[0].source
+
+                # Check if we have a result for the source step node
+                if step_results and source_node_id in step_results:
+                    source_result = step_results[source_node_id]
+
+                    # Create output node result from source step's output
+                    results[output_node.node_id] = NodeExecutionResult(
+                        success=source_result.success,
+                        output=source_result.output,
+                        metadata=source_result.metadata or {}
+                    )
+
+                    logger.info(
+                        f"[_rebuild_chatoutput_node_results] Created output node {output_node.node_id} "
+                        f"from source step {source_node_id}"
+                    )
+
+            return results
+
+        return await get_chatoutput_nodes()
 
     async def _update_conditional_step_with_user_choice(
         self,
