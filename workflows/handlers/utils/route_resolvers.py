@@ -5,6 +5,7 @@ This module consolidates structured output handling and routing logic,
 providing clean interfaces for route resolution, normalization, and
 structured output specification following LLM provider utility patterns.
 """
+import json
 import logging
 import re
 from typing import Optional, List, Dict, Any, Tuple
@@ -173,7 +174,6 @@ class RouteNormalizer:
 
         # Strategy 0: JSON extraction (for object schemas with route + explanation)
         try:
-            import json
             data = json.loads(raw_response)
             if isinstance(data, dict):
                 # Try to find route field (could be 'route', 'decision', 'choice', etc.)
