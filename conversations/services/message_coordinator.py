@@ -33,6 +33,7 @@ from core.services.conversation_service import ConversationService
 from core.services.llm_service import LLMService
 from core.services.billing_service import BillingService
 from core.services.learning_progress_service import LearningProgressService
+from core.services.file_upload_service import FileUploadService
 from core.services.dtos import LLMQueryRequestBuilder
 from conversations.services.websocket_response_service import WebSocketResponseService
 from conversations.services.message_validation_service import MessageValidationService
@@ -116,13 +117,32 @@ class MessageCoordinator:
                     await self.send_error(ErrorCode.INSUFFICIENT_CREDITS, ErrorMessage.INSUFFICIENT_CREDITS)
                     return None
 
+            # Save attached images (base64) as File objects
+            attached_image_ids = []
+            images = message_data.get("images", [])
+            if images:
+                saved_files = await database_sync_to_async(
+                    FileUploadService.save_base64_images
+                )(
+                    images=images,
+                    user=self.user,
+                    is_public=(self.user is None)
+                )
+                attached_image_ids = [f.id for f in saved_files]
+                logger.info(f"Saved {len(attached_image_ids)} attached images for message")
+
+            # Combine file_ids with attached image IDs
+            all_file_ids = list(set(
+                (message_data.get("file_ids") or []) + attached_image_ids
+            ))
+
             # Create user message
             user_message = await self.conversation_service.create_message(
                 conversation=self.conversation,
                 sender_type=SenderType.PLAYER,
                 message_content=message_data["message"],
                 sender=sender_name,
-                file_ids=message_data.get("file_ids"),
+                file_ids=all_file_ids,
                 tag_ids=message_data.get("tag_ids"),
                 embedding_ids=message_data.get("embedding_ids"),
                 llm=llm,
