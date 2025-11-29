@@ -23,6 +23,7 @@ from core.services.workflow_execution_service import WorkflowExecutionService
 from workflows.api.serializers import (
     WorkflowRunSerializer, WorkflowSerializer,
     WorkflowNodeSerializer, WorkflowEdgeSerializer,
+    WorkflowRunV2Serializer,
 )
 from workflows.constants import WorkflowRunStepStatus
 from workflows.handlers.utils import MetadataKey, ExecutionValidator
@@ -878,7 +879,6 @@ class WorkflowRunV2ViewSet(viewsets.ViewSet):
                 status=status.HTTP_404_NOT_FOUND
             )
 
-        from workflows.api.serializers import WorkflowRunV2Serializer
         serializer = WorkflowRunV2Serializer(workflow_run)
         return Response(serializer.data)
 
@@ -905,8 +905,6 @@ class WorkflowRunV2ViewSet(viewsets.ViewSet):
             "error": str | null
         }
         """
-        from workflows.api.serializers import WorkflowRunV2Serializer
-
         workflow_id = request.data.get('workflow_id')
         step_node_id = request.data.get('step_node_id')
         workflow_run_id = request.data.get('workflow_run_id')
@@ -1055,8 +1053,6 @@ class WorkflowRunV2ViewSet(viewsets.ViewSet):
         Response:
             WorkflowRunV2Serializer data with updated nodeStates
         """
-        from workflows.api.serializers import WorkflowRunV2Serializer
-
         workflow_run_id = request.data.get('workflow_run_id')
         node_id = request.data.get('node_id')
         chosen_route = request.data.get('chosen_route')

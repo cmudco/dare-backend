@@ -14,6 +14,7 @@ from workflows.models import (
     StepNodeData, StartNodeData, ChatOutputNodeData, ConditionalNodeData, StructuredOutputNodeData,
     WorkflowNode, WorkflowEdge
 )
+from workflows.services import NodeExecutionStateBuilder
 from workflows.utils import convert_keys_to_snake_case
 
 
@@ -77,8 +78,6 @@ class WorkflowRunSerializer(serializers.ModelSerializer):
         Build graph-based execution state map for V2 API compatibility.
         Provides O(1) node access for frontend components.
         """
-        from workflows.services import NodeExecutionStateBuilder
-
         builder = NodeExecutionStateBuilder()
         return builder.build_state(obj)
     
@@ -624,8 +623,6 @@ class WorkflowRunV2Serializer(serializers.ModelSerializer):
             - Cached at serializer level
             - O(1) access for frontend
         """
-        from workflows.services import NodeExecutionStateBuilder
-
         builder = NodeExecutionStateBuilder()
         return builder.build_state(obj)
 

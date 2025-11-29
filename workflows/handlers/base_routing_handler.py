@@ -1,7 +1,7 @@
 """
 Base routing handler for workflow routing nodes.
 
-This module provides a unified base handler for routing nodes (ConditionalNode, 
+This module provides a unified base handler for routing nodes (ConditionalNode,
 StructuredOutputNode) that share common functionality:
 - LLM query with structured output spec
 - Route parsing and validation
@@ -10,6 +10,7 @@ StructuredOutputNode) that share common functionality:
 
 Both ConditionalNodeHandler and StructuredOutputNodeHandler extend this base.
 """
+import json
 import logging
 from abc import abstractmethod
 from typing import Optional, Tuple, Dict, Any, List
@@ -242,7 +243,6 @@ class BaseRoutingHandler(BaseExecutionHandler):
 
         # Strategy 1: Try JSON extraction first (for structured outputs)
         try:
-            import json
             data = json.loads(response)
             if isinstance(data, dict):
                 # Extract route from JSON - try multiple field names
