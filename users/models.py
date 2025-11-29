@@ -1,5 +1,6 @@
 from django.contrib.auth.models import AbstractUser
 from django.db import models
+from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 from common.managers import ActiveObjectsManager
@@ -77,7 +78,6 @@ class AccessCodeGroup(TimeStampMixin):
         scope_indicator = f" [{self.get_scope_display()}]"
         expiration_indicator = ""
         if self.expires_at:
-            from django.utils import timezone
             if self.is_expired:
                 expiration_indicator = " [EXPIRED]"
             else:
@@ -89,7 +89,6 @@ class AccessCodeGroup(TimeStampMixin):
         """Check if the access code has expired"""
         if not self.expires_at:
             return False
-        from django.utils import timezone
         return timezone.now() > self.expires_at
 
     @property
