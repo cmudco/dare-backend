@@ -57,12 +57,16 @@ class Workflow(BaseModel):
         default=False,
         help_text="Whether manual mode (step-by-step execution) is enabled for this workflow"
     )
+    display_order = models.PositiveIntegerField(
+        default=0,
+        help_text="Order in which workflows are displayed in the UI. Higher values appear later."
+    )
 
     objects = models.Manager()
     active_objects = ActiveObjectsManager()
 
     class Meta:
-        ordering = ['-created_at']
+        ordering = ['display_order', '-created_at']
 
     def __str__(self):
         # Get title from StartNodeData

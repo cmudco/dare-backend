@@ -28,7 +28,9 @@ class StepNodeData(BaseNodeData):
     prompt = models.ForeignKey(
         'prompts.Prompt',
         on_delete=models.PROTECT,
-        help_text="Prompt template for this step"
+        null=True,
+        blank=True,
+        help_text="Prompt template for this step (required for execution)"
     )
     content_files = models.ManyToManyField(
         'files.File',
@@ -112,9 +114,13 @@ class StartNodeData(BaseNodeData):
     """Data model for 'start' type nodes."""
     title = models.CharField(
         max_length=255,
+        blank=True,
+        null=True,
         help_text="Workflow title"
     )
     description = models.TextField(
+        blank=True,
+        null=True,
         help_text="Workflow description"
     )
     mode = models.CharField(
