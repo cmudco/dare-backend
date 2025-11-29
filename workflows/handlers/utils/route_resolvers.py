@@ -336,7 +336,8 @@ class StructuredOutputBuilder:
                     },
                     'explanation': {
                         'type': 'string',
-                        'description': 'Brief explanation for the routing decision'
+                        'description': 'Required: 1-2 sentence analysis explaining why this route was selected based on the context, configuration, or routing criteria. Must not be empty.',
+                        'minLength': 10  # Ensure non-empty explanation
                     }
                 },
                 'required': [field_name, 'explanation'],

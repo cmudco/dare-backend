@@ -97,6 +97,7 @@ class WorkflowCloningService:
             )
         elif isinstance(data_object, StepNodeData):
             cloned_data = StepNodeData.objects.create(
+                agent=data_object.agent,
                 prompt=data_object.prompt,
                 llm=data_object.llm,
                 step_number=data_object.step_number,
@@ -107,7 +108,7 @@ class WorkflowCloningService:
                 use_previous_step_files=data_object.use_previous_step_files,
                 use_previous_step_embeddings=data_object.use_previous_step_embeddings,
                 text_input=data_object.text_input,
-                use_structured_output_node=data_object.use_structured_output_node
+                enable_web_search=data_object.enable_web_search
             )
             # Clone many-to-many relationships
             cloned_data.content_files.set(data_object.content_files.all())
@@ -134,7 +135,8 @@ class WorkflowCloningService:
                 routes=data_object.routes,
                 step_number=data_object.step_number,
                 require_human_validation=data_object.require_human_validation,
-                llm=data_object.llm
+                llm=data_object.llm,
+                text_input=data_object.text_input
             )
         return None
 
