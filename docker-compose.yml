@@ -22,5 +22,38 @@ services:
       - "8081:80"
     environment:
       WEAVIATE_URL: 'http://weaviate:8080'
-
     restart: on-failure:0
+
+  # Ollama for local LLaMA models
+  ollama:
+    image: ollama/ollama:latest
+    container_name: dare-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      # Number of parallel requests (adjust based on RAM)
+      - OLLAMA_NUM_PARALLEL=2
+      # Keep model in memory for 10 minutes (default is 5m)
+      - OLLAMA_KEEP_ALIVE=10m
+      # Max loaded models (set to 1 if RAM is limited)
+      - OLLAMA_MAX_LOADED_MODELS=1
+    # Resource limits (adjust based on your server)
+    deploy:
+      resources:
+        limits:
+          memory: 16G  # Max RAM container can use
+        reservations:
+          memory: 8G   # Guaranteed RAM
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  ollama_data:
+    driver: local
