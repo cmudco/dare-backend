@@ -94,18 +94,18 @@ class RouteResolver:
         return await database_sync_to_async(_resolve)()
 
     @staticmethod
-    async def resolve_routes_for_conditional(
+    async def resolve_routes_for_routing_node(
         workflow,
-        conditional_node_id: str
+        routing_node_id: str
     ) -> List[str]:
         """
-        Resolve available routes from a conditional node.
+        Resolve available routes from a routing node.
 
         Extracts route names from outgoing edge handles.
 
         Args:
             workflow: The workflow instance
-            conditional_node_id: The conditional node ID
+            routing_node_id: The routing node ID
 
         Returns:
             List of route names extracted from edge handles
@@ -114,9 +114,9 @@ class RouteResolver:
             try:
                 routes = []
 
-                # Find all outgoing edges from conditional node
+                # Find all outgoing edges from routing node
                 for edge in workflow.edges.all():
-                    if edge.source == conditional_node_id and edge.source_handle:
+                    if edge.source == routing_node_id and edge.source_handle:
                         # Extract route from handle (format: "output-<route_name>")
                         if edge.source_handle.startswith("output-"):
                             route = edge.source_handle[7:]  # Remove "output-" prefix
@@ -126,7 +126,7 @@ class RouteResolver:
 
             except Exception as e:
                 logger.error(
-                    f"Error resolving routes for conditional {conditional_node_id}: {e}"
+                    f"Error resolving routes for routing node {routing_node_id}: {e}"
                 )
                 return []
 
@@ -245,7 +245,7 @@ class RouteNormalizer:
         """
         Extract routing decision and analysis from XML-formatted response.
 
-        Supports both ConditionalNode (<decision>) and StructuredOutputNode (<route>) formats.
+        Supports both <decision> and <route> XML tag formats.
 
         Args:
             xml_response: XML-formatted LLM response
@@ -256,7 +256,7 @@ class RouteNormalizer:
             Tuple of (decision, analysis) or (None, None) if extraction fails
         """
         try:
-            # Extract decision tag - try both <decision> (ConditionalNode) and <route> (StructuredOutputNode)
+            # Extract decision tag - try both <decision> and <route> formats
             decision = XMLTag.extract_tag_content(xml_response, XMLTag.DECISION)
             if not decision:
                 # Try <route> tag for StructuredOutputNode
@@ -409,28 +409,25 @@ class RouteInstructionBuilder:
         default_route: Optional[str] = None
     ) -> str:
         """
-        Build route selection instruction with XML format (EXACT match to ConditionalNode).
-
-        Uses EXACT same format as ConditionalNode (conditional_prompt_service.py).
+        Build route selection instruction with XML format for routing nodes.
 
         Args:
             allowed_routes: List of valid route names
             default_route: Default route if uncertain (uses first route if None)
 
         Returns:
-            Formatted instruction string with XML format matching ConditionalNode
+            Formatted instruction string with XML format for routing
         """
         if not allowed_routes:
             return ""
 
-        # Build route list in XML format EXACTLY like ConditionalNode does
+        # Build route list in XML format for routing nodes
         route_xml_elements = "\n".join([
             f'<route name="{route}">{route}</route>'
             for route in allowed_routes
         ])
 
-        # EXACT same format as ConditionalNode (conditional_prompt_service.py lines 115-131)
-        # ConditionalNode puts this AFTER the user prompt with "Based on the following input..."
+        # Build the prompt with routes and analysis section
         # StructuredOutputNode appends this AFTER the step execution
         instruction = f"""
 
@@ -456,7 +453,7 @@ Analyze your response carefully and respond in this EXACT format (do not deviate
         """
         Build XML-formatted route selection instruction.
 
-        Used for conditional nodes that need analysis.
+        Used for routing nodes that need analysis.
 
         Args:
             allowed_routes: List of valid route names

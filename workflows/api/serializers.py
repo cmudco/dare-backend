@@ -11,7 +11,7 @@ from workflows.handlers.utils import MetadataKey
 from workflows.models import (
     Workflow, WorkflowRun, WorkflowRunStep,  # WorkflowStepSnippet,
     # Graph-driven models
-    StepNodeData, StartNodeData, ChatOutputNodeData, ConditionalNodeData, StructuredOutputNodeData,
+    StepNodeData, StartNodeData, ChatOutputNodeData, StructuredOutputNodeData,
     WorkflowNode, WorkflowEdge
 )
 from workflows.services import NodeExecutionStateBuilder
@@ -102,28 +102,8 @@ class WorkflowRunSerializer(serializers.ModelSerializer):
 
             metadata = step.metadata or {}
 
-            # Handle ConditionalNodeData
-            if step_data and isinstance(step_data, ConditionalNodeData):
-                available_routes = step_data.get_routes()
-
-                ai_recommendation = metadata.get(MetadataKey.AI_RECOMMENDATION)
-                ai_analysis = metadata.get(MetadataKey.ANALYSIS)
-
-                prompt_content = step_data.prompt.content if step_data.prompt else "Evaluate the input and choose the appropriate route."
-
-                validations.append({
-                    'node_id': step.step_node.node_id,
-                    'step_number': step_data.step_number,
-                    'custom_prompt': prompt_content,
-                    'available_routes': available_routes,
-                    'current_response': step.response,
-                    'step_id': step.id,
-                    'ai_recommendation': ai_recommendation,
-                    'ai_analysis': ai_analysis
-                })
-
-            # Handle StructuredOutputNodeData (independent routing node)
-            elif step_data and isinstance(step_data, StructuredOutputNodeData):
+            # Handle StructuredOutputNodeData (routing node)
+            if step_data and isinstance(step_data, StructuredOutputNodeData):
                 available_routes = step_data.get_routes()
 
                 # Use 'explanation' instead of 'analysis' for structured output nodes
@@ -257,33 +237,6 @@ class StructuredOutputNodeDataSerializer(serializers.ModelSerializer):
     class Meta:
         model = StructuredOutputNodeData
         fields = ['prompt', 'llm', 'routes', 'require_human_validation', 'step_number', 'text_input']
-
-    def to_representation(self, instance):
-        """Include computed routes via get_routes() method."""
-        data = super().to_representation(instance)
-        # Always include the computed routes
-        data['routes'] = instance.get_routes()
-        return data
-
-
-class ConditionalNodeDataSerializer(serializers.ModelSerializer):
-    routes = serializers.JSONField(required=False, allow_null=True)
-    prompt = serializers.PrimaryKeyRelatedField(
-        queryset=Prompt.active_objects.all(),
-        required=False,
-        allow_null=True
-    )
-    llm = serializers.PrimaryKeyRelatedField(
-        queryset=LLM.objects.all(),
-        required=False,
-        allow_null=True
-    )
-
-    class Meta:
-        model = ConditionalNodeData
-        fields = [
-            'prompt', 'llm', 'routes', 'require_human_validation', 'step_number'
-        ]
 
     def to_representation(self, instance):
         """Include computed routes via get_routes() method."""
@@ -488,7 +441,6 @@ class WorkflowNodeSerializer(serializers.ModelSerializer):
             'step': StepNodeDataSerializer,
             'start': StartNodeDataSerializer,
             'chatOutput': ChatOutputNodeDataSerializer,
-            'conditional': ConditionalNodeDataSerializer,
             'structuredOutput': StructuredOutputNodeDataSerializer,
         }
 
@@ -522,7 +474,6 @@ class WorkflowNodeSerializer(serializers.ModelSerializer):
                 'step': StepNodeDataSerializer,
                 'start': StartNodeDataSerializer,
                 'chatOutput': ChatOutputNodeDataSerializer,
-                'conditional': ConditionalNodeDataSerializer,
                 'structuredOutput': StructuredOutputNodeDataSerializer,
             }
             serializer_class = data_serializer_map.get(instance.node_type)

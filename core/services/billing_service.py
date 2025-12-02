@@ -297,7 +297,7 @@ class BillingService:
 
     def process_workflow_billing(self, user: 'User', llm: LLM, input_tokens: int, output_tokens: int, step_node_id: int = None) -> bool:
         """
-        Process billing for a workflow step or conditional node.
+        Process billing for a workflow step or routing node.
 
         Note: Workflows are DARE-only feature, so platform is always DARE.
         """
@@ -327,7 +327,7 @@ class BillingService:
             if step_order > 0:
                 transaction_message = f"Workflow {workflow_id} : Title - {workflow_title} | Step #{step_order} "
             else:
-                transaction_message = f"Workflow {workflow_id} : Title - {workflow_title} | Conditional Node "
+                transaction_message = f"Workflow {workflow_id} : Title - {workflow_title} | Routing Node "
 
             if wallet.balance < cost:
                 amount_to_deduct = wallet.balance

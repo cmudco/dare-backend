@@ -22,7 +22,6 @@ from workflows.models import (
     WorkflowRunStep,
     WorkflowNode,
     WorkflowEdge,
-    ConditionalNodeData,
     StructuredOutputNodeData,
 )
 
@@ -87,7 +86,7 @@ class NodeExecutionStateBuilder:
         # Build state for all nodes in the workflow
         node_states = {}
         for node_id, node in nodes_by_id.items():
-            if node.node_type in ['step', 'conditional', 'structuredOutput']:
+            if node.node_type in ['step', 'structuredOutput']:
                 # Execution nodes - have WorkflowRunStep records
                 node_states[node_id] = self._build_execution_node_state(
                     node=node,
@@ -114,7 +113,7 @@ class NodeExecutionStateBuilder:
         step: Optional[WorkflowRunStep],
     ) -> Dict[str, Any]:
         """
-        Build state for execution nodes (step, conditional, structuredOutput).
+        Build state for execution nodes (step, structuredOutput).
 
         These nodes have WorkflowRunStep records with execution data.
 
@@ -297,16 +296,16 @@ class NodeExecutionStateBuilder:
         node: WorkflowNode,
     ) -> Optional[Dict[str, Any]]:
         """
-        Normalize validation context from ConditionalNode or StructuredOutputNode.
+        Normalize validation context from StructuredOutputNode.
 
-        Both node types now use standardized MetadataKey constants for consistency:
+        Uses standardized MetadataKey constants for consistency:
         - MetadataKey.AI_RECOMMENDATION: AI's suggested route
         - MetadataKey.ANALYSIS: AI's reasoning/explanation
         - MetadataKey.AVAILABLE_ROUTES: Full route objects [{name, description}]
 
         Args:
             step: WorkflowRunStep with PENDING_HUMAN_INPUT status
-            node: WorkflowNode (should be conditional or structuredOutput type)
+            node: WorkflowNode (should be structuredOutput type)
 
         Returns:
             Normalized validation context:
@@ -326,8 +325,8 @@ class NodeExecutionStateBuilder:
         metadata = step.metadata or {}
         node_data = node.data_object
 
-        # Only conditional and structuredOutput nodes have validation
-        if not isinstance(node_data, (ConditionalNodeData, StructuredOutputNodeData)):
+        # Only structuredOutput nodes have validation
+        if not isinstance(node_data, StructuredOutputNodeData):
             return None
 
         # Extract available routes from metadata (full route objects)

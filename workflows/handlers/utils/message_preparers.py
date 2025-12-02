@@ -189,84 +189,6 @@ class StepMessagePreparer(MessagePreparer):
         return message
 
 
-# ==================== Conditional Message Preparer ====================
-
-class ConditionalMessagePreparer(MessagePreparer):
-    """
-    Message preparer for conditional nodes.
-
-    Builds evaluation prompts for routing decisions.
-    """
-
-    @staticmethod
-    def prepare_evaluation_prompt(
-        input_text: str,
-        available_routes: List[str],
-        include_analysis: bool = True
-    ) -> str:
-        """
-        Prepare an evaluation prompt for conditional routing.
-
-        Args:
-            input_text: The text to evaluate for routing
-            available_routes: List of available route names
-            include_analysis: Whether to request analysis in XML format
-
-        Returns:
-            Formatted evaluation prompt for LLM
-        """
-        # Format routes list
-        routes_formatted = "\n".join(f"- {route}" for route in available_routes)
-
-        if include_analysis:
-            # XML format with analysis
-            return PromptTemplate.CONDITIONAL_EVALUATION_WITH_ANALYSIS.format(
-                routes=routes_formatted,
-                input_text=input_text
-            )
-        else:
-            # Simple format
-            return PromptTemplate.CONDITIONAL_EVALUATION.format(
-                routes=routes_formatted,
-                input_text=input_text
-            )
-
-    @staticmethod
-    def extract_single_input_from_results(
-        previous_results: Dict[str, Dict]
-    ) -> tuple[bool, Optional[str], Optional[str]]:
-        """
-        Extract single input from previous results for conditional evaluation.
-
-        Conditional nodes require exactly one input to avoid ambiguity.
-
-        Args:
-            previous_results: Dictionary of previous node results
-
-        Returns:
-            Tuple of (success, error_message, input_text)
-        """
-        # Get non-skipped results
-        valid_results = []
-        for node_id, result_data in previous_results.items():
-            if ConditionalMessagePreparer.is_valid_result(result_data):
-                valid_results.append((node_id, result_data))
-
-        # Validate single input requirement
-        if len(valid_results) == 0:
-            return False, ErrorMessage.MISSING_INPUT, None
-
-        if len(valid_results) > 1:
-            return False, ErrorMessage.AMBIGUOUS_INPUT, None
-
-        # Extract input text
-        input_text = valid_results[0][1].get('output')
-        if not input_text:
-            return False, "Input from previous node is empty", None
-
-        return True, None, input_text
-
-
 # ==================== Structured Output Message Preparer ====================
 
 class StructuredOutputMessagePreparer(MessagePreparer):
@@ -346,7 +268,6 @@ class FileContextPreparer:
 __all__ = [
     "MessagePreparer",
     "StepMessagePreparer",
-    "ConditionalMessagePreparer",
     "StructuredOutputMessagePreparer",
     "FileContextPreparer",
 ]

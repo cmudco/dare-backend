@@ -76,15 +76,15 @@ class LLMConfig:
         )
 
     @classmethod
-    def for_conditional_node(
+    def for_routing_node(
         cls,
         provider: Optional[str] = None,
         model: Optional[str] = None
     ) -> 'LLMConfig':
         """
-        Create LLM configuration for conditional node.
+        Create LLM configuration for routing node.
 
-        Conditional nodes use lower temperature for more deterministic routing.
+        Routing nodes use lower temperature for more deterministic routing.
 
         Args:
             provider: LLM provider (defaults to OpenAI)
@@ -94,8 +94,8 @@ class LLMConfig:
             Configured LLMConfig instance
         """
         return cls(
-            max_tokens=LLMDefaults.CONDITIONAL_MAX_TOKENS,
-            temperature=LLMDefaults.CONDITIONAL_TEMPERATURE,
+            max_tokens=LLMDefaults.STRUCTURED_OUTPUT_MAX_TOKENS,
+            temperature=LLMDefaults.STRUCTURED_OUTPUT_TEMPERATURE,
             provider=provider or LLMDefaults.DEFAULT_PROVIDER,
             model=model or LLMDefaults.DEFAULT_MODEL,
             structured_spec=None
@@ -318,7 +318,7 @@ class LLMSelector:
         Get LLM for a workflow node with fallback logic.
 
         Args:
-            node_data: The node data object (StepNodeData or ConditionalNodeData)
+            node_data: The node data object (StepNodeData or StructuredOutputNodeData)
             fallback_provider: Fallback provider if none configured
 
         Returns:
