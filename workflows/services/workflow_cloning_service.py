@@ -9,7 +9,7 @@ from django.contrib.contenttypes.models import ContentType
 
 from workflows.models import (
     Workflow, WorkflowNode, WorkflowEdge,
-    StartNodeData, StepNodeData, ChatOutputNodeData, ConditionalNodeData, StructuredOutputNodeData
+    StartNodeData, StepNodeData, ChatOutputNodeData, StructuredOutputNodeData
 )
 
 
@@ -120,14 +120,6 @@ class WorkflowCloningService:
                 status='',
                 response='',
                 error=''
-            )
-        elif isinstance(data_object, ConditionalNodeData):
-            return ConditionalNodeData.objects.create(
-                prompt=data_object.prompt,
-                llm=data_object.llm,
-                routes=data_object.routes,
-                require_human_validation=data_object.require_human_validation,
-                step_number=data_object.step_number
             )
         elif isinstance(data_object, StructuredOutputNodeData):
             return StructuredOutputNodeData.objects.create(

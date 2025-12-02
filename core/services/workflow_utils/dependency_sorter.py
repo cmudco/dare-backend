@@ -21,7 +21,7 @@ class DependencySorter:
 
     Handles topological sorting with special logic for:
     - Multi-input nodes (wait for ALL dependencies)
-    - Conditional nodes (single input dependency)
+    - Structured output nodes (single input dependency)
     - Priority-based sorting within dependency levels
     - Start node chaining (depth-based execution order)
     - Cycle detection to prevent infinite loops
@@ -35,7 +35,7 @@ class DependencySorter:
         """
         Sort nodes based on their dependencies to ensure proper execution order.
 
-        Conditional nodes must run before nodes that depend on their routing decisions.
+        Structured output nodes must run before nodes that depend on their routing decisions.
         Multi-input nodes wait for ALL their dependencies before execution.
         Start node chains execute in depth order (chain 1 before chain 2).
 
@@ -66,7 +66,7 @@ class DependencySorter:
         # This enables proper start node chaining: Chain 1 completes before Chain 2
         node_depths = DependencySorter._calculate_node_depths(execution_nodes, edges)
 
-        # Topological sort with special handling for conditional dependencies
+        # Topological sort with special handling for routing node dependencies
         sorted_nodes = []
         remaining_nodes = execution_nodes.copy()
 
@@ -139,13 +139,6 @@ class DependencySorter:
                     if deps.issubset(executed_deps):
                         ready_nodes.append(node)
 
-            elif node.type == 'conditional':
-                # For conditional nodes, ensure the single input dependency is executed
-                if deps.issubset(executed_deps):
-                    # Additional check: ensure we have actual output from dependencies
-                    has_valid_input = any(dep_id in executed_deps for dep_id in deps)
-                    if has_valid_input:
-                        ready_nodes.append(node)
             else:
                 # Regular dependency check for other node types
                 if deps.issubset(executed_deps):
@@ -168,7 +161,7 @@ class DependencySorter:
             'start': 0,
             'step': 1,
             'chatOutput': 2,
-            'conditional': 3
+            'structuredOutput': 3
         }.get(node.type, 999)
 
     @staticmethod

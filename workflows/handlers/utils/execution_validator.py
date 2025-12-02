@@ -9,7 +9,7 @@ from typing import List, Tuple
 
 from workflows.models import (
     Workflow, WorkflowNode, StepNodeData,
-    ConditionalNodeData, StructuredOutputNodeData
+    StructuredOutputNodeData
 )
 
 logger = logging.getLogger(__name__)
@@ -39,11 +39,9 @@ class ExecutionValidator:
 
         # Get all nodes
         step_nodes = workflow.nodes.filter(node_type='step')
-        conditional_nodes = workflow.nodes.filter(node_type='conditional')
         structured_output_nodes = workflow.nodes.filter(node_type='structuredOutput')
 
         logger.info(f"[ExecutionValidator] Found {step_nodes.count()} step nodes, "
-                   f"{conditional_nodes.count()} conditional nodes, "
                    f"{structured_output_nodes.count()} structured output nodes")
 
         # Validate step nodes
@@ -51,13 +49,6 @@ class ExecutionValidator:
             node_errors = ExecutionValidator._validate_step_node(node)
             if node_errors:
                 logger.warning(f"[ExecutionValidator] Step node {node.node_id} has errors: {node_errors}")
-            errors.extend(node_errors)
-
-        # Validate conditional nodes
-        for node in conditional_nodes:
-            node_errors = ExecutionValidator._validate_conditional_node(node)
-            if node_errors:
-                logger.warning(f"[ExecutionValidator] Conditional node {node.node_id} has errors: {node_errors}")
             errors.extend(node_errors)
 
         # Validate structured output nodes
@@ -117,53 +108,6 @@ class ExecutionValidator:
             logger.warning(f"[ExecutionValidator] Step node {node.node_id}: Missing LLM")
             errors.append(
                 f"Step {step_data.step_number}: Missing required LLM. Please select an LLM before running."
-            )
-
-        return errors
-
-    @staticmethod
-    def _validate_conditional_node(node: WorkflowNode) -> List[str]:
-        """
-        Validate a conditional node for execution.
-
-        Required:
-        - prompt must be set
-        - llm must be set
-        - routes must have at least 2 entries
-
-        Args:
-            node: The conditional node to validate
-
-        Returns:
-            List of error messages (empty if valid)
-        """
-        errors = []
-        cond_data = node.data_object
-
-        if not isinstance(cond_data, ConditionalNodeData):
-            errors.append(f"Conditional node {node.node_id}: Invalid data type")
-            return errors
-
-        step_number = getattr(cond_data, 'step_number', None)
-        node_label = f"Conditional {step_number}" if step_number else "Conditional node"
-
-        # Validate prompt (REQUIRED)
-        if not cond_data.prompt:
-            errors.append(
-                f"{node_label}: Missing required prompt"
-            )
-
-        # Validate LLM (REQUIRED)
-        if not cond_data.llm:
-            errors.append(
-                f"{node_label}: Missing required LLM selection"
-            )
-
-        # Validate routes (REQUIRED, minimum 2)
-        routes = cond_data.get_routes()
-        if len(routes) < 2:
-            errors.append(
-                f"{node_label}: Must have at least 2 routes defined. Please configure routes before running."
             )
 
         return errors

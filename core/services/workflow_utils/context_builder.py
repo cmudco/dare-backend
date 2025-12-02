@@ -52,11 +52,6 @@ class WorkflowContextBuilder:
                 # Start with the step's actual metadata from the database
                 metadata = dict(step.metadata) if step.metadata else {}
 
-                # Add routing-specific metadata for conditional nodes (legacy support)
-                if node_type == 'conditional':
-                    metadata['is_human_validated'] = True
-                    metadata['routing_decision'] = step.response
-
                 # For structuredOutput nodes, selected_route should already be in step.metadata
                 # but if it's not, use the response as fallback
                 if node_type == 'structuredOutput' and 'selected_route' not in metadata:
@@ -127,12 +122,12 @@ class WorkflowContextBuilder:
         }
 
     @staticmethod
-    def update_conditional_step_with_user_choice(
+    def update_routing_step_with_user_choice(
         existing_metadata: Dict,
         chosen_route: str
     ) -> Dict:
         """
-        Update conditional step metadata with user's routing choice.
+        Update routing step metadata with user's routing choice.
 
         NOTE: All keys MUST be snake_case on backend - DRF converts to camelCase for frontend
 

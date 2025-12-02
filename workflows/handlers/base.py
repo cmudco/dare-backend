@@ -47,7 +47,7 @@ class ExecutionNode:
 
     Attributes:
         id: Unique node identifier
-        type: Node type ('start', 'step', 'chatOutput', 'conditional', 'structuredOutput')
+        type: Node type ('start', 'step', 'chatOutput', 'structuredOutput')
         step_number: Optional step ordering number
         db_node: Reference to the database WorkflowNode object
         next_node_id: ID of the next node in the flow

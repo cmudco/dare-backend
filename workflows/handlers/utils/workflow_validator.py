@@ -43,11 +43,11 @@ class WorkflowValidator:
             - All nodes are reachable from a start node
             - Start nodes have title and description
             - Step nodes have prompt and llm
-            - Conditional nodes have prompt, llm, and 2+ routes
+            - Routing nodes have prompt, llm, and 2+ routes
             - Structured output nodes have (prompt OR textInput), llm, and 2+ routes
             - All routes have unique non-empty names
             - All routes connect only to step nodes
-            - At least one route is connected per conditional/structured output node
+            - At least one route is connected per structured output node
         """
         errors: List[str] = []
 
@@ -83,15 +83,7 @@ class WorkflowValidator:
         )
         errors.extend(step_errors)
 
-        # 5. Validate conditional nodes (execution mode)
-        conditional_nodes = [n for n in nodes if n.node_type == 'conditional']
-        conditional_errors = WorkflowValidator._validate_conditional_nodes(
-            conditional_nodes, edges_by_source, edges_by_target,
-            node_lookup, for_execution=True
-        )
-        errors.extend(conditional_errors)
-
-        # 6. Validate structured output nodes (execution mode)
+        # 5. Validate structured output nodes (execution mode)
         structured_nodes = [n for n in nodes if n.node_type == 'structuredOutput']
         structured_errors = WorkflowValidator._validate_structured_output_nodes(
             structured_nodes, step_nodes, edges_by_source, edges_by_target,
@@ -216,122 +208,6 @@ class WorkflowValidator:
                 if not has_output_edge:
                     errors.append(
                         f"Step {step_number} must connect to its output node."
-                    )
-
-        return errors
-
-    @staticmethod
-    def _validate_conditional_nodes(conditional_nodes, edges_by_source, edges_by_target,
-                                   node_lookup, for_execution: bool) -> List[str]:
-        """
-        Validates all conditional nodes in the workflow.
-
-        Requirements:
-            - At least 2 routes defined
-            - All route names are unique and non-empty
-            - Receives exactly one input from chatOutput node
-            - Routes only connect to step nodes
-            - For execution: prompt is selected
-            - For execution: llm is selected
-            - For execution: at least one route is connected
-        """
-        errors: List[str] = []
-
-        for conditional_node in conditional_nodes:
-            data = conditional_node.typed_data
-            routes = getattr(data, 'routes', []) or []
-            step_number = getattr(data, 'step_number', None)
-            node_label = f"Conditional {step_number}" if step_number else "Conditional node"
-
-            # Validate execution requirements
-            if for_execution:
-                # Check prompt
-                prompt = getattr(data, 'prompt', None)
-                if not prompt:
-                    errors.append(f"{node_label}: Missing required prompt")
-
-                # Check LLM
-                llm = getattr(data, 'llm', None)
-                if not llm:
-                    errors.append(f"{node_label}: Missing required LLM selection")
-
-            # Validate routes
-            if len(routes) < 2:
-                errors.append(
-                    f"{node_label}: Must have at least 2 routes defined. Please configure routes before running."
-                )
-
-            # Validate route names are unique and non-empty
-            route_names = [r.get('name', '').strip() for r in routes if isinstance(r, dict)]
-            non_empty_route_names = [name for name in route_names if name]
-
-            if len(non_empty_route_names) != len(routes):
-                errors.append(
-                    f"{node_label}: All routes must have non-empty names"
-                )
-
-            if len(non_empty_route_names) != len(set(non_empty_route_names)):
-                errors.append(
-                    f"{node_label}: All route names must be unique"
-                )
-
-            # Validate incoming connection (exactly one from chatOutput)
-            incoming_edges = edges_by_target.get(conditional_node.node_id, [])
-            connected_outputs = [
-                edge for edge in incoming_edges
-                if edge.source in node_lookup and node_lookup[edge.source].node_type == 'chatOutput'
-            ]
-
-            if len(connected_outputs) == 0:
-                errors.append(
-                    f"{node_label}: Must connect from exactly one output node"
-                )
-            elif len(connected_outputs) > 1:
-                errors.append(
-                    f"{node_label}: Can only connect from one output node"
-                )
-
-            # Validate outgoing connections - edges_by_source now contains edge objects
-            actual_outgoing_edges = edges_by_source.get(conditional_node.node_id, [])
-
-            # Validate each route's connections
-            for route in routes:
-                if not isinstance(route, dict):
-                    continue
-
-                route_name = route.get('name', '').strip()
-                if not route_name:
-                    continue
-
-                route_handle = f"{WorkflowValidator.ROUTE_HANDLE_PREFIX}{route_name}"
-                route_connections = [
-                    edge for edge in actual_outgoing_edges
-                    if edge.source_handle == route_handle
-                ]
-
-                # Check if route connects to a step node (if connected)
-                if len(route_connections) == 1:
-                    target_node = node_lookup.get(route_connections[0].target)
-                    if target_node and target_node.node_type != 'step':
-                        errors.append(
-                            f"{node_label} route \"{route_name}\": "
-                            f"Must connect to a step node (currently connected to {target_node.node_type})"
-                        )
-                elif len(route_connections) > 1:
-                    errors.append(
-                        f"{node_label} route \"{route_name}\": Can only connect to one step node"
-                    )
-
-            # Require at least one route connected (for execution)
-            if for_execution:
-                total_route_connections = sum(
-                    1 for edge in actual_outgoing_edges
-                    if edge.source_handle and edge.source_handle.startswith(WorkflowValidator.ROUTE_HANDLE_PREFIX)
-                )
-
-                if total_route_connections == 0:
-                    errors.append(
-                        f"{node_label}: Must have at least one route connected to a step node"
                     )
 
         return errors
