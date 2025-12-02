@@ -64,7 +64,7 @@ class WorkflowExecutionService:
 
         Args:
             workflow_run: The workflow run to resume
-            node_id: The conditional node ID that was waiting for input
+            node_id: The routing node ID that was waiting for input
             chosen_route: The route name chosen by the user
 
         Returns:
@@ -73,8 +73,8 @@ class WorkflowExecutionService:
         try:
             workflow = await database_sync_to_async(lambda: workflow_run.workflow)()
 
-            # Get the conditional node's step
-            conditional_step = await database_sync_to_async(
+            # Get the routing node's step
+            routing_step = await database_sync_to_async(
                 lambda: WorkflowRunStep.objects.filter(
                     workflow_run=workflow_run,
                     step_node__node_id=node_id,
@@ -82,16 +82,16 @@ class WorkflowExecutionService:
                 ).first()
             )()
 
-            if not conditional_step:
+            if not routing_step:
                 return {
                     'success': False,
                     'error': 'No pending human validation found for this node',
                     'results': {}
                 }
 
-            # Update the conditional step with user's choice
-            await self._update_conditional_step_with_user_choice(
-                conditional_step, chosen_route
+            # Update the routing step with user's choice
+            await self._update_routing_step_with_user_choice(
+                routing_step, chosen_route
             )
 
             logger.info(
@@ -105,12 +105,12 @@ class WorkflowExecutionService:
             # Get all workflow nodes and continue from where we left off
             nodes = await self._get_ordered_workflow_nodes(workflow)
 
-            # Find the index of the conditional node
-            conditional_node_idx = next(
+            # Find the index of the routing node
+            routing_node_idx = next(
                 (i for i, n in enumerate(nodes) if n.id == node_id), -1
             )
 
-            if conditional_node_idx == -1:
+            if routing_node_idx == -1:
                 return {
                     'success': False,
                     'error': f'Could not find node {node_id} in workflow',
@@ -119,7 +119,7 @@ class WorkflowExecutionService:
 
             # Continue execution from the next node
             execution_stats = await self._execute_nodes_from_index(
-                nodes, conditional_node_idx + 1, context, workflow
+                nodes, routing_node_idx + 1, context, workflow
             )
 
             # Update workflow run status
@@ -182,7 +182,7 @@ class WorkflowExecutionService:
                     'results': {}
                 }
 
-            # Execute nodes with conditional routing logic
+            # Execute nodes with routing logic
             execution_stats = await self._execute_nodes_from_index(
                 nodes, 0, context, workflow
             )
@@ -249,7 +249,7 @@ class WorkflowExecutionService:
         Sort nodes based on their dependencies to ensure proper execution order.
 
         Uses DependencySorter utility for topological sorting with special handling
-        for conditional nodes and multi-input nodes.
+        for routing nodes and multi-input nodes.
         """
         edges = await database_sync_to_async(lambda: list(workflow.edges.all()))()
         return DependencySorter.sort_nodes_by_dependencies(execution_nodes, edges)
@@ -310,7 +310,7 @@ class WorkflowExecutionService:
                     )
                 elif node.type == 'chatOutput':
                     await self._clear_output_node_data(node)
-                elif node.type in ('conditional', 'structuredOutput'):
+                elif node.type == 'structuredOutput':
                     # Routing nodes can also be skipped if all predecessors are skipped
                     await self._update_step_status_to_skipped(
                         context.workflow_run, node
@@ -469,7 +469,7 @@ class WorkflowExecutionService:
         workflow: Workflow
     ) -> bool:
         """
-        Determine if a node should be executed based on conditional routing decisions.
+        Determine if a node should be executed based on routing decisions.
 
         Uses RoutingEvaluator utility for routing constraint evaluation.
 
@@ -700,7 +700,7 @@ class WorkflowExecutionService:
         all_nodes = await database_sync_to_async(lambda: list(workflow.nodes.all()))()
         node_types = {node.node_id: node.node_type for node in all_nodes}
 
-        # Filter to only include step nodes (exclude start, conditional, output nodes, etc.)
+        # Filter to only include step nodes (exclude start, structuredOutput, output nodes, etc.)
         step_dependency_node_ids = [
             dep_id for dep_id in dependency_node_ids
             if node_types.get(dep_id) == 'step'
@@ -861,29 +861,29 @@ class WorkflowExecutionService:
 
         return await get_chatoutput_nodes()
 
-    async def _update_conditional_step_with_user_choice(
+    async def _update_routing_step_with_user_choice(
         self,
-        conditional_step: WorkflowRunStep,
+        routing_step: WorkflowRunStep,
         chosen_route: str
     ):
         """
-        Update conditional step with user's routing choice.
+        Update routing step with user's routing choice.
 
         Args:
-            conditional_step: The conditional step to update
+            routing_step: The routing step to update
             chosen_route: User's chosen route
         """
         @database_sync_to_async
         def update_step():
-            step = WorkflowRunStep.objects.get(id=conditional_step.id)
+            step = WorkflowRunStep.objects.get(id=routing_step.id)
             existing_metadata = step.metadata or {}
 
             # Update metadata using utility
-            updated_metadata = WorkflowContextBuilder.update_conditional_step_with_user_choice(
+            updated_metadata = WorkflowContextBuilder.update_routing_step_with_user_choice(
                 existing_metadata, chosen_route
             )
 
-            WorkflowRunStep.objects.filter(id=conditional_step.id).update(
+            WorkflowRunStep.objects.filter(id=routing_step.id).update(
                 status=WorkflowRunStepStatus.COMPLETED,
                 response=chosen_route,
                 metadata=updated_metadata

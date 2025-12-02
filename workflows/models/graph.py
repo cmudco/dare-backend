@@ -33,7 +33,7 @@ class WorkflowNode(TimeStampMixin):
     )
     node_type = models.CharField(
         max_length=100,
-        help_text="React Flow node type (node.type): step, start, chatOutput, conditional"
+        help_text="React Flow node type (node.type): step, start, chatOutput, structuredOutput"
     )
 
     # Position Properties

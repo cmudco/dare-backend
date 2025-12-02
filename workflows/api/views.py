@@ -31,7 +31,7 @@ from workflows.handlers.utils.workflow_validator import WorkflowValidator
 from workflows.models import (
     Workflow, WorkflowRun, WorkflowRunStep,
     WorkflowNode, WorkflowEdge, StepNodeData, StartNodeData, ChatOutputNodeData,
-    ConditionalNodeData, StructuredOutputNodeData
+    StructuredOutputNodeData
 )
 from workflows.services import WorkflowCloningService
 from workflows.tasks import execute_workflow_run, resume_workflow_run
@@ -437,8 +437,6 @@ class WorkflowRunViewSet(viewsets.ModelViewSet):
 
         if step_node.node_type == 'step':
             node_errors = ExecutionValidator._validate_step_node(step_node)
-        elif step_node.node_type == 'conditional':
-            node_errors = ExecutionValidator._validate_conditional_node(step_node)
         elif step_node.node_type == 'structuredOutput':
             node_errors = ExecutionValidator._validate_structured_output_node(step_node)
         else:
@@ -599,7 +597,7 @@ class WorkflowRunViewSet(viewsets.ModelViewSet):
         """
         Submit user's route choice for a node requiring human validation.
 
-        Handles both ConditionalNode and StructuredOutputNode validations.
+        Handles StructuredOutputNode validations.
         Frontend sends: {"nodeId": "...", "chosenRoute": "..."}
         DRF CamelCaseJSONParser converts to: {"node_id": "...", "chosen_route": "..."}
         """
@@ -663,7 +661,7 @@ class WorkflowRunViewSet(viewsets.ModelViewSet):
         Returns:
             WorkflowRunStep or None
         """
-        # Try direct match (ConditionalNode case)
+        # Try direct match
         pending_step = WorkflowRunStep.objects.filter(
             workflow_run=workflow_run,
             step_node__node_id=node_id,
@@ -705,11 +703,7 @@ class WorkflowRunViewSet(viewsets.ModelViewSet):
         """
         step_data = pending_step.step_node.data_object
 
-        # ConditionalNode: routes are directly on the node
-        if isinstance(step_data, ConditionalNodeData):
-            return step_data.get_routes()
-
-        # StructuredOutputNodeData: independent routing node with its own routes
+        # StructuredOutputNodeData: routing node with its own routes
         if isinstance(step_data, StructuredOutputNodeData):
             return step_data.get_routes()
 
@@ -718,7 +712,7 @@ class WorkflowRunViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['get'], url_path='pending-validations')
     def get_pending_validations(self, request, pk=None):
         """
-        Get all conditional nodes in this workflow run that are waiting for human validation.
+        Get all routing nodes in this workflow run that are waiting for human validation.
         
         Returns a list of pending validations with route options.
         """
@@ -733,16 +727,16 @@ class WorkflowRunViewSet(viewsets.ModelViewSet):
         validations = []
 
         for step in pending_steps:
-            conditional_data = step.step_node.data_object
+            routing_data = step.step_node.data_object
             
-            if isinstance(conditional_data, ConditionalNodeData):
-                available_routes = conditional_data.get_routes()
+            if isinstance(routing_data, StructuredOutputNodeData):
+                available_routes = routing_data.get_routes()
                 # Get prompt content if prompt exists
-                prompt_content = conditional_data.prompt.content if conditional_data.prompt else "Evaluate the input and choose the appropriate route."
+                prompt_content = routing_data.prompt.content if routing_data.prompt else "Evaluate the input and choose the appropriate route."
 
                 validations.append({
                     'node_id': step.step_node.node_id,
-                    'step_number': conditional_data.step_number,
+                    'step_number': routing_data.step_number,
                     'custom_prompt': prompt_content,  # For backward compatibility with frontend
                     'available_routes': available_routes,
                     'current_response': step.response,
@@ -972,8 +966,6 @@ class WorkflowRunV2ViewSet(viewsets.ViewSet):
         # Validate node configuration
         if step_node.node_type == 'step':
             node_errors = ExecutionValidator._validate_step_node(step_node)
-        elif step_node.node_type == 'conditional':
-            node_errors = ExecutionValidator._validate_conditional_node(step_node)
         elif step_node.node_type == 'structuredOutput':
             node_errors = ExecutionValidator._validate_structured_output_node(step_node)
         else:
@@ -1041,7 +1033,7 @@ class WorkflowRunV2ViewSet(viewsets.ViewSet):
         """
         POST /api/v2/workflows/runs/submit-human-validation/
 
-        Submit human validation choice for a conditional/structured output node.
+        Submit human validation choice for a structured output node.
 
         Request body:
         {

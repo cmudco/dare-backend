@@ -3,7 +3,7 @@ from .models import (
     Workflow,
     # Graph-driven models
     WorkflowNode, WorkflowEdge,
-    StepNodeData, StartNodeData, ChatOutputNodeData, ConditionalNodeData
+    StepNodeData, StartNodeData, ChatOutputNodeData
 )
 
 class WorkflowNodeInline(admin.TabularInline):
@@ -55,11 +55,3 @@ class StartNodeDataAdmin(admin.ModelAdmin):
 class ChatOutputNodeDataAdmin(admin.ModelAdmin):
     list_display = ('step_number', 'status', 'created_at')
     list_filter = ('status', 'created_at')
-
-
-@admin.register(ConditionalNodeData)
-class ConditionalNodeDataAdmin(admin.ModelAdmin):
-    list_display = ('step_number', 'require_human_validation', 'created_at')
-    list_filter = ('require_human_validation', 'created_at')
-    search_fields = ('prompt__name', 'prompt__content')
-    readonly_fields = ('routes',)
