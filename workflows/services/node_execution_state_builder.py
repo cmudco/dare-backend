@@ -143,6 +143,17 @@ class NodeExecutionStateBuilder:
         if step.status == WorkflowRunStepStatus.PENDING_HUMAN_INPUT:
             validation_context = self._normalize_validation_context(step, node)
 
+        # Extract AI metadata for completed routing nodes (so frontend can display AI analysis)
+        metadata = None
+        if node.node_type == 'structuredOutput' and step.metadata:
+            metadata = {
+                "aiRecommendation": step.metadata.get(MetadataKey.AI_RECOMMENDATION),
+                "aiAnalysis": step.metadata.get(MetadataKey.ANALYSIS),
+                "isHumanValidated": step.metadata.get(MetadataKey.IS_HUMAN_VALIDATED, False),
+                "userChoice": step.metadata.get(MetadataKey.USER_CHOICE),
+                "selectedRoute": step.metadata.get(MetadataKey.SELECTED_ROUTE),
+            }
+
         return {
             "nodeId": node.node_id,  # Include nodeId to survive key mangling
             "stepId": step.id,
@@ -151,6 +162,7 @@ class NodeExecutionStateBuilder:
             "response": step.response,
             "error": step.error,
             "validationContext": validation_context,
+            "metadata": metadata,  # Include AI analysis for completed steps
         }
 
     def _build_display_node_state(
