@@ -2,7 +2,7 @@
 Base execution handler with common billing, status updates, and error handling.
 
 This module provides shared functionality for handlers that execute LLM calls
-and manage workflow run steps (step_handler, conditional_handler).
+and manage workflow run steps (step_handler, structured_output_handler).
 """
 import logging
 from typing import Dict, Optional

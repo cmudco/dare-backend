@@ -1,14 +1,14 @@
 """
 Base routing handler for workflow routing nodes.
 
-This module provides a unified base handler for routing nodes (ConditionalNode,
-StructuredOutputNode) that share common functionality:
+This module provides a unified base handler for routing nodes (StructuredOutputNode)
+that share common functionality:
 - LLM query with structured output spec
 - Route parsing and validation
 - Metadata building (unified format)
 - Human validation flow
 
-Both ConditionalNodeHandler and StructuredOutputNodeHandler extend this base.
+StructuredOutputNodeHandler extends this base.
 """
 import json
 import logging
@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 
 class BaseRoutingHandler(BaseExecutionHandler):
     """
-    Base handler for routing nodes (ConditionalNode, StructuredOutputNode).
+    Base handler for routing nodes (StructuredOutputNode).
 
     Shared functionality:
     - LLM query with structured output spec
@@ -150,7 +150,7 @@ class BaseRoutingHandler(BaseExecutionHandler):
         """
         Execute LLM query for routing decision with optional structured output.
 
-        This is the shared LLM query logic used by both ConditionalNode and
+        This is the shared LLM query logic used by
         StructuredOutputNode.
 
         Args:
@@ -193,8 +193,8 @@ class BaseRoutingHandler(BaseExecutionHandler):
             message=final_message,
             user=user,
             llm=llm,
-            max_tokens=LLMDefaults.CONDITIONAL_MAX_TOKENS,
-            temperature=LLMDefaults.CONDITIONAL_TEMPERATURE,
+            max_tokens=LLMDefaults.STRUCTURED_OUTPUT_MAX_TOKENS,
+            temperature=LLMDefaults.STRUCTURED_OUTPUT_TEMPERATURE,
             structured_spec=structured_spec if supports_native else None
         )
 
@@ -340,7 +340,7 @@ class BaseRoutingHandler(BaseExecutionHandler):
         """
         Build standardized metadata dictionary for routing nodes.
 
-        This ensures both ConditionalNode and StructuredOutputNode use
+        This ensures StructuredOutputNode uses
         identical metadata format for consistency.
 
         Args:
@@ -383,7 +383,7 @@ class BaseRoutingHandler(BaseExecutionHandler):
 
         Updates workflow step with pending status and metadata containing
         AI recommendation for user review. This is shared logic for both
-        ConditionalNode and StructuredOutputNode.
+        StructuredOutputNode.
 
         Args:
             workflow_run_step: Workflow run step to update
