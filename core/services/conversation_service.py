@@ -22,7 +22,7 @@ class ConversationService:
             lambda: list(
                 Message.active_objects.filter(conversation=conversation)
                 .select_related('llm')
-                .prefetch_related('snippets', 'files', 'tags')
+                .prefetch_related('snippets', 'files', 'tags', 'artifacts')
                 .order_by('-created_at')[:limit]
             )
         )()
@@ -53,6 +53,7 @@ class ConversationService:
                 "cost": msg.get("cost", None),
                 "inputTokens": msg.get("input_tokens", None),
                 "outputTokens": msg.get("output_tokens", None),
+                "artifactId": msg.get("artifactId", None),
             }
             for msg in serialized_messages
         ]

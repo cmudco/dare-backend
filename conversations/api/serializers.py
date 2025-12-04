@@ -103,6 +103,7 @@ class MessageSerializer(serializers.ModelSerializer):
     )
     snippets = SnippetSerializer(many=True, read_only=True)
     llm = serializers.PrimaryKeyRelatedField(read_only=True, allow_null=True)
+    artifactId = serializers.SerializerMethodField()
 
     class Meta:
         model = Message
@@ -127,8 +128,15 @@ class MessageSerializer(serializers.ModelSerializer):
             'input_tokens',
             'output_tokens',
             'cost',
+            'artifactId',
         ]
-        read_only_fields = ['id', 'created_at', 'sender_name', 'files', 'tags', 'snippets', 'input_tokens', 'output_tokens', 'cost']
+        read_only_fields = ['id', 'created_at', 'sender_name', 'files', 'tags', 'snippets', 'input_tokens', 'output_tokens', 'cost', 'artifactId']
+
+    def get_artifactId(self, obj):
+        """Get the ID of the first artifact linked to this message."""
+        # Use the reverse relation from Artifact -> Message
+        artifact = obj.artifacts.first()
+        return str(artifact.id) if artifact else None
 
 
 class ArtifactCheckpointSerializer(serializers.ModelSerializer):
