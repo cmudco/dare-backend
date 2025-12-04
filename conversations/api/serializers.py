@@ -64,6 +64,7 @@ class ConversationSerializer(serializers.ModelSerializer):
             'history_limit',
             'web_search_enabled',
             'image_generation_enabled',
+            'artifacts_enabled',
             'selected_model',
             'selected_media_ids',
             'prompt',
