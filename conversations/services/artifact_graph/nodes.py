@@ -245,15 +245,18 @@ async def plan_node(state: ArtifactState) -> Dict[str, Any]:
         language = None
         
         for tool_call in tool_calls:
+            logger.info(f"Plan node: Processing tool_call: {tool_call}")
             if tool_call.get("name") == ArtifactTools.CREATE_ARTIFACT:
                 args = ArtifactTools.parse_tool_arguments(
                     tool_call.get("arguments", "{}")
                 )
+                logger.info(f"Plan node: Parsed create_artifact args: {args}")
                 artifact_type = args.get("artifact_type", "document")
                 title = args.get("title", title)
                 outline = args.get("outline", outline)
                 estimated_sections = args.get("estimated_sections", 3)
                 language = args.get("language")
+                logger.info(f"Plan node: Extracted title='{title}', type={artifact_type}, sections={estimated_sections}")
                 break
         
         # If no tool call, try to parse from response text

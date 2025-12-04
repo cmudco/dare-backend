@@ -29,15 +29,39 @@ class OpenAIStreamProcessor:
         Yields:
             Tuple of (text_chunk, usage_data)
         """
+        tool_calls = []
+        current_tool_calls = {}  # Track tool calls by index
+
         async for chunk in response:
             # Yield content chunks
             if chunk.choices and chunk.choices[0].delta.content:
                 yield chunk.choices[0].delta.content, None
 
+            # Handle tool calls
+            if chunk.choices and chunk.choices[0].delta.tool_calls:
+                for tc in chunk.choices[0].delta.tool_calls:
+                    idx = tc.index
+                    if idx not in current_tool_calls:
+                        current_tool_calls[idx] = {
+                            "id": tc.id or "",
+                            "name": tc.function.name if tc.function and tc.function.name else "",
+                            "arguments": ""
+                        }
+                    if tc.function and tc.function.arguments:
+                        current_tool_calls[idx]["arguments"] += tc.function.arguments
+
             # Yield usage data
             usage = OpenAIUsageExtractor.extract_from_chat_completion(chunk)
             if usage:
+                # Include tool calls in usage data if present
+                if current_tool_calls:
+                    tool_calls = list(current_tool_calls.values())
+                    usage["tool_calls"] = tool_calls
                 yield "", usage
+
+        # If we have tool calls but no usage was yielded, yield them now
+        if current_tool_calls and not tool_calls:
+            yield "", {"tool_calls": list(current_tool_calls.values())}
 
     @staticmethod
     async def process_responses_api_stream(
