@@ -10,7 +10,7 @@ from django.utils import timezone
 from common.managers import ActiveObjectsManager
 from common.models import BaseModel, TimeStampMixin
 from core.fields import EncryptedCharField
-from .constants import Provider, SenderType, FeedbackType, ConversationSource
+from .constants import Provider, SenderType, FeedbackType, ConversationSource, ArtifactType, ArtifactStatus
 
 
 class LLM(models.Model):
@@ -559,3 +559,143 @@ class LearningProgressAssessment(BaseModel):
 
     def __str__(self):
         return f"Progress Assessment for {self.conversation.conversation_id} at {self.created_at.strftime('%Y-%m-%d %H:%M')}"
+
+
+class Artifact(BaseModel):
+    """
+    Model for long-form generated content (documents, code, diagrams).
+    Supports section-by-section generation with pause/resume capability.
+    """
+    conversation = models.ForeignKey(
+        Conversation,
+        on_delete=models.CASCADE,
+        related_name="artifacts",
+        help_text="The conversation this artifact belongs to."
+    )
+    message = models.ForeignKey(
+        Message,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="artifacts",
+        help_text="The AI message associated with this artifact."
+    )
+
+    artifact_type = models.CharField(
+        max_length=20,
+        choices=ArtifactType.choices,
+        default=ArtifactType.DOCUMENT,
+        help_text="Type of artifact (document, code, diagram)."
+    )
+    title = models.CharField(
+        max_length=500,
+        help_text="Title of the artifact."
+    )
+    language = models.CharField(
+        max_length=50,
+        blank=True,
+        null=True,
+        help_text="Programming language for code artifacts."
+    )
+    outline = models.TextField(
+        blank=True,
+        default="",
+        help_text="Structured outline of the artifact sections."
+    )
+    content = models.TextField(
+        blank=True,
+        default="",
+        help_text="Generated content of the artifact."
+    )
+
+    estimated_sections = models.PositiveIntegerField(
+        default=10,
+        help_text="Estimated number of sections in the artifact."
+    )
+    current_section = models.PositiveIntegerField(
+        default=0,
+        help_text="Current section being generated (0 = not started)."
+    )
+
+    status = models.CharField(
+        max_length=20,
+        choices=ArtifactStatus.choices,
+        default=ArtifactStatus.PLANNING,
+        help_text="Current status of artifact generation."
+    )
+
+    metadata = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Additional metadata (LLM used, token counts, etc.)."
+    )
+
+    active_objects = ActiveObjectsManager()
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = "Artifact"
+        verbose_name_plural = "Artifacts"
+        indexes = [
+            models.Index(fields=['conversation', 'status'], name='artifact_conv_status_idx'),
+        ]
+
+    def __str__(self):
+        return f"{self.title} ({self.get_status_display()})"
+
+    @property
+    def progress(self) -> float:
+        """Calculate generation progress as a percentage."""
+        if self.estimated_sections == 0:
+            return 0.0
+        return min(1.0, self.current_section / self.estimated_sections)
+
+    @property
+    def sections_remaining(self) -> int:
+        """Calculate remaining sections to generate."""
+        return max(0, self.estimated_sections - self.current_section)
+
+    @property
+    def word_count(self) -> int:
+        """Calculate word count of generated content."""
+        return len(self.content.split()) if self.content else 0
+
+
+class ArtifactCheckpoint(BaseModel):
+    """
+    Model to store checkpoints for artifact generation.
+    Enables pause/resume functionality for long-form content.
+    """
+    artifact = models.ForeignKey(
+        Artifact,
+        on_delete=models.CASCADE,
+        related_name="checkpoints",
+        help_text="The artifact this checkpoint belongs to."
+    )
+    content_snapshot = models.TextField(
+        help_text="Content snapshot at this checkpoint."
+    )
+    current_section = models.PositiveIntegerField(
+        help_text="Section number at this checkpoint."
+    )
+    iteration_count = models.PositiveIntegerField(
+        default=0,
+        help_text="Number of generation iterations completed."
+    )
+    state_data = models.JSONField(
+        default=dict,
+        help_text="Serialized state data for resuming generation."
+    )
+
+    active_objects = ActiveObjectsManager()
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = "Artifact Checkpoint"
+        verbose_name_plural = "Artifact Checkpoints"
+        indexes = [
+            models.Index(fields=['artifact', 'created_at'], name='checkpoint_artifact_idx'),
+        ]
+
+    def __str__(self):
+        return f"Checkpoint for {self.artifact.title} at section {self.current_section}"

@@ -63,6 +63,7 @@ class LLMQueryRequestBuilder:
             image_generation_enabled=message_data.get("image_generation_enabled", False),
             image_generation_settings=message_data.get("image_generation_settings"),
             structured_spec=message_data.get("structured_spec"),
+            artifacts_enabled=message_data.get("artifacts_enabled", False),
         )
 
         # Build media config
