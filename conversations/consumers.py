@@ -4,6 +4,7 @@ from typing import Optional, Dict, Any
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.exceptions import DenyConnection
 from django.contrib.auth import get_user_model
+from asgiref.sync import sync_to_async
 from pydantic import ValidationError
 
 from conversations.models import Conversation
@@ -83,8 +84,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
         try:
             if self.conversation_id:
                 # Find any artifacts that are still in-progress (planning or generating)
-                from asgiref.sync import sync_to_async
-
                 @sync_to_async
                 def pause_in_progress_artifacts():
                     updated_count = Artifact.active_objects.filter(

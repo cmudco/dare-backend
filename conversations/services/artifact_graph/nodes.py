@@ -8,6 +8,8 @@ These are checkpointed automatically by LangGraph at each transition.
 import logging
 from typing import Dict, Any, Optional
 from asgiref.sync import sync_to_async
+from django.db import connection
+from django.contrib.auth import get_user_model
 
 from conversations.models import Artifact, ArtifactCheckpoint, Conversation, Message, LLM
 from conversations.constants import ArtifactStatus, ArtifactType, Provider
@@ -114,7 +116,6 @@ def check_artifact_paused(artifact_id: int) -> bool:
     try:
         # Use select_for_update to ensure we read the latest committed data
         # and avoid reading stale cached data
-        from django.db import connection
         connection.ensure_connection()
 
         artifact = Artifact.active_objects.get(id=artifact_id)
@@ -202,9 +203,8 @@ async def plan_node(state: ArtifactState) -> Dict[str, Any]:
         # Get LLM and conversation
         llm = await get_llm(state["llm_id"])
         conversation = await get_conversation(state["conversation_id"])
-        
+
         # Get AI service
-        from django.contrib.auth import get_user_model
         User = get_user_model()
         user = None
         if state.get("user_id"):
@@ -345,9 +345,8 @@ async def generate_section_node(state: ArtifactState) -> Dict[str, Any]:
 
         # Get LLM
         llm = await get_llm(state["llm_id"])
-        
+
         # Get user if available
-        from django.contrib.auth import get_user_model
         User = get_user_model()
         user = None
         if state.get("user_id"):
