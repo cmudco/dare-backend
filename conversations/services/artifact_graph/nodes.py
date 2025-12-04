@@ -108,38 +108,59 @@ def create_checkpoint_db(
     return checkpoint
 
 
+@sync_to_async
+def check_artifact_paused(artifact_id: int) -> bool:
+    """Check if artifact has been paused by user."""
+    try:
+        # Use select_for_update to ensure we read the latest committed data
+        # and avoid reading stale cached data
+        from django.db import connection
+        connection.ensure_connection()
+
+        artifact = Artifact.active_objects.get(id=artifact_id)
+        # Force refresh from database to get latest status
+        artifact.refresh_from_db(fields=['status'])
+        is_paused = artifact.status == ArtifactStatus.PAUSED
+        logger.info(f"Check artifact paused: artifact_id={artifact_id}, status={artifact.status}, is_paused={is_paused}")
+        return is_paused
+    except Artifact.DoesNotExist:
+        logger.warning(f"Check artifact paused: artifact_id={artifact_id} not found")
+        return False
+
+
 # ========== AI Service Helper ==========
 
 async def get_ai_service(llm: LLM, user=None):
-    """Get the appropriate AI service for an LLM."""
+    """
+    Get the appropriate AI service for an LLM.
+
+    All services expect an LLM object and optional api_key override.
+    """
     provider = llm.provider
-    
-    # Get API key
+
+    # Get API key (these are already async functions)
     if user:
-        api_key = await sync_to_async(get_provider_api_key_for_user)(user, provider)
+        api_key = await get_provider_api_key_for_user(provider, user)
     else:
-        api_key = await sync_to_async(get_provider_api_key)(provider)
-    
+        api_key = await get_provider_api_key(provider)
+
     if not api_key:
         raise ValueError(f"No API key found for provider {provider}")
-    
-    # Get base URL for custom providers
-    base_url = getattr(llm, 'base_url', None)
-    
-    # Return appropriate service
+
+    # Return appropriate service - all take (llm, api_key) signature
     if provider == Provider.OPENAI.value:
-        return OpenAIService(api_key=api_key, model=llm.identifier)
+        return OpenAIService(llm=llm, api_key=api_key)
     elif provider == Provider.CLAUDE.value:
-        return ClaudeService(api_key=api_key, model=llm.identifier)
+        return ClaudeService(llm=llm, api_key=api_key)
     elif provider == Provider.GEMINI.value:
-        return GeminiService(api_key=api_key, model=llm.identifier)
+        return GeminiService(llm=llm, api_key=api_key)
     elif provider == Provider.LLAMA.value:
-        return LlamaService(model=llm.identifier)
-    elif provider == Provider.CUSTOM.value and base_url:
-        return CustomLLMService(api_key=api_key, model=llm.identifier, base_url=base_url)
+        return LlamaService(llm=llm, api_key=api_key)
+    elif provider == Provider.CUSTOM.value:
+        return CustomLLMService(llm=llm, api_key=api_key)
     else:
         # Default to OpenAI-compatible
-        return OpenAIService(api_key=api_key, model=llm.identifier)
+        return OpenAIService(llm=llm, api_key=api_key)
 
 
 # ========== Graph Nodes ==========
@@ -147,17 +168,36 @@ async def get_ai_service(llm: LLM, user=None):
 async def plan_node(state: ArtifactState) -> Dict[str, Any]:
     """
     Planning node - Creates the artifact with title and outline.
-    
+
     This node:
     1. Calls LLM with planning prompt
     2. Parses create_artifact tool call
     3. Creates artifact in database
     4. Updates state with artifact info
-    
+
     Checkpointed: Yes - saves artifact_id and outline
+
+    If artifact_id is already set (resume case), skips planning and returns existing state.
     """
     logger.info(f"Plan node: Starting for conversation {state['conversation_id']}")
-    
+
+    # RESUME CHECK: If artifact already exists, skip planning and pass through
+    if state.get("artifact_id") and state["artifact_id"] > 0:
+        logger.info(f"Plan node: Skipping - artifact {state['artifact_id']} already exists (resume)")
+
+        # Update artifact status to GENERATING in database for resume
+        await update_artifact_db(state["artifact_id"], status=ArtifactStatus.GENERATING)
+        logger.info(f"Plan node: Updated artifact {state['artifact_id']} status to GENERATING (resume)")
+
+        # Return state with ARTIFACT_INIT chunk for frontend to know we're resuming
+        message_id = state.get("message_id", "")
+        init_chunk = f"__ARTIFACT_INIT__|{state['artifact_id']}|{state['title']}|{state['outline']}|{state['estimated_sections']}|{message_id}"
+
+        return {
+            "pending_chunks": [init_chunk],
+            "status": "generating",
+        }
+
     try:
         # Get LLM and conversation
         llm = await get_llm(state["llm_id"])
@@ -229,19 +269,35 @@ async def plan_node(state: ArtifactState) -> Dict[str, Any]:
                 outline = "\n".join(outline_lines)
                 estimated_sections = len(outline_lines)
         
-        # Create artifact in database
+        # Get message object to link immediately (so artifactId appears in conversation history on reload)
+        message_obj = None
+        message_id = state.get("message_id")
+        if message_id:
+            try:
+                message_obj = await sync_to_async(Message.active_objects.get)(id=message_id)
+            except Message.DoesNotExist:
+                logger.warning(f"Plan node: Message {message_id} not found for artifact linking")
+
+        # Create artifact in database WITH message link
         artifact = await create_artifact_db(
             conversation=conversation,
-            message=None,  # Will be set later
+            message=message_obj,  # Link immediately instead of None
             artifact_type=artifact_type,
             title=title,
             outline=outline,
             estimated_sections=estimated_sections,
             language=language,
         )
-        
-        logger.info(f"Plan node: Created artifact {artifact.id} - {title}")
-        
+
+        # Update artifact status to GENERATING in database
+        # This is crucial for pause detection to work correctly
+        await update_artifact_db(artifact.id, status=ArtifactStatus.GENERATING)
+
+        logger.info(f"Plan node: Created artifact {artifact.id} - {title}, linked to message {message_id}, status set to GENERATING")
+
+        # Include message_id in the init chunk for frontend linking
+        message_id = state.get("message_id") or ""
+
         return {
             "artifact_id": artifact.id,
             "artifact_type": artifact_type,
@@ -250,7 +306,7 @@ async def plan_node(state: ArtifactState) -> Dict[str, Any]:
             "estimated_sections": estimated_sections,
             "language": language,
             "status": "generating",
-            "pending_chunks": [f"__ARTIFACT_INIT__|{artifact.id}|{title}|{outline}|{estimated_sections}"],
+            "pending_chunks": [f"__ARTIFACT_INIT__|{artifact.id}|{title}|{outline}|{estimated_sections}|{message_id}"],
         }
         
     except Exception as e:
@@ -264,18 +320,29 @@ async def plan_node(state: ArtifactState) -> Dict[str, Any]:
 async def generate_section_node(state: ArtifactState) -> Dict[str, Any]:
     """
     Section generation node - Generates content for the next section.
-    
+
     This node:
-    1. Gets current section from state
-    2. Calls LLM with section prompt
-    3. Appends content to artifact
-    4. Updates progress
-    
+    1. Checks if user requested pause
+    2. Gets current section from state
+    3. Calls LLM with section prompt
+    4. Appends content to artifact
+    5. Updates progress
+
     Checkpointed: Yes - saves content and section number after each section
     """
     logger.info(f"Generate section node: Section {state['current_section'] + 1} of {state['estimated_sections']}")
-    
+
     try:
+        # Check if user requested pause before starting section
+        if state.get("artifact_id"):
+            is_paused = await check_artifact_paused(state["artifact_id"])
+            if is_paused:
+                logger.info(f"Generate section node: Artifact {state['artifact_id']} paused by user")
+                return {
+                    "status": "paused",
+                    "pending_chunks": [f"__ARTIFACT_PAUSE__|{state['artifact_id']}|{state['current_section']}|{state['estimated_sections'] - state['current_section']}"],
+                }
+
         # Get LLM
         llm = await get_llm(state["llm_id"])
         
@@ -310,9 +377,11 @@ async def generate_section_node(state: ArtifactState) -> Dict[str, Any]:
         tools = ArtifactTools.get_generation_tools()
         
         # Generate section content
+        # Note: Pause is checked AFTER section completes (not mid-stream)
+        # because the REST API updates the DB and we check DB after each section
         section_content = ""
         chunks = []
-        
+
         async for chunk, usage in ai_service.stream_chat_completion(
             messages=messages,
             max_tokens=4000,
@@ -322,7 +391,7 @@ async def generate_section_node(state: ArtifactState) -> Dict[str, Any]:
             if chunk:
                 section_content += chunk
                 chunks.append(chunk)
-            
+
             # Handle tool calls
             if usage and usage.get("tool_calls"):
                 for tool_call in usage["tool_calls"]:
@@ -342,12 +411,28 @@ async def generate_section_node(state: ArtifactState) -> Dict[str, Any]:
             content=new_content,
             current_section=section_number,
         )
-        
+
         # Calculate progress
         progress = section_number / state["estimated_sections"]
-        
+
         logger.info(f"Generate section node: Completed section {section_number}, progress {progress:.2%}")
-        
+
+        # Check if pause was requested DURING section generation
+        # This ensures we stop after completing the current section
+        if state.get("artifact_id"):
+            is_paused = await check_artifact_paused(state["artifact_id"])
+            if is_paused:
+                logger.info(f"Generate section node: Pause detected after completing section {section_number}")
+                return {
+                    "content": new_content,
+                    "current_section": section_number,
+                    "status": "paused",
+                    "pending_chunks": [
+                        f"__ARTIFACT_STREAM__|{state['artifact_id']}|{section_number}|{progress}|{section_content}",
+                        f"__ARTIFACT_PAUSE__|{state['artifact_id']}|{section_number}|{state['estimated_sections'] - section_number}",
+                    ],
+                }
+
         return {
             "content": new_content,
             "current_section": section_number,
@@ -520,8 +605,9 @@ async def error_node(state: ArtifactState) -> Dict[str, Any]:
 def should_continue_generating(state: ArtifactState) -> str:
     """
     Determine what to do after generating a section.
-    
+
     Returns:
+        - "pause" if user requested pause
         - "generate_section" if more sections needed and within iteration limit
         - "checkpoint" if iteration batch complete
         - "complete" if all sections done
@@ -530,16 +616,20 @@ def should_continue_generating(state: ArtifactState) -> str:
     # Check for errors
     if state.get("error") and state.get("retry_count", 0) >= 3:
         return "error"
-    
+
+    # Check if paused (status set by generate_section_node when pause detected)
+    if state.get("status") == "paused":
+        return "pause"
+
     # Check if all sections complete
     if state["current_section"] >= state["estimated_sections"]:
         return "complete"
-    
+
     # Check if we should checkpoint (end of iteration batch)
     sections_in_iteration = state["current_section"] % state["sections_per_iteration"]
     if sections_in_iteration == 0 and state["current_section"] > 0:
         return "checkpoint"
-    
+
     # Continue generating
     return "generate_section"
 

@@ -22,7 +22,7 @@ Guidelines for outlining:
 - Order sections logically (introduction → fundamentals → advanced → conclusion)
 - For code artifacts, include: overview, setup, implementation, testing, deployment
 - For documents, include: introduction, context, main content sections, summary
-- Aim for 8-15 sections for comprehensive coverage
+- Aim for 3-5 sections for focused, concise content (keep it brief for faster generation)
 
 After creating the artifact outline, you will generate content section by section.
 
@@ -64,12 +64,9 @@ Current state:
 Resume from where you left off. Generate content for section {current_section} and use the update_artifact tool to save it."""
 
 
-def get_planning_prompt(user_message: str) -> str:
+def get_planning_prompt() -> str:
     """
     Get the system prompt for artifact planning phase.
-
-    Args:
-        user_message: The user's request
 
     Returns:
         Complete system prompt for planning

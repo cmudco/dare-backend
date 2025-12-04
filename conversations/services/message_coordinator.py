@@ -28,6 +28,7 @@ from conversations.constants import (
     DEFAULT_CONVERSATION_TITLE,
     ErrorCode,
     ErrorMessage,
+    ArtifactStatus,
 )
 from core.services.conversation_service import ConversationService
 from core.services.llm_service import LLMService
@@ -75,10 +76,17 @@ class MessageCoordinator:
         self.billing_service = BillingService()
         self.learning_progress_service = LearningProgressService()
 
+        # Track active artifact generation tasks for cancellation
+        self._artifact_tasks: Dict[str, asyncio.Task] = {}
+
     async def send(self, data: Dict[str, Any]):
         """Send data through WebSocket if callback is available."""
         if self.send_callback:
-            await self.send_callback(json.dumps(camelize(data)))
+            try:
+                await self.send_callback(json.dumps(camelize(data)))
+            except Exception as e:
+                # Log but don't raise - client may have disconnected
+                logger.debug(f"Failed to send WebSocket message (client may have disconnected): {type(e).__name__}")
 
     async def send_error(self, error_code: str, error_message: str, details: Optional[Dict] = None):
         """Send error response through WebSocket."""
@@ -757,11 +765,32 @@ class MessageCoordinator:
         """
         Stream artifact generation response.
 
+        Uses an event-driven approach to allow pause requests to be processed
+        during generation.
+
         Args:
             message_data: Validated message data
             message_obj: AI message object
             llm: LLM instance to use
             artifact_id: Optional existing artifact ID for continuation
+        """
+        await self._run_artifact_generation(message_data, message_obj, llm, artifact_id)
+
+    async def _run_artifact_generation(
+        self,
+        message_data: Dict[str, Any],
+        message_obj: Message,
+        llm: LLM,
+        artifact_id: Optional[str] = None,
+    ):
+        """
+        Execute the artifact generation logic.
+
+        The pause mechanism works by:
+        1. User clicks pause -> handle_pause_artifact updates DB status to PAUSED
+        2. The asyncio.sleep(0) in graph.py yields control to process pause request
+        3. check_artifact_paused in nodes.py reads the PAUSED status from DB
+        4. Generation stops at the next section boundary
         """
         try:
             # Create artifact service with WebSocket callback
@@ -771,11 +800,12 @@ class MessageCoordinator:
                 send_callback=self._artifact_send_callback,
             )
 
-            # Track accumulated content for finalization
-            ai_response_accumulator = ""
             token_usage = None
+            generated_artifact_id = artifact_id
 
             # Execute artifact generation
+            # Note: Content is stored in the Artifact model, NOT in the message
+            # The message just gets linked to the artifact via artifact_id
             async for chunk, usage in artifact_service.execute(
                 message=message_data["message"],
                 llm=llm,
@@ -785,47 +815,106 @@ class MessageCoordinator:
                 if usage:
                     token_usage = usage
 
+                    # Track the artifact_id from metadata
+                    if usage.get("type") == "artifact_init":
+                        generated_artifact_id = str(usage.get("artifact_id"))
+                        logger.info(f"Artifact generation started for artifact_id={generated_artifact_id}")
+
                     # Check billing during streaming (authenticated users only)
                     if self.user:
                         can_continue, error_response = await self.billing_service.check_streaming_credit_usage(
                             self.user, llm, token_usage
                         )
                         if not can_continue:
-                            await self._handle_insufficient_balance(
-                                message_obj, ai_response_accumulator, token_usage, error_response
-                            )
+                            # For artifacts, just pause instead of failing
+                            if generated_artifact_id:
+                                await self._pause_artifact_internal(generated_artifact_id)
                             return
 
-                if chunk and chunk.strip():
-                    ai_response_accumulator += chunk
-                    # Stream chunks to frontend for the main chat view
-                    payload = WebSocketResponseService.format_streaming_chunk(
-                        message_id=str(message_obj.id),
-                        chunk=ai_response_accumulator,
-                        is_complete=False,
-                        metadata={
-                            "senderName": DEFAULT_AI_SENDER_NAME,
-                            "senderType": SenderType.AI_ASSISTANT,
-                            "isSender": False,
-                            "streaming": True,
-                            "regenerate": False,
-                            "date": message_obj.created_at.isoformat(),
-                        }
-                    )
-                    await self.send(payload)
-
-            # Finalize message if we have content
-            if ai_response_accumulator.strip():
-                await self._finalize_message(
-                    message_obj=message_obj,
-                    ai_response=ai_response_accumulator,
-                    token_usage=token_usage,
-                    regenerate=False,
-                )
+            # Finalize message - for artifacts, message content stays empty
+            # but we link it to the artifact
+            await self._finalize_artifact_message(
+                message_obj=message_obj,
+                artifact_id=generated_artifact_id or artifact_id,
+                token_usage=token_usage,
+            )
 
         except Exception as e:
             logger.exception(f"Error streaming artifact response: {str(e)}")
             await self.send_error(ErrorCode.ARTIFACT_ERROR, ErrorMessage.ARTIFACT_ERROR)
+
+    async def _finalize_artifact_message(
+        self,
+        message_obj: Message,
+        artifact_id: Optional[str],
+        token_usage: Optional[Dict],
+    ):
+        """
+        Finalize an artifact-linked message.
+
+        Unlike regular messages, artifact messages don't store the content
+        directly - they just link to the artifact.
+
+        Note: The artifact is already linked to the message in plan_node,
+        so we just verify and update the message content here.
+
+        Args:
+            message_obj: The AI message object
+            artifact_id: ID of the linked artifact
+            token_usage: Token usage data
+        """
+        try:
+            # Link message to artifact if we have an artifact_id
+            if artifact_id:
+                from conversations.models import Artifact
+
+                # Get the artifact fresh from database to ensure we have latest title
+                def _get_artifact():
+                    return Artifact.active_objects.get(id=int(artifact_id))
+
+                artifact = await database_sync_to_async(_get_artifact)()
+
+                # Force refresh from DB to get absolute latest data
+                await database_sync_to_async(artifact.refresh_from_db)()
+
+                # Verify artifact is linked to message (should already be done in plan_node)
+                # Only update if not already linked (defensive check)
+                if artifact.message_id != message_obj.id:
+                    logger.warning(f"Artifact {artifact_id} not linked to message {message_obj.id}, linking now")
+                    artifact.message = message_obj
+                    await database_sync_to_async(artifact.save)(update_fields=['message', 'updated_at'])
+
+                # Use the artifact title - should be set by plan_node
+                artifact_title = artifact.title or "Untitled"
+                message_obj.message = f"Generated artifact: {artifact_title}"
+
+                logger.info(f"Finalizing artifact message: artifact_id={artifact_id}, title={artifact_title}")
+
+            # Save the message
+            await database_sync_to_async(message_obj.save)()
+
+            # Process billing
+            if token_usage and self.user:
+                llm = await database_sync_to_async(lambda: message_obj.llm)()
+                await self.billing_service.process_message_cost(
+                    user=self.user,
+                    llm=llm,
+                    message_obj=message_obj,
+                    token_usage=token_usage,
+                )
+
+            # Send final message to frontend
+            final_payload = await WebSocketResponseService.format_message(
+                message=message_obj,
+                message_type="message",
+                is_sender=False,
+                streaming=False,
+                regenerate=False,
+            )
+            await self.send(final_payload)
+
+        except Exception as e:
+            logger.exception(f"Error finalizing artifact message: {str(e)}")
 
     async def _artifact_send_callback(self, data: Dict[str, Any]):
         """
@@ -852,9 +941,24 @@ class MessageCoordinator:
             The AI message object if successful, None otherwise
         """
         try:
+            from conversations.models import Artifact
+
             artifact_id = message_data.get("artifact_id")
             if not artifact_id:
                 await self.send_error(ErrorCode.MISSING_DATA, ErrorMessage.MISSING_ARTIFACT_ID)
+                return None
+
+            # Get the artifact and its linked message
+            artifact = await database_sync_to_async(
+                Artifact.active_objects.get
+            )(id=int(artifact_id))
+
+            # Use the existing message linked to the artifact (don't create a new one)
+            ai_message = await database_sync_to_async(lambda: artifact.message)()
+
+            if not ai_message:
+                # If no message is linked, something is wrong
+                await self.send_error(ErrorCode.ARTIFACT_ERROR, "Artifact has no linked message")
                 return None
 
             # Get LLM
@@ -872,26 +976,20 @@ class MessageCoordinator:
                     await self.send_error(ErrorCode.INSUFFICIENT_CREDITS, ErrorMessage.INSUFFICIENT_CREDITS)
                     return None
 
-            # Create new AI message for continuation
-            ai_message = await self.conversation_service.create_message(
-                conversation=self.conversation,
-                sender_type=SenderType.AI_ASSISTANT,
-                message_content="",
-                sender=DEFAULT_AI_SENDER_NAME,
-                llm=llm,
-            )
+            # Update artifact status to generating
+            artifact.status = ArtifactStatus.GENERATING
+            await database_sync_to_async(artifact.save)(update_fields=['status', 'updated_at'])
 
-            # Send placeholder
-            placeholder_payload = await WebSocketResponseService.format_message(
-                message=ai_message,
-                message_type="message",
-                is_sender=False,
-                streaming=True,
-                regenerate=False
-            )
-            await self.send(placeholder_payload)
+            # Send artifact resume notification to frontend
+            await self.send({
+                "type": "artifact_resume",
+                "artifactId": str(artifact_id),
+                "messageId": str(ai_message.id),
+                "currentSection": artifact.current_section,
+                "estimatedSections": artifact.estimated_sections,
+            })
 
-            # Continue artifact generation
+            # Continue artifact generation (reuse existing message)
             await self._stream_artifact_response(
                 message_data=message_data,
                 message_obj=ai_message,
@@ -905,3 +1003,57 @@ class MessageCoordinator:
             logger.exception(f"Error continuing artifact: {str(e)}")
             await self.send_error(ErrorCode.ARTIFACT_ERROR, ErrorMessage.ARTIFACT_ERROR)
             return None
+
+    async def handle_pause_artifact(self, artifact_id: str):
+        """
+        Handle request to pause an artifact generation.
+
+        Updates the artifact status in the database. The generation loop will
+        check this status via check_artifact_paused() and stop at the next
+        section boundary or during streaming.
+
+        Args:
+            artifact_id: ID of the artifact to pause
+        """
+        try:
+            logger.info(f"MessageCoordinator: Starting pause for artifact_id={artifact_id}")
+
+            # Update artifact status in database
+            # The generation loop will check this status via check_artifact_paused()
+            # and stop at the next chunk check interval or section boundary
+            await self._pause_artifact_internal(artifact_id)
+
+        except Exception as e:
+            # Only log, don't try to send error (client may have disconnected)
+            logger.warning(f"Error pausing artifact {artifact_id}: {type(e).__name__}: {str(e)}")
+
+    async def _pause_artifact_internal(self, artifact_id: str):
+        """
+        Internal method to update artifact status to paused and notify frontend.
+
+        Args:
+            artifact_id: ID of the artifact to pause
+        """
+        from conversations.models import Artifact
+
+        artifact = await database_sync_to_async(
+            Artifact.active_objects.get
+        )(id=int(artifact_id))
+
+        logger.info(f"MessageCoordinator: Found artifact {artifact_id}, current status={artifact.status}")
+
+        # Only update if not already paused or completed
+        if artifact.status not in [ArtifactStatus.PAUSED, ArtifactStatus.COMPLETED]:
+            artifact.status = ArtifactStatus.PAUSED
+            await database_sync_to_async(artifact.save)(update_fields=['status', 'updated_at'])
+            logger.info(f"MessageCoordinator: Updated artifact {artifact_id} status to PAUSED in database")
+
+        # Try to send pause confirmation to frontend (may fail if disconnected)
+        await self.send({
+            "type": "artifact_pause",
+            "artifactId": artifact_id,
+            "currentSection": artifact.current_section,
+            "sectionsRemaining": artifact.estimated_sections - artifact.current_section,
+        })
+
+        logger.info(f"Artifact {artifact_id} paused at section {artifact.current_section}")
