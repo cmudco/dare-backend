@@ -14,9 +14,9 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 
-from conversations.models import Message, Conversation, LLM, Snippet
+from conversations.models import Message, Conversation, LLM, Snippet, Artifact
 from users.utils import detect_platform_from_request
-from .serializers import MessageSerializer, ConversationSerializer, LLMSerializer
+from .serializers import MessageSerializer, ConversationSerializer, LLMSerializer, ArtifactSerializer, ArtifactListSerializer
 
 
 
@@ -172,6 +172,74 @@ class ConversationViewSet(viewsets.ModelViewSet):
                 {"error": f"Failed to clone conversation: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+    @action(detail=True, methods=['get'], url_path='artifacts')
+    def list_artifacts(self, request, conversation_id=None):
+        """
+        List all artifacts for a conversation.
+        
+        Query params:
+        - status: Filter by artifact status (planning, generating, paused, completed, error)
+        - artifact_type: Filter by type (document, code, diagram)
+        """
+        conversation = self.get_object()
+        
+        queryset = Artifact.active_objects.filter(
+            conversation=conversation
+        ).select_related('conversation', 'message').order_by('-created_at')
+        
+        # Optional status filter
+        status_filter = request.query_params.get('status')
+        if status_filter:
+            queryset = queryset.filter(status=status_filter)
+        
+        # Optional type filter
+        type_filter = request.query_params.get('artifact_type')
+        if type_filter:
+            queryset = queryset.filter(artifact_type=type_filter)
+        
+        serializer = ArtifactListSerializer(queryset, many=True)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['get'], url_path='artifacts/(?P<artifact_id>[^/.]+)')
+    def artifact_detail(self, request, conversation_id=None, artifact_id=None):
+        """Get detailed information about a specific artifact."""
+        conversation = self.get_object()
+        
+        try:
+            artifact = Artifact.active_objects.get(
+                id=artifact_id,
+                conversation=conversation
+            )
+        except Artifact.DoesNotExist:
+            return Response(
+                {"error": "Artifact not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        serializer = ArtifactSerializer(artifact)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['get'], url_path='artifacts/(?P<artifact_id>[^/.]+)/checkpoints')
+    def artifact_checkpoints(self, request, conversation_id=None, artifact_id=None):
+        """Get all checkpoints for an artifact."""
+        conversation = self.get_object()
+        
+        try:
+            artifact = Artifact.active_objects.get(
+                id=artifact_id,
+                conversation=conversation
+            )
+        except Artifact.DoesNotExist:
+            return Response(
+                {"error": "Artifact not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        from .serializers import ArtifactCheckpointSerializer
+        checkpoints = artifact.checkpoints.order_by('-created_at')
+        serializer = ArtifactCheckpointSerializer(checkpoints, many=True)
+        return Response(serializer.data)
 
     @action(detail=True, methods=['get'], url_path='export-pdf')
     def export_pdf(self, request, conversation_id=None):
@@ -379,3 +447,5 @@ class LLMViewSet(viewsets.ModelViewSet):
         queryset = LLM.objects.all().order_by('name')
         serializer = self.get_serializer(queryset, many=True)
         return Response(serializer.data)
+
+
