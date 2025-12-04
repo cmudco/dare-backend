@@ -180,6 +180,10 @@ class Conversation(BaseModel):
         default=False,
         help_text="Enable AI image generation for this conversation."
     )
+    artifacts_enabled = models.BooleanField(
+        default=False,
+        help_text="Enable artifact generation for long-form content."
+    )
     selected_model = models.ForeignKey(
         LLM,
         on_delete=models.SET_NULL,
@@ -285,6 +289,7 @@ class Conversation(BaseModel):
                 history_limit=self.history_limit,
                 web_search_enabled=self.web_search_enabled,
                 image_generation_enabled=self.image_generation_enabled,
+                artifacts_enabled=self.artifacts_enabled,
                 selected_model=self.selected_model,
                 selected_media_ids=self.selected_media_ids.copy() if self.selected_media_ids else [],
                 prompt=self.prompt,
