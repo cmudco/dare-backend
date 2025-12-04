@@ -83,12 +83,33 @@ class ClaudeStreamProcessor:
             Tuple of (text_chunk, usage_data)
         """
         usage_extractor = ClaudeUsageExtractor()
+        tool_calls = []
+        current_tool_call = None
 
         async for event in response:
+            # Handle content block start (for tool use)
+            if event.type == "content_block_start":
+                if hasattr(event, 'content_block') and event.content_block.type == "tool_use":
+                    current_tool_call = {
+                        "id": event.content_block.id,
+                        "name": event.content_block.name,
+                        "arguments": ""
+                    }
+
             # Handle text deltas
-            if event.type == "content_block_delta":
+            elif event.type == "content_block_delta":
                 if hasattr(event.delta, 'text'):
                     yield event.delta.text, None
+                # Handle tool input JSON delta
+                elif hasattr(event.delta, 'partial_json'):
+                    if current_tool_call:
+                        current_tool_call["arguments"] += event.delta.partial_json
+
+            # Handle content block stop (finalize tool call)
+            elif event.type == "content_block_stop":
+                if current_tool_call:
+                    tool_calls.append(current_tool_call)
+                    current_tool_call = None
 
             # Extract input tokens from message start
             elif event.type == "message_start":
@@ -98,11 +119,18 @@ class ClaudeStreamProcessor:
             elif event.type == "message_delta":
                 usage = usage_extractor.extract_from_message_delta(event)
                 if usage:
+                    # Include tool calls in usage data if present
+                    if tool_calls:
+                        usage["tool_calls"] = tool_calls
                     yield "", usage
 
         # Ensure we yield something at the end even if no usage
         if usage_extractor.input_tokens is None:
-            yield "", None
+            # Still yield tool calls if we have them
+            if tool_calls:
+                yield "", {"tool_calls": tool_calls}
+            else:
+                yield "", None
 
 
 class GeminiStreamProcessor:

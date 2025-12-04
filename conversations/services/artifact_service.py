@@ -131,6 +131,9 @@ class ArtifactService:
         
         logger.info(f"Starting new artifact generation: thread={thread_id}")
         
+        # Get message ID for linking artifact to message
+        message_id = message_obj.id if message_obj else None
+
         try:
             async for chunk, metadata in run_artifact_generation(
                 conversation_id=self.conversation.conversation_id,
@@ -139,6 +142,7 @@ class ArtifactService:
                 llm_provider=llm.provider,
                 thread_id=thread_id,
                 user_id=user_id,
+                message_id=message_id,
                 send_callback=self.send_callback,
             ):
                 yield chunk, metadata
