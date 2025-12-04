@@ -20,7 +20,14 @@ from django.shortcuts import get_object_or_404
 from conversations.models import Message, Conversation, LLM, Snippet, Artifact
 from conversations.constants import ArtifactStatus
 from users.utils import detect_platform_from_request
-from .serializers import MessageSerializer, ConversationSerializer, LLMSerializer, ArtifactSerializer, ArtifactListSerializer
+from .serializers import (
+    MessageSerializer,
+    ConversationSerializer,
+    LLMSerializer,
+    ArtifactSerializer,
+    ArtifactListSerializer,
+    ArtifactCheckpointSerializer,
+)
 
 
 
@@ -239,8 +246,7 @@ class ConversationViewSet(viewsets.ModelViewSet):
                 {"error": "Artifact not found"},
                 status=status.HTTP_404_NOT_FOUND
             )
-        
-        from .serializers import ArtifactCheckpointSerializer
+
         checkpoints = artifact.checkpoints.order_by('-created_at')
         serializer = ArtifactCheckpointSerializer(checkpoints, many=True)
         return Response(serializer.data)

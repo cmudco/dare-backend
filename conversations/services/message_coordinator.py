@@ -21,7 +21,7 @@ from channels.db import database_sync_to_async
 from django.core.exceptions import ValidationError as DjangoValidationError
 from djangorestframework_camel_case.util import camelize
 
-from conversations.models import Conversation, Message, LLM
+from conversations.models import Conversation, Message, LLM, Artifact
 from conversations.constants import (
     SenderType,
     DEFAULT_AI_SENDER_NAME,
@@ -866,8 +866,6 @@ class MessageCoordinator:
         try:
             # Link message to artifact if we have an artifact_id
             if artifact_id:
-                from conversations.models import Artifact
-
                 # Get the artifact fresh from database to ensure we have latest title
                 def _get_artifact():
                     return Artifact.active_objects.get(id=int(artifact_id))
@@ -941,8 +939,6 @@ class MessageCoordinator:
             The AI message object if successful, None otherwise
         """
         try:
-            from conversations.models import Artifact
-
             artifact_id = message_data.get("artifact_id")
             if not artifact_id:
                 await self.send_error(ErrorCode.MISSING_DATA, ErrorMessage.MISSING_ARTIFACT_ID)
@@ -1034,8 +1030,6 @@ class MessageCoordinator:
         Args:
             artifact_id: ID of the artifact to pause
         """
-        from conversations.models import Artifact
-
         artifact = await database_sync_to_async(
             Artifact.active_objects.get
         )(id=int(artifact_id))
