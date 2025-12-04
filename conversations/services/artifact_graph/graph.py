@@ -5,11 +5,12 @@ Defines the state machine for artifact generation with automatic checkpointing.
 """
 
 import logging
+import asyncio
 from typing import Optional, AsyncGenerator, Tuple, Dict, Any
 from functools import lru_cache
 
 from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+from langgraph.checkpoint.memory import MemorySaver
 
 from django.conf import settings
 
@@ -76,6 +77,7 @@ def create_artifact_graph() -> StateGraph:
             "generate_section": "generate_section",
             "checkpoint": "checkpoint",
             "complete": "complete",
+            "pause": "pause",  # User-requested pause
             "error": "error",
         }
     )
@@ -100,43 +102,53 @@ def create_artifact_graph() -> StateGraph:
 
 
 # Singleton checkpointer instance
-_checkpointer: Optional[AsyncPostgresSaver] = None
+_checkpointer = None
 
 
-async def get_checkpointer() -> AsyncPostgresSaver:
+async def get_checkpointer():
     """
-    Get or create the Postgres checkpointer.
-    
-    Uses connection settings from Django settings.
-    Creates the checkpointer tables if they don't exist.
-    
+    Get or create the checkpointer based on database backend.
+
+    - Development (SQLite): Uses MemorySaver (in-memory, no persistence across restarts)
+    - Production (PostgreSQL): Uses AsyncPostgresSaver (persistent checkpoints)
+
     Returns:
-        AsyncPostgresSaver instance
+        Checkpointer instance (MemorySaver or AsyncPostgresSaver)
     """
     global _checkpointer
-    
+
     if _checkpointer is None:
         # Get database settings from Django
         db_settings = settings.DATABASES.get('default', {})
-        
-        # Build connection string
-        # Format: postgresql://user:password@host:port/database
-        user = db_settings.get('USER', 'postgres')
-        password = db_settings.get('PASSWORD', '')
-        host = db_settings.get('HOST', 'localhost')
-        port = db_settings.get('PORT', '5432')
-        database = db_settings.get('NAME', 'dare')
-        
-        connection_string = f"postgresql://{user}:{password}@{host}:{port}/{database}"
-        
-        # Create checkpointer
-        _checkpointer = AsyncPostgresSaver.from_conn_string(connection_string)
-        
-        # Set up tables (creates if not exists)
-        await _checkpointer.setup()
-        
-        logger.info("LangGraph Postgres checkpointer initialized")
-    
+        db_engine = db_settings.get('ENGINE', '')
+
+        if 'sqlite' in db_engine:
+            # Development: Use in-memory checkpointer
+            # Note: State is lost on server restart, but works for basic testing
+            _checkpointer = MemorySaver()
+            logger.info("LangGraph MemorySaver checkpointer initialized (development mode)")
+        else:
+            # Production: Use PostgreSQL checkpointer
+            from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+
+            # Build connection string
+            # Format: postgresql://user:password@host:port/database
+            user = db_settings.get('USER', 'postgres')
+            password = db_settings.get('PASSWORD', '')
+            host = db_settings.get('HOST', 'localhost')
+            port = db_settings.get('PORT', '5432')
+            database = db_settings.get('NAME', 'dare')
+
+            connection_string = f"postgresql://{user}:{password}@{host}:{port}/{database}"
+
+            # Create checkpointer
+            _checkpointer = AsyncPostgresSaver.from_conn_string(connection_string)
+
+            # Set up tables (creates if not exists)
+            await _checkpointer.setup()
+
+            logger.info("LangGraph Postgres checkpointer initialized (production mode)")
+
     return _checkpointer
 
 
@@ -175,11 +187,12 @@ async def run_artifact_generation(
     llm_provider: str,
     thread_id: str,
     user_id: Optional[int] = None,
+    message_id: Optional[int] = None,
     send_callback=None,
 ) -> AsyncGenerator[Tuple[str, Optional[Dict]], None]:
     """
     Run artifact generation workflow.
-    
+
     Args:
         conversation_id: ID of the conversation
         user_message: User's request
@@ -187,13 +200,14 @@ async def run_artifact_generation(
         llm_provider: Provider name
         thread_id: Unique thread ID for this generation
         user_id: Optional user ID
+        message_id: Optional AI message ID to link artifact to
         send_callback: Async callback for sending messages
-        
+
     Yields:
         Tuple of (chunk: str, metadata: dict)
     """
     app = await get_artifact_app()
-    
+
     # Create initial state
     initial_state = create_initial_state(
         conversation_id=conversation_id,
@@ -202,28 +216,41 @@ async def run_artifact_generation(
         llm_provider=llm_provider,
         thread_id=thread_id,
         user_id=user_id,
+        message_id=message_id,
     )
     
     # Configuration for this thread
     config = {"configurable": {"thread_id": thread_id}}
     
     try:
+        # Track chunks we've already sent to avoid duplicates
+        # (pending_chunks accumulates due to Annotated[List, add])
+        sent_chunk_count = 0
+
         # Stream execution
         async for event in app.astream(initial_state, config, stream_mode="values"):
-            # Process pending chunks
+            # Yield control to event loop to allow pause requests to be processed
+            await asyncio.sleep(0)
+
+            # Process only NEW pending chunks (skip already sent ones)
             pending_chunks = event.get("pending_chunks", [])
-            for chunk_data in pending_chunks:
+            new_chunks = pending_chunks[sent_chunk_count:]
+
+            for chunk_data in new_chunks:
                 # Parse chunk type and data
                 parsed = await _parse_chunk(chunk_data, send_callback)
                 if parsed:
                     yield parsed
-            
+
+            # Update sent count
+            sent_chunk_count = len(pending_chunks)
+
             # Check for completion or error
             status = event.get("status")
             if status in ("completed", "paused", "error"):
                 yield "", {"status": status, "artifact_id": event.get("artifact_id")}
                 break
-                
+
     except Exception as e:
         logger.exception(f"Error in artifact generation: {str(e)}")
         yield f"Error: {str(e)}", {"error": str(e)}
@@ -293,36 +320,58 @@ async def resume_artifact_generation(
     config = {"configurable": {"thread_id": thread_id}}
     
     try:
+        # Track chunks we've already sent to avoid duplicates
+        sent_chunk_count = 0
+
         # Resume from generate_section (skip plan since artifact exists)
         async for event in app.astream(resume_state, config, stream_mode="values"):
-            # Process pending chunks
+            # Yield control to event loop to allow pause requests to be processed
+            await asyncio.sleep(0)
+
+            # Process only NEW pending chunks
             pending_chunks = event.get("pending_chunks", [])
-            for chunk_data in pending_chunks:
+            new_chunks = pending_chunks[sent_chunk_count:]
+
+            for chunk_data in new_chunks:
                 parsed = await _parse_chunk(chunk_data, send_callback)
                 if parsed:
                     yield parsed
-            
+
+            sent_chunk_count = len(pending_chunks)
+
             # Check for completion or error
             status = event.get("status")
             if status in ("completed", "paused", "error"):
                 yield "", {"status": status, "artifact_id": event.get("artifact_id")}
                 break
-                
+
     except Exception as e:
         logger.exception(f"Error resuming artifact: {str(e)}")
         yield f"Error: {str(e)}", {"error": str(e)}
+
+
+async def _safe_send(send_callback, msg) -> bool:
+    """Safely send a message via callback, handling disconnection gracefully."""
+    if not send_callback:
+        return True
+    try:
+        await send_callback(msg)
+        return True
+    except Exception as e:
+        logger.debug(f"Failed to send artifact message (client may have disconnected): {type(e).__name__}")
+        return False
 
 
 async def _parse_chunk(chunk_data: str, send_callback=None) -> Optional[Tuple[str, Optional[Dict]]]:
     """Parse chunk data and optionally send via callback."""
     if not chunk_data:
         return None
-    
+
     parts = chunk_data.split("|", 1)
     chunk_type = parts[0] if parts else ""
-    
+
     if chunk_type == "__ARTIFACT_INIT__":
-        # Format: __ARTIFACT_INIT__|artifact_id|title|outline|estimated_sections
+        # Format: __ARTIFACT_INIT__|artifact_id|title|outline|estimated_sections|message_id
         data_parts = chunk_data.split("|")
         if len(data_parts) >= 5:
             msg = {
@@ -332,8 +381,10 @@ async def _parse_chunk(chunk_data: str, send_callback=None) -> Optional[Tuple[st
                 "outline": data_parts[3],
                 "estimatedSections": int(data_parts[4]),
             }
-            if send_callback:
-                await send_callback(msg)
+            # Include messageId if present (6th element)
+            if len(data_parts) >= 6 and data_parts[5]:
+                msg["messageId"] = data_parts[5]
+            await _safe_send(send_callback, msg)
             return "", {"type": "artifact_init", "artifact_id": data_parts[1]}
     
     elif chunk_type == "__ARTIFACT_STREAM__":
@@ -348,10 +399,9 @@ async def _parse_chunk(chunk_data: str, send_callback=None) -> Optional[Tuple[st
                 "progress": float(data_parts[3]),
                 "chunk": content,
             }
-            if send_callback:
-                await send_callback(msg)
+            await _safe_send(send_callback, msg)
             return content, {"type": "artifact_stream", "section": int(data_parts[2])}
-    
+
     elif chunk_type == "__ARTIFACT_PAUSE__":
         # Format: __ARTIFACT_PAUSE__|artifact_id|current_section|sections_remaining
         data_parts = chunk_data.split("|")
@@ -362,10 +412,9 @@ async def _parse_chunk(chunk_data: str, send_callback=None) -> Optional[Tuple[st
                 "currentSection": int(data_parts[2]),
                 "sectionsRemaining": int(data_parts[3]),
             }
-            if send_callback:
-                await send_callback(msg)
+            await _safe_send(send_callback, msg)
             return "", {"type": "artifact_pause"}
-    
+
     elif chunk_type == "__ARTIFACT_COMPLETE__":
         # Format: __ARTIFACT_COMPLETE__|artifact_id|total_words
         data_parts = chunk_data.split("|")
@@ -375,10 +424,9 @@ async def _parse_chunk(chunk_data: str, send_callback=None) -> Optional[Tuple[st
                 "artifactId": data_parts[1],
                 "totalWords": int(data_parts[2]),
             }
-            if send_callback:
-                await send_callback(msg)
+            await _safe_send(send_callback, msg)
             return "", {"type": "artifact_complete"}
-    
+
     elif chunk_type == "__ARTIFACT_ERROR__":
         # Format: __ARTIFACT_ERROR__|error_message
         error_msg = chunk_data.replace("__ARTIFACT_ERROR__|", "")
@@ -387,8 +435,7 @@ async def _parse_chunk(chunk_data: str, send_callback=None) -> Optional[Tuple[st
             "errorCode": "ARTIFACT_ERROR",
             "errorMessage": error_msg,
         }
-        if send_callback:
-            await send_callback(msg)
+        await _safe_send(send_callback, msg)
         return "", {"type": "error", "error": error_msg}
     
     # Return raw content if not a special chunk

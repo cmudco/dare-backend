@@ -1,6 +1,6 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from conversations.api.views import ConversationViewSet, LLMViewSet, MessageViewSet
+from conversations.api.views import ConversationViewSet, LLMViewSet, MessageViewSet, ArtifactStatusView
 from conversations.constants import APP_NAME
 
 
@@ -14,4 +14,5 @@ app_name = APP_NAME
 urlpatterns = [
     path('', include(router.urls)),
     path('conversations/<str:conversation_id>/clone/', ConversationViewSet.as_view({'post': 'clone_conversation'}), name='conversation-clone'),
+    path('artifacts/<int:artifact_id>/status/', ArtifactStatusView.as_view(), name='artifact-status'),
 ]

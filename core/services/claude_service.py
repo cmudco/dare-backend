@@ -220,11 +220,61 @@ class ClaudeService:
         if system_message:
             params["system"] = system_message
 
-        # Add tools if provided
+        # Add tools if provided (convert from OpenAI format to Claude format)
         if tools:
-            params["tools"] = tools
+            params["tools"] = self._convert_tools_to_claude_format(tools)
 
         return params
+
+    def _convert_tools_to_claude_format(self, tools: List[Dict]) -> List[Dict]:
+        """
+        Convert OpenAI-style tool definitions to Claude format.
+
+        OpenAI format:
+        {
+            "type": "function",
+            "function": {
+                "name": "...",
+                "description": "...",
+                "parameters": {...}
+            }
+        }
+
+        Claude format:
+        {
+            "name": "...",
+            "description": "...",
+            "input_schema": {...}
+        }
+
+        Args:
+            tools: List of tools in OpenAI format
+
+        Returns:
+            List of tools in Claude format
+        """
+        claude_tools = []
+        for tool in tools:
+            # Check if it's already in Claude format
+            if "name" in tool and "input_schema" in tool:
+                claude_tools.append(tool)
+                continue
+
+            # Convert from OpenAI format
+            if tool.get("type") == "function" and "function" in tool:
+                func = tool["function"]
+                claude_tool = {
+                    "name": func.get("name", ""),
+                    "description": func.get("description", ""),
+                    "input_schema": func.get("parameters", {"type": "object", "properties": {}})
+                }
+                claude_tools.append(claude_tool)
+            else:
+                # Unknown format, try to pass through
+                logger.warning(f"Unknown tool format, passing through: {tool}")
+                claude_tools.append(tool)
+
+        return claude_tools
 
     async def _get_structured_completion(
         self,

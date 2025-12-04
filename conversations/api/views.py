@@ -14,7 +14,11 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 
+from rest_framework.views import APIView
+from django.shortcuts import get_object_or_404
+
 from conversations.models import Message, Conversation, LLM, Snippet, Artifact
+from conversations.constants import ArtifactStatus
 from users.utils import detect_platform_from_request
 from .serializers import MessageSerializer, ConversationSerializer, LLMSerializer, ArtifactSerializer, ArtifactListSerializer
 
@@ -407,6 +411,57 @@ class MessageViewSet(viewsets.ModelViewSet):
                 {"error": f"Failed to delete message: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+class ArtifactStatusView(APIView):
+    """
+    Update artifact status via REST API.
+
+    Used for pause/resume when WebSocket is blocked by streaming.
+    The generation loop polls the database after each section and will
+    pick up the updated status.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, artifact_id):
+        """
+        Update artifact status.
+
+        Request body: {"status": "paused"|"generating"|"completed"|"error"}
+        """
+        new_status = request.data.get('status')
+
+        # Validate status
+        valid_statuses = [s.value for s in ArtifactStatus]
+        if new_status not in valid_statuses:
+            return Response(
+                {'error': f'Invalid status. Must be one of: {valid_statuses}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Get artifact
+        artifact = get_object_or_404(Artifact.active_objects, id=artifact_id)
+
+        # Verify user owns this artifact's conversation
+        if artifact.conversation.user != request.user:
+            return Response(
+                {'error': 'You do not have permission to modify this artifact'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # Update status
+        artifact.status = new_status
+        artifact.save(update_fields=['status', 'updated_at'])
+
+        logger = logging.getLogger(__name__)
+        logger.info(f"Artifact {artifact_id} status updated to {new_status} via REST API")
+
+        return Response({
+            'id': artifact.id,
+            'status': artifact.status,
+            'currentSection': artifact.current_section,
+            'estimatedSections': artifact.estimated_sections,
+        })
+
 
 class LLMViewSet(viewsets.ModelViewSet):
     """Endpoint for listing available LLM models."""

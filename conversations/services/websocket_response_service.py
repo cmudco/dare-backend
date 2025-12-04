@@ -86,11 +86,20 @@ class WebSocketResponseService:
         output_tokens = await database_sync_to_async(lambda: message.output_tokens)()
         learning_progress_data = await database_sync_to_async(lambda: message.learning_progress_data)()
 
+        # Get linked artifact ID if exists
+        @database_sync_to_async
+        def get_artifact_id():
+            artifact = message.artifacts.first()
+            return str(artifact.id) if artifact else None
+
+        artifact_id = await get_artifact_id()
+
         # Build response matching original format
         response = {
             "type": message_type,
             "id": str(message.id),
             "message": message.message,
+            "artifactId": artifact_id,
             "senderType": message.sender_type,
             "senderName": message.sender or "AI Assistant",
             "isSender": is_sender,

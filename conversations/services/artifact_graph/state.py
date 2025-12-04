@@ -110,12 +110,13 @@ def create_initial_state(
     llm_provider: str,
     thread_id: str,
     user_id: Optional[int] = None,
+    message_id: Optional[int] = None,
     sections_per_iteration: int = 3,
     max_iterations: int = 10,
 ) -> ArtifactState:
     """
     Create initial state for a new artifact generation.
-    
+
     Args:
         conversation_id: ID of the conversation
         user_message: User's request message
@@ -123,9 +124,10 @@ def create_initial_state(
         llm_provider: Provider name
         thread_id: LangGraph thread ID
         user_id: Optional user ID
+        message_id: Optional AI message ID to link artifact to
         sections_per_iteration: Sections per iteration
         max_iterations: Max iterations before pause
-        
+
     Returns:
         Initial ArtifactState
     """
@@ -133,7 +135,7 @@ def create_initial_state(
         # Identifiers
         artifact_id=None,
         conversation_id=conversation_id,
-        message_id=None,
+        message_id=message_id,
         thread_id=thread_id,
         
         # User context
