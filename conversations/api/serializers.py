@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from conversations.models import LLM, Message, Conversation, Snippet
+from conversations.models import LLM, Message, Conversation, Snippet, Artifact, ArtifactCheckpoint
 from files.api.serializers import FileSerializer, TagSerializer
 from prompts.models import Prompt
 from prompts.api.serializers import PromptSerializer
@@ -129,3 +129,95 @@ class MessageSerializer(serializers.ModelSerializer):
             'cost',
         ]
         read_only_fields = ['id', 'created_at', 'sender_name', 'files', 'tags', 'snippets', 'input_tokens', 'output_tokens', 'cost']
+
+
+class ArtifactCheckpointSerializer(serializers.ModelSerializer):
+    """Serializer for artifact checkpoints."""
+
+    class Meta:
+        model = ArtifactCheckpoint
+        fields = [
+            'id',
+            'content_snapshot',
+            'current_section',
+            'iteration_count',
+            'state_data',
+            'created_at',
+        ]
+        read_only_fields = fields
+
+
+class ArtifactSerializer(serializers.ModelSerializer):
+    """Serializer for artifacts with progress tracking."""
+
+    conversation_id = serializers.CharField(source='conversation.conversation_id', read_only=True)
+    message_id = serializers.PrimaryKeyRelatedField(source='message', read_only=True)
+    progress = serializers.FloatField(read_only=True)
+    sections_remaining = serializers.IntegerField(read_only=True)
+    word_count = serializers.IntegerField(read_only=True)
+    latest_checkpoint = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Artifact
+        fields = [
+            'id',
+            'conversation_id',
+            'message_id',
+            'artifact_type',
+            'title',
+            'language',
+            'outline',
+            'content',
+            'estimated_sections',
+            'current_section',
+            'status',
+            'metadata',
+            'progress',
+            'sections_remaining',
+            'word_count',
+            'latest_checkpoint',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = [
+            'id',
+            'conversation_id',
+            'message_id',
+            'progress',
+            'sections_remaining',
+            'word_count',
+            'latest_checkpoint',
+            'created_at',
+            'updated_at',
+        ]
+
+    def get_latest_checkpoint(self, obj):
+        """Get the latest checkpoint for this artifact."""
+        checkpoint = obj.checkpoints.order_by('-created_at').first()
+        if checkpoint:
+            return ArtifactCheckpointSerializer(checkpoint).data
+        return None
+
+
+class ArtifactListSerializer(serializers.ModelSerializer):
+    """Lightweight serializer for artifact lists (without full content)."""
+
+    conversation_id = serializers.CharField(source='conversation.conversation_id', read_only=True)
+    progress = serializers.FloatField(read_only=True)
+    word_count = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = Artifact
+        fields = [
+            'id',
+            'conversation_id',
+            'artifact_type',
+            'title',
+            'status',
+            'estimated_sections',
+            'current_section',
+            'progress',
+            'word_count',
+            'created_at',
+        ]
+        read_only_fields = fields

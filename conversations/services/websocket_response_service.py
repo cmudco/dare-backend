@@ -333,3 +333,116 @@ class WebSocketResponseService:
         }
 
         return cls._dict_to_camel_case(payload)
+
+    # ========== Artifact Response Formatters ==========
+
+    @classmethod
+    def format_artifact_init(
+        cls,
+        artifact_id: str,
+        title: str,
+        outline: str,
+        estimated_sections: int
+    ) -> Dict[str, Any]:
+        """
+        Format artifact initialization message for WebSocket transmission.
+
+        Sent when a new artifact is created and ready for section generation.
+
+        Args:
+            artifact_id: Unique identifier for the artifact
+            title: Title of the artifact
+            outline: Structured outline with section descriptions
+            estimated_sections: Expected number of sections
+
+        Returns:
+            Dictionary ready for JSON serialization
+        """
+        return {
+            "type": "artifact_init",
+            "artifactId": artifact_id,
+            "title": title,
+            "outline": outline,
+            "estimatedSections": estimated_sections,
+        }
+
+    @classmethod
+    def format_artifact_stream(
+        cls,
+        artifact_id: str,
+        chunk: str,
+        section: int,
+        progress: float
+    ) -> Dict[str, Any]:
+        """
+        Format artifact content streaming chunk for WebSocket transmission.
+
+        Sent during section-by-section content generation.
+
+        Args:
+            artifact_id: Unique identifier for the artifact
+            chunk: Content chunk being streamed
+            section: Current section number being generated
+            progress: Generation progress (0.0 to 1.0)
+
+        Returns:
+            Dictionary ready for JSON serialization
+        """
+        return {
+            "type": "artifact_stream",
+            "artifactId": artifact_id,
+            "chunk": chunk,
+            "section": section,
+            "progress": progress,
+        }
+
+    @classmethod
+    def format_artifact_pause(
+        cls,
+        artifact_id: str,
+        current_section: int,
+        sections_remaining: int
+    ) -> Dict[str, Any]:
+        """
+        Format artifact pause message for WebSocket transmission.
+
+        Sent when artifact generation is paused awaiting user continuation.
+
+        Args:
+            artifact_id: Unique identifier for the artifact
+            current_section: Last completed section number
+            sections_remaining: Number of sections left to generate
+
+        Returns:
+            Dictionary ready for JSON serialization
+        """
+        return {
+            "type": "artifact_pause",
+            "artifactId": artifact_id,
+            "currentSection": current_section,
+            "sectionsRemaining": sections_remaining,
+        }
+
+    @classmethod
+    def format_artifact_complete(
+        cls,
+        artifact_id: str,
+        total_words: int
+    ) -> Dict[str, Any]:
+        """
+        Format artifact completion message for WebSocket transmission.
+
+        Sent when artifact generation is fully complete.
+
+        Args:
+            artifact_id: Unique identifier for the artifact
+            total_words: Total word count of the generated artifact
+
+        Returns:
+            Dictionary ready for JSON serialization
+        """
+        return {
+            "type": "artifact_complete",
+            "artifactId": artifact_id,
+            "totalWords": total_words,
+        }

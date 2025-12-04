@@ -86,6 +86,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 await self.handle_edit_message(data)
             elif action == "regenerate_response":
                 await self.handle_regenerate_response(data)
+            elif action == "continue_artifact":
+                await self.handle_continue_artifact(data)
             else:
                 await self.handle_new_message(data)
         except json.JSONDecodeError as e:
@@ -164,6 +166,22 @@ class ChatConsumer(AsyncWebsocketConsumer):
             logger.exception(f"Error in handle_regenerate_response: {str(e)}")
             await self.send_error(ErrorCode.REGENERATE_ERROR, ErrorMessage.REGENERATE_ERROR)
 
+    async def handle_continue_artifact(self, data: Dict[str, Any]):
+        """Continue generating a paused artifact using MessageCoordinator."""
+        try:
+            # Validate message data
+            message_data = self._validate_message_data(data, default_message="Continue generating")
+
+            # Delegate to MessageCoordinator which handles:
+            # - Billing checks
+            # - Loading artifact state
+            # - Continuing generation
+            await self.coordinator.handle_continue_artifact(
+                message_data=message_data,
+            )
+        except Exception as e:
+            logger.exception(f"Error in handle_continue_artifact: {str(e)}")
+            await self.send_error(ErrorCode.ARTIFACT_ERROR, ErrorMessage.ARTIFACT_ERROR)
 
     def _validate_message_data(self, data: Dict[str, Any], default_message: str = None) -> Dict[str, Any]:
         """Validate and extract message data using MessageValidationService."""
@@ -279,3 +297,17 @@ class PublicBotConsumer(ChatConsumer):
         except Exception as e:
             logger.exception(f"Error in handle_regenerate_response (public): {str(e)}")
             await self.send_error(ErrorCode.REGENERATE_ERROR, ErrorMessage.REGENERATE_ERROR)
+
+    async def handle_continue_artifact(self, data: Dict[str, Any]):
+        """Continue generating a paused artifact for public bot using MessageCoordinator."""
+        try:
+            # Validate message data
+            message_data = self._validate_message_data(data, default_message="Continue generating")
+
+            # Delegate to MessageCoordinator
+            await self.coordinator.handle_continue_artifact(
+                message_data=message_data,
+            )
+        except Exception as e:
+            logger.exception(f"Error in handle_continue_artifact (public): {str(e)}")
+            await self.send_error(ErrorCode.ARTIFACT_ERROR, ErrorMessage.ARTIFACT_ERROR)
