@@ -64,6 +64,8 @@ class MessageValidationService:
             "web_search_enabled": data.get("web_search_enabled"),
             "image_generation_enabled": data.get("image_generation_enabled"),
             "image_generation_settings": data.get("image_generation_settings"),
+            "artifacts_enabled": data.get("artifacts_enabled", False),
+            "artifact_id": data.get("artifact_id"),  # For continuing existing artifact
 
             # Vision support (base64 encoded images)
             "images": cls._get_list(data, "images"),
@@ -136,6 +138,7 @@ class MessageValidationService:
             "web_search_enabled": data.get("web_search_enabled"),
             "image_generation_enabled": data.get("image_generation_enabled"),
             "image_generation_settings": data.get("image_generation_settings"),
+            "artifacts_enabled": data.get("artifacts_enabled", False),
         }
 
     @classmethod

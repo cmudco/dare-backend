@@ -39,6 +39,7 @@ from conversations.services.websocket_response_service import WebSocketResponseS
 from conversations.services.message_validation_service import MessageValidationService
 from conversations.services.image_generation_service import ImageGenerationService
 from conversations.services.bot_budget_service import BotBudgetService
+from conversations.services.artifact_service import ArtifactService
 from users.utils import should_run_learning_progress
 
 logger = logging.getLogger(__name__)
@@ -281,12 +282,29 @@ class MessageCoordinator:
         """
         Stream AI response with billing checks.
 
+        Supports both standard LLM streaming and artifact generation mode.
+        When artifacts_enabled is True, delegates to ArtifactService.
+
         Args:
             message_data: Validated message data
             message_obj: Empty AI message object to populate
             llm: LLM instance to use
             regenerate: Whether this is a regeneration request
         """
+        # Check if artifacts mode is enabled
+        artifacts_enabled = message_data.get("artifacts_enabled", False)
+        artifact_id = message_data.get("artifact_id")
+
+        if artifacts_enabled and not regenerate:
+            # Delegate to artifact service for long-form content generation
+            await self._stream_artifact_response(
+                message_data=message_data,
+                message_obj=message_obj,
+                llm=llm,
+                artifact_id=artifact_id,
+            )
+            return
+
         try:
             bot_message_id = str(message_obj.id)
             ai_response_accumulator = ""
@@ -726,3 +744,164 @@ class MessageCoordinator:
                 "assessment": None
             }
             await self.send(payload)
+
+    # ========== Artifact Methods ==========
+
+    async def _stream_artifact_response(
+        self,
+        message_data: Dict[str, Any],
+        message_obj: Message,
+        llm: LLM,
+        artifact_id: Optional[str] = None,
+    ):
+        """
+        Stream artifact generation response.
+
+        Args:
+            message_data: Validated message data
+            message_obj: AI message object
+            llm: LLM instance to use
+            artifact_id: Optional existing artifact ID for continuation
+        """
+        try:
+            # Create artifact service with WebSocket callback
+            artifact_service = ArtifactService(
+                conversation=self.conversation,
+                user=self.user,
+                send_callback=self._artifact_send_callback,
+            )
+
+            # Track accumulated content for finalization
+            ai_response_accumulator = ""
+            token_usage = None
+
+            # Execute artifact generation
+            async for chunk, usage in artifact_service.execute(
+                message=message_data["message"],
+                llm=llm,
+                message_obj=message_obj,
+                artifact_id=artifact_id,
+            ):
+                if usage:
+                    token_usage = usage
+
+                    # Check billing during streaming (authenticated users only)
+                    if self.user:
+                        can_continue, error_response = await self.billing_service.check_streaming_credit_usage(
+                            self.user, llm, token_usage
+                        )
+                        if not can_continue:
+                            await self._handle_insufficient_balance(
+                                message_obj, ai_response_accumulator, token_usage, error_response
+                            )
+                            return
+
+                if chunk and chunk.strip():
+                    ai_response_accumulator += chunk
+                    # Stream chunks to frontend for the main chat view
+                    payload = WebSocketResponseService.format_streaming_chunk(
+                        message_id=str(message_obj.id),
+                        chunk=ai_response_accumulator,
+                        is_complete=False,
+                        metadata={
+                            "senderName": DEFAULT_AI_SENDER_NAME,
+                            "senderType": SenderType.AI_ASSISTANT,
+                            "isSender": False,
+                            "streaming": True,
+                            "regenerate": False,
+                            "date": message_obj.created_at.isoformat(),
+                        }
+                    )
+                    await self.send(payload)
+
+            # Finalize message if we have content
+            if ai_response_accumulator.strip():
+                await self._finalize_message(
+                    message_obj=message_obj,
+                    ai_response=ai_response_accumulator,
+                    token_usage=token_usage,
+                    regenerate=False,
+                )
+
+        except Exception as e:
+            logger.exception(f"Error streaming artifact response: {str(e)}")
+            await self.send_error(ErrorCode.ARTIFACT_ERROR, ErrorMessage.ARTIFACT_ERROR)
+
+    async def _artifact_send_callback(self, data: Dict[str, Any]):
+        """
+        Callback for ArtifactService to send WebSocket messages.
+
+        Args:
+            data: Data dictionary to send (already formatted)
+        """
+        await self.send(data)
+
+    async def handle_continue_artifact(
+        self,
+        message_data: Dict[str, Any],
+        llm_id: Optional[str] = None,
+    ) -> Optional[Message]:
+        """
+        Handle continuation of a paused artifact.
+
+        Args:
+            message_data: Validated message data with artifact_id
+            llm_id: Optional LLM ID override
+
+        Returns:
+            The AI message object if successful, None otherwise
+        """
+        try:
+            artifact_id = message_data.get("artifact_id")
+            if not artifact_id:
+                await self.send_error(ErrorCode.MISSING_DATA, ErrorMessage.MISSING_ARTIFACT_ID)
+                return None
+
+            # Get LLM
+            llm = await self._get_llm(llm_id or message_data.get("llm_id"))
+            if not llm:
+                await self.send_error(ErrorCode.VALIDATION_ERROR, "Selected AI model not found")
+                return None
+
+            # Check billing if user exists
+            if self.user:
+                has_credits = await self.billing_service.check_sufficient_credits(
+                    self.user, llm
+                )
+                if not has_credits:
+                    await self.send_error(ErrorCode.INSUFFICIENT_CREDITS, ErrorMessage.INSUFFICIENT_CREDITS)
+                    return None
+
+            # Create new AI message for continuation
+            ai_message = await self.conversation_service.create_message(
+                conversation=self.conversation,
+                sender_type=SenderType.AI_ASSISTANT,
+                message_content="",
+                sender=DEFAULT_AI_SENDER_NAME,
+                llm=llm,
+            )
+
+            # Send placeholder
+            placeholder_payload = await WebSocketResponseService.format_message(
+                message=ai_message,
+                message_type="message",
+                is_sender=False,
+                streaming=True,
+                regenerate=False
+            )
+            await self.send(placeholder_payload)
+
+            # Continue artifact generation
+            await self._stream_artifact_response(
+                message_data=message_data,
+                message_obj=ai_message,
+                llm=llm,
+                artifact_id=artifact_id,
+            )
+
+            return ai_message
+
+        except Exception as e:
+            logger.exception(f"Error continuing artifact: {str(e)}")
+            await self.send_error(ErrorCode.ARTIFACT_ERROR, ErrorMessage.ARTIFACT_ERROR)
+            return None

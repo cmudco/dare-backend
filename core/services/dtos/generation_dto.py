@@ -19,6 +19,7 @@ class GenerationConfig:
         image_generation_enabled: Enable image generation (DALL-E)
         image_generation_settings: DALL-E settings (size, quality, style)
         structured_spec: JSON schema for structured output
+        artifacts_enabled: Enable artifact generation for long-form content
     """
     temperature: float = 0.7
     max_tokens: int = 8000
@@ -27,6 +28,7 @@ class GenerationConfig:
     image_generation_enabled: bool = False
     image_generation_settings: Optional[Dict[str, Any]] = None
     structured_spec: Optional[Dict[str, Any]] = None
+    artifacts_enabled: bool = False
 
     def __post_init__(self):
         """Validate generation parameters."""
@@ -38,3 +40,7 @@ class GenerationConfig:
     def is_image_generation_request(self) -> bool:
         """Check if this is an image generation request."""
         return self.image_generation_enabled
+
+    def is_artifact_request(self) -> bool:
+        """Check if this is an artifact generation request."""
+        return self.artifacts_enabled

@@ -72,6 +72,10 @@ class LLMQueryRequest:
         """Check if image generation is enabled."""
         return self.generation.image_generation_enabled
 
+    def requires_artifact_generation(self) -> bool:
+        """Check if artifact generation is enabled."""
+        return self.generation.artifacts_enabled
+
     def with_conversation_defaults(self, conversation: Any) -> 'LLMQueryRequest':
         """Apply conversation-level defaults for generation settings.
 
