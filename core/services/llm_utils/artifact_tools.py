@@ -5,6 +5,7 @@ This module provides tool definitions for artifact generation,
 enabling structured creation, updating, and finalization of long-form content.
 """
 
+import json
 from typing import Dict, List, Optional
 
 
@@ -211,7 +212,6 @@ class ArtifactTools:
         Returns:
             Parsed arguments dictionary
         """
-        import json
         try:
             return json.loads(arguments)
         except json.JSONDecodeError:

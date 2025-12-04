@@ -11,6 +11,7 @@ from functools import lru_cache
 
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 from django.conf import settings
 
@@ -129,8 +130,6 @@ async def get_checkpointer():
             logger.info("LangGraph MemorySaver checkpointer initialized (development mode)")
         else:
             # Production: Use PostgreSQL checkpointer
-            from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-
             # Build connection string
             # Format: postgresql://user:password@host:port/database
             user = db_settings.get('USER', 'postgres')
