@@ -26,7 +26,7 @@ class WebSearchTools:
         """
         if not tools:
             return False
-        return len(tools) > 0
+        return any(t.get("type") == "web_search" for t in tools)
 
 
 class OpenAIWebSearchTools:

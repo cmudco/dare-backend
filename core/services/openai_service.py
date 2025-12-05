@@ -147,6 +147,67 @@ class OpenAIService:
         stream = self.stream_chat_completion(messages, max_tokens, temperature)
         return await StreamAggregator.aggregate_stream(stream)
 
+    async def generate_structured_output(
+        self,
+        messages: List[Dict[str, str]],
+        response_schema: Dict,
+        max_tokens: int = 2000,
+        temperature: float = 0.7,
+    ) -> Dict:
+        """
+        Generate response matching a JSON schema using native structured outputs.
+
+        This method provides reliable JSON responses for artifact planning.
+        Uses OpenAI's json_schema response format for guaranteed compliance.
+
+        Args:
+            messages: List of message dictionaries
+            response_schema: JSON Schema the response must match
+            max_tokens: Maximum tokens to generate
+            temperature: Controls randomness
+
+        Returns:
+            Parsed JSON response as dictionary
+
+        Raises:
+            ValueError: If schema validation fails or no response returned
+        """
+        logger.info(f"[OpenAI] generate_structured_output with schema: {list(response_schema.get('properties', {}).keys())}")
+
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "structured_response",
+                "schema": response_schema,
+                "strict": True
+            }
+        }
+
+        params = {
+            "model": self.model,
+            "messages": messages,
+            "response_format": response_format,
+        }
+
+        if self.is_reasoning:
+            params["max_completion_tokens"] = max_tokens
+        else:
+            params["max_tokens"] = max_tokens
+            params["temperature"] = temperature
+
+        try:
+            response = await self.client.chat.completions.create(**params)
+            content = response.choices[0].message.content
+
+            if not content:
+                raise ValueError("Empty response from OpenAI structured output")
+
+            return json.loads(content)
+
+        except Exception as e:
+            logger.exception(f"[OpenAI] generate_structured_output error: {str(e)}")
+            raise ValueError(f"Structured output generation failed: {str(e)}")
+
     # ==================== Private Methods ====================
 
     def _prepare_messages(
@@ -252,6 +313,8 @@ class OpenAIService:
         # Add tools if provided (for function calling like artifacts)
         if tools:
             params["tools"] = tools
+            # Force tool use when tools are provided - ensures LLM uses tools instead of text
+            params["tool_choice"] = "required"
 
         return params
 
