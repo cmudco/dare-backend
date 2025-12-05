@@ -27,9 +27,8 @@ from conversations.services.artifact_graph import (
     ArtifactState,
 )
 from conversations.services.artifact_graph.graph import (
-    run_artifact_generation,
-    resume_artifact_generation,
-    run_artifact_modification,
+    ArtifactMode,
+    run_artifact_workflow,
 )
 
 logger = logging.getLogger(__name__)
@@ -151,7 +150,8 @@ class ArtifactService:
         message_id = message_obj.id if message_obj else None
 
         try:
-            async for chunk, metadata in run_artifact_generation(
+            async for chunk, metadata in run_artifact_workflow(
+                mode=ArtifactMode.CREATE,
                 conversation_id=self.conversation.conversation_id,
                 user_message=message,
                 llm_id=llm.id,
@@ -226,22 +226,24 @@ class ArtifactService:
         logger.info(f"Resuming artifact {artifact_id}: thread={thread_id}")
         
         try:
-            async for chunk, metadata in resume_artifact_generation(
-                artifact_id=artifact.id,
+            async for chunk, metadata in run_artifact_workflow(
+                mode=ArtifactMode.RESUME,
                 conversation_id=self.conversation.conversation_id,
+                llm_id=llm.id,
+                llm_provider=llm.provider,
                 thread_id=thread_id,
+                user_id=user_id,
+                send_callback=self.send_callback,
+                # RESUME-specific params
+                artifact_id=artifact.id,
                 content=artifact.content,
                 current_section=artifact.current_section,
                 estimated_sections=artifact.estimated_sections,
                 iteration_count=checkpoint.iteration_count if checkpoint else 0,
-                llm_id=llm.id,
-                llm_provider=llm.provider,
                 title=artifact.title,
                 outline=artifact.outline,
                 artifact_type=artifact.artifact_type,
-                user_id=user_id,
                 language=artifact.language,
-                send_callback=self.send_callback,
             ):
                 yield chunk, metadata
                 
@@ -309,23 +311,25 @@ class ArtifactService:
         )
 
         try:
-            async for chunk, metadata in run_artifact_modification(
-                artifact_id=artifact.id,
+            async for chunk, metadata in run_artifact_workflow(
+                mode=ArtifactMode.MODIFY,
                 conversation_id=self.conversation.conversation_id,
-                user_message=message,
                 llm_id=llm.id,
                 llm_provider=llm.provider,
                 thread_id=thread_id,
+                user_id=user_id,
+                message_id=message_id,
+                send_callback=self.send_callback,
+                user_message=message,
+                # MODIFY-specific params
+                artifact_id=artifact.id,
                 title=artifact.title,
                 artifact_type=artifact.artifact_type,
+                language=artifact.language,
                 original_outline=artifact.outline,
                 original_content=artifact.content,
                 original_sections=artifact.current_section,
                 version=artifact.version,
-                user_id=user_id,
-                message_id=message_id,
-                language=artifact.language,
-                send_callback=self.send_callback,
             ):
                 yield chunk, metadata
 
