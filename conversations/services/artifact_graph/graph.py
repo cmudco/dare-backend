@@ -15,9 +15,10 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 
 from django.conf import settings
 
-from .state import ArtifactState, create_initial_state, create_resume_state
+from .state import ArtifactState, create_initial_state, create_resume_state, create_modification_state
 from .nodes import (
     plan_node,
+    modify_plan_node,
     generate_section_node,
     checkpoint_node,
     pause_node,
@@ -349,6 +350,210 @@ async def resume_artifact_generation(
         yield f"Error: {str(e)}", {"error": str(e)}
 
 
+def create_modification_graph() -> StateGraph:
+    """
+    Create the artifact modification (append sections) state graph.
+
+    Graph Structure:
+    ```
+    START → modify_plan → generate_section ←──┐
+                              │              │
+                              ├── checkpoint ┤
+                              │              │
+                              ├── pause → END
+                              │
+                              └── complete → END
+
+                error → END (from any node)
+    ```
+
+    This graph is similar to the main artifact graph, but uses
+    modify_plan_node instead of plan_node to handle appending
+    sections to an existing artifact.
+
+    Returns:
+        Compiled StateGraph ready for execution
+    """
+    # Create the graph
+    workflow = StateGraph(ArtifactState)
+
+    # Add nodes
+    workflow.add_node("modify_plan", modify_plan_node)
+    workflow.add_node("generate_section", generate_section_node)
+    workflow.add_node("checkpoint", checkpoint_node)
+    workflow.add_node("pause", pause_node)
+    workflow.add_node("complete", complete_node)
+    workflow.add_node("error", error_node)
+
+    # Set entry point - start with modification planning
+    workflow.set_entry_point("modify_plan")
+
+    # Add edge from modify_plan to generate_section
+    workflow.add_edge("modify_plan", "generate_section")
+
+    # Add conditional edges from generate_section
+    workflow.add_conditional_edges(
+        "generate_section",
+        should_continue_generating,
+        {
+            "generate_section": "generate_section",
+            "checkpoint": "checkpoint",
+            "complete": "complete",
+            "pause": "pause",
+            "error": "error",
+        }
+    )
+
+    # Add conditional edges from checkpoint
+    workflow.add_conditional_edges(
+        "checkpoint",
+        should_continue_after_checkpoint,
+        {
+            "generate_section": "generate_section",
+            "pause": "pause",
+            "complete": "complete",
+        }
+    )
+
+    # Terminal nodes
+    workflow.add_edge("pause", END)
+    workflow.add_edge("complete", END)
+    workflow.add_edge("error", END)
+
+    return workflow
+
+
+# Compiled modification graph singleton
+_compiled_modification_graph = None
+
+
+async def get_modification_app():
+    """
+    Get the compiled artifact modification app with checkpointing.
+
+    Returns:
+        Compiled LangGraph app ready for modification execution
+    """
+    global _compiled_modification_graph
+
+    if _compiled_modification_graph is None:
+        # Create graph
+        workflow = create_modification_graph()
+
+        # Get checkpointer (reuses same checkpointer as main graph)
+        checkpointer = await get_checkpointer()
+
+        # Compile with checkpointer
+        _compiled_modification_graph = workflow.compile(checkpointer=checkpointer)
+
+        logger.info("LangGraph artifact modification workflow compiled")
+
+    return _compiled_modification_graph
+
+
+async def run_artifact_modification(
+    artifact_id: int,
+    conversation_id: str,
+    user_message: str,
+    llm_id: int,
+    llm_provider: str,
+    thread_id: str,
+    # Existing artifact data
+    title: str,
+    artifact_type: str,
+    original_outline: str,
+    original_content: str,
+    original_sections: int,
+    version: int,
+    # Optional
+    user_id: Optional[int] = None,
+    message_id: Optional[int] = None,
+    language: Optional[str] = None,
+    send_callback=None,
+) -> AsyncGenerator[Tuple[str, Optional[Dict]], None]:
+    """
+    Run artifact modification workflow (append new sections).
+
+    Args:
+        artifact_id: ID of the artifact to modify
+        conversation_id: ID of the conversation
+        user_message: User's modification request
+        llm_id: ID of the LLM to use
+        llm_provider: Provider name
+        thread_id: Unique thread ID for this modification
+        title: Existing artifact title
+        artifact_type: Type of artifact
+        original_outline: Existing outline
+        original_content: Existing content
+        original_sections: Number of existing sections
+        version: Current version number
+        user_id: Optional user ID
+        message_id: Optional AI message ID to link
+        language: Optional language for code
+        send_callback: Async callback for sending messages
+
+    Yields:
+        Tuple of (chunk: str, metadata: dict)
+    """
+    app = await get_modification_app()
+
+    # Create modification state
+    modification_state = create_modification_state(
+        artifact_id=artifact_id,
+        conversation_id=conversation_id,
+        user_message=user_message,
+        llm_id=llm_id,
+        llm_provider=llm_provider,
+        thread_id=thread_id,
+        title=title,
+        artifact_type=artifact_type,
+        original_outline=original_outline,
+        original_content=original_content,
+        original_sections=original_sections,
+        version=version,
+        user_id=user_id,
+        message_id=message_id,
+        language=language,
+    )
+
+    # Configuration for this thread
+    config = {"configurable": {"thread_id": thread_id}}
+
+    try:
+        # Track chunks we've already sent to avoid duplicates
+        sent_chunk_count = 0
+
+        # Stream execution
+        async for event in app.astream(modification_state, config, stream_mode="values"):
+            # Yield control to event loop to allow pause requests to be processed
+            await asyncio.sleep(0)
+
+            # Process only NEW pending chunks
+            pending_chunks = event.get("pending_chunks", [])
+            new_chunks = pending_chunks[sent_chunk_count:]
+
+            for chunk_data in new_chunks:
+                parsed = await _parse_chunk(chunk_data, send_callback)
+                if parsed:
+                    yield parsed
+
+            sent_chunk_count = len(pending_chunks)
+
+            # Check for completion or error
+            status = event.get("status")
+            if status in ("completed", "paused", "error"):
+                yield "", {
+                    "status": status,
+                    "artifact_id": event.get("artifact_id"),
+                    "version": event.get("version"),
+                }
+                break
+
+    except Exception as e:
+        logger.exception(f"Error in artifact modification: {str(e)}")
+        yield f"Error: {str(e)}", {"error": str(e)}
+
+
 async def _safe_send(send_callback, msg) -> bool:
     """Safely send a message via callback, handling disconnection gracefully."""
     if not send_callback:
@@ -413,6 +618,29 @@ async def _parse_chunk(chunk_data: str, send_callback=None) -> Optional[Tuple[st
             }
             await _safe_send(send_callback, msg)
             return "", {"type": "artifact_pause"}
+
+    elif chunk_type == "__ARTIFACT_MODIFY_INIT__":
+        # Format: __ARTIFACT_MODIFY_INIT__|artifact_id|title|new_outline|new_sections|version|message_id
+        data_parts = chunk_data.split("|")
+        if len(data_parts) >= 6:
+            msg = {
+                "type": "artifact_modify_init",
+                "artifactId": data_parts[1],
+                "title": data_parts[2],
+                # Match frontend expected field names
+                "outline": data_parts[3],
+                "estimatedSections": int(data_parts[4]),
+                "newVersion": int(data_parts[5]),
+            }
+            # Include messageId if present (7th element)
+            if len(data_parts) >= 7 and data_parts[6]:
+                msg["messageId"] = data_parts[6]
+            await _safe_send(send_callback, msg)
+            return "", {
+                "type": "artifact_modify_init",
+                "artifact_id": data_parts[1],
+                "version": int(data_parts[5]),
+            }
 
     elif chunk_type == "__ARTIFACT_COMPLETE__":
         # Format: __ARTIFACT_COMPLETE__|artifact_id|total_words

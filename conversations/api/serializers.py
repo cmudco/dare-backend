@@ -134,9 +134,11 @@ class MessageSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at', 'sender_name', 'files', 'tags', 'snippets', 'input_tokens', 'output_tokens', 'cost', 'artifactId']
 
     def get_artifactId(self, obj):
-        """Get the ID of the first artifact linked to this message."""
+        """Get the ID of the first active artifact linked to this message."""
         # Use the reverse relation from Artifact -> Message
-        artifact = obj.artifacts.first()
+        # Filter by is_active=True since the reverse relation uses the default manager
+        # which doesn't filter by is_active automatically
+        artifact = obj.artifacts.filter(is_active=True).first()
         return str(artifact.id) if artifact else None
 
 
@@ -180,6 +182,7 @@ class ArtifactSerializer(serializers.ModelSerializer):
             'estimated_sections',
             'current_section',
             'status',
+            'version',
             'metadata',
             'progress',
             'sections_remaining',
@@ -192,6 +195,7 @@ class ArtifactSerializer(serializers.ModelSerializer):
             'id',
             'conversation_id',
             'message_id',
+            'version',
             'progress',
             'sections_remaining',
             'word_count',

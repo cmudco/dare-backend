@@ -18,6 +18,8 @@ from core.prompts.artifact_prompts import (
     get_planning_prompt,
     get_generation_prompt,
     get_section_user_prompt,
+    get_append_planning_prompt,
+    get_append_generation_prompt,
 )
 from core.services.api_key_service import get_provider_api_key, get_provider_api_key_for_user
 from core.services.openai_service import OpenAIService
@@ -49,6 +51,35 @@ def get_conversation(conversation_id: str) -> Conversation:
 def get_artifact(artifact_id: int) -> Artifact:
     """Get artifact from database."""
     return Artifact.active_objects.get(id=artifact_id)
+
+
+@sync_to_async
+def get_conversation_history(conversation: Conversation, limit: int = 10) -> list:
+    """
+    Get recent conversation history for context.
+
+    Returns list of messages in format [{"role": "user"|"assistant", "content": str}]
+    """
+    from conversations.constants import SenderType
+
+    messages = conversation.messages.filter(is_active=True).order_by('-created_at')[:limit]
+    history = []
+
+    for msg in reversed(list(messages)):
+        role = "user" if msg.sender_type == SenderType.PLAYER else "assistant"
+        content = msg.message or ""
+
+        # If message has artifacts, include artifact info
+        # Use the reverse relation 'artifacts' from Message model
+        msg_artifacts = msg.artifacts.filter(is_active=True)
+        if msg_artifacts.exists():
+            artifact = msg_artifacts.first()
+            content = f"[Generated artifact: '{artifact.title}' - {artifact.artifact_type}]\n{content}"
+
+        if content.strip():
+            history.append({"role": role, "content": content})
+
+    return history
 
 
 @sync_to_async
@@ -209,16 +240,27 @@ async def plan_node(state: ArtifactState) -> Dict[str, Any]:
         user = None
         if state.get("user_id"):
             user = await sync_to_async(User.objects.get)(id=state["user_id"])
-        
+
         ai_service = await get_ai_service(llm, user)
-        
-        # Build planning prompt
+
+        # Get conversation history for context (helps LLM understand references to previous artifacts)
+        history = await get_conversation_history(conversation, limit=6)
+
+        # Build planning prompt with conversation history
         system_prompt = get_planning_prompt()
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": state["user_message"]}
-        ]
-        
+        messages = [{"role": "system", "content": system_prompt}]
+
+        # Add conversation history (excluding the current message which we'll add separately)
+        # This gives the LLM context about previous artifacts and messages
+        for hist_msg in history:
+            # Skip if this is the current user message (avoid duplication)
+            if hist_msg["role"] == "user" and hist_msg["content"].strip() == state["user_message"].strip():
+                continue
+            messages.append(hist_msg)
+
+        # Add current user message
+        messages.append({"role": "user", "content": state["user_message"]})
+
         # Get planning tools
         tools = ArtifactTools.get_planning_tools()
         
@@ -314,6 +356,152 @@ async def plan_node(state: ArtifactState) -> Dict[str, Any]:
         
     except Exception as e:
         logger.exception(f"Plan node error: {str(e)}")
+        return {
+            "status": "error",
+            "error": str(e),
+        }
+
+
+async def modify_plan_node(state: ArtifactState) -> Dict[str, Any]:
+    """
+    Modification planning node - Plans new sections to APPEND to existing artifact.
+
+    This node is used for the modification flow (is_modification=True).
+    It:
+    1. Loads existing artifact context
+    2. Calls LLM with append_sections prompt
+    3. Parses append_sections tool call (new sections outline)
+    4. Updates artifact: appends to outline, increments estimated_sections
+    5. Increments version
+    6. Sets up state for generating the new sections only
+
+    Checkpointed: Yes - saves updated outline and section count
+    """
+    logger.info(f"Modify plan node: Starting for artifact {state['artifact_id']}")
+
+    try:
+        # Get LLM and artifact
+        llm = await get_llm(state["llm_id"])
+        artifact = await get_artifact(state["artifact_id"])
+
+        # Get AI service
+        User = get_user_model()
+        user = None
+        if state.get("user_id"):
+            user = await sync_to_async(User.objects.get)(id=state["user_id"])
+
+        ai_service = await get_ai_service(llm, user)
+
+        # Build append planning prompt with existing artifact context
+        system_prompt = get_append_planning_prompt(
+            title=state["title"],
+            artifact_type=state["artifact_type"],
+            outline=state["original_outline"],
+            content_preview=state["original_content"],
+            current_sections=state["original_sections"],
+            user_message=state["user_message"],
+        )
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": state["user_message"]}
+        ]
+
+        # Get modification planning tools
+        tools = ArtifactTools.get_modification_planning_tools()
+
+        # Call LLM for modification planning
+        response_text = ""
+        tool_calls = []
+
+        async for chunk, usage in ai_service.stream_chat_completion(
+            messages=messages,
+            max_tokens=2000,
+            temperature=0.7,
+            tools=tools
+        ):
+            if chunk:
+                response_text += chunk
+            if usage and usage.get("tool_calls"):
+                tool_calls.extend(usage["tool_calls"])
+
+        # Parse tool call to get new sections info
+        new_sections_outline = ""
+        estimated_new_sections = 1
+
+        for tool_call in tool_calls:
+            logger.info(f"Modify plan node: Processing tool_call: {tool_call}")
+            if tool_call.get("name") == ArtifactTools.APPEND_SECTIONS:
+                args = ArtifactTools.parse_tool_arguments(
+                    tool_call.get("arguments", "{}")
+                )
+                logger.info(f"Modify plan node: Parsed append_sections args: {args}")
+                new_sections_outline = args.get("new_sections_outline", "")
+                estimated_new_sections = args.get("estimated_new_sections", 1)
+                break
+
+        # If no tool call, create a default outline
+        if not new_sections_outline:
+            next_section = state["original_sections"] + 1
+            new_sections_outline = f"{next_section}. Additional Content - Based on user request"
+            estimated_new_sections = 1
+            logger.warning("Modify plan node: No append_sections tool call, using default")
+
+        # Calculate new totals
+        new_estimated_total = state["original_sections"] + estimated_new_sections
+
+        # Update artifact in database
+        # Append new sections to outline
+        updated_outline = state["original_outline"]
+        if updated_outline and not updated_outline.endswith("\n"):
+            updated_outline += "\n"
+        updated_outline += new_sections_outline
+
+        # Increment version
+        new_version = state["version"] + 1
+
+        await update_artifact_db(
+            state["artifact_id"],
+            outline=updated_outline,
+            estimated_sections=new_estimated_total,
+            status=ArtifactStatus.GENERATING,
+            version=new_version,
+        )
+
+        # Link to new message if provided
+        message_id = state.get("message_id")
+        if message_id:
+            try:
+                message_obj = await sync_to_async(Message.active_objects.get)(id=message_id)
+                artifact.message = message_obj
+                await sync_to_async(artifact.save)(update_fields=['message', 'updated_at'])
+            except Message.DoesNotExist:
+                logger.warning(f"Modify plan node: Message {message_id} not found")
+
+        logger.info(
+            f"Modify plan node: Artifact {state['artifact_id']} updated - "
+            f"adding {estimated_new_sections} new sections, version {new_version}"
+        )
+
+        # Send modification init message to frontend
+        # Include message_id so frontend can link message to artifact
+        message_id = state.get("message_id") or ""
+        init_chunk = (
+            f"__ARTIFACT_MODIFY_INIT__|{state['artifact_id']}|{state['title']}|"
+            f"{new_sections_outline}|{estimated_new_sections}|{new_version}|{message_id}"
+        )
+
+        return {
+            "outline": updated_outline,
+            "estimated_sections": new_estimated_total,
+            "new_sections_outline": new_sections_outline,
+            "status": "generating",
+            "version": new_version,
+            "pending_chunks": [init_chunk],
+        }
+
+    except Exception as e:
+        logger.exception(f"Modify plan node error: {str(e)}")
         return {
             "status": "error",
             "error": str(e),
