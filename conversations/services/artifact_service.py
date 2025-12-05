@@ -29,6 +29,7 @@ from conversations.services.artifact_graph import (
 from conversations.services.artifact_graph.graph import (
     run_artifact_generation,
     resume_artifact_generation,
+    run_artifact_modification,
 )
 
 logger = logging.getLogger(__name__)
@@ -74,9 +75,11 @@ class ArtifactService:
         llm: LLM,
         message_obj: Message,
         artifact_id: Optional[str] = None,
+        is_modification: bool = False,
+        target_artifact_id: Optional[str] = None,
     ) -> AsyncGenerator[Tuple[str, Optional[Dict]], None]:
         """
-        Execute artifact generation flow.
+        Execute artifact generation or modification flow.
 
         This is the main entry point that delegates to LangGraph.
 
@@ -85,11 +88,24 @@ class ArtifactService:
             llm: LLM to use for generation
             message_obj: The AI message object to associate with artifact
             artifact_id: Optional existing artifact ID for continuation
+            is_modification: True if modifying existing artifact (append sections)
+            target_artifact_id: ID of artifact to modify (for modification mode)
 
         Yields:
             Tuple of (chunk: str, usage: Dict) for streaming responses
         """
-        # If artifact_id provided, this is a continuation
+        # Modification mode - append new sections to existing artifact
+        if is_modification and target_artifact_id:
+            async for chunk, usage in self._modify_artifact(
+                message=message,
+                llm=llm,
+                message_obj=message_obj,
+                target_artifact_id=target_artifact_id,
+            ):
+                yield chunk, usage
+            return
+
+        # If artifact_id provided, this is a continuation (resume paused)
         if artifact_id:
             async for chunk, usage in self._continue_artifact(
                 artifact_id=artifact_id,
@@ -231,6 +247,90 @@ class ArtifactService:
                 
         except Exception as e:
             logger.exception(f"Error resuming artifact: {str(e)}")
+            await self.send({
+                "type": "error",
+                "errorCode": ErrorCode.ARTIFACT_ERROR,
+                "errorMessage": str(e),
+            })
+            yield f"Error: {str(e)}", {"error": str(e)}
+
+    async def _modify_artifact(
+        self,
+        message: str,
+        llm: LLM,
+        message_obj: Message,
+        target_artifact_id: str,
+    ) -> AsyncGenerator[Tuple[str, Optional[Dict]], None]:
+        """
+        Modify an existing artifact by appending new sections.
+
+        Args:
+            message: User's modification request
+            llm: LLM to use
+            message_obj: AI message object
+            target_artifact_id: ID of the artifact to modify
+
+        Yields:
+            Tuple of (chunk: str, usage: Dict)
+        """
+        # Get artifact from database
+        try:
+            artifact = await self._get_artifact(int(target_artifact_id))
+        except (ValueError, Artifact.DoesNotExist):
+            error_msg = ErrorMessage.ARTIFACT_NOT_FOUND
+            await self.send({
+                "type": "error",
+                "errorCode": ErrorCode.ARTIFACT_NOT_FOUND,
+                "errorMessage": error_msg,
+            })
+            yield error_msg, {"error": error_msg}
+            return
+
+        # Check if artifact can be modified (must be completed or paused)
+        if artifact.status not in [ArtifactStatus.COMPLETED, ArtifactStatus.PAUSED]:
+            error_msg = "Cannot modify artifact that is currently being generated"
+            await self.send({
+                "type": "error",
+                "errorCode": ErrorCode.ARTIFACT_ERROR,
+                "errorMessage": error_msg,
+            })
+            yield error_msg, {"error": error_msg}
+            return
+
+        # Generate unique thread ID for this modification
+        thread_id = f"artifact_mod_{self.conversation.conversation_id}_{uuid.uuid4().hex[:8]}"
+
+        user_id = self.user.id if self.user else None
+        message_id = message_obj.id if message_obj else None
+
+        logger.info(
+            f"Starting artifact modification: artifact={target_artifact_id}, "
+            f"thread={thread_id}, current_sections={artifact.current_section}"
+        )
+
+        try:
+            async for chunk, metadata in run_artifact_modification(
+                artifact_id=artifact.id,
+                conversation_id=self.conversation.conversation_id,
+                user_message=message,
+                llm_id=llm.id,
+                llm_provider=llm.provider,
+                thread_id=thread_id,
+                title=artifact.title,
+                artifact_type=artifact.artifact_type,
+                original_outline=artifact.outline,
+                original_content=artifact.content,
+                original_sections=artifact.current_section,
+                version=artifact.version,
+                user_id=user_id,
+                message_id=message_id,
+                language=artifact.language,
+                send_callback=self.send_callback,
+            ):
+                yield chunk, metadata
+
+        except Exception as e:
+            logger.exception(f"Error modifying artifact: {str(e)}")
             await self.send({
                 "type": "error",
                 "errorCode": ErrorCode.ARTIFACT_ERROR,

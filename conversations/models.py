@@ -635,6 +635,12 @@ class Artifact(BaseModel):
         help_text="Additional metadata (LLM used, token counts, etc.)."
     )
 
+    # Version tracking for modifications
+    version = models.PositiveIntegerField(
+        default=1,
+        help_text="Version number, incremented on each modification."
+    )
+
     active_objects = ActiveObjectsManager()
 
     class Meta:
@@ -664,6 +670,11 @@ class Artifact(BaseModel):
     def word_count(self) -> int:
         """Calculate word count of generated content."""
         return len(self.content.split()) if self.content else 0
+
+    def increment_version(self):
+        """Increment version number on modification."""
+        self.version += 1
+        self.save(update_fields=['version', 'updated_at'])
 
 
 class ArtifactCheckpoint(BaseModel):

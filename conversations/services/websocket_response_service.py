@@ -87,12 +87,20 @@ class WebSocketResponseService:
         learning_progress_data = await database_sync_to_async(lambda: message.learning_progress_data)()
 
         # Get linked artifact ID if exists
+        # Use fresh DB query to avoid stale cached relation
         @database_sync_to_async
         def get_artifact_id():
-            artifact = message.artifacts.first()
+            from conversations.models import Artifact
+            artifact = Artifact.active_objects.filter(message_id=message.id).first()
             return str(artifact.id) if artifact else None
 
         artifact_id = await get_artifact_id()
+
+        # Debug log to trace artifact ID resolution
+        if artifact_id:
+            logger.info(f"format_message: message_id={message.id}, resolved artifact_id={artifact_id}")
+        else:
+            logger.warning(f"format_message: message_id={message.id}, NO artifact found in DB")
 
         # Build response matching original format
         response = {

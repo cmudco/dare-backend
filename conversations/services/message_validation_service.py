@@ -67,6 +67,11 @@ class MessageValidationService:
             "artifacts_enabled": data.get("artifacts_enabled", False),
             "artifact_id": data.get("artifact_id"),  # For continuing existing artifact
 
+            # Artifact modification fields
+            "artifact_action": data.get("artifact_action", "auto"),  # "auto" | "create" | "modify"
+            "active_artifact_id": data.get("active_artifact_id"),    # Currently open artifact (for auto-detection)
+            "target_artifact_id": data.get("target_artifact_id"),    # Explicit target override
+
             # Vision support (base64 encoded images)
             "images": cls._get_list(data, "images"),
 

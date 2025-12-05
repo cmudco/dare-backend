@@ -56,11 +56,19 @@ class ArtifactState(TypedDict, total=False):
         # Error handling
         error: Error message if any
         retry_count: Number of retries attempted
-        
+
         # Metadata
         metadata: Additional metadata dict
+
+        # Modification mode (append sections to existing artifact)
+        is_modification: Whether this is a modification of existing artifact
+        original_content: Existing content before modification
+        original_sections: Number of sections before modification
+        original_outline: Original outline before modification
+        new_sections_outline: Outline of only the NEW sections to append
+        version: Current version number
     """
-    
+
     # Identifiers
     artifact_id: Optional[int]
     conversation_id: str
@@ -101,6 +109,14 @@ class ArtifactState(TypedDict, total=False):
     
     # Metadata
     metadata: dict
+
+    # Modification mode (append sections to existing artifact)
+    is_modification: bool
+    original_content: str
+    original_sections: int
+    original_outline: str
+    new_sections_outline: str
+    version: int
 
 
 def create_initial_state(
@@ -172,6 +188,14 @@ def create_initial_state(
         
         # Metadata
         metadata={},
+
+        # Modification mode (not a modification, creating new)
+        is_modification=False,
+        original_content="",
+        original_sections=0,
+        original_outline="",
+        new_sections_outline="",
+        version=1,
     )
 
 
@@ -258,5 +282,114 @@ def create_resume_state(
         
         # Metadata
         metadata={},
+
+        # Modification mode (resume is not a modification)
+        is_modification=False,
+        original_content="",
+        original_sections=0,
+        original_outline="",
+        new_sections_outline="",
+        version=1,
+    )
+
+
+def create_modification_state(
+    artifact_id: int,
+    conversation_id: str,
+    user_message: str,
+    llm_id: int,
+    llm_provider: str,
+    thread_id: str,
+    # Existing artifact data
+    title: str,
+    artifact_type: str,
+    original_outline: str,
+    original_content: str,
+    original_sections: int,
+    version: int,
+    # Optional
+    user_id: Optional[int] = None,
+    message_id: Optional[int] = None,
+    language: Optional[str] = None,
+    sections_per_iteration: int = 3,
+    max_iterations: int = 10,
+) -> ArtifactState:
+    """
+    Create state for modifying an existing artifact (append sections).
+
+    This state preserves the original content and outline, and sets up
+    the workflow to plan and generate NEW sections only.
+
+    Args:
+        artifact_id: ID of the artifact to modify
+        conversation_id: ID of the conversation
+        user_message: User's modification request
+        llm_id: ID of the LLM to use
+        llm_provider: Provider name
+        thread_id: LangGraph thread ID
+        title: Existing artifact title
+        artifact_type: Type of artifact
+        original_outline: Existing outline
+        original_content: Existing content
+        original_sections: Number of existing sections
+        version: Current version number
+        user_id: Optional user ID
+        message_id: Optional AI message ID
+        language: Optional language for code
+        sections_per_iteration: Sections per iteration
+        max_iterations: Max iterations
+
+    Returns:
+        ArtifactState configured for modification
+    """
+    return ArtifactState(
+        # Identifiers
+        artifact_id=artifact_id,
+        conversation_id=conversation_id,
+        message_id=message_id,
+        thread_id=thread_id,
+
+        # User context
+        user_id=user_id,
+        user_message=user_message,
+
+        # LLM context
+        llm_id=llm_id,
+        llm_provider=llm_provider,
+
+        # Artifact metadata (existing artifact data)
+        artifact_type=artifact_type,
+        title=title,
+        outline=original_outline,  # Will be updated with new sections
+        language=language,
+
+        # Content tracking (start from existing state)
+        content=original_content,
+        current_section=original_sections,  # Start from where we left off
+        estimated_sections=original_sections,  # Will be updated in modify_plan_node
+
+        # Generation state - start with planning for modification
+        status="planning",
+        iteration_count=0,
+        sections_per_iteration=sections_per_iteration,
+        max_iterations=max_iterations,
+
+        # Streaming
+        pending_chunks=[],
+
+        # Error handling
+        error=None,
+        retry_count=0,
+
+        # Metadata
+        metadata={},
+
+        # Modification mode - THIS IS A MODIFICATION
+        is_modification=True,
+        original_content=original_content,
+        original_sections=original_sections,
+        original_outline=original_outline,
+        new_sections_outline="",  # Will be set by modify_plan_node
+        version=version,
     )
 

@@ -16,6 +16,7 @@ class ArtifactTools:
     CREATE_ARTIFACT = "create_artifact"
     UPDATE_ARTIFACT = "update_artifact"
     FINALIZE_ARTIFACT = "finalize_artifact"
+    APPEND_SECTIONS = "append_sections"  # For modification mode
 
     @staticmethod
     def get_create_artifact_tool() -> Dict:
@@ -147,6 +148,50 @@ class ArtifactTools:
             }
         }
 
+    @staticmethod
+    def get_append_sections_tool() -> Dict:
+        """
+        Get the append_sections tool definition for LLM function calling.
+
+        This tool is used by the LLM to plan new sections to append
+        to an existing artifact during modification mode.
+
+        Returns:
+            Tool definition dictionary
+        """
+        return {
+            "type": "function",
+            "function": {
+                "name": "append_sections",
+                "description": (
+                    "Plan new sections to append to the END of an existing artifact. "
+                    "Analyze the user request and existing content to determine what "
+                    "new sections should be added. The sections will be appended after "
+                    "the current content."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "new_sections_outline": {
+                            "type": "string",
+                            "description": (
+                                "Outline of NEW sections to append. Continue numbering "
+                                "from existing sections. Format each section as: "
+                                "'N. Section Title - Brief description' on separate lines."
+                            )
+                        },
+                        "estimated_new_sections": {
+                            "type": "integer",
+                            "description": "Number of new sections to add",
+                            "minimum": 1,
+                            "maximum": 20
+                        }
+                    },
+                    "required": ["new_sections_outline", "estimated_new_sections"]
+                }
+            }
+        }
+
     @classmethod
     def get_planning_tools(cls) -> List[Dict]:
         """
@@ -156,6 +201,16 @@ class ArtifactTools:
             List of tool definitions for planning
         """
         return [cls.get_create_artifact_tool()]
+
+    @classmethod
+    def get_modification_planning_tools(cls) -> List[Dict]:
+        """
+        Get tools for artifact modification planning phase.
+
+        Returns:
+            List of tool definitions for modification planning
+        """
+        return [cls.get_append_sections_tool()]
 
     @classmethod
     def get_generation_tools(cls) -> List[Dict]:
@@ -198,7 +253,8 @@ class ArtifactTools:
         return tool_name in [
             ArtifactTools.CREATE_ARTIFACT,
             ArtifactTools.UPDATE_ARTIFACT,
-            ArtifactTools.FINALIZE_ARTIFACT
+            ArtifactTools.FINALIZE_ARTIFACT,
+            ArtifactTools.APPEND_SECTIONS,
         ]
 
     @staticmethod

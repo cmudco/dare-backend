@@ -18,11 +18,18 @@ class ConversationService:
 
     async def fetch_chat_history_from_db(self, conversation: Conversation, limit: int = 50):
         """Fetches recent chat history for AI context."""
+        from django.db.models import Prefetch
+        from conversations.models import Artifact
+
         messages = await database_sync_to_async(
             lambda: list(
                 Message.active_objects.filter(conversation=conversation)
                 .select_related('llm')
-                .prefetch_related('snippets', 'files', 'tags', 'artifacts')
+                .prefetch_related(
+                    'snippets', 'files', 'tags',
+                    # Only prefetch active artifacts to match what serializer expects
+                    Prefetch('artifacts', queryset=Artifact.active_objects.all())
+                )
                 .order_by('-created_at')[:limit]
             )
         )()
