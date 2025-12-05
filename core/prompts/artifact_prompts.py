@@ -162,3 +162,131 @@ def get_section_user_prompt(outline: str, section_number: int) -> str:
 
     return f"Please generate content for: {section_title}"
 
+
+# ========== Modification (Append Sections) Prompts ==========
+
+ARTIFACT_APPEND_PLANNING_PROMPT = """You are an expert content architect. You are ADDING new sections to an existing artifact.
+
+## Existing Artifact Context
+- Title: {title}
+- Type: {artifact_type}
+- Current Sections: {current_sections}
+- Current Outline:
+{outline}
+
+- Content Summary (last 500 chars):
+{content_preview}
+
+## User Request
+{user_message}
+
+## Your Task
+Analyze the user's request and plan NEW sections to APPEND to the end of this artifact.
+
+Guidelines:
+- Continue section numbering from {next_section_number}
+- Ensure new sections complement existing content
+- Don't repeat what already exists
+- Keep new sections focused on the user's request
+- Aim for 1-5 new sections depending on request scope
+
+Use the append_sections tool to specify the new sections to add."""
+
+
+def get_append_planning_prompt(
+    title: str,
+    artifact_type: str,
+    outline: str,
+    content_preview: str,
+    current_sections: int,
+    user_message: str,
+) -> str:
+    """
+    Get the system prompt for append sections planning phase.
+
+    Args:
+        title: Existing artifact title
+        artifact_type: Type of artifact
+        outline: Existing outline
+        content_preview: Preview of existing content
+        current_sections: Number of existing sections
+        user_message: User's modification request
+
+    Returns:
+        Formatted system prompt for append planning
+    """
+    # Truncate content preview if too long
+    preview = content_preview[-500:] if content_preview else "(No content yet)"
+
+    return ARTIFACT_APPEND_PLANNING_PROMPT.format(
+        title=title,
+        artifact_type=artifact_type,
+        outline=outline,
+        content_preview=preview,
+        current_sections=current_sections,
+        next_section_number=current_sections + 1,
+        user_message=user_message,
+    )
+
+
+ARTIFACT_APPEND_GENERATION_PROMPT = """You are generating NEW sections for an existing artifact. You have access to the following tools:
+
+- update_artifact: Append content for the current section
+- finalize_artifact: Mark the artifact as complete when all NEW sections are done
+
+Current artifact context:
+- Title: {title}
+- Type: {artifact_type}
+- Original sections: {original_sections}
+- New sections outline: {new_sections_outline}
+- Current section: {current_section} of {total_sections}
+- Generating new section: {new_section_number} (section {new_section_number} of {total_new_sections} new sections)
+
+Guidelines for section generation:
+1. Generate content ONLY for the current new section indicated
+2. Maintain consistency with existing content style
+3. Use appropriate formatting (markdown for documents, proper syntax for code)
+4. Each section should be 200-500 words for documents, or complete functional code for code artifacts
+5. Call update_artifact with the section content and correct section_number
+6. Remember: section numbering continues from {next_section_start}
+
+When the final NEW section is complete, call finalize_artifact with a brief summary of what was added."""
+
+
+def get_append_generation_prompt(
+    title: str,
+    artifact_type: str,
+    original_sections: int,
+    new_sections_outline: str,
+    current_section: int,
+    total_sections: int,
+) -> str:
+    """
+    Get the system prompt for append sections generation phase.
+
+    Args:
+        title: Artifact title
+        artifact_type: Type of artifact
+        original_sections: Number of sections before modification
+        new_sections_outline: Outline of NEW sections only
+        current_section: Current section number (absolute, including original)
+        total_sections: Total sections after modification
+
+    Returns:
+        Formatted system prompt for append generation
+    """
+    total_new_sections = total_sections - original_sections
+    new_section_number = current_section - original_sections
+
+    return ARTIFACT_APPEND_GENERATION_PROMPT.format(
+        title=title,
+        artifact_type=artifact_type,
+        original_sections=original_sections,
+        new_sections_outline=new_sections_outline,
+        current_section=current_section,
+        total_sections=total_sections,
+        new_section_number=new_section_number,
+        total_new_sections=total_new_sections,
+        next_section_start=original_sections + 1,
+    )
+

@@ -768,13 +768,41 @@ class MessageCoordinator:
         Uses an event-driven approach to allow pause requests to be processed
         during generation.
 
+        Supports three modes:
+        1. Create new artifact (default)
+        2. Continue paused artifact (artifact_id provided)
+        3. Modify existing artifact (artifact_action=modify or auto-detected)
+
         Args:
             message_data: Validated message data
             message_obj: AI message object
             llm: LLM instance to use
             artifact_id: Optional existing artifact ID for continuation
         """
-        await self._run_artifact_generation(message_data, message_obj, llm, artifact_id)
+        # Get artifact action parameters from message data
+        artifact_action = message_data.get("artifact_action", "auto")
+        active_artifact_id = message_data.get("active_artifact_id")
+        target_artifact_id = message_data.get("target_artifact_id")
+
+        # Resolve action using heuristics if "auto"
+        resolved_action = artifact_action
+        if artifact_action == "auto" and active_artifact_id:
+            from conversations.services.artifact_intent_detector import ArtifactIntentDetector
+            resolved_action = ArtifactIntentDetector.detect_intent(
+                message=message_data.get("message", ""),
+                has_active_artifact=True,
+            )
+            # Use active artifact as target if not explicitly set
+            if resolved_action == "modify":
+                target_artifact_id = target_artifact_id or active_artifact_id
+            logger.info(f"Artifact intent detection: action={artifact_action} -> resolved={resolved_action}")
+
+        # Route to appropriate flow
+        if resolved_action == "modify" and target_artifact_id:
+            await self._run_artifact_modification(message_data, message_obj, llm, target_artifact_id)
+        else:
+            # Existing create/continue flow
+            await self._run_artifact_generation(message_data, message_obj, llm, artifact_id)
 
     async def _run_artifact_generation(
         self,
@@ -843,6 +871,73 @@ class MessageCoordinator:
             logger.exception(f"Error streaming artifact response: {str(e)}")
             await self.send_error(ErrorCode.ARTIFACT_ERROR, ErrorMessage.ARTIFACT_ERROR)
 
+    async def _run_artifact_modification(
+        self,
+        message_data: Dict[str, Any],
+        message_obj: Message,
+        llm: LLM,
+        target_artifact_id: str,
+    ):
+        """
+        Execute artifact modification logic (append new sections).
+
+        Args:
+            message_data: Validated message data
+            message_obj: AI message object
+            llm: LLM instance to use
+            target_artifact_id: ID of the artifact to modify
+        """
+        try:
+            # Create artifact service with WebSocket callback
+            artifact_service = ArtifactService(
+                conversation=self.conversation,
+                user=self.user,
+                send_callback=self._artifact_send_callback,
+            )
+
+            token_usage = None
+
+            logger.info(f"Starting artifact modification for artifact_id={target_artifact_id}")
+
+            # Execute artifact modification
+            async for chunk, usage in artifact_service.execute(
+                message=message_data["message"],
+                llm=llm,
+                message_obj=message_obj,
+                is_modification=True,
+                target_artifact_id=target_artifact_id,
+            ):
+                if usage:
+                    token_usage = usage
+
+                    # Track modification init
+                    if usage.get("type") == "artifact_modify_init":
+                        logger.info(
+                            f"Artifact modification started: artifact_id={usage.get('artifact_id')}, "
+                            f"version={usage.get('version')}"
+                        )
+
+                    # Check billing during streaming (authenticated users only)
+                    if self.user:
+                        can_continue, error_response = await self.billing_service.check_streaming_credit_usage(
+                            self.user, llm, token_usage
+                        )
+                        if not can_continue:
+                            # Pause artifact modification if out of credits
+                            await self._pause_artifact_internal(target_artifact_id)
+                            return
+
+            # Finalize message
+            await self._finalize_artifact_message(
+                message_obj=message_obj,
+                artifact_id=target_artifact_id,
+                token_usage=token_usage,
+            )
+
+        except Exception as e:
+            logger.exception(f"Error modifying artifact: {str(e)}")
+            await self.send_error(ErrorCode.ARTIFACT_ERROR, f"Error modifying artifact: {str(e)}")
+
     async def _finalize_artifact_message(
         self,
         message_obj: Message,
@@ -891,6 +986,9 @@ class MessageCoordinator:
             # Save the message
             await database_sync_to_async(message_obj.save)()
 
+            # Refresh message from DB to ensure artifacts relation is up-to-date
+            await database_sync_to_async(message_obj.refresh_from_db)()
+
             # Process billing
             if token_usage and self.user:
                 llm = await database_sync_to_async(lambda: message_obj.llm)()
@@ -909,6 +1007,14 @@ class MessageCoordinator:
                 streaming=False,
                 regenerate=False,
             )
+
+            # Debug log to track artifactId in final payload
+            logger.info(
+                f"Finalize artifact message: message_id={message_obj.id}, "
+                f"artifact_id param={artifact_id}, "
+                f"payload artifactId={final_payload.get('artifactId')}"
+            )
+
             await self.send(final_payload)
 
         except Exception as e:

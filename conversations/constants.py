@@ -40,6 +40,7 @@ class WebSocketMessageType(Enum):
     ARTIFACT_STREAM = "artifact_stream"
     ARTIFACT_PAUSE = "artifact_pause"
     ARTIFACT_COMPLETE = "artifact_complete"
+    ARTIFACT_MODIFY_INIT = "artifact_modify_init"  # Modification started (append sections)
 
 class WebSocketAction(Enum):
     """WebSocket actions for incoming messages."""
@@ -64,6 +65,16 @@ class ArtifactStatus(models.TextChoices):
     PAUSED = 'paused', 'Paused'
     COMPLETED = 'completed', 'Completed'
     ERROR = 'error', 'Error'
+
+
+class ArtifactAction(models.TextChoices):
+    """
+    Action type for artifact generation/modification.
+    Used by frontend to indicate user intent.
+    """
+    AUTO = 'auto', 'Auto Detect'
+    CREATE = 'create', 'Create New'
+    MODIFY = 'modify', 'Modify Existing'
 
 # Default message sender names
 DEFAULT_AI_SENDER_NAME = "AI Assistant"
