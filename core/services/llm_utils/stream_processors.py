@@ -29,8 +29,8 @@ class OpenAIStreamProcessor:
         Yields:
             Tuple of (text_chunk, usage_data)
         """
-        tool_calls = []
         current_tool_calls = {}  # Track tool calls by index
+        tool_calls_yielded = False
 
         async for chunk in response:
             # Yield content chunks
@@ -55,12 +55,12 @@ class OpenAIStreamProcessor:
             if usage:
                 # Include tool calls in usage data if present
                 if current_tool_calls:
-                    tool_calls = list(current_tool_calls.values())
-                    usage["tool_calls"] = tool_calls
+                    usage["tool_calls"] = list(current_tool_calls.values())
+                    tool_calls_yielded = True
                 yield "", usage
 
-        # If we have tool calls but no usage was yielded, yield them now
-        if current_tool_calls and not tool_calls:
+        # Always yield tool calls at end if we have them and haven't yielded yet
+        if current_tool_calls and not tool_calls_yielded:
             yield "", {"tool_calls": list(current_tool_calls.values())}
 
     @staticmethod
@@ -109,6 +109,7 @@ class ClaudeStreamProcessor:
         usage_extractor = ClaudeUsageExtractor()
         tool_calls = []
         current_tool_call = None
+        tool_calls_yielded = False
 
         async for event in response:
             # Handle content block start (for tool use)
@@ -146,15 +147,12 @@ class ClaudeStreamProcessor:
                     # Include tool calls in usage data if present
                     if tool_calls:
                         usage["tool_calls"] = tool_calls
+                        tool_calls_yielded = True
                     yield "", usage
 
-        # Ensure we yield something at the end even if no usage
-        if usage_extractor.input_tokens is None:
-            # Still yield tool calls if we have them
-            if tool_calls:
-                yield "", {"tool_calls": tool_calls}
-            else:
-                yield "", None
+        # Always yield tool calls at end if we have them and haven't yielded yet
+        if tool_calls and not tool_calls_yielded:
+            yield "", {"tool_calls": tool_calls}
 
 
 class GeminiStreamProcessor:
@@ -172,17 +170,44 @@ class GeminiStreamProcessor:
             Tuple of (text_chunk, usage_data)
         """
         usage_extractor = GeminiUsageExtractor()
+        tool_calls = []
 
         for chunk in response:
-            # Yield text content
-            if hasattr(chunk, 'text') and chunk.text:
-                yield chunk.text, None
+            # Handle candidates (both text and function calls)
+            if hasattr(chunk, 'candidates') and chunk.candidates:
+                for candidate in chunk.candidates:
+                    if hasattr(candidate, 'content') and candidate.content:
+                        for part in candidate.content.parts:
+                            # Handle text parts
+                            if hasattr(part, 'text') and part.text:
+                                yield part.text, None
+                            
+                            # Handle function calls (Gemini's tool calling)
+                            # When Gemini uses tools, it returns function_call with content in args
+                            if hasattr(part, 'function_call') and part.function_call:
+                                fc = part.function_call
+                                
+                                # Extract content from function call args if present
+                                # This handles the case where Gemini wraps content in a tool call
+                                if fc.args and 'content' in dict(fc.args):
+                                    content = dict(fc.args).get('content', '')
+                                    if content:
+                                        yield content, None
+                                
+                                # Also track tool calls for usage data
+                                tool_calls.append({
+                                    "id": "",  # Gemini doesn't provide IDs
+                                    "name": fc.name,
+                                    "arguments": str(dict(fc.args)) if fc.args else "{}"
+                                })
 
             # Update usage metadata
             usage_extractor.update_from_chunk(chunk)
 
-        # Yield final usage data
-        usage = usage_extractor.get_final_usage()
+        # Yield final usage data with tool calls
+        usage = usage_extractor.get_final_usage() or {}
+        if tool_calls:
+            usage["tool_calls"] = tool_calls
         if usage:
             yield "", usage
 

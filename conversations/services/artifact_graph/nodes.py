@@ -29,6 +29,7 @@ from core.services.llama_service import LlamaService
 from core.services.custom_llm_service import CustomLLMService
 
 from .state import ArtifactState
+from .schemas import get_artifact_plan_schema, get_modification_plan_schema
 
 logger = logging.getLogger(__name__)
 
@@ -195,7 +196,70 @@ async def get_ai_service(llm: LLM, user=None):
         return OpenAIService(llm=llm, api_key=api_key)
 
 
+async def get_structured_output_service(llm: LLM, user=None):
+    """
+    Get an AI service that supports structured output for artifact planning.
+    
+    For providers that don't support structured output (LLaMA, Custom),
+    falls back to OpenAI or Claude.
+    
+    Returns:
+        Tuple of (ai_service, is_fallback, provider_name)
+    """
+    provider = llm.provider
+    
+    # Providers that support structured output natively
+    supported_providers = [
+        Provider.OPENAI.value,
+        Provider.CLAUDE.value, 
+        Provider.GEMINI.value,
+    ]
+    
+    if provider in supported_providers:
+        service = await get_ai_service(llm, user)
+        return service, False, provider
+    
+    # Fall back to OpenAI for unsupported providers
+    logger.info(f"Provider {provider} doesn't support structured output, falling back to OpenAI")
+    
+    # Get OpenAI API key
+    if user:
+        api_key = await get_provider_api_key_for_user(Provider.OPENAI.value, user)
+    else:
+        api_key = await get_provider_api_key(Provider.OPENAI.value)
+    
+    if not api_key:
+        # Try Claude as second fallback
+        logger.info("OpenAI key not found, trying Claude for structured output")
+        if user:
+            api_key = await get_provider_api_key_for_user(Provider.CLAUDE.value, user)
+        else:
+            api_key = await get_provider_api_key(Provider.CLAUDE.value)
+        
+        if not api_key:
+            raise ValueError("No API key available for structured output (tried OpenAI and Claude)")
+        
+        # Get a lightweight Claude model for planning
+        fallback_llm = await sync_to_async(
+            LLM.objects.filter(provider=Provider.CLAUDE.value, is_active=True).first
+        )()
+        if not fallback_llm:
+            raise ValueError("No active Claude model found for structured output fallback")
+        
+        return ClaudeService(llm=fallback_llm, api_key=api_key), True, Provider.CLAUDE.value
+    
+    # Get a lightweight OpenAI model for planning
+    fallback_llm = await sync_to_async(
+        LLM.objects.filter(provider=Provider.OPENAI.value, is_active=True).first
+    )()
+    if not fallback_llm:
+        raise ValueError("No active OpenAI model found for structured output fallback")
+    
+    return OpenAIService(llm=fallback_llm, api_key=api_key), True, Provider.OPENAI.value
+
+
 # ========== Graph Nodes ==========
+
 
 async def plan_node(state: ArtifactState) -> Dict[str, Any]:
     """
@@ -235,13 +299,16 @@ async def plan_node(state: ArtifactState) -> Dict[str, Any]:
         llm = await get_llm(state["llm_id"])
         conversation = await get_conversation(state["conversation_id"])
 
-        # Get AI service
+        # Get AI service that supports structured output
         User = get_user_model()
         user = None
         if state.get("user_id"):
             user = await sync_to_async(User.objects.get)(id=state["user_id"])
 
-        ai_service = await get_ai_service(llm, user)
+        # Get service for structured output (falls back to OpenAI/Claude if needed)
+        planning_service, is_fallback, provider = await get_structured_output_service(llm, user)
+        if is_fallback:
+            logger.info(f"Plan node: Using fallback service for structured output")
 
         # Get conversation history for context (helps LLM understand references to previous artifacts)
         history = await get_conversation_history(conversation, limit=6)
@@ -261,58 +328,36 @@ async def plan_node(state: ArtifactState) -> Dict[str, Any]:
         # Add current user message
         messages.append({"role": "user", "content": state["user_message"]})
 
-        # Get planning tools
-        tools = ArtifactTools.get_planning_tools()
+        # Use structured output for reliable planning (no more tool calling!)
+        # Get provider-specific schema (OpenAI/Claude need additionalProperties, Gemini doesn't)
+        schema = get_artifact_plan_schema(provider)
         
-        # Call LLM for planning
-        response_text = ""
-        tool_calls = []
-        
-        async for chunk, usage in ai_service.stream_chat_completion(
-            messages=messages,
-            max_tokens=2000,
-            temperature=0.7,
-            tools=tools
-        ):
-            if chunk:
-                response_text += chunk
-            if usage and usage.get("tool_calls"):
-                tool_calls.extend(usage["tool_calls"])
-        
-        # Parse tool call to get artifact details
-        artifact_type = "document"
-        title = "Untitled Document"
-        outline = "1. Introduction\n2. Main Content\n3. Conclusion"
-        estimated_sections = 3
-        language = None
-        
-        for tool_call in tool_calls:
-            logger.info(f"Plan node: Processing tool_call: {tool_call}")
-            if tool_call.get("name") == ArtifactTools.CREATE_ARTIFACT:
-                args = ArtifactTools.parse_tool_arguments(
-                    tool_call.get("arguments", "{}")
-                )
-                logger.info(f"Plan node: Parsed create_artifact args: {args}")
-                artifact_type = args.get("artifact_type", "document")
-                title = args.get("title", title)
-                outline = args.get("outline", outline)
-                estimated_sections = args.get("estimated_sections", 3)
-                language = args.get("language")
-                logger.info(f"Plan node: Extracted title='{title}', type={artifact_type}, sections={estimated_sections}")
-                break
-        
-        # If no tool call, try to parse from response text
-        if not tool_calls and response_text:
-            # Extract title if present
-            if "Title:" in response_text:
-                title_line = response_text.split("Title:")[1].split("\n")[0].strip()
-                title = title_line or title
+        try:
+            plan = await planning_service.generate_structured_output(
+                messages=messages,
+                response_schema=schema,
+                max_tokens=2000,
+                temperature=0.7,
+            )
             
-            # Count outline sections
-            outline_lines = [l for l in response_text.split("\n") if l.strip().startswith(("1.", "2.", "3.", "4.", "5.", "6.", "7.", "8.", "9.", "10.", "-", "*"))]
-            if outline_lines:
-                outline = "\n".join(outline_lines)
-                estimated_sections = len(outline_lines)
+            # Structured output guarantees these fields exist
+            artifact_type = plan.get("artifact_type", "document")
+            title = plan.get("title", "Untitled Document")
+            outline = plan.get("outline", "1. Introduction\n2. Main Content\n3. Conclusion")
+            estimated_sections = plan.get("estimated_sections", 3)
+            language = plan.get("language")
+            
+            logger.info(f"Plan node: Structured output - title='{title}', type={artifact_type}, sections={estimated_sections}")
+            
+        except Exception as e:
+            logger.error(f"Plan node: Structured output failed: {str(e)}, using defaults")
+            # Fallback to defaults if structured output fails
+            artifact_type = "document"
+            title = "Untitled Document"
+            outline = "1. Introduction\n2. Main Content\n3. Conclusion"
+            estimated_sections = 3
+            language = None
+
         
         # Get message object to link immediately (so artifactId appears in conversation history on reload)
         message_obj = None
@@ -384,13 +429,16 @@ async def modify_plan_node(state: ArtifactState) -> Dict[str, Any]:
         llm = await get_llm(state["llm_id"])
         artifact = await get_artifact(state["artifact_id"])
 
-        # Get AI service
+        # Get AI service that supports structured output
         User = get_user_model()
         user = None
         if state.get("user_id"):
             user = await sync_to_async(User.objects.get)(id=state["user_id"])
 
-        ai_service = await get_ai_service(llm, user)
+        # Get service for structured output (falls back to OpenAI/Claude if needed)
+        planning_service, is_fallback, provider = await get_structured_output_service(llm, user)
+        if is_fallback:
+            logger.info(f"Modify plan node: Using fallback service for structured output")
 
         # Build append planning prompt with existing artifact context
         system_prompt = get_append_planning_prompt(
@@ -407,45 +455,37 @@ async def modify_plan_node(state: ArtifactState) -> Dict[str, Any]:
             {"role": "user", "content": state["user_message"]}
         ]
 
-        # Get modification planning tools
-        tools = ArtifactTools.get_modification_planning_tools()
+        # Use structured output for reliable modification planning
+        # Get provider-specific schema
+        schema = get_modification_plan_schema(provider)
+        
+        try:
+            plan = await planning_service.generate_structured_output(
+                messages=messages,
+                response_schema=schema,
+                max_tokens=2000,
+                temperature=0.7,
+            )
+            
+            # Structured output guarantees these fields exist
+            new_sections_outline = plan.get("new_sections_outline", "")
+            estimated_new_sections = plan.get("estimated_new_sections", 1)
+            
+            logger.info(f"Modify plan node: Structured output - new_sections={estimated_new_sections}")
+            
+        except Exception as e:
+            logger.error(f"Modify plan node: Structured output failed: {str(e)}, using defaults")
+            # Fallback to defaults if structured output fails
+            next_section = state["original_sections"] + 1
+            new_sections_outline = f"{next_section}. Additional Content - Based on user request"
+            estimated_new_sections = 1
 
-        # Call LLM for modification planning
-        response_text = ""
-        tool_calls = []
-
-        async for chunk, usage in ai_service.stream_chat_completion(
-            messages=messages,
-            max_tokens=2000,
-            temperature=0.7,
-            tools=tools
-        ):
-            if chunk:
-                response_text += chunk
-            if usage and usage.get("tool_calls"):
-                tool_calls.extend(usage["tool_calls"])
-
-        # Parse tool call to get new sections info
-        new_sections_outline = ""
-        estimated_new_sections = 1
-
-        for tool_call in tool_calls:
-            logger.info(f"Modify plan node: Processing tool_call: {tool_call}")
-            if tool_call.get("name") == ArtifactTools.APPEND_SECTIONS:
-                args = ArtifactTools.parse_tool_arguments(
-                    tool_call.get("arguments", "{}")
-                )
-                logger.info(f"Modify plan node: Parsed append_sections args: {args}")
-                new_sections_outline = args.get("new_sections_outline", "")
-                estimated_new_sections = args.get("estimated_new_sections", 1)
-                break
-
-        # If no tool call, create a default outline
+        # If no outline returned, create a default one
         if not new_sections_outline:
             next_section = state["original_sections"] + 1
             new_sections_outline = f"{next_section}. Additional Content - Based on user request"
             estimated_new_sections = 1
-            logger.warning("Modify plan node: No append_sections tool call, using default")
+            logger.warning("Modify plan node: Empty outline from structured output, using default")
 
         # Calculate new totals
         new_estimated_total = state["original_sections"] + estimated_new_sections
