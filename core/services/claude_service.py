@@ -136,6 +136,87 @@ class ClaudeService:
         stream = self.stream_chat_completion(messages, max_tokens, temperature)
         return await StreamAggregator.aggregate_stream(stream)
 
+    async def generate_structured_output(
+        self,
+        messages: List[Dict[str, str]],
+        response_schema: Dict,
+        max_tokens: int = 2000,
+        temperature: float = 0.7,
+    ) -> Dict:
+        """
+        Generate response matching a JSON schema using Claude's native structured outputs.
+
+        Uses Claude's official structured outputs API (beta) for guaranteed JSON compliance.
+        Structured outputs require Claude 4.x models (Sonnet 4.5, Opus 4.1/4.5, Haiku 4.5).
+        If current model doesn't support it, falls back to claude-sonnet-4-5-20250514.
+
+        Args:
+            messages: List of message dictionaries
+            response_schema: JSON Schema the response must match
+            max_tokens: Maximum tokens to generate
+            temperature: Controls randomness
+
+        Returns:
+            Parsed JSON response as dictionary
+
+        Raises:
+            ValueError: If schema validation fails or no response returned
+        """
+        import json
+
+        logger.info(f"[Claude] generate_structured_output with schema: {list(response_schema.get('properties', {}).keys())}")
+
+        # Models that support structured output (Claude 4.x only)
+        SUPPORTED_MODELS = [
+            "claude-sonnet-4-5-20250929",
+            "claude-opus-4-1-20250929",
+            "claude-opus-4-5-20250929",
+            "claude-haiku-4-5-20250929",
+        ]
+        
+        # Use the configured model if it supports structured output, otherwise use Sonnet 4.5
+        model_to_use = self.model
+        if not any(supported in self.model for supported in SUPPORTED_MODELS):
+            model_to_use = "claude-sonnet-4-5-20250929"
+            logger.info(f"[Claude] Model {self.model} doesn't support structured output, using {model_to_use}")
+
+        # Extract system message (Claude requires it separately)
+        system_message, filtered_messages = MessageFormatter.extract_system_messages(messages)
+
+        params = {
+            "model": model_to_use,
+            "max_tokens": max_tokens,
+            "messages": filtered_messages,
+            "temperature": temperature,
+            "betas": ["structured-outputs-2025-11-13"],
+            "output_format": {
+                "type": "json_schema",
+                "schema": response_schema,
+            }
+        }
+
+        if system_message:
+            params["system"] = system_message
+
+        try:
+            # Use beta client for structured outputs
+            response = await self.client.beta.messages.create(**params)
+
+            # Check for refusal
+            if response.stop_reason == "refusal":
+                raise ValueError("Claude refused to generate structured output")
+
+            # Parse JSON from response content
+            if response.content and len(response.content) > 0:
+                content = response.content[0].text
+                return json.loads(content)
+
+            raise ValueError("Empty response from Claude structured output")
+
+        except Exception as e:
+            logger.exception(f"[Claude] generate_structured_output error: {str(e)}")
+            raise ValueError(f"Structured output generation failed: {str(e)}")
+
     # ==================== Private Methods ====================
 
     def _prepare_messages(
@@ -222,7 +303,11 @@ class ClaudeService:
 
         # Add tools if provided (convert from OpenAI format to Claude format)
         if tools:
-            params["tools"] = self._convert_tools_to_claude_format(tools)
+            claude_tools = self._convert_tools_to_claude_format(tools)
+            params["tools"] = claude_tools
+            # Force tool use when tools are provided - ensures LLM uses tools instead of text
+            if claude_tools:
+                params["tool_choice"] = {"type": "any"}
 
         return params
 

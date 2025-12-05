@@ -140,6 +140,61 @@ class GeminiService:
         stream = self.stream_chat_completion(messages, max_tokens, temperature)
         return await StreamAggregator.aggregate_stream(stream)
 
+    async def generate_structured_output(
+        self,
+        messages: List[Dict[str, str]],
+        response_schema: Dict,
+        max_tokens: int = 2000,
+        temperature: float = 0.7,
+    ) -> Dict:
+        """
+        Generate response matching a JSON schema using Gemini's native structured outputs.
+
+        Uses Gemini's response_schema for guaranteed JSON compliance.
+
+        Args:
+            messages: List of message dictionaries
+            response_schema: JSON Schema the response must match
+            max_tokens: Maximum tokens to generate
+            temperature: Controls randomness
+
+        Returns:
+            Parsed JSON response as dictionary
+
+        Raises:
+            ValueError: If schema validation fails or no response returned
+        """
+        logger.info(f"[Gemini] generate_structured_output with schema: {list(response_schema.get('properties', {}).keys())}")
+
+        contents = GeminiMessageFormatter.convert_to_contents(messages)
+
+        generation_config = types.GenerateContentConfig(
+            temperature=temperature,
+            max_output_tokens=max_tokens,
+            response_mime_type="application/json",
+            response_schema=response_schema,
+        )
+
+        def generate_sync():
+            return self.client.models.generate_content(
+                model=self.model_identifier,
+                contents=contents,
+                config=generation_config,
+            )
+
+        try:
+            response = await asyncio.to_thread(generate_sync)
+            content = getattr(response, 'text', None)
+
+            if not content:
+                raise ValueError("Empty response from Gemini structured output")
+
+            return json.loads(content)
+
+        except Exception as e:
+            logger.exception(f"[Gemini] generate_structured_output error: {str(e)}")
+            raise ValueError(f"Structured output generation failed: {str(e)}")
+
     # ==================== Private Methods ====================
 
     def _prepare_messages(
@@ -217,8 +272,40 @@ class GeminiService:
 
         if GeminiWebSearchTools.has_google_search(tools):
             config.tools = [GeminiWebSearchTools.build_google_search_tool()]
+        elif tools:
+            # Convert OpenAI-style tools to Gemini function declarations
+            gemini_tools = self._convert_tools_to_gemini_format(tools)
+            if gemini_tools:
+                config.tools = gemini_tools
 
         return config
+
+    def _convert_tools_to_gemini_format(self, tools: List[Dict]) -> List:
+        """
+        Convert OpenAI-style tool definitions to Gemini format.
+
+        Args:
+            tools: List of tools in OpenAI format
+
+        Returns:
+            List of Gemini Tool objects
+        """
+        function_declarations = []
+
+        for tool in tools:
+            if tool.get("type") == "function" and "function" in tool:
+                func = tool["function"]
+                # Build Gemini function declaration
+                func_decl = types.FunctionDeclaration(
+                    name=func.get("name", ""),
+                    description=func.get("description", ""),
+                    parameters=func.get("parameters", {})
+                )
+                function_declarations.append(func_decl)
+
+        if function_declarations:
+            return [types.Tool(function_declarations=function_declarations)]
+        return []
 
     async def _get_structured_completion(
         self,
