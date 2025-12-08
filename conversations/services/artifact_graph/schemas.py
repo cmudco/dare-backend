@@ -155,11 +155,17 @@ class ArtifactInitEvent:
 
 @dataclass
 class ArtifactModifyInitEvent:
-    """Event: Artifact modification started."""
-    artifact_id: int
+    """Event: Artifact modification started (new version created)."""
+    artifact_id: int      # NEW artifact ID (not parent)
+    parent_artifact_id: int
+    artifact_group_id: int
     title: str
-    outline: str
-    estimated_sections: int
+    outline: str  # New sections outline only
+    full_outline: str  # Complete outline including parent's
+    new_sections_count: int  # Number of NEW sections being added
+    total_estimated_sections: int  # Total sections (parent's + new)
+    current_section: int  # Inherited from parent (where we start from)
+    existing_content: str  # Content from parent artifact
     version: int
     message_id: Optional[int] = None
     
@@ -172,9 +178,15 @@ class ArtifactModifyInitEvent:
         msg = {
             "type": self.type,
             "artifactId": str(self.artifact_id),
+            "parentArtifactId": str(self.parent_artifact_id),
+            "artifactGroupId": str(self.artifact_group_id),
             "title": self.title,
             "outline": self.outline,
-            "estimatedSections": self.estimated_sections,
+            "fullOutline": self.full_outline,
+            "estimatedSections": self.new_sections_count,  # Legacy: new sections only
+            "totalEstimatedSections": self.total_estimated_sections,
+            "currentSection": self.current_section,
+            "existingContent": self.existing_content,
             "newVersion": self.version,
         }
         if self.message_id:

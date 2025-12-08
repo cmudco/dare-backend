@@ -885,7 +885,7 @@ class MessageCoordinator:
             message_data: Validated message data
             message_obj: AI message object
             llm: LLM instance to use
-            target_artifact_id: ID of the artifact to modify
+            target_artifact_id: ID of the artifact to modify (parent)
         """
         try:
             # Create artifact service with WebSocket callback
@@ -896,6 +896,9 @@ class MessageCoordinator:
             )
 
             token_usage = None
+            # Track the NEW artifact ID (not the parent!)
+            # This will be set by artifact_modify_init event
+            new_artifact_id = None
 
             logger.info(f"Starting artifact modification for artifact_id={target_artifact_id}")
 
@@ -910,11 +913,12 @@ class MessageCoordinator:
                 if usage:
                     token_usage = usage
 
-                    # Track modification init
+                    # Track the NEW artifact ID from modification init
                     if usage.get("type") == "artifact_modify_init":
+                        new_artifact_id = str(usage.get("artifact_id"))
                         logger.info(
-                            f"Artifact modification started: artifact_id={usage.get('artifact_id')}, "
-                            f"version={usage.get('version')}"
+                            f"Artifact modification started: NEW artifact_id={new_artifact_id}, "
+                            f"parent={target_artifact_id}, version={usage.get('version')}"
                         )
 
                     # Check billing during streaming (authenticated users only)
@@ -923,14 +927,15 @@ class MessageCoordinator:
                             self.user, llm, token_usage
                         )
                         if not can_continue:
-                            # Pause artifact modification if out of credits
-                            await self._pause_artifact_internal(target_artifact_id)
+                            # Pause the NEW artifact if out of credits
+                            await self._pause_artifact_internal(new_artifact_id or target_artifact_id)
                             return
 
-            # Finalize message
+            # Finalize message with the NEW artifact ID (not parent!)
+            # This is critical: we must link message to the NEW artifact, not the parent
             await self._finalize_artifact_message(
                 message_obj=message_obj,
-                artifact_id=target_artifact_id,
+                artifact_id=new_artifact_id or target_artifact_id,
                 token_usage=token_usage,
             )
 
