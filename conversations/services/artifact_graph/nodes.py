@@ -106,6 +106,12 @@ async def plan_node(state: ArtifactState) -> Dict[str, Any]:
 
         # Build planning prompt with conversation history
         system_prompt = get_planning_prompt()
+        
+        # Prepend custom system prompt if provided via artifact_context
+        artifact_ctx = state.get("artifact_context")
+        if artifact_ctx and artifact_ctx.get("system_prompt"):
+            system_prompt = f"{artifact_ctx['system_prompt']}\n\n{system_prompt}"
+        
         messages = [{"role": "system", "content": system_prompt}]
 
         # Add conversation history (excluding the current message which we'll add separately)
@@ -115,6 +121,17 @@ async def plan_node(state: ArtifactState) -> Dict[str, Any]:
             if hist_msg["role"] == "user" and hist_msg["content"].strip() == state["user_message"].strip():
                 continue
             messages.append(hist_msg)
+
+        # Add RAG context from embeddings/files if available
+        from conversations.services.artifact_graph.context_helpers import retrieve_rag_context_for_artifact
+        rag_context = await retrieve_rag_context_for_artifact(
+            artifact_context=state.get("artifact_context"),
+            query_text=state["user_message"],
+            user_id=state.get("user_id"),
+        )
+        if rag_context:
+            logger.info(f"Plan node: Adding RAG context ({len(rag_context)} chars)")
+            messages.append({"role": "user", "content": rag_context})
 
         # Add current user message
         messages.append({"role": "user", "content": state["user_message"]})
@@ -422,12 +439,29 @@ async def generate_section_node(state: ArtifactState) -> Dict[str, Any]:
             content_preview=state["content"][-1000:] if state["content"] else ""
         )
         
+        # Prepend custom system prompt if provided via artifact_context
+        artifact_ctx = state.get("artifact_context")
+        if artifact_ctx and artifact_ctx.get("system_prompt"):
+            system_prompt = f"{artifact_ctx['system_prompt']}\n\n{system_prompt}"
+        
         user_prompt = get_section_user_prompt(state["outline"], section_number)
         
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
         ]
+        
+        # Add RAG context from embeddings/files if available
+        from conversations.services.artifact_graph.context_helpers import retrieve_rag_context_for_artifact
+        rag_context = await retrieve_rag_context_for_artifact(
+            artifact_context=state.get("artifact_context"),
+            query_text=f"{state['title']} - section {section_number}: {user_prompt}",
+            user_id=state.get("user_id"),
+        )
+        if rag_context:
+            logger.info(f"Generate section node: Adding RAG context ({len(rag_context)} chars)")
+            messages.append({"role": "user", "content": rag_context})
+        
+        messages.append({"role": "user", "content": user_prompt})
         
         tools = ArtifactTools.get_generation_tools()
         

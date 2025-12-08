@@ -76,6 +76,7 @@ class ArtifactService:
         artifact_id: Optional[str] = None,
         is_modification: bool = False,
         target_artifact_id: Optional[str] = None,
+        artifact_context: Optional[Dict[str, Any]] = None,  # Context for RAG, files, etc.
     ) -> AsyncGenerator[Tuple[str, Optional[Dict]], None]:
         """
         Execute artifact generation or modification flow.
@@ -100,6 +101,7 @@ class ArtifactService:
                 llm=llm,
                 message_obj=message_obj,
                 target_artifact_id=target_artifact_id,
+                artifact_context=artifact_context,
             ):
                 yield chunk, usage
             return
@@ -110,6 +112,7 @@ class ArtifactService:
                 artifact_id=artifact_id,
                 llm=llm,
                 message_obj=message_obj,
+                artifact_context=artifact_context,
             ):
                 yield chunk, usage
             return
@@ -119,6 +122,7 @@ class ArtifactService:
             message=message,
             llm=llm,
             message_obj=message_obj,
+            artifact_context=artifact_context,
         ):
             yield chunk, usage
 
@@ -127,6 +131,7 @@ class ArtifactService:
         message: str,
         llm: LLM,
         message_obj: Message,
+        artifact_context: Optional[Dict[str, Any]] = None,
     ) -> AsyncGenerator[Tuple[str, Optional[Dict]], None]:
         """
         Create a new artifact using LangGraph workflow.
@@ -160,6 +165,7 @@ class ArtifactService:
                 user_id=user_id,
                 message_id=message_id,
                 send_callback=self.send_callback,
+                artifact_context=artifact_context,
             ):
                 yield chunk, metadata
                 
@@ -177,6 +183,7 @@ class ArtifactService:
         artifact_id: str,
         llm: LLM,
         message_obj: Message,
+        artifact_context: Optional[Dict[str, Any]] = None,
     ) -> AsyncGenerator[Tuple[str, Optional[Dict]], None]:
         """
         Continue a paused artifact.
@@ -244,6 +251,7 @@ class ArtifactService:
                 outline=artifact.outline,
                 artifact_type=artifact.artifact_type,
                 language=artifact.language,
+                artifact_context=artifact_context,
             ):
                 yield chunk, metadata
                 
@@ -262,6 +270,7 @@ class ArtifactService:
         llm: LLM,
         message_obj: Message,
         target_artifact_id: str,
+        artifact_context: Optional[Dict[str, Any]] = None,
     ) -> AsyncGenerator[Tuple[str, Optional[Dict]], None]:
         """
         Modify an existing artifact by appending new sections.
@@ -330,6 +339,7 @@ class ArtifactService:
                 original_content=artifact.content,
                 original_sections=artifact.current_section,
                 version=artifact.version,
+                artifact_context=artifact_context,
             ):
                 yield chunk, metadata
 
