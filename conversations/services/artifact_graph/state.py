@@ -180,7 +180,7 @@ def create_initial_state(
         max_iterations=max_iterations,
         
         # Streaming
-        pending_chunks=[],
+        pending_events=[],
         
         # Error handling
         error=None,
@@ -274,7 +274,7 @@ def create_resume_state(
         max_iterations=max_iterations,
         
         # Streaming
-        pending_chunks=[],
+        pending_events=[],
         
         # Error handling
         error=None,
@@ -375,7 +375,7 @@ def create_modification_state(
         max_iterations=max_iterations,
 
         # Streaming
-        pending_chunks=[],
+        pending_events=[],
 
         # Error handling
         error=None,

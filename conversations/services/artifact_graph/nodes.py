@@ -6,13 +6,13 @@ These are checkpointed automatically by LangGraph at each transition.
 """
 
 import logging
-from typing import Dict, Any, Optional
+from typing import Dict, Any
+
 from asgiref.sync import sync_to_async
-from django.db import connection
 from django.contrib.auth import get_user_model
 
-from conversations.models import Artifact, ArtifactCheckpoint, Conversation, Message, LLM
-from conversations.constants import ArtifactStatus, ArtifactType, Provider
+from conversations.models import Message
+from conversations.constants import ArtifactStatus
 from core.services.llm_utils.artifact_tools import ArtifactTools
 from core.prompts.artifact_prompts import (
     get_planning_prompt,
@@ -21,12 +21,6 @@ from core.prompts.artifact_prompts import (
     get_append_planning_prompt,
     get_append_generation_prompt,
 )
-from core.services.api_key_service import get_provider_api_key, get_provider_api_key_for_user
-from core.services.openai_service import OpenAIService
-from core.services.claude_service import ClaudeService
-from core.services.gemini_service import GeminiService
-from core.services.llama_service import LlamaService
-from core.services.custom_llm_service import CustomLLMService
 
 from .state import ArtifactState
 from .schemas import (
@@ -39,232 +33,20 @@ from .schemas import (
     ArtifactCompleteEvent,
     ArtifactErrorEvent,
 )
+from .db_helpers import (
+    get_llm,
+    get_conversation,
+    get_artifact,
+    get_conversation_history,
+    create_artifact_db,
+    update_artifact_db,
+    create_checkpoint_db,
+    check_artifact_paused,
+)
+from .ai_services import get_ai_service, get_structured_output_service
+
 
 logger = logging.getLogger(__name__)
-
-
-# ========== Database Helpers ==========
-
-@sync_to_async
-def get_llm(llm_id: int) -> LLM:
-    """Get LLM from database."""
-    return LLM.objects.get(id=llm_id)
-
-
-@sync_to_async
-def get_conversation(conversation_id: str) -> Conversation:
-    """Get conversation from database."""
-    return Conversation.active_objects.get(conversation_id=conversation_id)
-
-
-@sync_to_async
-def get_artifact(artifact_id: int) -> Artifact:
-    """Get artifact from database."""
-    return Artifact.active_objects.get(id=artifact_id)
-
-
-@sync_to_async
-def get_conversation_history(conversation: Conversation, limit: int = 10) -> list:
-    """
-    Get recent conversation history for context.
-
-    Returns list of messages in format [{"role": "user"|"assistant", "content": str}]
-    """
-    from conversations.constants import SenderType
-
-    messages = conversation.messages.filter(is_active=True).order_by('-created_at')[:limit]
-    history = []
-
-    for msg in reversed(list(messages)):
-        role = "user" if msg.sender_type == SenderType.PLAYER else "assistant"
-        content = msg.message or ""
-
-        # If message has artifacts, include artifact info
-        # Use the reverse relation 'artifacts' from Message model
-        msg_artifacts = msg.artifacts.filter(is_active=True)
-        if msg_artifacts.exists():
-            artifact = msg_artifacts.first()
-            content = f"[Generated artifact: '{artifact.title}' - {artifact.artifact_type}]\n{content}"
-
-        if content.strip():
-            history.append({"role": role, "content": content})
-
-    return history
-
-
-@sync_to_async
-def create_artifact_db(
-    conversation: Conversation,
-    message: Optional[Message],
-    artifact_type: str,
-    title: str,
-    outline: str,
-    estimated_sections: int,
-    language: Optional[str] = None,
-) -> Artifact:
-    """Create artifact in database."""
-    artifact = Artifact(
-        conversation=conversation,
-        message=message,
-        artifact_type=artifact_type,
-        title=title,
-        outline=outline,
-        estimated_sections=estimated_sections,
-        current_section=0,
-        status=ArtifactStatus.PLANNING,
-        language=language,
-    )
-    artifact.save()
-    return artifact
-
-
-@sync_to_async
-def update_artifact_db(
-    artifact_id: int,
-    **kwargs
-) -> Artifact:
-    """Update artifact in database."""
-    artifact = Artifact.active_objects.get(id=artifact_id)
-    for key, value in kwargs.items():
-        setattr(artifact, key, value)
-    artifact.save()
-    return artifact
-
-
-@sync_to_async
-def create_checkpoint_db(
-    artifact: Artifact,
-    content_snapshot: str,
-    current_section: int,
-    iteration_count: int,
-    state_data: Dict[str, Any],
-) -> ArtifactCheckpoint:
-    """Create checkpoint in database."""
-    checkpoint = ArtifactCheckpoint(
-        artifact=artifact,
-        content_snapshot=content_snapshot,
-        current_section=current_section,
-        iteration_count=iteration_count,
-        state_data=state_data,
-    )
-    checkpoint.save()
-    return checkpoint
-
-
-@sync_to_async
-def check_artifact_paused(artifact_id: int) -> bool:
-    """Check if artifact has been paused by user."""
-    try:
-        # Use select_for_update to ensure we read the latest committed data
-        # and avoid reading stale cached data
-        connection.ensure_connection()
-
-        artifact = Artifact.active_objects.get(id=artifact_id)
-        # Force refresh from database to get latest status
-        artifact.refresh_from_db(fields=['status'])
-        is_paused = artifact.status == ArtifactStatus.PAUSED
-        logger.info(f"Check artifact paused: artifact_id={artifact_id}, status={artifact.status}, is_paused={is_paused}")
-        return is_paused
-    except Artifact.DoesNotExist:
-        logger.warning(f"Check artifact paused: artifact_id={artifact_id} not found")
-        return False
-
-
-# ========== AI Service Helper ==========
-
-async def get_ai_service(llm: LLM, user=None):
-    """
-    Get the appropriate AI service for an LLM.
-
-    All services expect an LLM object and optional api_key override.
-    """
-    provider = llm.provider
-
-    # Get API key (these are already async functions)
-    if user:
-        api_key = await get_provider_api_key_for_user(provider, user)
-    else:
-        api_key = await get_provider_api_key(provider)
-
-    if not api_key:
-        raise ValueError(f"No API key found for provider {provider}")
-
-    # Return appropriate service - all take (llm, api_key) signature
-    if provider == Provider.OPENAI.value:
-        return OpenAIService(llm=llm, api_key=api_key)
-    elif provider == Provider.CLAUDE.value:
-        return ClaudeService(llm=llm, api_key=api_key)
-    elif provider == Provider.GEMINI.value:
-        return GeminiService(llm=llm, api_key=api_key)
-    elif provider == Provider.LLAMA.value:
-        return LlamaService(llm=llm, api_key=api_key)
-    elif provider == Provider.CUSTOM.value:
-        return CustomLLMService(llm=llm, api_key=api_key)
-    else:
-        # Default to OpenAI-compatible
-        return OpenAIService(llm=llm, api_key=api_key)
-
-
-async def get_structured_output_service(llm: LLM, user=None):
-    """
-    Get an AI service that supports structured output for artifact planning.
-    
-    For providers that don't support structured output (LLaMA, Custom),
-    falls back to OpenAI or Claude.
-    
-    Returns:
-        Tuple of (ai_service, is_fallback, provider_name)
-    """
-    provider = llm.provider
-    
-    # Providers that support structured output natively
-    supported_providers = [
-        Provider.OPENAI.value,
-        Provider.CLAUDE.value, 
-        Provider.GEMINI.value,
-    ]
-    
-    if provider in supported_providers:
-        service = await get_ai_service(llm, user)
-        return service, False, provider
-    
-    # Fall back to OpenAI for unsupported providers
-    logger.info(f"Provider {provider} doesn't support structured output, falling back to OpenAI")
-    
-    # Get OpenAI API key
-    if user:
-        api_key = await get_provider_api_key_for_user(Provider.OPENAI.value, user)
-    else:
-        api_key = await get_provider_api_key(Provider.OPENAI.value)
-    
-    if not api_key:
-        # Try Claude as second fallback
-        logger.info("OpenAI key not found, trying Claude for structured output")
-        if user:
-            api_key = await get_provider_api_key_for_user(Provider.CLAUDE.value, user)
-        else:
-            api_key = await get_provider_api_key(Provider.CLAUDE.value)
-        
-        if not api_key:
-            raise ValueError("No API key available for structured output (tried OpenAI and Claude)")
-        
-        # Get a lightweight Claude model for planning
-        fallback_llm = await sync_to_async(
-            LLM.objects.filter(provider=Provider.CLAUDE.value, is_active=True).first
-        )()
-        if not fallback_llm:
-            raise ValueError("No active Claude model found for structured output fallback")
-        
-        return ClaudeService(llm=fallback_llm, api_key=api_key), True, Provider.CLAUDE.value
-    
-    # Get a lightweight OpenAI model for planning
-    fallback_llm = await sync_to_async(
-        LLM.objects.filter(provider=Provider.OPENAI.value, is_active=True).first
-    )()
-    if not fallback_llm:
-        raise ValueError("No active OpenAI model found for structured output fallback")
-    
-    return OpenAIService(llm=fallback_llm, api_key=api_key), True, Provider.OPENAI.value
 
 
 # ========== Graph Nodes ==========
@@ -878,60 +660,3 @@ async def error_node(state: ArtifactState) -> Dict[str, Any]:
         return {
             "status": "error",
         }
-
-
-# ========== Conditional Edge Functions ==========
-
-def should_continue_generating(state: ArtifactState) -> str:
-    """
-    Determine what to do after generating a section.
-
-    Returns:
-        - "pause" if user requested pause
-        - "generate_section" if more sections needed and within iteration limit
-        - "checkpoint" if iteration batch complete
-        - "complete" if all sections done
-        - "error" if there was an error
-    """
-    # Check for errors
-    if state.get("error") and state.get("retry_count", 0) >= 3:
-        return "error"
-
-    # Check if paused (status set by generate_section_node when pause detected)
-    if state.get("status") == "paused":
-        return "pause"
-
-    # Check if all sections complete
-    if state["current_section"] >= state["estimated_sections"]:
-        return "complete"
-
-    # Check if we should checkpoint (end of iteration batch)
-    sections_in_iteration = state["current_section"] % state["sections_per_iteration"]
-    if sections_in_iteration == 0 and state["current_section"] > 0:
-        return "checkpoint"
-
-    # Continue generating
-    return "generate_section"
-
-
-def should_continue_after_checkpoint(state: ArtifactState) -> str:
-    """
-    Determine what to do after checkpointing.
-    
-    Returns:
-        - "pause" if max iterations reached
-        - "generate_section" if more sections to generate
-        - "complete" if all sections done
-    """
-    # Check if all sections complete
-    if state["current_section"] >= state["estimated_sections"]:
-        return "complete"
-    
-    # Check if max iterations reached
-    if state["iteration_count"] >= state["max_iterations"]:
-        return "pause"
-    
-    # Continue generating
-    return "generate_section"
-
-
