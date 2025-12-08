@@ -17,6 +17,17 @@ from enum import Enum
 from typing import Dict, Any, Optional, Union
 
 
+# ========== Artifact Mode Enum ==========
+
+
+class ArtifactMode(str, Enum):
+    """Mode of artifact workflow execution."""
+
+    CREATE = "create"  # New artifact creation
+    RESUME = "resume"  # Resume paused artifact
+    MODIFY = "modify"  # Append sections to existing artifact
+
+
 # ========== LLM Response Schemas ==========
 
 

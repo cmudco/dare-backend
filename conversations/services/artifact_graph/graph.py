@@ -6,7 +6,6 @@ Defines the state machine for artifact generation with automatic checkpointing.
 
 import logging
 from typing import Optional, AsyncGenerator, Tuple, Dict, Any
-from enum import Enum
 
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
@@ -20,6 +19,7 @@ from .state import (
     create_resume_state,
     create_modification_state,
 )
+from .schemas import ArtifactMode
 from .nodes import (
     plan_node,
     modify_plan_node,
@@ -28,22 +28,13 @@ from .nodes import (
     pause_node,
     complete_node,
     error_node,
+)
+from .transitions import (
     should_continue_generating,
     should_continue_after_checkpoint,
 )
 
 logger = logging.getLogger(__name__)
-
-
-# ========== Artifact Mode Enum ==========
-
-
-class ArtifactMode(str, Enum):
-    """Mode of artifact workflow execution."""
-
-    CREATE = "create"  # New artifact creation
-    RESUME = "resume"  # Resume paused artifact
-    MODIFY = "modify"  # Append sections to existing artifact
 
 
 # ========== Unified Graph Builder ==========
