@@ -6,7 +6,7 @@ from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.permissions import AllowAny
 from django.contrib.auth import get_user_model
-from django_rq import enqueue
+from django_rq import enqueue, get_queue
 from django.utils import timezone
 
 from conversations.constants import SenderType
@@ -135,8 +135,6 @@ class VectorDBViewSet(viewsets.ViewSet):
     def migration_status(self, request):
         """Get the status of the current migration job."""
         try:
-            from django_rq import get_queue
-
             queue = get_queue()
 
             return Response({
