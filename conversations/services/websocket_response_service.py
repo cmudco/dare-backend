@@ -13,7 +13,7 @@ from channels.db import database_sync_to_async
 
 from conversations.api.serializers import MessageSerializer
 from conversations.constants import SenderType
-from conversations.models import Message
+from conversations.models import Message, Artifact
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +90,6 @@ class WebSocketResponseService:
         # Use fresh DB query to avoid stale cached relation
         @database_sync_to_async
         def get_artifact_id():
-            from conversations.models import Artifact
             artifact = Artifact.active_objects.filter(message_id=message.id).first()
             return str(artifact.id) if artifact else None
 

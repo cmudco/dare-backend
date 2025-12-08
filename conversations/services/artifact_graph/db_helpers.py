@@ -12,7 +12,7 @@ from asgiref.sync import sync_to_async
 from django.db import connection
 
 from conversations.models import Artifact, ArtifactGroup, ArtifactCheckpoint, Conversation, Message, LLM
-from conversations.constants import ArtifactStatus
+from conversations.constants import ArtifactStatus, SenderType
 
 
 logger = logging.getLogger(__name__)
@@ -46,8 +46,6 @@ def get_conversation_history(conversation: Conversation, limit: int = 10) -> lis
 
     Returns list of messages in format [{"role": "user"|"assistant", "content": str}]
     """
-    from conversations.constants import SenderType
-
     messages = conversation.messages.filter(is_active=True).order_by('-created_at')[:limit]
     history = []
 

@@ -3,7 +3,8 @@ from typing import Dict, Optional
 from django.db import models
 from django.core.exceptions import ValidationError
 from channels.db import database_sync_to_async
-from conversations.models import LLM, Message, Conversation
+from django.db.models import Prefetch
+from conversations.models import LLM, Message, Conversation, Artifact
 from core.services.openai_service import OpenAIService
 from core.services.api_key_service import get_provider_api_key
 from conversations.constants import SenderType
@@ -18,8 +19,6 @@ class ConversationService:
 
     async def fetch_chat_history_from_db(self, conversation: Conversation, limit: int = 50):
         """Fetches recent chat history for AI context."""
-        from django.db.models import Prefetch
-        from conversations.models import Artifact
 
         messages = await database_sync_to_async(
             lambda: list(

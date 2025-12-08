@@ -5,6 +5,7 @@ This service provides a clean, readable interface for interacting with Anthropic
 Claude models, including support for streaming, vision, web search, and structured outputs.
 """
 
+import json
 import logging
 from typing import AsyncGenerator, Dict, List, Tuple, Optional
 
@@ -162,8 +163,6 @@ class ClaudeService:
         Raises:
             ValueError: If schema validation fails or no response returned
         """
-        import json
-
         logger.info(f"[Claude] generate_structured_output with schema: {list(response_schema.get('properties', {}).keys())}")
 
         # Models that support structured output (Claude 4.x only)

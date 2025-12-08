@@ -44,6 +44,7 @@ from .db_helpers import (
     create_checkpoint_db,
     check_artifact_paused,
 )
+from .context_helpers import retrieve_rag_context_for_artifact
 from .ai_services import get_ai_service, get_structured_output_service
 
 
@@ -123,7 +124,6 @@ async def plan_node(state: ArtifactState) -> Dict[str, Any]:
             messages.append(hist_msg)
 
         # Add RAG context from embeddings/files if available
-        from conversations.services.artifact_graph.context_helpers import retrieve_rag_context_for_artifact
         rag_context = await retrieve_rag_context_for_artifact(
             artifact_context=state.get("artifact_context"),
             query_text=state["user_message"],
@@ -451,7 +451,6 @@ async def generate_section_node(state: ArtifactState) -> Dict[str, Any]:
         ]
         
         # Add RAG context from embeddings/files if available
-        from conversations.services.artifact_graph.context_helpers import retrieve_rag_context_for_artifact
         rag_context = await retrieve_rag_context_for_artifact(
             artifact_context=state.get("artifact_context"),
             query_text=f"{state['title']} - section {section_number}: {user_prompt}",
