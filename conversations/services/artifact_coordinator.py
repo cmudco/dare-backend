@@ -24,8 +24,10 @@ from conversations.constants import (
     ArtifactStatus,
 )
 from core.services.billing_service import BillingService
+from core.services.dtos.artifact_dto import build_artifact_context
 from conversations.services.websocket_response_service import WebSocketResponseService
 from conversations.services.artifact_service import ArtifactService
+from conversations.services.artifact_intent_detector import ArtifactIntentDetector
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +108,6 @@ class ArtifactCoordinator:
         # Resolve action using heuristics if "auto"
         resolved_action = artifact_action
         if artifact_action == "auto" and active_artifact_id:
-            from conversations.services.artifact_intent_detector import ArtifactIntentDetector
             resolved_action = ArtifactIntentDetector.detect_intent(
                 message=message_data.get("message", ""),
                 has_active_artifact=True,
@@ -151,7 +152,6 @@ class ArtifactCoordinator:
             generated_artifact_id = artifact_id
 
             # Build artifact context from message_data for RAG, files, etc.
-            from core.services.dtos.artifact_dto import build_artifact_context
             artifact_context = build_artifact_context(
                 file_ids=message_data.get("file_ids"),
                 embedding_ids=message_data.get("embedding_ids"),
@@ -236,7 +236,6 @@ class ArtifactCoordinator:
             logger.info(f"Starting artifact modification for artifact_id={target_artifact_id}")
 
             # Build artifact context from message_data for RAG, files, etc.
-            from core.services.dtos.artifact_dto import build_artifact_context
             artifact_context = build_artifact_context(
                 file_ids=message_data.get("file_ids"),
                 embedding_ids=message_data.get("embedding_ids"),
