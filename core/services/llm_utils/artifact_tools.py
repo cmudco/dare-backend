@@ -273,3 +273,4 @@ class ArtifactTools:
         except json.JSONDecodeError:
             return {}
 
+

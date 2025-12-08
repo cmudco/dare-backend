@@ -12,7 +12,12 @@ COMPATIBILITY NOTES:
 Use get_artifact_plan_schema(provider) to get the right schema for each provider.
 """
 
-from typing import Dict, Any
+from dataclasses import dataclass, asdict
+from enum import Enum
+from typing import Dict, Any, Optional, Union
+
+
+# ========== LLM Response Schemas ==========
 
 
 # Base schema that works for Gemini
@@ -95,3 +100,164 @@ def get_modification_plan_schema(provider: str = "openai") -> Dict[str, Any]:
         schema["additionalProperties"] = False
     
     return schema
+
+
+# ========== Typed Artifact Events ==========
+
+
+class ArtifactEventType(str, Enum):
+    """Types of artifact events that flow through the graph."""
+    INIT = "artifact_init"
+    MODIFY_INIT = "artifact_modify_init"
+    STREAM = "artifact_stream"
+    PAUSE = "artifact_pause"
+    COMPLETE = "artifact_complete"
+    ERROR = "error"
+
+
+@dataclass
+class ArtifactInitEvent:
+    """Event: New artifact created."""
+    artifact_id: int
+    title: str
+    outline: str
+    estimated_sections: int
+    message_id: Optional[int] = None
+    
+    @property
+    def type(self) -> str:
+        return ArtifactEventType.INIT.value
+    
+    def to_websocket_message(self) -> Dict[str, Any]:
+        """Convert to WebSocket message format."""
+        msg = {
+            "type": self.type,
+            "artifactId": str(self.artifact_id),
+            "title": self.title,
+            "outline": self.outline,
+            "estimatedSections": self.estimated_sections,
+        }
+        if self.message_id:
+            msg["messageId"] = str(self.message_id)
+        return msg
+
+
+@dataclass
+class ArtifactModifyInitEvent:
+    """Event: Artifact modification started."""
+    artifact_id: int
+    title: str
+    outline: str
+    estimated_sections: int
+    version: int
+    message_id: Optional[int] = None
+    
+    @property
+    def type(self) -> str:
+        return ArtifactEventType.MODIFY_INIT.value
+    
+    def to_websocket_message(self) -> Dict[str, Any]:
+        """Convert to WebSocket message format."""
+        msg = {
+            "type": self.type,
+            "artifactId": str(self.artifact_id),
+            "title": self.title,
+            "outline": self.outline,
+            "estimatedSections": self.estimated_sections,
+            "newVersion": self.version,
+        }
+        if self.message_id:
+            msg["messageId"] = str(self.message_id)
+        return msg
+
+
+@dataclass
+class ArtifactStreamEvent:
+    """Event: Section content streamed."""
+    artifact_id: int
+    section: int
+    progress: float
+    content: str
+    
+    @property
+    def type(self) -> str:
+        return ArtifactEventType.STREAM.value
+    
+    def to_websocket_message(self) -> Dict[str, Any]:
+        """Convert to WebSocket message format."""
+        return {
+            "type": self.type,
+            "artifactId": str(self.artifact_id),
+            "section": self.section,
+            "progress": self.progress,
+            "chunk": self.content,
+        }
+
+
+@dataclass
+class ArtifactPauseEvent:
+    """Event: Artifact generation paused."""
+    artifact_id: int
+    current_section: int
+    sections_remaining: int
+    
+    @property
+    def type(self) -> str:
+        return ArtifactEventType.PAUSE.value
+    
+    def to_websocket_message(self) -> Dict[str, Any]:
+        """Convert to WebSocket message format."""
+        return {
+            "type": self.type,
+            "artifactId": str(self.artifact_id),
+            "currentSection": self.current_section,
+            "sectionsRemaining": self.sections_remaining,
+        }
+
+
+@dataclass
+class ArtifactCompleteEvent:
+    """Event: Artifact generation completed."""
+    artifact_id: int
+    total_words: int
+    
+    @property
+    def type(self) -> str:
+        return ArtifactEventType.COMPLETE.value
+    
+    def to_websocket_message(self) -> Dict[str, Any]:
+        """Convert to WebSocket message format."""
+        return {
+            "type": self.type,
+            "artifactId": str(self.artifact_id),
+            "totalWords": self.total_words,
+        }
+
+
+@dataclass
+class ArtifactErrorEvent:
+    """Event: Error occurred during generation."""
+    error_message: str
+    
+    @property
+    def type(self) -> str:
+        return ArtifactEventType.ERROR.value
+    
+    def to_websocket_message(self) -> Dict[str, Any]:
+        """Convert to WebSocket message format."""
+        return {
+            "type": self.type,
+            "errorCode": "ARTIFACT_ERROR",
+            "errorMessage": self.error_message,
+        }
+
+
+# Union type for all artifact events
+ArtifactEvent = Union[
+    ArtifactInitEvent,
+    ArtifactModifyInitEvent,
+    ArtifactStreamEvent,
+    ArtifactPauseEvent,
+    ArtifactCompleteEvent,
+    ArtifactErrorEvent,
+]

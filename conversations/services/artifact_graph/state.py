@@ -51,7 +51,7 @@ class ArtifactState(TypedDict, total=False):
         max_iterations: Maximum iterations before auto-pause
         
         # Streaming
-        pending_chunks: Chunks waiting to be sent to client
+        pending_events: Event objects waiting to be sent to client
         
         # Error handling
         error: Error message if any
@@ -101,7 +101,7 @@ class ArtifactState(TypedDict, total=False):
     max_iterations: int
     
     # Streaming - use Annotated with add for list accumulation
-    pending_chunks: Annotated[List[str], add]
+    pending_events: Annotated[List[Any], add]
     
     # Error handling
     error: Optional[str]
@@ -392,4 +392,5 @@ def create_modification_state(
         new_sections_outline="",  # Will be set by modify_plan_node
         version=version,
     )
+
 
