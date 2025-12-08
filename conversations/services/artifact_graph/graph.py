@@ -5,7 +5,6 @@ Defines the state machine for artifact generation with automatic checkpointing.
 """
 
 import logging
-import asyncio
 from typing import Optional, AsyncGenerator, Tuple, Dict, Any
 from enum import Enum
 
@@ -328,22 +327,19 @@ async def run_artifact_workflow(
     config = {"configurable": {"thread_id": thread_id}}
 
     try:
-        sent_chunk_count = 0
+        sent_event_count = 0
 
         async for event in app.astream(initial_state, config, stream_mode="values"):
-            # Yield control to event loop for pause request processing
-            await asyncio.sleep(0)
+            # Process only NEW pending events
+            pending_events = event.get("pending_events", [])
+            new_events = pending_events[sent_event_count:]
 
-            # Process only NEW pending chunks
-            pending_chunks = event.get("pending_chunks", [])
-            new_chunks = pending_chunks[sent_chunk_count:]
+            for artifact_event in new_events:
+                result = await _process_event(artifact_event, send_callback)
+                if result:
+                    yield result
 
-            for chunk_data in new_chunks:
-                parsed = await _parse_chunk(chunk_data, send_callback)
-                if parsed:
-                    yield parsed
-
-            sent_chunk_count = len(pending_chunks)
+            sent_event_count = len(pending_events)
 
             # Check for completion or error
             status = event.get("status")
@@ -363,7 +359,7 @@ async def run_artifact_workflow(
         yield f"Error: {str(e)}", {"error": str(e)}
 
 
-# ========== Chunk Parsing Helpers ==========
+# ========== Event Processing Helpers ==========
 
 
 async def _safe_send(send_callback, msg) -> bool:
@@ -380,103 +376,45 @@ async def _safe_send(send_callback, msg) -> bool:
         return False
 
 
-async def _parse_chunk(
-    chunk_data: str, send_callback=None
+async def _process_event(
+    artifact_event, send_callback=None
 ) -> Optional[Tuple[str, Optional[Dict]]]:
-    """Parse chunk data and optionally send via callback."""
-    if not chunk_data:
+    """Process a typed artifact event and send to client."""
+    if not artifact_event:
         return None
 
-    parts = chunk_data.split("|", 1)
-    chunk_type = parts[0] if parts else ""
+    # Send WebSocket message using the event's built-in conversion
+    msg = artifact_event.to_websocket_message()
+    await _safe_send(send_callback, msg)
 
-    if chunk_type == "__ARTIFACT_INIT__":
-        # Format: __ARTIFACT_INIT__|artifact_id|title|outline|estimated_sections|message_id
-        data_parts = chunk_data.split("|")
-        if len(data_parts) >= 5:
-            msg = {
-                "type": "artifact_init",
-                "artifactId": data_parts[1],
-                "title": data_parts[2],
-                "outline": data_parts[3],
-                "estimatedSections": int(data_parts[4]),
-            }
-            if len(data_parts) >= 6 and data_parts[5]:
-                msg["messageId"] = data_parts[5]
-            await _safe_send(send_callback, msg)
-            return "", {"type": "artifact_init", "artifact_id": data_parts[1]}
+    # Return appropriate tuple based on event type
+    event_type = artifact_event.type
 
-    elif chunk_type == "__ARTIFACT_STREAM__":
-        # Format: __ARTIFACT_STREAM__|artifact_id|section|progress|content
-        data_parts = chunk_data.split("|", 4)
-        if len(data_parts) >= 5:
-            content = data_parts[4]
-            msg = {
-                "type": "artifact_stream",
-                "artifactId": data_parts[1],
-                "section": int(data_parts[2]),
-                "progress": float(data_parts[3]),
-                "chunk": content,
-            }
-            await _safe_send(send_callback, msg)
-            return content, {"type": "artifact_stream", "section": int(data_parts[2])}
+    if event_type == "artifact_init":
+        return "", {"type": "artifact_init", "artifact_id": artifact_event.artifact_id}
 
-    elif chunk_type == "__ARTIFACT_PAUSE__":
-        # Format: __ARTIFACT_PAUSE__|artifact_id|current_section|sections_remaining
-        data_parts = chunk_data.split("|")
-        if len(data_parts) >= 4:
-            msg = {
-                "type": "artifact_pause",
-                "artifactId": data_parts[1],
-                "currentSection": int(data_parts[2]),
-                "sectionsRemaining": int(data_parts[3]),
-            }
-            await _safe_send(send_callback, msg)
-            return "", {"type": "artifact_pause"}
-
-    elif chunk_type == "__ARTIFACT_MODIFY_INIT__":
-        # Format: __ARTIFACT_MODIFY_INIT__|artifact_id|title|new_outline|new_sections|version|message_id
-        data_parts = chunk_data.split("|")
-        if len(data_parts) >= 6:
-            msg = {
-                "type": "artifact_modify_init",
-                "artifactId": data_parts[1],
-                "title": data_parts[2],
-                "outline": data_parts[3],
-                "estimatedSections": int(data_parts[4]),
-                "newVersion": int(data_parts[5]),
-            }
-            if len(data_parts) >= 7 and data_parts[6]:
-                msg["messageId"] = data_parts[6]
-            await _safe_send(send_callback, msg)
-            return "", {
-                "type": "artifact_modify_init",
-                "artifact_id": data_parts[1],
-                "version": int(data_parts[5]),
-            }
-
-    elif chunk_type == "__ARTIFACT_COMPLETE__":
-        # Format: __ARTIFACT_COMPLETE__|artifact_id|total_words
-        data_parts = chunk_data.split("|")
-        if len(data_parts) >= 3:
-            msg = {
-                "type": "artifact_complete",
-                "artifactId": data_parts[1],
-                "totalWords": int(data_parts[2]),
-            }
-            await _safe_send(send_callback, msg)
-            return "", {"type": "artifact_complete"}
-
-    elif chunk_type == "__ARTIFACT_ERROR__":
-        # Format: __ARTIFACT_ERROR__|error_message
-        error_msg = chunk_data.replace("__ARTIFACT_ERROR__|", "")
-        msg = {
-            "type": "error",
-            "errorCode": "ARTIFACT_ERROR",
-            "errorMessage": error_msg,
+    elif event_type == "artifact_modify_init":
+        return "", {
+            "type": "artifact_modify_init",
+            "artifact_id": artifact_event.artifact_id,
+            "version": artifact_event.version,
         }
-        await _safe_send(send_callback, msg)
-        return "", {"type": "error", "error": error_msg}
 
-    # Return raw content if not a special chunk
-    return chunk_data, None
+    elif event_type == "artifact_stream":
+        return artifact_event.content, {
+            "type": "artifact_stream",
+            "section": artifact_event.section,
+        }
+
+    elif event_type == "artifact_pause":
+        return "", {"type": "artifact_pause"}
+
+    elif event_type == "artifact_complete":
+        return "", {"type": "artifact_complete"}
+
+    elif event_type == "error":
+        return "", {"type": "error", "error": artifact_event.error_message}
+
+    # Unknown event type - shouldn't happen with typed events
+    return None
+

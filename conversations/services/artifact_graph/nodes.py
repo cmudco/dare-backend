@@ -29,7 +29,16 @@ from core.services.llama_service import LlamaService
 from core.services.custom_llm_service import CustomLLMService
 
 from .state import ArtifactState
-from .schemas import get_artifact_plan_schema, get_modification_plan_schema
+from .schemas import (
+    get_artifact_plan_schema,
+    get_modification_plan_schema,
+    ArtifactInitEvent,
+    ArtifactModifyInitEvent,
+    ArtifactStreamEvent,
+    ArtifactPauseEvent,
+    ArtifactCompleteEvent,
+    ArtifactErrorEvent,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -285,12 +294,17 @@ async def plan_node(state: ArtifactState) -> Dict[str, Any]:
         await update_artifact_db(state["artifact_id"], status=ArtifactStatus.GENERATING)
         logger.info(f"Plan node: Updated artifact {state['artifact_id']} status to GENERATING (resume)")
 
-        # Return state with ARTIFACT_INIT chunk for frontend to know we're resuming
-        message_id = state.get("message_id", "")
-        init_chunk = f"__ARTIFACT_INIT__|{state['artifact_id']}|{state['title']}|{state['outline']}|{state['estimated_sections']}|{message_id}"
+        # Return state with ARTIFACT_INIT event for frontend to know we're resuming
+        init_event = ArtifactInitEvent(
+            artifact_id=state["artifact_id"],
+            title=state["title"],
+            outline=state["outline"],
+            estimated_sections=state["estimated_sections"],
+            message_id=state.get("message_id"),
+        )
 
         return {
-            "pending_chunks": [init_chunk],
+            "pending_events": [init_event],
             "status": "generating",
         }
 
@@ -385,8 +399,14 @@ async def plan_node(state: ArtifactState) -> Dict[str, Any]:
 
         logger.info(f"Plan node: Created artifact {artifact.id} - {title}, linked to message {message_id}, status set to GENERATING")
 
-        # Include message_id in the init chunk for frontend linking
-        message_id = state.get("message_id") or ""
+        # Include message_id in the init event for frontend linking
+        init_event = ArtifactInitEvent(
+            artifact_id=artifact.id,
+            title=title,
+            outline=outline,
+            estimated_sections=estimated_sections,
+            message_id=state.get("message_id"),
+        )
 
         return {
             "artifact_id": artifact.id,
@@ -396,7 +416,7 @@ async def plan_node(state: ArtifactState) -> Dict[str, Any]:
             "estimated_sections": estimated_sections,
             "language": language,
             "status": "generating",
-            "pending_chunks": [f"__ARTIFACT_INIT__|{artifact.id}|{title}|{outline}|{estimated_sections}|{message_id}"],
+            "pending_events": [init_event],
         }
         
     except Exception as e:
@@ -523,12 +543,14 @@ async def modify_plan_node(state: ArtifactState) -> Dict[str, Any]:
             f"adding {estimated_new_sections} new sections, version {new_version}"
         )
 
-        # Send modification init message to frontend
-        # Include message_id so frontend can link message to artifact
-        message_id = state.get("message_id") or ""
-        init_chunk = (
-            f"__ARTIFACT_MODIFY_INIT__|{state['artifact_id']}|{state['title']}|"
-            f"{new_sections_outline}|{estimated_new_sections}|{new_version}|{message_id}"
+        # Send modification init event to frontend
+        init_event = ArtifactModifyInitEvent(
+            artifact_id=state["artifact_id"],
+            title=state["title"],
+            outline=new_sections_outline,
+            estimated_sections=estimated_new_sections,
+            version=new_version,
+            message_id=state.get("message_id"),
         )
 
         return {
@@ -537,7 +559,7 @@ async def modify_plan_node(state: ArtifactState) -> Dict[str, Any]:
             "new_sections_outline": new_sections_outline,
             "status": "generating",
             "version": new_version,
-            "pending_chunks": [init_chunk],
+            "pending_events": [init_event],
         }
 
     except Exception as e:
@@ -569,9 +591,14 @@ async def generate_section_node(state: ArtifactState) -> Dict[str, Any]:
             is_paused = await check_artifact_paused(state["artifact_id"])
             if is_paused:
                 logger.info(f"Generate section node: Artifact {state['artifact_id']} paused by user")
+                pause_event = ArtifactPauseEvent(
+                    artifact_id=state["artifact_id"],
+                    current_section=state["current_section"],
+                    sections_remaining=state["estimated_sections"] - state["current_section"],
+                )
                 return {
                     "status": "paused",
-                    "pending_chunks": [f"__ARTIFACT_PAUSE__|{state['artifact_id']}|{state['current_section']}|{state['estimated_sections'] - state['current_section']}"],
+                    "pending_events": [pause_event],
                 }
 
         # Get LLM
@@ -653,20 +680,34 @@ async def generate_section_node(state: ArtifactState) -> Dict[str, Any]:
             is_paused = await check_artifact_paused(state["artifact_id"])
             if is_paused:
                 logger.info(f"Generate section node: Pause detected after completing section {section_number}")
+                stream_event = ArtifactStreamEvent(
+                    artifact_id=state["artifact_id"],
+                    section=section_number,
+                    progress=progress,
+                    content=section_content,
+                )
+                pause_event = ArtifactPauseEvent(
+                    artifact_id=state["artifact_id"],
+                    current_section=section_number,
+                    sections_remaining=state["estimated_sections"] - section_number,
+                )
                 return {
                     "content": new_content,
                     "current_section": section_number,
                     "status": "paused",
-                    "pending_chunks": [
-                        f"__ARTIFACT_STREAM__|{state['artifact_id']}|{section_number}|{progress}|{section_content}",
-                        f"__ARTIFACT_PAUSE__|{state['artifact_id']}|{section_number}|{state['estimated_sections'] - section_number}",
-                    ],
+                    "pending_events": [stream_event, pause_event],
                 }
 
+        stream_event = ArtifactStreamEvent(
+            artifact_id=state["artifact_id"],
+            section=section_number,
+            progress=progress,
+            content=section_content,
+        )
         return {
             "content": new_content,
             "current_section": section_number,
-            "pending_chunks": [f"__ARTIFACT_STREAM__|{state['artifact_id']}|{section_number}|{progress}|{section_content}"],
+            "pending_events": [stream_event],
         }
         
     except Exception as e:
@@ -749,10 +790,15 @@ async def pause_node(state: ArtifactState) -> Dict[str, Any]:
         )
         
         sections_remaining = state["estimated_sections"] - state["current_section"]
+        pause_event = ArtifactPauseEvent(
+            artifact_id=state["artifact_id"],
+            current_section=state["current_section"],
+            sections_remaining=sections_remaining,
+        )
         
         return {
             "status": "paused",
-            "pending_chunks": [f"__ARTIFACT_PAUSE__|{state['artifact_id']}|{state['current_section']}|{sections_remaining}"],
+            "pending_events": [pause_event],
         }
         
     except Exception as e:
@@ -784,10 +830,14 @@ async def complete_node(state: ArtifactState) -> Dict[str, Any]:
         
         # Get word count
         word_count = len(state["content"].split())
+        complete_event = ArtifactCompleteEvent(
+            artifact_id=state["artifact_id"],
+            total_words=word_count,
+        )
         
         return {
             "status": "completed",
-            "pending_chunks": [f"__ARTIFACT_COMPLETE__|{state['artifact_id']}|{word_count}"],
+            "pending_events": [complete_event],
         }
         
     except Exception as e:
@@ -820,7 +870,7 @@ async def error_node(state: ArtifactState) -> Dict[str, Any]:
         
         return {
             "status": "error",
-            "pending_chunks": [f"__ARTIFACT_ERROR__|{state.get('error', 'Generation failed')}"],
+            "pending_events": [ArtifactErrorEvent(error_message=state.get('error', 'Generation failed'))],
         }
         
     except Exception as e:
@@ -883,4 +933,5 @@ def should_continue_after_checkpoint(state: ArtifactState) -> str:
     
     # Continue generating
     return "generate_section"
+
 
