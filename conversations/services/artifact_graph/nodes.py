@@ -76,17 +76,11 @@ async def plan_node(state: ArtifactState) -> Dict[str, Any]:
         await update_artifact_db(state["artifact_id"], status=ArtifactStatus.GENERATING)
         logger.info(f"Plan node: Updated artifact {state['artifact_id']} status to GENERATING (resume)")
 
-        # Return state with ARTIFACT_INIT event for frontend to know we're resuming
-        init_event = ArtifactInitEvent(
-            artifact_id=state["artifact_id"],
-            title=state["title"],
-            outline=state["outline"],
-            estimated_sections=state["estimated_sections"],
-            message_id=state.get("message_id"),
-        )
-
+        # NOTE: Do NOT send artifact_init here for resume case.
+        # handle_continue_artifact already sends artifact_resume with correct currentSection.
+        # Sending artifact_init would reset the frontend UI to 0/N sections.
         return {
-            "pending_events": [init_event],
+            "pending_events": [],  # No events - coordinator handles resume notification
             "status": "generating",
         }
 
