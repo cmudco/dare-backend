@@ -831,6 +831,19 @@ class MessageCoordinator:
             token_usage = None
             generated_artifact_id = artifact_id
 
+            # Build artifact context from message_data for RAG, files, etc.
+            from core.services.dtos.artifact_dto import build_artifact_context
+            artifact_context = build_artifact_context(
+                file_ids=message_data.get("file_ids"),
+                embedding_ids=message_data.get("embedding_ids"),
+                tag_ids=message_data.get("tag_ids"),
+                folder_ids=message_data.get("folder_ids"),
+                media_ids=message_data.get("media_ids"),
+                system_prompt=message_data.get("system_prompt"),
+                max_context_snippets=message_data.get("max_context_snippets", 4),
+            )
+            artifact_context_dict = artifact_context.to_dict() if artifact_context.has_rag_context() or artifact_context.has_system_prompt() else None
+
             # Execute artifact generation
             # Note: Content is stored in the Artifact model, NOT in the message
             # The message just gets linked to the artifact via artifact_id
@@ -839,6 +852,7 @@ class MessageCoordinator:
                 llm=llm,
                 message_obj=message_obj,
                 artifact_id=artifact_id,
+                artifact_context=artifact_context_dict,
             ):
                 if usage:
                     token_usage = usage
@@ -902,6 +916,19 @@ class MessageCoordinator:
 
             logger.info(f"Starting artifact modification for artifact_id={target_artifact_id}")
 
+            # Build artifact context from message_data for RAG, files, etc.
+            from core.services.dtos.artifact_dto import build_artifact_context
+            artifact_context = build_artifact_context(
+                file_ids=message_data.get("file_ids"),
+                embedding_ids=message_data.get("embedding_ids"),
+                tag_ids=message_data.get("tag_ids"),
+                folder_ids=message_data.get("folder_ids"),
+                media_ids=message_data.get("media_ids"),
+                system_prompt=message_data.get("system_prompt"),
+                max_context_snippets=message_data.get("max_context_snippets", 4),
+            )
+            artifact_context_dict = artifact_context.to_dict() if artifact_context.has_rag_context() or artifact_context.has_system_prompt() else None
+
             # Execute artifact modification
             async for chunk, usage in artifact_service.execute(
                 message=message_data["message"],
@@ -909,6 +936,7 @@ class MessageCoordinator:
                 message_obj=message_obj,
                 is_modification=True,
                 target_artifact_id=target_artifact_id,
+                artifact_context=artifact_context_dict,
             ):
                 if usage:
                     token_usage = usage
