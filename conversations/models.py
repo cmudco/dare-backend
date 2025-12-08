@@ -566,6 +566,41 @@ class LearningProgressAssessment(BaseModel):
         return f"Progress Assessment for {self.conversation.conversation_id} at {self.created_at.strftime('%Y-%m-%d %H:%M')}"
 
 
+class ArtifactGroup(BaseModel):
+    """
+    Groups all versions of an artifact together.
+    Enables version history, diffing, and rollback capabilities.
+    """
+    conversation = models.ForeignKey(
+        Conversation,
+        on_delete=models.CASCADE,
+        related_name="artifact_groups",
+        help_text="The conversation this artifact group belongs to."
+    )
+    base_title = models.CharField(
+        max_length=500,
+        help_text="Original title of the artifact (from first version)."
+    )
+    latest_version = models.OneToOneField(
+        'Artifact',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='is_latest_for',
+        help_text="The most recent version of this artifact."
+    )
+
+    active_objects = ActiveObjectsManager()
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = "Artifact Group"
+        verbose_name_plural = "Artifact Groups"
+
+    def __str__(self):
+        return f"ArtifactGroup: {self.base_title}"
+
+
 class Artifact(BaseModel):
     """
     Model for long-form generated content (documents, code, diagrams).
@@ -584,6 +619,22 @@ class Artifact(BaseModel):
         blank=True,
         related_name="artifacts",
         help_text="The AI message associated with this artifact."
+    )
+    artifact_group = models.ForeignKey(
+        'ArtifactGroup',
+        on_delete=models.CASCADE,
+        related_name='versions',
+        null=True,
+        blank=True,
+        help_text="The group containing all versions of this artifact."
+    )
+    parent_artifact = models.ForeignKey(
+        'self',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='child_versions',
+        help_text="The previous version this artifact was derived from."
     )
 
     artifact_type = models.CharField(
@@ -675,6 +726,38 @@ class Artifact(BaseModel):
         """Increment version number on modification."""
         self.version += 1
         self.save(update_fields=['version', 'updated_at'])
+
+    def create_new_version(self) -> 'Artifact':
+        """
+        Create a new version based on this artifact.
+        Copies current content and increments version number.
+        The new artifact is linked as a child of this one.
+        
+        Returns:
+            Artifact: The newly created version
+        """
+        new_artifact = Artifact(
+            conversation=self.conversation,
+            artifact_group=self.artifact_group,
+            parent_artifact=self,
+            artifact_type=self.artifact_type,
+            title=self.title,
+            language=self.language,
+            outline=self.outline,
+            content=self.content,
+            estimated_sections=self.estimated_sections,
+            current_section=self.current_section,
+            status=ArtifactStatus.PLANNING,
+            version=self.version + 1,
+        )
+        new_artifact.save()
+        
+        # Update group's latest_version
+        if self.artifact_group:
+            self.artifact_group.latest_version = new_artifact
+            self.artifact_group.save(update_fields=['latest_version', 'updated_at'])
+        
+        return new_artifact
 
 
 class ArtifactCheckpoint(BaseModel):

@@ -117,6 +117,8 @@ class ArtifactState(TypedDict, total=False):
     original_outline: str
     new_sections_outline: str
     version: int
+    parent_artifact_id: Optional[int]  # ID of parent artifact for versioning
+    artifact_group_id: Optional[int]   # ID of artifact group
 
 
 def create_initial_state(
@@ -196,6 +198,8 @@ def create_initial_state(
         original_outline="",
         new_sections_outline="",
         version=1,
+        parent_artifact_id=None,
+        artifact_group_id=None,
     )
 
 
@@ -290,6 +294,8 @@ def create_resume_state(
         original_outline="",
         new_sections_outline="",
         version=1,
+        parent_artifact_id=None,
+        artifact_group_id=None,
     )
 
 
@@ -391,6 +397,8 @@ def create_modification_state(
         original_outline=original_outline,
         new_sections_outline="",  # Will be set by modify_plan_node
         version=version,
+        parent_artifact_id=artifact_id,  # The artifact being modified becomes the parent
+        artifact_group_id=None,  # Will be set from parent artifact in node
     )
 
 

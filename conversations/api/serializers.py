@@ -159,7 +159,7 @@ class ArtifactCheckpointSerializer(serializers.ModelSerializer):
 
 
 class ArtifactSerializer(serializers.ModelSerializer):
-    """Serializer for artifacts with progress tracking."""
+    """Serializer for artifacts with progress tracking and versioning."""
 
     conversation_id = serializers.CharField(source='conversation.conversation_id', read_only=True)
     message_id = serializers.PrimaryKeyRelatedField(source='message', read_only=True)
@@ -167,6 +167,17 @@ class ArtifactSerializer(serializers.ModelSerializer):
     sections_remaining = serializers.IntegerField(read_only=True)
     word_count = serializers.IntegerField(read_only=True)
     latest_checkpoint = serializers.SerializerMethodField()
+    
+    # Versioning fields
+    parent_artifact_id = serializers.PrimaryKeyRelatedField(
+        source='parent_artifact',
+        read_only=True,
+    )
+    artifact_group_id = serializers.PrimaryKeyRelatedField(
+        source='artifact_group',
+        read_only=True,
+    )
+    version_history = serializers.SerializerMethodField()
 
     class Meta:
         model = Artifact
@@ -188,6 +199,10 @@ class ArtifactSerializer(serializers.ModelSerializer):
             'sections_remaining',
             'word_count',
             'latest_checkpoint',
+            # Versioning fields
+            'parent_artifact_id',
+            'artifact_group_id',
+            'version_history',
             'created_at',
             'updated_at',
         ]
@@ -200,6 +215,9 @@ class ArtifactSerializer(serializers.ModelSerializer):
             'sections_remaining',
             'word_count',
             'latest_checkpoint',
+            'parent_artifact_id',
+            'artifact_group_id',
+            'version_history',
             'created_at',
             'updated_at',
         ]
@@ -210,6 +228,16 @@ class ArtifactSerializer(serializers.ModelSerializer):
         if checkpoint:
             return ArtifactCheckpointSerializer(checkpoint).data
         return None
+
+    def get_version_history(self, obj):
+        """Get list of versions in this artifact's group."""
+        if not obj.artifact_group:
+            return []
+        versions = obj.artifact_group.versions.filter(is_active=True).order_by('version')
+        return [
+            {'id': str(v.id), 'version': v.version, 'createdAt': v.created_at.isoformat()}
+            for v in versions
+        ]
 
 
 class ArtifactListSerializer(serializers.ModelSerializer):
