@@ -39,6 +39,7 @@ from .db_helpers import (
     get_artifact,
     get_conversation_history,
     create_artifact_db,
+    create_artifact_version_db,
     update_artifact_db,
     create_checkpoint_db,
     check_artifact_paused,
@@ -205,25 +206,34 @@ async def plan_node(state: ArtifactState) -> Dict[str, Any]:
 
 async def modify_plan_node(state: ArtifactState) -> Dict[str, Any]:
     """
-    Modification planning node - Plans new sections to APPEND to existing artifact.
+    Modification planning node - Creates NEW artifact version for modifications.
 
     This node is used for the modification flow (is_modification=True).
+    
+    KEY CHANGE: Instead of updating the artifact in-place, we CREATE A NEW
+    artifact record as a child of the original. This preserves:
+    - Original artifact linked to Message 1
+    - New version linked to Message 2
+    - Full version history via parent_artifact chain
+    
     It:
-    1. Loads existing artifact context
+    1. Loads existing artifact context (the parent)
     2. Calls LLM with append_sections prompt
-    3. Parses append_sections tool call (new sections outline)
-    4. Updates artifact: appends to outline, increments estimated_sections
-    5. Increments version
-    6. Sets up state for generating the new sections only
+    3. CREATES new artifact version (not in-place update!)
+    4. New artifact has parent_artifact pointing to original
+    5. Updates ArtifactGroup.latest_version
 
-    Checkpointed: Yes - saves updated outline and section count
+    Checkpointed: Yes - saves new artifact_id and version
     """
     logger.info(f"Modify plan node: Starting for artifact {state['artifact_id']}")
 
     try:
-        # Get LLM and artifact
+        # Get LLM and parent artifact
         llm = await get_llm(state["llm_id"])
-        artifact = await get_artifact(state["artifact_id"])
+        parent_artifact = await get_artifact(state["artifact_id"])
+        
+        # Get artifact_group_id from parent
+        parent_artifact_group_id = await sync_to_async(lambda: parent_artifact.artifact_group_id)()
 
         # Get AI service that supports structured output
         User = get_user_model()
@@ -283,53 +293,65 @@ async def modify_plan_node(state: ArtifactState) -> Dict[str, Any]:
             estimated_new_sections = 1
             logger.warning("Modify plan node: Empty outline from structured output, using default")
 
-        # Calculate new totals
-        new_estimated_total = state["original_sections"] + estimated_new_sections
-
-        # Update artifact in database
-        # Append new sections to outline
+        # Build complete updated outline
         updated_outline = state["original_outline"]
         if updated_outline and not updated_outline.endswith("\n"):
             updated_outline += "\n"
         updated_outline += new_sections_outline
 
-        # Increment version
-        new_version = state["version"] + 1
-
-        await update_artifact_db(
-            state["artifact_id"],
-            outline=updated_outline,
-            estimated_sections=new_estimated_total,
-            status=ArtifactStatus.GENERATING,
-            version=new_version,
-        )
-
-        # Link to new message if provided
+        # Get message object to link to new artifact
+        message_obj = None
         message_id = state.get("message_id")
         if message_id:
             try:
                 message_obj = await sync_to_async(Message.active_objects.get)(id=message_id)
-                artifact.message = message_obj
-                await sync_to_async(artifact.save)(update_fields=['message', 'updated_at'])
             except Message.DoesNotExist:
                 logger.warning(f"Modify plan node: Message {message_id} not found")
 
-        logger.info(
-            f"Modify plan node: Artifact {state['artifact_id']} updated - "
-            f"adding {estimated_new_sections} new sections, version {new_version}"
+        # CREATE NEW ARTIFACT VERSION (key change!)
+        # This creates a new artifact record linked to the parent
+        new_artifact = await create_artifact_version_db(
+            parent_artifact=parent_artifact,
+            new_outline=updated_outline,
+            estimated_new_sections=estimated_new_sections,
+            message=message_obj,
         )
 
-        # Send modification init event to frontend
+        new_version = await sync_to_async(lambda: new_artifact.version)()
+        new_artifact_id = await sync_to_async(lambda: new_artifact.id)()
+        new_artifact_group_id = await sync_to_async(lambda: new_artifact.artifact_group_id)()
+
+        # Calculate new totals before creating event
+        new_estimated_total = state["original_sections"] + estimated_new_sections
+
+        logger.info(
+            f"Modify plan node: Created NEW artifact {new_artifact_id} v{new_version} "
+            f"(parent={state['artifact_id']}), adding {estimated_new_sections} new sections, "
+            f"total={new_estimated_total}, starting from section {state['original_sections']}"
+        )
+
+        # Send modification init event to frontend with COMPLETE data
+        # This ensures frontend doesn't need parent artifact in state
         init_event = ArtifactModifyInitEvent(
-            artifact_id=state["artifact_id"],
+            artifact_id=new_artifact_id,  # NEW artifact ID
+            parent_artifact_id=state["artifact_id"],  # Original artifact ID
+            artifact_group_id=new_artifact_group_id or parent_artifact_group_id,
             title=state["title"],
-            outline=new_sections_outline,
-            estimated_sections=estimated_new_sections,
+            outline=new_sections_outline,  # New sections only
+            full_outline=updated_outline,  # Complete outline
+            new_sections_count=estimated_new_sections,
+            total_estimated_sections=new_estimated_total,
+            current_section=state["original_sections"],  # Start from parent's current
+            existing_content=state["original_content"],  # Preserve parent content
             version=new_version,
             message_id=state.get("message_id"),
         )
 
         return {
+            # IMPORTANT: Update artifact_id to the NEW artifact
+            "artifact_id": new_artifact_id,
+            "artifact_group_id": new_artifact_group_id or parent_artifact_group_id,
+            "parent_artifact_id": state["artifact_id"],
             "outline": updated_outline,
             "estimated_sections": new_estimated_total,
             "new_sections_outline": new_sections_outline,

@@ -11,7 +11,7 @@ from typing import Dict, Any, Optional
 from asgiref.sync import sync_to_async
 from django.db import connection
 
-from conversations.models import Artifact, ArtifactCheckpoint, Conversation, Message, LLM
+from conversations.models import Artifact, ArtifactGroup, ArtifactCheckpoint, Conversation, Message, LLM
 from conversations.constants import ArtifactStatus
 
 
@@ -81,10 +81,20 @@ def create_artifact_db(
     estimated_sections: int,
     language: Optional[str] = None,
 ) -> Artifact:
-    """Create artifact in database."""
+    """Create artifact in database with its ArtifactGroup."""
+    # Create the artifact group first
+    artifact_group = ArtifactGroup(
+        conversation=conversation,
+        base_title=title,
+    )
+    artifact_group.save()
+    
+    # Create the artifact (v1)
     artifact = Artifact(
         conversation=conversation,
         message=message,
+        artifact_group=artifact_group,
+        parent_artifact=None,  # First version has no parent
         artifact_type=artifact_type,
         title=title,
         outline=outline,
@@ -92,9 +102,63 @@ def create_artifact_db(
         current_section=0,
         status=ArtifactStatus.PLANNING,
         language=language,
+        version=1,
     )
     artifact.save()
+    
+    # Set this artifact as the latest version
+    artifact_group.latest_version = artifact
+    artifact_group.save(update_fields=['latest_version'])
+    
     return artifact
+
+
+@sync_to_async
+def create_artifact_version_db(
+    parent_artifact: Artifact,
+    new_outline: str,
+    estimated_new_sections: int,
+    message: Optional[Message] = None,
+) -> Artifact:
+    """
+    Create a new version based on parent artifact.
+    
+    The new artifact:
+    - Copies content from parent
+    - Links to same artifact_group
+    - Sets parent_artifact to the parent
+    - Increments version number
+    - Updates artifact_group.latest_version
+    
+    Args:
+        parent_artifact: The artifact to create a new version from
+        new_outline: The new/updated outline
+        estimated_new_sections: Number of NEW sections to add
+        message: Optional message to link to
+        
+    Returns:
+        The newly created artifact version
+    """
+    # Calculate new totals
+    new_estimated_total = parent_artifact.current_section + estimated_new_sections
+    
+    # Create new version using the model's helper method
+    new_artifact = parent_artifact.create_new_version()
+    
+    # Update with new outline and sections
+    new_artifact.message = message
+    new_artifact.outline = new_outline
+    new_artifact.estimated_sections = new_estimated_total
+    new_artifact.status = ArtifactStatus.GENERATING
+    new_artifact.save()
+    
+    logger.info(
+        f"Created artifact version {new_artifact.version} "
+        f"(id={new_artifact.id}) from parent {parent_artifact.id}"
+    )
+    
+    return new_artifact
+
 
 
 @sync_to_async
