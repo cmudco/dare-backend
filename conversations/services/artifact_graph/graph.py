@@ -224,6 +224,8 @@ async def run_artifact_workflow(
     original_content: Optional[str] = None,
     original_sections: Optional[int] = None,
     version: Optional[int] = None,
+    # Context for RAG, files, and system prompt (all modes)
+    artifact_context: Optional[Dict[str, Any]] = None,
 ) -> AsyncGenerator[Tuple[str, Optional[Dict]], None]:
     """
     Unified artifact workflow runner.
@@ -278,6 +280,7 @@ async def run_artifact_workflow(
             thread_id=thread_id,
             user_id=user_id,
             message_id=message_id,
+            artifact_context=artifact_context,
         )
     elif mode == ArtifactMode.RESUME:
         initial_state = create_resume_state(
@@ -295,6 +298,7 @@ async def run_artifact_workflow(
             artifact_type=artifact_type or "document",
             user_id=user_id,
             language=language,
+            artifact_context=artifact_context,
         )
     else:  # MODIFY
         initial_state = create_modification_state(
@@ -313,6 +317,7 @@ async def run_artifact_workflow(
             user_id=user_id,
             message_id=message_id,
             language=language,
+            artifact_context=artifact_context,
         )
 
     config = {"configurable": {"thread_id": thread_id}}

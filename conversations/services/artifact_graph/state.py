@@ -119,6 +119,9 @@ class ArtifactState(TypedDict, total=False):
     version: int
     parent_artifact_id: Optional[int]  # ID of parent artifact for versioning
     artifact_group_id: Optional[int]   # ID of artifact group
+    
+    # External context for RAG, files, and system prompt
+    artifact_context: Optional[dict]  # Serialized ArtifactContext
 
 
 def create_initial_state(
@@ -131,6 +134,7 @@ def create_initial_state(
     message_id: Optional[int] = None,
     sections_per_iteration: int = 3,
     max_iterations: int = 10,
+    artifact_context: Optional[dict] = None,  # Serialized ArtifactContext
 ) -> ArtifactState:
     """
     Create initial state for a new artifact generation.
@@ -200,6 +204,7 @@ def create_initial_state(
         version=1,
         parent_artifact_id=None,
         artifact_group_id=None,
+        artifact_context=artifact_context,
     )
 
 
@@ -220,6 +225,7 @@ def create_resume_state(
     language: Optional[str] = None,
     sections_per_iteration: int = 3,
     max_iterations: int = 10,
+    artifact_context: Optional[dict] = None,  # Serialized ArtifactContext
 ) -> ArtifactState:
     """
     Create state for resuming a paused artifact.
@@ -296,6 +302,7 @@ def create_resume_state(
         version=1,
         parent_artifact_id=None,
         artifact_group_id=None,
+        artifact_context=artifact_context,
     )
 
 
@@ -319,6 +326,7 @@ def create_modification_state(
     language: Optional[str] = None,
     sections_per_iteration: int = 3,
     max_iterations: int = 10,
+    artifact_context: Optional[dict] = None,  # Serialized ArtifactContext
 ) -> ArtifactState:
     """
     Create state for modifying an existing artifact (append sections).
@@ -399,6 +407,7 @@ def create_modification_state(
         version=version,
         parent_artifact_id=artifact_id,  # The artifact being modified becomes the parent
         artifact_group_id=None,  # Will be set from parent artifact in node
+        artifact_context=artifact_context,
     )
 
 

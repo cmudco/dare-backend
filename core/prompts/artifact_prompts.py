@@ -215,8 +215,8 @@ def get_append_planning_prompt(
     Returns:
         Formatted system prompt for append planning
     """
-    # Truncate content preview if too long
-    preview = content_preview[-500:] if content_preview else "(No content yet)"
+    # Pass full content for complete context (don't truncate)
+    preview = content_preview if content_preview else "(No content yet)"
 
     return ARTIFACT_APPEND_PLANNING_PROMPT.format(
         title=title,
