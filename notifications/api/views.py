@@ -8,6 +8,7 @@ from rest_framework.response import Response
 from common.pagination import CustomPageNumberPagination
 from notifications.models import Notification, UserNotificationReadStatus
 from notifications.constants import NotificationStatus
+from users.utils import detect_platform_from_request
 from .serializers import (
     NotificationListSerializer,
     NotificationDetailSerializer,
@@ -27,13 +28,16 @@ class NotificationViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         """
         Return notifications for the current user plus system notifications
-        with user-specific read status for global notifications
+        with user-specific read status for global notifications.
+        Filters by platform source (DARE/SocraticBots) based on request origin.
         """
         user = self.request.user
+        platform_source = detect_platform_from_request(self.request)
         
-        # Base queryset: user's own notifications + global notifications
+        # Base queryset: user's own notifications + global notifications, filtered by platform
         queryset = Notification.active_objects.filter(
-            Q(user=user) | Q(user__isnull=True)
+            Q(user=user) | Q(user__isnull=True),
+            source=platform_source  # Filter by platform
         ).select_related('user').prefetch_related('user_read_statuses')
 
         user_read_status_subquery = UserNotificationReadStatus.objects.filter(
@@ -111,13 +115,16 @@ class NotificationViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'], url_path='stats')
     def get_stats(self, request):
         """
-        Get notification statistics for the current user with user-specific read status
+        Get notification statistics for the current user with user-specific read status.
+        Filters by platform source.
         """
         user = request.user
+        platform_source = detect_platform_from_request(request)
 
-        # Get all notifications visible to user with effective status
+        # Get all notifications visible to user with effective status, filtered by platform
         user_notifications = Notification.active_objects.filter(
-            Q(user=user) | Q(user__isnull=True)
+            Q(user=user) | Q(user__isnull=True),
+            source=platform_source
         ).select_related('user').prefetch_related('user_read_statuses')
 
         active_notifications = user_notifications.filter(
