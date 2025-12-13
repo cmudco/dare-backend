@@ -26,6 +26,7 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
     auth_source = serializers.ChoiceField(choices=AuthSourceChoice.choices, read_only=True)
     billing_mode = serializers.CharField(read_only=True)
     billing_mode_display = serializers.CharField(source='get_billing_mode_display', read_only=True)
+    avatar_url = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -45,7 +46,10 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
             "is_dare_accessible",
             "is_socratic_bots_accessible",
             "billing_mode",
-            "billing_mode_display"
+            "billing_mode_display",
+            "avatar_type",
+            "avatar_preset",
+            "avatar_url",
         ]
         read_only_fields = ["id", "auth_source", "billing_mode", "billing_mode_display", "is_onboarding_completed"]
 
@@ -67,6 +71,23 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
                 "isActive": group.is_active
             }
         return None
+
+    def get_avatar_url(self, obj):
+        """Return absolute URL for avatar, or None if not set."""
+        if not obj.avatar_url:
+            return None
+        
+        # If already an absolute URL, return as-is
+        if obj.avatar_url.startswith('http://') or obj.avatar_url.startswith('https://'):
+            return obj.avatar_url
+        
+        # Build absolute URL from request context
+        request = self.context.get('request')
+        if request:
+            return request.build_absolute_uri(obj.avatar_url)
+        
+        # Fallback: return the relative URL
+        return obj.avatar_url
 
     def to_representation(self, instance):
         representation = super().to_representation(instance)
