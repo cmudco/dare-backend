@@ -1,23 +1,27 @@
-from django.db.models import Sum
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status, viewsets
-from rest_framework.decorators import action, api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.permissions import AllowAny
-from django.contrib.auth import get_user_model
-from django_rq import enqueue
-from django.utils import timezone
+import os
+import uuid
 
+from django.conf import settings
+from django.contrib.auth import get_user_model
+from django.core.files.storage import default_storage
+from django.db.models import Sum
+from django.utils import timezone
+from django_rq import enqueue
+from rest_framework import serializers, status, viewsets
+from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
+from billing.constants import TransactionTypeChoice
+from billing.models import Transaction
 from conversations.constants import SenderType
 from conversations.models import Conversation, Message
 from files.models import File
 from prompts.models import Prompt
 from users.constants import VectorDBChoice
-from billing.models import Transaction
-from billing.constants import TransactionTypeChoice
 from users.models import AccessCodeGroup
-from rest_framework import serializers
+from users.services import AvatarService, AvatarValidationError
 
 User = get_user_model()
 
@@ -298,3 +302,48 @@ class AccessCodeCheckView(APIView):
                 "available_slots": 0,
                 "message": "Access code not found"
             })
+
+
+class AvatarViewSet(viewsets.ViewSet):
+    """ViewSet for managing user avatar/profile pictures."""
+
+    permission_classes = [IsAuthenticated]
+
+    @action(detail=False, methods=["post"], url_path="upload")
+    def upload(self, request):
+        """Upload a new avatar image."""
+        try:
+            avatar_file = request.FILES.get("avatar")
+            avatar_url = AvatarService.upload_avatar(request.user, avatar_file, request)
+
+            return Response({
+                "avatar_url": avatar_url,
+                "avatar_type": "custom",
+                "message": "Avatar uploaded successfully"
+            })
+
+        except AvatarValidationError as e:
+            return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+        except Exception as e:
+            return Response(
+                {"error": f"Failed to upload avatar: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=False, methods=["delete"], url_path="remove")
+    def remove(self, request):
+        """Remove current avatar and reset to initials."""
+        try:
+            AvatarService.remove_avatar(request.user)
+
+            return Response({
+                "avatar_type": "initials",
+                "message": "Avatar removed successfully"
+            })
+
+        except Exception as e:
+            return Response(
+                {"error": f"Failed to remove avatar: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
