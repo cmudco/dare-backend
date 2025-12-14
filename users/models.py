@@ -212,6 +212,28 @@ class User(AbstractUser, IsDeletedMixin):
         help_text=_("How the user pays for API usage: wallet credits or own API keys")
     )
 
+    # Avatar settings
+    avatar_type = models.CharField(
+        max_length=20,
+        choices=[('initials', 'Initials'), ('preset', 'Preset Avatar'), ('custom', 'Custom Upload')],
+        default='initials',
+        verbose_name=_("Avatar Type"),
+        help_text=_("Type of avatar: initials, preset image, or custom upload")
+    )
+    avatar_preset = models.CharField(
+        max_length=50,
+        blank=True,
+        null=True,
+        verbose_name=_("Avatar Preset"),
+        help_text=_("Identifier for preset avatar image")
+    )
+    avatar_url = models.URLField(
+        blank=True,
+        null=True,
+        verbose_name=_("Avatar URL"),
+        help_text=_("URL for custom uploaded avatar image")
+    )
+
     objects = UserManager()
     active_objects = ActiveObjectsManager()
 
