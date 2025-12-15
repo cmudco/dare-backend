@@ -243,6 +243,7 @@ class ArtifactCompleteEvent:
     """Event: Artifact generation completed."""
     artifact_id: int
     total_words: int
+    estimated_sections: int = 0  # Total sections so frontend can mark all as complete
     
     @property
     def type(self) -> str:
@@ -254,6 +255,7 @@ class ArtifactCompleteEvent:
             "type": self.type,
             "artifactId": str(self.artifact_id),
             "totalWords": self.total_words,
+            "estimatedSections": self.estimated_sections,
         }
 
 
