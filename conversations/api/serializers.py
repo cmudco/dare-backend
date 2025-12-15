@@ -161,6 +161,7 @@ class ArtifactCheckpointSerializer(serializers.ModelSerializer):
 class ArtifactSerializer(serializers.ModelSerializer):
     """Serializer for artifacts with progress tracking and versioning."""
 
+    # IDs returned as natural types (integers) from Django
     conversation_id = serializers.CharField(source='conversation.conversation_id', read_only=True)
     message_id = serializers.PrimaryKeyRelatedField(source='message', read_only=True)
     progress = serializers.FloatField(read_only=True)
@@ -168,7 +169,7 @@ class ArtifactSerializer(serializers.ModelSerializer):
     word_count = serializers.IntegerField(read_only=True)
     latest_checkpoint = serializers.SerializerMethodField()
     
-    # Versioning fields
+    # Versioning fields - use PrimaryKeyRelatedField for natural integer IDs
     parent_artifact_id = serializers.PrimaryKeyRelatedField(
         source='parent_artifact',
         read_only=True,
@@ -235,7 +236,7 @@ class ArtifactSerializer(serializers.ModelSerializer):
             return []
         versions = obj.artifact_group.versions.filter(is_active=True).order_by('version')
         return [
-            {'id': str(v.id), 'version': v.version, 'createdAt': v.created_at.isoformat()}
+            {'id': v.id, 'version': v.version, 'createdAt': v.created_at.isoformat()}
             for v in versions
         ]
 
@@ -243,9 +244,22 @@ class ArtifactSerializer(serializers.ModelSerializer):
 class ArtifactListSerializer(serializers.ModelSerializer):
     """Lightweight serializer for artifact lists (without full content)."""
 
+    # IDs returned as natural types (integers) from Django
     conversation_id = serializers.CharField(source='conversation.conversation_id', read_only=True)
     progress = serializers.FloatField(read_only=True)
     word_count = serializers.IntegerField(read_only=True)
+    # Content fields - empty strings to prevent frontend crashes, full content loaded on demand
+    outline = serializers.SerializerMethodField()
+    content = serializers.SerializerMethodField()
+    # Versioning fields - use PrimaryKeyRelatedField for natural integer IDs
+    parent_artifact_id = serializers.PrimaryKeyRelatedField(
+        source='parent_artifact',
+        read_only=True,
+    )
+    artifact_group_id = serializers.PrimaryKeyRelatedField(
+        source='artifact_group',
+        read_only=True,
+    )
 
     class Meta:
         model = Artifact
@@ -254,11 +268,29 @@ class ArtifactListSerializer(serializers.ModelSerializer):
             'conversation_id',
             'artifact_type',
             'title',
+            'language',
+            'outline',
+            'content',
             'status',
             'estimated_sections',
             'current_section',
             'progress',
             'word_count',
+            # Versioning fields
+            'version',
+            'parent_artifact_id',
+            'artifact_group_id',
             'created_at',
         ]
         read_only_fields = fields
+    
+    def get_outline(self, obj):
+        """Return empty string - full outline loaded on demand."""
+        return ''
+    
+    def get_content(self, obj):
+        """Return empty string - full content loaded on demand."""
+        return ''
+
+
+
