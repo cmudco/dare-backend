@@ -25,7 +25,7 @@ class AvatarTypeChoice(models.TextChoices):
     CUSTOM = "custom", _("Custom Upload")
 
 
-# Available preset avatar identifiers - alternating male/female
+# Available preset avatar identifiers - alternating male/female + thumbs
 PRESET_AVATARS = [
     "m1",
     "f1",
@@ -37,6 +37,16 @@ PRESET_AVATARS = [
     "f4",
     "m5",
     "f5",
+    "thumbs1",
+    "thumbs2",
+    "thumbs3",
+    "thumbs4",
+    "thumbs5",
+    "thumbs6",
+    "thumbs7",
+    "thumbs8",
+    "thumbs9",
+    "thumbs10",
 ]
 
 # Avatar upload constraints
