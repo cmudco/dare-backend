@@ -291,3 +291,197 @@ def get_append_generation_prompt(
     )
 
 
+# ========== Section Rewrite Prompts ==========
+
+ARTIFACT_SECTION_REWRITE_PROMPT = """You are rewriting a SPECIFIC section of an existing artifact.
+
+## Existing Artifact
+- Title: {title}
+- Type: {artifact_type}
+- Total Sections: {total_sections}
+- Target Section: {target_section_number} - "{target_section_title}"
+
+## Other Sections (for context only - do NOT include these in your output)
+{other_sections_summary}
+
+## Original Section Content to Rewrite
+{original_section_content}
+
+## User's Request
+{user_message}
+
+## Your Task
+Rewrite ONLY section {target_section_number} based on the user's feedback.
+
+Guidelines:
+1. Output ONLY the rewritten section content
+2. Keep the same section number ({target_section_number})
+3. Maintain the same general topic/purpose
+4. Apply the user's requested changes
+5. Use consistent formatting with the rest of the document
+6. Do NOT include other sections in your output
+7. Do NOT include a section header/title - just the content
+
+Output the rewritten section content now:"""
+
+
+def get_section_rewrite_prompt(
+    title: str,
+    artifact_type: str,
+    total_sections: int,
+    target_section_number: int,
+    target_section_title: str,
+    original_section_content: str,
+    other_sections_summary: str,
+    user_message: str,
+) -> str:
+    """
+    Get the system prompt for section rewrite.
+
+    Args:
+        title: Artifact title
+        artifact_type: Type of artifact
+        total_sections: Total number of sections
+        target_section_number: The section number to rewrite (1-indexed)
+        target_section_title: Title of the section to rewrite
+        original_section_content: Current content of the target section
+        other_sections_summary: Brief summary of other sections for context
+        user_message: User's rewrite request
+
+    Returns:
+        Formatted system prompt for section rewrite
+    """
+    return ARTIFACT_SECTION_REWRITE_PROMPT.format(
+        title=title,
+        artifact_type=artifact_type,
+        total_sections=total_sections,
+        target_section_number=target_section_number,
+        target_section_title=target_section_title,
+        original_section_content=original_section_content,
+        other_sections_summary=other_sections_summary,
+        user_message=user_message,
+    )
+
+
+def parse_sections_from_content(content: str) -> list[dict]:
+    """
+    Parse artifact content into sections based on ## headers (h2).
+    
+    Args:
+        content: The full artifact content (markdown)
+        
+    Returns:
+        List of dicts with keys: number, title, content, start_pos, end_pos
+    """
+    import re
+    
+    sections = []
+    # Match ## headers (h2 level)
+    pattern = r'^##\s+(.+?)$'
+    matches = list(re.finditer(pattern, content, re.MULTILINE))
+    
+    for i, match in enumerate(matches):
+        section_title = match.group(1).strip()
+        start_pos = match.end()
+        
+        # End position is start of next section or end of content
+        if i + 1 < len(matches):
+            end_pos = matches[i + 1].start()
+        else:
+            end_pos = len(content)
+        
+        section_content = content[start_pos:end_pos].strip()
+        
+        sections.append({
+            'number': i + 1,
+            'title': section_title,
+            'content': section_content,
+            'header_start': match.start(),
+            'content_start': start_pos,
+            'content_end': end_pos,
+        })
+    
+    return sections
+
+
+def reconstruct_content_with_new_section(
+    original_content: str,
+    sections: list[dict],
+    target_section_number: int,
+    new_section_content: str,
+) -> str:
+    """
+    Reconstruct the full artifact content with a rewritten section.
+    
+    Args:
+        original_content: The original full content
+        sections: Parsed sections from parse_sections_from_content
+        target_section_number: Which section to replace (1-indexed)
+        new_section_content: The new content for that section
+        
+    Returns:
+        Full content with the target section replaced
+    """
+    if not sections or target_section_number < 1 or target_section_number > len(sections):
+        return original_content
+    
+    target_section = sections[target_section_number - 1]
+    
+    # Build new content by keeping everything before and after the section content
+    before = original_content[:target_section['content_start']]
+    after = original_content[target_section['content_end']:]
+    
+    # Ensure proper spacing
+    new_content = new_section_content.strip()
+    if not before.endswith('\n'):
+        before += '\n'
+    
+    return before + new_content + '\n' + after.lstrip('\n')
+
+
+def extract_target_section_from_message(message: str, total_sections: int) -> int | None:
+    """
+    Extract the target section number from a user's rewrite request.
+    
+    Args:
+        message: User's message (e.g., "rewrite section 2", "redo the first section")
+        total_sections: Total number of sections in the artifact
+        
+    Returns:
+        Section number (1-indexed) or None if not found
+    """
+    import re
+    
+    message_lower = message.lower()
+    
+    # Try to find explicit section number: "section 2", "part 3"
+    match = re.search(r'(section|part)\s*(\d+)', message_lower)
+    if match:
+        section_num = int(match.group(2))
+        if 1 <= section_num <= total_sections:
+            return section_num
+    
+    # Ordinal references
+    ordinal_map = {
+        'first': 1,
+        'second': 2,
+        'third': 3,
+        'fourth': 4,
+        'fifth': 5,
+        'sixth': 6,
+        'seventh': 7,
+        'eighth': 8,
+        'ninth': 9,
+        'tenth': 10,
+        'last': total_sections,
+    }
+    
+    for word, num in ordinal_map.items():
+        if word in message_lower:
+            if 1 <= num <= total_sections:
+                return num
+    
+    # Default to first section if no specific section mentioned
+    # This handles cases like "rewrite the introduction"
+    return 1
+
