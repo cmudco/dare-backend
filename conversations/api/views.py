@@ -469,6 +469,59 @@ class ArtifactStatusView(APIView):
         })
 
 
+class ArtifactContentView(APIView):
+    """
+    Update artifact content via REST API.
+
+    Used for direct manual editing of artifact content.
+    Creates a new version to preserve history.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, artifact_id):
+        """
+        Update artifact content by creating a new version.
+
+        Request body: {"content": "new markdown content"}
+
+        Returns the newly created artifact version.
+        """
+        logger = logging.getLogger(__name__)
+        
+        new_content = request.data.get('content')
+        if new_content is None:
+            return Response(
+                {'error': 'Content field is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Get artifact
+        artifact = get_object_or_404(Artifact.active_objects, id=artifact_id)
+
+        # Verify user owns this artifact's conversation
+        if artifact.conversation.user != request.user:
+            return Response(
+                {'error': 'You do not have permission to modify this artifact'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # Create new version with updated content
+        with transaction.atomic():
+            new_artifact = artifact.create_new_version()
+            new_artifact.content = new_content
+            new_artifact.status = ArtifactStatus.COMPLETED
+            new_artifact.save(update_fields=['content', 'status', 'updated_at'])
+
+        logger.info(
+            f"Artifact {artifact_id} content updated via manual edit, "
+            f"created new version {new_artifact.id} (v{new_artifact.version})"
+        )
+
+        # Return the new artifact using the serializer
+        serializer = ArtifactSerializer(new_artifact)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
 class LLMViewSet(viewsets.ModelViewSet):
     """Endpoint for listing available LLM models."""
     serializer_class = LLMSerializer
