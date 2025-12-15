@@ -193,6 +193,25 @@ def create_checkpoint_db(
 
 
 @sync_to_async
+def get_latest_version_in_group(artifact_group_id: int) -> Optional[Artifact]:
+    """
+    Get the latest version artifact in a group.
+    
+    This is used to ensure modifications always use the latest version
+    as the parent, regardless of which version is currently active in the UI.
+    
+    Args:
+        artifact_group_id: ID of the artifact group
+        
+    Returns:
+        The latest version Artifact, or None if group is empty
+    """
+    return Artifact.active_objects.filter(
+        artifact_group_id=artifact_group_id
+    ).order_by('-version').first()
+
+
+@sync_to_async
 def check_artifact_paused(artifact_id: int) -> bool:
     """Check if artifact has been paused by user."""
     try:
