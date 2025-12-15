@@ -69,12 +69,27 @@ class ArtifactIntentDetector:
         re.compile(r"make\s+(a\s+)?(new|another)", re.IGNORECASE),
     ]
 
+    # Patterns that suggest REWRITING specific sections (not appending)
+    # These take priority over regular modify patterns
+    REWRITE_PATTERNS = [
+        # Explicit section numbers: "rewrite section 2", "redo section 3"
+        re.compile(r"(rewrite|redo|regenerate|redo)\s+(section|part)\s*\d+", re.IGNORECASE),
+        # Ordinal references: "rewrite the first section", "redo the second part"
+        re.compile(r"(rewrite|redo|regenerate)\s+(the\s+)?(first|second|third|fourth|fifth|last)\s+(section|part)", re.IGNORECASE),
+        # "rewrite section X again"
+        re.compile(r"(rewrite|redo)\s+.{0,30}\s+again", re.IGNORECASE),
+        # "can you rewrite X" patterns
+        re.compile(r"can\s+you\s+(rewrite|redo|regenerate)", re.IGNORECASE),
+        # Direct rewrite requests
+        re.compile(r"^rewrite\s+", re.IGNORECASE),
+    ]
+
     @classmethod
     def detect_intent(
         cls,
         message: str,
         has_active_artifact: bool,
-    ) -> Literal["modify", "create", "ambiguous"]:
+    ) -> Literal["modify", "rewrite", "create", "ambiguous"]:
         """
         Detect user intent from message.
 
@@ -83,7 +98,8 @@ class ArtifactIntentDetector:
             has_active_artifact: Whether there's an active artifact in the UI
 
         Returns:
-            "modify" - User wants to modify active artifact
+            "rewrite" - User wants to rewrite specific section(s)
+            "modify" - User wants to add/append to artifact
             "create" - User wants to create new artifact
             "ambiguous" - Can't determine with confidence, frontend should ask
         """
@@ -97,7 +113,13 @@ class ArtifactIntentDetector:
             if pattern.search(message_lower):
                 return "create"
 
-        # Check strong modify patterns
+        # Check rewrite patterns BEFORE modify (rewrite is more specific)
+        if has_active_artifact:
+            for pattern in cls.REWRITE_PATTERNS:
+                if pattern.search(message_lower):
+                    return "rewrite"
+
+        # Check strong modify patterns (append/add)
         for pattern in cls.MODIFY_PATTERNS:
             if pattern.search(message_lower):
                 return "modify" if has_active_artifact else "create"

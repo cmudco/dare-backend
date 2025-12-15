@@ -28,6 +28,7 @@ from core.services.dtos.artifact_dto import build_artifact_context
 from conversations.services.websocket_response_service import WebSocketResponseService
 from conversations.services.artifact_service import ArtifactService
 from conversations.services.artifact_intent_detector import ArtifactIntentDetector
+from conversations.services.artifact_graph.db_helpers import get_artifact, get_latest_version_in_group
 
 logger = logging.getLogger(__name__)
 
@@ -113,12 +114,21 @@ class ArtifactCoordinator:
                 has_active_artifact=True,
             )
             # Use active artifact as target if not explicitly set
-            if resolved_action == "modify":
+            if resolved_action in ("modify", "rewrite"):
                 target_artifact_id = target_artifact_id or active_artifact_id
             logger.info(f"Artifact intent detection: action={artifact_action} -> resolved={resolved_action}")
 
         # Route to appropriate flow
-        if resolved_action == "modify" and target_artifact_id:
+        if resolved_action == "rewrite" and target_artifact_id:
+            # Section rewrite - regenerate specific section(s)
+            target_artifact_id = await self._resolve_to_latest_version(target_artifact_id)
+            logger.info(f"Resolved target artifact to latest version for rewrite: {target_artifact_id}")
+            await self._run_artifact_section_rewrite(message_data, message_obj, llm, target_artifact_id)
+        elif resolved_action == "modify" and target_artifact_id:
+            # CRITICAL: Always resolve to the latest version in the artifact group
+            # This fixes the bug where clicking an old version in UI caused branching
+            target_artifact_id = await self._resolve_to_latest_version(target_artifact_id)
+            logger.info(f"Resolved target artifact to latest version: {target_artifact_id}")
             await self._run_artifact_modification(message_data, message_obj, llm, target_artifact_id)
         else:
             # Existing create/continue flow
@@ -289,6 +299,165 @@ class ArtifactCoordinator:
             logger.exception(f"Error modifying artifact: {str(e)}")
             await self.send_error(ErrorCode.ARTIFACT_ERROR, f"Error modifying artifact: {str(e)}")
 
+    async def _run_artifact_section_rewrite(
+        self,
+        message_data: Dict[str, Any],
+        message_obj: Message,
+        llm: LLM,
+        target_artifact_id: str,
+    ):
+        """
+        Execute artifact section rewrite logic.
+        
+        Instead of appending new sections, this rewrites a specific section
+        in place while keeping all other sections unchanged.
+
+        Args:
+            message_data: Validated message data
+            message_obj: AI message object  
+            llm: LLM instance to use
+            target_artifact_id: ID of the artifact to rewrite section in
+        """
+        from core.prompts.artifact_prompts import (
+            get_section_rewrite_prompt,
+            parse_sections_from_content,
+            reconstruct_content_with_new_section,
+            extract_target_section_from_message,
+        )
+        from conversations.services.artifact_graph.ai_services import get_ai_service
+        
+        try:
+            # Get the artifact
+            artifact = await get_artifact(int(target_artifact_id))
+            content = await database_sync_to_async(lambda: artifact.content)()
+            title = await database_sync_to_async(lambda: artifact.title)()
+            artifact_type = await database_sync_to_async(lambda: artifact.artifact_type)()
+            
+            # Parse content into sections
+            sections = parse_sections_from_content(content)
+            if not sections:
+                logger.warning(f"No sections found in artifact {target_artifact_id}, falling back to modify")
+                await self._run_artifact_modification(message_data, message_obj, llm, target_artifact_id)
+                return
+            
+            # Determine which section to rewrite
+            user_message = message_data.get("message", "")
+            target_section_num = extract_target_section_from_message(user_message, len(sections))
+            
+            if not target_section_num or target_section_num > len(sections):
+                logger.warning(f"Could not determine target section, falling back to modify")
+                await self._run_artifact_modification(message_data, message_obj, llm, target_artifact_id)
+                return
+            
+            target_section = sections[target_section_num - 1]
+            
+            # Build context summary of other sections
+            other_sections_summary = "\n".join([
+                f"- Section {s['number']}: {s['title']}"
+                for s in sections if s['number'] != target_section_num
+            ])
+            
+            # Build the rewrite prompt
+            system_prompt = get_section_rewrite_prompt(
+                title=title,
+                artifact_type=artifact_type,
+                total_sections=len(sections),
+                target_section_number=target_section_num,
+                target_section_title=target_section['title'],
+                original_section_content=target_section['content'],
+                other_sections_summary=other_sections_summary,
+                user_message=user_message,
+            )
+            
+            logger.info(
+                f"Starting section rewrite: artifact={target_artifact_id}, "
+                f"section={target_section_num} '{target_section['title']}'"
+            )
+            
+            # Send rewrite_init notification to frontend
+            await self.send({
+                "type": "artifact_rewrite_init",
+                "artifactId": target_artifact_id,
+                "targetSection": target_section_num,
+                "targetSectionTitle": target_section['title'],
+            })
+            
+            # Call LLM to generate new section content
+            ai_service = await get_ai_service(llm, self.user)
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_message},
+            ]
+            
+            new_section_content = ""
+            async for chunk, usage in ai_service.stream_chat_completion(
+                messages=messages,
+                max_tokens=2000,
+                temperature=0.7,
+            ):
+                if chunk:
+                    new_section_content += chunk
+                    # Stream progress to frontend
+                    await self.send({
+                        "type": "artifact_rewrite_stream",
+                        "artifactId": target_artifact_id,
+                        "chunk": chunk,
+                        "targetSection": target_section_num,
+                    })
+            
+            # Reconstruct full content with new section
+            new_content = reconstruct_content_with_new_section(
+                content, sections, target_section_num, new_section_content
+            )
+            
+            # Create new version with rewritten content
+            new_artifact = await database_sync_to_async(artifact.create_new_version)()
+            new_artifact.content = new_content
+            new_artifact.message = message_obj
+            new_artifact.status = ArtifactStatus.COMPLETED
+            await database_sync_to_async(new_artifact.save)()
+            
+            new_version = await database_sync_to_async(lambda: new_artifact.version)()
+            new_artifact_id = await database_sync_to_async(lambda: new_artifact.id)()
+            
+            logger.info(
+                f"Section rewrite complete: new artifact {new_artifact_id} v{new_version}, "
+                f"rewrote section {target_section_num}"
+            )
+            
+            # Get additional data for frontend
+            outline = await database_sync_to_async(lambda: new_artifact.outline)()
+            estimated_sections = await database_sync_to_async(lambda: new_artifact.estimated_sections)()
+            current_section = await database_sync_to_async(lambda: new_artifact.current_section)()
+            artifact_group_id = await database_sync_to_async(lambda: new_artifact.artifact_group_id)()
+            
+            # Send completion notification with full artifact data
+            await self.send({
+                "type": "artifact_rewrite_complete",
+                "artifactId": str(new_artifact_id),
+                "parentArtifactId": target_artifact_id,
+                "artifactGroupId": artifact_group_id,
+                "version": new_version,
+                "targetSection": target_section_num,
+                "content": new_content,
+                "title": title,
+                "outline": outline,
+                "artifactType": artifact_type,
+                "estimatedSections": estimated_sections,
+                "currentSection": current_section,
+            })
+            
+            # Finalize the message
+            await self._finalize_artifact_message(
+                message_obj=message_obj,
+                artifact_id=str(new_artifact_id),
+                token_usage=None,  # TODO: Track token usage for rewrite
+            )
+
+        except Exception as e:
+            logger.exception(f"Error rewriting artifact section: {str(e)}")
+            await self.send_error(ErrorCode.ARTIFACT_ERROR, f"Error rewriting section: {str(e)}")
+
     async def _finalize_artifact_message(
         self,
         message_obj: Message,
@@ -379,6 +548,45 @@ class ArtifactCoordinator:
             data: Data dictionary to send (already formatted)
         """
         await self.send(data)
+
+    async def _resolve_to_latest_version(self, artifact_id: str) -> str:
+        """
+        Resolve an artifact ID to the latest version in its artifact group.
+        
+        This ensures that modifications always build on the latest version,
+        even if the user is viewing an older version in the sidecar.
+        
+        Args:
+            artifact_id: The artifact ID from the frontend (may be any version)
+            
+        Returns:
+            The ID of the latest version in the artifact's group,
+            or the original ID if no group exists
+        """
+        try:
+            # Get the artifact to find its group
+            artifact = await get_artifact(int(artifact_id))
+            artifact_group_id = await database_sync_to_async(lambda: artifact.artifact_group_id)()
+            
+            if artifact_group_id:
+                # Get the latest version in the group
+                latest = await get_latest_version_in_group(artifact_group_id)
+                if latest:
+                    latest_id = await database_sync_to_async(lambda: latest.id)()
+                    if str(latest_id) != artifact_id:
+                        logger.info(
+                            f"Resolved artifact {artifact_id} to latest version {latest_id} "
+                            f"in group {artifact_group_id}"
+                        )
+                    return str(latest_id)
+            
+            # No group or no latest version found, use original
+            return artifact_id
+            
+        except Exception as e:
+            logger.warning(f"Failed to resolve latest version for artifact {artifact_id}: {e}")
+            return artifact_id
+
 
     async def handle_continue_artifact(
         self,
