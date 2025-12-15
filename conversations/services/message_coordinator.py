@@ -720,7 +720,7 @@ class MessageCoordinator:
         )()
 
     async def send_conversation_history(self):
-        """Send conversation history to client."""
+        """Send conversation history and artifacts to client."""
         try:
             # Use the existing fetch_chat_history_from_db method
             # which returns already formatted and camelized history
@@ -728,15 +728,33 @@ class MessageCoordinator:
                 self.conversation
             )
 
-            # Send as conversation_history message
+            # Fetch all artifacts for this conversation
+            artifacts = await self._fetch_conversation_artifacts()
+
+            # Send as conversation_history message with artifacts
             payload = {
                 "type": "conversation_history",
-                "conversationHistory": history
+                "conversationHistory": history,
+                "artifacts": artifacts,  # Include artifacts for preloading
             }
             await self.send(payload)
 
         except Exception as e:
             logger.exception(f"Error sending conversation history: {str(e)}")
+
+    async def _fetch_conversation_artifacts(self):
+        """Fetch all artifacts for the current conversation."""
+        def _get_artifacts():
+            from conversations.api.serializers import ArtifactListSerializer
+            artifacts = Artifact.active_objects.filter(
+                conversation=self.conversation
+            ).select_related('conversation', 'artifact_group', 'parent_artifact').order_by('-created_at')
+            serializer = ArtifactListSerializer(artifacts, many=True)
+            return serializer.data
+
+        artifacts_data = await database_sync_to_async(_get_artifacts)()
+        # Camelize the artifact data to match frontend expectations
+        return camelize(artifacts_data)
 
     async def send_latest_learning_progress(self):
         """Send latest learning progress assessment to client (Socratic only)."""
