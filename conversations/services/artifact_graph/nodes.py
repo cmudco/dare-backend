@@ -664,6 +664,7 @@ async def complete_node(state: ArtifactState) -> Dict[str, Any]:
         complete_event = ArtifactCompleteEvent(
             artifact_id=state["artifact_id"],
             total_words=word_count,
+            estimated_sections=state.get("estimated_sections", 0),
         )
         
         return {

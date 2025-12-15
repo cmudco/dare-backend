@@ -443,7 +443,8 @@ class WebSocketResponseService:
     def format_artifact_complete(
         cls,
         artifact_id: str,
-        total_words: int
+        total_words: int,
+        estimated_sections: int = 0
     ) -> Dict[str, Any]:
         """
         Format artifact completion message for WebSocket transmission.
@@ -453,6 +454,7 @@ class WebSocketResponseService:
         Args:
             artifact_id: Unique identifier for the artifact
             total_words: Total word count of the generated artifact
+            estimated_sections: Total number of sections (for frontend to mark all as complete)
 
         Returns:
             Dictionary ready for JSON serialization
@@ -461,4 +463,6 @@ class WebSocketResponseService:
             "type": "artifact_complete",
             "artifactId": artifact_id,
             "totalWords": total_words,
+            "estimatedSections": estimated_sections,
         }
+
