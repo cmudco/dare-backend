@@ -331,6 +331,10 @@ async def run_artifact_workflow(
         sent_event_count = 0
 
         async for event in app.astream(initial_state, config, stream_mode="values"):
+            # Check for completion or error FIRST, but process events before breaking
+            status = event.get("status")
+            is_terminal = status in ("completed", "paused", "error")
+
             # Process only NEW pending events
             pending_events = event.get("pending_events", [])
             new_events = pending_events[sent_event_count:]
@@ -342,9 +346,8 @@ async def run_artifact_workflow(
 
             sent_event_count = len(pending_events)
 
-            # Check for completion or error
-            status = event.get("status")
-            if status in ("completed", "paused", "error"):
+            # Now break after processing all events
+            if is_terminal:
                 yield_meta = {
                     "status": status,
                     "artifact_id": event.get("artifact_id"),
@@ -411,6 +414,7 @@ async def _process_event(
         return "", {"type": "artifact_pause"}
 
     elif event_type == "artifact_complete":
+        logger.info(f"Sending artifact_complete event: artifact_id={artifact_event.artifact_id}, totalWords={artifact_event.total_words}, estimatedSections={artifact_event.estimated_sections}")
         return "", {"type": "artifact_complete"}
 
     elif event_type == "error":
