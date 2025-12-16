@@ -125,6 +125,7 @@ def create_artifact_graph(mode: ArtifactMode) -> StateGraph:
 
 
 _checkpointer = None
+_checkpointer_cm = None  # Keep reference to context manager to prevent it from closing
 
 
 async def get_checkpointer():
@@ -137,7 +138,7 @@ async def get_checkpointer():
     Returns:
         Checkpointer instance (MemorySaver or AsyncPostgresSaver)
     """
-    global _checkpointer
+    global _checkpointer, _checkpointer_cm
 
     if _checkpointer is None:
         db_settings = settings.DATABASES.get("default", {})
@@ -156,7 +157,11 @@ async def get_checkpointer():
             database = db_settings.get("NAME", "dare")
 
             connection_string = f"postgresql://{user}:{password}@{host}:{port}/{database}"
-            _checkpointer = AsyncPostgresSaver.from_conn_string(connection_string)
+            # AsyncPostgresSaver.from_conn_string() returns an async context manager
+            # We need to enter it and keep it alive for the app lifetime
+            _checkpointer_cm = AsyncPostgresSaver.from_conn_string(connection_string)
+            _checkpointer = await _checkpointer_cm.__aenter__()
+            # Setup the database tables
             await _checkpointer.setup()
 
             logger.info(
