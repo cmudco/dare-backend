@@ -54,7 +54,7 @@ def create_artifact_graph(mode: ArtifactMode) -> StateGraph:
                                       │
                                       └── complete → END
 
-                error → END (from any node)
+                error_handler → END (from any node)
     ```
 
     Entry point varies by mode:
@@ -79,7 +79,7 @@ def create_artifact_graph(mode: ArtifactMode) -> StateGraph:
     workflow.add_node("checkpoint", checkpoint_node)
     workflow.add_node("pause", pause_node)
     workflow.add_node("complete", complete_node)
-    workflow.add_node("error", error_node)
+    workflow.add_node("error_handler", error_node)
 
     # Set entry point based on mode
     if mode == ArtifactMode.MODIFY:
@@ -98,7 +98,7 @@ def create_artifact_graph(mode: ArtifactMode) -> StateGraph:
             "checkpoint": "checkpoint",
             "complete": "complete",
             "pause": "pause",
-            "error": "error",
+            "error": "error_handler",
         },
     )
 
@@ -116,7 +116,7 @@ def create_artifact_graph(mode: ArtifactMode) -> StateGraph:
     # Terminal nodes
     workflow.add_edge("pause", END)
     workflow.add_edge("complete", END)
-    workflow.add_edge("error", END)
+    workflow.add_edge("error_handler", END)
 
     return workflow
 
