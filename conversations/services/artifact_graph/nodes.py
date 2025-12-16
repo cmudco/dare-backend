@@ -643,22 +643,22 @@ async def pause_node(state: ArtifactState) -> Dict[str, Any]:
 async def complete_node(state: ArtifactState) -> Dict[str, Any]:
     """
     Complete node - Finalizes the artifact.
-    
+
     This node:
     1. Updates artifact status to completed
     2. Sends completion message
-    
+
     Checkpointed: Yes - saves completed state
     """
     logger.info(f"Complete node: Completing artifact {state['artifact_id']}")
-    
+
     try:
         # Update artifact status
         artifact = await update_artifact_db(
             state["artifact_id"],
             status=ArtifactStatus.COMPLETED,
         )
-        
+
         # Get word count
         word_count = len(state["content"].split())
         complete_event = ArtifactCompleteEvent(
@@ -666,17 +666,27 @@ async def complete_node(state: ArtifactState) -> Dict[str, Any]:
             total_words=word_count,
             estimated_sections=state.get("estimated_sections", 0),
         )
-        
+
+        logger.info(f"Complete node: Created ArtifactCompleteEvent with artifact_id={state['artifact_id']}, word_count={word_count}, estimated_sections={state.get('estimated_sections', 0)}")
+
         return {
             "status": "completed",
             "pending_events": [complete_event],
         }
-        
+
     except Exception as e:
         logger.exception(f"Complete node error: {str(e)}")
+        # Still create the complete event even if there was an error updating DB
+        word_count = len(state["content"].split())
+        complete_event = ArtifactCompleteEvent(
+            artifact_id=state["artifact_id"],
+            total_words=word_count,
+            estimated_sections=state.get("estimated_sections", 0),
+        )
         return {
             "status": "completed",
             "error": str(e),
+            "pending_events": [complete_event],
         }
 
 
