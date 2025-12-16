@@ -17,11 +17,11 @@ def should_continue_generating(state: ArtifactState) -> str:
         - "generate_section" if more sections needed and within iteration limit
         - "checkpoint" if iteration batch complete
         - "complete" if all sections done
-        - "error" if there was an error
+        - "error_handler" if there was an error
     """
     # Check for errors
     if state.get("error") and state.get("retry_count", 0) >= 3:
-        return "error"
+        return "error_handler"
 
     # Check if paused (status set by generate_section_node when pause detected)
     if state.get("status") == "paused":
