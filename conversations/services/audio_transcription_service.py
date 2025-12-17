@@ -25,9 +25,71 @@ WHISPER_MAX_FILE_SIZE = 25 * 1024 * 1024  # 26214400 bytes
 # Diarization model identifier
 DIARIZE_MODEL = "gpt-4o-transcribe-diarize"
 
+# Diarization model max duration (1400 seconds, use 1300 to be safe)
+DIARIZE_MAX_DURATION_SECONDS = 1300
+
 
 class AudioTranscriptionService:
     """Service for handling audio file transcription."""
+
+    @staticmethod
+    def _get_audio_duration(audio_file_path: str) -> float:
+        """Get audio duration in seconds using ffprobe."""
+        duration_cmd = [
+            'ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+            '-of', 'default=noprint_wrappers=1:nokey=1', audio_file_path
+        ]
+        duration_output = subprocess.run(duration_cmd, capture_output=True, text=True)
+        return float(duration_output.stdout.strip())
+
+    @staticmethod
+    def split_audio_by_duration(audio_file_path: str, max_duration: int = DIARIZE_MAX_DURATION_SECONDS) -> List[str]:
+        """
+        Split audio file into chunks based on duration.
+
+        Args:
+            audio_file_path: Path to the audio file
+            max_duration: Maximum duration per chunk in seconds
+
+        Returns:
+            List of paths to chunked audio files
+        """
+        total_duration = AudioTranscriptionService._get_audio_duration(audio_file_path)
+
+        if total_duration <= max_duration:
+            return [audio_file_path]
+
+        logger.info(f"Audio duration ({total_duration}s) exceeds diarization limit ({max_duration}s). Splitting into chunks...")
+
+        # Split audio into chunks
+        chunk_files = []
+        temp_dir = tempfile.mkdtemp()
+        chunk_index = 0
+        start_time = 0
+
+        while start_time < total_duration:
+            chunk_path = os.path.join(temp_dir, f"chunk_{chunk_index}.mp3")
+
+            split_cmd = [
+                'ffmpeg', '-i', audio_file_path,
+                '-ss', str(start_time),
+                '-t', str(max_duration),
+                '-acodec', 'libmp3lame',
+                '-ar', '16000',  # 16kHz
+                '-ac', '1',      # Mono
+                '-b:a', '64k',   # 64kbps
+                '-y',
+                chunk_path
+            ]
+
+            subprocess.run(split_cmd, capture_output=True, check=True)
+            chunk_files.append(chunk_path)
+
+            start_time += max_duration
+            chunk_index += 1
+
+        logger.info(f"Split audio into {len(chunk_files)} chunks by duration")
+        return chunk_files
 
     @staticmethod
     def split_audio_file(audio_file_path: str, max_size: int = WHISPER_MAX_FILE_SIZE) -> List[str]:
@@ -49,12 +111,7 @@ class AudioTranscriptionService:
         logger.info(f"Audio file size ({file_size} bytes) exceeds Whisper limit ({max_size} bytes). Splitting into chunks...")
 
         # Get audio duration
-        duration_cmd = [
-            'ffprobe', '-v', 'error', '-show_entries', 'format=duration',
-            '-of', 'default=noprint_wrappers=1:nokey=1', audio_file_path
-        ]
-        duration_output = subprocess.run(duration_cmd, capture_output=True, text=True)
-        total_duration = float(duration_output.stdout.strip())
+        total_duration = AudioTranscriptionService._get_audio_duration(audio_file_path)
 
         # Calculate chunk duration to stay under max_size
         # Rough estimate: size_per_second = file_size / duration
@@ -140,11 +197,14 @@ class AudioTranscriptionService:
 
                 transcription_text = await whisper_service.transcribe_video(video_data, language)
             else:
-                # For audio files, check size and split if needed
+                # For audio files, check size/duration and split if needed
                 audio_file_path = file_obj.file.path
 
-                # Split file if it exceeds Whisper's limit
-                chunk_files = AudioTranscriptionService.split_audio_file(audio_file_path)
+                # Use duration-based splitting for diarization model, size-based for Whisper
+                if model == DIARIZE_MODEL:
+                    chunk_files = AudioTranscriptionService.split_audio_by_duration(audio_file_path)
+                else:
+                    chunk_files = AudioTranscriptionService.split_audio_file(audio_file_path)
 
                 transcription_texts = []
                 temp_files_to_cleanup = []
@@ -291,7 +351,13 @@ class AudioTranscriptionService:
             else:
                 # For audio files, split and stream each chunk
                 audio_file_path = file_obj.file.path
-                chunk_files = AudioTranscriptionService.split_audio_file(audio_file_path)
+                
+                # Use duration-based splitting for diarization model, size-based for Whisper
+                if model == DIARIZE_MODEL:
+                    chunk_files = AudioTranscriptionService.split_audio_by_duration(audio_file_path)
+                else:
+                    chunk_files = AudioTranscriptionService.split_audio_file(audio_file_path)
+                    
                 total_chunks = len(chunk_files)
 
                 transcription_texts = []
