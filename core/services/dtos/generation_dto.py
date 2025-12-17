@@ -18,6 +18,8 @@ class GenerationConfig:
         web_search_enabled: Enable web search tool
         image_generation_enabled: Enable image generation (DALL-E)
         image_generation_settings: DALL-E settings (size, quality, style)
+        audio_transcription_enabled: Enable audio transcription (Whisper)
+        audio_transcription_settings: Whisper settings (language)
         structured_spec: JSON schema for structured output
         artifacts_enabled: Enable artifact generation for long-form content
     """
@@ -27,6 +29,8 @@ class GenerationConfig:
     web_search_enabled: bool = False
     image_generation_enabled: bool = False
     image_generation_settings: Optional[Dict[str, Any]] = None
+    audio_transcription_enabled: bool = False
+    audio_transcription_settings: Optional[Dict[str, Any]] = None
     structured_spec: Optional[Dict[str, Any]] = None
     artifacts_enabled: bool = False
 
@@ -40,6 +44,10 @@ class GenerationConfig:
     def is_image_generation_request(self) -> bool:
         """Check if this is an image generation request."""
         return self.image_generation_enabled
+
+    def is_audio_transcription_request(self) -> bool:
+        """Check if this is an audio transcription request."""
+        return self.audio_transcription_enabled
 
     def is_artifact_request(self) -> bool:
         """Check if this is an artifact generation request."""

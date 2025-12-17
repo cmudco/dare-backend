@@ -38,6 +38,10 @@ class LLM(models.Model):
         default=False,
         help_text="Whether the model is an image generation model (e.g., DALL-E)."
     )
+    is_audio_transcriber = models.BooleanField(
+        default=False,
+        help_text="Whether the model supports audio transcription (e.g., Whisper, Gemini)."
+    )
 
     input_token_rate_per_million = models.DecimalField(
             max_digits=10,
@@ -179,6 +183,10 @@ class Conversation(BaseModel):
     image_generation_enabled = models.BooleanField(
         default=False,
         help_text="Enable AI image generation for this conversation."
+    )
+    audio_transcription_enabled = models.BooleanField(
+        default=False,
+        help_text="Enable audio transcription for this conversation."
     )
     artifacts_enabled = models.BooleanField(
         default=False,

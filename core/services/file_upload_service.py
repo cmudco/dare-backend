@@ -18,7 +18,8 @@ logger = logging.getLogger(__name__)
 # Media file MIME type prefixes
 MEDIA_MIME_TYPES = {
     'image': ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp', 'image/tiff', 'image/svg+xml'],
-    'video': ['video/mp4', 'video/webm', 'video/quicktime', 'video/x-msvideo', 'video/mpeg', 'video/ogg']
+    'video': ['video/mp4', 'video/webm', 'video/quicktime', 'video/x-msvideo', 'video/mpeg', 'video/ogg'],
+    'audio': ['audio/mpeg', 'audio/wav', 'audio/x-wav', 'audio/mp4', 'audio/x-m4a', 'audio/flac', 'audio/aac', 'audio/x-ms-wma', 'audio/opus', 'audio/ogg']
 }
 
 
@@ -30,13 +31,13 @@ class FileUploadService:
     @staticmethod
     def detect_media_type(content_type: str) -> tuple[bool, Optional[str]]:
         """
-        Detect if file is a media file (image/video) and return its type.
+        Detect if file is a media file (image/video/audio) and return its type.
 
         Args:
             content_type: MIME type of the file
 
         Returns:
-            tuple: (is_media, media_type) where media_type is 'image', 'video', or None
+            tuple: (is_media, media_type) where media_type is 'image', 'video', 'audio', or None
         """
         if not content_type:
             return False, None
