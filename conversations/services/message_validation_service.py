@@ -64,6 +64,8 @@ class MessageValidationService:
             "web_search_enabled": data.get("web_search_enabled"),
             "image_generation_enabled": data.get("image_generation_enabled"),
             "image_generation_settings": data.get("image_generation_settings"),
+            "audio_transcription_enabled": data.get("audio_transcription_enabled"),
+            "audio_transcription_settings": data.get("audio_transcription_settings"),
             "artifacts_enabled": data.get("artifacts_enabled", False),
             "artifact_id": data.get("artifact_id"),  # For continuing existing artifact
 
@@ -143,6 +145,8 @@ class MessageValidationService:
             "web_search_enabled": data.get("web_search_enabled"),
             "image_generation_enabled": data.get("image_generation_enabled"),
             "image_generation_settings": data.get("image_generation_settings"),
+            "audio_transcription_enabled": data.get("audio_transcription_enabled"),
+            "audio_transcription_settings": data.get("audio_transcription_settings"),
             "artifacts_enabled": data.get("artifacts_enabled", False),
         }
 

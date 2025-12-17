@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from channels.db import database_sync_to_async
 from conversations.constants import Provider, SenderType
 from conversations.models import LLM, Conversation, Message
+from conversations.services.audio_transcription_service import AudioTranscriptionService
 from core.services.document_processor import DocumentProcessor
 from core.services.openai_service import OpenAIService
 from core.services.claude_service import ClaudeService
@@ -57,7 +58,10 @@ class LLMService:
             messages = await self._build_messages_for_request(request, llm)
             all_images = await self._process_media_files(request)
 
-            if request.requires_image_generation():
+            if request.requires_audio_transcription():
+                async for chunk, usage in self._execute_audio_transcription(request, llm):
+                    yield chunk, usage
+            elif request.requires_image_generation():
                 async for chunk, usage in self._execute_image_generation(request, llm):
                     yield chunk, usage
             else:
@@ -275,6 +279,75 @@ class LLMService:
             style=style
         ):
             yield chunk, usage
+
+    async def _execute_audio_transcription(
+        self,
+        request: LLMQueryRequest,
+        llm: LLM
+    ) -> AsyncGenerator[Tuple[str, Dict], None]:
+        """Execute audio transcription request.
+
+        Args:
+            request: LLMQueryRequest with audio transcription settings
+            llm: LLM model (must be Whisper or support audio transcription)
+
+        Yields:
+            Tuple of (chunk: str, usage: Dict)
+        """
+        # Get audio files from media_ids
+        audio_files = []
+        if request.context.media_ids:
+            @database_sync_to_async
+            def get_audio_files():
+                return list(File.active_objects.filter(
+                    id__in=request.context.media_ids,
+                    media_type='audio'
+                ))
+
+            audio_files = await get_audio_files()
+
+        if not audio_files:
+            yield "Error: No audio files found. Please upload an audio file to transcribe.", None
+            return
+
+        settings = request.generation.audio_transcription_settings or {}
+        language = settings.get("language", "auto")
+        # Convert 'auto' to None for Whisper API
+        language = None if language == "auto" else language
+
+        # Transcribe each audio file
+        transcription_results = []
+        for audio_file in audio_files:
+            try:
+                transcription = await AudioTranscriptionService.transcribe_audio_file(
+                    file_obj=audio_file,
+                    language=language,
+                    model=llm.identifier
+                )
+
+                if transcription:
+                    transcription_results.append({
+                        "file": audio_file,
+                        "transcription": transcription
+                    })
+            except Exception as e:
+                logger.exception(f"Error transcribing audio file {audio_file.id}: {str(e)}")
+                yield f"Error transcribing {audio_file.name}: {str(e)}", None
+                return
+
+        # Format transcription results
+        if transcription_results:
+            result_text = AudioTranscriptionService.format_transcription_for_display(
+                transcription_results[0]["transcription"]
+            )
+
+            # Yield the transcription text and usage data
+            usage_data = transcription_results[0]["transcription"].copy()
+            usage_data["transcription_result"] = transcription_results[0]["transcription"]
+
+            yield result_text, usage_data
+        else:
+            yield "Error: Transcription failed.", None
 
     async def _execute_llm_completion(
         self,

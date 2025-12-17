@@ -14,6 +14,7 @@ class ContextConfig:
     Attributes:
         file_ids: Full file content IDs (read entire file)
         embedding_ids: File IDs for semantic search (RAG)
+        media_ids: Media file IDs (images, videos, audio)
         tag_ids: Tag IDs to fetch associated files
         folder_ids: Folder IDs to fetch contained files
         referenced_conversation_ids: Previous conversation IDs for context
@@ -23,6 +24,7 @@ class ContextConfig:
     """
     file_ids: List[str] = field(default_factory=list)
     embedding_ids: List[str] = field(default_factory=list)
+    media_ids: List[str] = field(default_factory=list)
     tag_ids: List[str] = field(default_factory=list)
     folder_ids: List[str] = field(default_factory=list)
     referenced_conversation_ids: List[str] = field(default_factory=list)

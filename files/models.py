@@ -115,7 +115,7 @@ class File(BaseModel):
     )
     is_media = models.BooleanField(
         default=False,
-        help_text="Flag indicating if this file is a media file (image/video) that should not be vectorized"
+        help_text="Flag indicating if this file is a media file (image/video/audio) that should not be vectorized"
     )
     media_type = models.CharField(
         max_length=50,
@@ -124,10 +124,11 @@ class File(BaseModel):
         choices=[
             ('image', 'Image'),
             ('video', 'Video'),
+            ('audio', 'Audio'),
             ('document', 'Document'),
             ('generated_image', 'Generated Image')
         ],
-        help_text="Type of media file: image, video, document, or generated_image"
+        help_text="Type of media file: image, video, audio, document, or generated_image"
     )
 
     # AI Image Generation Fields

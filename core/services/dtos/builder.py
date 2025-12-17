@@ -46,6 +46,7 @@ class LLMQueryRequestBuilder:
         context = ContextConfig(
             file_ids=message_data.get("file_ids", []),
             embedding_ids=message_data.get("embedding_ids", []),
+            media_ids=message_data.get("media_ids", []),
             tag_ids=message_data.get("tag_ids", []),
             folder_ids=message_data.get("folder_ids", []),
             referenced_conversation_ids=message_data.get("referenced_conversation_ids", []),
@@ -62,6 +63,8 @@ class LLMQueryRequestBuilder:
             web_search_enabled=message_data.get("web_search_enabled", False),
             image_generation_enabled=message_data.get("image_generation_enabled", False),
             image_generation_settings=message_data.get("image_generation_settings"),
+            audio_transcription_enabled=message_data.get("audio_transcription_enabled", False),
+            audio_transcription_settings=message_data.get("audio_transcription_settings"),
             structured_spec=message_data.get("structured_spec"),
             artifacts_enabled=message_data.get("artifacts_enabled", False),
         )
@@ -144,6 +147,7 @@ class LLMQueryRequestBuilder:
         context = ContextConfig(
             file_ids=file_ids or [],
             embedding_ids=embedding_ids or [],
+            media_ids=[],  # Workflows don't use media files
             tag_ids=tag_ids or [],
             folder_ids=folder_ids or [],
             max_context_snippets=max_context_snippets,
