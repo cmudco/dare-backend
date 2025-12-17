@@ -7,6 +7,9 @@ Saves transcriptions as structured data that can be displayed in conversations.
 
 import logging
 import base64
+import tempfile
+import subprocess
+import os
 from typing import Dict, Optional, List
 from datetime import datetime
 from files.models import File
@@ -16,9 +19,76 @@ from conversations.constants import Provider
 
 logger = logging.getLogger(__name__)
 
+# Whisper API file size limit (25MB)
+WHISPER_MAX_FILE_SIZE = 25 * 1024 * 1024  # 26214400 bytes
+
 
 class AudioTranscriptionService:
     """Service for handling audio file transcription."""
+
+    @staticmethod
+    def split_audio_file(audio_file_path: str, max_size: int = WHISPER_MAX_FILE_SIZE) -> List[str]:
+        """
+        Split large audio file into smaller chunks using ffmpeg.
+
+        Args:
+            audio_file_path: Path to the audio file
+            max_size: Maximum size per chunk in bytes
+
+        Returns:
+            List of paths to chunked audio files
+        """
+        file_size = os.path.getsize(audio_file_path)
+
+        if file_size <= max_size:
+            return [audio_file_path]
+
+        logger.info(f"Audio file size ({file_size} bytes) exceeds Whisper limit ({max_size} bytes). Splitting into chunks...")
+
+        # Get audio duration
+        duration_cmd = [
+            'ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+            '-of', 'default=noprint_wrappers=1:nokey=1', audio_file_path
+        ]
+        duration_output = subprocess.run(duration_cmd, capture_output=True, text=True)
+        total_duration = float(duration_output.stdout.strip())
+
+        # Calculate chunk duration to stay under max_size
+        # Rough estimate: size_per_second = file_size / duration
+        size_per_second = file_size / total_duration
+        chunk_duration = int((max_size * 0.95) / size_per_second)  # 95% of max to be safe
+
+        logger.info(f"Splitting {total_duration}s audio into ~{chunk_duration}s chunks")
+
+        # Split audio into chunks
+        chunk_files = []
+        temp_dir = tempfile.mkdtemp()
+        chunk_index = 0
+        start_time = 0
+
+        while start_time < total_duration:
+            chunk_path = os.path.join(temp_dir, f"chunk_{chunk_index}.mp3")
+
+            split_cmd = [
+                'ffmpeg', '-i', audio_file_path,
+                '-ss', str(start_time),
+                '-t', str(chunk_duration),
+                '-acodec', 'libmp3lame',
+                '-ar', '16000',  # 16kHz for Whisper
+                '-ac', '1',      # Mono
+                '-b:a', '64k',   # 64kbps
+                '-y',
+                chunk_path
+            ]
+
+            subprocess.run(split_cmd, capture_output=True, check=True)
+            chunk_files.append(chunk_path)
+
+            start_time += chunk_duration
+            chunk_index += 1
+
+        logger.info(f"Split audio into {len(chunk_files)} chunks")
+        return chunk_files
 
     @staticmethod
     async def transcribe_audio_file(
@@ -67,19 +137,61 @@ class AudioTranscriptionService:
 
                 transcription_text = await whisper_service.transcribe_video(video_data, language)
             else:
-                # For audio files, directly call Whisper API
+                # For audio files, check size and split if needed
                 audio_file_path = file_obj.file.path
-                with open(audio_file_path, 'rb') as audio_file:
-                    transcript_params = {
-                        "model": model,
-                        "file": audio_file,
-                        "response_format": "text"
-                    }
 
-                    if language:
-                        transcript_params["language"] = language
+                # Split file if it exceeds Whisper's limit
+                chunk_files = AudioTranscriptionService.split_audio_file(audio_file_path)
 
-                    transcription_text = await whisper_service.client.audio.transcriptions.create(**transcript_params)
+                transcription_texts = []
+                temp_files_to_cleanup = []
+
+                try:
+                    for idx, chunk_path in enumerate(chunk_files):
+                        if chunk_path != audio_file_path:
+                            temp_files_to_cleanup.append(chunk_path)
+
+                        logger.info(f"Transcribing chunk {idx + 1}/{len(chunk_files)}")
+
+                        with open(chunk_path, 'rb') as audio_file:
+                            # OpenAI needs the filename with correct extension
+                            # For chunks, use .mp3 extension (what we converted to)
+                            # For original file, use the original extension
+                            if chunk_path == audio_file_path:
+                                # Original file - use original name
+                                chunk_name = file_obj.name
+                            else:
+                                # Chunk file - use .mp3 extension
+                                base_name = os.path.splitext(file_obj.name)[0]
+                                chunk_name = f"{base_name}_chunk{idx}.mp3"
+
+                            transcript_params = {
+                                "model": model,
+                                "file": (chunk_name, audio_file),
+                                "response_format": "text"
+                            }
+
+                            if language:
+                                transcript_params["language"] = language
+
+                            chunk_text = await whisper_service.client.audio.transcriptions.create(**transcript_params)
+                            transcription_texts.append(chunk_text)
+
+                    # Combine all chunks
+                    transcription_text = " ".join(transcription_texts)
+
+                finally:
+                    # Cleanup temporary chunk files
+                    for temp_file in temp_files_to_cleanup:
+                        try:
+                            if os.path.exists(temp_file):
+                                os.unlink(temp_file)
+                            # Remove temp directory if it's empty
+                            temp_dir = os.path.dirname(temp_file)
+                            if os.path.exists(temp_dir) and not os.listdir(temp_dir):
+                                os.rmdir(temp_dir)
+                        except Exception as cleanup_error:
+                            logger.warning(f"Failed to cleanup temp file {temp_file}: {cleanup_error}")
 
             if not transcription_text:
                 logger.error(f"Transcription failed for file ID: {file_obj.id}")
