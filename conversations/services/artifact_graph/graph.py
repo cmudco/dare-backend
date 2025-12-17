@@ -9,9 +9,6 @@ from typing import Optional, AsyncGenerator, Tuple, Dict, Any
 
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
-from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
-
-from django.conf import settings
 
 from .state import (
     ArtifactState,
@@ -141,46 +138,12 @@ async def get_checkpointer():
     global _checkpointer, _checkpointer_cm
 
     if _checkpointer is None:
-        db_settings = settings.DATABASES.get("default", {})
-        db_engine = db_settings.get("ENGINE", "")
-
-        logger.info(f"Checkpointer init: DB engine={db_engine}")
-
-        if "sqlite" in db_engine:
-            _checkpointer = MemorySaver()
-            logger.info(
-                "LangGraph MemorySaver checkpointer initialized (development mode)"
-            )
-        else:
-            user = db_settings.get("USER", "postgres")
-            password = db_settings.get("PASSWORD", "")
-            host = db_settings.get("HOST", "localhost")
-            port = db_settings.get("PORT", "5432")
-            database = db_settings.get("NAME", "dare")
-
-            # Log connection details (without password)
-            logger.info(f"Checkpointer PostgreSQL: host={host}, port={port}, db={database}, user={user}")
-
-            connection_string = f"postgresql://{user}:{password}@{host}:{port}/{database}"
-            # AsyncPostgresSaver.from_conn_string() returns an async context manager
-            # We need to enter it and keep it alive for the app lifetime
-            try:
-                _checkpointer_cm = AsyncPostgresSaver.from_conn_string(connection_string)
-                logger.info("Checkpointer: Created AsyncPostgresSaver context manager")
-                _checkpointer = await _checkpointer_cm.__aenter__()
-                logger.info("Checkpointer: Entered async context")
-                # Setup the database tables
-                await _checkpointer.setup()
-                logger.info("Checkpointer: Setup complete")
-
-                logger.info(
-                    f"LangGraph Postgres checkpointer initialized (production mode) - type={type(_checkpointer).__name__}"
-                )
-            except Exception as e:
-                logger.exception(f"Checkpointer: Failed to initialize PostgreSQL checkpointer: {e}")
-                # Fallback to MemorySaver on error
-                _checkpointer = MemorySaver()
-                logger.warning("Checkpointer: Falling back to MemorySaver due to PostgreSQL error")
+        # Use MemorySaver for all environments
+        # Artifact state persistence is handled by our own database models (Artifact, ArtifactCheckpoint)
+        # LangGraph checkpointing is only needed for in-flight state during a single generation run
+        # PostgreSQL checkpointer was causing issues with pending_events serialization on staging
+        _checkpointer = MemorySaver()
+        logger.info("LangGraph MemorySaver checkpointer initialized")
 
     return _checkpointer
 
