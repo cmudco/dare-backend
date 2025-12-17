@@ -371,7 +371,7 @@ class MessageCoordinator:
                                 "style": usage.get("style", "vivid"),
                             }
 
-                    # Handle audio transcription
+                    # Handle audio transcription (final result)
                     if usage.get("transcription_result"):
                         transcription = usage["transcription_result"]
                         generated_transcription_data = {
