@@ -11,6 +11,9 @@ ALLOWED_FILES = [
     # Video extensions (no vectorization - media files only)
     'mp4', 'webm', 'quicktime', 'x-msvideo', 'mpeg', 'ogg',
 
+    # Audio extensions (no vectorization - media files only)
+    'mp3', 'mpeg', 'wav', 'x-wav', 'x-m4a', 'flac', 'aac', 'x-ms-wma', 'opus',
+
     # MIME suffixes
     'plain', 'rtf', 'html', 'xml',
     'vnd.openxmlformats-officedocument.wordprocessingml.document',
