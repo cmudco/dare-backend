@@ -22,6 +22,9 @@ logger = logging.getLogger(__name__)
 # Whisper API file size limit (25MB)
 WHISPER_MAX_FILE_SIZE = 25 * 1024 * 1024  # 26214400 bytes
 
+# Diarization model identifier
+DIARIZE_MODEL = "gpt-4o-transcribe-diarize"
+
 
 class AudioTranscriptionService:
     """Service for handling audio file transcription."""
@@ -165,16 +168,30 @@ class AudioTranscriptionService:
                                 base_name = os.path.splitext(file_obj.name)[0]
                                 chunk_name = f"{base_name}_chunk{idx}.mp3"
 
+                            # Use diarized_json format for diarization model
+                            response_format = "diarized_json" if model == DIARIZE_MODEL else "text"
+                            
                             transcript_params = {
                                 "model": model,
                                 "file": (chunk_name, audio_file),
-                                "response_format": "text"
+                                "response_format": response_format
                             }
+                            
+                            # Add chunking_strategy for diarization model (required for audio > 30s)
+                            if model == DIARIZE_MODEL:
+                                transcript_params["chunking_strategy"] = "auto"
 
                             if language:
                                 transcript_params["language"] = language
 
-                            chunk_text = await whisper_service.client.audio.transcriptions.create(**transcript_params)
+                            result = await whisper_service.client.audio.transcriptions.create(**transcript_params)
+                            
+                            # Parse diarized response if using diarize model
+                            if model == DIARIZE_MODEL and response_format == "diarized_json":
+                                chunk_text = AudioTranscriptionService._format_diarized_response(result)
+                            else:
+                                chunk_text = result
+                            
                             transcription_texts.append(chunk_text)
 
                     # Combine all chunks
@@ -294,16 +311,30 @@ class AudioTranscriptionService:
                                 base_name = os.path.splitext(file_obj.name)[0]
                                 chunk_name = f"{base_name}_chunk{idx}.mp3"
 
+                            # Use diarized_json format for diarization model
+                            response_format = "diarized_json" if model == DIARIZE_MODEL else "text"
+                            
                             transcript_params = {
                                 "model": model,
                                 "file": (chunk_name, audio_file),
-                                "response_format": "text"
+                                "response_format": response_format
                             }
+                            
+                            # Add chunking_strategy for diarization model (required for audio > 30s)
+                            if model == DIARIZE_MODEL:
+                                transcript_params["chunking_strategy"] = "auto"
 
                             if language:
                                 transcript_params["language"] = language
 
-                            chunk_text = await whisper_service.client.audio.transcriptions.create(**transcript_params)
+                            result = await whisper_service.client.audio.transcriptions.create(**transcript_params)
+                            
+                            # Parse diarized response if using diarize model
+                            if model == DIARIZE_MODEL and response_format == "diarized_json":
+                                chunk_text = AudioTranscriptionService._format_diarized_response(result)
+                            else:
+                                chunk_text = result
+                            
                             transcription_texts.append(chunk_text)
 
                             # Yield chunk transcription immediately
@@ -384,6 +415,66 @@ class AudioTranscriptionService:
         return results
 
     @staticmethod
+    def _format_diarized_response(response) -> str:
+        """
+        Format diarized JSON response into readable text with speaker labels.
+        
+        Args:
+            response: Diarized response from OpenAI API
+            
+        Returns:
+            Formatted text with speaker labels
+        """
+        try:
+            # Handle response object or dict
+            if hasattr(response, 'model_dump'):
+                data = response.model_dump()
+            elif hasattr(response, 'to_dict'):
+                data = response.to_dict()
+            elif isinstance(response, dict):
+                data = response
+            else:
+                # If response is just text, return as-is
+                return str(response)
+            
+            # Extract segments with speaker labels
+            segments = data.get('segments', [])
+            if not segments:
+                # Fallback to text field if no segments
+                return data.get('text', str(response))
+            
+            formatted_lines = []
+            current_speaker = None
+            current_text = []
+            
+            for segment in segments:
+                speaker = segment.get('speaker', 'Unknown')
+                text = segment.get('text', '').strip()
+                
+                if speaker != current_speaker:
+                    # Output previous speaker's text
+                    if current_speaker is not None and current_text:
+                        formatted_lines.append(f"[{current_speaker}]: {' '.join(current_text)}")
+                    current_speaker = speaker
+                    current_text = [text] if text else []
+                else:
+                    if text:
+                        current_text.append(text)
+            
+            # Output last speaker's text
+            if current_speaker is not None and current_text:
+                formatted_lines.append(f"[{current_speaker}]: {' '.join(current_text)}")
+            
+            return '\n\n'.join(formatted_lines) if formatted_lines else data.get('text', '')
+            
+        except Exception as e:
+            logger.warning(f"Failed to parse diarized response: {e}")
+            # Fallback: try to get text directly
+            if hasattr(response, 'text'):
+                return response.text
+            return str(response)
+
+    @staticmethod
     def format_transcription_for_display(transcription: Dict) -> str:
         """
         Format transcription result for display in conversation.
@@ -397,8 +488,11 @@ class AudioTranscriptionService:
         file_name = transcription.get('file_name', 'Unknown')
         language = transcription.get('language', 'auto')
         text = transcription.get('text', '')
+        model = transcription.get('model', 'whisper-1')
 
         formatted = f"**Transcription of `{file_name}`**\n\n"
+        if model == DIARIZE_MODEL:
+            formatted += "*Speaker Diarization Enabled*\n\n"
         if language and language != 'auto':
             formatted += f"*Language: {language}*\n\n"
         formatted += f"{text}"
