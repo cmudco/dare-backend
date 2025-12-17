@@ -194,8 +194,9 @@ class AudioTranscriptionService:
                             logger.warning(f"Failed to cleanup temp file {temp_file}: {cleanup_error}")
 
             if not transcription_text:
+                error_msg = f"Transcription returned empty result for file: {file_obj.name}"
                 logger.error(f"Transcription failed for file ID: {file_obj.id}")
-                return None
+                raise Exception(error_msg)
 
             # Prepare transcription result
             result = {
@@ -214,7 +215,7 @@ class AudioTranscriptionService:
 
         except Exception as e:
             logger.exception(f"Error transcribing audio file ID {file_obj.id}: {str(e)}")
-            return None
+            raise
 
     @staticmethod
     async def transcribe_audio_file_streaming(
@@ -331,13 +332,27 @@ class AudioTranscriptionService:
                 transcription_text = " ".join(transcription_texts)
 
             if not transcription_text:
+                error_msg = f"Transcription returned empty result for file: {file_obj.name}"
                 logger.error(f"Streaming transcription failed for file ID: {file_obj.id}")
+                yield {
+                    "error": True,
+                    "error_message": error_msg,
+                    "file_id": file_obj.id,
+                    "file_name": file_obj.name,
+                }
                 return
 
             logger.info(f"Successfully completed streaming transcription for file ID: {file_obj.id}")
 
         except Exception as e:
-            logger.exception(f"Error in streaming transcription for file ID {file_obj.id}: {str(e)}")
+            error_msg = str(e)
+            logger.exception(f"Error in streaming transcription for file ID {file_obj.id}: {error_msg}")
+            yield {
+                "error": True,
+                "error_message": error_msg,
+                "file_id": file_obj.id,
+                "file_name": file_obj.name,
+            }
             return
 
     @staticmethod

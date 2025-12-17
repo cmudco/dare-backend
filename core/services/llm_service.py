@@ -333,12 +333,19 @@ class LLMService:
                     # Use streaming transcription - yields chunks as they complete
                     file_name = media_file.name
                     chunk_texts = []
+                    transcription_error = None
 
                     async for chunk_data in AudioTranscriptionService.transcribe_audio_file_streaming(
                         file_obj=media_file,
                         language=language,
                         model=llm.identifier
                     ):
+                        # Check if this is an error response
+                        if chunk_data.get("error"):
+                            transcription_error = chunk_data.get("error_message", "Unknown transcription error")
+                            logger.error(f"Transcription error for {file_name}: {transcription_error}")
+                            break
+
                         chunk_text = chunk_data["text"]
                         chunk_texts.append(chunk_text)
 
@@ -352,6 +359,11 @@ class LLMService:
 
                         # Yield immediately after each chunk (this is the key fix!)
                         yield accumulated_text, None
+
+                    # If there was an error, yield it and return
+                    if transcription_error:
+                        yield f"Error transcribing {file_name}: {transcription_error}", None
+                        return
 
                     # Build final transcription result after all chunks
                     if chunk_texts:
@@ -388,7 +400,8 @@ class LLMService:
 
             yield result_text, usage_data
         else:
-            yield "Error: Transcription failed.", None
+            file_names = ", ".join([f.name for f in media_files]) if media_files else "unknown"
+            yield f"Error: Transcription failed for {file_names}. Please check the server logs for more details.", None
 
     async def _execute_llm_completion(
         self,
