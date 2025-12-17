@@ -326,6 +326,7 @@ class MessageCoordinator:
             ai_response_accumulator = ""
             token_usage = None
             generated_image_data = None
+            generated_transcription_data = None
 
             # Build LLM query request using DTO builder
             request = LLMQueryRequestBuilder.from_message_data(
@@ -370,6 +371,20 @@ class MessageCoordinator:
                                 "style": usage.get("style", "vivid"),
                             }
 
+                    # Handle audio transcription
+                    if usage.get("transcription_result"):
+                        transcription = usage["transcription_result"]
+                        generated_transcription_data = {
+                            "fileId": transcription.get("file_id"),
+                            "fileName": transcription.get("file_name"),
+                            "text": transcription.get("text"),
+                            "language": transcription.get("language", "auto"),
+                            "model": transcription.get("model", "whisper-1"),
+                            "cost": str(usage.get("cost")) if usage.get("cost") else None,
+                            "duration": transcription.get("duration"),
+                            "transcribedAt": transcription.get("transcribed_at"),
+                        }
+
                     # Check billing during streaming (only for authenticated users)
                     if self.user:
                         can_continue, error_response = await self.billing_service.check_streaming_credit_usage(
@@ -407,6 +422,7 @@ class MessageCoordinator:
                     token_usage=token_usage,
                     regenerate=regenerate,
                     generated_image_data=generated_image_data,
+                    generated_transcription_data=generated_transcription_data,
                 )
 
                 # Run learning progress assessment (Socratic only, sequential after AI response)
@@ -424,6 +440,7 @@ class MessageCoordinator:
         token_usage: Optional[Dict],
         regenerate: bool = False,
         generated_image_data: Optional[Dict] = None,
+        generated_transcription_data: Optional[Dict] = None,
     ):
         """
         Finalize AI message with billing or budget update.
@@ -434,6 +451,7 @@ class MessageCoordinator:
             token_usage: Token usage dictionary
             regenerate: Whether this is a regeneration
             generated_image_data: Optional image generation data
+            generated_transcription_data: Optional audio transcription data
         """
         try:
             # Save original message content on first regeneration
@@ -483,7 +501,8 @@ class MessageCoordinator:
                 is_sender=False,
                 streaming=False,
                 regenerate=regenerate,
-                generated_image=generated_image_data
+                generated_image=generated_image_data,
+                generated_transcription=generated_transcription_data
             )
 
             await self.send(final_payload)

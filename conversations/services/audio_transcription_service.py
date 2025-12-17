@@ -10,6 +10,8 @@ from typing import Dict, Optional, List
 from datetime import datetime
 from files.models import File
 from core.services.whisper_service import WhisperService
+from core.services.api_key_service import get_provider_api_key
+from conversations.constants import Provider
 
 logger = logging.getLogger(__name__)
 
@@ -46,12 +48,24 @@ class AudioTranscriptionService:
             # Get the audio file path
             audio_file_path = file_obj.file.path
 
+            # Get API key asynchronously (we're in async context)
+            api_key = await get_provider_api_key(Provider.OPENAI.value)
+
             # Use WhisperService to transcribe
-            whisper_service = WhisperService()
-            transcription_text = await whisper_service.transcribe_video(
-                video_path=audio_file_path,
-                language=language
-            )
+            whisper_service = WhisperService(api_key=api_key)
+
+            # Directly call Whisper API with the file
+            with open(audio_file_path, 'rb') as audio_file:
+                transcript_params = {
+                    "model": model,
+                    "file": audio_file,
+                    "response_format": "text"
+                }
+
+                if language:
+                    transcript_params["language"] = language
+
+                transcription_text = await whisper_service.client.audio.transcriptions.create(**transcript_params)
 
             if not transcription_text:
                 logger.error(f"Transcription failed for file ID: {file_obj.id}")
