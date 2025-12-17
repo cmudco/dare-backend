@@ -6,6 +6,7 @@ Saves transcriptions as structured data that can be displayed in conversations.
 """
 
 import logging
+import base64
 from typing import Dict, Optional, List
 from datetime import datetime
 from files.models import File
@@ -43,10 +44,7 @@ class AudioTranscriptionService:
             - file_name: Name of the transcribed file
         """
         try:
-            logger.info(f"Starting transcription for file ID: {file_obj.id} ({file_obj.name})")
-
-            # Get the audio file path
-            audio_file_path = file_obj.file.path
+            logger.info(f"Starting transcription for file ID: {file_obj.id} ({file_obj.name}, type: {file_obj.media_type})")
 
             # Get API key asynchronously (we're in async context)
             api_key = await get_provider_api_key(Provider.OPENAI.value)
@@ -54,18 +52,34 @@ class AudioTranscriptionService:
             # Use WhisperService to transcribe
             whisper_service = WhisperService(api_key=api_key)
 
-            # Directly call Whisper API with the file
-            with open(audio_file_path, 'rb') as audio_file:
-                transcript_params = {
-                    "model": model,
-                    "file": audio_file,
-                    "response_format": "text"
-                }
+            # Handle video files differently (need to extract audio first)
+            if file_obj.media_type == 'video':
+                logger.info(f"Processing video file - will extract audio first")
+                # For videos, we need to read the file and create the video_data dict
+                file_path = file_obj.file.path
+                with open(file_path, 'rb') as f:
+                    file_bytes = f.read()
+                    base64_data = base64.b64encode(file_bytes).decode('utf-8')
+                    video_data = {
+                        'preview': f'data:video/mp4;base64,{base64_data}',
+                        'name': file_obj.name
+                    }
 
-                if language:
-                    transcript_params["language"] = language
+                transcription_text = await whisper_service.transcribe_video(video_data, language)
+            else:
+                # For audio files, directly call Whisper API
+                audio_file_path = file_obj.file.path
+                with open(audio_file_path, 'rb') as audio_file:
+                    transcript_params = {
+                        "model": model,
+                        "file": audio_file,
+                        "response_format": "text"
+                    }
 
-                transcription_text = await whisper_service.client.audio.transcriptions.create(**transcript_params)
+                    if language:
+                        transcript_params["language"] = language
+
+                    transcription_text = await whisper_service.client.audio.transcriptions.create(**transcript_params)
 
             if not transcription_text:
                 logger.error(f"Transcription failed for file ID: {file_obj.id}")
