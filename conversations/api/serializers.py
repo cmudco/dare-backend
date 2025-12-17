@@ -8,7 +8,7 @@ from users.constants import VectorDBChoice
 class LLMSerializer(serializers.ModelSerializer):
     class Meta:
         model = LLM
-        fields = ['id', 'name', 'identifier', 'provider', 'description', 'is_reasoning', 'is_image_generator', 'input_token_rate_per_million', 'output_token_rate_per_million']
+        fields = ['id', 'name', 'identifier', 'provider', 'description', 'is_reasoning', 'is_image_generator', 'is_audio_transcriber', 'input_token_rate_per_million', 'output_token_rate_per_million']
 
 class ConversationSerializer(serializers.ModelSerializer):
     user = serializers.SerializerMethodField()
@@ -64,6 +64,7 @@ class ConversationSerializer(serializers.ModelSerializer):
             'history_limit',
             'web_search_enabled',
             'image_generation_enabled',
+            'audio_transcription_enabled',
             'artifacts_enabled',
             'selected_model',
             'selected_media_ids',
