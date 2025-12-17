@@ -141,17 +141,10 @@ async def get_checkpointer():
     global _checkpointer, _checkpointer_cm
 
     if _checkpointer is None:
-        # TODO: TEMPORARY - Force MemorySaver to debug staging artifact_complete issue
-        # Remove this block after debugging
-        _checkpointer = MemorySaver()
-        logger.info(
-            "LangGraph MemorySaver checkpointer initialized (FORCED FOR DEBUGGING)"
-        )
-        return _checkpointer
-        # END TEMPORARY DEBUG BLOCK
-
         db_settings = settings.DATABASES.get("default", {})
         db_engine = db_settings.get("ENGINE", "")
+
+        logger.info(f"Checkpointer init: DB engine={db_engine}")
 
         if "sqlite" in db_engine:
             _checkpointer = MemorySaver()
@@ -165,17 +158,29 @@ async def get_checkpointer():
             port = db_settings.get("PORT", "5432")
             database = db_settings.get("NAME", "dare")
 
+            # Log connection details (without password)
+            logger.info(f"Checkpointer PostgreSQL: host={host}, port={port}, db={database}, user={user}")
+
             connection_string = f"postgresql://{user}:{password}@{host}:{port}/{database}"
             # AsyncPostgresSaver.from_conn_string() returns an async context manager
             # We need to enter it and keep it alive for the app lifetime
-            _checkpointer_cm = AsyncPostgresSaver.from_conn_string(connection_string)
-            _checkpointer = await _checkpointer_cm.__aenter__()
-            # Setup the database tables
-            await _checkpointer.setup()
+            try:
+                _checkpointer_cm = AsyncPostgresSaver.from_conn_string(connection_string)
+                logger.info("Checkpointer: Created AsyncPostgresSaver context manager")
+                _checkpointer = await _checkpointer_cm.__aenter__()
+                logger.info("Checkpointer: Entered async context")
+                # Setup the database tables
+                await _checkpointer.setup()
+                logger.info("Checkpointer: Setup complete")
 
-            logger.info(
-                "LangGraph Postgres checkpointer initialized (production mode)"
-            )
+                logger.info(
+                    f"LangGraph Postgres checkpointer initialized (production mode) - type={type(_checkpointer).__name__}"
+                )
+            except Exception as e:
+                logger.exception(f"Checkpointer: Failed to initialize PostgreSQL checkpointer: {e}")
+                # Fallback to MemorySaver on error
+                _checkpointer = MemorySaver()
+                logger.warning("Checkpointer: Falling back to MemorySaver due to PostgreSQL error")
 
     return _checkpointer
 
@@ -338,6 +343,8 @@ async def run_artifact_workflow(
 
     try:
         sent_event_count = 0
+        checkpointer_type = type(_checkpointer).__name__ if _checkpointer else "None"
+        logger.info(f"Workflow starting: mode={mode.value}, thread_id={thread_id}, checkpointer={checkpointer_type}")
 
         async for event in app.astream(initial_state, config, stream_mode="values"):
             # Check for completion or error FIRST, but process events before breaking
@@ -347,6 +354,18 @@ async def run_artifact_workflow(
             # Process only NEW pending events
             pending_events = event.get("pending_events", [])
             new_events = pending_events[sent_event_count:]
+
+            # Debug logging for pending_events
+            if new_events:
+                event_types = [getattr(e, 'type', type(e).__name__) for e in new_events]
+                logger.info(f"Workflow event: status={status}, pending_events_total={len(pending_events)}, new_events={len(new_events)}, types={event_types}")
+
+            # Extra debug for terminal states
+            if is_terminal:
+                logger.info(f"Workflow terminal state: status={status}, pending_events={len(pending_events)}, sent_so_far={sent_event_count}, new_to_process={len(new_events)}")
+                # Log the actual event objects for debugging
+                for i, evt in enumerate(new_events):
+                    logger.info(f"  Event {i}: type={getattr(evt, 'type', 'unknown')}, class={type(evt).__name__}, evt={evt}")
 
             for artifact_event in new_events:
                 result = await _process_event(artifact_event, send_callback)
@@ -364,6 +383,7 @@ async def run_artifact_workflow(
                 # Include version for MODIFY mode
                 if mode == ArtifactMode.MODIFY:
                     yield_meta["version"] = event.get("version")
+                logger.info(f"Workflow completed: status={status}, artifact_id={event.get('artifact_id')}")
                 yield "", yield_meta
                 break
 
