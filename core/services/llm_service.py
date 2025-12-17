@@ -294,20 +294,20 @@ class LLMService:
         Yields:
             Tuple of (chunk: str, usage: Dict)
         """
-        # Get audio files from media_ids
-        audio_files = []
+        # Get audio/video files from media_ids
+        media_files = []
         if request.context.media_ids:
             @database_sync_to_async
-            def get_audio_files():
+            def get_media_files():
                 return list(File.active_objects.filter(
                     id__in=request.context.media_ids,
-                    media_type='audio'
+                    media_type__in=['audio', 'video']
                 ))
 
-            audio_files = await get_audio_files()
+            media_files = await get_media_files()
 
-        if not audio_files:
-            yield "Error: No audio files found. Please upload an audio file to transcribe.", None
+        if not media_files:
+            yield "Error: No audio or video files found. Please upload an audio/video file to transcribe.", None
             return
 
         settings = request.generation.audio_transcription_settings or {}
@@ -315,24 +315,24 @@ class LLMService:
         # Convert 'auto' to None for Whisper API
         language = None if language == "auto" else language
 
-        # Transcribe each audio file
+        # Transcribe each audio/video file
         transcription_results = []
-        for audio_file in audio_files:
+        for media_file in media_files:
             try:
                 transcription = await AudioTranscriptionService.transcribe_audio_file(
-                    file_obj=audio_file,
+                    file_obj=media_file,
                     language=language,
                     model=llm.identifier
                 )
 
                 if transcription:
                     transcription_results.append({
-                        "file": audio_file,
+                        "file": media_file,
                         "transcription": transcription
                     })
             except Exception as e:
-                logger.exception(f"Error transcribing audio file {audio_file.id}: {str(e)}")
-                yield f"Error transcribing {audio_file.name}: {str(e)}", None
+                logger.exception(f"Error transcribing media file {media_file.id}: {str(e)}")
+                yield f"Error transcribing {media_file.name}: {str(e)}", None
                 return
 
         # Format transcription results
