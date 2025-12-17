@@ -55,7 +55,8 @@ class WebSocketResponseService:
         is_sender: bool = False,
         streaming: bool = False,
         regenerate: bool = False,
-        generated_image: Optional[Dict] = None
+        generated_image: Optional[Dict] = None,
+        generated_transcription: Optional[Dict] = None
     ) -> Dict[str, Any]:
         """
         Format a Message object for WebSocket transmission.
@@ -67,6 +68,7 @@ class WebSocketResponseService:
             streaming: Whether this is a streaming message
             regenerate: Whether this is a regenerated message
             generated_image: Optional generated image data
+            generated_transcription: Optional audio transcription data
 
         Returns:
             Dictionary with camelCase keys ready for JSON serialization
@@ -126,7 +128,8 @@ class WebSocketResponseService:
             "inputTokens": input_tokens,
             "outputTokens": output_tokens,
             "learningProgressData": learning_progress_data or {},
-            "generatedImage": generated_image
+            "generatedImage": generated_image,
+            "generatedTranscription": generated_transcription
         }
 
         return cls._dict_to_camel_case(response)
