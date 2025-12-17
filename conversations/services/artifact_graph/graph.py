@@ -141,6 +141,15 @@ async def get_checkpointer():
     global _checkpointer, _checkpointer_cm
 
     if _checkpointer is None:
+        # TODO: TEMPORARY - Force MemorySaver to debug staging artifact_complete issue
+        # Remove this block after debugging
+        _checkpointer = MemorySaver()
+        logger.info(
+            "LangGraph MemorySaver checkpointer initialized (FORCED FOR DEBUGGING)"
+        )
+        return _checkpointer
+        # END TEMPORARY DEBUG BLOCK
+
         db_settings = settings.DATABASES.get("default", {})
         db_engine = db_settings.get("ENGINE", "")
 
@@ -415,7 +424,12 @@ async def _process_event(
 
     elif event_type == "artifact_complete":
         logger.info(f"Sending artifact_complete event: artifact_id={artifact_event.artifact_id}, totalWords={artifact_event.total_words}, estimatedSections={artifact_event.estimated_sections}")
-        return "", {"type": "artifact_complete"}
+        return "", {
+            "type": "artifact_complete",
+            "artifact_id": artifact_event.artifact_id,
+            "total_words": artifact_event.total_words,
+            "estimated_sections": artifact_event.estimated_sections,
+        }
 
     elif event_type == "error":
         return "", {"type": "error", "error": artifact_event.error_message}
