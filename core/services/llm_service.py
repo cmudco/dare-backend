@@ -17,6 +17,7 @@ from typing import AsyncGenerator, Dict, Tuple, Optional, Any, List
 from files.models import File, Folder
 from prompts.models import Prompt
 from core.services.vector_service import get_vector_service_async
+from datetime import datetime
 import logging
 import base64
 
@@ -285,14 +286,19 @@ class LLMService:
         request: LLMQueryRequest,
         llm: LLM
     ) -> AsyncGenerator[Tuple[str, Dict], None]:
-        """Execute audio transcription request.
+        """Execute audio transcription request with streaming support.
+
+        For large files that get split into chunks, this yields each chunk's
+        transcription as it completes, allowing real-time progress updates.
 
         Args:
             request: LLMQueryRequest with audio transcription settings
             llm: LLM model (must be Whisper or support audio transcription)
 
         Yields:
-            Tuple of (chunk: str, usage: Dict)
+            Tuple of (chunk: str, usage: Dict) where usage contains:
+            - For intermediate chunks: {"transcription_chunk": {...}}
+            - For final chunk: {"transcription_result": {...}}
         """
         # Get audio/video files from media_ids
         media_files = []
@@ -314,36 +320,71 @@ class LLMService:
         language = settings.get("language", "auto")
         # Convert 'auto' to None for Whisper API
         language = None if language == "auto" else language
+        # Check if streaming is enabled (default True for new behavior)
+        enable_streaming = settings.get("stream_chunks", True)
 
         # Transcribe each audio/video file
-        transcription_results = []
+        accumulated_text = ""
+        final_transcription = None
+
         for media_file in media_files:
             try:
-                transcription = await AudioTranscriptionService.transcribe_audio_file(
-                    file_obj=media_file,
-                    language=language,
-                    model=llm.identifier
-                )
+                if enable_streaming:
+                    # Use streaming transcription - yields chunks as they complete
+                    file_name = media_file.name
+                    chunk_texts = []
 
-                if transcription:
-                    transcription_results.append({
-                        "file": media_file,
-                        "transcription": transcription
-                    })
+                    async for chunk_data in AudioTranscriptionService.transcribe_audio_file_streaming(
+                        file_obj=media_file,
+                        language=language,
+                        model=llm.identifier
+                    ):
+                        chunk_text = chunk_data["text"]
+                        chunk_texts.append(chunk_text)
+
+                        # Build formatted text progressively
+                        if chunk_data["chunk_index"] == 0:
+                            # First chunk - add header
+                            accumulated_text = f"**Transcription of `{file_name}`**\n\n{chunk_text}"
+                        else:
+                            # Subsequent chunks - append with space
+                            accumulated_text += " " + chunk_text
+
+                        # Yield immediately after each chunk (this is the key fix!)
+                        yield accumulated_text, None
+
+                    # Build final transcription result after all chunks
+                    if chunk_texts:
+                        final_transcription = {
+                            'text': " ".join(chunk_texts),
+                            'language': language or 'auto',
+                            'model': llm.identifier,
+                            'file_id': media_file.id,
+                            'file_name': media_file.name,
+                            'file_size': media_file.size,
+                            'media_type': media_file.media_type,
+                            'transcribed_at': datetime.now().isoformat(),
+                        }
+                else:
+                    # Use original non-streaming transcription
+                    final_transcription = await AudioTranscriptionService.transcribe_audio_file(
+                        file_obj=media_file,
+                        language=language,
+                        model=llm.identifier
+                    )
+
             except Exception as e:
                 logger.exception(f"Error transcribing media file {media_file.id}: {str(e)}")
                 yield f"Error transcribing {media_file.name}: {str(e)}", None
                 return
 
-        # Format transcription results
-        if transcription_results:
-            result_text = AudioTranscriptionService.format_transcription_for_display(
-                transcription_results[0]["transcription"]
-            )
+        # Yield final result with usage data
+        if final_transcription:
+            result_text = AudioTranscriptionService.format_transcription_for_display(final_transcription)
 
-            # Yield the transcription text and usage data
-            usage_data = transcription_results[0]["transcription"].copy()
-            usage_data["transcription_result"] = transcription_results[0]["transcription"]
+            # Yield the final transcription text and usage data
+            usage_data = final_transcription.copy()
+            usage_data["transcription_result"] = final_transcription
 
             yield result_text, usage_data
         else:

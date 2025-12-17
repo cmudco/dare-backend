@@ -10,7 +10,7 @@ import base64
 import tempfile
 import subprocess
 import os
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, AsyncGenerator, Callable, Awaitable
 from datetime import datetime
 from files.models import File
 from core.services.whisper_service import WhisperService
@@ -215,6 +215,130 @@ class AudioTranscriptionService:
         except Exception as e:
             logger.exception(f"Error transcribing audio file ID {file_obj.id}: {str(e)}")
             return None
+
+    @staticmethod
+    async def transcribe_audio_file_streaming(
+        file_obj: File,
+        language: Optional[str] = None,
+        model: str = "whisper-1"
+    ) -> AsyncGenerator[Dict, None]:
+        """
+        Transcribe an audio file using Whisper API, yielding each chunk as it completes.
+
+        For large files that get split into chunks, this method yields each chunk's
+        transcription as soon as it's ready, allowing real-time progress updates.
+
+        Args:
+            file_obj: File object containing the audio file
+            language: Optional language code (e.g., 'en', 'es', 'fr')
+            model: Transcription model to use (default: 'whisper-1')
+
+        Yields:
+            Dictionary with chunk data:
+            {"chunk_index": int, "total_chunks": int, "text": str, "is_final": bool,
+             "file_id": str, "file_name": str, "full_result": Optional[Dict]}
+            The final yield includes "full_result" with the complete transcription data.
+        """
+        try:
+            logger.info(f"Starting streaming transcription for file ID: {file_obj.id} ({file_obj.name})")
+
+            api_key = await get_provider_api_key(Provider.OPENAI.value)
+            whisper_service = WhisperService(api_key=api_key)
+
+            transcription_text = ""
+
+            # Handle video files - extract audio first (no streaming for video extraction)
+            if file_obj.media_type == 'video':
+                logger.info(f"Processing video file - will extract audio first")
+                file_path = file_obj.file.path
+                with open(file_path, 'rb') as f:
+                    file_bytes = f.read()
+                    base64_data = base64.b64encode(file_bytes).decode('utf-8')
+                    video_data = {
+                        'preview': f'data:video/mp4;base64,{base64_data}',
+                        'name': file_obj.name
+                    }
+
+                transcription_text = await whisper_service.transcribe_video(video_data, language)
+
+                # Yield single chunk for video (no splitting)
+                yield {
+                    "chunk_index": 0,
+                    "total_chunks": 1,
+                    "text": transcription_text,
+                    "is_final": True,
+                    "file_id": file_obj.id,
+                    "file_name": file_obj.name,
+                }
+            else:
+                # For audio files, split and stream each chunk
+                audio_file_path = file_obj.file.path
+                chunk_files = AudioTranscriptionService.split_audio_file(audio_file_path)
+                total_chunks = len(chunk_files)
+
+                transcription_texts = []
+                temp_files_to_cleanup = []
+
+                try:
+                    for idx, chunk_path in enumerate(chunk_files):
+                        if chunk_path != audio_file_path:
+                            temp_files_to_cleanup.append(chunk_path)
+
+                        logger.info(f"Transcribing chunk {idx + 1}/{total_chunks}")
+
+                        with open(chunk_path, 'rb') as audio_file:
+                            if chunk_path == audio_file_path:
+                                chunk_name = file_obj.name
+                            else:
+                                base_name = os.path.splitext(file_obj.name)[0]
+                                chunk_name = f"{base_name}_chunk{idx}.mp3"
+
+                            transcript_params = {
+                                "model": model,
+                                "file": (chunk_name, audio_file),
+                                "response_format": "text"
+                            }
+
+                            if language:
+                                transcript_params["language"] = language
+
+                            chunk_text = await whisper_service.client.audio.transcriptions.create(**transcript_params)
+                            transcription_texts.append(chunk_text)
+
+                            # Yield chunk transcription immediately
+                            is_final = (idx == total_chunks - 1)
+                            yield {
+                                "chunk_index": idx,
+                                "total_chunks": total_chunks,
+                                "text": chunk_text,
+                                "is_final": is_final,
+                                "file_id": file_obj.id,
+                                "file_name": file_obj.name,
+                            }
+
+                finally:
+                    # Cleanup temporary chunk files
+                    for temp_file in temp_files_to_cleanup:
+                        try:
+                            if os.path.exists(temp_file):
+                                os.unlink(temp_file)
+                            temp_dir = os.path.dirname(temp_file)
+                            if os.path.exists(temp_dir) and not os.listdir(temp_dir):
+                                os.rmdir(temp_dir)
+                        except Exception as cleanup_error:
+                            logger.warning(f"Failed to cleanup temp file {temp_file}: {cleanup_error}")
+
+                transcription_text = " ".join(transcription_texts)
+
+            if not transcription_text:
+                logger.error(f"Streaming transcription failed for file ID: {file_obj.id}")
+                return
+
+            logger.info(f"Successfully completed streaming transcription for file ID: {file_obj.id}")
+
+        except Exception as e:
+            logger.exception(f"Error in streaming transcription for file ID {file_obj.id}: {str(e)}")
+            return
 
     @staticmethod
     async def transcribe_multiple_audio_files(
