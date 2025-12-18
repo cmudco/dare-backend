@@ -62,6 +62,15 @@ class GeminiService:
             self._client = genai.Client(api_key=self.api_key)
         return self._client
 
+    @property
+    def async_client(self):
+        """
+        Get the native async interface for the Gemini client.
+        
+        Uses client.aio for true real-time streaming without blocking.
+        """
+        return self.client.aio
+
     async def stream_chat_completion(
         self,
         messages: List[Dict[str, str]],
@@ -225,7 +234,10 @@ class GeminiService:
         tools: Optional[List[Dict]]
     ):
         """
-        Create Gemini streaming response.
+        Create Gemini streaming response using native async interface.
+
+        Uses client.aio for true real-time streaming - chunks are delivered
+        as they arrive from the API, not buffered.
 
         Args:
             messages: Prepared messages
@@ -234,19 +246,17 @@ class GeminiService:
             tools: Optional tools configuration
 
         Returns:
-            Gemini response stream
+            Async Gemini response stream
         """
         contents = GeminiMessageFormatter.convert_to_contents(messages)
         config = self._build_generation_config(max_tokens, temperature, tools)
 
-        def generate_sync():
-            return self.client.models.generate_content_stream(
-                model=self.model_identifier,
-                contents=contents,
-                config=config,
-            )
-
-        return await asyncio.to_thread(generate_sync)
+        # Use native async interface for true real-time streaming
+        return await self.async_client.models.generate_content_stream(
+            model=self.model_identifier,
+            contents=contents,
+            config=config,
+        )
 
     def _build_generation_config(
         self,

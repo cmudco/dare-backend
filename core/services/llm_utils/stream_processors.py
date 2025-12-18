@@ -163,8 +163,11 @@ class GeminiStreamProcessor:
         """
         Process Gemini content stream.
 
+        Uses async iteration for true real-time streaming - chunks are
+        yielded as they arrive from the API, not buffered.
+
         Args:
-            response: Gemini content stream
+            response: Gemini async content stream
 
         Yields:
             Tuple of (text_chunk, usage_data)
@@ -172,7 +175,8 @@ class GeminiStreamProcessor:
         usage_extractor = GeminiUsageExtractor()
         tool_calls = []
 
-        for chunk in response:
+        # Use async for to properly iterate over async stream
+        async for chunk in response:
             # Handle candidates (both text and function calls)
             if hasattr(chunk, 'candidates') and chunk.candidates:
                 for candidate in chunk.candidates:
