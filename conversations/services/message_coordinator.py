@@ -322,7 +322,7 @@ class MessageCoordinator:
             return
 
         try:
-            bot_message_id = str(message_obj.id)
+            bot_message_id = message_obj.id  # Keep as integer for consistency
             ai_response_accumulator = ""
             token_usage = None
             generated_image_data = None

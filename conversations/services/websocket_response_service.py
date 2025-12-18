@@ -106,7 +106,7 @@ class WebSocketResponseService:
         # Build response matching original format
         response = {
             "type": message_type,
-            "id": str(message.id),
+            "id": message.id,  # Keep as integer for consistency with conversation_history
             "message": message.message,
             "artifactId": artifact_id,
             "senderType": message.sender_type,
@@ -137,7 +137,7 @@ class WebSocketResponseService:
     @classmethod
     def format_streaming_chunk(
         cls,
-        message_id: str,
+        message_id: int,
         chunk: str,
         is_complete: bool = False,
         metadata: Optional[Dict[str, Any]] = None
@@ -146,7 +146,7 @@ class WebSocketResponseService:
         Format an AI streaming chunk for WebSocket transmission.
 
         Args:
-            message_id: ID of the message being streamed
+            message_id: ID of the message being streamed (integer)
             chunk: The text chunk to send
             is_complete: Whether this is the final chunk
             metadata: Optional metadata (tokens, cost, etc.)
@@ -156,7 +156,7 @@ class WebSocketResponseService:
         """
         payload = {
             "type": "ai_stream",
-            "id": message_id,
+            "id": message_id,  # Keep as integer for consistency with conversation_history
             "message": chunk,  # Frontend expects "message" not "chunk"
             "is_complete": is_complete,
         }
