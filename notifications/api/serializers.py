@@ -130,6 +130,7 @@ class NotificationCreateSerializer(serializers.ModelSerializer):
             'action_type',
             'action_url',
             'expires_at',
+            'source',  # Target platform (DARE or SocraticBots)
         ]
 
     def validate(self, attrs):
