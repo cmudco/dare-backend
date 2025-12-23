@@ -2,7 +2,8 @@
 Chat Namespace for Socket.IO
 
 Handles all real-time chat functionality including:
-- User authentication via JWT
+- User authentication via JWT (authenticated users)
+- Session-based authentication (public/anonymous users)
 - Conversation subscriptions (join/leave rooms)
 - Message sending and streaming
 - Artifact generation and control
@@ -26,6 +27,7 @@ from conversations.constants import (
     ErrorCode,
     ErrorMessage,
     ArtifactStatus,
+    DEFAULT_ANONYMOUS_USER_NAME,
 )
 from conversations.services.message_coordinator import MessageCoordinator
 from conversations.services.message_validation_service import MessageValidationService
@@ -38,88 +40,167 @@ logger = logging.getLogger(__name__)
 class ChatNamespace(socketio.AsyncNamespace):
     """
     Socket.IO namespace for chat functionality.
-    
+
     Key features:
     - Single connection per user (not per conversation)
     - Event-based room subscriptions
     - Built-in heartbeat via Socket.IO engine
     - Automatic reconnection support
+    - Dual authentication: JWT (authenticated users) or session_id (public bots)
     """
-    
+
     def __init__(self):
         super().__init__(namespace='/chat')
         self.conversation_service = ConversationService()
-        
-        # Session tracking: {sid: {'user': User, 'subscriptions': set(), 'platform': str}}
+
+        # Session tracking: {sid: {'user': User|None, 'subscriptions': set(), 'platform': str, 'is_public': bool, 'session_id': str|None}}
         self.sessions: Dict[str, Dict[str, Any]] = {}
-        
+
         # Active message coordinators: {f"{sid}_{conv_id}": MessageCoordinator}
         self.coordinators: Dict[str, MessageCoordinator] = {}
-    
+
     # ==================== Connection Lifecycle ====================
-    
+
     async def on_connect(self, sid: str, environ: dict, auth: Optional[dict] = None):
         """
-        Handle new connection with JWT authentication.
-        
+        Handle new connection with JWT or session_id authentication.
+
+        Supports two authentication modes:
+        1. JWT Token (authenticated users): auth={'token': 'jwt_token'}
+        2. Session ID (public bots): auth={'sessionId': 'uuid', 'conversationId': 'uuid'}
+
         Args:
             sid: Socket session ID
             environ: ASGI environ dict with request info
-            auth: Client-provided auth data (expect {'token': 'jwt_token'})
-        
+            auth: Client-provided auth data
+
         Returns:
             True if auth successful, raises ConnectionRefusedError otherwise
         """
         try:
-            # Extract JWT token
-            token = auth.get('token') if auth else None
-            if not token:
-                logger.warning(f"Socket.IO connect rejected: no token provided (sid={sid})")
+            if not auth:
+                logger.warning(f"Socket.IO connect rejected: no auth provided (sid={sid})")
                 raise socketio.exceptions.ConnectionRefusedError('Authentication required')
-            
-            # Decode and validate JWT
-            try:
-                decoded = jwt.decode(token, settings.SECRET_KEY, algorithms=['HS256'])
-            except jwt.ExpiredSignatureError:
-                raise socketio.exceptions.ConnectionRefusedError('Token expired')
-            except jwt.InvalidTokenError as e:
-                raise socketio.exceptions.ConnectionRefusedError(f'Invalid token: {str(e)}')
-            
-            user_id = decoded.get('user_id')
-            if not user_id:
-                raise socketio.exceptions.ConnectionRefusedError('Invalid token: missing user_id')
-            
-            # Fetch user from database
-            user = await self._get_user(user_id)
-            if not user:
-                raise socketio.exceptions.ConnectionRefusedError('User not found')
-            
-            # Detect platform from headers (if available)
-            platform = self._detect_platform_from_environ(environ)
-            
-            # Store session data
-            self.sessions[sid] = {
-                'user': user,
-                'subscriptions': set(),
-                'platform': platform,
-            }
-            
-            # Join user-specific room for direct notifications
-            await sio.enter_room(sid, f'user_{user.id}', namespace='/chat')
-            
-            logger.info(f"Socket.IO connected: user={user.id}, sid={sid}, platform={platform}")
-            return True
-            
+
+            # Check which auth mode is being used
+            token = auth.get('token')
+            session_id = auth.get('sessionId')
+
+            if token:
+                # JWT authentication for authenticated users
+                return await self._connect_with_jwt(sid, environ, token)
+            elif session_id:
+                # Session-based authentication for public bots
+                conversation_id = auth.get('conversationId')
+                if not conversation_id:
+                    raise socketio.exceptions.ConnectionRefusedError('conversationId required for session auth')
+                return await self._connect_with_session(sid, environ, session_id, conversation_id)
+            else:
+                logger.warning(f"Socket.IO connect rejected: no token or sessionId provided (sid={sid})")
+                raise socketio.exceptions.ConnectionRefusedError('Authentication required: provide token or sessionId')
+
         except socketio.exceptions.ConnectionRefusedError:
             raise
         except Exception as e:
             logger.exception(f"Socket.IO connect error: {str(e)}")
             raise socketio.exceptions.ConnectionRefusedError(f'Connection failed: {str(e)}')
+
+    async def _connect_with_jwt(self, sid: str, environ: dict, token: str) -> bool:
+        """Handle JWT-based authentication for authenticated users."""
+        # Decode and validate JWT
+        try:
+            decoded = jwt.decode(token, settings.SECRET_KEY, algorithms=['HS256'])
+        except jwt.ExpiredSignatureError:
+            raise socketio.exceptions.ConnectionRefusedError('Token expired')
+        except jwt.InvalidTokenError as e:
+            raise socketio.exceptions.ConnectionRefusedError(f'Invalid token: {str(e)}')
+
+        user_id = decoded.get('user_id')
+        if not user_id:
+            raise socketio.exceptions.ConnectionRefusedError('Invalid token: missing user_id')
+
+        # Fetch user from database
+        user = await self._get_user(user_id)
+        if not user:
+            raise socketio.exceptions.ConnectionRefusedError('User not found')
+
+        # Detect platform from headers (if available)
+        platform = self._detect_platform_from_environ(environ)
+
+        # Store session data
+        self.sessions[sid] = {
+            'user': user,
+            'subscriptions': set(),
+            'platform': platform,
+            'is_public': False,
+            'session_id': None,
+        }
+
+        # Join user-specific room for direct notifications
+        await sio.enter_room(sid, f'user_{user.id}', namespace='/chat')
+
+        logger.info(f"Socket.IO connected (JWT): user={user.id}, sid={sid}, platform={platform}")
+        return True
+
+    async def _connect_with_session(self, sid: str, environ: dict, session_id: str, conversation_id: str) -> bool:
+        """Handle session-based authentication for public bots."""
+        # Get conversation and validate it belongs to this session
+        conversation = await self.conversation_service.get_conversation_by_id(conversation_id)
+
+        if not conversation:
+            logger.warning(f"Invalid conversation_id for public bot: {conversation_id}")
+            raise socketio.exceptions.ConnectionRefusedError('Invalid conversation')
+
+        # Verify this conversation belongs to this anonymous session
+        if conversation.anonymous_session_id != session_id:
+            logger.warning(f"Session mismatch for conversation {conversation_id}")
+            raise socketio.exceptions.ConnectionRefusedError('Invalid session for this conversation')
+
+        # Verify conversation has no user (is public)
+        if conversation.user is not None:
+            logger.warning(f"Conversation {conversation_id} is not a public conversation")
+            raise socketio.exceptions.ConnectionRefusedError('Not a public conversation')
+
+        # Detect platform from headers (if available)
+        platform = self._detect_platform_from_environ(environ)
+
+        # Store session data (user=None for public bots)
+        self.sessions[sid] = {
+            'user': None,
+            'subscriptions': set(),
+            'platform': platform,
+            'is_public': True,
+            'session_id': session_id,
+            'conversation_id': conversation_id,  # Store for auto-subscribe
+        }
+
+        # Auto-subscribe to the conversation room (public bots connect directly to a conversation)
+        room_name = f'conversation_{conversation_id}'
+        await sio.enter_room(sid, room_name, namespace='/chat')
+        self.sessions[sid]['subscriptions'].add(conversation_id)
+
+        # Create coordinator for this conversation
+        coordinator = MessageCoordinator(
+            conversation=conversation,
+            user=None,  # No user for public bots
+            platform=platform,
+            send_callback=self._create_send_callback(sid, conversation_id),
+        )
+        self.coordinators[f"{sid}_{conversation_id}"] = coordinator
+
+        # Send conversation history
+        await coordinator.send_conversation_history()
+
+        # Send latest learning progress if applicable
+        await coordinator.send_latest_learning_progress()
+
+        logger.info(f"Socket.IO connected (session): conv_id={conversation_id}, sid={sid}, platform={platform}, bot_id={conversation.bot_id}")
+        return True
     
     async def on_disconnect(self, sid: str):
         """
         Handle disconnection - cleanup session and pause artifacts.
-        
+
         Args:
             sid: Socket session ID
         """
@@ -127,11 +208,15 @@ class ChatNamespace(socketio.AsyncNamespace):
             session = self.sessions.pop(sid, None)
             if not session:
                 return
-            
+
             user = session.get('user')
             subscriptions = session.get('subscriptions', set())
-            
-            logger.info(f"Socket.IO disconnected: user={user.id if user else 'None'}, sid={sid}")
+            is_public = session.get('is_public', False)
+
+            if is_public:
+                logger.info(f"Socket.IO disconnected (public): session_id={session.get('session_id')}, sid={sid}")
+            else:
+                logger.info(f"Socket.IO disconnected (JWT): user={user.id if user else 'None'}, sid={sid}")
             
             # Pause any in-progress artifacts for subscribed conversations
             for conv_id in subscriptions:
@@ -149,11 +234,14 @@ class ChatNamespace(socketio.AsyncNamespace):
     async def on_subscribe_conversation(self, sid: str, data: dict) -> dict:
         """
         Subscribe to a conversation room to receive updates.
-        
+
+        Note: Public bot sessions are auto-subscribed on connect, so this is
+        primarily for authenticated users switching between conversations.
+
         Args:
             sid: Socket session ID
             data: {'conversationId': 'uuid'}
-        
+
         Returns:
             {'success': True, 'conversationId': 'uuid'} or {'error': 'message'}
         """
@@ -161,24 +249,28 @@ class ChatNamespace(socketio.AsyncNamespace):
             session = self.sessions.get(sid)
             if not session:
                 return {'error': 'Not authenticated'}
-            
+
+            # Public bots are auto-subscribed on connect
+            if session.get('is_public', False):
+                return {'success': True, 'conversationId': session.get('conversation_id')}
+
             conv_id = data.get('conversationId')
             if not conv_id:
                 return {'error': 'Missing conversationId'}
-            
+
             user = session['user']
             platform = data.get('platform') or session.get('platform', 'DARE')
-            
+
             # Validate user has access to this conversation
             conversation = await self.conversation_service.get_conversation(conv_id, user)
             if not conversation:
                 return {'error': ErrorMessage.INVALID_CONVERSATION}
-            
+
             # Join the conversation room
             room_name = f'conversation_{conv_id}'
             await sio.enter_room(sid, room_name, namespace='/chat')
             session['subscriptions'].add(conv_id)
-            
+
             # Create coordinator for this conversation
             coordinator = MessageCoordinator(
                 conversation=conversation,
@@ -187,16 +279,16 @@ class ChatNamespace(socketio.AsyncNamespace):
                 send_callback=self._create_send_callback(sid, conv_id),
             )
             self.coordinators[f"{sid}_{conv_id}"] = coordinator
-            
+
             # Send conversation history
             await coordinator.send_conversation_history()
-            
+
             # Send latest learning progress if applicable
             await coordinator.send_latest_learning_progress()
-            
+
             logger.info(f"Subscribed to conversation: user={user.id}, conv_id={conv_id}")
             return {'success': True, 'conversationId': conv_id}
-            
+
         except Exception as e:
             logger.exception(f"Subscribe error: {str(e)}")
             return {'error': str(e)}
@@ -245,11 +337,11 @@ class ChatNamespace(socketio.AsyncNamespace):
     async def on_send_message(self, sid: str, data: dict) -> dict:
         """
         Handle new message in a conversation.
-        
+
         Args:
             sid: Socket session ID
             data: Message payload with conversationId
-        
+
         Returns:
             {'success': True} or {'error': 'message'}
         """
@@ -257,30 +349,35 @@ class ChatNamespace(socketio.AsyncNamespace):
             session = self.sessions.get(sid)
             if not session:
                 return {'error': 'Not authenticated'}
-            
+
             conv_id = data.get('conversationId')
             if not conv_id or conv_id not in session['subscriptions']:
                 return {'error': 'Not subscribed to this conversation'}
-            
+
             # Get or create coordinator
             coordinator = self.coordinators.get(f"{sid}_{conv_id}")
             if not coordinator:
                 return {'error': 'Conversation not initialized'}
-            
+
             # Validate message data
             try:
                 message_data = MessageValidationService.validate_and_parse(data)
             except Exception as e:
                 return {'error': f'Validation error: {str(e)}'}
-            
+
+            # Determine sender name based on auth type
+            user = session.get('user')
+            is_public = session.get('is_public', False)
+            sender_name = DEFAULT_ANONYMOUS_USER_NAME if is_public else user.email
+
             # Handle message (async, doesn't block return)
             await coordinator.handle_new_message(
                 message_data=message_data,
-                sender_name=session['user'].email,
+                sender_name=sender_name,
             )
-            
+
             return {'success': True}
-            
+
         except Exception as e:
             logger.exception(f"Send message error: {str(e)}")
             return {'error': str(e)}
