@@ -43,6 +43,57 @@ class AudioTranscriptionService:
         return float(duration_output.stdout.strip())
 
     @staticmethod
+    async def transcribe_audio_bytes(
+        audio_bytes: bytes,
+        audio_format: str = 'wav',
+        language: Optional[str] = None,
+        model: str = 'whisper-1'
+    ) -> str:
+        """
+        Transcribe raw audio bytes using Whisper API.
+        
+        Args:
+            audio_bytes: Raw audio data as bytes
+            audio_format: Audio format (e.g., 'wav', 'webm', 'mp3')
+            language: Optional language code (e.g., 'en')
+            model: Transcription model to use
+            
+        Returns:
+            Transcribed text string
+        """
+        logger.info(f"Transcribing audio: {len(audio_bytes)} bytes, format={audio_format}")
+        
+        api_key = await get_provider_api_key(Provider.OPENAI.value)
+        whisper_service = WhisperService(api_key=api_key)
+        
+        suffix = f'.{audio_format}' if audio_format else '.wav'
+        temp_file_path = None
+        
+        try:
+            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temp_file:
+                temp_file.write(audio_bytes)
+                temp_file_path = temp_file.name
+            
+            with open(temp_file_path, 'rb') as audio_file:
+                transcript_params = {
+                    "model": model,
+                    "file": (f'voice_input{suffix}', audio_file),
+                    "response_format": "text"
+                }
+                if language:
+                    transcript_params["language"] = language
+                
+                result = await whisper_service.client.audio.transcriptions.create(**transcript_params)
+                text = result if isinstance(result, str) else str(result)
+            
+            logger.info(f"Transcribed: {len(text)} characters")
+            return text.strip()
+            
+        finally:
+            if temp_file_path and os.path.exists(temp_file_path):
+                os.unlink(temp_file_path)
+
+    @staticmethod
     def split_audio_by_duration(audio_file_path: str, max_duration: int = DIARIZE_MAX_DURATION_SECONDS) -> List[str]:
         """
         Split audio file into chunks based on duration.

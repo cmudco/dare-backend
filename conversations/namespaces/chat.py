@@ -15,6 +15,7 @@ with a single persistent connection model.
 
 import logging
 import jwt
+import base64
 from typing import Dict, Any, Optional, Set
 from asgiref.sync import sync_to_async
 from django.conf import settings
@@ -31,6 +32,7 @@ from conversations.constants import (
 )
 from conversations.services.message_coordinator import MessageCoordinator
 from conversations.services.message_validation_service import MessageValidationService
+from conversations.services.audio_transcription_service import AudioTranscriptionService
 from core.services.conversation_service import ConversationService
 
 User = get_user_model()
@@ -380,6 +382,93 @@ class ChatNamespace(socketio.AsyncNamespace):
 
         except Exception as e:
             logger.exception(f"Send message error: {str(e)}")
+            return {'error': str(e)}
+
+    async def on_send_voice_message(self, sid: str, data: dict) -> dict:
+        """
+        Handle voice message input - transcribe audio and send as text message.
+
+        This is a thin wrapper that:
+        1. Decodes base64 audio
+        2. Transcribes using AudioTranscriptionService
+        3. Delegates to normal message flow
+
+        Args:
+            sid: Socket session ID
+            data: {
+                'conversationId': str,
+                'audio': str (base64),
+                'audioFormat': str ('webm', 'wav', etc.),
+                'language': str (optional, default 'auto')
+            }
+
+        Returns:
+            {'success': True} or {'error': 'message'}
+        """
+        try:
+            session = self.sessions.get(sid)
+            if not session:
+                return {'error': 'Not authenticated'}
+
+            conv_id = data.get('conversationId')
+            if not conv_id or conv_id not in session['subscriptions']:
+                return {'error': 'Not subscribed to this conversation'}
+
+            # Get the coordinator
+            coordinator = self.coordinators.get(f"{sid}_{conv_id}")
+            if not coordinator:
+                return {'error': 'Conversation not initialized'}
+
+            # Extract audio data
+            audio_base64 = data.get('audio')
+            audio_format = data.get('audioFormat', 'webm')
+            language = data.get('language', 'auto')
+
+            if not audio_base64:
+                return {'error': 'Missing audio data'}
+
+            # Send processing indicator
+            await sio.emit('message', {
+                'type': 'voice_processing',
+                'status': 'transcribing',
+            }, room=f'conversation_{conv_id}', namespace='/chat')
+
+            # Transcribe audio
+
+            try:
+                audio_bytes = base64.b64decode(audio_base64)
+            except Exception as e:
+                logger.error(f"Failed to decode audio: {str(e)}")
+                return {'error': 'Invalid audio data'}
+
+            # Transcribe the audio bytes
+            language_param = None if language == 'auto' else language
+            transcribed_text = await AudioTranscriptionService.transcribe_audio_bytes(
+                audio_bytes=audio_bytes,
+                audio_format=audio_format,
+                language=language_param,
+            )
+
+            if not transcribed_text or not transcribed_text.strip():
+                await sio.emit('message', {
+                    'type': 'voice_transcription',
+                    'status': 'error',
+                    'error': 'Could not transcribe audio. Please try again.',
+                }, room=f'conversation_{conv_id}', namespace='/chat')
+                return {'error': 'Transcription returned empty result'}
+
+            # Send transcription back to frontend (user can review/edit before sending)
+            await sio.emit('message', {
+                'type': 'voice_transcription',
+                'status': 'complete',
+                'text': transcribed_text.strip(),
+            }, room=f'conversation_{conv_id}', namespace='/chat')
+
+            logger.info(f"Voice transcribed: conv_id={conv_id}, chars={len(transcribed_text)}")
+            return {'success': True, 'text': transcribed_text.strip()}
+
+        except Exception as e:
+            logger.exception(f"Send voice message error: {str(e)}")
             return {'error': str(e)}
     
     async def on_edit_message(self, sid: str, data: dict) -> dict:
