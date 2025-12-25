@@ -42,6 +42,9 @@ from conversations.services.image_generation_service import ImageGenerationServi
 from conversations.services.bot_budget_service import BotBudgetService
 from conversations.services.artifact_service import ArtifactService
 from conversations.services.artifact_coordinator import ArtifactCoordinator
+# New simplified artifact services
+from conversations.services.artifact_intent_service import ArtifactIntentService
+from conversations.services.simple_artifact_coordinator import SimpleArtifactCoordinator
 from users.utils import should_run_learning_progress
 
 logger = logging.getLogger(__name__)
@@ -80,11 +83,19 @@ class MessageCoordinator:
         # Track active artifact generation tasks for cancellation
         self._artifact_tasks: Dict[str, asyncio.Task] = {}
 
-        # Initialize artifact coordinator for artifact-related operations
+        # Initialize artifact coordinator for artifact-related operations (legacy)
         self.artifact_coordinator = ArtifactCoordinator(
             conversation=conversation,
             user=user,
             send_callback=self._artifact_coordinator_send_callback,
+        )
+        
+        # NEW: Simplified artifact services
+        self.intent_service = ArtifactIntentService()
+        self.simple_artifact_coordinator = SimpleArtifactCoordinator(
+            conversation=conversation,
+            user=user,
+            send_callback=send_callback,
         )
 
     async def send(self, data: Dict[str, Any]):
@@ -309,17 +320,46 @@ class MessageCoordinator:
         """
         # Check if artifacts mode is enabled
         artifacts_enabled = message_data.get("artifacts_enabled", False)
-        artifact_id = message_data.get("artifact_id")
+        active_artifact_id = message_data.get("active_artifact_id")
 
         if artifacts_enabled and not regenerate:
-            # Delegate to artifact coordinator for long-form content generation
-            await self.artifact_coordinator.stream_artifact_response(
-                message_data=message_data,
-                message_obj=message_obj,
-                llm=llm,
-                artifact_id=artifact_id,
-            )
-            return
+            # NEW: Use LLM-based intent detection
+            try:
+                # Get active artifact summary for context
+                active_artifact = None
+                if active_artifact_id:
+                    active_artifact = await self.intent_service.get_active_artifact_summary(
+                        active_artifact_id
+                    )
+                
+                # Detect intent using LLM
+                intent = await self.intent_service.detect_intent(
+                    message=message_data["message"],
+                    active_artifact=active_artifact,
+                    llm=llm,
+                    user=self.user,
+                )
+                
+                logger.info(f"Artifact intent detected: {intent}")
+                
+                if intent == "chat":
+                    # Normal message flow - falls through to regular streaming below
+                    logger.info("Intent is 'chat', using normal message streaming")
+                else:
+                    # Create or edit artifact using simplified coordinator
+                    await self.simple_artifact_coordinator.stream_artifact_response(
+                        message_data=message_data,
+                        message_obj=message_obj,
+                        llm=llm,
+                        intent=intent,
+                        active_artifact_id=active_artifact_id,
+                    )
+                    return
+                    
+            except Exception as e:
+                logger.exception(f"Error in artifact intent detection: {e}")
+                # Fallback to normal message flow on error
+                logger.warning("Falling back to normal message flow due to intent detection error")
 
         try:
             bot_message_id = message_obj.id  # Keep as integer for consistency
