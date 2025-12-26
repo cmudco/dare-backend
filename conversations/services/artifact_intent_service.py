@@ -27,6 +27,7 @@ class ArtifactIntentService:
     - "create": User wants to GENERATE new content (document, code, essay, etc.)
     - "edit": User wants to MODIFY/UPDATE the active artifact
     - "chat": User is asking questions, seeking clarification, or having a conversation
+    - "diagram": User wants to CREATE a visual diagram, flowchart, or chart
     """
     
     # Intent classification prompt
@@ -41,8 +42,9 @@ Classify the user's intent as one of:
 - "create": User wants to GENERATE new content (document, code, essay, etc.)
 - "edit": User wants to MODIFY/UPDATE the active artifact
 - "chat": User is asking questions, seeking clarification, or having a conversation (NOT generating content)
+- "diagram": User wants to CREATE a visual diagram, flowchart, chart, sequence diagram, mindmap, or any visual representation
 
-Respond with ONLY one word: create, edit, or chat"""
+Respond with ONLY one word: create, edit, chat, or diagram"""
 
     # Default LLM for intent detection (Gemini Flash - fast and cheap)
     DEFAULT_INTENT_MODEL = "gemini-2.0-flash"
@@ -53,7 +55,7 @@ Respond with ONLY one word: create, edit, or chat"""
         active_artifact: Optional[Dict] = None,
         llm=None,  # Not used anymore - using Gemini Flash directly
         user=None,
-    ) -> Literal["create", "edit", "chat"]:
+    ) -> Literal["create", "edit", "chat", "diagram"]:
         """
         Detect user intent using LLM.
         
@@ -64,7 +66,7 @@ Respond with ONLY one word: create, edit, or chat"""
             user: User for API key resolution
             
         Returns:
-            "create", "edit", or "chat"
+            "create", "edit", "chat", or "diagram"
         """
         try:
             # Clean up message - strip quotes that might be present
@@ -105,12 +107,12 @@ Respond with ONLY one word: create, edit, or chat"""
             logger.debug(f"Intent detection raw response: '{intent}'")
             
             # Check exact match first
-            if intent in ("create", "edit", "chat"):
+            if intent in ("create", "edit", "chat", "diagram"):
                 logger.info(f"Intent detected: {intent} for message: {clean_message[:50]}...")
                 return intent
             
             # Check if intent word is contained in response
-            for word in ["create", "edit", "chat"]:
+            for word in ["diagram", "create", "edit", "chat"]:  # Check diagram first
                 if word in intent:
                     logger.info(f"Intent detected (extracted): {word} for message: {clean_message[:50]}...")
                     return word
@@ -128,12 +130,25 @@ Respond with ONLY one word: create, edit, or chat"""
         self, 
         message: str, 
         has_active_artifact: bool
-    ) -> Literal["create", "edit", "chat"]:
+    ) -> Literal["create", "edit", "chat", "diagram"]:
         """
         Fallback heuristic-based intent detection.
         Used when LLM is not available.
         """
         message_lower = message.lower().strip()
+        
+        # Strong diagram indicators - check first!
+        diagram_patterns = [
+            "diagram", "flowchart", "flow chart", "sequence diagram",
+            "mindmap", "mind map", "pie chart", "chart",
+            "visualize", "draw", "sketch", "illustrate",
+            "state diagram", "class diagram", "graph",
+            "workflow", "process flow", "architecture diagram"
+        ]
+        
+        for pattern in diagram_patterns:
+            if pattern in message_lower:
+                return "diagram"
         
         # Strong create indicators
         create_patterns = [

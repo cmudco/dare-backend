@@ -43,6 +43,7 @@ class LLMService:
     async def query(
         self,
         request: LLMQueryRequest,
+        tools: Optional[List] = None,
     ) -> AsyncGenerator[Tuple[str, Dict], None]:
         """Generate AI response with context using DTO-based request.
 
@@ -50,6 +51,7 @@ class LLMService:
 
         Args:
             request: LLMQueryRequest containing all query parameters
+            tools: Optional list of tool definitions to pass to the LLM
 
         Yields:
             Tuple of (chunk: str, usage: Dict) for streaming responses
@@ -66,7 +68,9 @@ class LLMService:
                 async for chunk, usage in self._execute_image_generation(request, llm):
                     yield chunk, usage
             else:
-                async for chunk, usage in self._execute_llm_completion(request, llm, messages, all_images):
+                async for chunk, usage in self._execute_llm_completion(
+                    request, llm, messages, all_images, tools=tools
+                ):
                     yield chunk, usage
 
         except Exception as e:
@@ -408,7 +412,8 @@ class LLMService:
         request: LLMQueryRequest,
         llm: LLM,
         messages: List[Dict[str, str]],
-        all_images: List[Dict]
+        all_images: List[Dict],
+        tools: Optional[List] = None,
     ) -> AsyncGenerator[Tuple[str, Dict], None]:
         """Execute LLM completion (streaming or structured).
 
@@ -429,7 +434,11 @@ class LLMService:
             )
 
         ai_service = await self._get_ai_service(llm, request.user)
-        tools = self._get_web_search_tools(llm) if request.requires_web_search() else None
+        
+        # Use provided tools, or web search tools if enabled
+        llm_tools = tools
+        if not llm_tools and request.requires_web_search():
+            llm_tools = self._get_web_search_tools(llm)
 
         if request.generation.structured_spec:
             # Structured output (non-streaming)
@@ -452,7 +461,7 @@ class LLMService:
                 request.generation.max_tokens,
                 request.generation.temperature,
                 images=all_images,
-                tools=tools
+                tools=llm_tools
             ):
                 yield chunk, usage
 
