@@ -83,14 +83,23 @@ class GeminiWebSearchTools:
         Check if tools list contains Google Search.
 
         Args:
-            tools: List of tool dictionaries
+            tools: List of tool dictionaries or native Tool objects
 
         Returns:
             True if google_search is present
         """
         if not tools:
             return False
-        return any("google_search" in str(tool) for tool in tools)
+            
+        for tool in tools:
+            # Handle native Gemini Tool object
+            if hasattr(tool, 'google_search') and tool.google_search is not None:
+                return True
+            # Handle dictionary format
+            if isinstance(tool, dict) and "google_search" in tool:
+                return True
+                
+        return False
 
     @staticmethod
     def build_google_search_tool():
