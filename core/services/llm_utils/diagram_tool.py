@@ -124,46 +124,16 @@ def get_diagram_tool_gemini():
     """Get diagram tool definition in Gemini format."""
     from google.genai import types
     
+    # Use the OpenAI spec's parameters but wrapped in Gemini types.Tool/FunctionDeclaration
+    openai_spec = get_diagram_tool_openai()
+    func = openai_spec["function"]
+    
     return types.Tool(
         function_declarations=[
             types.FunctionDeclaration(
-                name="create_diagram",
-                description="Create a visual diagram or flowchart",
-                parameters=types.Schema(
-                    type=types.Type.OBJECT,
-                    properties={
-                        "diagram_type": types.Schema(
-                            type=types.Type.STRING,
-                            enum=["flowchart", "sequence", "mindmap", "pie", "state", "class"]
-                        ),
-                        "title": types.Schema(type=types.Type.STRING),
-                        "nodes": types.Schema(
-                            type=types.Type.ARRAY,
-                            items=types.Schema(
-                                type=types.Type.OBJECT,
-                                properties={
-                                    "id": types.Schema(type=types.Type.STRING),
-                                    "label": types.Schema(type=types.Type.STRING),
-                                    "shape": types.Schema(type=types.Type.STRING)
-                                },
-                                required=["id", "label"]
-                            )
-                        ),
-                        "edges": types.Schema(
-                            type=types.Type.ARRAY,
-                            items=types.Schema(
-                                type=types.Type.OBJECT,
-                                properties={
-                                    "from": types.Schema(type=types.Type.STRING),
-                                    "to": types.Schema(type=types.Type.STRING),
-                                    "label": types.Schema(type=types.Type.STRING)
-                                },
-                                required=["from", "to"]
-                            )
-                        )
-                    },
-                    required=["diagram_type", "title", "nodes", "edges"]
-                )
+                name=func["name"],
+                description=func["description"],
+                parameters=func["parameters"]
             )
         ]
     )
@@ -209,10 +179,30 @@ def _sanitize_node_id(node_id: str) -> str:
     return sanitized
 
 
-def _escape_label(label: str) -> str:
-    """Escape label text for mermaid."""
-    # Replace quotes and special characters
-    return str(label).replace('"', "'").replace('\n', ' ')
+def _escape_label(label: str, use_quotes: bool = False) -> str:
+    """
+    Escape label text for mermaid.
+
+    Args:
+        label: The label text to escape
+        use_quotes: If True, wrap in quotes (needed for shapes with special delimiters)
+    """
+    text = str(label).replace('\n', ' ')
+
+    if use_quotes:
+        # For quoted labels, escape internal quotes and wrap
+        text = text.replace('"', "'")
+        return f'"{text}"'
+    else:
+        # For unquoted labels, escape characters that conflict with mermaid syntax
+        # These characters can be misinterpreted as shape delimiters or syntax
+        text = text.replace('"', "'")
+        # Replace parentheses and brackets that conflict with shape syntax
+        text = text.replace('(', '[')
+        text = text.replace(')', ']')
+        text = text.replace('{', '[')
+        text = text.replace('}', ']')
+        return text
 
 
 def json_to_mermaid(data: Dict) -> str:
@@ -261,28 +251,37 @@ def _build_flowchart(title: str, nodes: List[Dict], edges: List[Dict]) -> str:
     # Reference: https://mermaid.js.org/syntax/flowchart.html#node-shapes
     for node in nodes:
         node_id = _sanitize_node_id(node.get("id", ""))
-        label = _escape_label(node.get("label", node_id))
+        raw_label = node.get("label", node_id)
         shape = node.get("shape", "box")
-        
-        # Official Mermaid v10.x shape syntax (text without outer quotes):
-        # Rectangle/box:     id[text]
-        # Round edges:       id(text)  
-        # Stadium (pill):    id([text])
-        # Cylinder (db):     id[(text)]
-        # Circle:            id((text))
-        # Rhombus/diamond:   id{text}
-        # Hexagon:           id{{text}}
+
+        # Official Mermaid v10.x shape syntax:
+        # Rectangle/box:     id["text"] or id[text]
+        # Round edges:       id("text") or id(text)
+        # Stadium (pill):    id(["text"]) or id([text])
+        # Cylinder (db):     id[("text")] or id[(text)]
+        # Circle:            id(("text")) or id((text))
+        # Rhombus/diamond:   id{"text"} or id{text}
+        # Hexagon:           id{{"text"}} or id{{text}}
+        #
+        # Use quoted labels for shapes with special delimiters to avoid
+        # conflicts with parentheses/brackets/braces in label text
         if shape == "diamond":
+            label = _escape_label(raw_label, use_quotes=True)
             lines.append(f'    {node_id}{{{label}}}')
         elif shape == "circle":
+            label = _escape_label(raw_label, use_quotes=True)
             lines.append(f'    {node_id}(({label}))')
         elif shape == "stadium":
+            label = _escape_label(raw_label, use_quotes=True)
             lines.append(f'    {node_id}([{label}])')
         elif shape == "cylinder":
+            label = _escape_label(raw_label, use_quotes=True)
             lines.append(f'    {node_id}[({label})]')
         elif shape == "hexagon":
+            label = _escape_label(raw_label, use_quotes=True)
             lines.append(f'    {node_id}{{{{{label}}}}}')
         else:  # box (default)
+            label = _escape_label(raw_label, use_quotes=True)
             lines.append(f'    {node_id}[{label}]')
     
     # Add edges
@@ -414,38 +413,47 @@ def is_diagram_request(message: str) -> bool:
     return any(keyword in message_lower for keyword in diagram_keywords)
 
 
-def parse_tool_call_response(response: Dict, provider: str) -> Optional[Dict]:
+def extract_tool_call_args(tool_calls: List[Dict], tool_name: str = None) -> Optional[Dict]:
     """
-    Parse tool call response from different providers.
+    Extract arguments from normalized tool calls.
     
+    Works with the normalized format from stream_processors.py:
+    {
+        "id": "...",
+        "name": "tool_name",
+        "arguments": "{...}"  # JSON string or dict
+    }
+    
+    Args:
+        tool_calls: List of normalized tool call dicts from usage["tool_calls"]
+        tool_name: Optional filter - only extract if tool name matches
+        
     Returns:
-        Dictionary with parsed arguments, or None if no tool call found
+        Parsed arguments dict, or None if no matching tool call found
     """
-    provider_lower = provider.lower()
+    if not tool_calls or not isinstance(tool_calls, list):
+        return None
     
-    try:
-        if provider_lower in ["openai", "azure_openai"]:
-            # OpenAI format: response.choices[0].message.tool_calls
-            tool_calls = response.get("tool_calls", [])
-            if tool_calls:
-                return json.loads(tool_calls[0].get("function", {}).get("arguments", "{}"))
+    for tc in tool_calls:
+        if not isinstance(tc, dict):
+            continue
+            
+        # Check tool name if filter specified
+        name = tc.get("name", "")
+        if tool_name and name != tool_name:
+            continue
+            
+        # Extract arguments
+        args = tc.get("arguments", "{}")
         
-        elif provider_lower in ["claude", "anthropic"]:
-            # Claude format: content blocks with type "tool_use"
-            content = response.get("content", [])
-            for block in content:
-                if block.get("type") == "tool_use":
-                    return block.get("input", {})
-        
-        elif provider_lower in ["gemini", "google"]:
-            # Gemini format: parts with function_call
-            parts = response.get("parts", [])
-            for part in parts:
-                if "function_call" in part:
-                    return dict(part["function_call"].get("args", {}))
-        
-        return None
-        
-    except Exception as e:
-        logger.error(f"Error parsing tool call response: {e}")
-        return None
+        # Parse if string, return if already dict
+        if isinstance(args, str):
+            try:
+                return json.loads(args)
+            except json.JSONDecodeError:
+                logger.error(f"Failed to parse tool call arguments: {args[:200]}")
+                return None
+        elif isinstance(args, dict):
+            return args
+    
+    return None
