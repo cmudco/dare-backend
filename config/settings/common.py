@@ -244,6 +244,22 @@ LOGGING = {
             "level": "DEBUG",
             "propagate": False,
         },
+        # Suppress noisy socketio/engineio emit logs
+        "socketio": {
+            "handlers": ["console"],
+            "level": "WARNING",
+            "propagate": False,
+        },
+        "engineio": {
+            "handlers": ["console"],
+            "level": "WARNING",
+            "propagate": False,
+        },
+        "async_server": {
+            "handlers": ["console"],
+            "level": "WARNING",
+            "propagate": False,
+        },
     },
 }
 
