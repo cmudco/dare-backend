@@ -17,6 +17,16 @@ from conversations.constants import ArtifactType, ArtifactStatus
 from core.services.llm_service import LLMService
 from core.services.dtos import LLMQueryRequestBuilder
 from core.services.billing_service import BillingService
+from core.services.llm_utils.diagram_tool import (
+    get_diagram_tool,
+    json_to_mermaid,
+    extract_tool_call_args,
+)
+from core.services.llm_utils.chart_tool import (
+    get_chart_tool,
+    validate_chart_config,
+    add_default_colors,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -178,7 +188,7 @@ class SimpleArtifactCoordinator:
                         "streaming": True,
                     })
             
-            logger.info(f"Streaming complete: {chunk_count} chunks, {len(new_content)} chars new content")
+            logger.debug(f"Streaming complete: {chunk_count} chunks, {len(new_content)} chars new content")
             
             # 5. Combine content for final save
             final_content = previous_content + "\n\n" + new_content if intent == "edit" else new_content
@@ -212,9 +222,8 @@ class SimpleArtifactCoordinator:
                 "senderType": 2,  # AI
                 "streaming": False,
             }
-            logger.info(f"Sending message event: messageId={message_obj.id}, artifactId={artifact_data['id']}")
+            logger.debug(f"Sending message event: messageId={message_obj.id}, artifactId={artifact_data['id']}")
             await self.send(message_event)
-            logger.debug(f"message event sent successfully for id={message_obj.id}")
             
         except Exception as e:
             logger.exception(f"Error streaming artifact: {e}")
@@ -223,6 +232,353 @@ class SimpleArtifactCoordinator:
                 "error": str(e),
                 "artifactId": artifact_data["id"] if artifact_data else None,
             })
+    
+    async def stream_diagram_response(
+        self,
+        message_data: Dict[str, Any],
+        message_obj: Message,
+        llm: LLM,
+    ):
+        """
+        Generate a diagram using tool calls and stream to artifact panel.
+        
+        Uses structured output via tool calls to get JSON, then converts to mermaid.
+        This is non-streaming because tool calls return complete JSON at once.
+        
+        Args:
+            message_data: Message data containing user's diagram request
+            message_obj: AI message object (for linking)
+            llm: LLM to use (must support function calling)
+        """
+        artifact_data = None
+        
+        try:
+            # 1. Create artifact for diagram
+            artifact = await self._create_diagram_artifact(message_data, message_obj)
+            logger.info(f"Created diagram artifact id={artifact.id}")
+            
+            # 2. Send artifact_start event
+            artifact_data = await self._get_artifact_data(artifact)
+            start_event = {
+                "type": "artifact_start",
+                "artifactId": artifact_data["id"],
+                "title": artifact_data["title"],
+                "messageId": message_obj.id,
+                "version": artifact_data["version"],
+                "isNewVersion": False,
+            }
+            logger.info(f"Sending diagram artifact_start: {start_event}")
+            await self.send(start_event)
+            
+            # 3. Send "generating" status update
+            await self.send({
+                "type": "artifact_stream",
+                "artifactId": artifact_data["id"],
+                "content": "_Generating diagram..._",
+                "streaming": True,
+            })
+            
+            # 4. Get diagram tool for the provider
+            tool = get_diagram_tool(llm.provider)
+            
+            # 5. Build request with tool
+            request = LLMQueryRequestBuilder.from_message_data(
+                message=message_data["message"],
+                conversation=self.conversation,
+                user=self.user,
+                message_data=message_data,
+                llm=llm,
+                message_obj=message_obj,
+            )
+            
+            # 6. Call LLM with tool - collect full response (tool calls are non-streaming)
+            full_response = ""
+            token_usage = None
+            tool_call_data = None
+            
+            logger.info(f"Calling LLM with diagram tool for provider {llm.provider}: {type(tool).__name__}")
+            
+            async for chunk, usage in self.llm_service.query(request, tools=[tool]):
+                if usage:
+                    token_usage = usage
+                    # Check for tool call in usage (normalized format from stream_processors)
+                    if usage.get("tool_calls"):
+                        tool_call_data = usage["tool_calls"]
+                        logger.debug(f"Tool call received: {tool_call_data}")
+                
+                if chunk:
+                    full_response += chunk
+            
+            # 7. Extract diagram arguments from tool call using normalized format
+            diagram_args = extract_tool_call_args(tool_call_data, tool_name="create_diagram")
+            
+            if diagram_args:
+                mermaid_content = json_to_mermaid(diagram_args)
+                logger.debug(f"Converted tool call to mermaid: {len(mermaid_content)} chars")
+            else:
+                # Tool call is required - fail if not received
+                error_msg = "LLM did not use the create_diagram tool. This is required for diagram generation."
+                logger.error(f"{error_msg} Full response: {full_response[:500]}")
+                raise ValueError(error_msg)
+            
+            # 9. Wrap in mermaid code block for rendering
+            final_content = f"```mermaid\n{mermaid_content}\n```"
+            
+            # 10. Send final diagram content
+            await self.send({
+                "type": "artifact_stream",
+                "artifactId": artifact_data["id"],
+                "content": final_content,
+                "streaming": False,
+            })
+            
+            # 11. Finalize artifact
+            await self._finalize_artifact(
+                artifact, final_content, message_obj, token_usage
+            )
+            
+            # 12. Send artifact_complete
+            complete_event = {
+                "type": "artifact_complete",
+                "artifactId": artifact_data["id"],
+                "wordCount": len(mermaid_content.split()),
+                "messageId": message_obj.id,
+            }
+            logger.info(f"Sending artifact_complete for diagram: {artifact_data['id']}")
+            await self.send(complete_event)
+            
+            # 13. Send message completion
+            message_event = {
+                "type": "message",
+                "id": message_obj.id,
+                "message": f"[Diagram: {artifact_data['title']}]",
+                "artifactId": str(artifact_data["id"]),
+                "senderType": 2,  # AI
+                "streaming": False,
+            }
+            await self.send(message_event)
+            
+        except Exception as e:
+            logger.exception(f"Error generating diagram: {e}")
+            await self.send({
+                "type": "artifact_error",
+                "error": str(e),
+                "artifactId": artifact_data["id"] if artifact_data else None,
+            })
+
+    async def stream_chart_response(
+        self,
+        message_data: Dict[str, Any],
+        message_obj: Message,
+        llm: LLM,
+    ):
+        """
+        Generate a data chart using tool calls and stream to artifact panel.
+
+        Uses structured output via tool calls to get JSON config for recharts.
+        This is non-streaming because tool calls return complete JSON at once.
+
+        Args:
+            message_data: Message data containing user's chart request
+            message_obj: AI message object (for linking)
+            llm: LLM to use (must support function calling)
+        """
+        artifact_data = None
+
+        try:
+            # 1. Create artifact for chart
+            artifact = await self._create_chart_artifact(message_data, message_obj)
+            logger.info(f"Created chart artifact id={artifact.id}")
+
+            # 2. Send artifact_start event
+            artifact_data = await self._get_artifact_data(artifact)
+            start_event = {
+                "type": "artifact_start",
+                "artifactId": artifact_data["id"],
+                "title": artifact_data["title"],
+                "messageId": message_obj.id,
+                "version": artifact_data["version"],
+                "isNewVersion": False,
+                "artifactType": "chart",
+            }
+            logger.info(f"Sending chart artifact_start: {start_event}")
+            await self.send(start_event)
+
+            # 3. Send "generating" status update
+            await self.send({
+                "type": "artifact_stream",
+                "artifactId": artifact_data["id"],
+                "content": "_Generating chart..._",
+                "streaming": True,
+            })
+
+            # 4. Get chart tool for the provider
+            tool = get_chart_tool(llm.provider)
+
+            # 5. Build request with tool
+            request = LLMQueryRequestBuilder.from_message_data(
+                message=message_data["message"],
+                conversation=self.conversation,
+                user=self.user,
+                message_data=message_data,
+                llm=llm,
+                message_obj=message_obj,
+            )
+
+            # 6. Call LLM with tool - collect full response (tool calls are non-streaming)
+            full_response = ""
+            token_usage = None
+            tool_call_data = None
+
+            logger.info(f"Calling LLM with chart tool for provider {llm.provider}: {type(tool).__name__}")
+
+            async for chunk, usage in self.llm_service.query(request, tools=[tool]):
+                if usage:
+                    token_usage = usage
+                    # Check for tool call in usage (normalized format from stream_processors)
+                    if usage.get("tool_calls"):
+                        tool_call_data = usage["tool_calls"]
+                        logger.debug(f"Chart tool call received: {tool_call_data}")
+
+                if chunk:
+                    full_response += chunk
+
+            # 7. Extract chart arguments from tool call using normalized format
+            chart_args = extract_tool_call_args(tool_call_data, tool_name="create_chart")
+
+            if chart_args:
+                # Validate and enhance config
+                if not validate_chart_config(chart_args):
+                    raise ValueError("LLM returned invalid chart configuration")
+
+                chart_config = add_default_colors(chart_args)
+                logger.debug(f"Chart config: {chart_config.get('chart_type')}, {len(chart_config.get('data', []))} data points")
+            else:
+                # Tool call is required - fail if not received
+                error_msg = "LLM did not use the create_chart tool. This is required for chart generation."
+                logger.error(f"{error_msg} Full response: {full_response[:500]}")
+                raise ValueError(error_msg)
+
+            # 8. Wrap in recharts code block for frontend rendering
+            final_content = f"```recharts\n{json.dumps(chart_config, indent=2)}\n```"
+
+            # 9. Send final chart content
+            await self.send({
+                "type": "artifact_stream",
+                "artifactId": artifact_data["id"],
+                "content": final_content,
+                "streaming": False,
+            })
+
+            # 10. Finalize artifact
+            await self._finalize_artifact(
+                artifact, final_content, message_obj, token_usage
+            )
+
+            # 11. Send artifact_complete
+            complete_event = {
+                "type": "artifact_complete",
+                "artifactId": artifact_data["id"],
+                "wordCount": len(chart_config.get("data", [])),
+                "messageId": message_obj.id,
+            }
+            logger.info(f"Sending artifact_complete for chart: {artifact_data['id']}")
+            await self.send(complete_event)
+
+            # 12. Send message completion
+            message_event = {
+                "type": "message",
+                "id": message_obj.id,
+                "message": f"[Chart: {artifact_data['title']}]",
+                "artifactId": str(artifact_data["id"]),
+                "senderType": 2,  # AI
+                "streaming": False,
+            }
+            await self.send(message_event)
+
+        except Exception as e:
+            logger.exception(f"Error generating chart: {e}")
+            await self.send({
+                "type": "artifact_error",
+                "error": str(e),
+                "artifactId": artifact_data["id"] if artifact_data else None,
+            })
+
+    async def _create_chart_artifact(
+        self,
+        message_data: Dict,
+        message_obj: Message
+    ) -> Artifact:
+        """Create artifact for chart with DIAGRAM type (reused for charts)."""
+        title = self._extract_title(message_data["message"])
+        if not title.lower().startswith(("chart", "graph", "plot")):
+            title = f"Chart: {title}"
+
+        def _create():
+            artifact = Artifact(
+                conversation=self.conversation,
+                message=message_obj,
+                title=title,
+                artifact_type=ArtifactType.DIAGRAM,  # Reuse DIAGRAM type for charts
+                status=ArtifactStatus.GENERATING,
+                version=1,
+                estimated_sections=1,
+                current_section=0,
+            )
+            artifact.save()
+
+            # Create artifact group
+            group = ArtifactGroup(
+                conversation=self.conversation,
+                base_title=title,
+                latest_version=artifact,
+            )
+            group.save()
+
+            artifact.artifact_group = group
+            artifact.save(update_fields=["artifact_group"])
+
+            return artifact
+
+        return await database_sync_to_async(_create)()
+
+    async def _create_diagram_artifact(
+        self,
+        message_data: Dict,
+        message_obj: Message
+    ) -> Artifact:
+        """Create artifact for diagram with DIAGRAM type."""
+        title = self._extract_title(message_data["message"])
+        if not title.lower().startswith(("diagram", "flowchart", "chart")):
+            title = f"Diagram: {title}"
+        
+        def _create():
+            artifact = Artifact(
+                conversation=self.conversation,
+                message=message_obj,
+                title=title,
+                artifact_type=ArtifactType.DIAGRAM,
+                status=ArtifactStatus.GENERATING,
+                version=1,
+                estimated_sections=1,
+                current_section=0,
+            )
+            artifact.save()
+            
+            # Create artifact group
+            group = ArtifactGroup(
+                conversation=self.conversation,
+                base_title=title,
+                latest_version=artifact,
+            )
+            group.save()
+            
+            artifact.artifact_group = group
+            artifact.save(update_fields=["artifact_group"])
+            
+            return artifact
+        
+        return await database_sync_to_async(_create)()
     
     async def _create_artifact(
         self, 

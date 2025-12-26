@@ -337,6 +337,24 @@ class MessageCoordinator:
                 if intent == "chat":
                     # Normal message flow - falls through to regular streaming below
                     logger.info("Intent is 'chat', using normal message streaming")
+                elif intent == "diagram":
+                    # Diagram generation using tool calls (mermaid)
+                    logger.info("Intent is 'diagram', using tool-based diagram generation")
+                    await self.simple_artifact_coordinator.stream_diagram_response(
+                        message_data=message_data,
+                        message_obj=message_obj,
+                        llm=llm,
+                    )
+                    return
+                elif intent == "chart":
+                    # Data chart generation using tool calls (recharts)
+                    logger.info("Intent is 'chart', using tool-based chart generation")
+                    await self.simple_artifact_coordinator.stream_chart_response(
+                        message_data=message_data,
+                        message_obj=message_obj,
+                        llm=llm,
+                    )
+                    return
                 else:
                     # Create or edit artifact using simplified coordinator
                     await self.simple_artifact_coordinator.stream_artifact_response(
