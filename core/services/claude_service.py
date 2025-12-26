@@ -304,9 +304,11 @@ class ClaudeService:
         if tools:
             claude_tools = self._convert_tools_to_claude_format(tools)
             params["tools"] = claude_tools
+            logger.info(f"[Claude] Converted {len(tools)} tools to Claude format: {[t.get('name') for t in claude_tools]}")
             # Force tool use when tools are provided - ensures LLM uses tools instead of text
             if claude_tools:
                 params["tool_choice"] = {"type": "any"}
+                logger.info("[Claude] Set tool_choice='any' to force tool usage")
 
         return params
 
