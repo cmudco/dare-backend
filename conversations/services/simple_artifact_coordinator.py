@@ -182,32 +182,39 @@ class SimpleArtifactCoordinator:
             
             # 5. Combine content for final save
             final_content = previous_content + "\n\n" + new_content if intent == "edit" else new_content
+            logger.debug(f"Final content length: {len(final_content)} chars, intent={intent}")
             
             # 6. Finalize artifact
             await self._finalize_artifact(
                 artifact, final_content, message_obj, token_usage
             )
+            logger.debug(f"Finalized artifact id={artifact_data['id']}")
             
             # 7. Send artifact_complete event
+            # NOTE: Content is NOT included - already streamed via artifact_stream events
+            # Including large content here can cause Socket.IO issues with large payloads
             complete_event = {
                 "type": "artifact_complete",
                 "artifactId": artifact_data["id"],
-                "content": final_content,
                 "wordCount": len(final_content.split()),
                 "messageId": message_obj.id,
             }
             logger.info(f"Sending artifact_complete: artifactId={artifact_data['id']}, words={len(final_content.split())}")
             await self.send(complete_event)
+            logger.debug(f"artifact_complete sent successfully for id={artifact_data['id']}")
             
             # 8. Send message completion event to stop streaming indicator
-            await self.send({
+            message_event = {
                 "type": "message",
                 "id": message_obj.id,
                 "message": f"[Artifact: {artifact_data['title']}]",
                 "artifactId": str(artifact_data["id"]),
                 "senderType": 2,  # AI
                 "streaming": False,
-            })
+            }
+            logger.info(f"Sending message event: messageId={message_obj.id}, artifactId={artifact_data['id']}")
+            await self.send(message_event)
+            logger.debug(f"message event sent successfully for id={message_obj.id}")
             
         except Exception as e:
             logger.exception(f"Error streaming artifact: {e}")
