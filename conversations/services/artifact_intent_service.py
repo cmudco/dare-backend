@@ -179,20 +179,32 @@ Respond with ONLY one word: create, edit, or chat"""
     
     async def get_active_artifact_summary(
         self, 
-        artifact_id: int
+        artifact_id: int,
+        conversation_id: str = None,
     ) -> Optional[Dict]:
         """
         Get summary of an artifact for intent detection context.
         
         Args:
             artifact_id: ID of the artifact
+            conversation_id: ID of the current conversation (for validation)
             
         Returns:
             Dict with title and content preview, or None if not found
+            OR if artifact doesn't belong to the specified conversation
         """
         def _get():
             try:
                 artifact = Artifact.active_objects.get(id=artifact_id)
+                
+                # Validate artifact belongs to the specified conversation
+                if conversation_id and str(artifact.conversation.conversation_id) != str(conversation_id):
+                    logger.warning(
+                        f"Artifact {artifact_id} belongs to conversation {artifact.conversation.conversation_id}, "
+                        f"not {conversation_id} - ignoring stale artifact reference"
+                    )
+                    return None
+                
                 return {
                     "id": artifact.id,
                     "title": artifact.title,

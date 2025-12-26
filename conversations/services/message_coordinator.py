@@ -40,9 +40,7 @@ from conversations.services.websocket_response_service import WebSocketResponseS
 from conversations.services.message_validation_service import MessageValidationService
 from conversations.services.image_generation_service import ImageGenerationService
 from conversations.services.bot_budget_service import BotBudgetService
-from conversations.services.artifact_service import ArtifactService
-from conversations.services.artifact_coordinator import ArtifactCoordinator
-# New simplified artifact services
+# Simplified artifact services (replaced legacy LangGraph system)
 from conversations.services.artifact_intent_service import ArtifactIntentService
 from conversations.services.simple_artifact_coordinator import SimpleArtifactCoordinator
 from users.utils import should_run_learning_progress
@@ -83,14 +81,7 @@ class MessageCoordinator:
         # Track active artifact generation tasks for cancellation
         self._artifact_tasks: Dict[str, asyncio.Task] = {}
 
-        # Initialize artifact coordinator for artifact-related operations (legacy)
-        self.artifact_coordinator = ArtifactCoordinator(
-            conversation=conversation,
-            user=user,
-            send_callback=self._artifact_coordinator_send_callback,
-        )
-        
-        # NEW: Simplified artifact services
+        # Simplified artifact services
         self.intent_service = ArtifactIntentService()
         self.simple_artifact_coordinator = SimpleArtifactCoordinator(
             conversation=conversation,
@@ -329,7 +320,8 @@ class MessageCoordinator:
                 active_artifact = None
                 if active_artifact_id:
                     active_artifact = await self.intent_service.get_active_artifact_summary(
-                        active_artifact_id
+                        active_artifact_id,
+                        conversation_id=self.conversation.conversation_id,  # Validate ownership
                     )
                 
                 # Detect intent using LLM
@@ -837,50 +829,3 @@ class MessageCoordinator:
                 "assessment": None
             }
             await self.send(payload)
-
-    # ========== Artifact Methods (delegated to ArtifactCoordinator) ==========
-
-    async def _artifact_coordinator_send_callback(self, data: Dict[str, Any]):
-        """
-        Callback for ArtifactCoordinator to send WebSocket messages.
-        This wraps the send method to handle the existing send flow.
-        """
-        await self.send(data)
-
-
-    async def handle_continue_artifact(
-        self,
-        message_data: Dict[str, Any],
-        llm_id: Optional[str] = None,
-    ) -> Optional[Message]:
-        """
-        Handle continuation of a paused artifact.
-        Delegates to ArtifactCoordinator.
-
-        Args:
-            message_data: Validated message data with artifact_id
-            llm_id: Optional LLM ID override
-
-        Returns:
-            The AI message object if successful, None otherwise
-        """
-        # Get LLM before delegating (coordinator needs LLM instance)
-        llm = await self._get_llm(llm_id or message_data.get("llm_id"))
-        if not llm:
-            await self.send_error(ErrorCode.VALIDATION_ERROR, "Selected AI model not found")
-            return None
-
-        return await self.artifact_coordinator.handle_continue_artifact(
-            message_data=message_data,
-            llm=llm,
-        )
-
-    async def handle_pause_artifact(self, artifact_id: str):
-        """
-        Handle request to pause an artifact generation.
-        Delegates to ArtifactCoordinator.
-
-        Args:
-            artifact_id: ID of the artifact to pause
-        """
-        await self.artifact_coordinator.handle_pause_artifact(artifact_id)
