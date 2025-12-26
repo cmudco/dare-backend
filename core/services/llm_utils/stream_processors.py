@@ -5,7 +5,8 @@ This module provides async generators and utilities for processing streaming
 responses from different LLM providers.
 """
 
-from typing import AsyncGenerator, Dict, Tuple
+import json
+from typing import AsyncGenerator, Dict, Tuple, List, Optional
 from .usage_extractors import (
     OpenAIUsageExtractor,
     ClaudeUsageExtractor,
@@ -202,7 +203,7 @@ class GeminiStreamProcessor:
                                 tool_calls.append({
                                     "id": "",  # Gemini doesn't provide IDs
                                     "name": fc.name,
-                                    "arguments": str(dict(fc.args)) if fc.args else "{}"
+                                    "arguments": json.dumps(dict(fc.args)) if fc.args else "{}"
                                 })
 
             # Update usage metadata

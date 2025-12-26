@@ -283,10 +283,33 @@ class GeminiService:
         if GeminiWebSearchTools.has_google_search(tools):
             config.tools = [GeminiWebSearchTools.build_google_search_tool()]
         elif tools:
-            # Convert OpenAI-style tools to Gemini function declarations
-            gemini_tools = self._convert_tools_to_gemini_format(tools)
+            # Handle tools - could be native Gemini types.Tool or OpenAI format dicts
+            gemini_tools = []
+            
+            for tool in tools:
+                # Check if it's already a Gemini types.Tool object
+                if isinstance(tool, types.Tool):
+                    gemini_tools.append(tool)
+                # OpenAI format: {"type": "function", "function": {...}}
+                elif isinstance(tool, dict) and tool.get("type") == "function":
+                    func = tool.get("function", {})
+                    func_decl = types.FunctionDeclaration(
+                        name=func.get("name", ""),
+                        description=func.get("description", ""),
+                        parameters=func.get("parameters", {})
+                    )
+                    gemini_tools.append(types.Tool(function_declarations=[func_decl]))
+            
             if gemini_tools:
                 config.tools = gemini_tools
+                # Force function calling when tools are provided
+                # This ensures Gemini uses the tool instead of generating raw text
+                config.tool_config = types.ToolConfig(
+                    function_calling_config=types.FunctionCallingConfig(
+                        mode="ANY"  # Force the model to use a function
+                    )
+                )
+                logger.debug(f"[Gemini] Set {len(gemini_tools)} tools with tool_config mode=ANY")
 
         return config
 

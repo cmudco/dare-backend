@@ -20,6 +20,7 @@ from core.services.billing_service import BillingService
 from core.services.llm_utils.diagram_tool import (
     get_diagram_tool,
     json_to_mermaid,
+    extract_tool_call_args,
 )
 
 logger = logging.getLogger(__name__)
@@ -182,7 +183,7 @@ class SimpleArtifactCoordinator:
                         "streaming": True,
                     })
             
-            logger.info(f"Streaming complete: {chunk_count} chunks, {len(new_content)} chars new content")
+            logger.debug(f"Streaming complete: {chunk_count} chunks, {len(new_content)} chars new content")
             
             # 5. Combine content for final save
             final_content = previous_content + "\n\n" + new_content if intent == "edit" else new_content
@@ -216,9 +217,8 @@ class SimpleArtifactCoordinator:
                 "senderType": 2,  # AI
                 "streaming": False,
             }
-            logger.info(f"Sending message event: messageId={message_obj.id}, artifactId={artifact_data['id']}")
+            logger.debug(f"Sending message event: messageId={message_obj.id}, artifactId={artifact_data['id']}")
             await self.send(message_event)
-            logger.debug(f"message event sent successfully for id={message_obj.id}")
             
         except Exception as e:
             logger.exception(f"Error streaming artifact: {e}")
@@ -296,73 +296,25 @@ class SimpleArtifactCoordinator:
             async for chunk, usage in self.llm_service.query(request, tools=[tool]):
                 if usage:
                     token_usage = usage
-                    # Check for tool call in usage
+                    # Check for tool call in usage (normalized format from stream_processors)
                     if usage.get("tool_calls"):
                         tool_call_data = usage["tool_calls"]
-                        logger.info(f"Tool call received: {tool_call_data}")
+                        logger.debug(f"Tool call received: {tool_call_data}")
                 
                 if chunk:
                     full_response += chunk
             
-            # 7. Parse tool call response or use raw response
-            mermaid_content = None
+            # 7. Extract diagram arguments from tool call using normalized format
+            diagram_args = extract_tool_call_args(tool_call_data, tool_name="create_diagram")
             
-            if tool_call_data:
-                # Tool call response - parse JSON and convert to mermaid
-                try:
-                    import json
-                    # Handle different tool call formats
-                    if isinstance(tool_call_data, list) and len(tool_call_data) > 0:
-                        tc = tool_call_data[0]
-                        if isinstance(tc, dict):
-                            # Claude format: {'name': '...', 'arguments': '...'}
-                            # OpenAI format: {'function': {'name': '...', 'arguments': '...'}}
-                            if "arguments" in tc:
-                                # Claude format - arguments directly on the tool call
-                                args = tc["arguments"]
-                            elif "function" in tc:
-                                # OpenAI format - under function key
-                                args = tc.get("function", {}).get("arguments", "{}")
-                            else:
-                                args = "{}"
-                            
-                            if isinstance(args, str):
-                                diagram_json = json.loads(args)
-                            else:
-                                diagram_json = args
-                        else:
-                            # Object-like access (OpenAI SDK objects)
-                            if hasattr(tc, 'function'):
-                                diagram_json = json.loads(tc.function.arguments)
-                            else:
-                                diagram_json = {}
-                    else:
-                        diagram_json = tool_call_data
-                    
-                    mermaid_content = json_to_mermaid(diagram_json)
-                    logger.info(f"Converted tool call to mermaid: {len(mermaid_content)} chars")
-                    
-                except Exception as e:
-                    logger.exception(f"Error parsing tool call: {e}")
-                    # Fall back to treating response as mermaid
-                    mermaid_content = None
-            
-            # 8. If no tool call, check if LLM returned mermaid directly
-            if not mermaid_content:
-                # Try to extract mermaid from markdown code block
-                if "```mermaid" in full_response:
-                    import re
-                    match = re.search(r'```mermaid\s*(.*?)\s*```', full_response, re.DOTALL)
-                    if match:
-                        mermaid_content = match.group(1).strip()
-                        logger.info("Extracted mermaid from markdown code block")
-                elif "flowchart" in full_response.lower() or "sequenceDiagram" in full_response:
-                    # Likely raw mermaid
-                    mermaid_content = full_response.strip()
-                else:
-                    # Last resort - use the raw response
-                    mermaid_content = f"```\n{full_response}\n```"
-                    logger.warning("Could not extract mermaid, using raw response")
+            if diagram_args:
+                mermaid_content = json_to_mermaid(diagram_args)
+                logger.debug(f"Converted tool call to mermaid: {len(mermaid_content)} chars")
+            else:
+                # Tool call is required - fail if not received
+                error_msg = "LLM did not use the create_diagram tool. This is required for diagram generation."
+                logger.error(f"{error_msg} Full response: {full_response[:500]}")
+                raise ValueError(error_msg)
             
             # 9. Wrap in mermaid code block for rendering
             final_content = f"```mermaid\n{mermaid_content}\n```"
