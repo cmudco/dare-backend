@@ -2,7 +2,8 @@
 Stream processing utilities for LLM providers.
 
 This module provides async generators and utilities for processing streaming
-responses from different LLM providers.
+responses from different LLM providers. Includes extraction of web search
+sources/citations when web search is enabled.
 """
 
 import json
@@ -11,6 +12,11 @@ from .usage_extractors import (
     OpenAIUsageExtractor,
     ClaudeUsageExtractor,
     GeminiUsageExtractor
+)
+from .web_search_extractors import (
+    OpenAIWebSearchExtractor,
+    ClaudeWebSearchExtractor,
+    GeminiWebSearchExtractor,
 )
 
 
@@ -71,12 +77,17 @@ class OpenAIStreamProcessor:
         """
         Process OpenAI Responses API stream.
 
+        Extracts both text content and web search sources (when enabled).
+        Sources are included in the final usage data under 'web_search_sources'.
+
         Args:
             response: OpenAI Responses API stream
 
         Yields:
             Tuple of (text_chunk, usage_data)
         """
+        web_search_extractor = OpenAIWebSearchExtractor()
+
         async for chunk in response:
             if not hasattr(chunk, 'type'):
                 continue
@@ -86,11 +97,19 @@ class OpenAIStreamProcessor:
                 if hasattr(chunk, 'delta') and chunk.delta:
                     yield chunk.delta, None
 
+            # Extract web search sources from streaming events
+            web_search_extractor.process_chunk(chunk)
+
             # Handle completion event with usage
-            elif chunk.type == 'response.completed':
-                usage = OpenAIUsageExtractor.extract_from_responses_api(chunk)
-                if usage:
-                    yield "", usage
+            if chunk.type == 'response.completed':
+                usage = OpenAIUsageExtractor.extract_from_responses_api(chunk) or {}
+
+                # Include web search sources in usage data
+                sources = web_search_extractor.get_sources()
+                if sources:
+                    usage["web_search_sources"] = sources
+
+                yield "", usage
 
 
 class ClaudeStreamProcessor:
@@ -101,6 +120,9 @@ class ClaudeStreamProcessor:
         """
         Process Claude message stream.
 
+        Extracts text content, tool calls, and web search sources (when enabled).
+        Sources are included in the final usage data under 'web_search_sources'.
+
         Args:
             response: Claude message stream
 
@@ -108,19 +130,24 @@ class ClaudeStreamProcessor:
             Tuple of (text_chunk, usage_data)
         """
         usage_extractor = ClaudeUsageExtractor()
+        web_search_extractor = ClaudeWebSearchExtractor()
         tool_calls = []
         current_tool_call = None
         tool_calls_yielded = False
 
         async for event in response:
-            # Handle content block start (for tool use)
+            # Handle content block start (for tool use and web search results)
             if event.type == "content_block_start":
-                if hasattr(event, 'content_block') and event.content_block.type == "tool_use":
-                    current_tool_call = {
-                        "id": event.content_block.id,
-                        "name": event.content_block.name,
-                        "arguments": ""
-                    }
+                if hasattr(event, 'content_block'):
+                    block = event.content_block
+                    if block.type == "tool_use":
+                        current_tool_call = {
+                            "id": block.id,
+                            "name": block.name,
+                            "arguments": ""
+                        }
+                    # Extract web search sources from tool result blocks
+                    web_search_extractor.process_event(event)
 
             # Handle text deltas
             elif event.type == "content_block_delta":
@@ -143,17 +170,28 @@ class ClaudeStreamProcessor:
 
             # Extract usage from message delta
             elif event.type == "message_delta":
-                usage = usage_extractor.extract_from_message_delta(event)
+                usage = usage_extractor.extract_from_message_delta(event) or {}
+
+                # Include tool calls in usage data if present
+                if tool_calls:
+                    usage["tool_calls"] = tool_calls
+                    tool_calls_yielded = True
+
+                # Include web search sources in usage data
+                sources = web_search_extractor.get_sources()
+                if sources:
+                    usage["web_search_sources"] = sources
+
                 if usage:
-                    # Include tool calls in usage data if present
-                    if tool_calls:
-                        usage["tool_calls"] = tool_calls
-                        tool_calls_yielded = True
                     yield "", usage
 
         # Always yield tool calls at end if we have them and haven't yielded yet
         if tool_calls and not tool_calls_yielded:
-            yield "", {"tool_calls": tool_calls}
+            final_data = {"tool_calls": tool_calls}
+            sources = web_search_extractor.get_sources()
+            if sources:
+                final_data["web_search_sources"] = sources
+            yield "", final_data
 
 
 class GeminiStreamProcessor:
@@ -165,7 +203,8 @@ class GeminiStreamProcessor:
         Process Gemini content stream.
 
         Uses async iteration for true real-time streaming - chunks are
-        yielded as they arrive from the API, not buffered.
+        yielded as they arrive from the API, not buffered. Extracts web
+        search sources from grounding metadata when Google Search is enabled.
 
         Args:
             response: Gemini async content stream
@@ -174,6 +213,7 @@ class GeminiStreamProcessor:
             Tuple of (text_chunk, usage_data)
         """
         usage_extractor = GeminiUsageExtractor()
+        web_search_extractor = GeminiWebSearchExtractor()
         tool_calls = []
 
         # Use async for to properly iterate over async stream
@@ -186,19 +226,19 @@ class GeminiStreamProcessor:
                             # Handle text parts
                             if hasattr(part, 'text') and part.text:
                                 yield part.text, None
-                            
+
                             # Handle function calls (Gemini's tool calling)
                             # When Gemini uses tools, it returns function_call with content in args
                             if hasattr(part, 'function_call') and part.function_call:
                                 fc = part.function_call
-                                
+
                                 # Extract content from function call args if present
                                 # This handles the case where Gemini wraps content in a tool call
                                 if fc.args and 'content' in dict(fc.args):
                                     content = dict(fc.args).get('content', '')
                                     if content:
                                         yield content, None
-                                
+
                                 # Also track tool calls for usage data
                                 tool_calls.append({
                                     "id": "",  # Gemini doesn't provide IDs
@@ -206,13 +246,22 @@ class GeminiStreamProcessor:
                                     "arguments": json.dumps(dict(fc.args)) if fc.args else "{}"
                                 })
 
+            # Extract web search sources from grounding metadata (usually in final chunk)
+            web_search_extractor.process_chunk(chunk)
+
             # Update usage metadata
             usage_extractor.update_from_chunk(chunk)
 
-        # Yield final usage data with tool calls
+        # Yield final usage data with tool calls and web search sources
         usage = usage_extractor.get_final_usage() or {}
         if tool_calls:
             usage["tool_calls"] = tool_calls
+
+        # Include web search sources in usage data
+        sources = web_search_extractor.get_sources()
+        if sources:
+            usage["web_search_sources"] = sources
+
         if usage:
             yield "", usage
 
