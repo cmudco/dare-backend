@@ -262,7 +262,7 @@ class ConversationViewSet(viewsets.ModelViewSet):
                 conversation.messages
                 .filter(is_active=True, is_deleted=False)
                 .select_related('llm')
-                .prefetch_related('files__tags', 'tags', 'snippets__file')
+                .prefetch_related('files__tags', 'tags', 'snippets__file', 'web_search_sources')
                 .order_by('created_at')
             )
             
@@ -379,7 +379,7 @@ class MessageViewSet(viewsets.ModelViewSet):
         return Message.active_objects.filter(
             conversation__user=self.request.user
         ).select_related('llm', 'conversation').prefetch_related(
-            'files', 'tags', 'snippets__file'
+            'files', 'tags', 'snippets__file', 'web_search_sources'
         )
 
     def get_serializer_context(self):
