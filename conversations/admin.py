@@ -7,11 +7,12 @@ from core.helpers.admin_utils import (
     render_code_block,
     render_empty_placeholder,
     render_feedback_icon,
+    render_image,
     render_link,
     render_tooltip_span,
     truncate_text,
 )
-from .models import LLM, Conversation, Message, ModelGroup, ProviderAPIKey
+from .models import LLM, Conversation, Message, ModelGroup, ProviderAPIKey, Feedback
 from .proxy_models import MessageWithFeedback
 
 User = get_user_model()
@@ -269,3 +270,83 @@ class ProviderAPIKeyAdmin(admin.ModelAdmin):
         if obj:  # Editing existing key
             return self.readonly_fields + ("provider",)
         return self.readonly_fields
+
+
+@admin.register(Feedback)
+class FeedbackAdmin(admin.ModelAdmin):
+    """Admin interface for viewing user feedback from the FAB widget."""
+    list_display = ("id", "user_email", "emotion_display", "category_display", "page_display", "has_screenshot", "created_at")
+    list_filter = ("emotion", "category", "created_at")
+    search_fields = ("user__email", "message", "page")
+    ordering = ("-created_at",)
+    readonly_fields = ("user", "emotion", "category", "message", "screenshot_preview", "page", "browser_info", "created_at", "updated_at")
+    list_per_page = 50
+
+    fieldsets = (
+        ("User Info", {
+            "fields": ("user", "created_at")
+        }),
+        ("Feedback", {
+            "fields": ("emotion", "category", "message"),
+        }),
+        ("Context", {
+            "fields": ("page", "browser_info"),
+            "classes": ("collapse",)
+        }),
+        ("Screenshot", {
+            "fields": ("screenshot_preview",),
+            "classes": ("collapse",)
+        }),
+    )
+
+    def user_email(self, obj):
+        return obj.user.email
+    user_email.short_description = "User"
+    user_email.admin_order_field = "user__email"
+
+    def emotion_display(self, obj):
+        emotion_icons = {
+            "love": "😍",
+            "happy": "😊",
+            "neutral": "😐",
+            "confused": "😕",
+            "sad": "😢",
+        }
+        icon = emotion_icons.get(obj.emotion, "❓")
+        return f"{icon} {obj.emotion.title()}"
+    emotion_display.short_description = "Emotion"
+    emotion_display.admin_order_field = "emotion"
+
+    def category_display(self, obj):
+        if not obj.category:
+            return render_empty_placeholder()
+        category_icons = {
+            "bug": "🐛",
+            "idea": "💡",
+            "ui": "🎨",
+            "performance": "⚡",
+            "docs": "📚",
+            "other": "💬",
+        }
+        icon = category_icons.get(obj.category, "📝")
+        return f"{icon} {obj.category.title()}"
+    category_display.short_description = "Category"
+    category_display.admin_order_field = "category"
+
+    def page_display(self, obj):
+        return truncate_text(obj.page, 40)
+    page_display.short_description = "Page"
+
+    def has_screenshot(self, obj):
+        return "✅" if obj.screenshot else "❌"
+    has_screenshot.short_description = "Screenshot"
+
+    def screenshot_preview(self, obj):
+        if obj.screenshot:
+            return render_image(obj.screenshot, alt="Feedback screenshot")
+        return render_empty_placeholder()
+    screenshot_preview.short_description = "Screenshot"
+
+    def has_delete_permission(self, request, obj=None):
+        """Only superusers can delete feedback"""
+        return request.user.is_superuser
