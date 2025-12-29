@@ -108,8 +108,9 @@ class OpenAIWebSearchExtractor:
                 if getattr(content, 'type', None) != 'output_text':
                     continue
 
-                if hasattr(content, 'annotations') and content.annotations:
-                    for annotation in content.annotations:
+                annotations = getattr(content, 'annotations', None)
+                if annotations:
+                    for annotation in annotations:
                         self._extract_annotation(annotation)
 
     def get_sources(self) -> List[Dict[str, str]]:

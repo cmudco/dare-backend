@@ -24,6 +24,7 @@ from workflows.models import (
     WorkflowEdge,
     StructuredOutputNodeData,
 )
+from workflows.services.citation_serialization import serialize_step_citations
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +60,9 @@ class NodeExecutionStateBuilder:
                     "status": str,
                     "response": str | null,
                     "error": str | null,
-                    "validationContext": dict | null
+                    "validationContext": dict | null,
+                    "snippets": list,
+                    "webSearchSources": list
                 }
             }
 
@@ -70,11 +73,13 @@ class NodeExecutionStateBuilder:
         """
         workflow = workflow_run.workflow
 
-        # Prefetch all data (3 queries total)
+        # Prefetch all data (3 queries total, plus citation prefetches)
         nodes_by_id = {n.node_id: n for n in workflow.nodes.all()}
         steps_by_node = {
             s.step_node.node_id: s
-            for s in workflow_run.steps.select_related('step_node').all()
+            for s in workflow_run.steps.select_related('step_node').prefetch_related(
+                'snippets__file', 'web_search_sources'
+            ).all()
         }
         edges_by_target = {e.target: e for e in workflow.edges.all()}
 
@@ -136,6 +141,8 @@ class NodeExecutionStateBuilder:
                 "response": None,
                 "error": None,
                 "validationContext": None,
+                "snippets": [],
+                "webSearchSources": [],
             }
 
         # Extract validation context if node is pending human input
@@ -154,6 +161,9 @@ class NodeExecutionStateBuilder:
                 "selectedRoute": step.metadata.get(MetadataKey.SELECTED_ROUTE),
             }
 
+        # Serialize snippets and web search sources
+        snippets_data, web_search_sources_data = serialize_step_citations(step)
+
         return {
             "nodeId": node.node_id,  # Include nodeId to survive key mangling
             "stepId": step.id,
@@ -163,6 +173,8 @@ class NodeExecutionStateBuilder:
             "error": step.error,
             "validationContext": validation_context,
             "metadata": metadata,  # Include AI analysis for completed steps
+            "snippets": snippets_data,
+            "webSearchSources": web_search_sources_data,
         }
 
     def _build_display_node_state(
@@ -207,7 +219,9 @@ class NodeExecutionStateBuilder:
         # Check if source is an execution node with a step
         source_step = steps_by_node.get(source_node_id)
         if source_step is not None:
-            # Source is an execution node - copy its state
+            # Source is an execution node - copy its state including citations
+            snippets_data, web_search_sources_data = serialize_step_citations(source_step)
+
             return {
                 "nodeId": node.node_id,  # Include nodeId to survive key mangling
                 "stepId": None,  # Display nodes don't have their own steps
@@ -216,6 +230,8 @@ class NodeExecutionStateBuilder:
                 "response": source_step.response,
                 "error": source_step.error,
                 "validationContext": None,  # Display nodes don't show validation UI
+                "snippets": snippets_data,
+                "webSearchSources": web_search_sources_data,
             }
 
         # Source might be another display node - follow the chain
@@ -245,6 +261,8 @@ class NodeExecutionStateBuilder:
             "response": None,
             "error": None,
             "validationContext": None,
+            "snippets": [],
+            "webSearchSources": [],
         }
 
     def _build_unconnected_state(self, node: WorkflowNode) -> Dict[str, Any]:
@@ -264,6 +282,8 @@ class NodeExecutionStateBuilder:
                 "response": None,
                 "error": None,
                 "validationContext": None,
+                "snippets": [],
+                "webSearchSources": [],
             }
         else:
             # Other display nodes without connections - likely misconfigured
@@ -276,6 +296,8 @@ class NodeExecutionStateBuilder:
                 "response": None,
                 "error": "No connected execution node",
                 "validationContext": None,
+                "snippets": [],
+                "webSearchSources": [],
             }
 
     def _build_error_state(self, node: WorkflowNode, error_message: str) -> Dict[str, Any]:
@@ -288,6 +310,8 @@ class NodeExecutionStateBuilder:
             "response": None,
             "error": error_message,
             "validationContext": None,
+            "snippets": [],
+            "webSearchSources": [],
         }
 
     def _build_default_state(self, node: WorkflowNode) -> Dict[str, Any]:
@@ -300,6 +324,8 @@ class NodeExecutionStateBuilder:
             "response": None,
             "error": f"Unknown node type: {node.node_type}",
             "validationContext": None,
+            "snippets": [],
+            "webSearchSources": [],
         }
 
     def _normalize_validation_context(
