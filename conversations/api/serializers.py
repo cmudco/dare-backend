@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from conversations.models import LLM, Message, Conversation, Snippet, Artifact, ArtifactCheckpoint
+from conversations.models import LLM, Message, Conversation, Snippet, WebSearchSource, Artifact, ArtifactCheckpoint
 from files.api.serializers import FileSerializer, TagSerializer
 from prompts.models import Prompt
 from prompts.api.serializers import PromptSerializer
@@ -94,6 +94,28 @@ class SnippetSerializer(serializers.ModelSerializer):
             return dict(VectorDBChoice.choices).get(obj.file.vector_db_source, "Unknown")
         return "Unknown"
 
+
+class WebSearchSourceSerializer(serializers.ModelSerializer):
+    """
+    Serializer for web search sources/citations.
+
+    Returns the essential fields for displaying source links in the UI,
+    similar to how SnippetSerializer returns document context.
+    """
+
+    class Meta:
+        model = WebSearchSource
+        fields = [
+            'id',
+            'url',
+            'title',
+            'cited_text',
+            'page_age',
+            'provider',
+        ]
+        read_only_fields = fields
+
+
 class MessageSerializer(serializers.ModelSerializer):
     sender_name = serializers.ReadOnlyField(read_only=True)
     files = FileSerializer(many=True, read_only=True)
@@ -104,6 +126,7 @@ class MessageSerializer(serializers.ModelSerializer):
         required=False
     )
     snippets = SnippetSerializer(many=True, read_only=True)
+    web_search_sources = WebSearchSourceSerializer(many=True, read_only=True)
     llm = serializers.PrimaryKeyRelatedField(read_only=True, allow_null=True)
     artifactId = serializers.SerializerMethodField()
 
@@ -119,6 +142,7 @@ class MessageSerializer(serializers.ModelSerializer):
             'file_ids',
             'tags',
             'snippets',
+            'web_search_sources',
             'created_at',
             'feedback_type',
             'feedback_text',
@@ -132,7 +156,7 @@ class MessageSerializer(serializers.ModelSerializer):
             'cost',
             'artifactId',
         ]
-        read_only_fields = ['id', 'created_at', 'sender_name', 'files', 'tags', 'snippets', 'input_tokens', 'output_tokens', 'cost', 'artifactId']
+        read_only_fields = ['id', 'created_at', 'sender_name', 'files', 'tags', 'snippets', 'web_search_sources', 'input_tokens', 'output_tokens', 'cost', 'artifactId']
 
     def get_artifactId(self, obj):
         """Get the ID of the first active artifact linked to this message."""

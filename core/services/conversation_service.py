@@ -25,7 +25,7 @@ class ConversationService:
                 Message.active_objects.filter(conversation=conversation)
                 .select_related('llm')
                 .prefetch_related(
-                    'snippets', 'files', 'tags',
+                    'snippets', 'files', 'tags', 'web_search_sources',
                     # Only prefetch active artifacts to match what serializer expects
                     Prefetch('artifacts', queryset=Artifact.active_objects.all())
                 )
@@ -51,6 +51,7 @@ class ConversationService:
                 "files": msg.get("files", []),
                 "tags": msg.get("tags", []),
                 "snippets": msg.get("snippets", []),
+                "webSearchSources": msg.get("web_search_sources", []),
                 "feedbackType": msg.get("feedback_type", None),
                 "feedbackText": msg.get("feedback_text", None),
                 "isEdited": msg.get("is_edited", False),

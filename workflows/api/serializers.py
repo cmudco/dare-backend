@@ -9,26 +9,20 @@ from prompts.models import Prompt
 from workflows.constants import WorkflowRunStepStatus
 from workflows.handlers.utils import MetadataKey
 from workflows.models import (
-    Workflow, WorkflowRun, WorkflowRunStep,  # WorkflowStepSnippet,
+    Workflow, WorkflowRun, WorkflowRunStep,
     # Graph-driven models
     StepNodeData, StartNodeData, ChatOutputNodeData, StructuredOutputNodeData,
     WorkflowNode, WorkflowEdge
 )
 from workflows.services import NodeExecutionStateBuilder
+from workflows.services.citation_serialization import (
+    WorkflowStepSnippetSerializer,
+    WorkflowStepWebSearchSourceSerializer,
+)
 from workflows.utils import convert_keys_to_snake_case
 
 
 logger = logging.getLogger(__name__)
-
-
-# TEMPORARILY COMMENTED OUT - TABLE MISSING
-# class WorkflowStepSnippetSerializer(serializers.ModelSerializer):
-#     file = FileSerializer(read_only=True)
-#     vector_db_source = serializers.CharField(read_only=True)
-
-#     class Meta:
-#         model = WorkflowStepSnippet
-#         fields = ['id', 'file', 'text', 'similarity_score', 'chunk_index', 'vector_db_source']
 
 
 class WorkflowRunStepSerializer(serializers.ModelSerializer):
@@ -36,12 +30,16 @@ class WorkflowRunStepSerializer(serializers.ModelSerializer):
         choices=WorkflowRunStepStatus.choices,
         default=WorkflowRunStepStatus.PENDING
     )
-    # snippets = WorkflowStepSnippetSerializer(many=True, read_only=True)  # TEMPORARILY COMMENTED
+    snippets = WorkflowStepSnippetSerializer(many=True, read_only=True)
+    web_search_sources = WorkflowStepWebSearchSourceSerializer(many=True, read_only=True)
 
     class Meta:
         model = WorkflowRunStep
-        fields = ['id', 'step_node', 'order', 'status', 'response', 'error', 'metadata', 'created_at', 'updated_at']
-        read_only_fields = ['id', 'created_at', 'updated_at']
+        fields = [
+            'id', 'step_node', 'order', 'status', 'response', 'error',
+            'metadata', 'created_at', 'updated_at', 'snippets', 'web_search_sources'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at', 'snippets', 'web_search_sources']
 
 class WorkflowRunSerializer(serializers.ModelSerializer):
     steps = WorkflowRunStepSerializer(many=True, read_only=True)

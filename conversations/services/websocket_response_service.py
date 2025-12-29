@@ -76,7 +76,9 @@ class WebSocketResponseService:
         # Use MessageSerializer for proper formatting
         @database_sync_to_async
         def serialize_message():
-            msg = Message.active_objects.prefetch_related('files', 'tags', 'snippets__file').get(id=message.id)
+            msg = Message.active_objects.prefetch_related(
+                'files', 'tags', 'snippets__file', 'web_search_sources'
+            ).get(id=message.id)
             return MessageSerializer(msg).data
 
         serialized_data = await serialize_message()
@@ -119,6 +121,7 @@ class WebSocketResponseService:
             "files": serialized_data.get("files", []),
             "tags": serialized_data.get("tags", []),
             "snippets": serialized_data.get("snippets", []),
+            "webSearchSources": serialized_data.get("web_search_sources", []),
             "feedbackType": message.feedback_type,
             "feedbackText": message.feedback_text,
             "isEdited": message.is_edited,

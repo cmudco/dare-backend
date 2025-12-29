@@ -40,6 +40,7 @@ from conversations.services.websocket_response_service import WebSocketResponseS
 from conversations.services.message_validation_service import MessageValidationService
 from conversations.services.image_generation_service import ImageGenerationService
 from conversations.services.bot_budget_service import BotBudgetService
+from conversations.services.web_search_source_service import WebSearchSourceService
 # Simplified artifact services (replaced legacy LangGraph system)
 from conversations.services.artifact_intent_service import ArtifactIntentService
 from conversations.services.simple_artifact_coordinator import SimpleArtifactCoordinator
@@ -466,6 +467,17 @@ class MessageCoordinator:
 
             # Finalize message
             if ai_response_accumulator.strip():
+                # Save web search sources if present (before finalization)
+                if token_usage and token_usage.get("web_search_sources"):
+                    # Clear old sources on regeneration
+                    if regenerate:
+                        await WebSearchSourceService.delete_sources_for_message(message_obj)
+                    # Save new sources
+                    await WebSearchSourceService.save_sources(
+                        message=message_obj,
+                        sources=token_usage["web_search_sources"],
+                    )
+
                 await self._finalize_message(
                     message_obj=message_obj,
                     ai_response=ai_response_accumulator,
