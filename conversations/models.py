@@ -531,6 +531,61 @@ class Snippet(BaseModel):
         return f"Snippet for Message {self.message.id} from File {self.file.id} (Score: {self.similarity_score})"
 
 
+class WebSearchSource(BaseModel):
+    """
+    Model to store web search sources/citations from LLM responses.
+
+    When web search is enabled, LLMs return citations linking their responses
+    to source URLs. This model captures those sources for display in the UI,
+    similar to how Snippet stores RAG-retrieved document chunks.
+
+    Provider-specific fields:
+    - OpenAI: url, title (from annotations)
+    - Claude: url, title, cited_text, page_age (from web_search_tool_result)
+    - Gemini: url, title (from grounding_metadata.grounding_chunks)
+    """
+    message = models.ForeignKey(
+        Message,
+        on_delete=models.CASCADE,
+        related_name="web_search_sources",
+        help_text="The message this source was cited in."
+    )
+    url = models.URLField(
+        max_length=2048,
+        help_text="The URL of the source."
+    )
+    title = models.CharField(
+        max_length=500,
+        blank=True,
+        help_text="The title of the source page."
+    )
+    cited_text = models.TextField(
+        blank=True,
+        help_text="The text that was cited from this source (Claude only)."
+    )
+    page_age = models.CharField(
+        max_length=100,
+        blank=True,
+        help_text="When the page was last updated (Claude only)."
+    )
+    provider = models.CharField(
+        max_length=20,
+        blank=True,
+        help_text="The LLM provider that returned this source (openai, claude, gemini)."
+    )
+
+    active_objects = ActiveObjectsManager()
+
+    class Meta:
+        ordering = ['created_at']
+        indexes = [
+            models.Index(fields=['message'], name='websearch_message_idx'),
+        ]
+
+    def __str__(self):
+        return f"WebSearchSource for Message {self.message.id}: {self.title or self.url[:50]}"
+
+
 class LearningProgressAssessment(BaseModel):
     """
     Model to store AI-generated learning progress assessments for conversations.

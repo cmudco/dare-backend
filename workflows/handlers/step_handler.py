@@ -27,6 +27,10 @@ from workflows.handlers.utils import (
     NodeDataValidator,
     StepMessagePreparer,
 )
+# Import directly from module to avoid circular import via workflows.services
+from workflows.services.workflow_web_search_source_service import (
+    WorkflowWebSearchSourceService,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -121,6 +125,13 @@ class StepNodeHandler(BaseExecutionHandler):
                 workflow_run_step=workflow_run_step,
                 structured_spec=None
             )
+
+            # Save web search sources if present
+            if token_usage and token_usage.get("web_search_sources"):
+                await WorkflowWebSearchSourceService.save_sources(
+                    workflow_run_step=workflow_run_step,
+                    sources=token_usage["web_search_sources"],
+                )
 
             # Process billing using base handler
             await self._process_step_billing(
