@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from conversations.models import LLM, Message, Conversation, Snippet, WebSearchSource, Artifact, ArtifactCheckpoint
+from conversations.models import LLM, Message, Conversation, Snippet, WebSearchSource, Artifact, ArtifactCheckpoint, Feedback
 from files.api.serializers import FileSerializer, TagSerializer
 from prompts.models import Prompt
 from prompts.api.serializers import PromptSerializer
@@ -317,5 +317,22 @@ class ArtifactListSerializer(serializers.ModelSerializer):
         """Return empty string - full content loaded on demand."""
         return ''
 
+
+class FeedbackSerializer(serializers.ModelSerializer):
+    """Serializer for general user feedback from the FAB widget."""
+
+    class Meta:
+        model = Feedback
+        fields = [
+            'id',
+            'emotion',
+            'category',
+            'message',
+            'screenshot',
+            'page',
+            'browser_info',
+            'created_at',
+        ]
+        read_only_fields = ['id', 'created_at']
 
 
