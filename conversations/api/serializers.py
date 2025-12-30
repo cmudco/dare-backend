@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from conversations.models import LLM, Message, Conversation, Snippet, WebSearchSource, Artifact, ArtifactCheckpoint, ModelCardData, PublicFeedbackSourceCluster, PublicFeedbackSource
+from conversations.models import LLM, Message, Conversation, Snippet, WebSearchSource, Artifact, ArtifactCheckpoint, Feedback, ModelCardData, PublicFeedbackSourceCluster, PublicFeedbackSource
 from files.api.serializers import FileSerializer, TagSerializer
 from prompts.models import Prompt
 from prompts.api.serializers import PromptSerializer
@@ -329,6 +329,23 @@ class PublicFeedbackSourceSerializer(serializers.ModelSerializer):
             'page_date',
             'snippet',
         ]
+
+class FeedbackSerializer(serializers.ModelSerializer):
+    """Serializer for general user feedback from the FAB widget."""
+
+    class Meta:
+        model = Feedback
+        fields = [
+            'id',
+            'emotion',
+            'category',
+            'message',
+            'screenshot',
+            'page',
+            'browser_info',
+            'created_at',
+        ]
+        read_only_fields = ['id', 'created_at']
 
 
 class PublicFeedbackSourceClusterSerializer(serializers.ModelSerializer):

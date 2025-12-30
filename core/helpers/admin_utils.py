@@ -93,3 +93,27 @@ def render_code_block(text: str) -> str:
         'padding: 2px 6px; border-radius: 3px; font-family: monospace;">{}</code>',
         text,
     )
+
+
+def render_image(
+    src: str,
+    *,
+    max_width: str = "100%",
+    max_height: str = "500px",
+    border_radius: str = "8px",
+    alt: str = "Image",
+) -> str:
+    """
+    Render an image element with consistent styling.
+
+    Supports base64 data URLs or regular URLs.
+    """
+    return format_html(
+        '<img src="{}" alt="{}" style="max-width: {}; max-height: {}; '
+        'border-radius: {}; box-shadow: 0 2px 8px rgba(0,0,0,0.1);" />',
+        src,
+        alt,
+        max_width,
+        max_height,
+        border_radius,
+    )
