@@ -1026,3 +1026,53 @@ class ArtifactCheckpoint(BaseModel):
 
     def __str__(self):
         return f"Checkpoint for {self.artifact.title} at section {self.current_section}"
+
+
+class Feedback(BaseModel):
+    """
+    Model to store general user feedback from the FAB feedback widget.
+    This is for platform-wide feedback, not message-specific feedback.
+    """
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="feedbacks",
+        help_text="User who submitted this feedback."
+    )
+    emotion = models.CharField(
+        max_length=20,
+        help_text="User's emotional response (love, happy, neutral, confused, sad)."
+    )
+    category = models.CharField(
+        max_length=20,
+        blank=True,
+        null=True,
+        help_text="Feedback category (bug, idea, ui, performance, docs, other)."
+    )
+    message = models.TextField(
+        blank=True,
+        help_text="Detailed feedback message from the user."
+    )
+    screenshot = models.TextField(
+        blank=True,
+        null=True,
+        help_text="Base64 encoded screenshot (optional)."
+    )
+    page = models.CharField(
+        max_length=500,
+        help_text="Page URL where feedback was submitted."
+    )
+    browser_info = models.TextField(
+        blank=True,
+        help_text="User's browser information."
+    )
+
+    active_objects = ActiveObjectsManager()
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = "Feedback"
+        verbose_name_plural = "Feedbacks"
+
+    def __str__(self):
+        return f"Feedback from {self.user.email}: {self.emotion} - {self.category or 'No category'}"

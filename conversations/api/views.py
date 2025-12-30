@@ -9,7 +9,7 @@ from django.db import transaction
 from django.http import HttpResponse
 from django.template.loader import render_to_string
 from django.utils import timezone
-from rest_framework import viewsets, generics, status
+from rest_framework import viewsets, generics, status, mixins
 from rest_framework.decorators import action
 from rest_framework.exceptions import NotFound
 from rest_framework.permissions import IsAuthenticated, AllowAny
@@ -17,7 +17,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.shortcuts import get_object_or_404
 
-from conversations.models import Message, Conversation, LLM, Snippet, Artifact, ModelCardData
+from conversations.models import Message, Conversation, LLM, Snippet, Artifact, Feedback, ModelCardData
 from conversations.constants import ArtifactStatus
 from users.utils import detect_platform_from_request
 from .serializers import (
@@ -27,6 +27,7 @@ from .serializers import (
     ArtifactSerializer,
     ArtifactListSerializer,
     ArtifactCheckpointSerializer,
+    FeedbackSerializer,
     ModelCardDataSerializer,
     ModelCardDataListSerializer,
 )
@@ -562,6 +563,26 @@ class LLMViewSet(viewsets.ModelViewSet):
         queryset = LLM.objects.all().order_by('name')
         serializer = self.get_serializer(queryset, many=True)
         return Response(serializer.data)
+
+
+class FeedbackViewSet(mixins.CreateModelMixin, viewsets.GenericViewSet):
+    """
+    ViewSet for submitting general user feedback from the FAB widget.
+
+    POST /api/conversations/feedback/
+    """
+    serializer_class = FeedbackSerializer
+    permission_classes = [IsAuthenticated]
+    queryset = Feedback.active_objects.all()
+
+    def perform_create(self, serializer):
+        """Save the feedback with the current user."""
+        serializer.save(user=self.request.user)
+        logger = logging.getLogger(__name__)
+        logger.info(
+            f"Feedback submitted by {self.request.user.email}: "
+            f"{serializer.data.get('emotion')} - {serializer.data.get('category')}"
+        )
 
 
 class ModelCardDataViewSet(viewsets.ReadOnlyModelViewSet):
