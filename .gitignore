@@ -55,3 +55,4 @@ dump.rdb
 data/
 weaviate_data/
 backups/
+model_card_cache/

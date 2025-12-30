@@ -11,7 +11,7 @@ from core.helpers.admin_utils import (
     render_tooltip_span,
     truncate_text,
 )
-from .models import LLM, Conversation, Message, ModelGroup, ProviderAPIKey
+from .models import LLM, Conversation, Message, ModelGroup, ProviderAPIKey, ModelCardData, PublicFeedbackSourceCluster, PublicFeedbackSource
 from .proxy_models import MessageWithFeedback
 
 User = get_user_model()
@@ -269,3 +269,39 @@ class ProviderAPIKeyAdmin(admin.ModelAdmin):
         if obj:  # Editing existing key
             return self.readonly_fields + ("provider",)
         return self.readonly_fields
+
+
+@admin.register(ModelCardData)
+class ModelCardDataAdmin(admin.ModelAdmin):
+    list_display = ('name', 'provider_name', 'slug', 'llm', 'updated_at')
+    list_filter = ('provider_name',)
+    search_fields = ('name', 'slug', 'name_variants')
+    readonly_fields = ('created_at', 'updated_at')
+    raw_id_fields = ('llm',)
+
+class PublicFeedbackSourceInline(admin.TabularInline):
+    model = PublicFeedbackSource
+    extra = 0
+    fields = ['source_type', 'title', 'url', 'page_date']
+    readonly_fields = ['title', 'url', 'page_date', 'originating_query']
+
+
+@admin.register(PublicFeedbackSourceCluster)
+class PublicFeedbackSourceClusterAdmin(admin.ModelAdmin):
+    list_display = ['cluster_index', 'canonical_title', 'model_card', 'source_count', 'created_at']
+    list_filter = ['model_card', 'created_at']
+    search_fields = ['canonical_title', 'canonical_url', 'identifier']
+    readonly_fields = ['created_at', 'updated_at']
+    inlines = [PublicFeedbackSourceInline]
+
+    def source_count(self, obj):
+        return obj.sources.count()
+    source_count.short_description = "Sources"
+
+
+@admin.register(PublicFeedbackSource)
+class PublicFeedbackSourceAdmin(admin.ModelAdmin):
+    list_display = ['title', 'source_type', 'cluster', 'page_date']
+    list_filter = ['source_type', 'cluster__model_card']
+    search_fields = ['title', 'url', 'snippet']
+    readonly_fields = ['created_at']
