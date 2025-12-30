@@ -239,6 +239,11 @@ class LLMService:
         Returns:
             List of processed image dictionaries (images and videos combined)
         """
+        # Skip processing media as images if this is an audio transcription request
+        # Audio files should only be processed by the transcription service
+        if request.requires_audio_transcription():
+            return request.media.images or []
+
         all_images = request.media.images or []
 
         if request.media.media_ids:

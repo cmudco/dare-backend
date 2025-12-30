@@ -62,6 +62,35 @@ class LLM(models.Model):
     def __str__(self):
         return self.name
 
+    @property
+    def is_special_purpose(self) -> bool:
+        """Check if this model is a special-purpose model (not a chat model).
+
+        Special-purpose models like image generators and audio transcribers
+        cannot be used for standard chat completions.
+        """
+        return self.is_image_generator or self.is_audio_transcriber
+
+    @property
+    def supports_chat(self) -> bool:
+        """Check if this model supports chat completions."""
+        return not self.is_special_purpose
+
+    @classmethod
+    def get_default_chat_model(cls) -> 'LLM':
+        """Get a default chat-capable model.
+
+        Returns the first available model that supports chat completions
+        (i.e., not an image generator or audio transcriber).
+
+        Returns:
+            LLM instance or None if no chat model is available
+        """
+        return cls.objects.filter(
+            is_image_generator=False,
+            is_audio_transcriber=False
+        ).first()
+
     class Meta:
         verbose_name_plural = "LLMs"
 
