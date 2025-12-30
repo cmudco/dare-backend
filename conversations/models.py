@@ -142,6 +142,171 @@ class ProviderAPIKey(BaseModel):
         return "***"
 
 
+class ModelCardData(models.Model):
+    """
+    Intelligence data for any LLM - powers the Model Cards feature.
+    Separate from operational LLM model to allow us to track models not configured for use in chat/workflows/etc.
+    """
+
+    # Optional link to operational model
+    llm = models.OneToOneField(
+        'LLM',
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='model_card_data',
+        help_text="Link to LLM if this model is configured for use"
+    )
+
+    # Identity
+    name = models.CharField(max_length=255)
+    slug = models.SlugField(max_length=255, unique=True)
+    name_variants = models.JSONField(default=list, blank=True)
+    provider_name = models.CharField(max_length=255)
+
+    # Public feedback (pilot JSON blob)
+    public_feedback = models.JSONField(default=dict, blank=True)
+
+    # Timestamps
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = "Model Card Data"
+        verbose_name_plural = "Model Card Data"
+
+    def __str__(self):
+        return self.name
+
+
+class PublicFeedbackSourceCluster(models.Model):
+    """
+    A cluster of related sources about the same content.
+
+    Example: An arXiv paper and its Hacker News discussion thread
+    would be grouped into one cluster, since they represent the same
+    underlying content/finding being discussed.
+
+    The cluster_index is used for citations in the public_feedback JSON:
+        "refs": [1, 3, 7] -> clusters with cluster_index 1, 3, 7
+    """
+    model_card = models.ForeignKey(
+        'ModelCardData',  # String reference to avoid circular import
+        on_delete=models.CASCADE,
+        related_name='source_clusters'
+    )
+
+    # Citation index - this is what refs[] arrays point to
+    cluster_index = models.PositiveIntegerField(
+        help_text="Citation number [1], [2], etc. used in refs arrays"
+    )
+
+    # The "canonical" representation of this cluster
+    canonical_title = models.CharField(
+        max_length=500,
+        help_text="Primary title for this source cluster"
+    )
+    canonical_url = models.URLField(
+        max_length=2000,
+        help_text="Primary URL (e.g., the original paper, not the HN thread)"
+    )
+
+    # Optional: identifier for deduplication (arXiv ID, DOI, etc.)
+    identifier = models.CharField(
+        max_length=100,
+        blank=True,
+        help_text="arXiv ID, DOI, or other unique identifier if available"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ['model_card', 'cluster_index']
+        ordering = ['cluster_index']
+        verbose_name = "Public Feedback Source Cluster"
+        verbose_name_plural = "Public Feedback Source Clusters"
+
+    def __str__(self):
+        return f"[{self.cluster_index}] {self.canonical_title[:50]}"
+
+    @property
+    def source_count(self):
+        return self.sources.count()
+
+
+class PublicFeedbackSource(models.Model):
+    """
+    Individual source within a cluster.
+
+    A cluster might contain:
+    - The original arXiv paper (source_type='canonical')
+    - A Hacker News discussion thread (source_type='hackernews')
+    - An OpenReview comment thread (source_type='review')
+    - A Reddit post about it (source_type='reddit')
+
+    All of these discuss the same underlying content but may contain
+    different perspectives and user reactions.
+    """
+
+    SOURCE_TYPE_CHOICES = [
+        ('canonical', 'Canonical Source'),
+        ('hackernews', 'Hacker News'),
+        ('reddit', 'Reddit'),
+        ('twitter', 'Twitter/X'),
+        ('blog', 'Blog Post'),
+        ('news', 'News Article'),
+        ('review', 'Review/OpenReview'),
+        ('forum', 'Forum Discussion'),
+        ('other', 'Other'),
+    ]
+
+    cluster = models.ForeignKey(
+        PublicFeedbackSourceCluster,
+        on_delete=models.CASCADE,
+        related_name='sources'
+    )
+
+    title = models.CharField(max_length=500)
+    url = models.URLField(max_length=2000)
+
+    source_type = models.CharField(
+        max_length=20,
+        choices=SOURCE_TYPE_CHOICES,
+        default='other',
+        help_text="Type of source for potential filtering"
+    )
+
+    page_date = models.CharField(
+        max_length=100,
+        blank=True,
+        null=True,
+        help_text="Date string as returned by search (not normalized)"
+    )
+
+    snippet = models.TextField(
+        blank=True,
+        help_text="Text snippet from search results"
+    )
+
+    originating_query = models.CharField(
+        max_length=200,
+        blank=True,
+        help_text="The search query that found this source"
+    )
+
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['source_type', 'title']
+        verbose_name = "Public Feedback Source"
+        verbose_name_plural = "Public Feedback Sources"
+
+    def __str__(self):
+        return f"{self.get_source_type_display()}: {self.title[:40]}"
+
+
+
 class Conversation(BaseModel):
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -795,7 +960,7 @@ class Artifact(BaseModel):
         Create a new version based on this artifact.
         Copies current content and increments version number.
         The new artifact is linked as a child of this one.
-        
+
         Returns:
             Artifact: The newly created version
         """
@@ -814,12 +979,12 @@ class Artifact(BaseModel):
             version=self.version + 1,
         )
         new_artifact.save()
-        
+
         # Update group's latest_version
         if self.artifact_group:
             self.artifact_group.latest_version = new_artifact
             self.artifact_group.save(update_fields=['latest_version', 'updated_at'])
-        
+
         return new_artifact
 
 

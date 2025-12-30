@@ -1,6 +1,6 @@
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from conversations.api.views import ConversationViewSet, LLMViewSet, MessageViewSet, ArtifactStatusView, ArtifactContentView
+from conversations.api.views import ConversationViewSet, LLMViewSet, MessageViewSet, ArtifactStatusView, ArtifactContentView, ModelCardDataViewSet
 from conversations.constants import APP_NAME
 
 
@@ -8,6 +8,8 @@ router = DefaultRouter()
 router.register(r'conversations', ConversationViewSet, basename='conversation')
 router.register(r'messages', MessageViewSet, basename='message')
 router.register(r'llms', LLMViewSet, basename='llm')
+router.register(r'model-cards', ModelCardDataViewSet, basename='model-card')
+
 
 app_name = APP_NAME
 

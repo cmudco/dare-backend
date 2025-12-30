@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from conversations.models import LLM, Message, Conversation, Snippet, WebSearchSource, Artifact, ArtifactCheckpoint
+from conversations.models import LLM, Message, Conversation, Snippet, WebSearchSource, Artifact, ArtifactCheckpoint, ModelCardData, PublicFeedbackSourceCluster, PublicFeedbackSource
 from files.api.serializers import FileSerializer, TagSerializer
 from prompts.models import Prompt
 from prompts.api.serializers import PromptSerializer
@@ -318,4 +318,67 @@ class ArtifactListSerializer(serializers.ModelSerializer):
         return ''
 
 
+class PublicFeedbackSourceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PublicFeedbackSource
+        fields = [
+            'id',
+            'title',
+            'url',
+            'source_type',
+            'page_date',
+            'snippet',
+        ]
 
+
+class PublicFeedbackSourceClusterSerializer(serializers.ModelSerializer):
+    sources = PublicFeedbackSourceSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = PublicFeedbackSourceCluster
+        fields = [
+            'id',
+            'cluster_index',
+            'canonical_title',
+            'canonical_url',
+            'identifier',
+            'sources',
+        ]
+
+
+class ModelCardDataSerializer(serializers.ModelSerializer):
+    source_clusters = PublicFeedbackSourceClusterSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = ModelCardData
+        fields = [
+            'id',
+            'name',
+            'slug',
+            'provider_name',
+            'name_variants',
+            'public_feedback',
+            'source_clusters',
+            'llm',
+            'created_at',
+            'updated_at',
+        ]
+
+class ModelCardDataListSerializer(serializers.ModelSerializer):
+    """Lighter serializer for list view (excludes full public_feedback blob)."""
+    has_public_feedback = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ModelCardData
+        fields = [
+            'id',
+            'name',
+            'slug',
+            'provider_name',
+            'llm',
+            'has_public_feedback',
+            'updated_at',
+        ]
+
+    def get_has_public_feedback(self, obj):
+        return bool(obj.public_feedback)
