@@ -11,12 +11,14 @@ class NotificationAdmin(admin.ModelAdmin):
     list_display = [
         'title',
         'user_display',
+        'source',
         'delivery_type',
         'category_display',
         'created_at',
         'expires_at'
     ]
     list_filter = [
+        'source',
         'delivery_type',
         'category',
         'created_at'
@@ -34,11 +36,11 @@ class NotificationAdmin(admin.ModelAdmin):
     ]
     fieldsets = (
         ('Basic Information', {
-            'fields': ('user', 'title', 'message'),
+            'fields': ('user', 'title', 'message', 'source', 'delivery_type', 'category'),
             'description': 'Leave user empty to send notification to all users'
         }),
         ('Display Settings', {
-            'fields': ('delivery_type', 'category', 'action_url')
+            'fields': ('action_url',)
         }),
         ('Scheduling', {
             'fields': ('expires_at',),

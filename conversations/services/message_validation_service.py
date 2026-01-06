@@ -64,6 +64,15 @@ class MessageValidationService:
             "web_search_enabled": data.get("web_search_enabled"),
             "image_generation_enabled": data.get("image_generation_enabled"),
             "image_generation_settings": data.get("image_generation_settings"),
+            "audio_transcription_enabled": data.get("audio_transcription_enabled"),
+            "audio_transcription_settings": data.get("audio_transcription_settings"),
+            "artifacts_enabled": data.get("artifacts_enabled", False),
+            "artifact_id": data.get("artifact_id"),  # For continuing existing artifact
+
+            # Artifact modification fields
+            "artifact_action": data.get("artifact_action", "auto"),  # "auto" | "create" | "modify"
+            "active_artifact_id": data.get("active_artifact_id"),    # Currently open artifact (for auto-detection)
+            "target_artifact_id": data.get("target_artifact_id"),    # Explicit target override
 
             # Vision support (base64 encoded images)
             "images": cls._get_list(data, "images"),
@@ -136,6 +145,9 @@ class MessageValidationService:
             "web_search_enabled": data.get("web_search_enabled"),
             "image_generation_enabled": data.get("image_generation_enabled"),
             "image_generation_settings": data.get("image_generation_settings"),
+            "audio_transcription_enabled": data.get("audio_transcription_enabled"),
+            "audio_transcription_settings": data.get("audio_transcription_settings"),
+            "artifacts_enabled": data.get("artifacts_enabled", False),
         }
 
     @classmethod

@@ -45,9 +45,22 @@ class OpenAIService:
         if api_key is None:
             api_key = get_provider_api_key(llm.provider)
 
-        self.client = AsyncOpenAI(api_key=api_key)
+        self.api_key = api_key
+        self._client = None
         self.model = llm.identifier
         self.is_reasoning = llm.is_reasoning
+
+    @property
+    def client(self) -> AsyncOpenAI:
+        """
+        Lazy initialization of OpenAI client.
+
+        This prevents issues with async HTTP clients in RQ background workers
+        by creating the client on first use rather than during __init__.
+        """
+        if self._client is None:
+            self._client = AsyncOpenAI(api_key=self.api_key)
+        return self._client
 
     async def stream_chat_completion(
         self,
@@ -84,10 +97,13 @@ class OpenAIService:
                 response = await self._stream_with_web_search(prepared_messages)
                 processor = OpenAIStreamProcessor.process_responses_api_stream
             else:
+                # Filter out web_search tools before passing to chat completions
+                non_web_tools = [t for t in (tools or []) if t.get("type") != "web_search"]
                 response = await self._stream_chat_completions(
                     prepared_messages,
                     max_tokens,
-                    temperature
+                    temperature,
+                    non_web_tools if non_web_tools else None
                 )
                 processor = OpenAIStreamProcessor.process_chat_completion_stream
 
@@ -130,6 +146,67 @@ class OpenAIService:
         # Default: use streaming and aggregate
         stream = self.stream_chat_completion(messages, max_tokens, temperature)
         return await StreamAggregator.aggregate_stream(stream)
+
+    async def generate_structured_output(
+        self,
+        messages: List[Dict[str, str]],
+        response_schema: Dict,
+        max_tokens: int = 2000,
+        temperature: float = 0.7,
+    ) -> Dict:
+        """
+        Generate response matching a JSON schema using native structured outputs.
+
+        This method provides reliable JSON responses for artifact planning.
+        Uses OpenAI's json_schema response format for guaranteed compliance.
+
+        Args:
+            messages: List of message dictionaries
+            response_schema: JSON Schema the response must match
+            max_tokens: Maximum tokens to generate
+            temperature: Controls randomness
+
+        Returns:
+            Parsed JSON response as dictionary
+
+        Raises:
+            ValueError: If schema validation fails or no response returned
+        """
+        logger.info(f"[OpenAI] generate_structured_output with schema: {list(response_schema.get('properties', {}).keys())}")
+
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "structured_response",
+                "schema": response_schema,
+                "strict": True
+            }
+        }
+
+        params = {
+            "model": self.model,
+            "messages": messages,
+            "response_format": response_format,
+        }
+
+        if self.is_reasoning:
+            params["max_completion_tokens"] = max_tokens
+        else:
+            params["max_tokens"] = max_tokens
+            params["temperature"] = temperature
+
+        try:
+            response = await self.client.chat.completions.create(**params)
+            content = response.choices[0].message.content
+
+            if not content:
+                raise ValueError("Empty response from OpenAI structured output")
+
+            return json.loads(content)
+
+        except Exception as e:
+            logger.exception(f"[OpenAI] generate_structured_output error: {str(e)}")
+            raise ValueError(f"Structured output generation failed: {str(e)}")
 
     # ==================== Private Methods ====================
 
@@ -176,7 +253,8 @@ class OpenAIService:
         self,
         messages: List[Dict[str, str]],
         max_tokens: int,
-        temperature: float
+        temperature: float,
+        tools: Optional[List[Dict]] = None
     ):
         """
         Stream using Chat Completions API.
@@ -185,6 +263,7 @@ class OpenAIService:
             messages: Prepared messages
             max_tokens: Max tokens to generate
             temperature: Temperature setting
+            tools: Optional tools for function calling
 
         Returns:
             OpenAI Chat Completions stream
@@ -192,7 +271,8 @@ class OpenAIService:
         kwargs = self._build_chat_completion_params(
             messages,
             max_tokens,
-            temperature
+            temperature,
+            tools
         )
 
         return await self.client.chat.completions.create(**kwargs)
@@ -201,7 +281,8 @@ class OpenAIService:
         self,
         messages: List[Dict],
         max_tokens: int,
-        temperature: float
+        temperature: float,
+        tools: Optional[List[Dict]] = None
     ) -> Dict:
         """
         Build parameters for chat completion API call.
@@ -210,6 +291,7 @@ class OpenAIService:
             messages: List of messages
             max_tokens: Max tokens to generate
             temperature: Temperature setting
+            tools: Optional tools for function calling
 
         Returns:
             Parameters dictionary
@@ -228,6 +310,12 @@ class OpenAIService:
             params["max_tokens"] = max_tokens
             params["temperature"] = temperature
 
+        # Add tools if provided (for function calling like artifacts)
+        if tools:
+            params["tools"] = tools
+            # Force tool use when tools are provided - ensures LLM uses tools instead of text
+            params["tool_choice"] = "required"
+
         return params
 
     async def _get_structured_completion(
@@ -245,20 +333,31 @@ class OpenAIService:
         Returns:
             Extracted field value as string
         """
+        logger.info(
+            f"[OpenAI] _get_structured_completion called with model: {self.model}, "
+            f"spec: {structured_spec}"
+        )
+
         response_format = SchemaTransformer.transform_for_openai(structured_spec)
+        logger.info(f"[OpenAI] Transformed response_format: {response_format}")
 
         if not response_format:
             # Fallback to regular completion
+            logger.warning("[OpenAI] No response_format generated, falling back to streaming")
             stream = self.stream_chat_completion(messages)
             return await StreamAggregator.aggregate_stream(stream)
 
         try:
+            logger.info("[OpenAI] Calling native structured output API with response_format")
             response = await self._generate_with_chat_completions_structure(
                 messages,
                 response_format
             )
+            logger.info(f"[OpenAI] Native API response received: {str(response)[:200]}...")
 
-            return self._extract_field_value(response, structured_spec)
+            extracted_value = self._extract_field_value(response, structured_spec)
+            logger.info(f"[OpenAI] Extracted field value: {extracted_value}")
+            return extracted_value
         except Exception as e:
             logger.error(f"OpenAI structured output error: {str(e)}", exc_info=True)
             error_message = OpenAIErrorHandler.format_error(e)
@@ -300,12 +399,15 @@ class OpenAIService:
         """
         Extract field value from structured response.
 
+        For object schemas (with explanation), returns the full JSON string.
+        For enum schemas, returns just the field value.
+
         Args:
             response: OpenAI response object (from chat.completions.create)
             structured_spec: Schema specification with field name
 
         Returns:
-            Extracted value as string
+            Extracted value as string (either single value or full JSON)
         """
         try:
             text_out = response.choices[0].message.content
@@ -316,6 +418,13 @@ class OpenAIService:
         if not text_out:
             return ""
 
+        schema_type = structured_spec.get('type')
+
+        # For object schemas, return the full JSON (includes explanation)
+        if schema_type == 'object':
+            return text_out
+
+        # For legacy enum schemas, extract just the field value
         try:
             data = json.loads(text_out)
             field_name = structured_spec.get('field', 'route')

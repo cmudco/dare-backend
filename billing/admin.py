@@ -101,6 +101,7 @@ class TransactionAdmin(admin.ModelAdmin):
     search_fields = ('user__email', 'message', 'llm_name')
     date_hierarchy = 'created_at'
     readonly_fields = (
+        'display_amount',
         'llm_name',
         'input_tokens',
         'output_tokens',
@@ -108,6 +109,11 @@ class TransactionAdmin(admin.ModelAdmin):
         'created_at',
         'updated_at'
     )
+
+    def display_amount(self, obj):
+        """Display formatted amount from the model property."""
+        return obj.display_amount if obj else "N/A"
+    display_amount.short_description = 'Amount'
     actions = ['export_transactions_to_csv']
 
     fieldsets = (

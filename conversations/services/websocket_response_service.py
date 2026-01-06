@@ -13,7 +13,7 @@ from channels.db import database_sync_to_async
 
 from conversations.api.serializers import MessageSerializer
 from conversations.constants import SenderType
-from conversations.models import Message
+from conversations.models import Message, Artifact
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +55,8 @@ class WebSocketResponseService:
         is_sender: bool = False,
         streaming: bool = False,
         regenerate: bool = False,
-        generated_image: Optional[Dict] = None
+        generated_image: Optional[Dict] = None,
+        generated_transcription: Optional[Dict] = None
     ) -> Dict[str, Any]:
         """
         Format a Message object for WebSocket transmission.
@@ -67,6 +68,7 @@ class WebSocketResponseService:
             streaming: Whether this is a streaming message
             regenerate: Whether this is a regenerated message
             generated_image: Optional generated image data
+            generated_transcription: Optional audio transcription data
 
         Returns:
             Dictionary with camelCase keys ready for JSON serialization
@@ -74,7 +76,9 @@ class WebSocketResponseService:
         # Use MessageSerializer for proper formatting
         @database_sync_to_async
         def serialize_message():
-            msg = Message.active_objects.prefetch_related('files', 'tags', 'snippets__file').get(id=message.id)
+            msg = Message.active_objects.prefetch_related(
+                'files', 'tags', 'snippets__file', 'web_search_sources'
+            ).get(id=message.id)
             return MessageSerializer(msg).data
 
         serialized_data = await serialize_message()
@@ -86,11 +90,27 @@ class WebSocketResponseService:
         output_tokens = await database_sync_to_async(lambda: message.output_tokens)()
         learning_progress_data = await database_sync_to_async(lambda: message.learning_progress_data)()
 
+        # Get linked artifact ID if exists
+        # Use fresh DB query to avoid stale cached relation
+        @database_sync_to_async
+        def get_artifact_id():
+            artifact = Artifact.active_objects.filter(message_id=message.id).first()
+            return str(artifact.id) if artifact else None
+
+        artifact_id = await get_artifact_id()
+
+        # Debug log to trace artifact ID resolution
+        if artifact_id:
+            logger.info(f"format_message: message_id={message.id}, resolved artifact_id={artifact_id}")
+        else:
+            logger.warning(f"format_message: message_id={message.id}, NO artifact found in DB")
+
         # Build response matching original format
         response = {
             "type": message_type,
-            "id": str(message.id),
+            "id": message.id,  # Keep as integer for consistency with conversation_history
             "message": message.message,
+            "artifactId": artifact_id,
             "senderType": message.sender_type,
             "senderName": message.sender or "AI Assistant",
             "isSender": is_sender,
@@ -101,6 +121,7 @@ class WebSocketResponseService:
             "files": serialized_data.get("files", []),
             "tags": serialized_data.get("tags", []),
             "snippets": serialized_data.get("snippets", []),
+            "webSearchSources": serialized_data.get("web_search_sources", []),
             "feedbackType": message.feedback_type,
             "feedbackText": message.feedback_text,
             "isEdited": message.is_edited,
@@ -110,7 +131,8 @@ class WebSocketResponseService:
             "inputTokens": input_tokens,
             "outputTokens": output_tokens,
             "learningProgressData": learning_progress_data or {},
-            "generatedImage": generated_image
+            "generatedImage": generated_image,
+            "generatedTranscription": generated_transcription
         }
 
         return cls._dict_to_camel_case(response)
@@ -118,7 +140,7 @@ class WebSocketResponseService:
     @classmethod
     def format_streaming_chunk(
         cls,
-        message_id: str,
+        message_id: int,
         chunk: str,
         is_complete: bool = False,
         metadata: Optional[Dict[str, Any]] = None
@@ -127,7 +149,7 @@ class WebSocketResponseService:
         Format an AI streaming chunk for WebSocket transmission.
 
         Args:
-            message_id: ID of the message being streamed
+            message_id: ID of the message being streamed (integer)
             chunk: The text chunk to send
             is_complete: Whether this is the final chunk
             metadata: Optional metadata (tokens, cost, etc.)
@@ -137,7 +159,7 @@ class WebSocketResponseService:
         """
         payload = {
             "type": "ai_stream",
-            "id": message_id,
+            "id": message_id,  # Keep as integer for consistency with conversation_history
             "message": chunk,  # Frontend expects "message" not "chunk"
             "is_complete": is_complete,
         }
@@ -333,3 +355,120 @@ class WebSocketResponseService:
         }
 
         return cls._dict_to_camel_case(payload)
+
+    # ========== Artifact Response Formatters ==========
+
+    @classmethod
+    def format_artifact_init(
+        cls,
+        artifact_id: str,
+        title: str,
+        outline: str,
+        estimated_sections: int
+    ) -> Dict[str, Any]:
+        """
+        Format artifact initialization message for WebSocket transmission.
+
+        Sent when a new artifact is created and ready for section generation.
+
+        Args:
+            artifact_id: Unique identifier for the artifact
+            title: Title of the artifact
+            outline: Structured outline with section descriptions
+            estimated_sections: Expected number of sections
+
+        Returns:
+            Dictionary ready for JSON serialization
+        """
+        return {
+            "type": "artifact_init",
+            "artifactId": artifact_id,
+            "title": title,
+            "outline": outline,
+            "estimatedSections": estimated_sections,
+        }
+
+    @classmethod
+    def format_artifact_stream(
+        cls,
+        artifact_id: str,
+        chunk: str,
+        section: int,
+        progress: float
+    ) -> Dict[str, Any]:
+        """
+        Format artifact content streaming chunk for WebSocket transmission.
+
+        Sent during section-by-section content generation.
+
+        Args:
+            artifact_id: Unique identifier for the artifact
+            chunk: Content chunk being streamed
+            section: Current section number being generated
+            progress: Generation progress (0.0 to 1.0)
+
+        Returns:
+            Dictionary ready for JSON serialization
+        """
+        return {
+            "type": "artifact_stream",
+            "artifactId": artifact_id,
+            "chunk": chunk,
+            "section": section,
+            "progress": progress,
+        }
+
+    @classmethod
+    def format_artifact_pause(
+        cls,
+        artifact_id: str,
+        current_section: int,
+        sections_remaining: int
+    ) -> Dict[str, Any]:
+        """
+        Format artifact pause message for WebSocket transmission.
+
+        Sent when artifact generation is paused awaiting user continuation.
+
+        Args:
+            artifact_id: Unique identifier for the artifact
+            current_section: Last completed section number
+            sections_remaining: Number of sections left to generate
+
+        Returns:
+            Dictionary ready for JSON serialization
+        """
+        return {
+            "type": "artifact_pause",
+            "artifactId": artifact_id,
+            "currentSection": current_section,
+            "sectionsRemaining": sections_remaining,
+        }
+
+    @classmethod
+    def format_artifact_complete(
+        cls,
+        artifact_id: str,
+        total_words: int,
+        estimated_sections: int = 0
+    ) -> Dict[str, Any]:
+        """
+        Format artifact completion message for WebSocket transmission.
+
+        Sent when artifact generation is fully complete.
+
+        Args:
+            artifact_id: Unique identifier for the artifact
+            total_words: Total word count of the generated artifact
+            estimated_sections: Total number of sections (for frontend to mark all as complete)
+
+        Returns:
+            Dictionary ready for JSON serialization
+        """
+        return {
+            "type": "artifact_complete",
+            "artifactId": artifact_id,
+            "totalWords": total_words,
+            "estimatedSections": estimated_sections,
+        }
+

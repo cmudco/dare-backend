@@ -2,14 +2,14 @@
 Base execution handler with common billing, status updates, and error handling.
 
 This module provides shared functionality for handlers that execute LLM calls
-and manage workflow run steps (step_handler, conditional_handler).
+and manage workflow run steps (step_handler, structured_output_handler).
 """
 import logging
 from typing import Dict, Optional
 from channels.db import database_sync_to_async
 from django.utils import timezone
 
-from workflows.handlers.base import BaseNodeHandler, ExecutionNode, NodeExecutionContext, NodeExecutionResult
+from workflows.handlers.base import BaseNodeHandler, ExecutionNode, NodeExecutionContext, NodeExecutionResult, categorize_error
 from workflows.models import WorkflowRun, WorkflowRunStep
 from workflows.constants import WorkflowRunStepStatus
 from core.services.billing_service import BillingService
@@ -209,8 +209,6 @@ class BaseExecutionHandler(BaseNodeHandler):
         Returns:
             NodeExecutionResult with error information
         """
-        from workflows.handlers.base import categorize_error
-        
         error_category, error_type = categorize_error(exception)
         error_msg = custom_message or f"{error_category}: {str(exception)}"
         

@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from channels.db import database_sync_to_async
 from conversations.constants import Provider, SenderType
 from conversations.models import LLM, Conversation, Message
+from conversations.services.audio_transcription_service import AudioTranscriptionService
 from core.services.document_processor import DocumentProcessor
 from core.services.openai_service import OpenAIService
 from core.services.claude_service import ClaudeService
@@ -16,6 +17,7 @@ from typing import AsyncGenerator, Dict, Tuple, Optional, Any, List
 from files.models import File, Folder
 from prompts.models import Prompt
 from core.services.vector_service import get_vector_service_async
+from datetime import datetime
 import logging
 import base64
 
@@ -41,6 +43,7 @@ class LLMService:
     async def query(
         self,
         request: LLMQueryRequest,
+        tools: Optional[List] = None,
     ) -> AsyncGenerator[Tuple[str, Dict], None]:
         """Generate AI response with context using DTO-based request.
 
@@ -48,6 +51,7 @@ class LLMService:
 
         Args:
             request: LLMQueryRequest containing all query parameters
+            tools: Optional list of tool definitions to pass to the LLM
 
         Yields:
             Tuple of (chunk: str, usage: Dict) for streaming responses
@@ -57,11 +61,16 @@ class LLMService:
             messages = await self._build_messages_for_request(request, llm)
             all_images = await self._process_media_files(request)
 
-            if request.requires_image_generation():
+            if request.requires_audio_transcription():
+                async for chunk, usage in self._execute_audio_transcription(request, llm):
+                    yield chunk, usage
+            elif request.requires_image_generation():
                 async for chunk, usage in self._execute_image_generation(request, llm):
                     yield chunk, usage
             else:
-                async for chunk, usage in self._execute_llm_completion(request, llm, messages, all_images):
+                async for chunk, usage in self._execute_llm_completion(
+                    request, llm, messages, all_images, tools=tools
+                ):
                     yield chunk, usage
 
         except Exception as e:
@@ -230,6 +239,11 @@ class LLMService:
         Returns:
             List of processed image dictionaries (images and videos combined)
         """
+        # Skip processing media as images if this is an audio transcription request
+        # Audio files should only be processed by the transcription service
+        if request.requires_audio_transcription():
+            return request.media.images or []
+
         all_images = request.media.images or []
 
         if request.media.media_ids:
@@ -276,12 +290,135 @@ class LLMService:
         ):
             yield chunk, usage
 
+    async def _execute_audio_transcription(
+        self,
+        request: LLMQueryRequest,
+        llm: LLM
+    ) -> AsyncGenerator[Tuple[str, Dict], None]:
+        """Execute audio transcription request with streaming support.
+
+        For large files that get split into chunks, this yields each chunk's
+        transcription as it completes, allowing real-time progress updates.
+
+        Args:
+            request: LLMQueryRequest with audio transcription settings
+            llm: LLM model (must be Whisper or support audio transcription)
+
+        Yields:
+            Tuple of (chunk: str, usage: Dict) where usage contains:
+            - For intermediate chunks: {"transcription_chunk": {...}}
+            - For final chunk: {"transcription_result": {...}}
+        """
+        # Get audio/video files from media_ids
+        media_files = []
+        if request.context.media_ids:
+            @database_sync_to_async
+            def get_media_files():
+                return list(File.active_objects.filter(
+                    id__in=request.context.media_ids,
+                    media_type__in=['audio', 'video']
+                ))
+
+            media_files = await get_media_files()
+
+        if not media_files:
+            yield "Error: No audio or video files found. Please upload an audio/video file to transcribe.", None
+            return
+
+        settings = request.generation.audio_transcription_settings or {}
+        language = settings.get("language", "auto")
+        # Convert 'auto' to None for Whisper API
+        language = None if language == "auto" else language
+        # Check if streaming is enabled (default True for new behavior)
+        enable_streaming = settings.get("stream_chunks", True)
+
+        # Transcribe each audio/video file
+        accumulated_text = ""
+        final_transcription = None
+
+        for media_file in media_files:
+            try:
+                if enable_streaming:
+                    # Use streaming transcription - yields chunks as they complete
+                    file_name = media_file.name
+                    chunk_texts = []
+                    transcription_error = None
+
+                    async for chunk_data in AudioTranscriptionService.transcribe_audio_file_streaming(
+                        file_obj=media_file,
+                        language=language,
+                        model=llm.identifier
+                    ):
+                        # Check if this is an error response
+                        if chunk_data.get("error"):
+                            transcription_error = chunk_data.get("error_message", "Unknown transcription error")
+                            logger.error(f"Transcription error for {file_name}: {transcription_error}")
+                            break
+
+                        chunk_text = chunk_data["text"]
+                        chunk_texts.append(chunk_text)
+
+                        # Build formatted text progressively
+                        if chunk_data["chunk_index"] == 0:
+                            # First chunk - add header
+                            accumulated_text = f"**Transcription of `{file_name}`**\n\n{chunk_text}"
+                        else:
+                            # Subsequent chunks - append with space
+                            accumulated_text += " " + chunk_text
+
+                        # Yield immediately after each chunk (this is the key fix!)
+                        yield accumulated_text, None
+
+                    # If there was an error, yield it and return
+                    if transcription_error:
+                        yield f"Error transcribing {file_name}: {transcription_error}", None
+                        return
+
+                    # Build final transcription result after all chunks
+                    if chunk_texts:
+                        final_transcription = {
+                            'text': " ".join(chunk_texts),
+                            'language': language or 'auto',
+                            'model': llm.identifier,
+                            'file_id': media_file.id,
+                            'file_name': media_file.name,
+                            'file_size': media_file.size,
+                            'media_type': media_file.media_type,
+                            'transcribed_at': datetime.now().isoformat(),
+                        }
+                else:
+                    # Use original non-streaming transcription
+                    final_transcription = await AudioTranscriptionService.transcribe_audio_file(
+                        file_obj=media_file,
+                        language=language,
+                        model=llm.identifier
+                    )
+
+            except Exception as e:
+                logger.exception(f"Error transcribing media file {media_file.id}: {str(e)}")
+                yield f"Error transcribing {media_file.name}: {str(e)}", None
+                return
+
+        # Yield final result with usage data
+        if final_transcription:
+            result_text = AudioTranscriptionService.format_transcription_for_display(final_transcription)
+
+            # Yield the final transcription text and usage data
+            usage_data = final_transcription.copy()
+            usage_data["transcription_result"] = final_transcription
+
+            yield result_text, usage_data
+        else:
+            file_names = ", ".join([f.name for f in media_files]) if media_files else "unknown"
+            yield f"Error: Transcription failed for {file_names}. Please check the server logs for more details.", None
+
     async def _execute_llm_completion(
         self,
         request: LLMQueryRequest,
         llm: LLM,
         messages: List[Dict[str, str]],
-        all_images: List[Dict]
+        all_images: List[Dict],
+        tools: Optional[List] = None,
     ) -> AsyncGenerator[Tuple[str, Dict], None]:
         """Execute LLM completion (streaming or structured).
 
@@ -302,16 +439,25 @@ class LLMService:
             )
 
         ai_service = await self._get_ai_service(llm, request.user)
-        tools = self._get_web_search_tools(llm) if request.requires_web_search() else None
+        
+        # Use provided tools, or web search tools if enabled
+        llm_tools = tools
+        if not llm_tools and request.requires_web_search():
+            llm_tools = self._get_web_search_tools(llm)
 
         if request.generation.structured_spec:
             # Structured output (non-streaming)
+            logger.info(
+                f"[LLMService] Using structured output with provider: {llm.provider}, "
+                f"model: {llm.identifier}, spec: {request.generation.structured_spec}"
+            )
             text = await ai_service.get_chat_completion(
                 messages,
                 request.generation.max_tokens,
                 request.generation.temperature,
                 structured_spec=request.generation.structured_spec
             )
+            logger.info(f"[LLMService] Structured output response received: {text[:200]}...")
             yield text, None
         else:
             # Standard streaming completion
@@ -320,7 +466,7 @@ class LLMService:
                 request.generation.max_tokens,
                 request.generation.temperature,
                 images=all_images,
-                tools=tools
+                tools=llm_tools
             ):
                 yield chunk, usage
 

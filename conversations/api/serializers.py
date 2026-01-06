@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from conversations.models import LLM, Message, Conversation, Snippet
+from conversations.models import LLM, Message, Conversation, Snippet, WebSearchSource, Artifact, ArtifactCheckpoint, Feedback
 from files.api.serializers import FileSerializer, TagSerializer
 from prompts.models import Prompt
 from prompts.api.serializers import PromptSerializer
@@ -8,7 +8,7 @@ from users.constants import VectorDBChoice
 class LLMSerializer(serializers.ModelSerializer):
     class Meta:
         model = LLM
-        fields = ['id', 'name', 'identifier', 'provider', 'description', 'is_reasoning', 'is_image_generator', 'input_token_rate_per_million', 'output_token_rate_per_million']
+        fields = ['id', 'name', 'identifier', 'provider', 'description', 'is_reasoning', 'is_image_generator', 'is_audio_transcriber', 'input_token_rate_per_million', 'output_token_rate_per_million']
 
 class ConversationSerializer(serializers.ModelSerializer):
     user = serializers.SerializerMethodField()
@@ -64,6 +64,8 @@ class ConversationSerializer(serializers.ModelSerializer):
             'history_limit',
             'web_search_enabled',
             'image_generation_enabled',
+            'audio_transcription_enabled',
+            'artifacts_enabled',
             'selected_model',
             'selected_media_ids',
             'prompt',
@@ -92,6 +94,28 @@ class SnippetSerializer(serializers.ModelSerializer):
             return dict(VectorDBChoice.choices).get(obj.file.vector_db_source, "Unknown")
         return "Unknown"
 
+
+class WebSearchSourceSerializer(serializers.ModelSerializer):
+    """
+    Serializer for web search sources/citations.
+
+    Returns the essential fields for displaying source links in the UI,
+    similar to how SnippetSerializer returns document context.
+    """
+
+    class Meta:
+        model = WebSearchSource
+        fields = [
+            'id',
+            'url',
+            'title',
+            'cited_text',
+            'page_age',
+            'provider',
+        ]
+        read_only_fields = fields
+
+
 class MessageSerializer(serializers.ModelSerializer):
     sender_name = serializers.ReadOnlyField(read_only=True)
     files = FileSerializer(many=True, read_only=True)
@@ -102,7 +126,9 @@ class MessageSerializer(serializers.ModelSerializer):
         required=False
     )
     snippets = SnippetSerializer(many=True, read_only=True)
+    web_search_sources = WebSearchSourceSerializer(many=True, read_only=True)
     llm = serializers.PrimaryKeyRelatedField(read_only=True, allow_null=True)
+    artifactId = serializers.SerializerMethodField()
 
     class Meta:
         model = Message
@@ -116,6 +142,7 @@ class MessageSerializer(serializers.ModelSerializer):
             'file_ids',
             'tags',
             'snippets',
+            'web_search_sources',
             'created_at',
             'feedback_type',
             'feedback_text',
@@ -127,5 +154,185 @@ class MessageSerializer(serializers.ModelSerializer):
             'input_tokens',
             'output_tokens',
             'cost',
+            'artifactId',
         ]
-        read_only_fields = ['id', 'created_at', 'sender_name', 'files', 'tags', 'snippets', 'input_tokens', 'output_tokens', 'cost']
+        read_only_fields = ['id', 'created_at', 'sender_name', 'files', 'tags', 'snippets', 'web_search_sources', 'input_tokens', 'output_tokens', 'cost', 'artifactId']
+
+    def get_artifactId(self, obj):
+        """Get the ID of the first active artifact linked to this message."""
+        # Use the reverse relation from Artifact -> Message
+        # Filter by is_active=True since the reverse relation uses the default manager
+        # which doesn't filter by is_active automatically
+        artifact = obj.artifacts.filter(is_active=True).first()
+        return str(artifact.id) if artifact else None
+
+
+class ArtifactCheckpointSerializer(serializers.ModelSerializer):
+    """Serializer for artifact checkpoints."""
+
+    class Meta:
+        model = ArtifactCheckpoint
+        fields = [
+            'id',
+            'content_snapshot',
+            'current_section',
+            'iteration_count',
+            'state_data',
+            'created_at',
+        ]
+        read_only_fields = fields
+
+
+class ArtifactSerializer(serializers.ModelSerializer):
+    """Serializer for artifacts with progress tracking and versioning."""
+
+    # IDs returned as natural types (integers) from Django
+    conversation_id = serializers.CharField(source='conversation.conversation_id', read_only=True)
+    message_id = serializers.PrimaryKeyRelatedField(source='message', read_only=True)
+    progress = serializers.FloatField(read_only=True)
+    sections_remaining = serializers.IntegerField(read_only=True)
+    word_count = serializers.IntegerField(read_only=True)
+    latest_checkpoint = serializers.SerializerMethodField()
+    
+    # Versioning fields - use PrimaryKeyRelatedField for natural integer IDs
+    parent_artifact_id = serializers.PrimaryKeyRelatedField(
+        source='parent_artifact',
+        read_only=True,
+    )
+    artifact_group_id = serializers.PrimaryKeyRelatedField(
+        source='artifact_group',
+        read_only=True,
+    )
+    version_history = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Artifact
+        fields = [
+            'id',
+            'conversation_id',
+            'message_id',
+            'artifact_type',
+            'title',
+            'language',
+            'outline',
+            'content',
+            'estimated_sections',
+            'current_section',
+            'status',
+            'version',
+            'metadata',
+            'progress',
+            'sections_remaining',
+            'word_count',
+            'latest_checkpoint',
+            # Versioning fields
+            'parent_artifact_id',
+            'artifact_group_id',
+            'version_history',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = [
+            'id',
+            'conversation_id',
+            'message_id',
+            'version',
+            'progress',
+            'sections_remaining',
+            'word_count',
+            'latest_checkpoint',
+            'parent_artifact_id',
+            'artifact_group_id',
+            'version_history',
+            'created_at',
+            'updated_at',
+        ]
+
+    def get_latest_checkpoint(self, obj):
+        """Get the latest checkpoint for this artifact."""
+        checkpoint = obj.checkpoints.order_by('-created_at').first()
+        if checkpoint:
+            return ArtifactCheckpointSerializer(checkpoint).data
+        return None
+
+    def get_version_history(self, obj):
+        """Get list of versions in this artifact's group."""
+        if not obj.artifact_group:
+            return []
+        versions = obj.artifact_group.versions.filter(is_active=True).order_by('version')
+        return [
+            {'id': v.id, 'version': v.version, 'createdAt': v.created_at.isoformat()}
+            for v in versions
+        ]
+
+
+class ArtifactListSerializer(serializers.ModelSerializer):
+    """Lightweight serializer for artifact lists (without full content)."""
+
+    # IDs returned as natural types (integers) from Django
+    conversation_id = serializers.CharField(source='conversation.conversation_id', read_only=True)
+    progress = serializers.FloatField(read_only=True)
+    word_count = serializers.IntegerField(read_only=True)
+    # Content fields - empty strings to prevent frontend crashes, full content loaded on demand
+    outline = serializers.SerializerMethodField()
+    content = serializers.SerializerMethodField()
+    # Versioning fields - use PrimaryKeyRelatedField for natural integer IDs
+    parent_artifact_id = serializers.PrimaryKeyRelatedField(
+        source='parent_artifact',
+        read_only=True,
+    )
+    artifact_group_id = serializers.PrimaryKeyRelatedField(
+        source='artifact_group',
+        read_only=True,
+    )
+
+    class Meta:
+        model = Artifact
+        fields = [
+            'id',
+            'conversation_id',
+            'artifact_type',
+            'title',
+            'language',
+            'outline',
+            'content',
+            'status',
+            'estimated_sections',
+            'current_section',
+            'progress',
+            'word_count',
+            # Versioning fields
+            'version',
+            'parent_artifact_id',
+            'artifact_group_id',
+            'created_at',
+        ]
+        read_only_fields = fields
+    
+    def get_outline(self, obj):
+        """Return empty string - full outline loaded on demand."""
+        return ''
+    
+    def get_content(self, obj):
+        """Return empty string - full content loaded on demand."""
+        return ''
+
+
+class FeedbackSerializer(serializers.ModelSerializer):
+    """Serializer for general user feedback from the FAB widget."""
+
+    class Meta:
+        model = Feedback
+        fields = [
+            'id',
+            'emotion',
+            'category',
+            'message',
+            'screenshot',
+            'page',
+            'browser_info',
+            'created_at',
+        ]
+        read_only_fields = ['id', 'created_at']
+
+

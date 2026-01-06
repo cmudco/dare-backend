@@ -1,5 +1,8 @@
 import json
+import mimetypes
+import os
 from django_rq import enqueue, get_queue
+from django.http import FileResponse
 
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework import viewsets
@@ -176,10 +179,6 @@ class FileViewAPIView(APIView):
         """
         Serve the actual file for viewing with proper content type headers.
         """
-        from django.http import FileResponse
-        import mimetypes
-        import os
-        
         logger.info(f"File view request - User: {request.user}, File ID: {file_id}")
         
         try:

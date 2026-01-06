@@ -5,6 +5,7 @@ from django.utils import timezone
 
 from common.models import BaseModel
 from common.managers import ActiveObjectsManager
+from users.constants import AuthSourceChoice
 from .constants import NotificationDeliveryType, NotificationCategory, NotificationStatus, NotificationAction
 
 
@@ -65,6 +66,14 @@ class Notification(BaseModel):
         help_text=_("URL to navigate to when notification is clicked")
     )
 
+    source = models.CharField(
+        max_length=20,
+        choices=AuthSourceChoice.choices,
+        default=AuthSourceChoice.DARE,
+        db_index=True,
+        help_text=_("Target platform for this notification (DARE or SocraticBots)")
+    )
+
     expires_at = models.DateTimeField(
         null=True,
         blank=True,
@@ -88,6 +97,7 @@ class Notification(BaseModel):
             models.Index(fields=['user', 'status']),
             models.Index(fields=['delivery_type']),
             models.Index(fields=['category']),
+            models.Index(fields=['source']),
             models.Index(fields=['created_at']),
         ]
 

@@ -35,6 +35,12 @@ class WebSocketMessageType(Enum):
     PROGRESS_COMPLETE = "progress_complete"
     CONVERSATION_HISTORY = "conversation_history"
     LATEST_PROGRESS = "latest_progress"
+    # Artifact-related message types
+    ARTIFACT_INIT = "artifact_init"
+    ARTIFACT_STREAM = "artifact_stream"
+    ARTIFACT_PAUSE = "artifact_pause"
+    ARTIFACT_COMPLETE = "artifact_complete"
+    ARTIFACT_MODIFY_INIT = "artifact_modify_init"  # Modification started (append sections)
 
 class WebSocketAction(Enum):
     """WebSocket actions for incoming messages."""
@@ -42,6 +48,33 @@ class WebSocketAction(Enum):
     EDIT_MESSAGE = "edit_message"
     REGENERATE_RESPONSE = "regenerate_response"
     LOAD_HISTORY = "load_history"
+    CONTINUE_ARTIFACT = "continue_artifact"
+
+
+class ArtifactType(models.TextChoices):
+    """Types of artifacts that can be generated."""
+    DOCUMENT = 'document', 'Document'
+    CODE = 'code', 'Code'
+    DIAGRAM = 'diagram', 'Diagram'
+
+
+class ArtifactStatus(models.TextChoices):
+    """Status of artifact generation."""
+    PLANNING = 'planning', 'Planning'
+    GENERATING = 'generating', 'Generating'
+    PAUSED = 'paused', 'Paused'
+    COMPLETED = 'completed', 'Completed'
+    ERROR = 'error', 'Error'
+
+
+class ArtifactAction(models.TextChoices):
+    """
+    Action type for artifact generation/modification.
+    Used by frontend to indicate user intent.
+    """
+    AUTO = 'auto', 'Auto Detect'
+    CREATE = 'create', 'Create New'
+    MODIFY = 'modify', 'Modify Existing'
 
 # Default message sender names
 DEFAULT_AI_SENDER_NAME = "AI Assistant"
@@ -65,6 +98,11 @@ Please analyze:
 4. Recommendations for next steps in their learning journey
 
 Provide your assessment in a clear, encouraging format that helps track their progress toward the learning goals."""
+
+# Artifact configuration defaults
+DEFAULT_ARTIFACT_SECTIONS_PER_ITERATION = 3
+DEFAULT_ARTIFACT_MAX_ITERATIONS = 5
+
 
 # Error codes and messages
 class ErrorCode:
@@ -92,6 +130,11 @@ class ErrorCode:
     EDIT_ERROR = "edit_error"
     FINALIZE_ERROR = "finalize_error"
 
+    # Artifact errors
+    ARTIFACT_ERROR = "artifact_error"
+    ARTIFACT_NOT_FOUND = "artifact_not_found"
+    ARTIFACT_ALREADY_COMPLETE = "artifact_already_complete"
+
 class ErrorMessage:
     """Standard error messages for WebSocket responses."""
     # JSON/Data errors
@@ -116,3 +159,9 @@ class ErrorMessage:
     REGENERATE_ERROR = "Failed to regenerate response"
     EDIT_ERROR = "Failed to edit message"
     FINALIZE_ERROR = "Failed to finalize message"
+
+    # Artifact errors
+    ARTIFACT_ERROR = "Failed to generate artifact"
+    ARTIFACT_NOT_FOUND = "Artifact not found"
+    ARTIFACT_ALREADY_COMPLETE = "Artifact is already complete"
+    MISSING_ARTIFACT_ID = "Missing artifact_id"

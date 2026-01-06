@@ -4,6 +4,7 @@ from typing import Optional, Dict, Any
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.exceptions import DenyConnection
 from django.contrib.auth import get_user_model
+from asgiref.sync import sync_to_async
 from pydantic import ValidationError
 
 from conversations.models import Conversation
@@ -15,7 +16,9 @@ from .constants import (
     DEFAULT_ANONYMOUS_USER_NAME,
     ErrorCode,
     ErrorMessage,
+    ArtifactStatus,
 )
+from .models import Artifact
 from users.utils import detect_platform_from_scope
 
 User = get_user_model()
@@ -76,6 +79,27 @@ class ChatConsumer(AsyncWebsocketConsumer):
             logger.exception(f"Error during connect: {str(e)}")
             await self.close(code=4001)
 
+    async def disconnect(self, close_code):
+        """Handle WebSocket disconnection - pause any in-progress artifacts."""
+        try:
+            if self.conversation_id:
+                # Find any artifacts that are still in-progress (planning or generating)
+                @sync_to_async
+                def pause_in_progress_artifacts():
+                    updated_count = Artifact.active_objects.filter(
+                        conversation__conversation_id=self.conversation_id,
+                        status__in=[ArtifactStatus.PLANNING, ArtifactStatus.GENERATING]
+                    ).update(status=ArtifactStatus.PAUSED)
+                    return updated_count
+
+                updated = await pause_in_progress_artifacts()
+                if updated > 0:
+                    logger.info(f"WebSocket disconnect: Paused {updated} in-progress artifact(s) for conversation {self.conversation_id}")
+
+                logger.info(f"WebSocket disconnected: user={self.user.id if self.user else 'None'}, conversation={self.conversation_id}, close_code={close_code}")
+        except Exception as e:
+            logger.exception(f"Error during disconnect: {str(e)}")
+
     async def receive(self, text_data: str = None, bytes_data: bytes = None):
         """Handle incoming WebSocket messages."""
         try:
@@ -86,6 +110,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 await self.handle_edit_message(data)
             elif action == "regenerate_response":
                 await self.handle_regenerate_response(data)
+            elif action == "continue_artifact":
+                await self.handle_continue_artifact(data)
+            elif action == "pause_artifact":
+                await self.handle_pause_artifact(data)
             else:
                 await self.handle_new_message(data)
         except json.JSONDecodeError as e:
@@ -164,6 +192,38 @@ class ChatConsumer(AsyncWebsocketConsumer):
             logger.exception(f"Error in handle_regenerate_response: {str(e)}")
             await self.send_error(ErrorCode.REGENERATE_ERROR, ErrorMessage.REGENERATE_ERROR)
 
+    async def handle_continue_artifact(self, data: Dict[str, Any]):
+        """Continue generating a paused artifact using MessageCoordinator."""
+        try:
+            # Validate message data
+            message_data = self._validate_message_data(data, default_message="Continue generating")
+
+            # Delegate to MessageCoordinator which handles:
+            # - Billing checks
+            # - Loading artifact state
+            # - Continuing generation
+            await self.coordinator.handle_continue_artifact(
+                message_data=message_data,
+            )
+        except Exception as e:
+            logger.exception(f"Error in handle_continue_artifact: {str(e)}")
+            await self.send_error(ErrorCode.ARTIFACT_ERROR, ErrorMessage.ARTIFACT_ERROR)
+
+    async def handle_pause_artifact(self, data: Dict[str, Any]):
+        """Handle request to pause artifact generation."""
+        try:
+            artifact_id = data.get("artifact_id")
+            logger.info(f"Consumer: Received pause_artifact request for artifact_id={artifact_id}")
+            if not artifact_id:
+                await self.send_error(ErrorCode.MISSING_DATA, "Missing artifact_id")
+                return
+
+            # Delegate to MessageCoordinator
+            await self.coordinator.handle_pause_artifact(artifact_id=artifact_id)
+            logger.info(f"Consumer: Completed pause_artifact handling for artifact_id={artifact_id}")
+        except Exception as e:
+            logger.exception(f"Error in handle_pause_artifact: {str(e)}")
+            await self.send_error(ErrorCode.ARTIFACT_ERROR, ErrorMessage.ARTIFACT_ERROR)
 
     def _validate_message_data(self, data: Dict[str, Any], default_message: str = None) -> Dict[str, Any]:
         """Validate and extract message data using MessageValidationService."""
@@ -279,3 +339,31 @@ class PublicBotConsumer(ChatConsumer):
         except Exception as e:
             logger.exception(f"Error in handle_regenerate_response (public): {str(e)}")
             await self.send_error(ErrorCode.REGENERATE_ERROR, ErrorMessage.REGENERATE_ERROR)
+
+    async def handle_continue_artifact(self, data: Dict[str, Any]):
+        """Continue generating a paused artifact for public bot using MessageCoordinator."""
+        try:
+            # Validate message data
+            message_data = self._validate_message_data(data, default_message="Continue generating")
+
+            # Delegate to MessageCoordinator
+            await self.coordinator.handle_continue_artifact(
+                message_data=message_data,
+            )
+        except Exception as e:
+            logger.exception(f"Error in handle_continue_artifact (public): {str(e)}")
+            await self.send_error(ErrorCode.ARTIFACT_ERROR, ErrorMessage.ARTIFACT_ERROR)
+
+    async def handle_pause_artifact(self, data: Dict[str, Any]):
+        """Handle request to pause artifact generation for public bot."""
+        try:
+            artifact_id = data.get("artifact_id")
+            if not artifact_id:
+                await self.send_error(ErrorCode.MISSING_DATA, "Missing artifact_id")
+                return
+
+            # Delegate to MessageCoordinator
+            await self.coordinator.handle_pause_artifact(artifact_id=artifact_id)
+        except Exception as e:
+            logger.exception(f"Error in handle_pause_artifact (public): {str(e)}")
+            await self.send_error(ErrorCode.ARTIFACT_ERROR, ErrorMessage.ARTIFACT_ERROR)

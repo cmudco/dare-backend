@@ -49,15 +49,18 @@ class WorkflowContextBuilder:
 
             # Add to context based on status
             if step.status == WorkflowRunStepStatus.COMPLETED:
+                # Start with the step's actual metadata from the database
+                metadata = dict(step.metadata) if step.metadata else {}
+
+                # For structuredOutput nodes, selected_route should already be in step.metadata
+                # but if it's not, use the response as fallback
+                if node_type == 'structuredOutput' and 'selected_route' not in metadata:
+                    metadata['selected_route'] = step.response
+
                 node_results[node_id] = NodeExecutionResult(
                     success=True,
                     output=step.response,
-                    metadata={
-                        'is_human_validated': node_type == 'conditional',
-                        'routing_decision': (
-                            step.response if node_type == 'conditional' else None
-                        )
-                    }
+                    metadata=metadata
                 )
             elif step.status == WorkflowRunStepStatus.SKIPPED:
                 node_results[node_id] = NodeExecutionResult(
@@ -119,12 +122,12 @@ class WorkflowContextBuilder:
         }
 
     @staticmethod
-    def update_conditional_step_with_user_choice(
+    def update_routing_step_with_user_choice(
         existing_metadata: Dict,
         chosen_route: str
     ) -> Dict:
         """
-        Update conditional step metadata with user's routing choice.
+        Update routing step metadata with user's routing choice.
 
         NOTE: All keys MUST be snake_case on backend - DRF converts to camelCase for frontend
 
