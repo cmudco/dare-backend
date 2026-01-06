@@ -53,6 +53,17 @@ from .web_search_tools import (
     GeminiWebSearchTools,
 )
 
+# Web search source extractors
+from .web_search_extractors import (
+    WebSearchSource,
+    OpenAIWebSearchExtractor,
+    ClaudeWebSearchExtractor,
+    GeminiWebSearchExtractor,
+)
+
+# Artifact tools
+from .artifact_tools import ArtifactTools
+
 # Schema transformer
 from .schema_transformer import SchemaTransformer
 
@@ -86,6 +97,13 @@ __all__ = [
     "OpenAIWebSearchTools",
     "ClaudeWebSearchTools",
     "GeminiWebSearchTools",
+    # Web search source extractors
+    "WebSearchSource",
+    "OpenAIWebSearchExtractor",
+    "ClaudeWebSearchExtractor",
+    "GeminiWebSearchExtractor",
+    # Artifact tools
+    "ArtifactTools",
     # Schema transformer
     "SchemaTransformer",
 ]

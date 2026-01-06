@@ -244,6 +244,22 @@ LOGGING = {
             "level": "DEBUG",
             "propagate": False,
         },
+        # Suppress noisy socketio/engineio emit logs
+        "socketio": {
+            "handlers": ["console"],
+            "level": "WARNING",
+            "propagate": False,
+        },
+        "engineio": {
+            "handlers": ["console"],
+            "level": "WARNING",
+            "propagate": False,
+        },
+        "async_server": {
+            "handlers": ["console"],
+            "level": "WARNING",
+            "propagate": False,
+        },
     },
 }
 
@@ -292,6 +308,10 @@ RQ_QUEUES = {
 }
 
 RQ_SHOW_ADMIN_LINK = True
+
+# File Upload Settings
+DATA_UPLOAD_MAX_MEMORY_SIZE = 104857600  # 100MB in bytes
+FILE_UPLOAD_MAX_MEMORY_SIZE = 104857600  # 100MB in bytes
 
 WEAVIATE = {
     'HOST': env.WEAVIATE_HOST,

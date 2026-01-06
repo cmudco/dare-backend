@@ -28,7 +28,9 @@ class StepNodeData(BaseNodeData):
     prompt = models.ForeignKey(
         'prompts.Prompt',
         on_delete=models.PROTECT,
-        help_text="Prompt template for this step"
+        null=True,
+        blank=True,
+        help_text="Prompt template for this step (required for execution)"
     )
     content_files = models.ManyToManyField(
         'files.File',
@@ -80,10 +82,6 @@ class StepNodeData(BaseNodeData):
         default='',
         help_text="Optional text input to be passed directly to the LLM"
     )
-    use_structured_output_node = models.BooleanField(
-        default=False,
-        help_text="If true, this step uses a separate StructuredOutputNode for routing"
-    )
     enable_web_search = models.BooleanField(
         default=False,
         help_text="If true, enable web search for this step's LLM"
@@ -105,7 +103,6 @@ class StepNodeData(BaseNodeData):
             'usePreviousStepFiles': self.use_previous_step_files,
             'usePreviousStepEmbeddings': self.use_previous_step_embeddings,
             'textInput': self.text_input,
-            'useStructuredOutputNode': self.use_structured_output_node,
             'enableWebSearch': self.enable_web_search,
         }
 
@@ -117,9 +114,13 @@ class StartNodeData(BaseNodeData):
     """Data model for 'start' type nodes."""
     title = models.CharField(
         max_length=255,
+        blank=True,
+        null=True,
         help_text="Workflow title"
     )
     description = models.TextField(
+        blank=True,
+        null=True,
         help_text="Workflow description"
     )
     mode = models.CharField(
@@ -173,13 +174,13 @@ class ChatOutputNodeData(BaseNodeData):
 
 
 class StructuredOutputNodeData(BaseNodeData):
-    """Data model for 'structuredOutput' type nodes - defines output routes for step nodes."""
+    """Data model for 'structuredOutput' type nodes - independent routing decision nodes."""
     prompt = models.ForeignKey(
         'prompts.Prompt',
         on_delete=models.PROTECT,
         null=True,
         blank=True,
-        help_text="Prompt template for routing evaluation"
+        help_text="Optional prompt template for routing evaluation (falls back to base prompt if not provided)"
     )
     routes = models.JSONField(
         default=list,
@@ -200,6 +201,11 @@ class StructuredOutputNodeData(BaseNodeData):
         blank=True,
         help_text="Language model for routing evaluation"
     )
+    text_input = models.TextField(
+        blank=True,
+        default='',
+        help_text="Optional text input to be passed directly to the LLM for routing decision"
+    )
 
     def get_routes(self):
         """Get routes for structured output node."""
@@ -212,6 +218,7 @@ class StructuredOutputNodeData(BaseNodeData):
             'stepNumber': self.step_number,
             'requireHumanValidation': self.require_human_validation,
             'llm': self.llm.id if self.llm else None,
+            'textInput': self.text_input,
         }
 
     def __str__(self):
@@ -222,55 +229,3 @@ class StructuredOutputNodeData(BaseNodeData):
         return f"Structured Output {self.step_number}: {route_names}"
 
 
-class ConditionalNodeData(BaseNodeData):
-    """Data model for 'conditional' type nodes - supports n routes and human validation."""
-    prompt = models.ForeignKey(
-        'prompts.Prompt',
-        on_delete=models.PROTECT,
-        null=True,
-        blank=True,
-        help_text="Prompt template for routing evaluation"
-    )
-
-    llm = models.ForeignKey(
-        'conversations.LLM',
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        help_text="Language model for routing evaluation"
-    )
-
-    routes = models.JSONField(
-        default=list,
-        blank=True,
-        help_text="List of route definitions: [{'name': 'Route A', 'description': '...'}, ...]"
-    )
-
-    require_human_validation = models.BooleanField(
-        default=False,
-        help_text="If true, pause execution and ask user to choose route"
-    )
-
-    step_number = models.PositiveIntegerField(
-        help_text="Step number for execution ordering"
-    )
-
-    def get_routes(self):
-        """Get routes for conditional node."""
-        return self.routes if self.routes else []
-
-    def to_dict(self):
-        return {
-            'prompt': self.prompt.id if self.prompt else None,
-            'llm': self.llm.id if self.llm else None,
-            'routes': self.get_routes(),
-            'requireHumanValidation': self.require_human_validation,
-            'stepNumber': self.step_number,
-        }
-
-    def __str__(self):
-        routes = self.get_routes()
-        route_names = ' / '.join([r['name'] for r in routes[:3]])
-        if len(routes) > 3:
-            route_names += f' (+{len(routes) - 3} more)'
-        return f"Conditional {self.step_number}: {route_names}"

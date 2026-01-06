@@ -25,28 +25,34 @@ from api_keys.constants import BillingModeChoice
 logger = logging.getLogger(__name__)
 
 
-def get_provider_api_key_sync(provider: str) -> str:
+def get_provider_api_key_sync(provider: str) -> Optional[str]:
     """
     Synchronous version: Get API key for a provider with database-first, env-fallback strategy.
 
     Resolution order:
-    1. Check ProviderAPIKey table for active key
-    2. Fallback to environment variable
-    3. Raise ValueError if no key found
+    1. Check if provider requires no API key (e.g., llama/Ollama is local)
+    2. Check ProviderAPIKey table for active key
+    3. Fallback to environment variable
+    4. Raise ValueError if no key found (for providers that need one)
 
     Args:
         provider: Provider identifier (e.g., 'openai', 'claude', 'gemini', 'llama')
 
     Returns:
-        API key string
+        API key string, or None for local providers like llama
 
     Raises:
-        ValueError: If no API key found in database or environment
+        ValueError: If no API key found in database or environment (for cloud providers)
 
     Example:
         >>> api_key = get_provider_api_key_sync(Provider.OPENAI.value)
         >>> client = OpenAI(api_key=api_key)
     """
+    # Step 0: LLaMA/Ollama is local - no API key needed
+    if provider == Provider.LLAMA.value:
+        logger.debug(f"Provider '{provider}' is local (Ollama), no API key required")
+        return None
+
     # Step 1: Try database first (active keys only)
     try:
         provider_key = ProviderAPIKey.active_objects.get(provider=provider)
@@ -69,7 +75,7 @@ def get_provider_api_key_sync(provider: str) -> str:
 
 
 # Async-safe version using sync_to_async
-async def get_provider_api_key(provider: str) -> str:
+async def get_provider_api_key(provider: str) -> Optional[str]:
     """
     Async version: Get API key for a provider with database-first, env-fallback strategy.
 
@@ -80,10 +86,10 @@ async def get_provider_api_key(provider: str) -> str:
         provider: Provider identifier (e.g., 'openai', 'claude', 'gemini', 'llama')
 
     Returns:
-        API key string
+        API key string, or None for local providers like llama
 
     Raises:
-        ValueError: If no API key found in database or environment
+        ValueError: If no API key found in database or environment (for cloud providers)
 
     Example:
         >>> api_key = await get_provider_api_key(Provider.OPENAI.value)
@@ -116,14 +122,20 @@ def has_provider_api_key(provider: str) -> bool:
     """
     Check if an API key exists for a provider (database or environment).
 
+    For local providers like llama (Ollama), always returns True since no key is needed.
+
     Args:
         provider: Provider identifier
 
     Returns:
-        True if API key exists, False otherwise
+        True if API key exists or not needed, False otherwise
     """
+    # LLaMA/Ollama is local - always "has" a key (doesn't need one)
+    if provider == Provider.LLAMA.value:
+        return True
+
     try:
-        get_provider_api_key(provider)
+        get_provider_api_key_sync(provider)
         return True
     except ValueError:
         return False
@@ -147,30 +159,36 @@ def get_all_configured_providers() -> list:
 
 # ===== NEW: User-Specific API Key Resolution =====
 
-def get_provider_api_key_for_user_sync(provider: str, user) -> str:
+def get_provider_api_key_for_user_sync(provider: str, user) -> Optional[str]:
     """
     Get API key for a provider based on user's billing mode.
 
     Resolution logic:
-    1. If user.billing_mode == OWN_API: Use user's UserProviderAPIKey
-    2. If user.billing_mode == WALLET: Use admin's ProviderAPIKey (system key)
-    3. Fallback to environment variables
-    4. Raise error if no key found
+    1. If provider is local (llama/Ollama): No API key needed
+    2. If user.billing_mode == OWN_API: Use user's UserProviderAPIKey
+    3. If user.billing_mode == WALLET: Use admin's ProviderAPIKey (system key)
+    4. Fallback to environment variables
+    5. Raise error if no key found (for cloud providers)
 
     Args:
         provider: Provider identifier (e.g., 'openai', 'claude', 'gemini', 'llama')
         user: User instance
 
     Returns:
-        API key string
+        API key string, or None for local providers like llama
 
     Raises:
-        ValueError: If no appropriate API key is found
+        ValueError: If no appropriate API key is found (for cloud providers)
 
     Example:
         >>> api_key = get_provider_api_key_for_user_sync(Provider.OPENAI.value, request.user)
         >>> client = OpenAI(api_key=api_key)
     """
+    # LLaMA/Ollama is local - no API key needed regardless of billing mode
+    if provider == Provider.LLAMA.value:
+        logger.debug(f"Provider '{provider}' is local (Ollama), no API key required")
+        return None
+
     # Check user's billing mode
     if user.billing_mode == BillingModeChoice.OWN_API:
         # User wants to use their own API key
@@ -197,7 +215,7 @@ def get_provider_api_key_for_user_sync(provider: str, user) -> str:
     return get_provider_api_key_sync(provider)
 
 
-async def get_provider_api_key_for_user(provider: str, user) -> str:
+async def get_provider_api_key_for_user(provider: str, user) -> Optional[str]:
     """
     Async version: Get API key for a provider based on user's billing mode.
 
@@ -208,10 +226,10 @@ async def get_provider_api_key_for_user(provider: str, user) -> str:
         user: User instance
 
     Returns:
-        API key string
+        API key string, or None for local providers like llama
 
     Raises:
-        ValueError: If no appropriate API key is found
+        ValueError: If no appropriate API key is found (for cloud providers)
 
     Example:
         >>> api_key = await get_provider_api_key_for_user(Provider.OPENAI.value, request.user)

@@ -9,14 +9,25 @@ from django.db import transaction
 from django.http import HttpResponse
 from django.template.loader import render_to_string
 from django.utils import timezone
-from rest_framework import viewsets, generics, status
+from rest_framework import viewsets, generics, status, mixins
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
+from rest_framework.views import APIView
+from django.shortcuts import get_object_or_404
 
-from conversations.models import Message, Conversation, LLM, Snippet
+from conversations.models import Message, Conversation, LLM, Snippet, Artifact, Feedback
+from conversations.constants import ArtifactStatus
 from users.utils import detect_platform_from_request
-from .serializers import MessageSerializer, ConversationSerializer, LLMSerializer
+from .serializers import (
+    MessageSerializer,
+    ConversationSerializer,
+    LLMSerializer,
+    ArtifactSerializer,
+    ArtifactListSerializer,
+    ArtifactCheckpointSerializer,
+    FeedbackSerializer,
+)
 
 
 
@@ -173,6 +184,73 @@ class ConversationViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
+    @action(detail=True, methods=['get'], url_path='artifacts')
+    def list_artifacts(self, request, conversation_id=None):
+        """
+        List all artifacts for a conversation.
+        
+        Query params:
+        - status: Filter by artifact status (planning, generating, paused, completed, error)
+        - artifact_type: Filter by type (document, code, diagram)
+        """
+        conversation = self.get_object()
+        
+        queryset = Artifact.active_objects.filter(
+            conversation=conversation
+        ).select_related('conversation', 'message').order_by('-created_at')
+        
+        # Optional status filter
+        status_filter = request.query_params.get('status')
+        if status_filter:
+            queryset = queryset.filter(status=status_filter)
+        
+        # Optional type filter
+        type_filter = request.query_params.get('artifact_type')
+        if type_filter:
+            queryset = queryset.filter(artifact_type=type_filter)
+        
+        serializer = ArtifactListSerializer(queryset, many=True)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['get'], url_path='artifacts/(?P<artifact_id>[^/.]+)')
+    def artifact_detail(self, request, conversation_id=None, artifact_id=None):
+        """Get detailed information about a specific artifact."""
+        conversation = self.get_object()
+        
+        try:
+            artifact = Artifact.active_objects.get(
+                id=artifact_id,
+                conversation=conversation
+            )
+        except Artifact.DoesNotExist:
+            return Response(
+                {"error": "Artifact not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        serializer = ArtifactSerializer(artifact)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['get'], url_path='artifacts/(?P<artifact_id>[^/.]+)/checkpoints')
+    def artifact_checkpoints(self, request, conversation_id=None, artifact_id=None):
+        """Get all checkpoints for an artifact."""
+        conversation = self.get_object()
+        
+        try:
+            artifact = Artifact.active_objects.get(
+                id=artifact_id,
+                conversation=conversation
+            )
+        except Artifact.DoesNotExist:
+            return Response(
+                {"error": "Artifact not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        checkpoints = artifact.checkpoints.order_by('-created_at')
+        serializer = ArtifactCheckpointSerializer(checkpoints, many=True)
+        return Response(serializer.data)
+
     @action(detail=True, methods=['get'], url_path='export-pdf')
     def export_pdf(self, request, conversation_id=None):
         """Export conversation history as a PDF."""
@@ -184,7 +262,7 @@ class ConversationViewSet(viewsets.ModelViewSet):
                 conversation.messages
                 .filter(is_active=True, is_deleted=False)
                 .select_related('llm')
-                .prefetch_related('files__tags', 'tags', 'snippets__file')
+                .prefetch_related('files__tags', 'tags', 'snippets__file', 'web_search_sources')
                 .order_by('created_at')
             )
             
@@ -301,7 +379,7 @@ class MessageViewSet(viewsets.ModelViewSet):
         return Message.active_objects.filter(
             conversation__user=self.request.user
         ).select_related('llm', 'conversation').prefetch_related(
-            'files', 'tags', 'snippets__file'
+            'files', 'tags', 'snippets__file', 'web_search_sources'
         )
 
     def get_serializer_context(self):
@@ -339,6 +417,110 @@ class MessageViewSet(viewsets.ModelViewSet):
                 {"error": f"Failed to delete message: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+class ArtifactStatusView(APIView):
+    """
+    Update artifact status via REST API.
+
+    Used for pause/resume when WebSocket is blocked by streaming.
+    The generation loop polls the database after each section and will
+    pick up the updated status.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, artifact_id):
+        """
+        Update artifact status.
+
+        Request body: {"status": "paused"|"generating"|"completed"|"error"}
+        """
+        new_status = request.data.get('status')
+
+        # Validate status
+        valid_statuses = [s.value for s in ArtifactStatus]
+        if new_status not in valid_statuses:
+            return Response(
+                {'error': f'Invalid status. Must be one of: {valid_statuses}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Get artifact
+        artifact = get_object_or_404(Artifact.active_objects, id=artifact_id)
+
+        # Verify user owns this artifact's conversation
+        if artifact.conversation.user != request.user:
+            return Response(
+                {'error': 'You do not have permission to modify this artifact'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # Update status
+        artifact.status = new_status
+        artifact.save(update_fields=['status', 'updated_at'])
+
+        logger = logging.getLogger(__name__)
+        logger.info(f"Artifact {artifact_id} status updated to {new_status} via REST API")
+
+        return Response({
+            'id': artifact.id,
+            'status': artifact.status,
+            'currentSection': artifact.current_section,
+            'estimatedSections': artifact.estimated_sections,
+        })
+
+
+class ArtifactContentView(APIView):
+    """
+    Update artifact content via REST API.
+
+    Used for direct manual editing of artifact content.
+    Creates a new version to preserve history.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, artifact_id):
+        """
+        Update artifact content by creating a new version.
+
+        Request body: {"content": "new markdown content"}
+
+        Returns the newly created artifact version.
+        """
+        logger = logging.getLogger(__name__)
+        
+        new_content = request.data.get('content')
+        if new_content is None:
+            return Response(
+                {'error': 'Content field is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Get artifact
+        artifact = get_object_or_404(Artifact.active_objects, id=artifact_id)
+
+        # Verify user owns this artifact's conversation
+        if artifact.conversation.user != request.user:
+            return Response(
+                {'error': 'You do not have permission to modify this artifact'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # Create new version with updated content
+        with transaction.atomic():
+            new_artifact = artifact.create_new_version()
+            new_artifact.content = new_content
+            new_artifact.status = ArtifactStatus.COMPLETED
+            new_artifact.save(update_fields=['content', 'status', 'updated_at'])
+
+        logger.info(
+            f"Artifact {artifact_id} content updated via manual edit, "
+            f"created new version {new_artifact.id} (v{new_artifact.version})"
+        )
+
+        # Return the new artifact using the serializer
+        serializer = ArtifactSerializer(new_artifact)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
 
 class LLMViewSet(viewsets.ModelViewSet):
     """Endpoint for listing available LLM models."""
@@ -379,3 +561,24 @@ class LLMViewSet(viewsets.ModelViewSet):
         queryset = LLM.objects.all().order_by('name')
         serializer = self.get_serializer(queryset, many=True)
         return Response(serializer.data)
+
+
+class FeedbackViewSet(mixins.CreateModelMixin, viewsets.GenericViewSet):
+    """
+    ViewSet for submitting general user feedback from the FAB widget.
+
+    POST /api/conversations/feedback/
+    """
+    serializer_class = FeedbackSerializer
+    permission_classes = [IsAuthenticated]
+    queryset = Feedback.active_objects.all()
+
+    def perform_create(self, serializer):
+        """Save the feedback with the current user."""
+        serializer.save(user=self.request.user)
+        logger = logging.getLogger(__name__)
+        logger.info(
+            f"Feedback submitted by {self.request.user.email}: "
+            f"{serializer.data.get('emotion')} - {serializer.data.get('category')}"
+        )
+

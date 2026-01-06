@@ -6,12 +6,15 @@ from django.contrib.auth import get_user_model
 from django.core.files.storage import default_storage
 from django.db.models import Sum
 from django.utils import timezone
-from django_rq import enqueue
+from django_rq import enqueue, get_queue
+from dj_rest_auth.registration.views import VerifyEmailView
 from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework_simplejwt.tokens import RefreshToken
+
 
 from billing.constants import TransactionTypeChoice
 from billing.models import Transaction
@@ -19,13 +22,53 @@ from conversations.constants import SenderType
 from conversations.models import Conversation, Message
 from files.models import File
 from prompts.models import Prompt
-from users.constants import VectorDBChoice
+from users.constants import VectorDBChoice, AuthSourceChoice
 from users.models import AccessCodeGroup
 from users.services import AvatarService, AvatarValidationError
 
 User = get_user_model()
 
+
+class CustomVerifyEmailView(VerifyEmailView):
+    """
+    Custom email verification view that returns JWT tokens after successful verification.
+    This enables auto-login after email verification for a smoother onboarding experience.
+    
+    Only DARE users receive tokens - Socratic Bots users are redirected to their own
+    frontend and can't use tokens stored in DARE's localStorage anyway.
+    """
+    def post(self, request, *args, **kwargs):
+        # Validate the key first
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        
+        # Set the key in kwargs so get_object() works (like parent class does)
+        self.kwargs['key'] = serializer.validated_data['key']
+        
+        # Get the confirmation object and confirm it
+        confirmation = self.get_object()
+        confirmation.confirm(self.request)
+        
+        # Get the user from the confirmation
+        user = confirmation.email_address.user
+        
+        # Prepare response
+        response_data = {'detail': 'ok'}
+        
+        # Only generate JWT tokens for DARE users (auto-login)
+        # Socratic Bots users will be redirected to their frontend where these tokens wouldn't be accessible
+        if user.auth_source == AuthSourceChoice.DARE:
+            refresh = RefreshToken.for_user(user)
+            response_data['access'] = str(refresh.access_token)
+            response_data['refresh'] = str(refresh)
+        
+        return Response(response_data, status=status.HTTP_200_OK)
+
+
+
+
 class UserStatsView(APIView):
+
     def get(self, request, *args, **kwargs):
         user = request.user
 
@@ -139,8 +182,6 @@ class VectorDBViewSet(viewsets.ViewSet):
     def migration_status(self, request):
         """Get the status of the current migration job."""
         try:
-            from django_rq import get_queue
-
             queue = get_queue()
 
             return Response({

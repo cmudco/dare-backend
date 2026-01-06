@@ -5,6 +5,7 @@ This module consolidates structured output handling and routing logic,
 providing clean interfaces for route resolution, normalization, and
 structured output specification following LLM provider utility patterns.
 """
+import json
 import logging
 import re
 from typing import Optional, List, Dict, Any, Tuple
@@ -93,18 +94,18 @@ class RouteResolver:
         return await database_sync_to_async(_resolve)()
 
     @staticmethod
-    async def resolve_routes_for_conditional(
+    async def resolve_routes_for_routing_node(
         workflow,
-        conditional_node_id: str
+        routing_node_id: str
     ) -> List[str]:
         """
-        Resolve available routes from a conditional node.
+        Resolve available routes from a routing node.
 
         Extracts route names from outgoing edge handles.
 
         Args:
             workflow: The workflow instance
-            conditional_node_id: The conditional node ID
+            routing_node_id: The routing node ID
 
         Returns:
             List of route names extracted from edge handles
@@ -113,9 +114,9 @@ class RouteResolver:
             try:
                 routes = []
 
-                # Find all outgoing edges from conditional node
+                # Find all outgoing edges from routing node
                 for edge in workflow.edges.all():
-                    if edge.source == conditional_node_id and edge.source_handle:
+                    if edge.source == routing_node_id and edge.source_handle:
                         # Extract route from handle (format: "output-<route_name>")
                         if edge.source_handle.startswith("output-"):
                             route = edge.source_handle[7:]  # Remove "output-" prefix
@@ -125,7 +126,7 @@ class RouteResolver:
 
             except Exception as e:
                 logger.error(
-                    f"Error resolving routes for conditional {conditional_node_id}: {e}"
+                    f"Error resolving routes for routing node {routing_node_id}: {e}"
                 )
                 return []
 
@@ -152,9 +153,11 @@ class RouteNormalizer:
         """
         Normalize LLM response to match one of the allowed routes.
 
-        Uses two strategies:
-        1. XML extraction - Checks for common XML tags (route, decision, choice, selection)
-        2. Fallback to default - Uses first route if no match found
+        Uses multiple strategies:
+        1. JSON extraction - For structured outputs with object schema
+        2. Direct match - For simple string responses
+        3. XML extraction - For Claude-style wrapped responses
+        4. Fallback to default - Uses first route if no match found
 
         Args:
             raw_response: The raw response from the LLM
@@ -169,15 +172,37 @@ class RouteNormalizer:
             logger.warning(f"No allowed routes provided for node {node_id}")
             return raw_response, raw_response
 
+        # Strategy 0: JSON extraction (for object schemas with route + explanation)
+        try:
+            data = json.loads(raw_response)
+            if isinstance(data, dict):
+                # Try to find route field (could be 'route', 'decision', 'choice', etc.)
+                for potential_field in ['route', 'decision', 'choice', 'selection']:
+                    if potential_field in data:
+                        route_value = data[potential_field]
+                        if route_value in allowed_routes:
+                            logger.debug(f"Route '{route_value}' extracted from JSON field '{potential_field}'")
+                            return route_value, raw_response
+                        # Try case-insensitive match
+                        if not case_sensitive:
+                            lower_map = {r.lower(): r for r in allowed_routes}
+                            if str(route_value).lower() in lower_map:
+                                matched_route = lower_map[str(route_value).lower()]
+                                logger.debug(f"Route '{route_value}' from JSON matched case-insensitive to '{matched_route}'")
+                                return matched_route, raw_response
+        except (json.JSONDecodeError, ValueError):
+            # Not JSON, continue with other strategies
+            pass
+
         # Clean response - remove quotes and whitespace
         cleaned = raw_response.strip().strip('"').strip("'")
         cleaned = cleaned.splitlines()[0].strip() if cleaned else cleaned
 
-        # Strategy 1: Direct match (for native structured outputs like Gemini/OpenAI)
+        # Strategy 1: Direct match (for simple string responses)
         if cleaned in allowed_routes:
             logger.debug(f"Route '{cleaned}' matched directly")
             return cleaned, raw_response
-        
+
         # Try case-insensitive match
         if not case_sensitive:
             lower_map = {r.lower(): r for r in allowed_routes}
@@ -220,7 +245,7 @@ class RouteNormalizer:
         """
         Extract routing decision and analysis from XML-formatted response.
 
-        Supports both ConditionalNode (<decision>) and StructuredOutputNode (<route>) formats.
+        Supports both <decision> and <route> XML tag formats.
 
         Args:
             xml_response: XML-formatted LLM response
@@ -231,7 +256,7 @@ class RouteNormalizer:
             Tuple of (decision, analysis) or (None, None) if extraction fails
         """
         try:
-            # Extract decision tag - try both <decision> (ConditionalNode) and <route> (StructuredOutputNode)
+            # Extract decision tag - try both <decision> and <route> formats
             decision = XMLTag.extract_tag_content(xml_response, XMLTag.DECISION)
             if not decision:
                 # Try <route> tag for StructuredOutputNode
@@ -271,7 +296,8 @@ class StructuredOutputBuilder:
     def build_structured_spec(
         allowed_routes: List[str],
         field_name: str = "route",
-        description: str = "Route selection decision"
+        description: str = "Route selection decision",
+        include_explanation: bool = True
     ) -> Optional[Dict[str, Any]]:
         """
         Build unified structured output specification.
@@ -283,6 +309,7 @@ class StructuredOutputBuilder:
             allowed_routes: List of valid route names
             field_name: Name of the field in output (default: "route")
             description: Description of the field
+            include_explanation: Whether to include explanation field (default: True)
 
         Returns:
             Unified structured spec dictionary or None if not applicable
@@ -297,13 +324,34 @@ class StructuredOutputBuilder:
             logger.warning(f"Invalid routes for structured output: {errors}")
             return None
 
-        return {
-            'type': 'enum',
-            'field': field_name,
-            'values': allowed_routes,
-            'description': description,
-            'enforce': True,
-        }
+        if include_explanation:
+            # Return object schema with route and explanation fields
+            return {
+                'type': 'object',
+                'properties': {
+                    field_name: {
+                        'type': 'enum',
+                        'values': allowed_routes,
+                        'description': description
+                    },
+                    'explanation': {
+                        'type': 'string',
+                        'description': 'Required: 1-2 sentence analysis explaining why this route was selected based on the context, configuration, or routing criteria. Must not be empty.',
+                        'minLength': 10  # Ensure non-empty explanation
+                    }
+                },
+                'required': [field_name, 'explanation'],
+                'enforce': True,
+            }
+        else:
+            # Legacy format: simple enum (backward compatibility)
+            return {
+                'type': 'enum',
+                'field': field_name,
+                'values': allowed_routes,
+                'description': description,
+                'enforce': True,
+            }
 
     @staticmethod
     def create_route_metadata(
@@ -361,28 +409,25 @@ class RouteInstructionBuilder:
         default_route: Optional[str] = None
     ) -> str:
         """
-        Build route selection instruction with XML format (EXACT match to ConditionalNode).
-
-        Uses EXACT same format as ConditionalNode (conditional_prompt_service.py).
+        Build route selection instruction with XML format for routing nodes.
 
         Args:
             allowed_routes: List of valid route names
             default_route: Default route if uncertain (uses first route if None)
 
         Returns:
-            Formatted instruction string with XML format matching ConditionalNode
+            Formatted instruction string with XML format for routing
         """
         if not allowed_routes:
             return ""
 
-        # Build route list in XML format EXACTLY like ConditionalNode does
+        # Build route list in XML format for routing nodes
         route_xml_elements = "\n".join([
             f'<route name="{route}">{route}</route>'
             for route in allowed_routes
         ])
 
-        # EXACT same format as ConditionalNode (conditional_prompt_service.py lines 115-131)
-        # ConditionalNode puts this AFTER the user prompt with "Based on the following input..."
+        # Build the prompt with routes and analysis section
         # StructuredOutputNode appends this AFTER the step execution
         instruction = f"""
 
@@ -408,7 +453,7 @@ Analyze your response carefully and respond in this EXACT format (do not deviate
         """
         Build XML-formatted route selection instruction.
 
-        Used for conditional nodes that need analysis.
+        Used for routing nodes that need analysis.
 
         Args:
             allowed_routes: List of valid route names

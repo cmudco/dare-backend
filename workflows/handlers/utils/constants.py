@@ -16,7 +16,6 @@ class NodeType:
     START = "start"
     STEP = "step"
     CHAT_OUTPUT = "chatOutput"
-    CONDITIONAL = "conditional"
     STRUCTURED_OUTPUT = "structuredOutput"
 
 
@@ -70,13 +69,13 @@ class XMLTag:
 class LLMDefaults:
     """Default LLM configuration values."""
 
-    # Conditional node defaults
-    CONDITIONAL_TEMPERATURE = 0.1
-    CONDITIONAL_MAX_TOKENS = 100
-
     # Step node defaults
     STEP_TEMPERATURE = 0.7
     STEP_MAX_TOKENS = 1024
+
+    # Structured output node defaults
+    STRUCTURED_OUTPUT_TEMPERATURE = 0.1
+    STRUCTURED_OUTPUT_MAX_TOKENS = 100
 
     # Fallback LLM provider
     DEFAULT_PROVIDER = "openai"
@@ -188,32 +187,6 @@ class ErrorMessage:
 
 class PromptTemplate:
     """Prompt templates for LLM interactions."""
-
-    CONDITIONAL_EVALUATION = """Based on the following context, determine which route to take.
-
-Available routes:
-{routes}
-
-Context to evaluate:
-{input_text}
-
-Respond with ONLY the route name from the available routes above. Your response must exactly match one of the route names.
-
-Your decision: """
-
-    CONDITIONAL_EVALUATION_WITH_ANALYSIS = """Based on the following context, determine which route to take and provide your analysis.
-
-Available routes:
-{routes}
-
-Context to evaluate:
-{input_text}
-
-Respond in the following XML format:
-<decision>route_name</decision>
-<analysis>Your reasoning for this decision</analysis>
-
-The route_name must exactly match one of the available routes above."""
 
     STRUCTURED_OUTPUT_INSTRUCTION = """Please respond with EXACTLY one of these values (no additional text):
 {route_values}

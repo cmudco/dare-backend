@@ -4,6 +4,7 @@ djangorestframework~=3.15.2
 asgiref~=3.8.1
 channels~=4.2.0
 channels-redis~=4.2.0
+python-socketio~=5.11.0
 uvicorn[standard]~=0.34.0
 
 # Authentication
@@ -41,11 +42,11 @@ pinecone~=6.0.1
 openai~=2.1.0
 tiktoken~=0.8.0
 
-# Claude/Anthropic (0.69.0+ includes web fetch, code execution)
-anthropic~=0.69.0
+# Claude/Anthropic (0.75.0+ includes structured outputs beta)
+anthropic~=0.75.0
 
 # Google Gemini (new unified SDK)
-google-genai~=1.0.0
+google-genai~=1.53.0
 
 # LLaMA (via Ollama)
 ollama~=0.4.2
@@ -76,3 +77,10 @@ xlrd~=2.0.1
 opencv-python~=4.10.0
 Pillow~=11.1.0
 ffmpeg-python~=0.2.0
+
+# LangGraph (for artifact generation with checkpointing)
+langgraph~=0.2.60
+langgraph-checkpoint~=2.0.10
+langgraph-checkpoint-postgres~=2.0.12
+asyncpg~=0.30.0
+psycopg[binary]~=3.2.0

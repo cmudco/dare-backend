@@ -297,7 +297,7 @@ class BillingService:
 
     def process_workflow_billing(self, user: 'User', llm: LLM, input_tokens: int, output_tokens: int, step_node_id: int = None) -> bool:
         """
-        Process billing for a workflow step or conditional node.
+        Process billing for a workflow step or routing node.
 
         Note: Workflows are DARE-only feature, so platform is always DARE.
         """
@@ -327,7 +327,7 @@ class BillingService:
             if step_order > 0:
                 transaction_message = f"Workflow {workflow_id} : Title - {workflow_title} | Step #{step_order} "
             else:
-                transaction_message = f"Workflow {workflow_id} : Title - {workflow_title} | Conditional Node "
+                transaction_message = f"Workflow {workflow_id} : Title - {workflow_title} | Routing Node "
 
             if wallet.balance < cost:
                 amount_to_deduct = wallet.balance
@@ -396,6 +396,98 @@ class BillingService:
     async def _send_warning(self, code: str, message: str, details: Dict = None):
         """Placeholder for warning sending (to be implemented in consumer)."""
         pass
+
+    async def process_message_cost(
+        self,
+        user: 'User',
+        llm: LLM,
+        message_obj: Message,
+        token_usage: Dict,
+    ) -> None:
+        """
+        Process billing for a message asynchronously.
+
+        This is the async version of finalize_ai_message for use in async contexts
+        like artifact generation.
+
+        Args:
+            user: User object
+            llm: LLM model being used
+            message_obj: Message object to bill for
+            token_usage: Dictionary with input_tokens, output_tokens, and optional cost
+        """
+        try:
+            # Calculate cost
+            input_tokens = token_usage.get('input_tokens', 0)
+            output_tokens = token_usage.get('output_tokens', 0)
+
+            if 'cost' in token_usage:
+                cost = Decimal(str(token_usage['cost']))
+            else:
+                cost = self._calculate_cost(llm, input_tokens, output_tokens)
+
+            if cost <= Decimal('0'):
+                return
+
+            # Update message with token info
+            message_obj.input_tokens = input_tokens
+            message_obj.output_tokens = output_tokens
+            message_obj.cost = cost
+            await database_sync_to_async(message_obj.save)()
+
+            # Get billing mode
+            billing_mode = await database_sync_to_async(lambda: user.billing_mode)()
+
+            # Get platform from conversation
+            conversation = await database_sync_to_async(lambda: message_obj.conversation)()
+            transaction_platform = await database_sync_to_async(lambda: conversation.source)()
+
+            if billing_mode == BillingModeChoice.OWN_API:
+                # User is using their own API key - create tracking transaction with $0
+                logger.info(f"User {user.id} in OWN_API mode - creating tracking transaction for artifact")
+                await database_sync_to_async(
+                    lambda: Transaction.objects.create(
+                        user=user,
+                        amount=Decimal('0.00'),
+                        llm=llm,
+                        type=TransactionTypeChoice.DEBIT,
+                        message=f"Artifact generation: {message_obj.message[:100]} (Own API Key)",
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                        billing_mode=BillingModeChoice.OWN_API,
+                        platform=transaction_platform,
+                    )
+                )()
+            else:
+                # WALLET mode - charge user's wallet
+                wallet = await self._get_user_wallet(user)
+                if not wallet:
+                    logger.error(f"Wallet not found for user: {user.id}")
+                    return
+
+                balance = await database_sync_to_async(lambda: wallet.balance)()
+                if balance < cost:
+                    logger.warning(f"Insufficient balance for artifact billing: user={user.id}, balance={balance}, cost={cost}")
+                    return
+
+                await database_sync_to_async(
+                    lambda: Transaction.objects.create(
+                        user=user,
+                        amount=cost,
+                        llm=llm,
+                        type=TransactionTypeChoice.DEBIT,
+                        message=f"Artifact generation: {message_obj.message[:100]}",
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                        billing_mode=BillingModeChoice.WALLET,
+                        platform=transaction_platform,
+                    )
+                )()
+
+                logger.info(f"Billed user {user.id} ${cost} for artifact generation")
+
+        except Exception as e:
+            logger.exception(f"Error processing artifact message cost: {str(e)}")
 
     async def check_credits_for_amount(self, user: 'User', amount: Decimal) -> bool:
         """

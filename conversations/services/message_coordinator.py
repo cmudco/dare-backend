@@ -21,23 +21,29 @@ from channels.db import database_sync_to_async
 from django.core.exceptions import ValidationError as DjangoValidationError
 from djangorestframework_camel_case.util import camelize
 
-from conversations.models import Conversation, Message, LLM
+from conversations.models import Conversation, Message, LLM, Artifact
 from conversations.constants import (
     SenderType,
     DEFAULT_AI_SENDER_NAME,
     DEFAULT_CONVERSATION_TITLE,
     ErrorCode,
     ErrorMessage,
+    ArtifactStatus,
 )
 from core.services.conversation_service import ConversationService
 from core.services.llm_service import LLMService
 from core.services.billing_service import BillingService
 from core.services.learning_progress_service import LearningProgressService
+from core.services.file_upload_service import FileUploadService
 from core.services.dtos import LLMQueryRequestBuilder
 from conversations.services.websocket_response_service import WebSocketResponseService
 from conversations.services.message_validation_service import MessageValidationService
 from conversations.services.image_generation_service import ImageGenerationService
 from conversations.services.bot_budget_service import BotBudgetService
+from conversations.services.web_search_source_service import WebSearchSourceService
+# Simplified artifact services (replaced legacy LangGraph system)
+from conversations.services.artifact_intent_service import ArtifactIntentService
+from conversations.services.simple_artifact_coordinator import SimpleArtifactCoordinator
 from users.utils import should_run_learning_progress
 
 logger = logging.getLogger(__name__)
@@ -73,10 +79,25 @@ class MessageCoordinator:
         self.billing_service = BillingService()
         self.learning_progress_service = LearningProgressService()
 
+        # Track active artifact generation tasks for cancellation
+        self._artifact_tasks: Dict[str, asyncio.Task] = {}
+
+        # Simplified artifact services
+        self.intent_service = ArtifactIntentService()
+        self.simple_artifact_coordinator = SimpleArtifactCoordinator(
+            conversation=conversation,
+            user=user,
+            send_callback=send_callback,
+        )
+
     async def send(self, data: Dict[str, Any]):
         """Send data through WebSocket if callback is available."""
         if self.send_callback:
-            await self.send_callback(json.dumps(camelize(data)))
+            try:
+                await self.send_callback(json.dumps(camelize(data)))
+            except Exception as e:
+                # Log but don't raise - client may have disconnected
+                logger.debug(f"Failed to send WebSocket message (client may have disconnected): {type(e).__name__}")
 
     async def send_error(self, error_code: str, error_message: str, details: Optional[Dict] = None):
         """Send error response through WebSocket."""
@@ -116,13 +137,32 @@ class MessageCoordinator:
                     await self.send_error(ErrorCode.INSUFFICIENT_CREDITS, ErrorMessage.INSUFFICIENT_CREDITS)
                     return None
 
+            # Save attached images (base64) as File objects
+            attached_image_ids = []
+            images = message_data.get("images", [])
+            if images:
+                saved_files = await database_sync_to_async(
+                    FileUploadService.save_base64_images
+                )(
+                    images=images,
+                    user=self.user,
+                    is_public=(self.user is None)
+                )
+                attached_image_ids = [f.id for f in saved_files]
+                logger.info(f"Saved {len(attached_image_ids)} attached images for message")
+
+            # Combine file_ids with attached image IDs
+            all_file_ids = list(set(
+                (message_data.get("file_ids") or []) + attached_image_ids
+            ))
+
             # Create user message
             user_message = await self.conversation_service.create_message(
                 conversation=self.conversation,
                 sender_type=SenderType.PLAYER,
                 message_content=message_data["message"],
                 sender=sender_name,
-                file_ids=message_data.get("file_ids"),
+                file_ids=all_file_ids,
                 tag_ids=message_data.get("tag_ids"),
                 embedding_ids=message_data.get("embedding_ids"),
                 llm=llm,
@@ -223,6 +263,16 @@ class MessageCoordinator:
                 await self.send_error(ErrorCode.VALIDATION_ERROR, "Selected AI model not found")
                 return None
 
+            # Handle special model regeneration (image generator, audio transcriber)
+            llm, regeneration_message_data = await self._prepare_regeneration_data(
+                ai_message=ai_message,
+                llm=llm,
+                message_data=message_data,
+                preceding_user_message=preceding_user_message,
+            )
+            if llm is None:
+                return None  # Error already sent
+
             # Check billing if user exists
             if self.user:
                 has_credits = await self.billing_service.check_sufficient_credits(
@@ -232,14 +282,13 @@ class MessageCoordinator:
                     await self.send_error(ErrorCode.INSUFFICIENT_CREDITS, ErrorMessage.INSUFFICIENT_CREDITS)
                     return None
 
-            # Use preceding user message content for regeneration
-            regeneration_message_data = message_data.copy()
-            regeneration_message_data["message"] = preceding_user_message.message
+            # Send streaming placeholder to show loading animation
+            await self._send_regeneration_placeholder(ai_message)
 
             # Stream AI response into the EXISTING message (don't create new one)
             await self.stream_ai_response(
                 message_data=regeneration_message_data,
-                message_obj=ai_message,  # Reuse existing message
+                message_obj=ai_message,
                 llm=llm,
                 regenerate=True,
             )
@@ -251,6 +300,75 @@ class MessageCoordinator:
             await self.send_error(ErrorCode.REGENERATE_ERROR, ErrorMessage.REGENERATE_ERROR)
             return None
 
+    async def _prepare_regeneration_data(
+        self,
+        ai_message: Message,
+        llm: LLM,
+        message_data: Dict[str, Any],
+        preceding_user_message: Message,
+    ) -> tuple[Optional[LLM], Dict[str, Any]]:
+        """
+        Prepare message data for regeneration based on original message type.
+
+        Handles special cases:
+        - Image generation: Switch to chat model (can't regenerate images)
+        - Audio transcription: Re-run transcription with original media files
+
+        Returns:
+            Tuple of (llm, regeneration_message_data) or (None, {}) on error
+        """
+        original_llm = ai_message.llm
+        regeneration_message_data = message_data.copy()
+        regeneration_message_data["message"] = preceding_user_message.message
+
+        # Image generator: switch to chat model
+        if original_llm and original_llm.is_image_generator and llm == original_llm:
+            default_llm = await database_sync_to_async(LLM.get_default_chat_model)()
+            if not default_llm:
+                await self.send_error(
+                    ErrorCode.VALIDATION_ERROR,
+                    "Cannot regenerate image: No chat model available."
+                )
+                return None, {}
+            llm = default_llm
+
+        # Audio transcriber: re-run transcription with original media
+        elif original_llm and original_llm.is_audio_transcriber and llm == original_llm:
+            media_file_ids = message_data.get("media_ids") or await database_sync_to_async(
+                lambda: list(preceding_user_message.files.filter(
+                    media_type__in=['audio', 'video']
+                ).values_list('id', flat=True))
+            )()
+
+            if not media_file_ids:
+                await self.send_error(
+                    ErrorCode.VALIDATION_ERROR,
+                    "Cannot regenerate transcription: No audio/video files found."
+                )
+                return None, {}
+
+            regeneration_message_data["audio_transcription_enabled"] = True
+            regeneration_message_data["media_ids"] = media_file_ids
+
+        # Regular chat: disable special modes
+        else:
+            regeneration_message_data["image_generation_enabled"] = False
+            regeneration_message_data["audio_transcription_enabled"] = False
+
+        return llm, regeneration_message_data
+
+    async def _send_regeneration_placeholder(self, ai_message: Message) -> None:
+        """Send streaming placeholder to show loading animation on frontend."""
+        ai_message.message = ""
+        placeholder_payload = await WebSocketResponseService.format_message(
+            message=ai_message,
+            message_type="message",
+            is_sender=False,
+            streaming=True,
+            regenerate=True
+        )
+        await self.send(placeholder_payload)
+
     async def stream_ai_response(
         self,
         message_data: Dict[str, Any],
@@ -261,17 +379,83 @@ class MessageCoordinator:
         """
         Stream AI response with billing checks.
 
+        Supports both standard LLM streaming and artifact generation mode.
+        When artifacts_enabled is True, delegates to ArtifactService.
+
         Args:
             message_data: Validated message data
             message_obj: Empty AI message object to populate
             llm: LLM instance to use
             regenerate: Whether this is a regeneration request
         """
+        # Check if artifacts mode is enabled
+        artifacts_enabled = message_data.get("artifacts_enabled", False)
+        active_artifact_id = message_data.get("active_artifact_id")
+
+        if artifacts_enabled and not regenerate:
+            # NEW: Use LLM-based intent detection
+            try:
+                # Get active artifact summary for context
+                active_artifact = None
+                if active_artifact_id:
+                    active_artifact = await self.intent_service.get_active_artifact_summary(
+                        active_artifact_id,
+                        conversation_id=self.conversation.conversation_id,  # Validate ownership
+                    )
+                
+                # Detect intent using LLM
+                intent = await self.intent_service.detect_intent(
+                    message=message_data["message"],
+                    active_artifact=active_artifact,
+                    llm=llm,
+                    user=self.user,
+                )
+                
+                logger.info(f"Artifact intent detected: {intent}")
+                
+                if intent == "chat":
+                    # Normal message flow - falls through to regular streaming below
+                    logger.info("Intent is 'chat', using normal message streaming")
+                elif intent == "diagram":
+                    # Diagram generation using tool calls (mermaid)
+                    logger.info("Intent is 'diagram', using tool-based diagram generation")
+                    await self.simple_artifact_coordinator.stream_diagram_response(
+                        message_data=message_data,
+                        message_obj=message_obj,
+                        llm=llm,
+                    )
+                    return
+                elif intent == "chart":
+                    # Data chart generation using tool calls (recharts)
+                    logger.info("Intent is 'chart', using tool-based chart generation")
+                    await self.simple_artifact_coordinator.stream_chart_response(
+                        message_data=message_data,
+                        message_obj=message_obj,
+                        llm=llm,
+                    )
+                    return
+                else:
+                    # Create or edit artifact using simplified coordinator
+                    await self.simple_artifact_coordinator.stream_artifact_response(
+                        message_data=message_data,
+                        message_obj=message_obj,
+                        llm=llm,
+                        intent=intent,
+                        active_artifact_id=active_artifact_id,
+                    )
+                    return
+                    
+            except Exception as e:
+                logger.exception(f"Error in artifact intent detection: {e}")
+                # Fallback to normal message flow on error
+                logger.warning("Falling back to normal message flow due to intent detection error")
+
         try:
-            bot_message_id = str(message_obj.id)
+            bot_message_id = message_obj.id  # Keep as integer for consistency
             ai_response_accumulator = ""
             token_usage = None
             generated_image_data = None
+            generated_transcription_data = None
 
             # Build LLM query request using DTO builder
             request = LLMQueryRequestBuilder.from_message_data(
@@ -316,6 +500,20 @@ class MessageCoordinator:
                                 "style": usage.get("style", "vivid"),
                             }
 
+                    # Handle audio transcription (final result)
+                    if usage.get("transcription_result"):
+                        transcription = usage["transcription_result"]
+                        generated_transcription_data = {
+                            "fileId": transcription.get("file_id"),
+                            "fileName": transcription.get("file_name"),
+                            "text": transcription.get("text"),
+                            "language": transcription.get("language", "auto"),
+                            "model": transcription.get("model", "whisper-1"),
+                            "cost": str(usage.get("cost")) if usage.get("cost") else None,
+                            "duration": transcription.get("duration"),
+                            "transcribedAt": transcription.get("transcribed_at"),
+                        }
+
                     # Check billing during streaming (only for authenticated users)
                     if self.user:
                         can_continue, error_response = await self.billing_service.check_streaming_credit_usage(
@@ -347,12 +545,24 @@ class MessageCoordinator:
 
             # Finalize message
             if ai_response_accumulator.strip():
+                # Save web search sources if present (before finalization)
+                if token_usage and token_usage.get("web_search_sources"):
+                    # Clear old sources on regeneration
+                    if regenerate:
+                        await WebSearchSourceService.delete_sources_for_message(message_obj)
+                    # Save new sources
+                    await WebSearchSourceService.save_sources(
+                        message=message_obj,
+                        sources=token_usage["web_search_sources"],
+                    )
+
                 await self._finalize_message(
                     message_obj=message_obj,
                     ai_response=ai_response_accumulator,
                     token_usage=token_usage,
                     regenerate=regenerate,
                     generated_image_data=generated_image_data,
+                    generated_transcription_data=generated_transcription_data,
                 )
 
                 # Run learning progress assessment (Socratic only, sequential after AI response)
@@ -370,6 +580,7 @@ class MessageCoordinator:
         token_usage: Optional[Dict],
         regenerate: bool = False,
         generated_image_data: Optional[Dict] = None,
+        generated_transcription_data: Optional[Dict] = None,
     ):
         """
         Finalize AI message with billing or budget update.
@@ -380,6 +591,7 @@ class MessageCoordinator:
             token_usage: Token usage dictionary
             regenerate: Whether this is a regeneration
             generated_image_data: Optional image generation data
+            generated_transcription_data: Optional audio transcription data
         """
         try:
             # Save original message content on first regeneration
@@ -429,7 +641,8 @@ class MessageCoordinator:
                 is_sender=False,
                 streaming=False,
                 regenerate=regenerate,
-                generated_image=generated_image_data
+                generated_image=generated_image_data,
+                generated_transcription=generated_transcription_data
             )
 
             await self.send(final_payload)
@@ -666,7 +879,7 @@ class MessageCoordinator:
         )()
 
     async def send_conversation_history(self):
-        """Send conversation history to client."""
+        """Send conversation history and artifacts to client."""
         try:
             # Use the existing fetch_chat_history_from_db method
             # which returns already formatted and camelized history
@@ -674,15 +887,33 @@ class MessageCoordinator:
                 self.conversation
             )
 
-            # Send as conversation_history message
+            # Fetch all artifacts for this conversation
+            artifacts = await self._fetch_conversation_artifacts()
+
+            # Send as conversation_history message with artifacts
             payload = {
                 "type": "conversation_history",
-                "conversationHistory": history
+                "conversationHistory": history,
+                "artifacts": artifacts,  # Include artifacts for preloading
             }
             await self.send(payload)
 
         except Exception as e:
             logger.exception(f"Error sending conversation history: {str(e)}")
+
+    async def _fetch_conversation_artifacts(self):
+        """Fetch all artifacts for the current conversation."""
+        def _get_artifacts():
+            from conversations.api.serializers import ArtifactListSerializer
+            artifacts = Artifact.active_objects.filter(
+                conversation=self.conversation
+            ).select_related('conversation', 'artifact_group', 'parent_artifact').order_by('-created_at')
+            serializer = ArtifactListSerializer(artifacts, many=True)
+            return serializer.data
+
+        artifacts_data = await database_sync_to_async(_get_artifacts)()
+        # Camelize the artifact data to match frontend expectations
+        return camelize(artifacts_data)
 
     async def send_latest_learning_progress(self):
         """Send latest learning progress assessment to client (Socratic only)."""

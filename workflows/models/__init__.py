@@ -4,7 +4,6 @@ from .nodes import (
     StepNodeData,
     StartNodeData,
     ChatOutputNodeData,
-    ConditionalNodeData,
     StructuredOutputNodeData,
 )
 
@@ -19,17 +18,23 @@ from .core import (
     WorkflowRunStep,
 )
 
+from .citations import (
+    WorkflowStepSnippet,
+    WorkflowStepWebSearchSource,
+)
+
 # Make all models available at package level
 __all__ = [
     'BaseNodeData',
     'StepNodeData',
     'StartNodeData',
     'ChatOutputNodeData',
-    'ConditionalNodeData',
     'StructuredOutputNodeData',
     'WorkflowNode',
     'WorkflowEdge',
     'Workflow',
     'WorkflowRun',
     'WorkflowRunStep',
+    'WorkflowStepSnippet',
+    'WorkflowStepWebSearchSource',
 ]

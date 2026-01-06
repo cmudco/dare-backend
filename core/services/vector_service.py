@@ -6,6 +6,8 @@ from asgiref.sync import sync_to_async
 
 from core.config.vector_db import get_user_namespace
 from core.config.processing import VECTOR_DIMENSION
+from core.helpers.pinecone import PineconeClient
+from core.helpers.weaviate import WeaviateClient
 from users.constants import VectorDBChoice
 
 User = get_user_model()
@@ -136,7 +138,6 @@ class PineconeVectorService(BaseVectorService):
     """Pinecone implementation of the vector service."""
 
     def __init__(self):
-        from core.helpers.pinecone import PineconeClient
         self.client = PineconeClient()
 
     @client_operation
@@ -171,7 +172,6 @@ class WeaviateVectorService(BaseVectorService):
     """Weaviate implementation of the vector service."""
 
     def __init__(self):
-        from core.helpers.weaviate import WeaviateClient
         self.client = WeaviateClient()
 
     @client_operation

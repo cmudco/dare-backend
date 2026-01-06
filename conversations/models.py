@@ -10,7 +10,7 @@ from django.utils import timezone
 from common.managers import ActiveObjectsManager
 from common.models import BaseModel, TimeStampMixin
 from core.fields import EncryptedCharField
-from .constants import Provider, SenderType, FeedbackType, ConversationSource
+from .constants import Provider, SenderType, FeedbackType, ConversationSource, ArtifactType, ArtifactStatus
 
 
 class LLM(models.Model):
@@ -38,6 +38,10 @@ class LLM(models.Model):
         default=False,
         help_text="Whether the model is an image generation model (e.g., DALL-E)."
     )
+    is_audio_transcriber = models.BooleanField(
+        default=False,
+        help_text="Whether the model supports audio transcription (e.g., Whisper, Gemini)."
+    )
 
     input_token_rate_per_million = models.DecimalField(
             max_digits=10,
@@ -57,6 +61,35 @@ class LLM(models.Model):
 
     def __str__(self):
         return self.name
+
+    @property
+    def is_special_purpose(self) -> bool:
+        """Check if this model is a special-purpose model (not a chat model).
+
+        Special-purpose models like image generators and audio transcribers
+        cannot be used for standard chat completions.
+        """
+        return self.is_image_generator or self.is_audio_transcriber
+
+    @property
+    def supports_chat(self) -> bool:
+        """Check if this model supports chat completions."""
+        return not self.is_special_purpose
+
+    @classmethod
+    def get_default_chat_model(cls) -> 'LLM':
+        """Get a default chat-capable model.
+
+        Returns the first available model that supports chat completions
+        (i.e., not an image generator or audio transcriber).
+
+        Returns:
+            LLM instance or None if no chat model is available
+        """
+        return cls.objects.filter(
+            is_image_generator=False,
+            is_audio_transcriber=False
+        ).first()
 
     class Meta:
         verbose_name_plural = "LLMs"
@@ -180,6 +213,14 @@ class Conversation(BaseModel):
         default=False,
         help_text="Enable AI image generation for this conversation."
     )
+    audio_transcription_enabled = models.BooleanField(
+        default=False,
+        help_text="Enable audio transcription for this conversation."
+    )
+    artifacts_enabled = models.BooleanField(
+        default=False,
+        help_text="Enable artifact generation for long-form content."
+    )
     selected_model = models.ForeignKey(
         LLM,
         on_delete=models.SET_NULL,
@@ -285,6 +326,7 @@ class Conversation(BaseModel):
                 history_limit=self.history_limit,
                 web_search_enabled=self.web_search_enabled,
                 image_generation_enabled=self.image_generation_enabled,
+                artifacts_enabled=self.artifacts_enabled,
                 selected_model=self.selected_model,
                 selected_media_ids=self.selected_media_ids.copy() if self.selected_media_ids else [],
                 prompt=self.prompt,
@@ -518,6 +560,61 @@ class Snippet(BaseModel):
         return f"Snippet for Message {self.message.id} from File {self.file.id} (Score: {self.similarity_score})"
 
 
+class WebSearchSource(BaseModel):
+    """
+    Model to store web search sources/citations from LLM responses.
+
+    When web search is enabled, LLMs return citations linking their responses
+    to source URLs. This model captures those sources for display in the UI,
+    similar to how Snippet stores RAG-retrieved document chunks.
+
+    Provider-specific fields:
+    - OpenAI: url, title (from annotations)
+    - Claude: url, title, cited_text, page_age (from web_search_tool_result)
+    - Gemini: url, title (from grounding_metadata.grounding_chunks)
+    """
+    message = models.ForeignKey(
+        Message,
+        on_delete=models.CASCADE,
+        related_name="web_search_sources",
+        help_text="The message this source was cited in."
+    )
+    url = models.URLField(
+        max_length=2048,
+        help_text="The URL of the source."
+    )
+    title = models.CharField(
+        max_length=500,
+        blank=True,
+        help_text="The title of the source page."
+    )
+    cited_text = models.TextField(
+        blank=True,
+        help_text="The text that was cited from this source (Claude only)."
+    )
+    page_age = models.CharField(
+        max_length=100,
+        blank=True,
+        help_text="When the page was last updated (Claude only)."
+    )
+    provider = models.CharField(
+        max_length=20,
+        blank=True,
+        help_text="The LLM provider that returned this source (openai, claude, gemini)."
+    )
+
+    active_objects = ActiveObjectsManager()
+
+    class Meta:
+        ordering = ['created_at']
+        indexes = [
+            models.Index(fields=['message'], name='websearch_message_idx'),
+        ]
+
+    def __str__(self):
+        return f"WebSearchSource for Message {self.message.id}: {self.title or self.url[:50]}"
+
+
 class LearningProgressAssessment(BaseModel):
     """
     Model to store AI-generated learning progress assessments for conversations.
@@ -559,3 +656,287 @@ class LearningProgressAssessment(BaseModel):
 
     def __str__(self):
         return f"Progress Assessment for {self.conversation.conversation_id} at {self.created_at.strftime('%Y-%m-%d %H:%M')}"
+
+
+class ArtifactGroup(BaseModel):
+    """
+    Groups all versions of an artifact together.
+    Enables version history, diffing, and rollback capabilities.
+    """
+    conversation = models.ForeignKey(
+        Conversation,
+        on_delete=models.CASCADE,
+        related_name="artifact_groups",
+        help_text="The conversation this artifact group belongs to."
+    )
+    base_title = models.CharField(
+        max_length=500,
+        help_text="Original title of the artifact (from first version)."
+    )
+    latest_version = models.OneToOneField(
+        'Artifact',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='is_latest_for',
+        help_text="The most recent version of this artifact."
+    )
+
+    active_objects = ActiveObjectsManager()
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = "Artifact Group"
+        verbose_name_plural = "Artifact Groups"
+
+    def __str__(self):
+        return f"ArtifactGroup: {self.base_title}"
+
+
+class Artifact(BaseModel):
+    """
+    Model for long-form generated content (documents, code, diagrams).
+    Supports section-by-section generation with pause/resume capability.
+    """
+    conversation = models.ForeignKey(
+        Conversation,
+        on_delete=models.CASCADE,
+        related_name="artifacts",
+        help_text="The conversation this artifact belongs to."
+    )
+    message = models.ForeignKey(
+        Message,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="artifacts",
+        help_text="The AI message associated with this artifact."
+    )
+    artifact_group = models.ForeignKey(
+        'ArtifactGroup',
+        on_delete=models.CASCADE,
+        related_name='versions',
+        null=True,
+        blank=True,
+        help_text="The group containing all versions of this artifact."
+    )
+    parent_artifact = models.ForeignKey(
+        'self',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='child_versions',
+        help_text="The previous version this artifact was derived from."
+    )
+
+    artifact_type = models.CharField(
+        max_length=20,
+        choices=ArtifactType.choices,
+        default=ArtifactType.DOCUMENT,
+        help_text="Type of artifact (document, code, diagram)."
+    )
+    title = models.CharField(
+        max_length=500,
+        help_text="Title of the artifact."
+    )
+    language = models.CharField(
+        max_length=50,
+        blank=True,
+        null=True,
+        help_text="Programming language for code artifacts."
+    )
+    outline = models.TextField(
+        blank=True,
+        default="",
+        help_text="Structured outline of the artifact sections."
+    )
+    content = models.TextField(
+        blank=True,
+        default="",
+        help_text="Generated content of the artifact."
+    )
+
+    estimated_sections = models.PositiveIntegerField(
+        default=10,
+        help_text="Estimated number of sections in the artifact."
+    )
+    current_section = models.PositiveIntegerField(
+        default=0,
+        help_text="Current section being generated (0 = not started)."
+    )
+
+    status = models.CharField(
+        max_length=20,
+        choices=ArtifactStatus.choices,
+        default=ArtifactStatus.PLANNING,
+        help_text="Current status of artifact generation."
+    )
+
+    metadata = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Additional metadata (LLM used, token counts, etc.)."
+    )
+
+    # Version tracking for modifications
+    version = models.PositiveIntegerField(
+        default=1,
+        help_text="Version number, incremented on each modification."
+    )
+
+    active_objects = ActiveObjectsManager()
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = "Artifact"
+        verbose_name_plural = "Artifacts"
+        indexes = [
+            models.Index(fields=['conversation', 'status'], name='artifact_conv_status_idx'),
+        ]
+
+    def __str__(self):
+        return f"{self.title} ({self.get_status_display()})"
+
+    @property
+    def progress(self) -> float:
+        """Calculate generation progress as a percentage."""
+        if self.estimated_sections == 0:
+            return 0.0
+        return min(1.0, self.current_section / self.estimated_sections)
+
+    @property
+    def sections_remaining(self) -> int:
+        """Calculate remaining sections to generate."""
+        return max(0, self.estimated_sections - self.current_section)
+
+    @property
+    def word_count(self) -> int:
+        """Calculate word count of generated content."""
+        return len(self.content.split()) if self.content else 0
+
+    def increment_version(self):
+        """Increment version number on modification."""
+        self.version += 1
+        self.save(update_fields=['version', 'updated_at'])
+
+    def create_new_version(self) -> 'Artifact':
+        """
+        Create a new version based on this artifact.
+        Copies current content and increments version number.
+        The new artifact is linked as a child of this one.
+        
+        Returns:
+            Artifact: The newly created version
+        """
+        new_artifact = Artifact(
+            conversation=self.conversation,
+            artifact_group=self.artifact_group,
+            parent_artifact=self,
+            artifact_type=self.artifact_type,
+            title=self.title,
+            language=self.language,
+            outline=self.outline,
+            content=self.content,
+            estimated_sections=self.estimated_sections,
+            current_section=self.current_section,
+            status=ArtifactStatus.PLANNING,
+            version=self.version + 1,
+        )
+        new_artifact.save()
+        
+        # Update group's latest_version
+        if self.artifact_group:
+            self.artifact_group.latest_version = new_artifact
+            self.artifact_group.save(update_fields=['latest_version', 'updated_at'])
+        
+        return new_artifact
+
+
+class ArtifactCheckpoint(BaseModel):
+    """
+    Model to store checkpoints for artifact generation.
+    Enables pause/resume functionality for long-form content.
+    """
+    artifact = models.ForeignKey(
+        Artifact,
+        on_delete=models.CASCADE,
+        related_name="checkpoints",
+        help_text="The artifact this checkpoint belongs to."
+    )
+    content_snapshot = models.TextField(
+        help_text="Content snapshot at this checkpoint."
+    )
+    current_section = models.PositiveIntegerField(
+        help_text="Section number at this checkpoint."
+    )
+    iteration_count = models.PositiveIntegerField(
+        default=0,
+        help_text="Number of generation iterations completed."
+    )
+    state_data = models.JSONField(
+        default=dict,
+        help_text="Serialized state data for resuming generation."
+    )
+
+    active_objects = ActiveObjectsManager()
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = "Artifact Checkpoint"
+        verbose_name_plural = "Artifact Checkpoints"
+        indexes = [
+            models.Index(fields=['artifact', 'created_at'], name='checkpoint_artifact_idx'),
+        ]
+
+    def __str__(self):
+        return f"Checkpoint for {self.artifact.title} at section {self.current_section}"
+
+
+class Feedback(BaseModel):
+    """
+    Model to store general user feedback from the FAB feedback widget.
+    This is for platform-wide feedback, not message-specific feedback.
+    """
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="feedbacks",
+        help_text="User who submitted this feedback."
+    )
+    emotion = models.CharField(
+        max_length=20,
+        help_text="User's emotional response (love, happy, neutral, confused, sad)."
+    )
+    category = models.CharField(
+        max_length=20,
+        blank=True,
+        null=True,
+        help_text="Feedback category (bug, idea, ui, performance, docs, other)."
+    )
+    message = models.TextField(
+        blank=True,
+        help_text="Detailed feedback message from the user."
+    )
+    screenshot = models.TextField(
+        blank=True,
+        null=True,
+        help_text="Base64 encoded screenshot (optional)."
+    )
+    page = models.CharField(
+        max_length=500,
+        help_text="Page URL where feedback was submitted."
+    )
+    browser_info = models.TextField(
+        blank=True,
+        help_text="User's browser information."
+    )
+
+    active_objects = ActiveObjectsManager()
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = "Feedback"
+        verbose_name_plural = "Feedbacks"
+
+    def __str__(self):
+        return f"Feedback from {self.user.email}: {self.emotion} - {self.category or 'No category'}"
