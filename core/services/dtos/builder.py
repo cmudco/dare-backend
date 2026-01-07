@@ -46,6 +46,7 @@ class LLMQueryRequestBuilder:
         context = ContextConfig(
             file_ids=message_data.get("file_ids", []),
             embedding_ids=message_data.get("embedding_ids", []),
+            file_owner_id=message_data.get("file_owner_id"),  # Bot creator's ID
             media_ids=message_data.get("media_ids", []),
             tag_ids=message_data.get("tag_ids", []),
             folder_ids=message_data.get("folder_ids", []),
