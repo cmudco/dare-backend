@@ -206,9 +206,11 @@ class LLMService:
         if not all_embedding_file_ids:
             return
 
-        if user_id and user_id != self.document_processor.user_id:
-            self.document_processor.user_id = user_id
-            self.document_processor.vector_service = await get_vector_service_async(user_id)
+        # Use file_owner_id for shared boards (e.g., deployed Socratic bots)
+        vector_user_id = request.context.file_owner_id or user_id
+        if vector_user_id and vector_user_id != self.document_processor.user_id:
+            self.document_processor.user_id = vector_user_id
+            self.document_processor.vector_service = await get_vector_service_async(vector_user_id)
 
         effective_threshold = (
             0.05 if request.is_socratic_mode()
@@ -778,9 +780,11 @@ class LLMService:
 
         # Retrieve contextual snippets using embedding_ids (avoid full file reads)
         if context.embedding_ids:
-            if context.user_id and context.user_id != self.document_processor.user_id:
-                self.document_processor.user_id = context.user_id
-                self.document_processor.vector_service = await get_vector_service_async(context.user_id)
+            # Use file_owner_id for shared boards (e.g., deployed Socratic bots)
+            vector_user_id = context.file_owner_id or context.user_id
+            if vector_user_id and vector_user_id != self.document_processor.user_id:
+                self.document_processor.user_id = vector_user_id
+                self.document_processor.vector_service = await get_vector_service_async(vector_user_id)
 
             doc_context = await self.document_processor.search_similar_documents(
                 query_text=context.message,
