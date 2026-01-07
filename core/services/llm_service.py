@@ -55,11 +55,19 @@ class LLMService:
 
         Yields:
             Tuple of (chunk: str, usage: Dict) for streaming responses
+            For Socratic mode, first yields debug_info in usage dict
         """
         try:
             llm = await self._resolve_llm(request)
             messages = await self._build_messages_for_request(request, llm)
             all_images = await self._process_media_files(request)
+
+            user_id = request.user.id if request.user else None
+            file_owner_id = request.context.file_owner_id
+
+            # Always yield debug info as first event for debugging
+            debug_info = await self._collect_debug_info(request, llm, messages)
+            yield "", {"debug_info": debug_info}
 
             if request.requires_audio_transcription():
                 async for chunk, usage in self._execute_audio_transcription(request, llm):
@@ -75,6 +83,66 @@ class LLMService:
 
         except Exception as e:
             yield f"Error: {str(e)}", None
+
+    async def _collect_debug_info(
+        self,
+        request: LLMQueryRequest,
+        llm: LLM,
+        messages: List[Dict[str, str]]
+    ) -> Dict[str, Any]:
+        """Collect debug information for Socratic mode.
+
+        Args:
+            request: LLMQueryRequest with context
+            llm: Resolved LLM model
+            messages: Built messages array
+
+        Returns:
+            Dictionary with debug information for frontend
+        """
+        user_id = request.user.id if request.user else None
+        file_owner_id = request.context.file_owner_id
+        vector_user_id = file_owner_id or user_id
+
+        # Get file names for embedding IDs
+        embedding_file_names = []
+        if request.context.embedding_ids:
+            embedding_file_names = await self._get_file_names(request.context.embedding_ids)
+
+        # Send raw messages as-is (no truncation)
+        raw_messages = []
+        for msg in messages:
+            content = msg.get("content", "")
+            raw_messages.append({
+                "role": msg.get("role", "user"),
+                "content": content,
+                "full_length": len(content)
+            })
+
+        return {
+            "llm_name": llm.name if llm else "Unknown",
+            "llm_identifier": llm.identifier if llm else "Unknown",
+            "file_owner_id": file_owner_id,
+            "user_id": user_id,
+            "vector_user_id": vector_user_id,
+            "embedding_file_ids": request.context.embedding_ids or [],
+            "embedding_file_names": embedding_file_names,
+            "messages": raw_messages,
+            "is_socratic_mode": request.is_socratic_mode(),
+            "is_advanced_mode": request.is_advanced_mode(),
+            "max_context_snippets": request.context.max_context_snippets,
+            "similarity_threshold": request.context.document_similarity_threshold,
+            "web_search_enabled": request.generation.web_search_enabled,
+        }
+
+    @database_sync_to_async
+    def _get_file_names(self, file_ids: List[int]) -> List[str]:
+        """Get file names for given file IDs (truncated to 50 chars)."""
+        if not file_ids:
+            return []
+        files = File.active_objects.filter(id__in=file_ids).values('id', 'name')
+        file_map = {f['id']: f['name'][:50] for f in files}
+        return [file_map.get(fid, f"File {fid}") for fid in file_ids]
 
     # ========== Query Orchestration Methods ==========
 
@@ -109,7 +177,15 @@ class LLMService:
         Returns:
             List of message dictionaries for LLM
         """
-        if request.is_socratic_mode():
+        is_socratic = request.is_socratic_mode()
+        logger.info(
+            f"[LLMService] Building messages: "
+            f"socratic_mode={is_socratic}, "
+            f"socratic.enabled={request.socratic.enabled}, "
+            f"is_advanced={request.is_advanced_mode()}"
+        )
+
+        if is_socratic:
             return await self._build_socratic_mode_messages(request)
         else:
             return await self._build_standard_messages(request)
@@ -206,8 +282,12 @@ class LLMService:
         if not all_embedding_file_ids:
             return
 
-        # Use file_owner_id for shared boards (e.g., deployed Socratic bots)
+        # Use file_owner_id from frontend (DARE user ID) for shared boards, fallback to current user
         vector_user_id = request.context.file_owner_id or user_id
+
+        logger.info(f"VECTOR CONTEXT: user_id={user_id}, file_owner_id={request.context.file_owner_id}, vector_user_id={vector_user_id}")
+        logger.info(f"VECTOR CONTEXT: file_ids={list(all_embedding_file_ids)}")
+
         if vector_user_id and vector_user_id != self.document_processor.user_id:
             self.document_processor.user_id = vector_user_id
             self.document_processor.vector_service = await get_vector_service_async(vector_user_id)
@@ -227,10 +307,8 @@ class LLMService:
             workflow_run_step_obj=request.workflow_run_step_obj
         )
 
-        if context:
-            for part in context.split("\n\n"):
-                if part.strip():
-                    messages.append({"role": "user", "content": part})
+        if context and context.strip():
+            messages.append({"role": "user", "content": f"Relevant context from documents:\n{context}"})
 
     async def _process_media_files(self, request: LLMQueryRequest) -> List[Dict]:
         """Process and combine all media files (images and videos).
@@ -751,6 +829,20 @@ class LLMService:
         learning_goals = context.learning_goals
         chat_prompt = context.chat_prompt
 
+        # Log the Socratic message components
+        logger.info(
+            f"[LLMService] Building Socratic messages (classic mode): "
+            f"subject={subject}, topic={topic}"
+        )
+        logger.info(
+            f"[LLMService] chat_prompt being attached to system message: "
+            f"{chat_prompt[:150] if chat_prompt else 'N/A'}..."
+        )
+        logger.info(
+            f"[LLMService] learning_goals being attached: "
+            f"{learning_goals[:100] if learning_goals else 'N/A'}..."
+        )
+
         # System prompt
         prompt_start = (
             f"Subject and Topic:\n"
@@ -837,6 +929,20 @@ class LLMService:
         topic = context.topic
         learning_goals = context.learning_goals
         chat_prompt = context.chat_prompt
+
+        # Log the Advanced message components
+        logger.info(
+            f"[LLMService] Building Socratic messages (ADVANCED mode): "
+            f"title={title}, subject={subject}, topic={topic}"
+        )
+        logger.info(
+            f"[LLMService] chat_prompt being attached to system message: "
+            f"{chat_prompt[:150] if chat_prompt else 'N/A'}..."
+        )
+        logger.info(
+            f"[LLMService] learning_goals being attached: "
+            f"{learning_goals[:100] if learning_goals else 'N/A'}..."
+        )
 
         # Conversation history as a readable transcript
         history_list = await self.get_conversation_history(

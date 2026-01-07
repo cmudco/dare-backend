@@ -1,5 +1,6 @@
 """Builder pattern for constructing LLMQueryRequest from dictionaries."""
 
+import logging
 from typing import Dict, Any, Optional
 
 from users.constants import AuthSourceChoice
@@ -8,6 +9,8 @@ from .context_dto import ContextConfig
 from .generation_dto import GenerationConfig
 from .media_dto import MediaConfig
 from .socratic_dto import SocraticConfig
+
+logger = logging.getLogger(__name__)
 
 
 class LLMQueryRequestBuilder:
@@ -78,10 +81,26 @@ class LLMQueryRequestBuilder:
 
         # Build Socratic config
         is_socratic_bots = platform == AuthSourceChoice.SOCRATIC_BOTS if platform else False
+        bot_meta = message_data.get("bot_meta", {})
+        socratic_enabled = is_socratic_bots and not message_data.get("prompt_id")
+
+        # Log Socratic config construction
+        logger.info(
+            f"[LLMQueryRequestBuilder] Building SocraticConfig: "
+            f"platform={platform}, is_socratic_bots={is_socratic_bots}, "
+            f"socratic_enabled={socratic_enabled}, is_advanced={bool(message_data.get('is_advanced'))}"
+        )
+        logger.info(
+            f"[LLMQueryRequestBuilder] bot_meta contents: "
+            f"subject={bot_meta.get('subject', 'N/A')}, "
+            f"topic={bot_meta.get('topic', 'N/A')}, "
+            f"chat_prompt={bot_meta.get('chat_prompt', 'N/A')[:100] if bot_meta.get('chat_prompt') else 'N/A'}..."
+        )
+
         socratic = SocraticConfig(
-            enabled=is_socratic_bots and not message_data.get("prompt_id"),
+            enabled=socratic_enabled,
             advanced_mode=bool(message_data.get("is_advanced")),
-            bot_meta=message_data.get("bot_meta", {}),
+            bot_meta=bot_meta,
         )
 
         # Build request
