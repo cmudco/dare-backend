@@ -1,7 +1,10 @@
 """Message context DTO for Socratic message building."""
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -53,6 +56,23 @@ class MessageBuildContext:
         Returns:
             MessageBuildContext with extracted socratic data
         """
+        # Extract values from socratic config
+        subject = request.socratic.get_subject()
+        topic = request.socratic.get_topic()
+        title = request.socratic.get_title()
+        learning_goals = request.socratic.get_learning_goals()
+        chat_prompt = request.socratic.get_chat_prompt()
+
+        # Log extraction from SocraticConfig -> MessageBuildContext
+        logger.info(
+            f"[MessageBuildContext] Extracting from SocraticConfig: "
+            f"subject={subject}, topic={topic}, title={title}"
+        )
+        logger.info(
+            f"[MessageBuildContext] chat_prompt extracted: "
+            f"{chat_prompt[:100] if chat_prompt else 'N/A'}..."
+        )
+
         return cls(
             message=request.message,
             conversation=request.conversation,
@@ -63,10 +83,10 @@ class MessageBuildContext:
             history_limit=request.context.history_limit,
             message_obj=request.message_obj,
             workflow_run_step_obj=request.workflow_run_step_obj,
-            subject=request.socratic.get_subject(),
-            topic=request.socratic.get_topic(),
-            title=request.socratic.get_title(),
-            learning_goals=request.socratic.get_learning_goals(),
-            chat_prompt=request.socratic.get_chat_prompt(),
+            subject=subject,
+            topic=topic,
+            title=title,
+            learning_goals=learning_goals,
+            chat_prompt=chat_prompt,
             file_owner_id=request.context.file_owner_id,
         )
