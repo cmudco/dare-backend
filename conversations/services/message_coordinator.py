@@ -471,16 +471,6 @@ class MessageCoordinator:
             # Stream from LLM service
             async for chunk, usage in self.llm_service.query(request):
                 if usage:
-                    # Handle debug info (Socratic mode only - sent as first event)
-                    if usage.get("debug_info"):
-                        debug_payload = {
-                            "type": "debug_info",
-                            "messageId": bot_message_id,
-                            **usage["debug_info"],
-                        }
-                        await self.send(debug_payload)
-                        continue  # Don't process as token usage
-
                     token_usage = usage
 
                     # Handle generated image
