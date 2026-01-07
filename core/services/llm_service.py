@@ -220,7 +220,7 @@ class LLMService:
         context = await self.document_processor.search_similar_documents(
             query_text=request.message,
             file_ids=list(all_embedding_file_ids),
-            user_id=user_id,
+            user_id=vector_user_id,  # Use file_owner_id for shared boards
             top_k=request.context.max_context_snippets,
             similarity_threshold=effective_threshold,
             message_obj=request.message_obj,
@@ -789,7 +789,7 @@ class LLMService:
             doc_context = await self.document_processor.search_similar_documents(
                 query_text=context.message,
                 file_ids=context.embedding_ids,
-                user_id=context.user_id,
+                user_id=vector_user_id,  # Use file_owner_id for shared boards
                 top_k=context.max_context_snippets,
                 similarity_threshold=context.document_similarity_threshold,
                 message_obj=context.message_obj,
