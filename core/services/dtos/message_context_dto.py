@@ -1,10 +1,7 @@
 """Message context DTO for Socratic message building."""
 
-import logging
 from dataclasses import dataclass
 from typing import Any, Optional
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -62,16 +59,6 @@ class MessageBuildContext:
         title = request.socratic.get_title()
         learning_goals = request.socratic.get_learning_goals()
         chat_prompt = request.socratic.get_chat_prompt()
-
-        # Log extraction from SocraticConfig -> MessageBuildContext
-        logger.info(
-            f"[MessageBuildContext] Extracting from SocraticConfig: "
-            f"subject={subject}, topic={topic}, title={title}"
-        )
-        logger.info(
-            f"[MessageBuildContext] chat_prompt extracted: "
-            f"{chat_prompt[:100] if chat_prompt else 'N/A'}..."
-        )
 
         return cls(
             message=request.message,
