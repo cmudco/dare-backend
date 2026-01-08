@@ -721,17 +721,22 @@ class MessageCoordinator:
             progress_accumulator = ""
             last_usage = None
 
+            # All Socratic bot data comes from bot_meta (single source of truth)
+            bot_meta = message_data.get("bot_meta", {})
+            learning_goals = bot_meta.get("learning_goals", "")
+            tracking_prompt = bot_meta.get("tracking_prompt", "")
+
             # Stream progress assessment
             async for chunk, usage in self.learning_progress_service.assess_learning_progress(
                 conversation=self.conversation,
                 last_message=message_obj,
-                learning_goals=message_data.get("learning_goals", ""),
-                tracking_prompt=message_data.get("tracking_prompt", ""),
+                learning_goals=learning_goals,
+                tracking_prompt=tracking_prompt,
                 llm=progress_llm,
                 max_tokens=2048,
                 temperature=0.7,
                 conversation_history_limit=80,
-                bot_meta=message_data.get("bot_meta", {}),
+                bot_meta=bot_meta,
             ):
                 # Track usage for billing (authenticated users only)
                 if usage:
@@ -774,14 +779,14 @@ class MessageCoordinator:
                     "llm_model": getattr(progress_llm, "identifier", None),
                     "usage": _build_usage(last_usage) if last_usage else None,
                     "platform": self.platform or "DARE",
-                    "tracking_prompt_used": message_data.get("tracking_prompt", "")[:100],
+                    "tracking_prompt_used": tracking_prompt[:100] if tracking_prompt else "",
                 }
 
                 # Save assessment to database (already decorated with @database_sync_to_async)
                 assessment = await self.learning_progress_service._save_progress_assessment(
                     conversation=self.conversation,
                     content=progress_accumulator,
-                    learning_goals=message_data.get("learning_goals", ""),
+                    learning_goals=learning_goals,
                     last_message=message_obj,
                     metadata=metadata,
                 )
@@ -790,8 +795,8 @@ class MessageCoordinator:
                 def _update_msg():
                     message_obj.learning_progress_data = {
                         "progress_assessment_id": str(getattr(assessment, "id", "")),
-                        "learning_goals": message_data.get("learning_goals", ""),
-                        "tracking_prompt": message_data.get("tracking_prompt", ""),
+                        "learning_goals": learning_goals,
+                        "tracking_prompt": tracking_prompt,
                         "llm_id": getattr(progress_llm, "id", None),
                         "input_tokens": (last_usage or {}).get("input_tokens"),
                         "output_tokens": (last_usage or {}).get("output_tokens"),
