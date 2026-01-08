@@ -33,6 +33,7 @@ from conversations.constants import (
 from conversations.services.message_coordinator import MessageCoordinator
 from conversations.services.message_validation_service import MessageValidationService
 from conversations.services.audio_transcription_service import AudioTranscriptionService
+from conversations.namespaces.utils import detect_platform_from_socketio_environ
 from core.services.conversation_service import ConversationService
 
 User = get_user_model()
@@ -126,8 +127,8 @@ class ChatNamespace(socketio.AsyncNamespace):
         if not user:
             raise socketio.exceptions.ConnectionRefusedError('User not found')
 
-        # Detect platform from headers (if available)
-        platform = self._detect_platform_from_environ(environ)
+        # Detect platform from Origin/Referer headers
+        platform = detect_platform_from_socketio_environ(environ)
 
         # Store session data
         self.sessions[sid] = {
@@ -163,8 +164,8 @@ class ChatNamespace(socketio.AsyncNamespace):
             logger.warning(f"Conversation {conversation_id} is not a public conversation")
             raise socketio.exceptions.ConnectionRefusedError('Not a public conversation')
 
-        # Detect platform from headers (if available)
-        platform = self._detect_platform_from_environ(environ)
+        # Detect platform from Origin/Referer headers
+        platform = detect_platform_from_socketio_environ(environ)
 
         # Store session data (user=None for public bots)
         self.sessions[sid] = {
@@ -261,7 +262,8 @@ class ChatNamespace(socketio.AsyncNamespace):
                 return {'error': 'Missing conversationId'}
 
             user = session['user']
-            platform = data.get('platform') or session.get('platform', 'DARE')
+            # Platform is determined at connection time via Origin header (single source of truth)
+            platform = session.get('platform', 'DARE')
 
             # Validate user has access to this conversation
             conversation = await self.conversation_service.get_conversation(conv_id, user)
@@ -658,13 +660,7 @@ class ChatNamespace(socketio.AsyncNamespace):
             return User.objects.get(id=user_id)
         except User.DoesNotExist:
             return None
-    
-    def _detect_platform_from_environ(self, environ: dict) -> str:
-        """Detect platform from HTTP headers."""
-        headers = dict(environ.get('asgi.http_headers', []))
-        platform_header = headers.get(b'x-platform', b'').decode()
-        return platform_header if platform_header in ('DARE', 'SocraticBots') else 'DARE'
-    
+
     async def _pause_conversation_artifacts(self, conv_id: str):
         """Pause all in-progress artifacts for a conversation."""
         @sync_to_async

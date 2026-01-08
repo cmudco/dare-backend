@@ -46,6 +46,7 @@ class LLMQueryRequestBuilder:
         context = ContextConfig(
             file_ids=message_data.get("file_ids", []),
             embedding_ids=message_data.get("embedding_ids", []),
+            file_owner_id=message_data.get("file_owner_id"),  # Bot creator's ID
             media_ids=message_data.get("media_ids", []),
             tag_ids=message_data.get("tag_ids", []),
             folder_ids=message_data.get("folder_ids", []),
@@ -77,10 +78,13 @@ class LLMQueryRequestBuilder:
 
         # Build Socratic config
         is_socratic_bots = platform == AuthSourceChoice.SOCRATIC_BOTS if platform else False
+        bot_meta = message_data.get("bot_meta", {})
+        socratic_enabled = is_socratic_bots and not message_data.get("prompt_id")
+
         socratic = SocraticConfig(
-            enabled=is_socratic_bots and not message_data.get("prompt_id"),
+            enabled=socratic_enabled,
             advanced_mode=bool(message_data.get("is_advanced")),
-            bot_meta=message_data.get("bot_meta", {}),
+            bot_meta=bot_meta,
         )
 
         # Build request

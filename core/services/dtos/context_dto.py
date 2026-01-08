@@ -1,7 +1,7 @@
 """Context configuration DTO for LLM requests."""
 
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Optional
 
 
 @dataclass(frozen=True)
@@ -24,6 +24,7 @@ class ContextConfig:
     """
     file_ids: List[str] = field(default_factory=list)
     embedding_ids: List[str] = field(default_factory=list)
+    file_owner_id: Optional[int] = None  # Bot creator's ID for shared access
     media_ids: List[str] = field(default_factory=list)
     tag_ids: List[str] = field(default_factory=list)
     folder_ids: List[str] = field(default_factory=list)
