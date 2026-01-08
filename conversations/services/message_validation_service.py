@@ -51,6 +51,7 @@ class MessageValidationService:
 
             # LLM configuration
             "llm_id": data.get("llm_id"),
+            "file_owner_id": data.get("file_owner_id"),  # Bot creator's ID for shared access
             "prompt_id": data.get("prompt_id"),
             "temperature": data.get("temperature", cls.DEFAULT_TEMPERATURE),
             "max_tokens": data.get("max_tokens", cls.DEFAULT_MAX_TOKENS),
