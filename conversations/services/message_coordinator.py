@@ -15,7 +15,7 @@ duplicated across ChatConsumer and PublicBotConsumer.
 import logging
 import json
 import asyncio
-from typing import Optional, Dict, Any, Callable
+from typing import Optional, Dict, Any, Callable, List
 from decimal import Decimal
 from channels.db import database_sync_to_async
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -104,6 +104,293 @@ class MessageCoordinator:
         error_payload = WebSocketResponseService.format_error(error_code, error_message, details)
         await self.send(error_payload)
 
+    async def _save_attached_images(self, images: List[Dict]) -> List[int]:
+        """
+        Save base64 images as File objects and return their IDs.
+        
+        Args:
+            images: List of base64 image dicts from frontend
+            
+        Returns:
+            List of saved File IDs
+        """
+        if not images:
+            return []
+        
+        saved_files = await database_sync_to_async(FileUploadService.save_base64_images)(
+            images=images,
+            user=self.user,
+            is_public=(self.user is None)
+        )
+        file_ids = [f.id for f in saved_files]
+        if file_ids:
+            logger.info(f"Saved {len(file_ids)} attached images for message")
+        return file_ids
+
+    async def _handle_generated_image(
+        self,
+        usage: Dict,
+        message_data: Dict,
+        message_obj: 'Message'
+    ) -> Optional[Dict]:
+        """
+        Handle generated image from DALL-E: save file and build response data.
+        
+        Args:
+            usage: Usage dict containing image_bytes and metadata
+            message_data: Original message data with prompt
+            message_obj: Message to attach the image to
+            
+        Returns:
+            Dict with image data for frontend, or None if no image
+        """
+        if not usage.get("image_bytes"):
+            return None
+        
+        generated_file = await database_sync_to_async(ImageGenerationService.save_generated_image)(
+            image_bytes=usage["image_bytes"],
+            prompt=message_data["message"],
+            metadata=ImageGenerationService.extract_image_metadata(usage),
+            user=self.user,
+            is_public=(self.user is None),
+        )
+        
+        if not generated_file:
+            return None
+        
+        await database_sync_to_async(message_obj.files.add)(generated_file)
+        
+        return {
+            "fileId": generated_file.id,
+            "filename": generated_file.name,
+            "fileUrl": generated_file.file.url,
+            "prompt": message_data["message"],
+            "revisedPrompt": usage.get("revised_prompt", ""),
+            "cost": str(usage.get("cost", "0.040")),
+            "model": usage.get("model", "dall-e-3"),
+            "size": usage.get("size", "1024x1024"),
+            "quality": usage.get("quality", "standard"),
+            "style": usage.get("style", "vivid"),
+        }
+
+    def _build_transcription_data(self, usage: Dict) -> Optional[Dict]:
+        """
+        Build transcription response data from usage dict.
+        
+        Args:
+            usage: Usage dict containing transcription_result
+            
+        Returns:
+            Dict with transcription data for frontend, or None
+        """
+        transcription = usage.get("transcription_result")
+        if not transcription:
+            return None
+        
+        return {
+            "fileId": transcription.get("file_id"),
+            "fileName": transcription.get("file_name"),
+            "text": transcription.get("text"),
+            "language": transcription.get("language", "auto"),
+            "model": transcription.get("model", "whisper-1"),
+            "cost": str(usage.get("cost")) if usage.get("cost") else None,
+            "duration": transcription.get("duration"),
+            "transcribedAt": transcription.get("transcribed_at"),
+        }
+
+    async def _save_web_search_sources(
+        self,
+        message_obj: 'Message',
+        token_usage: Optional[Dict],
+        regenerate: bool
+    ) -> None:
+        """
+        Save web search sources if present in token usage.
+        
+        Args:
+            message_obj: Message to attach sources to
+            token_usage: Usage dict possibly containing web_search_sources
+            regenerate: Whether this is a regeneration (clears old sources first)
+        """
+        if not token_usage or not token_usage.get("web_search_sources"):
+            return
+        
+        if regenerate:
+            await WebSearchSourceService.delete_sources_for_message(message_obj)
+        
+        await WebSearchSourceService.save_sources(
+            message=message_obj,
+            sources=token_usage["web_search_sources"],
+        )
+
+    async def _mark_as_regenerated(self, message: 'Message') -> None:
+        """Mark a message as regenerated if applicable."""
+        message.is_regenerated = True
+        await database_sync_to_async(message.save)(update_fields=['is_regenerated'])
+
+    async def _update_public_bot_budget(
+        self,
+        cost: Decimal,
+        message_obj: 'Message'
+    ) -> None:
+        """
+        Update bot budget for public bot conversations.
+        
+        Args:
+            cost: Cost to deduct from bot budget
+            message_obj: Message for metadata
+        """
+        if cost <= Decimal('0') or not self.conversation.bot_id:
+            return
+        
+        await BotBudgetService.update_bot_budget(
+            bot_id=self.conversation.bot_id,
+            cost=cost,
+            metadata={
+                'conversation_id': str(self.conversation.conversation_id),
+                'message_id': str(message_obj.id),
+                'input_tokens': message_obj.input_tokens,
+                'output_tokens': message_obj.output_tokens,
+            }
+        )
+
+    def _build_usage_with_totals(self, usage: Optional[Dict]) -> Optional[Dict]:
+        """
+        Build usage dict with total_tokens calculated.
+        
+        Args:
+            usage: Raw usage dict from LLM
+            
+        Returns:
+            Usage dict with total_tokens added, or None
+        """
+        if not usage or not isinstance(usage, dict):
+            return usage
+        
+        inp = usage.get("input_tokens") or usage.get("prompt_tokens") or 0
+        out = usage.get("output_tokens") or usage.get("completion_tokens") or 0
+        
+        result = dict(usage)
+        result["total_tokens"] = (inp or 0) + (out or 0)
+        return result
+
+    @database_sync_to_async
+    def _update_message_learning_progress(
+        self,
+        message_obj: 'Message',
+        assessment,
+        learning_goals: str,
+        tracking_prompt: str,
+        progress_llm,
+        last_usage: Optional[Dict]
+    ) -> 'Message':
+        """
+        Update message with learning progress data.
+        
+        Args:
+            message_obj: Message to update
+            assessment: Saved progress assessment
+            learning_goals: Learning goals text
+            tracking_prompt: Tracking prompt text
+            progress_llm: LLM used for assessment
+            last_usage: Final usage data
+        """
+        message_obj.learning_progress_data = {
+            "progress_assessment_id": str(getattr(assessment, "id", "")),
+            "learning_goals": learning_goals,
+            "tracking_prompt": tracking_prompt,
+            "llm_id": getattr(progress_llm, "id", None),
+            "input_tokens": (last_usage or {}).get("input_tokens"),
+            "output_tokens": (last_usage or {}).get("output_tokens"),
+            "status": "completed",
+        }
+        message_obj.save(update_fields=["learning_progress_data"])
+        return message_obj
+
+    async def _handle_artifact_intent(
+        self,
+        message_data: Dict[str, Any],
+        message_obj: Message,
+        llm: LLM,
+    ) -> bool:
+        """
+        Handle artifact intent detection and routing.
+        
+        Args:
+            message_data: Validated message data
+            message_obj: AI message object
+            llm: LLM instance
+            
+        Returns:
+            True if artifact was handled (caller should return), False to continue normal flow
+        """
+        active_artifact_id = message_data.get("active_artifact_id")
+        
+        try:
+            # Get active artifact summary for context
+            active_artifact = None
+            if active_artifact_id:
+                active_artifact = await self.intent_service.get_active_artifact_summary(
+                    active_artifact_id,
+                    conversation_id=self.conversation.conversation_id,
+                )
+            
+            # Detect intent using LLM
+            intent = await self.intent_service.detect_intent(
+                message=message_data["message"],
+                active_artifact=active_artifact,
+                llm=llm,
+                user=self.user,
+            )
+            
+            logger.info(f"Artifact intent detected: {intent}")
+            
+            if intent == "chat":
+                return False  # Continue to normal message streaming
+            
+            if intent == "diagram":
+                logger.info("Intent is 'diagram', using tool-based diagram generation")
+                await self.simple_artifact_coordinator.stream_diagram_response(
+                    message_data=message_data, message_obj=message_obj, llm=llm
+                )
+                return True
+            
+            if intent == "chart":
+                logger.info("Intent is 'chart', using tool-based chart generation")
+                await self.simple_artifact_coordinator.stream_chart_response(
+                    message_data=message_data, message_obj=message_obj, llm=llm
+                )
+                return True
+            
+            # Create or edit artifact
+            await self.simple_artifact_coordinator.stream_artifact_response(
+                message_data=message_data,
+                message_obj=message_obj,
+                llm=llm,
+                intent=intent,
+                active_artifact_id=active_artifact_id,
+            )
+            return True
+            
+        except Exception as e:
+            logger.exception(f"Error in artifact intent detection: {e}")
+            logger.warning("Falling back to normal message flow due to intent detection error")
+            return False
+
+    @database_sync_to_async
+    def _get_ai_message_by_id(self, message_id: int) -> Optional[Message]:
+        """Fetch an AI message by ID with LLM relation loaded."""
+        return Message.active_objects.select_related('llm').filter(
+            id=message_id, sender_type=SenderType.AI_ASSISTANT
+        ).first()
+
+    @database_sync_to_async
+    def _get_message_media_file_ids(self, message: Message) -> List[int]:
+        """Get audio/video file IDs attached to a message."""
+        return list(message.files.filter(
+            media_type__in=['audio', 'video']
+        ).values_list('id', flat=True))
+
     async def handle_new_message(
         self,
         message_data: Dict[str, Any],
@@ -137,24 +424,9 @@ class MessageCoordinator:
                     await self.send_error(ErrorCode.INSUFFICIENT_CREDITS, ErrorMessage.INSUFFICIENT_CREDITS)
                     return None
 
-            # Save attached images (base64) as File objects
-            attached_image_ids = []
-            images = message_data.get("images", [])
-            if images:
-                saved_files = await database_sync_to_async(
-                    FileUploadService.save_base64_images
-                )(
-                    images=images,
-                    user=self.user,
-                    is_public=(self.user is None)
-                )
-                attached_image_ids = [f.id for f in saved_files]
-                logger.info(f"Saved {len(attached_image_ids)} attached images for message")
-
-            # Combine file_ids with attached image IDs
-            all_file_ids = list(set(
-                (message_data.get("file_ids") or []) + attached_image_ids
-            ))
+            # Save attached images and combine with existing file_ids
+            attached_image_ids = await self._save_attached_images(message_data.get("images", []))
+            all_file_ids = list(set((message_data.get("file_ids") or []) + attached_image_ids))
 
             # Create user message
             user_message = await self.conversation_service.create_message(
@@ -194,10 +466,8 @@ class MessageCoordinator:
             )
             await self.send(placeholder_payload)
 
-            # Generate conversation title if first message
-            if await database_sync_to_async(
-                lambda: self.conversation.messages.count()
-            )() == 2:  # User + AI message
+            # Generate conversation title if first message (User + AI = 2 messages)
+            if await self._should_generate_title():
                 asyncio.create_task(self._generate_conversation_title())
 
             # Stream AI response
@@ -238,11 +508,7 @@ class MessageCoordinator:
                 return None
 
             # Get the existing AI message to regenerate
-            ai_message = await database_sync_to_async(
-                lambda: Message.active_objects.select_related('llm').filter(
-                    id=message_id, sender_type=SenderType.AI_ASSISTANT
-                ).first()
-            )()
+            ai_message = await self._get_ai_message_by_id(message_id)
 
             if not ai_message:
                 await self.send_error(ErrorCode.INVALID_MESSAGE, ErrorMessage.INVALID_MESSAGE)
@@ -332,13 +598,10 @@ class MessageCoordinator:
                 return None, {}
             llm = default_llm
 
-        # Audio transcriber: re-run transcription with original media
         elif original_llm and original_llm.is_audio_transcriber and llm == original_llm:
-            media_file_ids = message_data.get("media_ids") or await database_sync_to_async(
-                lambda: list(preceding_user_message.files.filter(
-                    media_type__in=['audio', 'video']
-                ).values_list('id', flat=True))
-            )()
+            media_file_ids = message_data.get("media_ids") or await self._get_message_media_file_ids(
+                preceding_user_message
+            )
 
             if not media_file_ids:
                 await self.send_error(
@@ -393,62 +656,8 @@ class MessageCoordinator:
         active_artifact_id = message_data.get("active_artifact_id")
 
         if artifacts_enabled and not regenerate:
-            # NEW: Use LLM-based intent detection
-            try:
-                # Get active artifact summary for context
-                active_artifact = None
-                if active_artifact_id:
-                    active_artifact = await self.intent_service.get_active_artifact_summary(
-                        active_artifact_id,
-                        conversation_id=self.conversation.conversation_id,  # Validate ownership
-                    )
-                
-                # Detect intent using LLM
-                intent = await self.intent_service.detect_intent(
-                    message=message_data["message"],
-                    active_artifact=active_artifact,
-                    llm=llm,
-                    user=self.user,
-                )
-                
-                logger.info(f"Artifact intent detected: {intent}")
-                
-                if intent == "chat":
-                    # Normal message flow - falls through to regular streaming below
-                    logger.info("Intent is 'chat', using normal message streaming")
-                elif intent == "diagram":
-                    # Diagram generation using tool calls (mermaid)
-                    logger.info("Intent is 'diagram', using tool-based diagram generation")
-                    await self.simple_artifact_coordinator.stream_diagram_response(
-                        message_data=message_data,
-                        message_obj=message_obj,
-                        llm=llm,
-                    )
-                    return
-                elif intent == "chart":
-                    # Data chart generation using tool calls (recharts)
-                    logger.info("Intent is 'chart', using tool-based chart generation")
-                    await self.simple_artifact_coordinator.stream_chart_response(
-                        message_data=message_data,
-                        message_obj=message_obj,
-                        llm=llm,
-                    )
-                    return
-                else:
-                    # Create or edit artifact using simplified coordinator
-                    await self.simple_artifact_coordinator.stream_artifact_response(
-                        message_data=message_data,
-                        message_obj=message_obj,
-                        llm=llm,
-                        intent=intent,
-                        active_artifact_id=active_artifact_id,
-                    )
-                    return
-                    
-            except Exception as e:
-                logger.exception(f"Error in artifact intent detection: {e}")
-                # Fallback to normal message flow on error
-                logger.warning("Falling back to normal message flow due to intent detection error")
+            if await self._handle_artifact_intent(message_data, message_obj, llm):
+                return
 
         try:
             bot_message_id = message_obj.id  # Keep as integer for consistency
@@ -475,44 +684,13 @@ class MessageCoordinator:
 
                     # Handle generated image
                     if usage.get("image_bytes"):
-                        generated_file = await database_sync_to_async(
-                            ImageGenerationService.save_generated_image
-                        )(
-                            image_bytes=usage["image_bytes"],
-                            prompt=message_data["message"],
-                            metadata=ImageGenerationService.extract_image_metadata(usage),
-                            user=self.user,  # Can be None for public bots
-                            is_public=(self.user is None),
+                        generated_image_data = await self._handle_generated_image(
+                            usage, message_data, message_obj
                         )
-
-                        if generated_file:
-                            await database_sync_to_async(message_obj.files.add)(generated_file)
-                            generated_image_data = {
-                                "fileId": generated_file.id,
-                                "filename": generated_file.name,
-                                "fileUrl": generated_file.file.url,
-                                "prompt": message_data["message"],
-                                "revisedPrompt": usage.get("revised_prompt", ""),
-                                "cost": str(usage.get("cost", "0.040")),
-                                "model": usage.get("model", "dall-e-3"),
-                                "size": usage.get("size", "1024x1024"),
-                                "quality": usage.get("quality", "standard"),
-                                "style": usage.get("style", "vivid"),
-                            }
 
                     # Handle audio transcription (final result)
                     if usage.get("transcription_result"):
-                        transcription = usage["transcription_result"]
-                        generated_transcription_data = {
-                            "fileId": transcription.get("file_id"),
-                            "fileName": transcription.get("file_name"),
-                            "text": transcription.get("text"),
-                            "language": transcription.get("language", "auto"),
-                            "model": transcription.get("model", "whisper-1"),
-                            "cost": str(usage.get("cost")) if usage.get("cost") else None,
-                            "duration": transcription.get("duration"),
-                            "transcribedAt": transcription.get("transcribed_at"),
-                        }
+                        generated_transcription_data = self._build_transcription_data(usage)
 
                     # Check billing during streaming (only for authenticated users)
                     if self.user:
@@ -543,18 +721,9 @@ class MessageCoordinator:
                     )
                     await self.send(payload)
 
-            # Finalize message
             if ai_response_accumulator.strip():
                 # Save web search sources if present (before finalization)
-                if token_usage and token_usage.get("web_search_sources"):
-                    # Clear old sources on regeneration
-                    if regenerate:
-                        await WebSearchSourceService.delete_sources_for_message(message_obj)
-                    # Save new sources
-                    await WebSearchSourceService.save_sources(
-                        message=message_obj,
-                        sources=token_usage["web_search_sources"],
-                    )
+                await self._save_web_search_sources(message_obj, token_usage, regenerate)
 
                 await self._finalize_message(
                     message_obj=message_obj,
@@ -608,8 +777,7 @@ class MessageCoordinator:
 
                 # Mark as regenerated if applicable
                 if regenerate:
-                    finalized_message.is_regenerated = True
-                    await database_sync_to_async(finalized_message.save)(update_fields=['is_regenerated'])
+                    await self._mark_as_regenerated(finalized_message)
             else:
                 # Public bot - no billing, just calculate cost
                 finalized_message, cost = await database_sync_to_async(
@@ -618,21 +786,10 @@ class MessageCoordinator:
 
                 # Mark as regenerated if applicable
                 if regenerate:
-                    finalized_message.is_regenerated = True
-                    await database_sync_to_async(finalized_message.save)(update_fields=['is_regenerated'])
+                    await self._mark_as_regenerated(finalized_message)
 
                 # Update bot budget if applicable
-                if cost > Decimal('0') and self.conversation.bot_id:
-                    await BotBudgetService.update_bot_budget(
-                        bot_id=self.conversation.bot_id,
-                        cost=cost,
-                        metadata={
-                            'conversation_id': str(self.conversation.conversation_id),
-                            'message_id': str(message_obj.id),
-                            'input_tokens': message_obj.input_tokens,
-                            'output_tokens': message_obj.output_tokens,
-                        }
-                    )
+                await self._update_public_bot_budget(cost, message_obj)
 
             # Send final message to client
             final_payload = await WebSocketResponseService.format_message(
@@ -762,27 +919,16 @@ class MessageCoordinator:
                     )
                     await self.send(progress_payload)
 
-            # Save assessment and send completion
             if progress_accumulator.strip():
                 # Build usage metadata for frontend
-                def _build_usage(u: dict):
-                    if not isinstance(u, dict):
-                        return u
-                    inp = u.get("input_tokens") or u.get("prompt_tokens") or 0
-                    out = u.get("output_tokens") or u.get("completion_tokens") or 0
-                    tot = (inp or 0) + (out or 0)
-                    u_with_totals = dict(u)
-                    u_with_totals["total_tokens"] = tot
-                    return u_with_totals
-
                 metadata = {
                     "llm_model": getattr(progress_llm, "identifier", None),
-                    "usage": _build_usage(last_usage) if last_usage else None,
+                    "usage": self._build_usage_with_totals(last_usage),
                     "platform": self.platform or "DARE",
                     "tracking_prompt_used": tracking_prompt[:100] if tracking_prompt else "",
                 }
 
-                # Save assessment to database (already decorated with @database_sync_to_async)
+                # Save assessment to database
                 assessment = await self.learning_progress_service._save_progress_assessment(
                     conversation=self.conversation,
                     content=progress_accumulator,
@@ -792,20 +938,9 @@ class MessageCoordinator:
                 )
 
                 # Update message with learning progress data
-                def _update_msg():
-                    message_obj.learning_progress_data = {
-                        "progress_assessment_id": str(getattr(assessment, "id", "")),
-                        "learning_goals": learning_goals,
-                        "tracking_prompt": tracking_prompt,
-                        "llm_id": getattr(progress_llm, "id", None),
-                        "input_tokens": (last_usage or {}).get("input_tokens"),
-                        "output_tokens": (last_usage or {}).get("output_tokens"),
-                        "status": "completed",
-                    }
-                    message_obj.save(update_fields=["learning_progress_data"])
-                    return message_obj
-
-                await database_sync_to_async(_update_msg)()
+                await self._update_message_learning_progress(
+                    message_obj, assessment, learning_goals, tracking_prompt, progress_llm, last_usage
+                )
 
                 # Send completion notification
                 completion_payload = WebSocketResponseService.format_progress_complete(
@@ -864,24 +999,37 @@ class MessageCoordinator:
             LLM instance or None
         """
         if llm_id:
-            return await database_sync_to_async(
-                lambda: LLM.objects.filter(id=llm_id).first()
-            )()
+            return await self._fetch_llm_by_id(llm_id)
         elif default:
             return default
         else:
-            # Fallback to conversation's selected model or first available
-            return await database_sync_to_async(
-                lambda: self.conversation.selected_model or LLM.objects.first()
-            )()
+            return await self._get_conversation_default_llm()
+
+    @database_sync_to_async
+    def _fetch_llm_by_id(self, llm_id: str) -> Optional[LLM]:
+        """Fetch LLM by ID from database."""
+        return LLM.objects.filter(id=llm_id).first()
+
+    @database_sync_to_async
+    def _get_conversation_default_llm(self) -> Optional[LLM]:
+        """Get conversation's selected model or first available LLM."""
+        return self.conversation.selected_model or LLM.objects.first()
+
+    @database_sync_to_async
+    def _fetch_preceding_user_message(self) -> Optional[Message]:
+        """Get the most recent user message in the conversation."""
+        return self.conversation.messages.filter(
+            sender_type=SenderType.PLAYER
+        ).order_by('-created_at').first()
 
     async def _get_preceding_user_message(self) -> Optional[Message]:
         """Get the most recent user message in the conversation."""
-        return await database_sync_to_async(
-            lambda: self.conversation.messages.filter(
-                sender_type=SenderType.PLAYER
-            ).order_by('-created_at').first()
-        )()
+        return await self._fetch_preceding_user_message()
+
+    @database_sync_to_async
+    def _should_generate_title(self) -> bool:
+        """Check if we should generate a conversation title (first message pair)."""
+        return self.conversation.messages.count() == 2  # User + AI = 2 messages
 
     async def send_conversation_history(self):
         """Send conversation history and artifacts to client."""
