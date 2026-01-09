@@ -263,6 +263,16 @@ class MessageCoordinator:
                 await self.send_error(ErrorCode.VALIDATION_ERROR, "Selected AI model not found")
                 return None
 
+            # Handle special model regeneration (image generator, audio transcriber)
+            llm, regeneration_message_data = await self._prepare_regeneration_data(
+                ai_message=ai_message,
+                llm=llm,
+                message_data=message_data,
+                preceding_user_message=preceding_user_message,
+            )
+            if llm is None:
+                return None  # Error already sent
+
             # Check billing if user exists
             if self.user:
                 has_credits = await self.billing_service.check_sufficient_credits(
@@ -272,14 +282,13 @@ class MessageCoordinator:
                     await self.send_error(ErrorCode.INSUFFICIENT_CREDITS, ErrorMessage.INSUFFICIENT_CREDITS)
                     return None
 
-            # Use preceding user message content for regeneration
-            regeneration_message_data = message_data.copy()
-            regeneration_message_data["message"] = preceding_user_message.message
+            # Send streaming placeholder to show loading animation
+            await self._send_regeneration_placeholder(ai_message)
 
             # Stream AI response into the EXISTING message (don't create new one)
             await self.stream_ai_response(
                 message_data=regeneration_message_data,
-                message_obj=ai_message,  # Reuse existing message
+                message_obj=ai_message,
                 llm=llm,
                 regenerate=True,
             )
@@ -290,6 +299,75 @@ class MessageCoordinator:
             logger.exception(f"Error regenerating response: {str(e)}")
             await self.send_error(ErrorCode.REGENERATE_ERROR, ErrorMessage.REGENERATE_ERROR)
             return None
+
+    async def _prepare_regeneration_data(
+        self,
+        ai_message: Message,
+        llm: LLM,
+        message_data: Dict[str, Any],
+        preceding_user_message: Message,
+    ) -> tuple[Optional[LLM], Dict[str, Any]]:
+        """
+        Prepare message data for regeneration based on original message type.
+
+        Handles special cases:
+        - Image generation: Switch to chat model (can't regenerate images)
+        - Audio transcription: Re-run transcription with original media files
+
+        Returns:
+            Tuple of (llm, regeneration_message_data) or (None, {}) on error
+        """
+        original_llm = ai_message.llm
+        regeneration_message_data = message_data.copy()
+        regeneration_message_data["message"] = preceding_user_message.message
+
+        # Image generator: switch to chat model
+        if original_llm and original_llm.is_image_generator and llm == original_llm:
+            default_llm = await database_sync_to_async(LLM.get_default_chat_model)()
+            if not default_llm:
+                await self.send_error(
+                    ErrorCode.VALIDATION_ERROR,
+                    "Cannot regenerate image: No chat model available."
+                )
+                return None, {}
+            llm = default_llm
+
+        # Audio transcriber: re-run transcription with original media
+        elif original_llm and original_llm.is_audio_transcriber and llm == original_llm:
+            media_file_ids = message_data.get("media_ids") or await database_sync_to_async(
+                lambda: list(preceding_user_message.files.filter(
+                    media_type__in=['audio', 'video']
+                ).values_list('id', flat=True))
+            )()
+
+            if not media_file_ids:
+                await self.send_error(
+                    ErrorCode.VALIDATION_ERROR,
+                    "Cannot regenerate transcription: No audio/video files found."
+                )
+                return None, {}
+
+            regeneration_message_data["audio_transcription_enabled"] = True
+            regeneration_message_data["media_ids"] = media_file_ids
+
+        # Regular chat: disable special modes
+        else:
+            regeneration_message_data["image_generation_enabled"] = False
+            regeneration_message_data["audio_transcription_enabled"] = False
+
+        return llm, regeneration_message_data
+
+    async def _send_regeneration_placeholder(self, ai_message: Message) -> None:
+        """Send streaming placeholder to show loading animation on frontend."""
+        ai_message.message = ""
+        placeholder_payload = await WebSocketResponseService.format_message(
+            message=ai_message,
+            message_type="message",
+            is_sender=False,
+            streaming=True,
+            regenerate=True
+        )
+        await self.send(placeholder_payload)
 
     async def stream_ai_response(
         self,
@@ -643,17 +721,22 @@ class MessageCoordinator:
             progress_accumulator = ""
             last_usage = None
 
+            # All Socratic bot data comes from bot_meta (single source of truth)
+            bot_meta = message_data.get("bot_meta", {})
+            learning_goals = bot_meta.get("learning_goals", "")
+            tracking_prompt = bot_meta.get("tracking_prompt", "")
+
             # Stream progress assessment
             async for chunk, usage in self.learning_progress_service.assess_learning_progress(
                 conversation=self.conversation,
                 last_message=message_obj,
-                learning_goals=message_data.get("learning_goals", ""),
-                tracking_prompt=message_data.get("tracking_prompt", ""),
+                learning_goals=learning_goals,
+                tracking_prompt=tracking_prompt,
                 llm=progress_llm,
                 max_tokens=2048,
                 temperature=0.7,
                 conversation_history_limit=80,
-                bot_meta=message_data.get("bot_meta", {}),
+                bot_meta=bot_meta,
             ):
                 # Track usage for billing (authenticated users only)
                 if usage:
@@ -696,14 +779,14 @@ class MessageCoordinator:
                     "llm_model": getattr(progress_llm, "identifier", None),
                     "usage": _build_usage(last_usage) if last_usage else None,
                     "platform": self.platform or "DARE",
-                    "tracking_prompt_used": message_data.get("tracking_prompt", "")[:100],
+                    "tracking_prompt_used": tracking_prompt[:100] if tracking_prompt else "",
                 }
 
                 # Save assessment to database (already decorated with @database_sync_to_async)
                 assessment = await self.learning_progress_service._save_progress_assessment(
                     conversation=self.conversation,
                     content=progress_accumulator,
-                    learning_goals=message_data.get("learning_goals", ""),
+                    learning_goals=learning_goals,
                     last_message=message_obj,
                     metadata=metadata,
                 )
@@ -712,8 +795,8 @@ class MessageCoordinator:
                 def _update_msg():
                     message_obj.learning_progress_data = {
                         "progress_assessment_id": str(getattr(assessment, "id", "")),
-                        "learning_goals": message_data.get("learning_goals", ""),
-                        "tracking_prompt": message_data.get("tracking_prompt", ""),
+                        "learning_goals": learning_goals,
+                        "tracking_prompt": tracking_prompt,
                         "llm_id": getattr(progress_llm, "id", None),
                         "input_tokens": (last_usage or {}).get("input_tokens"),
                         "output_tokens": (last_usage or {}).get("output_tokens"),

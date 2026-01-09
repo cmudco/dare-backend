@@ -41,6 +41,7 @@ class MessageBuildContext:
     message_obj: Optional[Any] = None  # Message model
     workflow_run_step_obj: Optional[Any] = None  # WorkflowRunStep model
     title: str = ""  # Used in advanced mode
+    file_owner_id: Optional[int] = None  # Bot creator's ID for shared access
 
     @classmethod
     def from_request(cls, request: 'LLMQueryRequest') -> 'MessageBuildContext':
@@ -52,6 +53,13 @@ class MessageBuildContext:
         Returns:
             MessageBuildContext with extracted socratic data
         """
+        # Extract values from socratic config
+        subject = request.socratic.get_subject()
+        topic = request.socratic.get_topic()
+        title = request.socratic.get_title()
+        learning_goals = request.socratic.get_learning_goals()
+        chat_prompt = request.socratic.get_chat_prompt()
+
         return cls(
             message=request.message,
             conversation=request.conversation,
@@ -62,9 +70,10 @@ class MessageBuildContext:
             history_limit=request.context.history_limit,
             message_obj=request.message_obj,
             workflow_run_step_obj=request.workflow_run_step_obj,
-            subject=request.socratic.get_subject(),
-            topic=request.socratic.get_topic(),
-            title=request.socratic.get_title(),
-            learning_goals=request.socratic.get_learning_goals(),
-            chat_prompt=request.socratic.get_chat_prompt(),
+            subject=subject,
+            topic=topic,
+            title=title,
+            learning_goals=learning_goals,
+            chat_prompt=chat_prompt,
+            file_owner_id=request.context.file_owner_id,
         )
