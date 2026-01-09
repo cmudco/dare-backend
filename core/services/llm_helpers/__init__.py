@@ -29,6 +29,20 @@ from .socratic_helpers import (
     build_advanced_socratic_messages,
 )
 
+from .media_helpers import (
+    add_video_transcriptions_to_messages,
+    execute_audio_transcription,
+)
+
+from .semantic_context_helpers import (
+    collect_embedding_file_ids,
+    add_semantic_context_to_messages,
+)
+
+from .standard_message_helpers import (
+    build_standard_messages,
+)
+
 __all__ = [
     # Context helpers
     "build_transcription_context",
@@ -46,5 +60,13 @@ __all__ = [
     # Socratic message builders
     "build_classic_socratic_messages",
     "build_advanced_socratic_messages",
+    # Media helpers
+    "add_video_transcriptions_to_messages",
+    "execute_audio_transcription",
+    # Semantic context helpers
+    "collect_embedding_file_ids",
+    "add_semantic_context_to_messages",
+    # Standard message helpers
+    "build_standard_messages",
 ]
 
