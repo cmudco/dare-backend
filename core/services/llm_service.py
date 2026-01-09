@@ -21,6 +21,11 @@ from datetime import datetime
 import logging
 import base64
 
+from core.services.llm_helpers import (
+    build_transcription_context,
+    insert_context_before_last_user_message,
+)
+
 logger = logging.getLogger(__name__)
 
 class AIService(ABC):
@@ -617,48 +622,6 @@ class LLMService:
 
         return media_images
 
-    def _build_transcription_context(self, transcriptions: Dict[str, str]) -> str:
-        """
-        Build formatted transcription context from video transcriptions.
-        
-        Args:
-            transcriptions: Dict mapping video names to transcription text
-            
-        Returns:
-            Formatted context string, or empty string if no successful transcriptions
-        """
-        successful_transcriptions = [
-            f"Video '{video_name}' audio transcription:\n{transcription}"
-            for video_name, transcription in transcriptions.items()
-            if transcription
-        ]
-        
-        if not successful_transcriptions:
-            return ""
-        
-        return (
-            "=== Video Audio Transcriptions ===\n\n"
-            + "\n\n".join(successful_transcriptions)
-            + "\n\n=== End of Video Transcriptions ===\n"
-        )
-
-    def _insert_context_before_last_user_message(
-        self, 
-        messages: List[Dict], 
-        context: str
-    ) -> None:
-        """
-        Insert context message before the last user message in the list.
-        
-        Args:
-            messages: List of message dicts (modified in place)
-            context: Context string to insert
-        """
-        for i in range(len(messages) - 1, -1, -1):
-            if messages[i].get("role") == "user":
-                messages.insert(i, {"role": "user", "content": context})
-                break
-
     async def add_video_transcriptions_to_context(
         self,
         media_items: List[Dict],
@@ -698,9 +661,9 @@ class LLMService:
             transcriptions = await whisper_service.transcribe_multiple_videos(videos)
 
             # Build and insert transcription context
-            context = self._build_transcription_context(transcriptions)
+            context = build_transcription_context(transcriptions)
             if context:
-                self._insert_context_before_last_user_message(messages, context)
+                insert_context_before_last_user_message(messages, context)
                 logger.info(f"Added transcriptions for {len([t for t in transcriptions.values() if t])} video(s)")
 
         except Exception as e:
