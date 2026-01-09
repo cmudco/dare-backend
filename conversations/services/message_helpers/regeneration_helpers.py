@@ -33,7 +33,7 @@ async def prepare_regeneration_data(
     Prepare message data for regeneration based on original message type.
 
     Handles special cases:
-    - Image generation: Switch to chat model (can't regenerate images)
+    - Image generation: Re-run image generation with same prompt
     - Audio transcription: Re-run transcription with original media files
     - Regular chat: Disable special modes
 
@@ -51,17 +51,9 @@ async def prepare_regeneration_data(
     regeneration_message_data = message_data.copy()
     regeneration_message_data["message"] = preceding_user_message.message
 
-    # Image generator: switch to chat model
+    # Image generator: re-run image generation with same prompt
     if original_llm and original_llm.is_image_generator and llm == original_llm:
-        default_llm = await database_sync_to_async(LLM.get_default_chat_model)()
-        if not default_llm:
-            await send_error_callback(
-                ErrorCode.VALIDATION_ERROR,
-                "Cannot regenerate image: No chat model available.",
-                None
-            )
-            return None, {}
-        llm = default_llm
+        regeneration_message_data["image_generation_enabled"] = True
 
     elif original_llm and original_llm.is_audio_transcriber and llm == original_llm:
         media_file_ids = message_data.get("media_ids") or await get_message_media_file_ids(
