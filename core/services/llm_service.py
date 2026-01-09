@@ -186,6 +186,34 @@ class LLMService:
 
         return messages
 
+    async def _collect_embedding_file_ids(self, request: LLMQueryRequest) -> set:
+        """
+        Collect all file IDs for embedding search from various sources.
+        
+        Aggregates file IDs from:
+        - Direct embedding_ids
+        - Files associated with tag_ids
+        - Files in folder_ids
+        
+        Args:
+            request: LLMQueryRequest with context config
+            
+        Returns:
+            Set of file IDs to search for embeddings
+        """
+        all_file_ids = set(request.context.embedding_ids or [])
+        user_id = request.user.id if request.user else None
+        
+        if request.context.tag_ids:
+            tagged_file_ids = await self.get_files_from_tags(request.context.tag_ids, user_id)
+            all_file_ids.update(tagged_file_ids)
+        
+        if request.context.folder_ids:
+            folder_file_ids = await self.get_files_from_folders(request.context.folder_ids, user_id)
+            all_file_ids.update(folder_file_ids)
+        
+        return all_file_ids
+
     async def _add_semantic_context_to_messages(
         self,
         request: LLMQueryRequest,
@@ -200,19 +228,11 @@ class LLMService:
         if not (request.context.embedding_ids or request.context.tag_ids or request.context.folder_ids):
             return
 
-        all_embedding_file_ids = set(request.context.embedding_ids or [])
-        user_id = request.user.id if request.user else None
-
-        if request.context.tag_ids:
-            tagged_file_ids = await self.get_files_from_tags(request.context.tag_ids, user_id)
-            all_embedding_file_ids.update(tagged_file_ids)
-
-        if request.context.folder_ids:
-            folder_file_ids = await self.get_files_from_folders(request.context.folder_ids, user_id)
-            all_embedding_file_ids.update(folder_file_ids)
-
+        all_embedding_file_ids = await self._collect_embedding_file_ids(request)
         if not all_embedding_file_ids:
             return
+
+        user_id = request.user.id if request.user else None
 
         # Use file_owner_id from frontend (DARE user ID) for shared boards, fallback to current user
         vector_user_id = request.context.file_owner_id or user_id
@@ -322,16 +342,7 @@ class LLMService:
             - For final chunk: {"transcription_result": {...}}
         """
         # Get audio/video files from media_ids
-        media_files = []
-        if request.context.media_ids:
-            @database_sync_to_async
-            def get_media_files():
-                return list(File.active_objects.filter(
-                    id__in=request.context.media_ids,
-                    media_type__in=['audio', 'video']
-                ))
-
-            media_files = await get_media_files()
+        media_files = await self._get_audio_or_video_files(request.context.media_ids)
 
         if not media_files:
             yield "Error: No audio or video files found. Please upload an audio/video file to transcribe.", None
@@ -520,6 +531,16 @@ class LLMService:
         return list(File.active_objects.filter(folders__id__in=folder_ids, user_id=user_id).distinct().values_list('id', flat=True))
 
     @database_sync_to_async
+    def _get_audio_or_video_files(self, media_ids: list) -> list:
+        """Fetch audio/video File objects by IDs for transcription."""
+        if not media_ids:
+            return []
+        return list(File.active_objects.filter(
+            id__in=media_ids,
+            media_type__in=['audio', 'video']
+        ))
+
+    @database_sync_to_async
     def get_full_file_contents(self, file_ids: list,) -> list:
         """Read full content from files for the given file IDs."""
         if not file_ids:
@@ -537,6 +558,32 @@ class LLMService:
                 continue
 
         return file_contents
+
+    def _convert_file_to_base64_dict(self, media_file: 'File') -> dict:
+        """
+        Convert a single media file to base64 data URL dict for vision API.
+        
+        Args:
+            media_file: File object to convert
+            
+        Returns:
+            Dict with 'preview', 'name', 'type' or None if conversion fails
+        """
+        try:
+            with media_file.file.open('rb') as f:
+                file_data = f.read()
+            
+            base64_data = base64.b64encode(file_data).decode('utf-8')
+            data_url = f"data:{media_file.file_type};base64,{base64_data}"
+            
+            return {
+                'preview': data_url,
+                'name': media_file.name or media_file.file.name,
+                'type': media_file.file_type
+            }
+        except Exception as e:
+            logger.error(f"Error reading media file {media_file.id}: {str(e)}")
+            return None
 
     @database_sync_to_async
     def get_media_files_as_images(self, media_ids: list, user_id: int) -> list:
@@ -564,27 +611,53 @@ class LLMService:
         )
 
         for media_file in media_files:
-            try:
-                # Read file from disk
-                with media_file.file.open('rb') as f:
-                    file_data = f.read()
-
-                # Convert to base64
-                base64_data = base64.b64encode(file_data).decode('utf-8')
-
-                # Create data URL
-                data_url = f"data:{media_file.file_type};base64,{base64_data}"
-
-                media_images.append({
-                    'preview': data_url,
-                    'name': media_file.name or media_file.file.name,
-                    'type': media_file.file_type
-                })
-            except Exception as e:
-                logger.error(f"Error reading media file {media_file.id}: {str(e)}")
-                continue
+            result = self._convert_file_to_base64_dict(media_file)
+            if result:
+                media_images.append(result)
 
         return media_images
+
+    def _build_transcription_context(self, transcriptions: Dict[str, str]) -> str:
+        """
+        Build formatted transcription context from video transcriptions.
+        
+        Args:
+            transcriptions: Dict mapping video names to transcription text
+            
+        Returns:
+            Formatted context string, or empty string if no successful transcriptions
+        """
+        successful_transcriptions = [
+            f"Video '{video_name}' audio transcription:\n{transcription}"
+            for video_name, transcription in transcriptions.items()
+            if transcription
+        ]
+        
+        if not successful_transcriptions:
+            return ""
+        
+        return (
+            "=== Video Audio Transcriptions ===\n\n"
+            + "\n\n".join(successful_transcriptions)
+            + "\n\n=== End of Video Transcriptions ===\n"
+        )
+
+    def _insert_context_before_last_user_message(
+        self, 
+        messages: List[Dict], 
+        context: str
+    ) -> None:
+        """
+        Insert context message before the last user message in the list.
+        
+        Args:
+            messages: List of message dicts (modified in place)
+            context: Context string to insert
+        """
+        for i in range(len(messages) - 1, -1, -1):
+            if messages[i].get("role") == "user":
+                messages.insert(i, {"role": "user", "content": context})
+                break
 
     async def add_video_transcriptions_to_context(
         self,
@@ -624,32 +697,11 @@ class LLMService:
             # Transcribe all videos
             transcriptions = await whisper_service.transcribe_multiple_videos(videos)
 
-            # Filter out failed transcriptions and build context
-            successful_transcriptions = []
-            for video_name, transcription in transcriptions.items():
-                if transcription:
-                    successful_transcriptions.append(
-                        f"Video '{video_name}' audio transcription:\n{transcription}"
-                    )
-
-            # Add transcriptions to messages before the last user message
-            if successful_transcriptions:
-                transcription_context = (
-                    "=== Video Audio Transcriptions ===\n\n"
-                    + "\n\n".join(successful_transcriptions)
-                    + "\n\n=== End of Video Transcriptions ===\n"
-                )
-
-                # Find last user message and insert transcription before it
-                for i in range(len(messages) - 1, -1, -1):
-                    if messages[i].get("role") == "user":
-                        messages.insert(i, {
-                            "role": "user",
-                            "content": transcription_context
-                        })
-                        break
-
-                logger.info(f"Added transcriptions for {len(successful_transcriptions)} video(s)")
+            # Build and insert transcription context
+            context = self._build_transcription_context(transcriptions)
+            if context:
+                self._insert_context_before_last_user_message(messages, context)
+                logger.info(f"Added transcriptions for {len([t for t in transcriptions.values() if t])} video(s)")
 
         except Exception as e:
             logger.error(f"Error transcribing videos: {str(e)}")
