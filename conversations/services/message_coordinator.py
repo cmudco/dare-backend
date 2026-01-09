@@ -45,6 +45,11 @@ from conversations.services.web_search_source_service import WebSearchSourceServ
 from conversations.services.artifact_intent_service import ArtifactIntentService
 from conversations.services.simple_artifact_coordinator import SimpleArtifactCoordinator
 from users.utils import should_run_learning_progress
+from conversations.services.message_helpers import (
+    build_transcription_data,
+    build_usage_with_totals,
+    build_generated_image_data,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -160,43 +165,9 @@ class MessageCoordinator:
         
         await database_sync_to_async(message_obj.files.add)(generated_file)
         
-        return {
-            "fileId": generated_file.id,
-            "filename": generated_file.name,
-            "fileUrl": generated_file.file.url,
-            "prompt": message_data["message"],
-            "revisedPrompt": usage.get("revised_prompt", ""),
-            "cost": str(usage.get("cost", "0.040")),
-            "model": usage.get("model", "dall-e-3"),
-            "size": usage.get("size", "1024x1024"),
-            "quality": usage.get("quality", "standard"),
-            "style": usage.get("style", "vivid"),
-        }
+        # Build and return the image data dict using helper function
+        return build_generated_image_data(generated_file, message_data["message"], usage)
 
-    def _build_transcription_data(self, usage: Dict) -> Optional[Dict]:
-        """
-        Build transcription response data from usage dict.
-        
-        Args:
-            usage: Usage dict containing transcription_result
-            
-        Returns:
-            Dict with transcription data for frontend, or None
-        """
-        transcription = usage.get("transcription_result")
-        if not transcription:
-            return None
-        
-        return {
-            "fileId": transcription.get("file_id"),
-            "fileName": transcription.get("file_name"),
-            "text": transcription.get("text"),
-            "language": transcription.get("language", "auto"),
-            "model": transcription.get("model", "whisper-1"),
-            "cost": str(usage.get("cost")) if usage.get("cost") else None,
-            "duration": transcription.get("duration"),
-            "transcribedAt": transcription.get("transcribed_at"),
-        }
 
     async def _save_web_search_sources(
         self,
@@ -253,26 +224,6 @@ class MessageCoordinator:
                 'output_tokens': message_obj.output_tokens,
             }
         )
-
-    def _build_usage_with_totals(self, usage: Optional[Dict]) -> Optional[Dict]:
-        """
-        Build usage dict with total_tokens calculated.
-        
-        Args:
-            usage: Raw usage dict from LLM
-            
-        Returns:
-            Usage dict with total_tokens added, or None
-        """
-        if not usage or not isinstance(usage, dict):
-            return usage
-        
-        inp = usage.get("input_tokens") or usage.get("prompt_tokens") or 0
-        out = usage.get("output_tokens") or usage.get("completion_tokens") or 0
-        
-        result = dict(usage)
-        result["total_tokens"] = (inp or 0) + (out or 0)
-        return result
 
     @database_sync_to_async
     def _update_message_learning_progress(
@@ -690,7 +641,7 @@ class MessageCoordinator:
 
                     # Handle audio transcription (final result)
                     if usage.get("transcription_result"):
-                        generated_transcription_data = self._build_transcription_data(usage)
+                        generated_transcription_data = build_transcription_data(usage)
 
                     # Check billing during streaming (only for authenticated users)
                     if self.user:
@@ -923,7 +874,7 @@ class MessageCoordinator:
                 # Build usage metadata for frontend
                 metadata = {
                     "llm_model": getattr(progress_llm, "identifier", None),
-                    "usage": self._build_usage_with_totals(last_usage),
+                    "usage": build_usage_with_totals(last_usage),
                     "platform": self.platform or "DARE",
                     "tracking_prompt_used": tracking_prompt[:100] if tracking_prompt else "",
                 }
