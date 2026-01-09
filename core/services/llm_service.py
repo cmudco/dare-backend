@@ -9,7 +9,7 @@ from core.services.llama_service import LlamaService
 from core.services.custom_llm_service import CustomLLMService
 from core.services.file_processor import FileProcessor
 from core.services.api_key_service import get_provider_api_key, get_provider_api_key_for_user
-from core.services.dtos import LLMQueryRequest, LLMQueryChunk, MessageBuildContext
+from core.services.dtos import LLMQueryRequest, LLMQueryChunk
 from typing import AsyncGenerator, Dict, Tuple, Optional, Any, List
 from files.models import File, Folder
 import logging
@@ -140,35 +140,14 @@ class LLMService:
         Returns:
             List of message dictionaries
         """
-        build_context = MessageBuildContext.from_request(request)
-
         if request.is_advanced_mode():
-            return await self._build_advanced_messages(build_context)
+            return await build_advanced_socratic_messages(request, self.document_processor)
         else:
-            return await self._build_socratic_messages(build_context)
+            return await build_classic_socratic_messages(request, self.document_processor)
 
     async def _build_standard_messages(self, request: LLMQueryRequest) -> List[Dict[str, str]]:
         """Build messages for standard (non-Socratic) mode."""
-        return await build_standard_messages(
-            request_message=request.message,
-            conversation=request.conversation,
-            document_processor=self.document_processor,
-            file_processor=self.file_processor,
-            prompt_id=request.generation.prompt_id,
-            referenced_conversation_ids=request.context.referenced_conversation_ids,
-            file_ids=request.context.file_ids,
-            embedding_ids=request.context.embedding_ids,
-            tag_ids=request.context.tag_ids,
-            folder_ids=request.context.folder_ids,
-            user_id=request.user.id if request.user else None,
-            file_owner_id=request.context.file_owner_id,
-            is_socratic_mode=request.is_socratic_mode(),
-            similarity_threshold=request.context.document_similarity_threshold,
-            max_context_snippets=request.context.max_context_snippets,
-            history_limit=request.context.history_limit,
-            message_obj=request.message_obj,
-            workflow_run_step_obj=request.workflow_run_step_obj,
-        )
+        return await build_standard_messages(request, self.document_processor, self.file_processor)
 
     async def _process_media_files(self, request: LLMQueryRequest) -> List[Dict]:
         """Process and combine all media files (images and videos).
@@ -346,11 +325,3 @@ class LLMService:
         tool_func = provider_tools.get(llm.provider)
         return [tool_func()] if tool_func else []
 
-    # -------- SocraticBooks helpers --------
-    async def _build_socratic_messages(self, context: MessageBuildContext) -> list:
-        """Build messages in classic SocraticBooks format."""
-        return await build_classic_socratic_messages(context, self.document_processor)
-
-    async def _build_advanced_messages(self, context: MessageBuildContext) -> list:
-        """Build messages in advanced SocraticBooks format."""
-        return await build_advanced_socratic_messages(context, self.document_processor)

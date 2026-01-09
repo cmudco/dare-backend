@@ -9,7 +9,7 @@ document context retrieval, and prompt assembly.
 import logging
 from typing import List, Dict, Any, Optional
 
-from core.services.dtos import MessageBuildContext
+from core.services.dtos import LLMQueryRequest
 from core.services.document_processor import DocumentProcessor
 from core.services.vector_service import get_vector_service_async
 from .db_helpers import get_conversation_history
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 async def build_classic_socratic_messages(
-    context: MessageBuildContext,
+    request: LLMQueryRequest,
     document_processor: DocumentProcessor,
 ) -> List[Dict[str, str]]:
     """
@@ -34,16 +34,18 @@ async def build_classic_socratic_messages(
     user message includes document context and conversation history.
 
     Args:
-        context: MessageBuildContext with all request data
+        request: LLMQueryRequest containing all query parameters
         document_processor: DocumentProcessor for vector similarity search
 
     Returns:
         List of message dicts ready for LLM API: [system_message, user_message]
     """
-    subject = context.subject
-    topic = context.topic
-    learning_goals = context.learning_goals
-    chat_prompt = context.chat_prompt
+    # Extract Socratic metadata from request
+    subject = request.socratic.get_subject()
+    topic = request.socratic.get_topic()
+    learning_goals = request.socratic.get_learning_goals()
+    chat_prompt = request.socratic.get_chat_prompt()
+    user_id = request.user.id if request.user else None
 
     _log_socratic_components(
         mode="classic",
@@ -61,24 +63,24 @@ async def build_classic_socratic_messages(
     )
 
     history_list = await get_conversation_history(
-        context.conversation,
-        limit=context.history_limit
-    ) if context.conversation else []
+        request.conversation,
+        limit=request.context.history_limit
+    ) if request.conversation else []
 
     conversation_history = _format_transcript(history_list)
 
     # Classic mode uses file_owner_id for shared boards (deployed Socratic bots)
-    vector_user_id = context.file_owner_id or context.user_id
+    vector_user_id = request.context.file_owner_id or user_id
 
     doc_context = await _retrieve_document_context(
         document_processor=document_processor,
-        query=context.message,
-        file_ids=context.embedding_ids,
+        query=request.message,
+        file_ids=request.context.embedding_ids,
         user_id=vector_user_id,
-        top_k=context.max_context_snippets,
-        similarity_threshold=context.document_similarity_threshold,
-        message_obj=context.message_obj,
-        workflow_run_step_obj=context.workflow_run_step_obj,
+        top_k=request.context.max_context_snippets,
+        similarity_threshold=request.context.document_similarity_threshold,
+        message_obj=request.message_obj,
+        workflow_run_step_obj=request.workflow_run_step_obj,
     )
 
     file_context = _format_document_snippets(doc_context, fallback="No relevant file content found.")
@@ -86,7 +88,7 @@ async def build_classic_socratic_messages(
     user_message = _build_classic_user_message(
         document_context=file_context,
         conversation_history=conversation_history,
-        question=context.message,
+        question=request.message,
     )
 
     return [
@@ -96,7 +98,7 @@ async def build_classic_socratic_messages(
 
 
 async def build_advanced_socratic_messages(
-    context: MessageBuildContext,
+    request: LLMQueryRequest,
     document_processor: DocumentProcessor,
 ) -> List[Dict[str, str]]:
     """
@@ -107,21 +109,23 @@ async def build_advanced_socratic_messages(
     is sent as a simple separate turn for chat API compliance.
 
     Args:
-        context: MessageBuildContext with all request data
+        request: LLMQueryRequest containing all query parameters
         document_processor: DocumentProcessor for vector similarity search
 
     Returns:
         List of message dicts ready for LLM API: [system_message, user_message]
     """
-    title = context.title or (
-        context.conversation.title
-        if context.conversation and context.conversation.title
+    # Extract Socratic metadata from request
+    title = request.socratic.get_title() or (
+        request.conversation.title
+        if request.conversation and request.conversation.title
         else "Untitled Conversation"
     )
-    subject = context.subject
-    topic = context.topic
-    learning_goals = context.learning_goals
-    chat_prompt = context.chat_prompt
+    subject = request.socratic.get_subject()
+    topic = request.socratic.get_topic()
+    learning_goals = request.socratic.get_learning_goals()
+    chat_prompt = request.socratic.get_chat_prompt()
+    user_id = request.user.id if request.user else None
 
     _log_socratic_components(
         mode="advanced",
@@ -133,22 +137,22 @@ async def build_advanced_socratic_messages(
     )
 
     history_list = await get_conversation_history(
-        context.conversation,
-        limit=context.history_limit
-    ) if context.conversation else []
+        request.conversation,
+        limit=request.context.history_limit
+    ) if request.conversation else []
 
     conversation_history = _format_transcript(history_list)
 
     # Advanced mode uses user_id directly (not file_owner_id)
     doc_context = await _retrieve_document_context(
         document_processor=document_processor,
-        query=context.message,
-        file_ids=context.embedding_ids,
-        user_id=context.user_id,
-        top_k=context.max_context_snippets,
-        similarity_threshold=context.document_similarity_threshold,
-        message_obj=context.message_obj,
-        workflow_run_step_obj=context.workflow_run_step_obj,
+        query=request.message,
+        file_ids=request.context.embedding_ids,
+        user_id=user_id,
+        top_k=request.context.max_context_snippets,
+        similarity_threshold=request.context.document_similarity_threshold,
+        message_obj=request.message_obj,
+        workflow_run_step_obj=request.workflow_run_step_obj,
     )
 
     relevant_content = _format_document_snippets(doc_context, fallback="No relevant external content found.")
@@ -161,12 +165,12 @@ async def build_advanced_socratic_messages(
         chat_prompt=chat_prompt,
         conversation_history=conversation_history,
         relevant_content=relevant_content,
-        user_message=context.message,
+        user_message=request.message,
     )
 
     return [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": context.message},
+        {"role": "user", "content": request.message},
     ]
 
 
