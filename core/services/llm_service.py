@@ -1,5 +1,4 @@
 from abc import ABC, abstractmethod
-from channels.db import database_sync_to_async
 from conversations.constants import Provider, SenderType
 from conversations.models import LLM, Conversation, Message
 from conversations.services.audio_transcription_service import AudioTranscriptionService
@@ -15,15 +14,23 @@ from core.services.api_key_service import get_provider_api_key, get_provider_api
 from core.services.dtos import LLMQueryRequest, LLMQueryChunk, MessageBuildContext
 from typing import AsyncGenerator, Dict, Tuple, Optional, Any, List
 from files.models import File, Folder
-from prompts.models import Prompt
 from core.services.vector_service import get_vector_service_async
 from datetime import datetime
 import logging
-import base64
 
 from core.services.llm_helpers import (
     build_transcription_context,
     insert_context_before_last_user_message,
+    # Database helpers
+    get_prompt,
+    get_conversation_history,
+    get_files_from_tags,
+    get_files_from_folders,
+    get_audio_or_video_files,
+    get_full_file_contents,
+    get_media_files_as_images,
+    get_referenced_conversations_context,
+    convert_file_to_base64_dict,
 )
 
 logger = logging.getLogger(__name__)
@@ -160,12 +167,12 @@ class LLMService:
         """
         messages = []
 
-        prompt = await self.get_prompt(request.generation.prompt_id)
+        prompt = await get_prompt(request.generation.prompt_id)
         if prompt and prompt.strip():
             messages.append({"role": "assistant", "content": f"Prompt: {prompt}"})
 
         if request.context.referenced_conversation_ids:
-            referenced_context = await self.get_referenced_conversations_context(
+            referenced_context = await get_referenced_conversations_context(
                 request.context.referenced_conversation_ids,
                 request.user.id if request.user else None,
                 None
@@ -174,14 +181,14 @@ class LLMService:
                 messages.append({"role": "user", "content": referenced_context})
 
         if request.context.file_ids:
-            file_contents = await self.get_full_file_contents(request.context.file_ids)
+            file_contents = await get_full_file_contents(request.context.file_ids, self.file_processor)
             if file_contents:
                 for file_content in file_contents:
                     messages.append({"role": "user", "content": file_content})
 
         await self._add_semantic_context_to_messages(request, messages)
 
-        conversation_history = await self.get_conversation_history(
+        conversation_history = await get_conversation_history(
             request.conversation,
             limit=request.context.history_limit
         ) if request.conversation else []
@@ -210,11 +217,11 @@ class LLMService:
         user_id = request.user.id if request.user else None
         
         if request.context.tag_ids:
-            tagged_file_ids = await self.get_files_from_tags(request.context.tag_ids, user_id)
+            tagged_file_ids = await get_files_from_tags(request.context.tag_ids, user_id)
             all_file_ids.update(tagged_file_ids)
         
         if request.context.folder_ids:
-            folder_file_ids = await self.get_files_from_folders(request.context.folder_ids, user_id)
+            folder_file_ids = await get_files_from_folders(request.context.folder_ids, user_id)
             all_file_ids.update(folder_file_ids)
         
         return all_file_ids
@@ -286,7 +293,7 @@ class LLMService:
         if request.media.media_ids:
             user_id = request.user.id if request.user else None
             if user_id:
-                media_images = await self.get_media_files_as_images(
+                media_images = await get_media_files_as_images(
                     request.media.media_ids,
                     user_id
                 )
@@ -347,7 +354,7 @@ class LLMService:
             - For final chunk: {"transcription_result": {...}}
         """
         # Get audio/video files from media_ids
-        media_files = await self._get_audio_or_video_files(request.context.media_ids)
+        media_files = await get_audio_or_video_files(request.context.media_ids)
 
         if not media_files:
             yield "Error: No audio or video files found. Please upload an audio/video file to transcribe.", None
@@ -500,128 +507,6 @@ class LLMService:
 
     # ========== End Query Orchestration Methods ==========
 
-    @database_sync_to_async
-    def get_prompt(self, prompt_id: str = None) -> str:
-        """Fetches the prompt if the prompt_id is provided."""
-        if prompt_id:
-            prompt = Prompt.active_objects.filter(id=prompt_id).first()
-            return prompt.content if prompt else ""
-        return ""
-
-    @database_sync_to_async
-    def get_conversation_history(self, conversation: 'Conversation', limit: int = 10, ) -> list:
-        """Retrieves recent chat history for AI context, ignoring placeholders."""
-        messages = Message.active_objects.filter(conversation=conversation).order_by('-created_at')
-        if limit >= 50:
-            messages = messages[2:]
-        else:
-            messages = messages[2:limit+2] if limit > 0 else messages[2:]
-        return [
-            {"role": "user" if msg.sender_type == SenderType.PLAYER else "assistant", "content": msg.message}
-            for msg in reversed(messages)
-        ]
-
-    @database_sync_to_async
-    def get_files_from_tags(self, tag_ids: list, user_id: int) -> list:
-        """Fetch file IDs from tags."""
-        if not tag_ids:
-            return []
-        return list(File.active_objects.filter(tags__id__in=tag_ids, user_id=user_id).distinct().values_list('id', flat=True))
-
-    @database_sync_to_async
-    def get_files_from_folders(self, folder_ids: list, user_id: int) -> list:
-        """Fetch file IDs from folders."""
-        if not folder_ids:
-            return []
-        return list(File.active_objects.filter(folders__id__in=folder_ids, user_id=user_id).distinct().values_list('id', flat=True))
-
-    @database_sync_to_async
-    def _get_audio_or_video_files(self, media_ids: list) -> list:
-        """Fetch audio/video File objects by IDs for transcription."""
-        if not media_ids:
-            return []
-        return list(File.active_objects.filter(
-            id__in=media_ids,
-            media_type__in=['audio', 'video']
-        ))
-
-    @database_sync_to_async
-    def get_full_file_contents(self, file_ids: list,) -> list:
-        """Read full content from files for the given file IDs."""
-        if not file_ids:
-            return []
-
-        file_contents = []
-        files = File.active_objects.filter(id__in=file_ids)
-        for file in files:
-            try:
-                content = self.file_processor.read_file_content(file)
-                file_name = file.name or file.file.name
-                formatted_content = f"File: {file_name}\n\n{content}"
-                file_contents.append(formatted_content)
-            except Exception as e:
-                continue
-
-        return file_contents
-
-    def _convert_file_to_base64_dict(self, media_file: 'File') -> dict:
-        """
-        Convert a single media file to base64 data URL dict for vision API.
-        
-        Args:
-            media_file: File object to convert
-            
-        Returns:
-            Dict with 'preview', 'name', 'type' or None if conversion fails
-        """
-        try:
-            with media_file.file.open('rb') as f:
-                file_data = f.read()
-            
-            base64_data = base64.b64encode(file_data).decode('utf-8')
-            data_url = f"data:{media_file.file_type};base64,{base64_data}"
-            
-            return {
-                'preview': data_url,
-                'name': media_file.name or media_file.file.name,
-                'type': media_file.file_type
-            }
-        except Exception as e:
-            logger.error(f"Error reading media file {media_file.id}: {str(e)}")
-            return None
-
-    @database_sync_to_async
-    def get_media_files_as_images(self, media_ids: list, user_id: int) -> list:
-        """
-        Convert media file IDs to image format for LLM vision API.
-        Reads media files from disk and converts to base64 data URLs.
-
-        Args:
-            media_ids: List of media file IDs
-            user_id: User ID for filtering
-
-        Returns:
-            List of dicts with 'preview' (base64 data URL), 'name', 'type'
-        """
-        if not media_ids:
-            return []
-
-        media_images = []
-
-        # Fetch media files from database
-        media_files = File.active_objects.filter(
-            id__in=media_ids,
-            user_id=user_id,
-            is_media=True  # Only media files
-        )
-
-        for media_file in media_files:
-            result = self._convert_file_to_base64_dict(media_file)
-            if result:
-                media_images.append(result)
-
-        return media_images
-
     async def add_video_transcriptions_to_context(
         self,
         media_items: List[Dict],
@@ -672,49 +557,6 @@ class LLMService:
 
         return messages
 
-    @database_sync_to_async
-    def get_referenced_conversations_context(self, conversation_ids: list, user_id: int, history_limit: int = None) -> str:
-        """Fetch context from referenced conversations.
-
-        Args:
-            conversation_ids: List of conversation IDs to fetch
-            user_id: User ID for filtering
-            history_limit: Optional limit for messages (None = all messages)
-        """
-        if not conversation_ids:
-            return ""
-
-        context_parts = []
-        conversations = Conversation.active_objects.filter(
-            conversation_id__in=conversation_ids,
-            user_id=user_id
-        )
-
-        for conversation in conversations:
-            messages_query = Message.active_objects.filter(
-                conversation=conversation
-            ).order_by('-created_at')
-
-            if history_limit is not None:
-                messages_query = messages_query[:history_limit]
-
-            messages = list(messages_query)
-
-            if messages:
-                conversation_title = conversation.title or "Untitled Conversation"
-                context_parts.append(f"=== Referenced Conversation: {conversation_title} ===")
-
-                for msg in reversed(messages):
-                    role = "User" if msg.sender_type == SenderType.PLAYER else "Assistant"
-                    context_parts.append(f"{role}: {msg.message}")
-
-                context_parts.append("=== End of Referenced Conversation ===\n")
-
-        if context_parts:
-            full_context = "\n".join(context_parts)
-            return f"Referenced conversation context for additional background:\n\n{full_context}"
-
-        return ""
 
     async def _get_ai_service(self, llm: LLM, user=None) -> AIService:
         """
@@ -803,7 +645,7 @@ class LLMService:
         )
 
         # Conversation history as simple transcript
-        history_list = await self.get_conversation_history(
+        history_list = await get_conversation_history(
             context.conversation,
             limit=context.history_limit
         ) if context.conversation else []
@@ -892,7 +734,7 @@ class LLMService:
         )
 
         # Conversation history as a readable transcript
-        history_list = await self.get_conversation_history(
+        history_list = await get_conversation_history(
             context.conversation,
             limit=context.history_limit
         ) if context.conversation else []
