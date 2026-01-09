@@ -171,7 +171,7 @@ class ProviderAPIKey(BaseModel):
         return "***"
 
 
-class ModelCardData(models.Model):
+class ModelCardData(TimeStampMixin):
     """
     Intelligence data for any LLM - powers the Model Cards feature.
     Separate from operational LLM model to allow us to track models not configured for use in chat/workflows/etc.
@@ -196,10 +196,6 @@ class ModelCardData(models.Model):
     # Public feedback (pilot JSON blob)
     public_feedback = models.JSONField(default=dict, blank=True)
 
-    # Timestamps
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
     class Meta:
         verbose_name = "Model Card Data"
         verbose_name_plural = "Model Card Data"
@@ -208,7 +204,7 @@ class ModelCardData(models.Model):
         return self.name
 
 
-class PublicFeedbackSourceCluster(models.Model):
+class PublicFeedbackSourceCluster(TimeStampMixin):
     """
     A cluster of related sources about the same content.
 
@@ -247,9 +243,6 @@ class PublicFeedbackSourceCluster(models.Model):
         help_text="arXiv ID, DOI, or other unique identifier if available"
     )
 
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
     class Meta:
         unique_together = ['model_card', 'cluster_index']
         ordering = ['cluster_index']
@@ -264,7 +257,7 @@ class PublicFeedbackSourceCluster(models.Model):
         return self.sources.count()
 
 
-class PublicFeedbackSource(models.Model):
+class PublicFeedbackSource(TimeStampMixin):
     """
     Individual source within a cluster.
 
