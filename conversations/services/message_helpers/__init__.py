@@ -26,6 +26,19 @@ from .db_helpers import (
     update_message_learning_progress,
 )
 
+from .learning_progress_helpers import (
+    run_learning_progress_stream,
+)
+
+from .billing_helpers import (
+    update_public_bot_budget,
+    handle_insufficient_balance,
+)
+
+from .artifact_helpers import (
+    handle_artifact_intent,
+)
+
 __all__ = [
     # Response builders
     "build_transcription_data",
@@ -40,5 +53,12 @@ __all__ = [
     "fetch_preceding_user_message",
     "should_generate_title",
     "update_message_learning_progress",
+    # Learning progress helpers
+    "run_learning_progress_stream",
+    # Billing helpers
+    "update_public_bot_budget",
+    "handle_insufficient_balance",
+    # Artifact helpers
+    "handle_artifact_intent",
 ]
 

@@ -39,7 +39,6 @@ from core.services.dtos import LLMQueryRequestBuilder
 from conversations.services.websocket_response_service import WebSocketResponseService
 from conversations.services.message_validation_service import MessageValidationService
 from conversations.services.image_generation_service import ImageGenerationService
-from conversations.services.bot_budget_service import BotBudgetService
 from conversations.services.web_search_source_service import WebSearchSourceService
 # Simplified artifact services (replaced legacy LangGraph system)
 from conversations.services.artifact_intent_service import ArtifactIntentService
@@ -47,7 +46,6 @@ from conversations.services.simple_artifact_coordinator import SimpleArtifactCoo
 from users.utils import should_run_learning_progress
 from conversations.services.message_helpers import (
     build_transcription_data,
-    build_usage_with_totals,
     build_generated_image_data,
     # Database helpers
     get_ai_message_by_id,
@@ -56,7 +54,13 @@ from conversations.services.message_helpers import (
     get_conversation_default_llm,
     fetch_preceding_user_message,
     should_generate_title,
-    update_message_learning_progress,
+    # Learning progress helpers
+    run_learning_progress_stream,
+    # Billing helpers
+    update_public_bot_budget,
+    handle_insufficient_balance,
+    # Artifact helpers
+    handle_artifact_intent,
 )
 
 logger = logging.getLogger(__name__)
@@ -212,26 +216,8 @@ class MessageCoordinator:
         cost: Decimal,
         message_obj: 'Message'
     ) -> None:
-        """
-        Update bot budget for public bot conversations.
-        
-        Args:
-            cost: Cost to deduct from bot budget
-            message_obj: Message for metadata
-        """
-        if cost <= Decimal('0') or not self.conversation.bot_id:
-            return
-        
-        await BotBudgetService.update_bot_budget(
-            bot_id=self.conversation.bot_id,
-            cost=cost,
-            metadata={
-                'conversation_id': str(self.conversation.conversation_id),
-                'message_id': str(message_obj.id),
-                'input_tokens': message_obj.input_tokens,
-                'output_tokens': message_obj.output_tokens,
-            }
-        )
+        """Update bot budget for public bot conversations."""
+        return await update_public_bot_budget(self.conversation, cost, message_obj)
 
 
     async def _handle_artifact_intent(
@@ -240,69 +226,16 @@ class MessageCoordinator:
         message_obj: Message,
         llm: LLM,
     ) -> bool:
-        """
-        Handle artifact intent detection and routing.
-        
-        Args:
-            message_data: Validated message data
-            message_obj: AI message object
-            llm: LLM instance
-            
-        Returns:
-            True if artifact was handled (caller should return), False to continue normal flow
-        """
-        active_artifact_id = message_data.get("active_artifact_id")
-        
-        try:
-            # Get active artifact summary for context
-            active_artifact = None
-            if active_artifact_id:
-                active_artifact = await self.intent_service.get_active_artifact_summary(
-                    active_artifact_id,
-                    conversation_id=self.conversation.conversation_id,
-                )
-            
-            # Detect intent using LLM
-            intent = await self.intent_service.detect_intent(
-                message=message_data["message"],
-                active_artifact=active_artifact,
-                llm=llm,
-                user=self.user,
-            )
-            
-            logger.info(f"Artifact intent detected: {intent}")
-            
-            if intent == "chat":
-                return False  # Continue to normal message streaming
-            
-            if intent == "diagram":
-                logger.info("Intent is 'diagram', using tool-based diagram generation")
-                await self.simple_artifact_coordinator.stream_diagram_response(
-                    message_data=message_data, message_obj=message_obj, llm=llm
-                )
-                return True
-            
-            if intent == "chart":
-                logger.info("Intent is 'chart', using tool-based chart generation")
-                await self.simple_artifact_coordinator.stream_chart_response(
-                    message_data=message_data, message_obj=message_obj, llm=llm
-                )
-                return True
-            
-            # Create or edit artifact
-            await self.simple_artifact_coordinator.stream_artifact_response(
-                message_data=message_data,
-                message_obj=message_obj,
-                llm=llm,
-                intent=intent,
-                active_artifact_id=active_artifact_id,
-            )
-            return True
-            
-        except Exception as e:
-            logger.exception(f"Error in artifact intent detection: {e}")
-            logger.warning("Falling back to normal message flow due to intent detection error")
-            return False
+        """Handle artifact intent detection and routing."""
+        return await handle_artifact_intent(
+            message_data=message_data,
+            message_obj=message_obj,
+            llm=llm,
+            conversation=self.conversation,
+            user=self.user,
+            intent_service=self.intent_service,
+            simple_artifact_coordinator=self.simple_artifact_coordinator,
+        )
 
 
     async def handle_new_message(
@@ -732,40 +665,16 @@ class MessageCoordinator:
         token_usage: Dict,
         error_response: Dict,
     ):
-        """
-        Handle mid-stream insufficient balance.
-
-        Args:
-            message_obj: Message object being streamed
-            ai_response: Accumulated response so far
-            token_usage: Current token usage
-            error_response: Error details from billing service
-        """
-        try:
-            # Finalize partial message (platform auto-detected from conversation)
-            await database_sync_to_async(
-                self.billing_service.finalize_ai_message
-            )(message_obj, ai_response, token_usage)
-
-            # Send partial message to client
-            partial_payload = await WebSocketResponseService.format_message(
-                message=message_obj,
-                message_type="message",
-                is_sender=False,
-                streaming=False,
-                regenerate=False
-            )
-            await self.send(partial_payload)
-
-            # Send error
-            await self.send_error(
-                error_response.get("error", "insufficient_balance"),
-                error_response.get("message", "Insufficient balance to continue"),
-                error_response
-            )
-
-        except Exception as e:
-            logger.exception(f"Error handling insufficient balance: {str(e)}")
+        """Handle mid-stream insufficient balance."""
+        return await handle_insufficient_balance(
+            message_obj=message_obj,
+            ai_response=ai_response,
+            token_usage=token_usage,
+            error_response=error_response,
+            billing_service=self.billing_service,
+            send_callback=self.send,
+            send_error_callback=self.send_error,
+        )
 
     async def _run_learning_progress_stream(
         self,
@@ -773,101 +682,19 @@ class MessageCoordinator:
         message_obj: Message,
         llm: LLM,
     ):
-        """
-        Stream learning progress assessment (Socratic only).
-
-        Args:
-            message_data: Original message data with Socratic config
-            message_obj: The AI message to assess
-            llm: LLM instance used for the response
-        """
-        try:
-            progress_llm_id = message_data.get("progress_llm_id") or llm.id
-            progress_llm = await self._get_llm(progress_llm_id)
-
-            if not progress_llm:
-                logger.warning("Progress LLM not found, skipping assessment")
-                return
-
-            progress_accumulator = ""
-            last_usage = None
-
-            # All Socratic bot data comes from bot_meta (single source of truth)
-            bot_meta = message_data.get("bot_meta", {})
-            learning_goals = bot_meta.get("learning_goals", "")
-            tracking_prompt = bot_meta.get("tracking_prompt", "")
-
-            # Stream progress assessment
-            async for chunk, usage in self.learning_progress_service.assess_learning_progress(
-                conversation=self.conversation,
-                last_message=message_obj,
-                learning_goals=learning_goals,
-                tracking_prompt=tracking_prompt,
-                llm=progress_llm,
-                max_tokens=2048,
-                temperature=0.7,
-                conversation_history_limit=80,
-                bot_meta=bot_meta,
-            ):
-                # Track usage for billing (authenticated users only)
-                if usage:
-                    last_usage = usage
-                    # Skip billing check for public bots (user is None)
-                    if self.user:
-                        can_continue, _ = await self.billing_service.check_streaming_credit_usage(
-                            self.user, progress_llm, usage
-                        )
-                        if not can_continue:
-                            error_payload = WebSocketResponseService.format_progress_error(
-                                "Insufficient credits during progress assessment"
-                            )
-                            await self.send(error_payload)
-                            return
-
-                if chunk and chunk.strip():
-                    progress_accumulator += chunk
-                    progress_payload = WebSocketResponseService.format_progress_chunk(
-                        conversation_id=str(self.conversation.id),
-                        message_id=str(message_obj.id),
-                        chunk=chunk,
-                    )
-                    await self.send(progress_payload)
-
-            if progress_accumulator.strip():
-                # Build usage metadata for frontend
-                metadata = {
-                    "llm_model": getattr(progress_llm, "identifier", None),
-                    "usage": build_usage_with_totals(last_usage),
-                    "platform": self.platform or "DARE",
-                    "tracking_prompt_used": tracking_prompt[:100] if tracking_prompt else "",
-                }
-
-                # Save assessment to database
-                assessment = await self.learning_progress_service._save_progress_assessment(
-                    conversation=self.conversation,
-                    content=progress_accumulator,
-                    learning_goals=learning_goals,
-                    last_message=message_obj,
-                    metadata=metadata,
-                )
-
-                # Update message with learning progress data
-                await update_message_learning_progress(
-                    message_obj, assessment, learning_goals, tracking_prompt, progress_llm, last_usage
-                )
-
-                # Send completion notification
-                completion_payload = WebSocketResponseService.format_progress_complete(
-                    conversation_id=str(self.conversation.id),
-                    message_id=str(message_obj.id),
-                    input_tokens=last_usage.get("input_tokens") if last_usage else None,
-                    output_tokens=last_usage.get("output_tokens") if last_usage else None,
-                )
-                await self.send(completion_payload)
-
-        except Exception as e:
-            logger.exception(f"Error running learning progress stream: {str(e)}")
-            # Non-fatal - don't interrupt the conversation
+        """Stream learning progress assessment (Socratic only)."""
+        return await run_learning_progress_stream(
+            conversation=self.conversation,
+            message_data=message_data,
+            message_obj=message_obj,
+            llm=llm,
+            platform=self.platform,
+            learning_progress_service=self.learning_progress_service,
+            billing_service=self.billing_service,
+            user=self.user,
+            send_callback=self.send,
+            get_llm_callback=self._get_llm,
+        )
 
     async def _generate_conversation_title(self):
         """Generate conversation title asynchronously (fire and forget)."""
