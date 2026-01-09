@@ -49,6 +49,14 @@ from conversations.services.message_helpers import (
     build_transcription_data,
     build_usage_with_totals,
     build_generated_image_data,
+    # Database helpers
+    get_ai_message_by_id,
+    get_message_media_file_ids,
+    fetch_llm_by_id,
+    get_conversation_default_llm,
+    fetch_preceding_user_message,
+    should_generate_title,
+    update_message_learning_progress,
 )
 
 logger = logging.getLogger(__name__)
@@ -225,38 +233,6 @@ class MessageCoordinator:
             }
         )
 
-    @database_sync_to_async
-    def _update_message_learning_progress(
-        self,
-        message_obj: 'Message',
-        assessment,
-        learning_goals: str,
-        tracking_prompt: str,
-        progress_llm,
-        last_usage: Optional[Dict]
-    ) -> 'Message':
-        """
-        Update message with learning progress data.
-        
-        Args:
-            message_obj: Message to update
-            assessment: Saved progress assessment
-            learning_goals: Learning goals text
-            tracking_prompt: Tracking prompt text
-            progress_llm: LLM used for assessment
-            last_usage: Final usage data
-        """
-        message_obj.learning_progress_data = {
-            "progress_assessment_id": str(getattr(assessment, "id", "")),
-            "learning_goals": learning_goals,
-            "tracking_prompt": tracking_prompt,
-            "llm_id": getattr(progress_llm, "id", None),
-            "input_tokens": (last_usage or {}).get("input_tokens"),
-            "output_tokens": (last_usage or {}).get("output_tokens"),
-            "status": "completed",
-        }
-        message_obj.save(update_fields=["learning_progress_data"])
-        return message_obj
 
     async def _handle_artifact_intent(
         self,
@@ -328,19 +304,6 @@ class MessageCoordinator:
             logger.warning("Falling back to normal message flow due to intent detection error")
             return False
 
-    @database_sync_to_async
-    def _get_ai_message_by_id(self, message_id: int) -> Optional[Message]:
-        """Fetch an AI message by ID with LLM relation loaded."""
-        return Message.active_objects.select_related('llm').filter(
-            id=message_id, sender_type=SenderType.AI_ASSISTANT
-        ).first()
-
-    @database_sync_to_async
-    def _get_message_media_file_ids(self, message: Message) -> List[int]:
-        """Get audio/video file IDs attached to a message."""
-        return list(message.files.filter(
-            media_type__in=['audio', 'video']
-        ).values_list('id', flat=True))
 
     async def handle_new_message(
         self,
@@ -418,7 +381,7 @@ class MessageCoordinator:
             await self.send(placeholder_payload)
 
             # Generate conversation title if first message (User + AI = 2 messages)
-            if await self._should_generate_title():
+            if await should_generate_title(self.conversation):
                 asyncio.create_task(self._generate_conversation_title())
 
             # Stream AI response
@@ -459,7 +422,7 @@ class MessageCoordinator:
                 return None
 
             # Get the existing AI message to regenerate
-            ai_message = await self._get_ai_message_by_id(message_id)
+            ai_message = await get_ai_message_by_id(message_id)
 
             if not ai_message:
                 await self.send_error(ErrorCode.INVALID_MESSAGE, ErrorMessage.INVALID_MESSAGE)
@@ -550,7 +513,7 @@ class MessageCoordinator:
             llm = default_llm
 
         elif original_llm and original_llm.is_audio_transcriber and llm == original_llm:
-            media_file_ids = message_data.get("media_ids") or await self._get_message_media_file_ids(
+            media_file_ids = message_data.get("media_ids") or await get_message_media_file_ids(
                 preceding_user_message
             )
 
@@ -889,7 +852,7 @@ class MessageCoordinator:
                 )
 
                 # Update message with learning progress data
-                await self._update_message_learning_progress(
+                await update_message_learning_progress(
                     message_obj, assessment, learning_goals, tracking_prompt, progress_llm, last_usage
                 )
 
@@ -950,37 +913,15 @@ class MessageCoordinator:
             LLM instance or None
         """
         if llm_id:
-            return await self._fetch_llm_by_id(llm_id)
+            return await fetch_llm_by_id(llm_id)
         elif default:
             return default
         else:
-            return await self._get_conversation_default_llm()
-
-    @database_sync_to_async
-    def _fetch_llm_by_id(self, llm_id: str) -> Optional[LLM]:
-        """Fetch LLM by ID from database."""
-        return LLM.objects.filter(id=llm_id).first()
-
-    @database_sync_to_async
-    def _get_conversation_default_llm(self) -> Optional[LLM]:
-        """Get conversation's selected model or first available LLM."""
-        return self.conversation.selected_model or LLM.objects.first()
-
-    @database_sync_to_async
-    def _fetch_preceding_user_message(self) -> Optional[Message]:
-        """Get the most recent user message in the conversation."""
-        return self.conversation.messages.filter(
-            sender_type=SenderType.PLAYER
-        ).order_by('-created_at').first()
+            return await get_conversation_default_llm(self.conversation)
 
     async def _get_preceding_user_message(self) -> Optional[Message]:
         """Get the most recent user message in the conversation."""
-        return await self._fetch_preceding_user_message()
-
-    @database_sync_to_async
-    def _should_generate_title(self) -> bool:
-        """Check if we should generate a conversation title (first message pair)."""
-        return self.conversation.messages.count() == 2  # User + AI = 2 messages
+        return await fetch_preceding_user_message(self.conversation)
 
     async def send_conversation_history(self):
         """Send conversation history and artifacts to client."""
