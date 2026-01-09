@@ -18,7 +18,6 @@ import asyncio
 from typing import Optional, Dict, Any, Callable, List
 from decimal import Decimal
 from channels.db import database_sync_to_async
-from django.core.exceptions import ValidationError as DjangoValidationError
 from djangorestframework_camel_case.util import camelize
 
 from conversations.models import Conversation, Message, LLM, Artifact
@@ -49,7 +48,6 @@ from conversations.services.message_helpers import (
     build_generated_image_data,
     # Database helpers
     get_ai_message_by_id,
-    get_message_media_file_ids,
     fetch_llm_by_id,
     get_conversation_default_llm,
     fetch_preceding_user_message,
@@ -61,6 +59,10 @@ from conversations.services.message_helpers import (
     handle_insufficient_balance,
     # Artifact helpers
     handle_artifact_intent,
+    # Finalization helpers
+    finalize_message,
+    # Regeneration helpers
+    prepare_regeneration_data,
 )
 
 logger = logging.getLogger(__name__)
@@ -420,52 +422,14 @@ class MessageCoordinator:
         message_data: Dict[str, Any],
         preceding_user_message: Message,
     ) -> tuple[Optional[LLM], Dict[str, Any]]:
-        """
-        Prepare message data for regeneration based on original message type.
-
-        Handles special cases:
-        - Image generation: Switch to chat model (can't regenerate images)
-        - Audio transcription: Re-run transcription with original media files
-
-        Returns:
-            Tuple of (llm, regeneration_message_data) or (None, {}) on error
-        """
-        original_llm = ai_message.llm
-        regeneration_message_data = message_data.copy()
-        regeneration_message_data["message"] = preceding_user_message.message
-
-        # Image generator: switch to chat model
-        if original_llm and original_llm.is_image_generator and llm == original_llm:
-            default_llm = await database_sync_to_async(LLM.get_default_chat_model)()
-            if not default_llm:
-                await self.send_error(
-                    ErrorCode.VALIDATION_ERROR,
-                    "Cannot regenerate image: No chat model available."
-                )
-                return None, {}
-            llm = default_llm
-
-        elif original_llm and original_llm.is_audio_transcriber and llm == original_llm:
-            media_file_ids = message_data.get("media_ids") or await get_message_media_file_ids(
-                preceding_user_message
-            )
-
-            if not media_file_ids:
-                await self.send_error(
-                    ErrorCode.VALIDATION_ERROR,
-                    "Cannot regenerate transcription: No audio/video files found."
-                )
-                return None, {}
-
-            regeneration_message_data["audio_transcription_enabled"] = True
-            regeneration_message_data["media_ids"] = media_file_ids
-
-        # Regular chat: disable special modes
-        else:
-            regeneration_message_data["image_generation_enabled"] = False
-            regeneration_message_data["audio_transcription_enabled"] = False
-
-        return llm, regeneration_message_data
+        """Prepare message data for regeneration based on original message type."""
+        return await prepare_regeneration_data(
+            ai_message=ai_message,
+            llm=llm,
+            message_data=message_data,
+            preceding_user_message=preceding_user_message,
+            send_error_callback=self.send_error,
+        )
 
     async def _send_regeneration_placeholder(self, ai_message: Message) -> None:
         """Send streaming placeholder to show loading animation on frontend."""
@@ -598,65 +562,21 @@ class MessageCoordinator:
         generated_image_data: Optional[Dict] = None,
         generated_transcription_data: Optional[Dict] = None,
     ):
-        """
-        Finalize AI message with billing or budget update.
-
-        Args:
-            message_obj: Message object to finalize
-            ai_response: Complete AI response text
-            token_usage: Token usage dictionary
-            regenerate: Whether this is a regeneration
-            generated_image_data: Optional image generation data
-            generated_transcription_data: Optional audio transcription data
-        """
-        try:
-            # Save original message content on first regeneration
-            if regenerate and not message_obj.original_message:
-                message_obj.original_message = message_obj.message
-                await database_sync_to_async(message_obj.save)(update_fields=['original_message'])
-
-            # Finalize with appropriate billing strategy
-            if self.user:
-                # Authenticated user - use wallet billing (platform auto-detected from conversation)
-                finalized_message = await database_sync_to_async(
-                    self.billing_service.finalize_ai_message
-                )(message_obj, ai_response, token_usage or {})
-
-                # Mark as regenerated if applicable
-                if regenerate:
-                    await self._mark_as_regenerated(finalized_message)
-            else:
-                # Public bot - no billing, just calculate cost
-                finalized_message, cost = await database_sync_to_async(
-                    self.billing_service.finalize_ai_message_no_billing
-                )(message_obj, ai_response, token_usage or {})
-
-                # Mark as regenerated if applicable
-                if regenerate:
-                    await self._mark_as_regenerated(finalized_message)
-
-                # Update bot budget if applicable
-                await self._update_public_bot_budget(cost, message_obj)
-
-            # Send final message to client
-            final_payload = await WebSocketResponseService.format_message(
-                message=finalized_message,
-                message_type="message",
-                is_sender=False,
-                streaming=False,
-                regenerate=regenerate,
-                generated_image=generated_image_data,
-                generated_transcription=generated_transcription_data
-            )
-
-            await self.send(final_payload)
-
-        except DjangoValidationError as e:
-            logger.error(f"Validation error finalizing message: {str(e)}")
-            await self.send_error(ErrorCode.VALIDATION_ERROR, str(e))
-        except Exception as e:
-            logger.exception(f"Error finalizing message: {str(e)}")
-            await self.send_error(ErrorCode.FINALIZE_ERROR, ErrorMessage.FINALIZE_ERROR)
+        """Finalize AI message with billing or budget update."""
+        return await finalize_message(
+            message_obj=message_obj,
+            ai_response=ai_response,
+            token_usage=token_usage,
+            regenerate=regenerate,
+            generated_image_data=generated_image_data,
+            generated_transcription_data=generated_transcription_data,
+            user=self.user,
+            conversation=self.conversation,
+            billing_service=self.billing_service,
+            send_callback=self.send,
+            send_error_callback=self.send_error,
+            mark_as_regenerated_callback=self._mark_as_regenerated,
+        )
 
     async def _handle_insufficient_balance(
         self,

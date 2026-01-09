@@ -39,6 +39,14 @@ from .artifact_helpers import (
     handle_artifact_intent,
 )
 
+from .finalization_helpers import (
+    finalize_message,
+)
+
+from .regeneration_helpers import (
+    prepare_regeneration_data,
+)
+
 __all__ = [
     # Response builders
     "build_transcription_data",
@@ -60,5 +68,9 @@ __all__ = [
     "handle_insufficient_balance",
     # Artifact helpers
     "handle_artifact_intent",
+    # Finalization helpers
+    "finalize_message",
+    # Regeneration helpers
+    "prepare_regeneration_data",
 ]
 
