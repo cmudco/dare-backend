@@ -31,6 +31,9 @@ from core.services.llm_helpers import (
     get_media_files_as_images,
     get_referenced_conversations_context,
     convert_file_to_base64_dict,
+    # Socratic message builders
+    build_classic_socratic_messages,
+    build_advanced_socratic_messages,
 )
 
 logger = logging.getLogger(__name__)
@@ -601,190 +604,10 @@ class LLMService:
         return [tool_func()] if tool_func else []
 
     # -------- SocraticBooks helpers --------
-    async def _build_socratic_messages(
-        self,
-        context: MessageBuildContext,
-    ) -> list:
-        """Build messages array in the classic SocraticBooks format.
+    async def _build_socratic_messages(self, context: MessageBuildContext) -> list:
+        """Build messages in classic SocraticBooks format."""
+        return await build_classic_socratic_messages(context, self.document_processor)
 
-        Args:
-            context: MessageBuildContext with all necessary data
-
-        Returns:
-            List of message dictionaries for LLM
-        """
-        subject = context.subject
-        topic = context.topic
-        learning_goals = context.learning_goals
-        chat_prompt = context.chat_prompt
-
-        # Log the Socratic message components
-        logger.info(
-            f"[LLMService] Building Socratic messages (classic mode): "
-            f"subject={subject}, topic={topic}"
-        )
-        logger.info(
-            f"[LLMService] chat_prompt being attached to system message: "
-            f"{chat_prompt[:150] if chat_prompt else 'N/A'}..."
-        )
-        logger.info(
-            f"[LLMService] learning_goals being attached: "
-            f"{learning_goals[:100] if learning_goals else 'N/A'}..."
-        )
-
-        # System prompt
-        prompt_start = (
-            f"Subject and Topic:\n"
-            f"Your job is to act as a living Socratic book that helps '{subject}' students\n"
-            f"learn about different subjects. This chapter specifically is about '{topic}'."
-        )
-        system_prompt = (
-            prompt_start
-            + "\n\nTeaching Style:\n" + chat_prompt
-            + "\n\nLearning Goals:\n" + learning_goals
-        )
-
-        # Conversation history as simple transcript
-        history_list = await get_conversation_history(
-            context.conversation,
-            limit=context.history_limit
-        ) if context.conversation else []
-        transcript_parts = []
-        for h in history_list:
-            role_name = "User" if h["role"] == "user" else "Assistant"
-            content = (h["content"] or "").strip()
-            if content:
-                transcript_parts.append(f"{role_name}: {content}")
-        conversation_history_text = "\n\n".join(transcript_parts) if transcript_parts else "No previous messages."
-
-        file_context_parts = []
-
-        # Retrieve contextual snippets using embedding_ids (avoid full file reads)
-        if context.embedding_ids:
-            # Use file_owner_id for shared boards (e.g., deployed Socratic bots)
-            vector_user_id = context.file_owner_id or context.user_id
-            if vector_user_id and vector_user_id != self.document_processor.user_id:
-                self.document_processor.user_id = vector_user_id
-                self.document_processor.vector_service = await get_vector_service_async(vector_user_id)
-
-            doc_context = await self.document_processor.search_similar_documents(
-                query_text=context.message,
-                file_ids=context.embedding_ids,
-                user_id=vector_user_id,  # Use file_owner_id for shared boards
-                top_k=context.max_context_snippets,
-                similarity_threshold=context.document_similarity_threshold,
-                message_obj=context.message_obj,
-                workflow_run_step_obj=context.workflow_run_step_obj
-            )
-            # print("context", doc_context)
-            if doc_context:
-                for part in doc_context.split("\n\n"):
-                    if part.strip():
-                        file_context_parts.append(part)
-
-        file_context_text = "\n\n".join([p for p in file_context_parts if p and p.strip()])
-        if not file_context_text:
-            file_context_text = "No relevant file content found."
-
-        # User message assembled like the old SocraticBooks format
-        user_message = (
-            "Respond based on the following documents.\n"
-            f"{file_context_text}\n"
-            "And the recent conversation history:\n"
-            f"{conversation_history_text}\n"
-            f"Question: {context.message}\n"
-        )
-
-        return [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_message},
-        ]
-
-    # -------- Advanced Prompt helpers --------
-    async def _build_advanced_messages(
-        self,
-        context: MessageBuildContext,
-    ) -> list:
-        """Build messages using the Advanced Prompt construction provided.
-
-        Args:
-            context: MessageBuildContext with all necessary data
-
-        Returns:
-            List of message dictionaries for LLM
-        """
-        title = context.title or (context.conversation.title if context.conversation and context.conversation.title else "Untitled Conversation")
-        subject = context.subject
-        topic = context.topic
-        learning_goals = context.learning_goals
-        chat_prompt = context.chat_prompt
-
-        # Log the Advanced message components
-        logger.info(
-            f"[LLMService] Building Socratic messages (ADVANCED mode): "
-            f"title={title}, subject={subject}, topic={topic}"
-        )
-        logger.info(
-            f"[LLMService] chat_prompt being attached to system message: "
-            f"{chat_prompt[:150] if chat_prompt else 'N/A'}..."
-        )
-        logger.info(
-            f"[LLMService] learning_goals being attached: "
-            f"{learning_goals[:100] if learning_goals else 'N/A'}..."
-        )
-
-        # Conversation history as a readable transcript
-        history_list = await get_conversation_history(
-            context.conversation,
-            limit=context.history_limit
-        ) if context.conversation else []
-        transcript_parts = []
-        for h in history_list:
-            role_name = "User" if h["role"] == "user" else "Assistant"
-            content = (h["content"] or "").strip()
-            if content:
-                transcript_parts.append(f"{role_name}: {content}")
-        conversation_history_text = "\n\n".join(transcript_parts) if transcript_parts else "No previous messages."
-
-        # Build relevant content using embedding-based retrieval (avoid full file reads)
-        relevant_sections = []
-
-        if context.embedding_ids:
-            if context.user_id and context.user_id != self.document_processor.user_id:
-                self.document_processor.user_id = context.user_id
-                self.document_processor.vector_service = await get_vector_service_async(context.user_id)
-
-            doc_context = await self.document_processor.search_similar_documents(
-                query_text=context.message,
-                file_ids=context.embedding_ids,
-                user_id=context.user_id,
-                top_k=context.max_context_snippets,
-                similarity_threshold=context.document_similarity_threshold,
-                message_obj=context.message_obj,
-                workflow_run_step_obj=context.workflow_run_step_obj
-            )
-            # print("context", len(doc_context))
-            if doc_context:
-                for part in doc_context.split("\n\n"):
-                    if part.strip():
-                        relevant_sections.append(part)
-
-        relevant_content_text = "\n\n".join([s for s in relevant_sections if s and s.strip()])
-        if not relevant_content_text:
-            relevant_content_text = "No relevant external content found."
-
-        # Assemble the advanced system prompt exactly as requested
-        system_prompt = (
-            f"Here is a conversation:\n{conversation_history_text}\n\n"
-            f"This is a conversation on {title} (Subject: {subject}, Topic: {topic}).\n"
-            f"We are trying to teach the following learning goals:\n{learning_goals}\n\n"
-            f"{relevant_content_text}\n"
-            f"The latest user message was: \"{context.message}\"\n\n"
-            f"Please respond according to these directions:\n{chat_prompt}"
-        )
-
-        # Include the user message as a separate turn to comply with chat APIs
-        return [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": context.message},
-        ]
+    async def _build_advanced_messages(self, context: MessageBuildContext) -> list:
+        """Build messages in advanced SocraticBooks format."""
+        return await build_advanced_socratic_messages(context, self.document_processor)

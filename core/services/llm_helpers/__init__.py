@@ -24,6 +24,11 @@ from .db_helpers import (
     convert_file_to_base64_dict,
 )
 
+from .socratic_helpers import (
+    build_classic_socratic_messages,
+    build_advanced_socratic_messages,
+)
+
 __all__ = [
     # Context helpers
     "build_transcription_context",
@@ -38,5 +43,8 @@ __all__ = [
     "get_media_files_as_images",
     "get_referenced_conversations_context",
     "convert_file_to_base64_dict",
+    # Socratic message builders
+    "build_classic_socratic_messages",
+    "build_advanced_socratic_messages",
 ]
 
