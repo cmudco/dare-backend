@@ -109,7 +109,15 @@ class LLMService:
         Returns:
             List of message dictionaries for LLM
         """
-        if request.is_socratic_mode():
+        is_socratic = request.is_socratic_mode()
+        logger.info(
+            f"[LLMService] Building messages: "
+            f"socratic_mode={is_socratic}, "
+            f"socratic.enabled={request.socratic.enabled}, "
+            f"is_advanced={request.is_advanced_mode()}"
+        )
+
+        if is_socratic:
             return await self._build_socratic_mode_messages(request)
         else:
             return await self._build_standard_messages(request)
@@ -206,9 +214,15 @@ class LLMService:
         if not all_embedding_file_ids:
             return
 
-        if user_id and user_id != self.document_processor.user_id:
-            self.document_processor.user_id = user_id
-            self.document_processor.vector_service = await get_vector_service_async(user_id)
+        # Use file_owner_id from frontend (DARE user ID) for shared boards, fallback to current user
+        vector_user_id = request.context.file_owner_id or user_id
+
+        logger.info(f"VECTOR CONTEXT: user_id={user_id}, file_owner_id={request.context.file_owner_id}, vector_user_id={vector_user_id}")
+        logger.info(f"VECTOR CONTEXT: file_ids={list(all_embedding_file_ids)}")
+
+        if vector_user_id and vector_user_id != self.document_processor.user_id:
+            self.document_processor.user_id = vector_user_id
+            self.document_processor.vector_service = await get_vector_service_async(vector_user_id)
 
         effective_threshold = (
             0.05 if request.is_socratic_mode()
@@ -218,17 +232,15 @@ class LLMService:
         context = await self.document_processor.search_similar_documents(
             query_text=request.message,
             file_ids=list(all_embedding_file_ids),
-            user_id=user_id,
+            user_id=vector_user_id,  # Use file_owner_id for shared boards
             top_k=request.context.max_context_snippets,
             similarity_threshold=effective_threshold,
             message_obj=request.message_obj,
             workflow_run_step_obj=request.workflow_run_step_obj
         )
 
-        if context:
-            for part in context.split("\n\n"):
-                if part.strip():
-                    messages.append({"role": "user", "content": part})
+        if context and context.strip():
+            messages.append({"role": "user", "content": f"Relevant context from documents:\n{context}"})
 
     async def _process_media_files(self, request: LLMQueryRequest) -> List[Dict]:
         """Process and combine all media files (images and videos).
@@ -239,6 +251,11 @@ class LLMService:
         Returns:
             List of processed image dictionaries (images and videos combined)
         """
+        # Skip processing media as images if this is an audio transcription request
+        # Audio files should only be processed by the transcription service
+        if request.requires_audio_transcription():
+            return request.media.images or []
+
         all_images = request.media.images or []
 
         if request.media.media_ids:
@@ -744,6 +761,20 @@ class LLMService:
         learning_goals = context.learning_goals
         chat_prompt = context.chat_prompt
 
+        # Log the Socratic message components
+        logger.info(
+            f"[LLMService] Building Socratic messages (classic mode): "
+            f"subject={subject}, topic={topic}"
+        )
+        logger.info(
+            f"[LLMService] chat_prompt being attached to system message: "
+            f"{chat_prompt[:150] if chat_prompt else 'N/A'}..."
+        )
+        logger.info(
+            f"[LLMService] learning_goals being attached: "
+            f"{learning_goals[:100] if learning_goals else 'N/A'}..."
+        )
+
         # System prompt
         prompt_start = (
             f"Subject and Topic:\n"
@@ -773,14 +804,16 @@ class LLMService:
 
         # Retrieve contextual snippets using embedding_ids (avoid full file reads)
         if context.embedding_ids:
-            if context.user_id and context.user_id != self.document_processor.user_id:
-                self.document_processor.user_id = context.user_id
-                self.document_processor.vector_service = await get_vector_service_async(context.user_id)
+            # Use file_owner_id for shared boards (e.g., deployed Socratic bots)
+            vector_user_id = context.file_owner_id or context.user_id
+            if vector_user_id and vector_user_id != self.document_processor.user_id:
+                self.document_processor.user_id = vector_user_id
+                self.document_processor.vector_service = await get_vector_service_async(vector_user_id)
 
             doc_context = await self.document_processor.search_similar_documents(
                 query_text=context.message,
                 file_ids=context.embedding_ids,
-                user_id=context.user_id,
+                user_id=vector_user_id,  # Use file_owner_id for shared boards
                 top_k=context.max_context_snippets,
                 similarity_threshold=context.document_similarity_threshold,
                 message_obj=context.message_obj,
@@ -828,6 +861,20 @@ class LLMService:
         topic = context.topic
         learning_goals = context.learning_goals
         chat_prompt = context.chat_prompt
+
+        # Log the Advanced message components
+        logger.info(
+            f"[LLMService] Building Socratic messages (ADVANCED mode): "
+            f"title={title}, subject={subject}, topic={topic}"
+        )
+        logger.info(
+            f"[LLMService] chat_prompt being attached to system message: "
+            f"{chat_prompt[:150] if chat_prompt else 'N/A'}..."
+        )
+        logger.info(
+            f"[LLMService] learning_goals being attached: "
+            f"{learning_goals[:100] if learning_goals else 'N/A'}..."
+        )
 
         # Conversation history as a readable transcript
         history_list = await self.get_conversation_history(
