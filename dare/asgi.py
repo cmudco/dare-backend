@@ -26,11 +26,11 @@ from django.core.asgi import get_asgi_application
 from conversations.middleware import JwtAuthMiddleware
 from conversations.routing import websocket_urlpatterns
 
-# Import Socket.IO server and register namespace
-from conversations.socket_server import sio
-from conversations.namespaces.chat import chat_namespace
+# Import Socket.IO server and register all namespaces
+from conversations.socket_server import sio, register_namespaces
 
-sio.register_namespace(chat_namespace)
+# Register all Socket.IO namespaces (chat, workflow, etc.)
+register_namespaces()
 
 # Get Django ASGI application
 django_asgi_app = get_asgi_application()

@@ -31,6 +31,7 @@ from workflows.handlers.utils import (
 from workflows.services.workflow_web_search_source_service import (
     WorkflowWebSearchSourceService,
 )
+from workflows.services.citation_serialization import serialize_step_citations
 
 
 logger = logging.getLogger(__name__)
@@ -117,13 +118,28 @@ class StepNodeHandler(BaseExecutionHandler):
             # Log debug information
             await self._log_step_debug_info(step_data, node.id)
 
+            # Send step_started event if streaming callback available
+            if context.send_callback:
+                from conversations.services.websocket_response_service import WebSocketResponseService
+                try:
+                    await context.send_callback(
+                        WebSocketResponseService.format_workflow_step_started(
+                            node_id=node.id,
+                            step_number=node.step_number or 0,
+                            node_type="step"
+                        )
+                    )
+                except Exception as e:
+                    logger.debug(f"Failed to send step_started event: {e}")
+
             # Execute LLM query
             response, token_usage = await self._execute_llm_query(
                 step_data=step_data,
                 message=message,
                 context=context,
                 workflow_run_step=workflow_run_step,
-                structured_spec=None
+                structured_spec=None,
+                node_id=node.id
             )
 
             # Save web search sources if present
@@ -153,6 +169,33 @@ class StepNodeHandler(BaseExecutionHandler):
             logger.info(
                 f"[{correlation_id}] Successfully executed step node in {execution_time:.2f}s"
             )
+
+            # Send step_completed event if streaming callback available
+            if context.send_callback:
+                from conversations.services.websocket_response_service import WebSocketResponseService
+                try:
+                    # Serialize citation data for the step_completed event
+                    snippets_data, web_sources_data = await database_sync_to_async(
+                        lambda: serialize_step_citations(workflow_run_step)
+                    )()
+
+                    await context.send_callback(
+                        WebSocketResponseService.format_workflow_step_completed(
+                            node_id=node.id,
+                            response=response,
+                            status="completed",
+                            tokens={
+                                "input": token_usage.get("input_tokens", 0),
+                                "output": token_usage.get("output_tokens", 0)
+                            } if token_usage else None,
+                            metadata={
+                                "snippets": snippets_data,
+                                "webSearchSources": web_sources_data,
+                            } if snippets_data or web_sources_data else None
+                        )
+                    )
+                except Exception as e:
+                    logger.debug(f"Failed to send step_completed event: {e}")
 
             return NodeExecutionResult(
                 success=True,
@@ -282,19 +325,22 @@ class StepNodeHandler(BaseExecutionHandler):
         message: str,
         context: NodeExecutionContext,
         workflow_run_step: WorkflowRunStep,
-        structured_spec: Optional[Dict]
+        structured_spec: Optional[Dict],
+        node_id: Optional[str] = None
     ) -> tuple[str, Dict]:
         """
         Execute LLM query and collect response.
 
         Uses the base LLM service query method for execution.
+        Supports real-time streaming via context.send_callback.
 
         Args:
             step_data: Step node configuration
             message: Prepared message for LLM
-            context: Execution context
+            context: Execution context (includes send_callback for streaming)
             workflow_run_step: Workflow run step for tracking
             structured_spec: Optional unified structured output specification
+            node_id: Node ID for streaming events
 
         Returns:
             Tuple of (response_text, token_usage)
@@ -324,8 +370,12 @@ class StepNodeHandler(BaseExecutionHandler):
 
         response_generator = self.llm_service.query(request)
 
-        # Use base handler to collect response
-        return await self._execute_llm_query_with_collection(response_generator)
+        # Use base handler to collect response (with streaming if callback provided)
+        return await self._execute_llm_query_with_collection(
+            response_generator,
+            send_callback=context.send_callback,
+            node_id=node_id
+        )
 
     async def _get_step_execution_config(
         self,
