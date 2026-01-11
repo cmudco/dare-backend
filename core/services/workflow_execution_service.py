@@ -35,6 +35,7 @@ class WorkflowExecutionContext:
     workflow_run: WorkflowRun
     workflow: Workflow
     node_results: Dict[str, NodeExecutionResult]
+    send_callback: Any = None  # Optional async callback for streaming to WebSocket clients
     # REMOVED: current_context (use edge-based data flow instead)
 
 
@@ -57,7 +58,8 @@ class WorkflowExecutionService:
         self,
         workflow_run: WorkflowRun,
         node_id: str,
-        chosen_route: str
+        chosen_route: str,
+        send_callback: Any = None
     ) -> Dict[str, Any]:
         """
         Resume workflow execution after human validation choice.
@@ -66,6 +68,7 @@ class WorkflowExecutionService:
             workflow_run: The workflow run to resume
             node_id: The routing node ID that was waiting for input
             chosen_route: The route name chosen by the user
+            send_callback: Optional async callback for streaming to WebSocket clients
 
         Returns:
             Dict containing execution results
@@ -101,6 +104,8 @@ class WorkflowExecutionService:
 
             # Build context with results from steps executed so far
             context = await self._rebuild_execution_context(workflow_run, workflow)
+            # Add send_callback to context for streaming
+            context.send_callback = send_callback
 
             # Get all workflow nodes and continue from where we left off
             nodes = await self._get_ordered_workflow_nodes(workflow)
@@ -136,6 +141,20 @@ class WorkflowExecutionService:
                 context.node_results
             )
 
+            # Send execution_complete event if streaming callback available
+            if send_callback and final_status != 'pending_human_input':
+                from conversations.services.websocket_response_service import WebSocketResponseService
+                try:
+                    await send_callback(
+                        WebSocketResponseService.format_workflow_execution_complete(
+                            workflow_run_id=workflow_run.id,
+                            status=final_status,
+                            ended_at=timezone.now().isoformat() if final_status in ['completed', 'failed'] else None
+                        )
+                    )
+                except Exception as callback_error:
+                    logger.debug(f"Failed to send execution_complete event: {callback_error}")
+
             return {
                 'success': execution_stats['failed_count'] == 0 and not execution_stats['pending_human_input'],
                 'pending_human_input': execution_stats['pending_human_input'],
@@ -154,22 +173,38 @@ class WorkflowExecutionService:
                 'results': {}
             }
 
-    async def execute_workflow(self, workflow_run: WorkflowRun) -> Dict[str, Any]:
+    async def execute_workflow(
+        self,
+        workflow_run: WorkflowRun = None,
+        workflow_run_id: int = None,
+        send_callback=None
+    ) -> Dict[str, Any]:
         """
         Execute a complete workflow using node handlers.
 
         Args:
-            workflow_run: The workflow run to execute
+            workflow_run: The workflow run to execute (optional if workflow_run_id provided)
+            workflow_run_id: ID of workflow run to execute (optional if workflow_run provided)
+            send_callback: Optional async callback for streaming progress to WebSocket clients
 
         Returns:
             Dict containing execution results and statistics
         """
         try:
+            # Get workflow_run from ID if not provided directly
+            if workflow_run is None and workflow_run_id is not None:
+                workflow_run = await database_sync_to_async(
+                    lambda: WorkflowRun.objects.select_related('workflow').get(id=workflow_run_id)
+                )()
+            elif workflow_run is None:
+                raise ValueError("Either workflow_run or workflow_run_id must be provided")
+
             workflow = await database_sync_to_async(lambda: workflow_run.workflow)()
             context = WorkflowExecutionContext(
                 workflow_run=workflow_run,
                 workflow=workflow,
-                node_results={}
+                node_results={},
+                send_callback=send_callback
             )
 
             # Get all workflow nodes ordered by dependencies
@@ -201,6 +236,20 @@ class WorkflowExecutionService:
                 context.node_results
             )
 
+            # Send execution_complete event if streaming callback available
+            if send_callback:
+                from conversations.services.websocket_response_service import WebSocketResponseService
+                try:
+                    await send_callback(
+                        WebSocketResponseService.format_workflow_execution_complete(
+                            workflow_run_id=workflow_run.id,
+                            status=final_status,
+                            ended_at=timezone.now().isoformat() if final_status in ['completed', 'failed'] else None
+                        )
+                    )
+                except Exception as callback_error:
+                    logger.debug(f"Failed to send execution_complete event: {callback_error}")
+
             return {
                 'success': execution_stats['failed_count'] == 0 and not execution_stats['pending_human_input'],
                 'pending_human_input': execution_stats['pending_human_input'],
@@ -213,6 +262,20 @@ class WorkflowExecutionService:
 
         except Exception as e:
             logger.error(f"Workflow execution failed: {str(e)}", exc_info=True)
+
+            # Send error event if streaming callback available
+            if send_callback:
+                from conversations.services.websocket_response_service import WebSocketResponseService
+                try:
+                    await send_callback(
+                        WebSocketResponseService.format_workflow_error(
+                            node_id=None,
+                            error=str(e)
+                        )
+                    )
+                except Exception:
+                    pass
+
             return {
                 'success': False,
                 'error': str(e),
@@ -333,6 +396,34 @@ class WorkflowExecutionService:
                     f"Workflow {context.workflow_run.id} paused at node {node.id} "
                     "- waiting for human validation"
                 )
+
+                # Send validation_required event via WebSocket so frontend can show validation UI
+                if context.send_callback:
+                    from conversations.services.websocket_response_service import WebSocketResponseService
+                    try:
+                        routes = result.metadata.get('available_routes', [])
+                        ai_recommendation = result.metadata.get('ai_recommendation')
+                        ai_analysis = result.metadata.get('ai_analysis')
+
+                        await context.send_callback(
+                            WebSocketResponseService.format_workflow_validation_required(
+                                node_id=node.id,
+                                routes=routes,
+                                context={
+                                    'stepNumber': result.metadata.get('step_number'),
+                                    'customPrompt': result.metadata.get('custom_prompt'),
+                                    'aiAnalysis': ai_analysis,
+                                },
+                                ai_recommendation=ai_recommendation
+                            )
+                        )
+                        logger.info(
+                            f"Sent validation_required event for node {node.id} "
+                            f"with routes: {[r.get('name') for r in routes]}"
+                        )
+                    except Exception as callback_error:
+                        logger.debug(f"Failed to send validation_required event: {callback_error}")
+
                 break
 
             if not result.success:
@@ -377,7 +468,8 @@ class WorkflowExecutionService:
             previous_results=WorkflowContextBuilder.prepare_node_execution_context(
                 filtered_results,
                 node_types=node_types
-            )
+            ),
+            send_callback=context.send_callback
             # REMOVED: current_input parameter (use edge-based data flow)
         )
 
@@ -493,7 +585,8 @@ class WorkflowExecutionService:
     async def execute_single_step(
         self,
         workflow_run: WorkflowRun,
-        step_node_id: str
+        step_node_id: str,
+        send_callback: Any = None
     ) -> Dict[str, Any]:
         """
         Execute a single step node in a workflow.
@@ -503,6 +596,7 @@ class WorkflowExecutionService:
         Args:
             workflow_run: The (partial) workflow run to execute in
             step_node_id: The node_id of the step to execute
+            send_callback: Optional async callback for streaming to WebSocket clients
 
         Returns:
             Dict containing:
@@ -608,7 +702,8 @@ class WorkflowExecutionService:
             # Execute the node with properly prepared context
             node_context = NodeExecutionContext(
                 workflow_run=workflow_run,
-                previous_results=prepared_context
+                previous_results=prepared_context,
+                send_callback=send_callback
             )
 
             logger.info(f"Executing node {step_node_id} with handler registry")
