@@ -21,7 +21,7 @@ from workflows.models import (
     Workflow, WorkflowRun, WorkflowRunStep, StepNodeData
 )
 from workflows.constants import WorkflowRunStepStatus
-from workflows.api.serializers import WorkflowRunSerializer, WorkflowRunV2Serializer
+from workflows.api.serializers import WorkflowRunV2Serializer
 
 
 User = get_user_model()

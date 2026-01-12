@@ -3,10 +3,13 @@ Citation Serialization Helpers
 
 Provides serialization utilities for workflow step citations (snippets and web search sources).
 Separated from serializers.py to avoid circular imports with NodeExecutionStateBuilder.
+
+Output is camelCase to match frontend interfaces (WorkflowStepSnippet, WorkflowStepWebSearchSource).
 """
 
 from typing import List, Dict, Any
 
+from djangorestframework_camel_case.util import camelize
 from rest_framework import serializers
 from files.api.serializers import FileSerializer
 from users.constants import VectorDBChoice
@@ -48,16 +51,20 @@ def serialize_step_citations(step) -> tuple[List[Dict[str, Any]], List[Dict[str,
     """
     Serialize snippets and web search sources for a workflow run step.
 
+    Output is camelized to match frontend TypeScript interfaces:
+    - WorkflowStepSnippet: id, file, text, similarityScore, chunkIndex, vectorDbSource
+    - WorkflowStepWebSearchSource: id, url, title, citedText, pageAge, provider
+
     Args:
         step: WorkflowRunStep instance
 
     Returns:
-        Tuple of (snippets_data, web_search_sources_data)
+        Tuple of (snippets_data, web_search_sources_data) with camelCase keys
     """
-    snippets_data = WorkflowStepSnippetSerializer(
+    snippets_data = camelize(WorkflowStepSnippetSerializer(
         step.snippets.all(), many=True
-    ).data
-    web_search_sources_data = WorkflowStepWebSearchSourceSerializer(
+    ).data)
+    web_search_sources_data = camelize(WorkflowStepWebSearchSourceSerializer(
         step.web_search_sources.all(), many=True
-    ).data
+    ).data)
     return snippets_data, web_search_sources_data
