@@ -3,15 +3,17 @@ Route resolution utilities for workflow handlers.
 
 This module consolidates structured output handling and routing logic,
 providing clean interfaces for route resolution, normalization, and
-structured output specification following LLM provider utility patterns.
+structured output specification.
+
+All modern LLM providers (OpenAI, Gemini, Claude) now support native
+structured output, returning JSON responses.
 """
 import json
 import logging
-import re
 from typing import Optional, List, Dict, Any, Tuple
 from channels.db import database_sync_to_async
 
-from .constants import MetadataKey, ErrorMessage, XMLTag
+from .constants import MetadataKey
 from .validation_helpers import RouteValidator
 
 
@@ -139,8 +141,8 @@ class RouteNormalizer:
     """
     Normalizer for LLM routing responses.
 
-    Provides multi-strategy matching to handle various LLM response formats
-    and ensure routing decisions match available routes.
+    All providers now support native structured output and return JSON.
+    This normalizer provides fallback matching for edge cases.
     """
 
     @staticmethod
@@ -153,14 +155,11 @@ class RouteNormalizer:
         """
         Normalize LLM response to match one of the allowed routes.
 
-        Uses multiple strategies:
-        1. JSON extraction - For structured outputs with object schema
-        2. Direct match - For simple string responses
-        3. XML extraction - For Claude-style wrapped responses
-        4. Fallback to default - Uses first route if no match found
+        Primary strategy is JSON extraction since all providers now return JSON
+        with native structured outputs. Fallback strategies handle edge cases.
 
         Args:
-            raw_response: The raw response from the LLM
+            raw_response: The raw response from the LLM (typically JSON)
             allowed_routes: List of valid route names
             node_id: Node ID for logging
             case_sensitive: Whether to enforce case-sensitive matching
@@ -172,33 +171,31 @@ class RouteNormalizer:
             logger.warning(f"No allowed routes provided for node {node_id}")
             return raw_response, raw_response
 
-        # Strategy 0: JSON extraction (for object schemas with route + explanation)
+        # Strategy 1: JSON extraction (primary - all providers return JSON)
         try:
             data = json.loads(raw_response)
             if isinstance(data, dict):
-                # Try to find route field (could be 'route', 'decision', 'choice', etc.)
-                for potential_field in ['route', 'decision', 'choice', 'selection']:
-                    if potential_field in data:
-                        route_value = data[potential_field]
-                        if route_value in allowed_routes:
-                            logger.debug(f"Route '{route_value}' extracted from JSON field '{potential_field}'")
-                            return route_value, raw_response
-                        # Try case-insensitive match
-                        if not case_sensitive:
-                            lower_map = {r.lower(): r for r in allowed_routes}
-                            if str(route_value).lower() in lower_map:
-                                matched_route = lower_map[str(route_value).lower()]
-                                logger.debug(f"Route '{route_value}' from JSON matched case-insensitive to '{matched_route}'")
-                                return matched_route, raw_response
+                # Primary field name is 'route'
+                route_value = data.get('route')
+                if route_value:
+                    if route_value in allowed_routes:
+                        logger.debug(f"Route '{route_value}' extracted from JSON")
+                        return route_value, raw_response
+                    # Try case-insensitive match
+                    if not case_sensitive:
+                        lower_map = {r.lower(): r for r in allowed_routes}
+                        if str(route_value).lower() in lower_map:
+                            matched_route = lower_map[str(route_value).lower()]
+                            logger.debug(f"Route '{route_value}' matched case-insensitive to '{matched_route}'")
+                            return matched_route, raw_response
         except (json.JSONDecodeError, ValueError):
-            # Not JSON, continue with other strategies
+            # Not JSON, continue with fallback strategies
             pass
 
-        # Clean response - remove quotes and whitespace
+        # Strategy 2: Direct match (fallback for simple string responses)
         cleaned = raw_response.strip().strip('"').strip("'")
         cleaned = cleaned.splitlines()[0].strip() if cleaned else cleaned
 
-        # Strategy 1: Direct match (for simple string responses)
         if cleaned in allowed_routes:
             logger.debug(f"Route '{cleaned}' matched directly")
             return cleaned, raw_response
@@ -211,22 +208,6 @@ class RouteNormalizer:
                 logger.debug(f"Route '{cleaned}' matched case-insensitive to '{matched_route}'")
                 return matched_route, raw_response
 
-        # Strategy 2: XML extraction (for Claude and other providers that wrap in XML)
-        for tag_name in ['route', 'decision', 'choice', 'selection']:
-            xml_content = XMLTag.extract_tag_content(raw_response, tag_name)
-            if xml_content:
-                # Try exact match
-                if xml_content in allowed_routes:
-                    logger.debug(f"Route '{xml_content}' extracted from <{tag_name}> tag")
-                    return xml_content, raw_response
-                # Try case-insensitive match
-                if not case_sensitive:
-                    lower_map = {r.lower(): r for r in allowed_routes}
-                    if xml_content.lower() in lower_map:
-                        matched_route = lower_map[xml_content.lower()]
-                        logger.debug(f"Route '{xml_content}' from <{tag_name}> matched to '{matched_route}'")
-                        return matched_route, raw_response
-
         # Strategy 3: Fallback to default (first route)
         default_route = allowed_routes[0]
         logger.warning(
@@ -235,52 +216,6 @@ class RouteNormalizer:
         )
 
         return default_route, raw_response
-
-    @staticmethod
-    def extract_route_from_xml(
-        xml_response: str,
-        allowed_routes: List[str],
-        node_id: str
-    ) -> Tuple[Optional[str], Optional[str]]:
-        """
-        Extract routing decision and analysis from XML-formatted response.
-
-        Supports both <decision> and <route> XML tag formats.
-
-        Args:
-            xml_response: XML-formatted LLM response
-            allowed_routes: List of valid route names
-            node_id: Node ID for logging
-
-        Returns:
-            Tuple of (decision, analysis) or (None, None) if extraction fails
-        """
-        try:
-            # Extract decision tag - try both <decision> and <route> formats
-            decision = XMLTag.extract_tag_content(xml_response, XMLTag.DECISION)
-            if not decision:
-                # Try <route> tag for StructuredOutputNode
-                decision = XMLTag.extract_tag_content(xml_response, 'route')
-
-            if not decision:
-                logger.warning(f"No <{XMLTag.DECISION}> or <route> tag found in response")
-                return None, None
-
-            # Extract analysis tag (optional)
-            analysis = XMLTag.extract_tag_content(xml_response, XMLTag.ANALYSIS)
-
-            # Normalize the decision
-            normalized_decision, _ = RouteNormalizer.normalize_route_response(
-                decision,
-                allowed_routes,
-                node_id
-            )
-
-            return normalized_decision, analysis
-
-        except Exception as e:
-            logger.error(f"Error extracting route from XML: {e}")
-            return None, None
 
 
 # ==================== Structured Output Builder ====================
@@ -394,105 +329,10 @@ class StructuredOutputBuilder:
         return metadata
 
 
-# ==================== Route Instruction Builder ====================
-
-class RouteInstructionBuilder:
-    """
-    Builder for route selection instructions.
-
-    Creates clear, formatted instructions for LLMs about route selection.
-    """
-
-    @staticmethod
-    def build_simple_instruction(
-        allowed_routes: List[str],
-        default_route: Optional[str] = None
-    ) -> str:
-        """
-        Build route selection instruction with XML format for routing nodes.
-
-        Args:
-            allowed_routes: List of valid route names
-            default_route: Default route if uncertain (uses first route if None)
-
-        Returns:
-            Formatted instruction string with XML format for routing
-        """
-        if not allowed_routes:
-            return ""
-
-        # Build route list in XML format for routing nodes
-        route_xml_elements = "\n".join([
-            f'<route name="{route}">{route}</route>'
-            for route in allowed_routes
-        ])
-
-        # Build the prompt with routes and analysis section
-        # StructuredOutputNode appends this AFTER the step execution
-        instruction = f"""
-
-Based on your response above, choose the most appropriate route.
-
-<routes>
-{route_xml_elements}
-</routes>
-
-Analyze your response carefully and respond in this EXACT format (do not deviate):
-<analysis>
-[Brief reasoning for your choice - 1-2 sentences]
-</analysis>
-<route>[EXACT route name from the routes listed above]</route>"""
-
-        return instruction
-
-    @staticmethod
-    def build_xml_instruction(
-        allowed_routes: List[str],
-        include_analysis: bool = True
-    ) -> str:
-        """
-        Build XML-formatted route selection instruction.
-
-        Used for routing nodes that need analysis.
-
-        Args:
-            allowed_routes: List of valid route names
-            include_analysis: Whether to include analysis requirement
-
-        Returns:
-            Formatted XML instruction string
-        """
-        if not allowed_routes:
-            return ""
-
-        route_list = ", ".join(allowed_routes)
-
-        if include_analysis:
-            instruction = (
-                "\n\nROUTE SELECTION INSTRUCTIONS:\n"
-                f"Available routes: {route_list}\n\n"
-                "Respond in the following XML format:\n"
-                f"<{XMLTag.DECISION}>route_name</{XMLTag.DECISION}>\n"
-                f"<{XMLTag.ANALYSIS}>Your reasoning for this decision</{XMLTag.ANALYSIS}>\n\n"
-                "The route_name must exactly match one of the available routes."
-            )
-        else:
-            instruction = (
-                "\n\nROUTE SELECTION INSTRUCTIONS:\n"
-                f"Available routes: {route_list}\n\n"
-                "Respond in XML format:\n"
-                f"<{XMLTag.DECISION}>route_name</{XMLTag.DECISION}>\n\n"
-                "The route_name must exactly match one of the available routes."
-            )
-
-        return instruction
-
-
 # ==================== Export All ====================
 
 __all__ = [
     "RouteResolver",
     "RouteNormalizer",
     "StructuredOutputBuilder",
-    "RouteInstructionBuilder",
 ]

@@ -303,6 +303,9 @@ def get_workflow_run_status(run_id: int) -> Optional[Dict[str, Any]]:
     """
     Get the current status of a workflow run.
 
+    Uses V2 serializer for consistent data shape with socket events.
+    Includes nodeStates and pendingValidation.
+
     Args:
         run_id: Workflow run ID
 
@@ -314,8 +317,8 @@ def get_workflow_run_status(run_id: int) -> Optional[Dict[str, Any]]:
             'steps__step_node'
         ).get(id=run_id)
 
-        # Use serializer for consistent formatting
-        serializer = WorkflowRunSerializer(run)
+        # Use V2 serializer for consistent formatting with socket events
+        serializer = WorkflowRunV2Serializer(run)
         return {
             'type': 'workflow_status',
             **serializer.data
