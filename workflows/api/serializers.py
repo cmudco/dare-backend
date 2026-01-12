@@ -515,6 +515,7 @@ class WorkflowRunV2Serializer(serializers.ModelSerializer):
     - All nodes in workflow included (execution + display)
     - Validation context normalized across node types
     - Consistent data shape across all endpoints
+    - NEW: Flat `pendingValidation` for frontend - no extraction needed
 
     Response Structure:
         {
@@ -524,17 +525,13 @@ class WorkflowRunV2Serializer(serializers.ModelSerializer):
             "started_at": datetime,
             "ended_at": datetime | null,
             "status": str,
-            "nodeStates": {
-                "node-id": {
-                    "stepId": int | null,
-                    "nodeType": str,
-                    "status": str,
-                    "response": str | null,
-                    "error": str | null,
-                    "validationContext": dict | null
-                },
-                ...
-            },
+            "nodeStates": {...},
+            "pendingValidation": {
+                "nodeId": str,
+                "routes": [{"name": str, "description": str}, ...],
+                "aiRecommendation": str | null,
+                "context": {"aiAnalysis": str | null}
+            } | null,
             "workflow_title": str,
             "workflow_description": str,
             "is_partial": bool
@@ -542,6 +539,7 @@ class WorkflowRunV2Serializer(serializers.ModelSerializer):
     """
 
     nodeStates = serializers.SerializerMethodField()
+    pendingValidation = serializers.SerializerMethodField()
     started_at = serializers.DateTimeField()
     status = serializers.CharField()
     workflow_title = serializers.SerializerMethodField()
@@ -552,11 +550,11 @@ class WorkflowRunV2Serializer(serializers.ModelSerializer):
         model = WorkflowRun
         fields = [
             'id', 'workflow', 'user', 'started_at', 'ended_at', 'status',
-            'nodeStates',  # NEW - replaces 'steps' from v1
+            'nodeStates', 'pendingValidation',
             'workflow_title', 'workflow_description', 'is_partial'
         ]
         read_only_fields = [
-            'id', 'started_at', 'ended_at', 'status', 'nodeStates',
+            'id', 'started_at', 'ended_at', 'status', 'nodeStates', 'pendingValidation',
             'workflow_title', 'workflow_description', 'is_partial'
         ]
 
@@ -574,6 +572,57 @@ class WorkflowRunV2Serializer(serializers.ModelSerializer):
         """
         builder = NodeExecutionStateBuilder()
         return builder.build_state(obj)
+
+    def get_pendingValidation(self, obj):
+        """
+        Get flat pending validation data for frontend.
+
+        Returns the first pending validation as a flat object matching
+        frontend's PendingValidation type. Returns null if no pending validation.
+
+        Response Format:
+            {
+                "nodeId": str,
+                "routes": [{"name": str, "description": str}, ...],
+                "aiRecommendation": str | null,
+                "context": {"aiAnalysis": str | null}
+            } | null
+        """
+        # Find the first step waiting for human validation
+        pending_step = obj.steps.filter(
+            status=WorkflowRunStepStatus.PENDING_HUMAN_INPUT
+        ).select_related('step_node').first()
+
+        if not pending_step:
+            return None
+
+        step_data = pending_step.step_node.data_object if pending_step.step_node else None
+        metadata = pending_step.metadata or {}
+
+        # Handle StructuredOutputNodeData (routing node)
+        if step_data and isinstance(step_data, StructuredOutputNodeData):
+            routes = step_data.get_routes()
+            ai_recommendation = metadata.get('ai_recommendation')
+            ai_analysis = metadata.get('explanation') or metadata.get(MetadataKey.ANALYSIS)
+
+            return {
+                'nodeId': pending_step.step_node.node_id,
+                'routes': routes,
+                'aiRecommendation': ai_recommendation,
+                'context': {
+                    'aiAnalysis': ai_analysis
+                }
+            }
+
+        # Fallback for other node types that might need validation
+        return {
+            'nodeId': pending_step.step_node.node_id if pending_step.step_node else None,
+            'routes': [],
+            'aiRecommendation': None,
+            'context': {
+                'aiAnalysis': None
+            }
+        }
 
     # Reuse existing methods from v1 serializer
     get_workflow_title = WorkflowRunSerializer.get_workflow_title

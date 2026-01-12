@@ -1,7 +1,7 @@
 from .workflow_cloning_service import WorkflowCloningService
 from .node_execution_state_builder import NodeExecutionStateBuilder
 from .workflow_web_search_source_service import WorkflowWebSearchSourceService
-from .workflow_coordinator import WorkflowCoordinator
+# NOTE: WorkflowCoordinator imported lazily to avoid circular import with workflow_execution_service
 from .workflow_run_service import (
     get_user,
     validate_workflow_run_access,
@@ -19,7 +19,7 @@ __all__ = [
     'WorkflowCloningService',
     'NodeExecutionStateBuilder',
     'WorkflowWebSearchSourceService',
-    'WorkflowCoordinator',
+    # 'WorkflowCoordinator' - import directly from .workflow_coordinator to avoid circular import
     # Workflow run service functions
     'get_user',
     'validate_workflow_run_access',
