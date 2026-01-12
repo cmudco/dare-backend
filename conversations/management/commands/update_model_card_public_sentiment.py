@@ -726,7 +726,7 @@ class Command(BaseCommand):
             "tiers": {}
         }
 
-        client = anthropic.Anthropic()
+        client = anthropic.Anthropic(api_key=os.environ.get("CLAUDE_API_KEY"))
 
         for tier_name, query_templates in active_tiers.items():
             self.stdout.write(f'    {tier_name.upper()}')
@@ -893,7 +893,7 @@ Focus on authentic user experiences, not marketing content. Provide at least 5-1
 
         # Run analysis
         self.stdout.write(f'    Sending to Claude for analysis...')
-        client = anthropic.Anthropic()
+        client = anthropic.Anthropic(api_key=os.environ.get("CLAUDE_API_KEY"))
 
         try:
             response = client.messages.create(
