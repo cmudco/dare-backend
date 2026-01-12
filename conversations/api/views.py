@@ -11,12 +11,13 @@ from django.template.loader import render_to_string
 from django.utils import timezone
 from rest_framework import viewsets, generics, status, mixins
 from rest_framework.decorators import action
+from rest_framework.exceptions import NotFound
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.shortcuts import get_object_or_404
 
-from conversations.models import Message, Conversation, LLM, Snippet, Artifact, Feedback
+from conversations.models import Message, Conversation, LLM, Snippet, Artifact, Feedback, ModelCardData
 from conversations.constants import ArtifactStatus
 from users.utils import detect_platform_from_request
 from .serializers import (
@@ -27,8 +28,9 @@ from .serializers import (
     ArtifactListSerializer,
     ArtifactCheckpointSerializer,
     FeedbackSerializer,
+    ModelCardDataSerializer,
+    ModelCardDataListSerializer,
 )
-
 
 
 class ConversationViewSet(viewsets.ModelViewSet):
@@ -582,3 +584,30 @@ class FeedbackViewSet(mixins.CreateModelMixin, viewsets.GenericViewSet):
             f"{serializer.data.get('emotion')} - {serializer.data.get('category')}"
         )
 
+
+class ModelCardDataViewSet(viewsets.ReadOnlyModelViewSet):
+    """Read-only endpoint for Model Card data."""
+    queryset = ModelCardData.objects.all()
+    permission_classes = [AllowAny]
+    lookup_field = 'slug'
+
+    def get_serializer_class(self):
+        if self.action == 'list':
+            return ModelCardDataListSerializer
+        return ModelCardDataSerializer
+
+    def get_object(self):
+        slug = self.kwargs.get('slug')
+
+        # Try exact slug match first
+        try:
+            return ModelCardData.objects.get(slug=slug)
+        except ModelCardData.DoesNotExist:
+            pass
+
+        # Fallback: search name_variants
+        for card in ModelCardData.objects.all():
+            if slug in [v.lower().replace(' ', '-') for v in card.name_variants]:
+                return card
+
+        raise NotFound("Model card not found")
