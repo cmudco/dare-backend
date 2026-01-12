@@ -17,7 +17,7 @@ from rest_framework.permissions import IsAuthenticated
 
 from common.permissions import IsOwner
 from workflows.api.serializers import (
-    WorkflowRunSerializer, WorkflowSerializer,
+    WorkflowRunV2Serializer, WorkflowSerializer,
     WorkflowNodeSerializer, WorkflowEdgeSerializer,
 )
 from workflows.models import (
@@ -243,12 +243,11 @@ class WorkflowRunViewSet(viewsets.ModelViewSet):
     - get-active-partial-run: Get current partial run state on page load
     - export-pdf: Export workflow run results as PDF
     """
-    serializer_class = WorkflowRunSerializer
+    serializer_class = WorkflowRunV2Serializer
     permission_classes = [IsAuthenticated, IsOwner]
 
     def get_queryset(self):
-        # Prefetch steps with their related step_node to avoid N+1 queries
-        # and ensure step_node is properly populated in serialization
+        # Prefetch steps for NodeExecutionStateBuilder which builds nodeStates
         steps_prefetch = Prefetch(
             'steps',
             queryset=WorkflowRunStep.objects.select_related('step_node').order_by('order')
@@ -323,22 +322,11 @@ class WorkflowRunViewSet(viewsets.ModelViewSet):
                 if target_node and target_node.node_type in ['chatOutput', 'structuredOutput']:
                     executed_node_ids.append(edge.target)
 
-        # Serialize the partial run
+        # Serialize the partial run using V2 serializer (nodeStates instead of steps)
         serializer = self.get_serializer(partial_run)
-        partial_run_data = serializer.data
-
-        # Enrich steps with node_id for easier frontend mapping
-        enriched_steps = []
-        for step_data in partial_run_data.get('steps', []):
-            step = partial_run.steps.filter(id=step_data['id']).select_related('step_node').first()
-            if step and step.step_node:
-                step_data['node_id'] = step.step_node.node_id
-            enriched_steps.append(step_data)
-
-        partial_run_data['steps'] = enriched_steps
 
         return Response({
-            'partialRun': partial_run_data,
+            'partialRun': serializer.data,
             'executedStepNodeIds': list(set(executed_node_ids))  # Remove duplicates
         }, status=200)
 
