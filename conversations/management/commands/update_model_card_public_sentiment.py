@@ -696,8 +696,8 @@ class Command(BaseCommand):
             self.stderr.write(self.style.ERROR('    anthropic package not installed'))
             return False
 
-        if not os.environ.get("ANTHROPIC_API_KEY"):
-            self.stderr.write(self.style.ERROR('    ANTHROPIC_API_KEY not set'))
+        if not os.environ.get("CLAUDE_API_KEY"):
+            self.stderr.write(self.style.ERROR('    CLAUDE_API_KEY not set'))
             return False
 
         safe_name = self.get_safe_filename(model_name)
@@ -861,8 +861,8 @@ Focus on authentic user experiences, not marketing content. Provide at least 5-1
             self.stderr.write(self.style.ERROR('    anthropic package not installed'))
             return False
 
-        if not os.environ.get("ANTHROPIC_API_KEY"):
-            self.stderr.write(self.style.ERROR('    ANTHROPIC_API_KEY not set'))
+        if not os.environ.get("CLAUDE_API_KEY"):
+            self.stderr.write(self.style.ERROR('    CLAUDE_API_KEY not set'))
             return False
 
         safe_name = self.get_safe_filename(model_name)
