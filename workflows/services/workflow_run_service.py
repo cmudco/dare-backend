@@ -21,7 +21,6 @@ from workflows.models import (
     Workflow, WorkflowRun, WorkflowRunStep, StepNodeData
 )
 from workflows.constants import WorkflowRunStepStatus
-from workflows.api.serializers import WorkflowRunV2Serializer
 
 
 User = get_user_model()
@@ -299,47 +298,44 @@ def convert_partial_to_full_run(
 
 
 @sync_to_async
-def get_workflow_run_status(run_id: int) -> Optional[Dict[str, Any]]:
+def get_workflow_run_for_status(run_id: int) -> Optional[WorkflowRun]:
     """
-    Get the current status of a workflow run.
+    Get a workflow run with prefetched data for status display.
 
-    Uses V2 serializer for consistent data shape with socket events.
-    Includes nodeStates and pendingValidation.
+    Returns the raw WorkflowRun object - the caller is responsible
+    for serialization. This follows separation of concerns:
+    - Service layer: data access and business logic
+    - Coordinator/View layer: serialization for transport
 
     Args:
         run_id: Workflow run ID
 
     Returns:
-        Status dictionary or None if not found
+        WorkflowRun instance or None if not found
     """
     try:
-        run = WorkflowRun.objects.prefetch_related(
+        return WorkflowRun.objects.prefetch_related(
             'steps__step_node'
         ).get(id=run_id)
-
-        # Use V2 serializer for consistent formatting with socket events
-        serializer = WorkflowRunV2Serializer(run)
-        return {
-            'type': 'workflow_status',
-            **serializer.data
-        }
     except WorkflowRun.DoesNotExist:
         return None
 
 
 @sync_to_async
-def get_latest_workflow_run(workflow_id: int, user) -> Optional[Dict[str, Any]]:
+def get_latest_workflow_run_obj(workflow_id: int, user) -> Optional[WorkflowRun]:
     """
-    Get the latest workflow run for a workflow with full execution state.
+    Get the latest workflow run for a workflow with prefetched data.
 
     Also cleans up stale runs that have been stuck in "running" status.
+    Returns the raw WorkflowRun object - the caller is responsible
+    for serialization.
 
     Args:
         workflow_id: Workflow ID
         user: User instance
 
     Returns:
-        Full run data with nodeStates or None if no runs exist
+        WorkflowRun instance or None if no runs exist
     """
     try:
         # Verify workflow access
@@ -370,9 +366,7 @@ def get_latest_workflow_run(workflow_id: int, user) -> Optional[Dict[str, Any]]:
                 latest_run.ended_at = timezone.now()
                 latest_run.save(update_fields=['status', 'ended_at'])
 
-        # Use V2 serializer for full nodeStates
-        serializer = WorkflowRunV2Serializer(latest_run)
-        return serializer.data
+        return latest_run
 
     except Workflow.DoesNotExist:
         logger.warning(f"Workflow not found: id={workflow_id}, user={user.id}")
