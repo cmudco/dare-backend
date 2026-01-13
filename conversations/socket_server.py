@@ -37,3 +37,17 @@ sio = socketio.AsyncServer(
     ping_timeout=20,        # Disconnect after 20 seconds without pong
     max_http_buffer_size=10 * 1024 * 1024,  # 10MB max message size
 )
+
+
+def register_namespaces():
+    """
+    Register all Socket.IO namespaces.
+
+    This function is called after all namespace modules are imported
+    to avoid circular import issues.
+    """
+    from conversations.namespaces.chat import chat_namespace
+    from conversations.namespaces.workflow import workflow_namespace
+
+    sio.register_namespace(chat_namespace)
+    sio.register_namespace(workflow_namespace)
