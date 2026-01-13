@@ -22,7 +22,6 @@ from workflows.handlers.base import ExecutionNode, NodeExecutionContext, NodeExe
 from workflows.models import WorkflowRun, WorkflowRunStep
 from workflows.constants import WorkflowRunStepStatus
 from conversations.models import LLM
-from core.services.llm_utils import SchemaTransformer
 from core.services.dtos import LLMQueryRequestBuilder
 
 from workflows.handlers.utils import (
@@ -31,7 +30,6 @@ from workflows.handlers.utils import (
     MetadataKey,
     RouteNormalizer,
     StructuredOutputBuilder,
-    RouteInstructionBuilder,
 )
 
 
@@ -148,17 +146,17 @@ class BaseRoutingHandler(BaseExecutionHandler):
         correlation_id: str
     ) -> Tuple[str, Optional[str], Optional[Dict]]:
         """
-        Execute LLM query for routing decision with optional structured output.
+        Execute LLM query for routing decision with structured output.
 
-        This is the shared LLM query logic used by
-        StructuredOutputNode.
+        All modern providers (OpenAI, Gemini, Claude) support native structured
+        output and return JSON responses.
 
         Args:
             message: The prepared routing prompt
             llm: LLM to use for evaluation
             routes: List of route definitions
             route_names: List of route names for validation
-            structured_spec: Optional structured output specification
+            structured_spec: Structured output specification
             workflow_run: Current workflow run
             correlation_id: Correlation ID for logging
 
@@ -167,35 +165,18 @@ class BaseRoutingHandler(BaseExecutionHandler):
         """
         logger.debug(f"[{correlation_id}] Evaluating routing with LLM: {llm.identifier}")
 
-        # Get LLM provider info
-        llm_provider = await database_sync_to_async(lambda: llm.provider)()
-        llm_identifier = await database_sync_to_async(lambda: llm.identifier)()
-
-        # Check if provider supports native structured output
-        supports_native = SchemaTransformer.supports_native_structured_output(llm_provider)
-
-        # If provider doesn't support native structured output, append XML instructions
-        final_message = message
-        if not supports_native and structured_spec:
-            instruction = RouteInstructionBuilder.build_simple_instruction(route_names)
-            final_message = f"{message}{instruction}"
-            logger.debug(
-                f"[{correlation_id}] Provider {llm_provider} doesn't support native structured output, "
-                "added XML instructions to message"
-            )
-
         # Get user for LLM query
         workflow = await database_sync_to_async(lambda: workflow_run.workflow)()
         user = await database_sync_to_async(lambda: workflow.user)()
 
-        # Build request with structured spec (only pass if provider supports it)
+        # Build request with structured spec - all providers support native structured output
         request = LLMQueryRequestBuilder.from_workflow_data(
-            message=final_message,
+            message=message,
             user=user,
             llm=llm,
             max_tokens=LLMDefaults.STRUCTURED_OUTPUT_MAX_TOKENS,
             temperature=LLMDefaults.STRUCTURED_OUTPUT_TEMPERATURE,
-            structured_spec=structured_spec if supports_native else None
+            structured_spec=structured_spec
         )
 
         response_generator = self.llm_service.query(request)
@@ -207,7 +188,7 @@ class BaseRoutingHandler(BaseExecutionHandler):
 
         logger.debug(f"[{correlation_id}] LLM response received, parsing routing decision")
 
-        # Extract route and analysis from response
+        # Extract route and analysis from JSON response
         selected_route, analysis_text = self._parse_routing_response(
             full_response,
             route_names,
@@ -225,13 +206,12 @@ class BaseRoutingHandler(BaseExecutionHandler):
         """
         Parse routing decision from LLM response.
 
-        Supports multiple response formats:
-        1. JSON with route + explanation fields
-        2. XML with <decision>/<route> and <analysis> tags
-        3. Plain text route name with multi-line explanation
+        All providers return JSON with structured outputs containing:
+        - route: The selected route name
+        - explanation: AI's reasoning for the choice
 
         Args:
-            response: Raw LLM response
+            response: JSON response from LLM
             route_names: List of valid route names
             correlation_id: Correlation ID for logging
 
@@ -241,64 +221,33 @@ class BaseRoutingHandler(BaseExecutionHandler):
         analysis_text = None
         selected_route = None
 
-        # Strategy 1: Try JSON extraction first (for structured outputs)
+        # Parse JSON response - all providers return JSON with native structured outputs
         try:
             data = json.loads(response)
             if isinstance(data, dict):
-                # Extract route from JSON - try multiple field names
-                for field in ['route', 'decision', 'choice', 'selection']:
-                    if field in data:
-                        route_value = data[field]
-                        # Match case-insensitively
-                        for route_name in route_names:
-                            if str(route_value).lower() == route_name.lower():
-                                selected_route = route_name
-                                break
-                        if selected_route:
+                # Extract route - primary field name is 'route'
+                route_value = data.get('route')
+                if route_value:
+                    # Match case-insensitively
+                    for route_name in route_names:
+                        if str(route_value).lower() == route_name.lower():
+                            selected_route = route_name
                             break
 
                 if selected_route:
-                    # Extract explanation from multiple possible fields
-                    for exp_field in ['explanation', 'analysis', 'reasoning', 'rationale']:
-                        exp_value = data.get(exp_field)
-                        if exp_value and str(exp_value).strip():
-                            analysis_text = str(exp_value).strip()
-                            break
+                    # Extract explanation - primary field name is 'explanation'
+                    analysis_text = data.get('explanation', '').strip() or None
 
-                    logger.debug(f"[{correlation_id}] Extracted route '{selected_route}' from JSON, analysis: {bool(analysis_text)}")
+                    logger.debug(
+                        f"[{correlation_id}] Extracted route '{selected_route}' from JSON, "
+                        f"has_explanation: {bool(analysis_text)}"
+                    )
                     return selected_route, analysis_text
 
-        except (json.JSONDecodeError, ValueError):
-            pass
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.warning(f"[{correlation_id}] JSON parse failed: {e}, response: {response[:200]}")
 
-        # Strategy 2: Try XML extraction for Claude-style responses
-        selected_route, analysis_text = RouteNormalizer.extract_route_from_xml(
-            response,
-            route_names,
-            correlation_id
-        )
-
-        if selected_route:
-            return selected_route, analysis_text
-
-        # Strategy 3: Try multi-line extraction (first line = route, rest = explanation)
-        lines = response.strip().split('\n')
-        if lines:
-            first_line = lines[0].strip()
-            # Check if first line matches a route
-            for route_name in route_names:
-                if first_line.lower() == route_name.lower() or route_name.lower() in first_line.lower():
-                    selected_route = route_name
-                    # Join remaining lines as explanation
-                    if len(lines) > 1:
-                        analysis_text = '\n'.join(lines[1:]).strip()
-                    break
-
-        if selected_route:
-            logger.debug(f"[{correlation_id}] Extracted route '{selected_route}' from multi-line, analysis: {bool(analysis_text)}")
-            return selected_route, analysis_text
-
-        # Strategy 4: Fallback to direct matching
+        # Fallback: fuzzy matching on raw response (for edge cases)
         normalized_route, _ = RouteNormalizer.normalize_route_response(
             response,
             route_names,

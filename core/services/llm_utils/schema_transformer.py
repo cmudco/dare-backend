@@ -52,7 +52,7 @@ class SchemaTransformer:
     Provider-Specific Formats:
     - OpenAI: Uses response_format with json_schema and strict mode
     - Gemini: Uses response_schema with type definitions
-    - Claude: No native support, returns instructions for prompt engineering
+    - Claude: Uses json_schema via beta API (structured-outputs-2025-11-13)
     """
 
     @staticmethod
@@ -60,13 +60,22 @@ class SchemaTransformer:
         """
         Check if provider supports native structured outputs.
 
+        All modern providers now support native structured output:
+        - OpenAI: json_schema with strict mode
+        - Gemini: response_schema with JSON mime type
+        - Claude: json_schema via beta API (structured-outputs-2025-11-13)
+
         Args:
             provider: Provider name (openai, claude, gemini, etc.)
 
         Returns:
             bool: True if provider has native structured output support
         """
-        supports = provider in [Provider.OPENAI.value, Provider.GEMINI.value]
+        supports = provider in [
+            Provider.OPENAI.value,
+            Provider.GEMINI.value,
+            Provider.CLAUDE.value,  # Claude now supports native via beta API
+        ]
         logger.debug(
             f"[SchemaTransformer] Provider '{provider}' native structured output support: {supports}"
         )
@@ -287,42 +296,104 @@ class SchemaTransformer:
             return None, None
 
     @staticmethod
-    def transform_for_claude(schema: Dict[str, Any]) -> Optional[str]:
+    def transform_for_claude(schema: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
-        Transform unified schema to Claude-compatible prompt instructions.
-        
-        Claude doesn't support native structured outputs, so we generate
-        instructions for XML-based prompt engineering.
-        
+        Transform unified schema to Claude's json_schema format.
+
+        Claude now supports native structured outputs via the beta API
+        (structured-outputs-2025-11-13). The format is identical to OpenAI's
+        json_schema format.
+
         Args:
             schema: Unified schema definition
-        
+
         Returns:
-            Instruction string to append to prompt, or None
+            JSON schema configuration for Claude's structured output API
         """
-        if not schema or schema.get('type') != 'enum':
+        logger.debug(f"[SchemaTransformer] transform_for_claude called with schema: {schema}")
+
+        if not schema:
+            logger.warning("[SchemaTransformer] No schema provided for Claude")
             return None
 
-        field_name = schema.get('field', 'route')
-        enum_values = schema.get('values', [])
-        description = schema.get('description', 'Selection')
+        schema_type = schema.get('type')
 
-        if not enum_values:
-            logger.warning("No enum values provided for Claude structured output")
+        # Handle object schema (with explanation) - recommended format
+        if schema_type == 'object':
+            properties = schema.get('properties', {})
+            required = schema.get('required', [])
+
+            if not properties:
+                logger.warning("[SchemaTransformer] Object schema has no properties")
+                return None
+
+            # Build Claude schema properties (same format as OpenAI)
+            claude_properties = {}
+            for prop_name, prop_def in properties.items():
+                prop_type = prop_def.get('type')
+
+                if prop_type == 'enum':
+                    claude_properties[prop_name] = {
+                        "type": "string",
+                        "enum": prop_def.get('values', []),
+                        "description": prop_def.get('description', '')
+                    }
+                elif prop_type == 'string':
+                    claude_properties[prop_name] = {
+                        "type": "string",
+                        "description": prop_def.get('description', '')
+                    }
+                else:
+                    logger.warning(f"[SchemaTransformer] Unsupported property type: {prop_type}")
+                    continue
+
+            result = {
+                "type": "object",
+                "properties": claude_properties,
+                "required": required,
+                "additionalProperties": False,
+            }
+
+            logger.info(
+                f"[SchemaTransformer] Claude object transformation successful - "
+                f"properties: {list(claude_properties.keys())}, required: {required}"
+            )
+
+            return result
+
+        # Handle legacy enum schema (backward compatibility)
+        elif schema_type == 'enum':
+            field_name = schema.get('field', 'route')
+            enum_values = schema.get('values', [])
+            description = schema.get('description', f'Select one of: {", ".join(enum_values)}')
+
+            if not enum_values:
+                logger.warning("[SchemaTransformer] No enum values provided for Claude structured output")
+                return None
+
+            result = {
+                "type": "object",
+                "properties": {
+                    field_name: {
+                        "type": "string",
+                        "enum": enum_values,
+                        "description": description
+                    }
+                },
+                "required": [field_name],
+                "additionalProperties": False,
+            }
+
+            logger.info(
+                f"[SchemaTransformer] Claude enum transformation successful - "
+                f"field: {field_name}, values: {enum_values}"
+            )
+
+            return result
+
+        else:
+            logger.warning(f"[SchemaTransformer] Unsupported schema type: {schema_type}")
             return None
-
-        default_value = enum_values[0]
-
-        # Claude instruction format (XML-based)
-        instruction = (
-            f"\n\n{description.upper()} INSTRUCTIONS:\n"
-            f"You must respond with exactly one of these values: {', '.join(enum_values)}.\n"
-            f"Format your response as: <{field_name}>your_choice</{field_name}>\n"
-            f"Choose only from the provided options. If unsure, select '{default_value}'.\n"
-            f"Do not include any other text in your response."
-        )
-
-        return instruction
 
     @staticmethod
     def extract_value_from_response(
@@ -333,8 +404,10 @@ class SchemaTransformer:
         """
         Extract the structured value from a provider's response.
 
+        All providers now support native structured output and return JSON.
+
         Args:
-            response: Raw response from LLM
+            response: Raw response from LLM (JSON string)
             schema: Original unified schema
             provider: Provider name
 
@@ -343,28 +416,24 @@ class SchemaTransformer:
         """
         field_name = schema.get('field', 'route')
         allowed_values = schema.get('values', [])
-        
+
         if not allowed_values:
             return response.strip()
 
-        # For OpenAI and Gemini (native structured outputs), parse JSON
-        if provider in [Provider.OPENAI.value, Provider.GEMINI.value]:
-            try:
-                data = json.loads(response)
-                value = data.get(field_name)
-                if value in allowed_values:
-                    return value
-            except (json.JSONDecodeError, AttributeError):
-                logger.warning(f"Failed to parse JSON from {provider} response")
-
-        # For Claude or fallback, try XML extraction
-        xml_match = re.search(rf'<{field_name}>(.+?)</{field_name}>', response, re.DOTALL)
-        if xml_match:
-            value = xml_match.group(1).strip()
+        # All providers now return JSON with native structured outputs
+        try:
+            data = json.loads(response)
+            value = data.get(field_name)
             if value in allowed_values:
                 return value
+            # Try case-insensitive match
+            for allowed in allowed_values:
+                if str(value).lower() == allowed.lower():
+                    return allowed
+        except (json.JSONDecodeError, AttributeError):
+            logger.warning(f"Failed to parse JSON from {provider} response: {response[:100]}")
 
-        # Last resort: normalize response with fuzzy matching
+        # Fallback: normalize response with fuzzy matching
         return SchemaTransformer._normalize_with_fuzzy_match(
             response, allowed_values
         )

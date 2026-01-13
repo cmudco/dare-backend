@@ -155,22 +155,47 @@ class BaseExecutionHandler(BaseNodeHandler):
     async def _execute_llm_query_with_collection(
         self,
         llm_query_generator,
+        send_callback=None,
+        node_id: Optional[str] = None,
     ) -> tuple[str, Dict]:
         """
         Execute LLM query and collect full response with token usage.
 
+        Supports real-time streaming via send_callback for WebSocket clients.
+
         Args:
             llm_query_generator: Async generator from llm_service.query()
+            send_callback: Optional async callback for streaming chunks to clients
+            node_id: Optional node ID for streaming events
 
         Returns:
             tuple: (full_response, token_usage)
         """
+        from conversations.services.websocket_response_service import WebSocketResponseService
+
         full_response = ""
         token_usage = {}
+        accumulated_tokens = 0
 
         async for chunk, usage in llm_query_generator:
             if chunk:
                 full_response += chunk
+                accumulated_tokens += 1  # Approximate token count
+
+                # Stream chunk to client if callback provided
+                if send_callback and node_id:
+                    try:
+                        await send_callback(
+                            WebSocketResponseService.format_workflow_step_streaming(
+                                node_id=node_id,
+                                chunk=chunk,
+                                accumulated_tokens=accumulated_tokens
+                            )
+                        )
+                    except Exception as e:
+                        # Don't fail execution if streaming fails
+                        logger.debug(f"Streaming callback failed: {e}")
+
             if usage:
                 token_usage = usage
 

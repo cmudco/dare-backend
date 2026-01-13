@@ -472,3 +472,197 @@ class WebSocketResponseService:
             "estimatedSections": estimated_sections,
         }
 
+    # ========== Workflow Execution Response Formatters ==========
+
+    @classmethod
+    def format_workflow_step_started(
+        cls,
+        node_id: str,
+        step_number: int,
+        node_type: str = "step"
+    ) -> Dict[str, Any]:
+        """
+        Format workflow step started message for WebSocket transmission.
+
+        Sent when a workflow node begins execution.
+
+        Args:
+            node_id: Unique identifier for the node
+            step_number: Sequential step number in the workflow
+            node_type: Type of node ('step', 'structuredOutput', etc.)
+
+        Returns:
+            Dictionary ready for JSON serialization
+        """
+        return {
+            "type": "step_started",
+            "nodeId": node_id,
+            "stepNumber": step_number,
+            "nodeType": node_type,
+        }
+
+    @classmethod
+    def format_workflow_step_streaming(
+        cls,
+        node_id: str,
+        chunk: str,
+        accumulated_tokens: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """
+        Format workflow step streaming chunk for WebSocket transmission.
+
+        Sent during LLM response streaming for real-time token display.
+
+        Args:
+            node_id: Unique identifier for the node
+            chunk: The text chunk being streamed
+            accumulated_tokens: Running count of output tokens (optional)
+
+        Returns:
+            Dictionary ready for JSON serialization
+        """
+        payload = {
+            "type": "step_streaming",
+            "nodeId": node_id,
+            "chunk": chunk,
+        }
+        if accumulated_tokens is not None:
+            payload["accumulatedTokens"] = accumulated_tokens
+        return payload
+
+    @classmethod
+    def format_workflow_step_completed(
+        cls,
+        node_id: str,
+        response: str,
+        status: str,
+        tokens: Optional[Dict[str, int]] = None,
+        metadata: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        Format workflow step completion message for WebSocket transmission.
+
+        Sent when a workflow node finishes execution.
+
+        Args:
+            node_id: Unique identifier for the node
+            response: The complete response from the node
+            status: Execution status ('completed', 'failed', 'skipped')
+            tokens: Token usage {'input': int, 'output': int}
+            metadata: Additional metadata (routing decisions, snippets, etc.)
+
+        Returns:
+            Dictionary ready for JSON serialization
+        """
+        payload = {
+            "type": "step_completed",
+            "nodeId": node_id,
+            "response": response,
+            "status": status,
+        }
+        if tokens:
+            payload["tokens"] = tokens
+        if metadata:
+            payload["metadata"] = metadata
+        return payload
+
+    @classmethod
+    def format_workflow_execution_complete(
+        cls,
+        workflow_run_id: int,
+        status: str,
+        total_cost: Optional[float] = None,
+        total_tokens: Optional[Dict[str, int]] = None,
+        ended_at: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Format workflow execution complete message for WebSocket transmission.
+
+        Sent when the entire workflow finishes execution.
+
+        Args:
+            workflow_run_id: ID of the workflow run
+            status: Final execution status ('completed', 'failed', 'pending_human_input')
+            total_cost: Total cost of the execution
+            total_tokens: Total token usage {'input': int, 'output': int}
+            ended_at: ISO timestamp of completion
+
+        Returns:
+            Dictionary ready for JSON serialization
+        """
+        payload = {
+            "type": "execution_complete",
+            "workflowRunId": workflow_run_id,
+            "status": status,
+        }
+        if total_cost is not None:
+            payload["totalCost"] = total_cost
+        if total_tokens:
+            payload["totalTokens"] = total_tokens
+        if ended_at:
+            payload["endedAt"] = ended_at
+        return payload
+
+    @classmethod
+    def format_workflow_error(
+        cls,
+        node_id: Optional[str],
+        error: str,
+        error_type: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Format workflow error message for WebSocket transmission.
+
+        Sent when a workflow step encounters an error.
+
+        Args:
+            node_id: ID of the node that errored (None for workflow-level errors)
+            error: Error message
+            error_type: Category of error (optional)
+
+        Returns:
+            Dictionary ready for JSON serialization
+        """
+        payload = {
+            "type": "step_error",
+            "error": error,
+        }
+        if node_id:
+            payload["nodeId"] = node_id
+        if error_type:
+            payload["errorType"] = error_type
+        return payload
+
+    @classmethod
+    def format_workflow_validation_required(
+        cls,
+        node_id: str,
+        routes: List[Dict[str, Any]],
+        context: Optional[Dict[str, Any]] = None,
+        ai_recommendation: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Format human validation required message for WebSocket transmission.
+
+        Sent when a routing node requires human decision.
+
+        Args:
+            node_id: ID of the routing node
+            routes: List of available routes [{'name': str, 'description': str}, ...]
+            context: Additional context about the decision
+            ai_recommendation: AI's suggested route (optional)
+
+        Returns:
+            Dictionary ready for JSON serialization
+        """
+        payload = {
+            "type": "validation_required",
+            "nodeId": node_id,
+            "routes": routes,
+        }
+        if context:
+            payload["context"] = context
+        if ai_recommendation:
+            payload["aiRecommendation"] = ai_recommendation
+        return payload
+
