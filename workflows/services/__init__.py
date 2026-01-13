@@ -11,8 +11,8 @@ from .workflow_run_service import (
     create_partial_workflow_run,
     get_existing_partial_run,
     convert_partial_to_full_run,
-    get_workflow_run_status,
-    get_latest_workflow_run,
+    get_workflow_run_for_status,
+    get_latest_workflow_run_obj,
 )
 
 __all__ = [
@@ -29,6 +29,6 @@ __all__ = [
     'create_partial_workflow_run',
     'get_existing_partial_run',
     'convert_partial_to_full_run',
-    'get_workflow_run_status',
-    'get_latest_workflow_run',
+    'get_workflow_run_for_status',
+    'get_latest_workflow_run_obj',
 ]

@@ -16,8 +16,10 @@ import asyncio
 import logging
 from typing import Dict, Any, Optional, Callable, Awaitable
 
+from asgiref.sync import sync_to_async
 from conversations.services.websocket_response_service import WebSocketResponseService
 from core.services.workflow_execution_service import WorkflowExecutionService
+from workflows.api.serializers import WorkflowRunV2Serializer
 from workflows.services.workflow_run_service import (
     validate_workflow_run_access,
     get_workflow_run,
@@ -26,8 +28,8 @@ from workflows.services.workflow_run_service import (
     create_partial_workflow_run,
     get_existing_partial_run,
     convert_partial_to_full_run,
-    get_workflow_run_status,
-    get_latest_workflow_run,
+    get_workflow_run_for_status,
+    get_latest_workflow_run_obj,
 )
 
 
@@ -99,8 +101,15 @@ class WorkflowCoordinator:
         logger.info(f"Subscribed to workflow run: user={user.id}, run_id={run_id}")
 
         # Send current status
-        run_status = await get_workflow_run_status(run_id)
-        if run_status:
+        workflow_run = await get_workflow_run_for_status(run_id)
+        if workflow_run:
+            # Serializer accesses related models, must run in sync context
+            run_status = await sync_to_async(
+                lambda: {
+                    'type': 'workflow_status',
+                    **WorkflowRunV2Serializer(workflow_run).data
+                }
+            )()
             await self.sio.emit(
                 'workflow_status',
                 run_status,
@@ -135,10 +144,15 @@ class WorkflowCoordinator:
                 'latestRun': {...} or None,
             }
         """
-        latest_run = await get_latest_workflow_run(workflow_id, user)
+        workflow_run = await get_latest_workflow_run_obj(workflow_id, user)
 
-        if latest_run:
-            run_id = latest_run.get('id')
+        # Serialize if we have a run (must run in sync context due to ORM access)
+        latest_run_data = None
+        if workflow_run:
+            latest_run_data = await sync_to_async(
+                lambda: WorkflowRunV2Serializer(workflow_run).data
+            )()
+            run_id = latest_run_data.get('id')
             room_name = f'workflow_run_{run_id}'
             await self.sio.enter_room(sid, room_name, namespace=self.namespace)
             session['subscriptions'].add(run_id)
@@ -153,7 +167,7 @@ class WorkflowCoordinator:
         return {
             'success': True,
             'workflowId': workflow_id,
-            'latestRun': latest_run,
+            'latestRun': latest_run_data,
         }
 
     # ==================== Execution Operations ====================
