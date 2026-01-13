@@ -80,7 +80,6 @@ from .route_resolvers import (
     RouteResolver,
     RouteNormalizer,
     StructuredOutputBuilder,
-    RouteInstructionBuilder,
 )
 
 
@@ -131,7 +130,6 @@ __all__ = [
     "RouteResolver",
     "RouteNormalizer",
     "StructuredOutputBuilder",
-    "RouteInstructionBuilder",
 ]
 
 
