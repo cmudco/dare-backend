@@ -65,6 +65,7 @@ from conversations.services.message_helpers import (
     prepare_regeneration_data,
 )
 from mcp.services import mcp_tool_handler
+from dare_tools.services import dare_tool_handler
 
 logger = logging.getLogger(__name__)
 
@@ -501,6 +502,7 @@ class MessageCoordinator:
 
                     # Handle MCP tool calls if present
                     if usage.get("tool_calls"):
+                        # Handle MCP tool calls
                         tool_results = await mcp_tool_handler.handle_tool_calls(
                             tool_calls=usage["tool_calls"],
                             message=message_obj,
@@ -509,6 +511,16 @@ class MessageCoordinator:
                             send_callback=self.send,
                         )
                         mcp_tool_results.extend(tool_results)
+                        
+                        # Handle DARE tool calls (internal tools like diagrams, charts)
+                        dare_results = await dare_tool_handler.handle_tool_calls(
+                            tool_calls=usage["tool_calls"],
+                            message=message_obj,
+                            user=self.user,
+                            conversation=self.conversation,
+                            send_callback=self.send,
+                        )
+                        mcp_tool_results.extend(dare_results)
 
                     # Handle generated image
                     if usage.get("image_bytes"):
