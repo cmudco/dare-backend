@@ -1,0 +1,33 @@
+[
+    {
+        "model": "mcp.mcpserver",
+        "pk": 1,
+        "fields": {
+            "name": "Slack",
+            "slug": "slack",
+            "description": "Send messages, search channels, and read conversations in your Slack workspace using your personal token.",
+            "icon": "slack",
+            "command": "npx",
+            "args": [
+                "-y",
+                "slack-mcp-server@latest"
+            ],
+            "required_credentials": [
+                {
+                    "key": "slack_mcp_xoxp_token",
+                    "label": "User OAuth Token",
+                    "type": "password",
+                    "placeholder": "xoxp-your-user-token",
+                    "required": true,
+                    "helpText": "Your personal Slack User OAuth Token (starts with xoxp-)"
+                }
+            ],
+            "credentials_help_url": "https://api.slack.com/apps",
+            "setup_guide": "## Quick Setup (App Manifest)\n\n1. Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** → **From an app manifest**\n\n2. Select your workspace and paste this JSON:\n\n```json\n{\n    \"display_information\": {\n        \"name\": \"DARE MCP\"\n    },\n    \"oauth_config\": {\n        \"scopes\": {\n            \"user\": [\n                \"channels:history\",\n                \"channels:read\",\n                \"groups:history\",\n                \"groups:read\",\n                \"im:history\",\n                \"im:read\",\n                \"im:write\",\n                \"mpim:history\",\n                \"mpim:read\",\n                \"mpim:write\",\n                \"users:read\",\n                \"chat:write\",\n                \"search:read\"\n            ]\n        }\n    },\n    \"settings\": {\n        \"org_deploy_enabled\": false,\n        \"socket_mode_enabled\": false,\n        \"token_rotation_enabled\": false\n    }\n}\n```\n\n3. Click **Create** → **Install to Workspace** → Copy the `xoxp-...` token!",
+            "is_active": true,
+            "is_deleted": false,
+            "created_at": "2026-01-13T00:00:00Z",
+            "updated_at": "2026-01-14T00:00:00Z"
+        }
+    }
+]

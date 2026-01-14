@@ -49,6 +49,7 @@ LOCAL_APPS = [
     "billing",
     "notifications",
     "api_keys",
+    "mcp",
 ]
 
 THIRD_PARTY_APPS = [

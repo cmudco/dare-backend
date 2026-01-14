@@ -23,6 +23,7 @@ app_paths = [
     path("", include("billing.urls", namespace="billing")),
     path("", include("notifications.urls", namespace="notifications")),
     path("", include("api_keys.urls")),
+    path("mcp/", include("mcp.urls", namespace="mcp")),
 
 ]
 
