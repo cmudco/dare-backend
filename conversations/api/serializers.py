@@ -1,9 +1,10 @@
 from rest_framework import serializers
-from conversations.models import LLM, Message, Conversation, Snippet, WebSearchSource, Artifact, ArtifactCheckpoint, Feedback, ModelCardData, PublicFeedbackSourceCluster, PublicFeedbackSource
+from conversations.models import LLM, Message, Conversation, Snippet, WebSearchSource, Artifact, ArtifactCheckpoint, Feedback, ModelCardData, PublicFeedbackSourceCluster, PublicFeedbackSource, MessageToolCall
 from files.api.serializers import FileSerializer, TagSerializer
 from prompts.models import Prompt
 from prompts.api.serializers import PromptSerializer
 from users.constants import VectorDBChoice
+from mcp.models import MCPServer
 
 class LLMSerializer(serializers.ModelSerializer):
     class Meta:
@@ -42,6 +43,13 @@ class ConversationSerializer(serializers.ModelSerializer):
         allow_blank=True,
         help_text="Session ID for anonymous public bot conversations."
     )
+    selected_mcp_server_ids = serializers.PrimaryKeyRelatedField(
+        queryset=MCPServer.active_objects.all(),
+        source='selected_mcp_servers',
+        many=True,
+        required=False,
+        help_text="MCP servers enabled for this conversation."
+    )
 
     def get_user(self, obj):
         """Return user email or None for anonymous conversations."""
@@ -76,6 +84,7 @@ class ConversationSerializer(serializers.ModelSerializer):
             'feedback_auto_prompt_count',
             'feedback_last_prompt_message_count',
             'feedback_last_prompt_timestamp',
+            'selected_mcp_server_ids',
         ]
         read_only_fields = ['created_at', 'user', 'prompt']
 
@@ -116,6 +125,22 @@ class WebSearchSourceSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class MessageToolCallSerializer(serializers.ModelSerializer):
+    """Serializer for MCP tool calls within messages."""
+
+    class Meta:
+        model = MessageToolCall
+        fields = [
+            'tool_call_id',
+            'tool_name',
+            'server_slug',
+            'status',
+            'result',
+            'error',
+        ]
+        read_only_fields = fields
+
+
 class MessageSerializer(serializers.ModelSerializer):
     sender_name = serializers.ReadOnlyField(read_only=True)
     files = FileSerializer(many=True, read_only=True)
@@ -129,6 +154,7 @@ class MessageSerializer(serializers.ModelSerializer):
     web_search_sources = WebSearchSourceSerializer(many=True, read_only=True)
     llm = serializers.PrimaryKeyRelatedField(read_only=True, allow_null=True)
     artifactId = serializers.SerializerMethodField()
+    mcp_tool_calls = MessageToolCallSerializer(many=True, read_only=True)
 
     class Meta:
         model = Message
@@ -155,8 +181,9 @@ class MessageSerializer(serializers.ModelSerializer):
             'output_tokens',
             'cost',
             'artifactId',
+            'mcp_tool_calls',
         ]
-        read_only_fields = ['id', 'created_at', 'sender_name', 'files', 'tags', 'snippets', 'web_search_sources', 'input_tokens', 'output_tokens', 'cost', 'artifactId']
+        read_only_fields = ['id', 'created_at', 'sender_name', 'files', 'tags', 'snippets', 'web_search_sources', 'input_tokens', 'output_tokens', 'cost', 'artifactId', 'mcp_tool_calls']
 
     def get_artifactId(self, obj):
         """Get the ID of the first active artifact linked to this message."""
