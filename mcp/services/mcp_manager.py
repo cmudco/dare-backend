@@ -247,6 +247,10 @@ class MCPManager:
         for key, value in credentials.items():
             env[key.upper()] = value
 
+        # Add server-configured extra env vars (already stored as uppercase keys)
+        extra_vars = server.extra_env_vars if isinstance(server.extra_env_vars, dict) else {}
+        env.update(extra_vars)
+
         # Get command and args from server config
         command = server.command
         args = server.args if isinstance(server.args, list) else []

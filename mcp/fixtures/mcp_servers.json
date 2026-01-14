@@ -23,6 +23,9 @@
                 }
             ],
             "credentials_help_url": "https://api.slack.com/apps",
+            "extra_env_vars": {
+                "SLACK_MCP_ADD_MESSAGE_TOOL": "true"
+            },
             "setup_guide": "## Quick Setup (App Manifest)\n\n1. Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** → **From an app manifest**\n\n2. Select your workspace and paste this JSON:\n\n```json\n{\n    \"display_information\": {\n        \"name\": \"DARE MCP\"\n    },\n    \"oauth_config\": {\n        \"scopes\": {\n            \"user\": [\n                \"channels:history\",\n                \"channels:read\",\n                \"groups:history\",\n                \"groups:read\",\n                \"im:history\",\n                \"im:read\",\n                \"im:write\",\n                \"mpim:history\",\n                \"mpim:read\",\n                \"mpim:write\",\n                \"users:read\",\n                \"chat:write\",\n                \"search:read\"\n            ]\n        }\n    },\n    \"settings\": {\n        \"org_deploy_enabled\": false,\n        \"socket_mode_enabled\": false,\n        \"token_rotation_enabled\": false\n    }\n}\n```\n\n3. Click **Create** → **Install to Workspace** → Copy the `xoxp-...` token!",
             "is_active": true,
             "is_deleted": false,
