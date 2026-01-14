@@ -24,6 +24,7 @@ app_paths = [
     path("", include("notifications.urls", namespace="notifications")),
     path("", include("api_keys.urls")),
     path("mcp/", include("mcp.urls", namespace="mcp")),
+    path("dare/", include("dare_tools.urls", namespace="dare_tools")),
 
 ]
 
