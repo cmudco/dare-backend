@@ -549,23 +549,40 @@ class MessageCoordinator:
                     )
                     await self.send(payload)
 
-            # If we have tool results but no text response, make follow-up LLM call
-            if mcp_tool_results and not ai_response_accumulator.strip():
+            # If we have MCP tool results, ALWAYS make a follow-up LLM call
+            # Even if there's text, it's just the LLM "thinking" before calling tools
+            # The LLM needs to see the tool results to generate the final response
+            if mcp_tool_results:
                 logger.info(
                     f"[MessageCoordinator] Making follow-up LLM call with {len(mcp_tool_results)} tool results"
                 )
-                ai_response_accumulator = await mcp_tool_handler.stream_tool_result_response(
-                    tool_results=mcp_tool_results,
-                    message_data=message_data,
-                    message_obj=message_obj,
-                    llm=llm,
-                    conversation=self.conversation,
-                    user=self.user,
-                    platform=self.platform,
-                    send_callback=self.send,
-                    regenerate=regenerate,
-                )
+                try:
+                    # The follow-up response REPLACES any partial text from before tool calls
+                    ai_response_accumulator = await mcp_tool_handler.stream_tool_result_response(
+                        tool_results=mcp_tool_results,
+                        message_data=message_data,
+                        message_obj=message_obj,
+                        llm=llm,
+                        conversation=self.conversation,
+                        user=self.user,
+                        platform=self.platform,
+                        send_callback=self.send,
+                        regenerate=regenerate,
+                    )
+                except Exception as e:
+                    # If follow-up call fails, generate a fallback error message
+                    logger.exception(f"[MessageCoordinator] Follow-up LLM call failed: {e}")
+                    # Build fallback response from tool results
+                    error_parts = []
+                    for tr in mcp_tool_results:
+                        if tr.get("result", "").startswith("Error:"):
+                            error_parts.append(f"Tool `{tr['tool_name']}`: {tr['result']}")
+                    if error_parts:
+                        ai_response_accumulator = "I encountered some issues while executing the requested tools:\n\n" + "\n".join(error_parts)
+                    else:
+                        ai_response_accumulator = "I was unable to complete the tool execution. Please try again."
 
+            # Ensure we always finalize the message
             if ai_response_accumulator.strip():
                 # Save web search sources if present (before finalization)
                 await self._save_web_search_sources(message_obj, token_usage, regenerate)
@@ -582,6 +599,20 @@ class MessageCoordinator:
                 # Run learning progress assessment (Socratic only, sequential after AI response)
                 if not regenerate and should_run_learning_progress(self.platform, message_data.get("enable_progress")):
                     await self._run_learning_progress_stream(message_data, message_obj, llm)
+            elif mcp_tool_results:
+                # Edge case: tool results exist but no response was generated
+                # This shouldn't happen after the fix above, but handle defensively
+                logger.warning(
+                    f"[MessageCoordinator] Tool results existed but no response generated. "
+                    f"Finalizing with fallback message."
+                )
+                fallback_message = "The tool execution completed but I was unable to generate a response. Please try again."
+                await self._finalize_message(
+                    message_obj=message_obj,
+                    ai_response=fallback_message,
+                    token_usage=token_usage,
+                    regenerate=regenerate,
+                )
 
         except Exception as e:
             logger.exception(f"Error streaming AI response: {str(e)}")

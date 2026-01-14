@@ -86,6 +86,11 @@ class MCPToolHandler:
             if "__" not in tool_name:
                 continue
 
+            # Initialize variables before try block to ensure they're always defined
+            server_slug = "unknown"
+            actual_tool_name = tool_name
+            arguments = {}
+
             try:
                 # Parse tool name to get server and actual tool name
                 server_slug, actual_tool_name = mcp_tool_executor.parse_tool_call_name(
@@ -98,7 +103,7 @@ class MCPToolHandler:
                 except json.JSONDecodeError:
                     arguments = {}
 
-                logger.info(
+                logger.debug(
                     f"[MCPToolHandler] Executing MCP tool: {actual_tool_name} "
                     f"on {server_slug}"
                 )
@@ -137,7 +142,7 @@ class MCPToolHandler:
                 }
                 await send_callback(tool_result_payload)
 
-                logger.info(
+                logger.debug(
                     f"[MCPToolHandler] MCP tool {actual_tool_name} executed successfully"
                 )
                 
@@ -160,36 +165,54 @@ class MCPToolHandler:
                 })
 
             except MCPToolExecutorError as e:
-                results.append(
-                    await self._handle_tool_error(
+                # Use defensive try/except to ensure we ALWAYS append a result
+                try:
+                    error_result = await self._handle_tool_error(
                         error=e,
                         tool_call_id=tool_call_id,
                         tool_name=tool_name,
-                        server_slug=server_slug if 'server_slug' in dir() else 'unknown',
-                        actual_tool_name=actual_tool_name if 'actual_tool_name' in dir() else tool_name,
-                        arguments=arguments if 'arguments' in dir() else {},
+                        server_slug=server_slug,
+                        actual_tool_name=actual_tool_name,
+                        arguments=arguments,
                         message=message,
                         bot_message_id=bot_message_id,
                         send_callback=send_callback,
                         is_expected=True,
                     )
-                )
+                    results.append(error_result)
+                except Exception as handler_error:
+                    # If even the error handler fails, create a minimal result
+                    logger.exception(f"[MCPToolHandler] Error handler itself failed: {handler_error}")
+                    results.append({
+                        "tool_call_id": tool_call_id,
+                        "tool_name": tool_name,
+                        "result": f"Error: {str(e)}",
+                    })
 
             except Exception as e:
-                results.append(
-                    await self._handle_tool_error(
+                # Use defensive try/except to ensure we ALWAYS append a result
+                try:
+                    error_result = await self._handle_tool_error(
                         error=e,
                         tool_call_id=tool_call_id,
                         tool_name=tool_name,
-                        server_slug=server_slug if 'server_slug' in dir() else 'unknown',
-                        actual_tool_name=actual_tool_name if 'actual_tool_name' in dir() else tool_name,
-                        arguments=arguments if 'arguments' in dir() else {},
+                        server_slug=server_slug,
+                        actual_tool_name=actual_tool_name,
+                        arguments=arguments,
                         message=message,
                         bot_message_id=bot_message_id,
                         send_callback=send_callback,
                         is_expected=False,
                     )
-                )
+                    results.append(error_result)
+                except Exception as handler_error:
+                    # If even the error handler fails, create a minimal result
+                    logger.exception(f"[MCPToolHandler] Error handler itself failed: {handler_error}")
+                    results.append({
+                        "tool_call_id": tool_call_id,
+                        "tool_name": tool_name,
+                        "result": f"Error: {str(e)}",
+                    })
         
         return results
     
@@ -302,11 +325,12 @@ class MCPToolHandler:
         log_method = logger.error if is_expected else logger.exception
         log_method(f"[MCPToolHandler] MCP tool execution failed: {error}")
         
-        # Send error to client
+        # Send error to client - MUST match mcp_tool_call format (toolName, serverSlug)
         tool_error_payload = {
             "type": "mcp_tool_result",
             "messageId": bot_message_id,
-            "toolName": tool_name,
+            "toolName": actual_tool_name,  # Use actual tool name, not prefixed
+            "serverSlug": server_slug,  # Include serverSlug for frontend matching
             "status": "error",
             "error": str(error),
         }
