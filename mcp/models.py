@@ -67,6 +67,17 @@ class MCPServer(BaseModel):
         help_text="URL to documentation/guide on how to get credentials for this server"
     )
 
+    # Additional environment variables (admin-configured, not user-provided)
+    extra_env_vars = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="""
+        Additional environment variables to set when spawning this server. Example:
+        {"SLACK_MCP_ADD_MESSAGE_TOOL": "true", "SLACK_MCP_DEBUG": "1"}
+        These are admin-configured, not user-provided.
+        """
+    )
+
     # In-app setup guide (markdown)
     setup_guide = models.TextField(
         blank=True,
