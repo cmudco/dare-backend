@@ -90,6 +90,9 @@ class MessageValidationService:
 
             # MCP servers for tool calls
             "mcp_server_ids": cls._get_list(data, "mcp_server_ids"),
+
+            # DARE tools for internal tool calls
+            "dare_tool_slugs": cls._get_list(data, "dare_tool_slugs"),
         }
 
     @staticmethod

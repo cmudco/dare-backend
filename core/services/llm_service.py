@@ -67,7 +67,7 @@ class LLMService:
             messages = await self._build_messages_for_request(request, llm)
             all_images = await self._process_media_files(request)
             
-            # Collect all tools (MCP + any passed externally)
+            # Collect all tools (MCP + DARE + any passed externally)
             all_tools = list(tools) if tools else []
             
             # Auto-fetch MCP tools if server IDs provided
@@ -77,6 +77,14 @@ class LLMService:
                 all_tools.extend(mcp_tools)
             else:
                 logger.debug("[LLMService] No MCP server IDs in request")
+            
+            # Auto-fetch DARE tools if slugs provided
+            if request.requires_dare_tools():
+                logger.info(f"[LLMService] Request has DARE tool slugs: {request.dare_tool_slugs}")
+                dare_tools = self._get_dare_tools(request, llm)
+                all_tools.extend(dare_tools)
+            else:
+                logger.debug("[LLMService] No DARE tool slugs in request")
             
             # Log what tools are being passed
             if all_tools:
@@ -377,4 +385,42 @@ class LLMService:
             return tools
         except Exception as e:
             logger.warning(f"[LLMService] Failed to get MCP tools: {e}")
+            return []
+
+    def _get_dare_tools(
+        self,
+        request: LLMQueryRequest,
+        llm: LLM,
+    ) -> list:
+        """Get DARE native tools from the registry.
+        
+        Fetches tool definitions for DARE tools specified in the request.
+        These are internal tools (diagrams, charts) that don't require
+        external servers or credentials.
+        
+        Args:
+            request: LLMQueryRequest with dare_tool_slugs
+            llm: LLM model (used to determine tool format)
+            
+        Returns:
+            List of tool definitions in LLM-compatible format
+        """
+        if not request.requires_dare_tools():
+            return []
+        
+        try:
+            from dare_tools.services.registry import get_dare_tool_schemas
+            
+            # Get schemas in the appropriate format for the LLM provider
+            tools = get_dare_tool_schemas(
+                tool_slugs=list(request.dare_tool_slugs),
+                provider=llm.provider,
+            )
+            
+            if tools:
+                logger.info(f"[LLMService] Loaded {len(tools)} DARE tools for request")
+            
+            return tools
+        except Exception as e:
+            logger.warning(f"[LLMService] Failed to get DARE tools: {e}")
             return []
