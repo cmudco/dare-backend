@@ -225,7 +225,7 @@ class DareToolHandler:
                         "date": message_obj.created_at.isoformat(),
                     }
                 )
-                await send_callback(json.dumps(camelize(payload)))
+                await send_callback(camelize(payload))
         
         return ai_response_accumulator
     
@@ -273,7 +273,7 @@ class DareToolHandler:
         
         camelized = camelize(payload)
         logger.info(f"[DareToolHandler] Sending tool status: type={camelized.get('type')}, status={status}, message_id={bot_message_id}")
-        await send_callback(json.dumps(camelized))
+        await send_callback(camelized)
     
     @database_sync_to_async
     def _save_tool_execution(
