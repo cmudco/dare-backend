@@ -64,6 +64,7 @@ from conversations.services.message_helpers import (
     # Regeneration helpers
     prepare_regeneration_data,
 )
+from mcp.services import mcp_tool_handler
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +109,7 @@ class MessageCoordinator:
             user=user,
             send_callback=send_callback,
         )
+
 
     async def send(self, data: Dict[str, Any]):
         """Send data through WebSocket if callback is available."""
@@ -478,6 +480,7 @@ class MessageCoordinator:
             generated_transcription_data = None
 
             # Build LLM query request using DTO builder
+            # Note: mcp_server_ids are automatically extracted in the builder
             request = LLMQueryRequestBuilder.from_message_data(
                 message=message_data["message"],
                 conversation=self.conversation,
@@ -488,10 +491,24 @@ class MessageCoordinator:
                 platform=self.platform,
             )
 
-            # Stream from LLM service
+            # Track tool results for multi-turn tool use
+            mcp_tool_results = []
+
+            # Stream from LLM service (MCP tools fetched internally if mcp_server_ids present)
             async for chunk, usage in self.llm_service.query(request):
                 if usage:
                     token_usage = usage
+
+                    # Handle MCP tool calls if present
+                    if usage.get("tool_calls"):
+                        tool_results = await mcp_tool_handler.handle_tool_calls(
+                            tool_calls=usage["tool_calls"],
+                            message=message_obj,
+                            user=self.user,
+                            conversation=self.conversation,
+                            send_callback=self.send,
+                        )
+                        mcp_tool_results.extend(tool_results)
 
                     # Handle generated image
                     if usage.get("image_bytes"):
@@ -531,6 +548,23 @@ class MessageCoordinator:
                         }
                     )
                     await self.send(payload)
+
+            # If we have tool results but no text response, make follow-up LLM call
+            if mcp_tool_results and not ai_response_accumulator.strip():
+                logger.info(
+                    f"[MessageCoordinator] Making follow-up LLM call with {len(mcp_tool_results)} tool results"
+                )
+                ai_response_accumulator = await mcp_tool_handler.stream_tool_result_response(
+                    tool_results=mcp_tool_results,
+                    message_data=message_data,
+                    message_obj=message_obj,
+                    llm=llm,
+                    conversation=self.conversation,
+                    user=self.user,
+                    platform=self.platform,
+                    send_callback=self.send,
+                    regenerate=regenerate,
+                )
 
             if ai_response_accumulator.strip():
                 # Save web search sources if present (before finalization)
@@ -729,3 +763,4 @@ class MessageCoordinator:
                 "assessment": None
             }
             await self.send(payload)
+
