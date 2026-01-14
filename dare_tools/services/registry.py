@@ -87,7 +87,7 @@ def get_chart_tool_openai() -> Dict:
         "type": "function",
         "function": {
             "name": "create_chart",
-            "description": "Create a data visualization chart. Use this when the user asks for a bar chart, line chart, pie chart, or any data visualization based on numbers or statistics.",
+            "description": "Create a data visualization chart. You MUST call this tool whenever the user asks for ANY type of chart including: bar chart, line chart, pie chart, doughnut chart, area chart, or scatter chart. Do not describe the chart in text - always call this tool to render it visually.",
             "parameters": {
                 "type": "object",
                 "properties": {
