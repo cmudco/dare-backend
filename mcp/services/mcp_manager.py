@@ -234,6 +234,9 @@ class MCPManager:
         """
         Spawn MCP server subprocess with credentials as environment variables.
         
+        In Docker mode: runs `docker run -i --rm -e CREDS image`
+        In dev mode: runs `npx -y package` (existing behavior)
+        
         Args:
             server: MCPServer instance with command and args
             credentials: Decrypted credentials to pass as env vars
@@ -241,22 +244,53 @@ class MCPManager:
         Returns:
             asyncio subprocess with stdin/stdout pipes
         """
-        # Build environment with credentials
-        # MCP servers expect UPPERCASE environment variable names
-        env = os.environ.copy()
-        for key, value in credentials.items():
-            env[key.upper()] = value
-
-        # Add server-configured extra env vars (already stored as uppercase keys)
+        from mcp.constants import MCP_USE_DOCKER, MCP_DOCKER_IMAGES
+        
+        # Get extra env vars from server config
         extra_vars = server.extra_env_vars if isinstance(server.extra_env_vars, dict) else {}
-        env.update(extra_vars)
-
-        # Get command and args from server config
-        command = server.command
-        args = server.args if isinstance(server.args, list) else []
-
-        logger.debug(f"Spawning MCP subprocess: {command} {' '.join(args)}")
-
+        
+        if MCP_USE_DOCKER:
+            # Docker mode: run containerized MCP server
+            image = MCP_DOCKER_IMAGES.get(server.slug)
+            if not image:
+                raise MCPManagerError(f"No Docker image configured for {server.slug}")
+            
+            # Build docker run command
+            command = "docker"
+            args = ["run", "-i", "--rm"]
+            
+            # Pass credentials as -e flags (uppercase keys)
+            for key, value in credentials.items():
+                args.extend(["-e", f"{key.upper()}={value}"])
+            
+            # Pass extra env vars as -e flags
+            for key, value in extra_vars.items():
+                args.extend(["-e", f"{key}={value}"])
+            
+            # Add the image name
+            args.append(image)
+            
+            # Log without exposing credential values
+            logger.debug(f"Spawning Docker MCP: docker run -i --rm [env vars] {image}")
+            
+            # Docker mode doesn't need env passed to subprocess (uses -e flags)
+            env = None
+        else:
+            # Dev mode: existing npx behavior
+            # Build environment with credentials (uppercase keys)
+            env = os.environ.copy()
+            for key, value in credentials.items():
+                env[key.upper()] = value
+            
+            # Add server-configured extra env vars
+            env.update(extra_vars)
+            
+            # Get command and args from server config
+            command = server.command
+            args = server.args if isinstance(server.args, list) else []
+            
+            logger.debug(f"Spawning MCP subprocess: {command} {' '.join(args)}")
+        
         try:
             process = await asyncio.create_subprocess_exec(
                 command,
