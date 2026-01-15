@@ -7,6 +7,7 @@
             "slug": "slack",
             "description": "Send messages, search channels, and read conversations in your Slack workspace using your personal token.",
             "icon": "slack",
+            "docker_image": "dare-mcp-slack:latest",
             "command": "npx",
             "args": [
                 "-y",
@@ -41,6 +42,7 @@
             "slug": "github",
             "description": "Search repositories, manage issues and pull requests, view code, and interact with GitHub from your conversations.",
             "icon": "github",
+            "docker_image": "dare-mcp-github:latest",
             "command": "npx",
             "args": [
                 "-y",
