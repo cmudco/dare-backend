@@ -5,8 +5,11 @@ Functions for handling artifact intent detection and routing.
 Extracted from MessageCoordinator to improve modularity.
 
 These functions handle:
-- Artifact intent detection (chat, diagram, chart, create, edit)
+- Artifact intent detection (chat, create, edit)
 - Routing to appropriate artifact generation handlers
+
+Note: Diagrams and charts are handled directly via DARE tool calls,
+not through this artifact routing system.
 """
 
 import logging
@@ -33,9 +36,10 @@ async def handle_artifact_intent(
     Detects the user's intent from their message and routes to the
     appropriate artifact generation handler. Supports:
     - chat: Normal conversation (returns False to continue normal flow)
-    - diagram: Mermaid diagram generation
-    - chart: Chart.js chart generation
-    - create/edit: Code artifact creation or editing
+    - create/edit: Text artifact creation or editing
+
+    Note: Diagrams and charts are handled via DARE tool calls in
+    dare_tool_handler.py through the normal message flow.
 
     Args:
         message_data: Validated message data containing the user message
@@ -73,21 +77,7 @@ async def handle_artifact_intent(
         if intent == "chat":
             return False  # Continue to normal message streaming
 
-        if intent == "diagram":
-            logger.info("Intent is 'diagram', using tool-based diagram generation")
-            await simple_artifact_coordinator.stream_diagram_response(
-                message_data=message_data, message_obj=message_obj, llm=llm
-            )
-            return True
-
-        if intent == "chart":
-            logger.info("Intent is 'chart', using tool-based chart generation")
-            await simple_artifact_coordinator.stream_chart_response(
-                message_data=message_data, message_obj=message_obj, llm=llm
-            )
-            return True
-
-        # Create or edit artifact
+        # Create or edit text artifact
         await simple_artifact_coordinator.stream_artifact_response(
             message_data=message_data,
             message_obj=message_obj,
@@ -101,3 +91,4 @@ async def handle_artifact_intent(
         logger.exception(f"Error in artifact intent detection: {e}")
         logger.warning("Falling back to normal message flow due to intent detection error")
         return False
+

@@ -3,6 +3,9 @@ Artifact Intent Detection Service
 
 LLM-based intent detection for artifact operations.
 Uses Gemini Flash for fast, reliable classification.
+
+Note: Diagrams and charts are handled directly via DARE tool calls
+in the normal message flow, not through artifact intent routing.
 """
 
 import logging
@@ -27,8 +30,9 @@ class ArtifactIntentService:
     - "create": User wants to GENERATE new content (document, code, essay, etc.)
     - "edit": User wants to MODIFY/UPDATE the active artifact
     - "chat": User is asking questions, seeking clarification, or having a conversation
-    - "diagram": User wants to CREATE a visual diagram, flowchart, sequence diagram, mindmap (mermaid-based)
-    - "chart": User wants to CREATE a data visualization chart (bar, line, pie, area) with numerical data
+
+    Note: Diagrams and charts are handled via DARE tool calls (dare_tool_handler.py),
+    not through this intent service.
     """
 
     # Intent classification prompt
@@ -40,13 +44,13 @@ CONTEXT:
 USER MESSAGE: {message}
 
 Classify the user's intent as one of:
-- "create": User wants to GENERATE new content (document, code, essay, etc.)
+- "create": User wants to GENERATE new text content (document, code, essay, article, etc.)
 - "edit": User wants to MODIFY/UPDATE the active artifact
 - "chat": User is asking questions, seeking clarification, or having a conversation (NOT generating content)
-- "diagram": User wants to CREATE a visual diagram, flowchart, sequence diagram, mindmap, state diagram, class diagram, or architecture diagram (structural/flow visualizations)
-- "chart": User wants to CREATE a data visualization chart with numerical data like bar chart, line chart, pie chart, area chart, histogram, or graph showing statistics/trends
 
-Respond with ONLY one word: create, edit, chat, diagram, or chart"""
+Note: If the user is asking for a diagram, flowchart, or data chart, classify as "chat" - those are handled separately.
+
+Respond with ONLY one word: create, edit, or chat"""
 
     # Default LLM for intent detection (Gemini Flash - fast and cheap)
     DEFAULT_INTENT_MODEL = "gemini-2.0-flash"
@@ -57,7 +61,7 @@ Respond with ONLY one word: create, edit, chat, diagram, or chart"""
         active_artifact: Optional[Dict] = None,
         llm=None,  # Not used anymore - using Gemini Flash directly
         user=None,
-    ) -> Literal["create", "edit", "chat", "diagram", "chart"]:
+    ) -> Literal["create", "edit", "chat"]:
         """
         Detect user intent using LLM.
         
@@ -68,7 +72,7 @@ Respond with ONLY one word: create, edit, chat, diagram, or chart"""
             user: User for API key resolution
             
         Returns:
-            "create", "edit", "chat", "diagram", or "chart"
+            "create", "edit", or "chat"
         """
         try:
             # Clean up message - strip quotes that might be present
@@ -109,13 +113,12 @@ Respond with ONLY one word: create, edit, chat, diagram, or chart"""
             logger.debug(f"Intent detection raw response: '{intent}'")
 
             # Check exact match first
-            if intent in ("create", "edit", "chat", "diagram", "chart"):
+            if intent in ("create", "edit", "chat"):
                 logger.info(f"Intent detected: {intent} for message: {clean_message[:50]}...")
                 return intent
 
             # Check if intent word is contained in response
-            # Check chart before diagram since "chart" might appear in "flowchart"
-            for word in ["chart", "diagram", "create", "edit", "chat"]:
+            for word in ["create", "edit", "chat"]:
                 if word in intent:
                     logger.info(f"Intent detected (extracted): {word} for message: {clean_message[:50]}...")
                     return word
@@ -133,38 +136,12 @@ Respond with ONLY one word: create, edit, chat, diagram, or chart"""
         self,
         message: str,
         has_active_artifact: bool
-    ) -> Literal["create", "edit", "chat", "diagram", "chart"]:
+    ) -> Literal["create", "edit", "chat"]:
         """
         Fallback heuristic-based intent detection.
         Used when LLM is not available.
         """
         message_lower = message.lower().strip()
-
-        # Data chart indicators - check BEFORE diagram patterns
-        # These are for numerical data visualizations (recharts)
-        chart_patterns = [
-            "bar chart", "line chart", "pie chart", "area chart",
-            "histogram", "data chart", "sales chart", "revenue chart",
-            "comparison chart", "statistics chart", "trend chart",
-            "show me a chart", "create a chart", "make a chart",
-            "plot the data", "visualize the data", "graph the"
-        ]
-
-        for pattern in chart_patterns:
-            if pattern in message_lower:
-                return "chart"
-
-        # Diagram indicators (mermaid-based structural diagrams)
-        diagram_patterns = [
-            "diagram", "flowchart", "flow chart", "sequence diagram",
-            "mindmap", "mind map", "state diagram", "class diagram",
-            "architecture diagram", "workflow", "process flow",
-            "entity relationship", "er diagram", "uml"
-        ]
-
-        for pattern in diagram_patterns:
-            if pattern in message_lower:
-                return "diagram"
 
         # Strong create indicators
         create_patterns = [
@@ -245,3 +222,4 @@ Respond with ONLY one word: create, edit, chat, diagram, or chart"""
                 return None
         
         return await sync_to_async(_get)()
+
