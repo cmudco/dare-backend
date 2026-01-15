@@ -68,3 +68,6 @@ WEAVIATE_PORT = int(os.getenv("WEAVIATE_PORT", "8080"))
 WEAVIATE_COLLECTION_NAME = os.getenv("WEAVIATE_COLLECTION_NAME", "Document")
 WEAVIATE_SKIP_INIT_CHECKS = os.getenv("WEAVIATE_SKIP_INIT_CHECKS", "True") == "True"
 WEAVIATE_AUTOSCHEMA_ENABLED = os.getenv("WEAVIATE_AUTOSCHEMA_ENABLED", "False") == "True"
+
+# MCP Docker Configuration
+MCP_USE_DOCKER = os.getenv("MCP_USE_DOCKER", "False") == "True"
