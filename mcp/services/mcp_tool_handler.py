@@ -18,6 +18,7 @@ from django.utils import timezone
 
 from conversations.constants import SenderType, DEFAULT_AI_SENDER_NAME
 from conversations.models import Conversation, Message, MessageToolCall
+from conversations.services.websocket_response_service import WebSocketResponseService
 from core.services.dtos import LLMQueryRequest
 from core.services.dtos.builder import LLMQueryRequestBuilder
 from core.services.llm_service import LLMService
@@ -249,7 +250,7 @@ class MCPToolHandler:
         Returns:
             The accumulated response text
         """
-        from conversations.services.websocket_response_service import WebSocketResponseService
+
         
         bot_message_id = message_obj.id
         

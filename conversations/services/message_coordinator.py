@@ -20,6 +20,7 @@ from decimal import Decimal
 from channels.db import database_sync_to_async
 from djangorestframework_camel_case.util import camelize
 
+from conversations.api.serializers import ArtifactListSerializer
 from conversations.models import Conversation, Message, LLM, Artifact
 from conversations.constants import (
     SenderType,
@@ -773,7 +774,7 @@ class MessageCoordinator:
     async def _fetch_conversation_artifacts(self):
         """Fetch all artifacts for the current conversation."""
         def _get_artifacts():
-            from conversations.api.serializers import ArtifactListSerializer
+
             artifacts = Artifact.active_objects.filter(
                 conversation=self.conversation
             ).select_related('conversation', 'artifact_group', 'parent_artifact').order_by('-created_at')

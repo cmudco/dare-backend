@@ -371,7 +371,7 @@ class LLMService:
         
         try:
             from mcp.services import MCPToolExecutor
-            
+
             executor = MCPToolExecutor()
             tools = await executor.get_tools_for_server_ids(
                 user=request.user,
@@ -410,7 +410,7 @@ class LLMService:
         
         try:
             from dare_tools.services.registry import get_dare_tool_schemas
-            
+
             # Get schemas in the appropriate format for the LLM provider
             tools = get_dare_tool_schemas(
                 tool_slugs=list(request.dare_tool_slugs),
