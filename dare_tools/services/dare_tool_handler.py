@@ -15,6 +15,7 @@ from typing import List, Dict, Any, Callable, Optional
 
 from channels.db import database_sync_to_async
 from djangorestframework_camel_case.util import camelize
+from django.utils import timezone
 
 from conversations.constants import SenderType, DEFAULT_AI_SENDER_NAME
 from conversations.models import MessageToolCall
@@ -331,7 +332,7 @@ class DareToolHandler:
         
         Uses server_slug='dare' to distinguish from MCP tool calls.
         """
-        from django.utils import timezone
+
         
         try:
             # Format result as string for storage

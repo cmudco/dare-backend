@@ -16,11 +16,17 @@ import redis
 from django.conf import settings
 from django.utils import timezone
 
+from channels.db import database_sync_to_async
+
 from mcp.constants import (
     TOOL_CACHE_KEY_PREFIX,
     TOOL_CACHE_TTL,
     MCP_SUBPROCESS_TIMEOUT,
+    ExecutionStatus,
+    MCP_USE_DOCKER,
+    MCP_DOCKER_IMAGES,
 )
+from mcp.models import MCPToolExecution, UserMCPConnection
 from mcp.services.mcp_client import MCPClient, MCPClientError
 
 logger = logging.getLogger(__name__)
@@ -122,8 +128,7 @@ class MCPManager:
         Returns:
             Tool execution result
         """
-        from mcp.models import MCPToolExecution, UserMCPConnection
-        from mcp.constants import ExecutionStatus
+
 
         start_time = time.time()
         status = ExecutionStatus.PENDING
@@ -244,7 +249,7 @@ class MCPManager:
         Returns:
             asyncio subprocess with stdin/stdout pipes
         """
-        from mcp.constants import MCP_USE_DOCKER, MCP_DOCKER_IMAGES
+
         
         # Get extra env vars from server config
         extra_vars = server.extra_env_vars if isinstance(server.extra_env_vars, dict) else {}
@@ -318,8 +323,7 @@ class MCPManager:
         execution_time_ms: int
     ):
         """Create MCPToolExecution record asynchronously."""
-        from channels.db import database_sync_to_async
-        from mcp.models import MCPToolExecution
+
 
         @database_sync_to_async
         def create_record():
@@ -338,8 +342,7 @@ class MCPManager:
 
     async def _update_connection_last_used(self, user, server):
         """Update last_used_at on UserMCPConnection."""
-        from channels.db import database_sync_to_async
-        from mcp.models import UserMCPConnection
+
 
         @database_sync_to_async
         def update_last_used():
