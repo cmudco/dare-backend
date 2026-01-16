@@ -27,8 +27,8 @@ def get_diagram_tool_openai() -> Dict:
                 "properties": {
                     "diagram_type": {
                         "type": "string",
-                        "enum": ["flowchart", "sequence", "mindmap", "pie", "state", "class"],
-                        "description": "Type of diagram to create"
+                        "enum": ["flowchart", "sequence", "mindmap", "pie", "state", "class", "er"],
+                        "description": "Type of diagram to create. Use 'er' for Entity Relationship Diagrams (database schemas)"
                     },
                     "title": {
                         "type": "string",
@@ -81,8 +81,8 @@ def get_diagram_tool_claude() -> Dict:
             "properties": {
                 "diagram_type": {
                     "type": "string",
-                    "enum": ["flowchart", "sequence", "mindmap", "pie", "state", "class"],
-                    "description": "Type of diagram to create"
+                    "enum": ["flowchart", "sequence", "mindmap", "pie", "state", "class", "er"],
+                    "description": "Type of diagram to create. Use 'er' for Entity Relationship Diagrams (database schemas)"
                 },
                 "title": {
                     "type": "string",
@@ -234,6 +234,8 @@ def json_to_mermaid(data: Dict) -> str:
         return _build_state_diagram(title, nodes, edges)
     elif diagram_type == "class":
         return _build_class_diagram(title, nodes, edges)
+    elif diagram_type == "er":
+        return _build_er_diagram(title, nodes, edges)
     else:
         # Default to flowchart
         logger.warning(f"Unknown diagram type '{diagram_type}', defaulting to flowchart")
@@ -389,6 +391,32 @@ def _build_class_diagram(title: str, nodes: List[Dict], edges: List[Dict]) -> st
         
         if from_id and to_id:
             lines.append(f'    {from_id} --> {to_id} : {_escape_label(label)}')
+    
+    return "\n".join(lines)
+
+
+def _build_er_diagram(title: str, nodes: List[Dict], edges: List[Dict]) -> str:
+    """Build an Entity Relationship Diagram."""
+    lines = ["erDiagram"]
+    lines.append(f"    %% {title}")
+    
+    # Define entities (nodes become entity names)
+    # ERD doesn't require explicit entity definitions - they're inferred from relationships
+    
+    # Add relationships
+    # ERD relationship syntax: Entity1 ||--o{ Entity2 : "relationship"
+    # Cardinality: ||=exactly one, |o=zero or one, }|=one or more, }o=zero or more
+    for edge in edges:
+        from_id = _sanitize_node_id(edge.get("from", ""))
+        to_id = _sanitize_node_id(edge.get("to", ""))
+        label = edge.get("label", "relates_to")
+        # Default to one-to-many relationship (most common in databases)
+        cardinality = edge.get("cardinality", "||--o{")
+        
+        if from_id and to_id:
+            # ERD labels must be quoted
+            escaped_label = _escape_label(label).replace('"', "'").replace(' ', '_')
+            lines.append(f'    {from_id} {cardinality} {to_id} : "{escaped_label}"')
     
     return "\n".join(lines)
 
