@@ -113,6 +113,7 @@ class MCPToolHandler:
                 tool_start_payload = {
                     "type": "mcp_tool_call",
                     "messageId": bot_message_id,
+                    "toolCallId": tool_call_id,
                     "toolName": actual_tool_name,
                     "serverSlug": server_slug,
                     "status": "executing",
@@ -136,6 +137,7 @@ class MCPToolHandler:
                 tool_result_payload = {
                     "type": "mcp_tool_result",
                     "messageId": bot_message_id,
+                    "toolCallId": tool_call_id,
                     "toolName": actual_tool_name,
                     "serverSlug": server_slug,
                     "status": "success",
@@ -326,10 +328,11 @@ class MCPToolHandler:
         log_method = logger.error if is_expected else logger.exception
         log_method(f"[MCPToolHandler] MCP tool execution failed: {error}")
         
-        # Send error to client - MUST match mcp_tool_call format (toolName, serverSlug)
+        # Send error to client - include toolCallId for frontend matching
         tool_error_payload = {
             "type": "mcp_tool_result",
             "messageId": bot_message_id,
+            "toolCallId": tool_call_id,
             "toolName": actual_tool_name,  # Use actual tool name, not prefixed
             "serverSlug": server_slug,  # Include serverSlug for frontend matching
             "status": "error",
