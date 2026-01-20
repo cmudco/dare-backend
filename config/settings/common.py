@@ -51,6 +51,7 @@ LOCAL_APPS = [
     "api_keys",
     "mcp",
     "dare_tools",
+    "memory",
 ]
 
 THIRD_PARTY_APPS = [
