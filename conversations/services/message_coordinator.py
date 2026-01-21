@@ -580,6 +580,7 @@ class MessageCoordinator:
                         user=self.user,
                         platform=self.platform,
                         send_callback=self.send,
+                        llm_service=self.llm_service,
                         regenerate=regenerate,
                     )
                 except Exception as e:

@@ -1,6 +1,10 @@
+import logging
 from abc import ABC, abstractmethod
+from typing import AsyncGenerator, Dict, Tuple, Optional, Any, List
+
 from conversations.constants import Provider, SenderType
 from conversations.models import LLM, Conversation, Message
+from core.integrations import ToolFetcher
 from core.services.document_processor import DocumentProcessor
 from core.services.openai_service import OpenAIService
 from core.services.claude_service import ClaudeService
@@ -10,9 +14,7 @@ from core.services.custom_llm_service import CustomLLMService
 from core.services.file_processor import FileProcessor
 from core.services.api_key_service import get_provider_api_key, get_provider_api_key_for_user
 from core.services.dtos import LLMQueryRequest, LLMQueryChunk
-from typing import AsyncGenerator, Dict, Tuple, Optional, Any, List
 from files.models import File, Folder
-import logging
 
 from core.services.llm_helpers import (
     # Database helpers
@@ -45,6 +47,7 @@ class LLMService:
     def __init__(self):
         self.document_processor = DocumentProcessor(vector_service=None)
         self.file_processor = FileProcessor()
+        self.tool_fetcher = ToolFetcher()
 
     async def query(
         self,
@@ -66,30 +69,9 @@ class LLMService:
             llm = await self._resolve_llm(request)
             messages = await self._build_messages_for_request(request, llm)
             all_images = await self._process_media_files(request)
-            
-            # Collect all tools (MCP + DARE + any passed externally)
-            all_tools = list(tools) if tools else []
-            
-            # Auto-fetch MCP tools if server IDs provided
-            if request.requires_mcp_tools():
-                logger.info(f"[LLMService] Request has MCP server IDs: {request.mcp_server_ids}")
-                mcp_tools = await self._get_mcp_tools(request, llm)
-                all_tools.extend(mcp_tools)
-            else:
-                logger.debug("[LLMService] No MCP server IDs in request")
-            
-            # Auto-fetch DARE tools if slugs provided
-            if request.requires_dare_tools():
-                logger.info(f"[LLMService] Request has DARE tool slugs: {request.dare_tool_slugs}")
-                dare_tools = self._get_dare_tools(request, llm)
-                all_tools.extend(dare_tools)
-            else:
-                logger.debug("[LLMService] No DARE tool slugs in request")
-            
-            # Log what tools are being passed
-            if all_tools:
-                tool_names = [t.get('function', {}).get('name', 'unknown') for t in all_tools]
-                logger.info(f"[LLMService] Passing {len(all_tools)} tools to LLM: {tool_names}")
+
+            # Collect all tools (MCP + DARE + any passed externally) via ToolFetcher
+            all_tools = await self.tool_fetcher.get_all_tools(request, llm, tools)
 
             if request.requires_audio_transcription():
                 async for chunk, usage in self._execute_audio_transcription(request, llm):
@@ -348,79 +330,3 @@ class LLMService:
 
         tool_func = provider_tools.get(llm.provider)
         return [tool_func()] if tool_func else []
-
-    async def _get_mcp_tools(
-        self,
-        request: LLMQueryRequest,
-        llm: LLM,
-    ) -> list:
-        """Get MCP tools from selected servers.
-        
-        Fetches tools from MCP servers specified in the request and converts
-        them to the appropriate format for the LLM provider.
-        
-        Args:
-            request: LLMQueryRequest with mcp_server_ids
-            llm: LLM model (used to determine tool format)
-            
-        Returns:
-            List of tool definitions in LLM-compatible format
-        """
-        if not request.requires_mcp_tools() or not request.user:
-            return []
-        
-        try:
-            from mcp.services import MCPToolExecutor
-
-            executor = MCPToolExecutor()
-            tools = await executor.get_tools_for_server_ids(
-                user=request.user,
-                server_ids=list(request.mcp_server_ids),
-                llm_provider=llm.provider,
-            )
-            
-            if tools:
-                logger.info(f"[LLMService] Loaded {len(tools)} MCP tools for request")
-            
-            return tools
-        except Exception as e:
-            logger.warning(f"[LLMService] Failed to get MCP tools: {e}")
-            return []
-
-    def _get_dare_tools(
-        self,
-        request: LLMQueryRequest,
-        llm: LLM,
-    ) -> list:
-        """Get DARE native tools from the registry.
-        
-        Fetches tool definitions for DARE tools specified in the request.
-        These are internal tools (diagrams, charts) that don't require
-        external servers or credentials.
-        
-        Args:
-            request: LLMQueryRequest with dare_tool_slugs
-            llm: LLM model (used to determine tool format)
-            
-        Returns:
-            List of tool definitions in LLM-compatible format
-        """
-        if not request.requires_dare_tools():
-            return []
-        
-        try:
-            from dare_tools.services.registry import get_dare_tool_schemas
-
-            # Get schemas in the appropriate format for the LLM provider
-            tools = get_dare_tool_schemas(
-                tool_slugs=list(request.dare_tool_slugs),
-                provider=llm.provider,
-            )
-            
-            if tools:
-                logger.info(f"[LLMService] Loaded {len(tools)} DARE tools for request")
-            
-            return tools
-        except Exception as e:
-            logger.warning(f"[LLMService] Failed to get DARE tools: {e}")
-            return []
