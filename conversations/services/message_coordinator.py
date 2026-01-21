@@ -40,9 +40,6 @@ from conversations.services.websocket_response_service import WebSocketResponseS
 from conversations.services.message_validation_service import MessageValidationService
 from conversations.services.image_generation_service import ImageGenerationService
 from conversations.services.web_search_source_service import WebSearchSourceService
-# Simplified artifact services (replaced legacy LangGraph system)
-from conversations.services.artifact_intent_service import ArtifactIntentService
-from conversations.services.simple_artifact_coordinator import SimpleArtifactCoordinator
 from users.utils import should_run_learning_progress
 from conversations.services.message_helpers import (
     build_transcription_data,
@@ -58,8 +55,6 @@ from conversations.services.message_helpers import (
     # Billing helpers
     update_public_bot_budget,
     handle_insufficient_balance,
-    # Artifact helpers
-    handle_artifact_intent,
     # Finalization helpers
     finalize_message,
     # Regeneration helpers
@@ -103,14 +98,6 @@ class MessageCoordinator:
 
         # Track active artifact generation tasks for cancellation
         self._artifact_tasks: Dict[str, asyncio.Task] = {}
-
-        # Simplified artifact services
-        self.intent_service = ArtifactIntentService()
-        self.simple_artifact_coordinator = SimpleArtifactCoordinator(
-            conversation=conversation,
-            user=user,
-            send_callback=send_callback,
-        )
 
 
     async def send(self, data: Dict[str, Any]):
@@ -224,24 +211,6 @@ class MessageCoordinator:
     ) -> None:
         """Update bot budget for public bot conversations."""
         return await update_public_bot_budget(self.conversation, cost, message_obj)
-
-
-    async def _handle_artifact_intent(
-        self,
-        message_data: Dict[str, Any],
-        message_obj: Message,
-        llm: LLM,
-    ) -> bool:
-        """Handle artifact intent detection and routing."""
-        return await handle_artifact_intent(
-            message_data=message_data,
-            message_obj=message_obj,
-            llm=llm,
-            conversation=self.conversation,
-            user=self.user,
-            intent_service=self.intent_service,
-            simple_artifact_coordinator=self.simple_artifact_coordinator,
-        )
 
 
     async def handle_new_message(
@@ -466,13 +435,9 @@ class MessageCoordinator:
             llm: LLM instance to use
             regenerate: Whether this is a regeneration request
         """
-        # Check if artifacts mode is enabled
-        artifacts_enabled = message_data.get("artifacts_enabled", False)
-        active_artifact_id = message_data.get("active_artifact_id")
-
-        if artifacts_enabled and not regenerate:
-            if await self._handle_artifact_intent(message_data, message_obj, llm):
-                return
+        # Note: artifacts_enabled controls tool injection via LLMQueryRequestBuilder
+        # LLM naturally decides when to use create_artifact/update_artifact tools
+        # No longer using intent detection - tools handle artifact creation directly
 
         try:
             bot_message_id = message_obj.id  # Keep as integer for consistency
