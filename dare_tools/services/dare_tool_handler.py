@@ -24,6 +24,7 @@ from core.services.dtos.builder import LLMQueryRequestBuilder
 from dare_tools.constants import ExecutionStatus
 from dare_tools.models import DareTool, DareToolExecution
 from dare_tools.services.registry import DareToolRegistry
+from conversations.services.artifact_tool_executor import artifact_tool_executor
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,13 @@ class DareToolHandler:
     2. Emit WebSocket notifications for UI updates
     3. Persist execution records to database
     4. Make follow-up LLM calls with tool results
+    
+    Visual tools (create_chart, create_diagram) are routed to ArtifactToolExecutor
+    for unified artifact panel rendering.
     """
+    
+    # Tools that create visual artifacts - routed to ArtifactToolExecutor
+    ARTIFACT_TOOLS = ['create_chart', 'create_diagram']
     
     def __init__(self):
         # No LLMService here - it's passed via stream_tool_result_response
@@ -103,7 +110,19 @@ class DareToolHandler:
             # Execute the tool
             start_time = time.time()
             try:
-                result = DareToolRegistry.execute_tool(tool_name, arguments)
+                # Route visual tools to ArtifactToolExecutor for artifact panel
+                if tool_name in self.ARTIFACT_TOOLS:
+                    result = await artifact_tool_executor.execute(
+                        tool_name=tool_name,
+                        arguments=arguments,
+                        message=message,
+                        conversation=conversation,
+                        send_callback=send_callback,
+                    )
+                else:
+                    # Non-visual tools use existing registry
+                    result = DareToolRegistry.execute_tool(tool_name, arguments)
+                
                 execution_time_ms = int((time.time() - start_time) * 1000)
                 
                 if result.get("success"):
