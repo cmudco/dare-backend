@@ -21,7 +21,6 @@ from conversations.constants import SenderType, DEFAULT_AI_SENDER_NAME
 from conversations.models import MessageToolCall
 from conversations.services.websocket_response_service import WebSocketResponseService
 from core.services.dtos.builder import LLMQueryRequestBuilder
-from core.services.llm_service import LLMService
 from dare_tools.constants import ExecutionStatus
 from dare_tools.models import DareTool, DareToolExecution
 from dare_tools.services.registry import DareToolRegistry
@@ -41,7 +40,9 @@ class DareToolHandler:
     """
     
     def __init__(self):
-        self.llm_service = LLMService()
+        # No LLMService here - it's passed via stream_tool_result_response
+        # to match MCP tool handler pattern and avoid potential circular imports
+        pass
     
     async def handle_tool_calls(
         self,
@@ -175,11 +176,12 @@ class DareToolHandler:
         user,
         platform: str,
         send_callback: Callable,
+        llm_service,
         regenerate: bool = False,
     ) -> str:
         """
         Make a follow-up LLM call with tool results to get the final response.
-        
+
         Args:
             tool_results: List of tool execution results
             message_data: Original message data
@@ -189,8 +191,9 @@ class DareToolHandler:
             user: User who triggered the request
             platform: Platform name
             send_callback: WebSocket callback
+            llm_service: LLMService instance for making follow-up calls
             regenerate: Whether this is a regeneration
-            
+
         Returns:
             Final AI response text
         """
@@ -204,14 +207,14 @@ class DareToolHandler:
             message_obj=message_obj,
             platform=platform,
         )
-        
+
         # Add tool results to the request
         request.tool_results = tool_results
-        
+
         # Stream the response
         ai_response_accumulator = ""
-        
-        async for chunk, usage in self.llm_service.query(request):
+
+        async for chunk, usage in llm_service.query(request):
             if chunk and chunk.strip():
                 ai_response_accumulator += chunk
                 payload = WebSocketResponseService.format_streaming_chunk(
@@ -228,7 +231,7 @@ class DareToolHandler:
                     }
                 )
                 await send_callback(camelize(payload))
-        
+
         return ai_response_accumulator
     
     def _format_result_for_llm(self, tool_name: str, result: Dict) -> str:
