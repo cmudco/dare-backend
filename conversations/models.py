@@ -1066,6 +1066,26 @@ class Artifact(BaseModel):
         help_text="Additional metadata (LLM used, token counts, etc.)."
     )
 
+    # Unified artifact system fields
+    filename = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        help_text="Filename with extension (e.g., 'chart.json', 'diagram.mmd') - determines renderer."
+    )
+    content_type = models.CharField(
+        max_length=100,
+        blank=True,
+        default="",
+        help_text="MIME-like content type (e.g., 'application/vnd.dare.chart+json', 'text/mermaid')."
+    )
+    source_tool = models.CharField(
+        max_length=50,
+        blank=True,
+        default="",
+        help_text="DARE tool that created this artifact (e.g., 'create_chart', 'create_diagram')."
+    )
+
     # Version tracking for modifications
     version = models.PositiveIntegerField(
         default=1,
