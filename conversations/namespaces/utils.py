@@ -8,6 +8,13 @@ including platform detection based on HTTP headers.
 import logging
 from typing import Optional
 
+from config.env import (
+    DARE_FRONTEND_URL,
+    DARE_BACKEND_URL,
+    SOCRATIC_BOTS_FRONTEND_URL,
+    SOCRATIC_BOTS_BACKEND_URL,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -109,13 +116,6 @@ def _match_url_to_platform(origin: Optional[str], referer: Optional[str]) -> str
     Returns:
         "SocraticBots" or "DARE"
     """
-    from config.env import (
-        DARE_FRONTEND_URL,
-        DARE_BACKEND_URL,
-        SOCRATIC_BOTS_FRONTEND_URL,
-        SOCRATIC_BOTS_BACKEND_URL,
-    )
-
     # Build URL mappings: normalized_url -> platform
     url_to_platform = {}
 

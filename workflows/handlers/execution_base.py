@@ -14,6 +14,7 @@ from workflows.models import WorkflowRun, WorkflowRunStep
 from workflows.constants import WorkflowRunStepStatus
 from core.services.billing_service import BillingService
 from conversations.models import LLM
+from conversations.services.websocket_response_service import WebSocketResponseService
 
 
 logger = logging.getLogger(__name__)
@@ -171,8 +172,6 @@ class BaseExecutionHandler(BaseNodeHandler):
         Returns:
             tuple: (full_response, token_usage)
         """
-        from conversations.services.websocket_response_service import WebSocketResponseService
-
         full_response = ""
         token_usage = {}
         accumulated_tokens = 0

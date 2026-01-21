@@ -13,6 +13,7 @@ This namespace replaces the per-conversation ChatConsumer pattern
 with a single persistent connection model.
 """
 
+import json
 import logging
 import jwt
 import base64
@@ -33,6 +34,7 @@ from conversations.constants import (
 from conversations.services.message_coordinator import MessageCoordinator
 from conversations.services.message_validation_service import MessageValidationService
 from conversations.services.audio_transcription_service import AudioTranscriptionService
+from conversations.services.websocket_response_service import WebSocketResponseService
 from conversations.namespaces.utils import detect_platform_from_socketio_environ
 from core.services.conversation_service import ConversationService
 
@@ -511,7 +513,6 @@ class ChatNamespace(socketio.AsyncNamespace):
             )
             
             # Broadcast update to all subscribers
-            from conversations.services.websocket_response_service import WebSocketResponseService
             formatted = await WebSocketResponseService.format_message(
                 message=updated_message,
                 message_type="edit_message",
@@ -644,7 +645,6 @@ class ChatNamespace(socketio.AsyncNamespace):
         subscribers receive them.
         """
         async def send_callback(message: str):
-            import json
             try:
                 data = json.loads(message) if isinstance(message, str) else message
                 await sio.emit('message', data, room=f'conversation_{conv_id}', namespace='/chat')

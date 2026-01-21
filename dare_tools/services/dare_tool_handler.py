@@ -23,6 +23,7 @@ from conversations.services.websocket_response_service import WebSocketResponseS
 from core.services.dtos.builder import LLMQueryRequestBuilder
 from core.services.llm_service import LLMService
 from dare_tools.constants import ExecutionStatus
+from dare_tools.models import DareTool, DareToolExecution
 from dare_tools.services.registry import DareToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -291,8 +292,6 @@ class DareToolHandler:
         execution_time_ms: int,
     ):
         """Save tool execution record to database."""
-        from dare_tools.models import DareTool, DareToolExecution
-        
         try:
             # Get or create the tool record
             tool = DareTool.active_objects.filter(function_name=tool_name).first()

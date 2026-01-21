@@ -10,6 +10,8 @@ import json
 import logging
 from typing import Dict, List, Optional, Any
 
+from google.genai import types as genai_types
+
 logger = logging.getLogger(__name__)
 
 
@@ -122,15 +124,13 @@ def get_diagram_tool_claude() -> Dict:
 
 def get_diagram_tool_gemini():
     """Get diagram tool definition in Gemini format."""
-    from google.genai import types
-    
     # Use the OpenAI spec's parameters but wrapped in Gemini types.Tool/FunctionDeclaration
     openai_spec = get_diagram_tool_openai()
     func = openai_spec["function"]
-    
-    return types.Tool(
+
+    return genai_types.Tool(
         function_declarations=[
-            types.FunctionDeclaration(
+            genai_types.FunctionDeclaration(
                 name=func["name"],
                 description=func["description"],
                 parameters=func["parameters"]
