@@ -1,3 +1,4 @@
+import json
 from decimal import Decimal
 from typing import Dict, Optional
 from django.db import models
@@ -99,11 +100,10 @@ class ConversationService:
     def _parse_tool_result(self, result: str):
         """
         Parse tool result JSON string and camelize for FE.
-        
-        The result is stored as a JSON string in the database, but FE 
+
+        The result is stored as a JSON string in the database, but FE
         expects a properly camelCased object - no parsing needed on FE side.
         """
-        import json
         if not result:
             return None
         try:
