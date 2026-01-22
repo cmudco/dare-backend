@@ -44,7 +44,7 @@ class DareToolHandler:
     """
     
     # Tools that create visual artifacts - routed to ArtifactToolExecutor
-    ARTIFACT_TOOLS = ['create_chart', 'create_diagram']
+    ARTIFACT_TOOLS = ['create_chart', 'create_diagram', 'update_artifact', 'update_artifact_inline']
     
     def __init__(self):
         # No LLMService here - it's passed via stream_tool_result_response
@@ -257,12 +257,18 @@ class DareToolHandler:
         """Format tool result as text for LLM context."""
         if not result.get("success"):
             return f"Error: {result.get('error', 'Unknown error')}"
-        
+
         if tool_name == "create_diagram":
             return f"Diagram created successfully. Mermaid code:\n```mermaid\n{result.get('mermaid_code', '')}\n```"
         elif tool_name == "create_chart":
             chart_config = result.get("chart_config", {})
             return f"Chart created successfully. Type: {chart_config.get('type')}, Title: {chart_config.get('title')}"
+        elif tool_name == "update_artifact_inline":
+            change = result.get('change_summary', {})
+            return (
+                f"Artifact updated successfully (v{result.get('version')}). "
+                f"Replaced {change.get('removed_chars', 0)} chars with {change.get('added_chars', 0)} chars."
+            )
         else:
             return json.dumps(result)
     
