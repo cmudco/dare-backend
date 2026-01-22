@@ -157,9 +157,15 @@ def get_update_artifact_tool_openai() -> Dict:
         "function": {
             "name": "update_artifact",
             "description": (
-                "FULL REWRITE: Replace entire artifact content with new content. "
-                "Use ONLY when making major changes affecting >30% of the content (restructuring, adding many elements, changing chart type). "
-                "For SMALL edits (changing colors, fixing typos, updating single values), use update_artifact_inline instead - it's faster and more precise. "
+                "Replace entire artifact content with new content. "
+                "USE FOR: "
+                "\n• Changing color schemes (cyan → orange affects multiple places)"
+                "\n• Restructuring layout or content"
+                "\n• Any change affecting multiple locations in the code"
+                "\n• Major rewrites (>30% of content)"
+                "\n\n"
+                "This is PREFERRED over multiple update_artifact_inline calls. "
+                "Always provide the COMPLETE new code - partial updates will break the artifact. "
                 "You MUST reference the artifact_id of the artifact to update."
             ),
             "parameters": {
@@ -171,7 +177,7 @@ def get_update_artifact_tool_openai() -> Dict:
                     },
                     "content": {
                         "type": "string",
-                        "description": "The new content for the artifact. For diagrams, provide the complete updated Mermaid code. For charts, provide the complete updated JSON configuration."
+                        "description": "The COMPLETE new content for the artifact. For React components, provide the full code. For diagrams, provide the complete Mermaid code."
                     },
                     "title": {
                         "type": "string",
@@ -206,12 +212,20 @@ def get_update_artifact_inline_tool_openai() -> Dict:
         "function": {
             "name": "update_artifact_inline",
             "description": (
-                "PREFERRED for small edits: Make targeted string replacement in an artifact. "
-                "USE THIS for: changing colors (e.g., 'red' -> '#3B82F6'), fixing typos, updating values, small additions. "
-                "Example: To change bar colors to blue, find the color values in the JSON and replace them. "
-                "CRITICAL: old_str must be UNIQUE and match EXACTLY (including whitespace). "
-                "If not unique, include more surrounding context. "
-                "For major rewrites (>30% changes), use update_artifact instead."
+                "Make a SINGLE targeted string replacement in an artifact. "
+                "USE FOR: ONE small edit like fixing a typo, changing one value, or updating one small section. "
+                "\n\n"
+                "⚠️ IMPORTANT RULES:"
+                "\n• NEVER call this tool multiple times in parallel - each call creates a new version!"
+                "\n• If you need to make MORE THAN ONE change (e.g., changing a color scheme from cyan to orange), "
+                "use update_artifact with the FULL new code instead."
+                "\n• old_str must be UNIQUE in the artifact. If it appears multiple times, include more context."
+                "\n\n"
+                "WHEN TO USE update_artifact INSTEAD:"
+                "\n• Changing color schemes (multiple classes need updating)"
+                "\n• Restructuring content"
+                "\n• Updating multiple values"
+                "\n• Any change affecting >1 location in the code"
             ),
             "parameters": {
                 "type": "object",
@@ -248,6 +262,154 @@ def get_update_artifact_inline_tool_claude() -> Dict:
         "description": func["description"],
         "input_schema": func["parameters"]
     }
+
+
+def get_create_react_component_tool_openai() -> Dict:
+    """Get create_react_component tool definition in OpenAI format."""
+    return {
+        "type": "function",
+        "function": {
+            "name": "create_react_component",
+            "description": (
+                "Create an interactive React component rendered in the artifact panel. "
+                "Use for: interactive UIs, forms, todo lists, calculators, games, widgets, dashboards."
+                "\n\n"
+                "⚠️ CRITICAL: NO IMPORT STATEMENTS ⚠️"
+                "\nAll libraries are pre-loaded as globals. Write code that directly uses them."
+                "\n\n"
+                "AVAILABLE GLOBALS:"
+                "\n• React: useState, useEffect, useRef, useMemo, useCallback, useReducer, useContext, createContext, Fragment"
+                "\n• UI Components: Button, Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter, Input, Textarea, Label, Badge, Alert, AlertTitle, AlertDescription, Switch, Checkbox, Separator, Progress, Slider, Avatar, AvatarImage, AvatarFallback, ScrollArea"
+                "\n• Icons: Heart, Star, Home, Settings, User, Users, Search, Menu, X, Check, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, ArrowRight, ArrowLeft, Plus, Minus, Trash, Trash2, Edit, Edit2, Mail, Phone, MapPin, Calendar, Clock, TrendingUp, TrendingDown, Zap, Sparkles, Bell, Bookmark, Folder, File, Image, Download, Upload, Share, Copy, Link, ExternalLink, Eye, EyeOff, Lock, Unlock, Shield, AlertCircle, AlertTriangle, Info, HelpCircle, CheckCircle, XCircle, Loader, RefreshCw, Sun, Moon, Cloud, Send, MessageCircle, MessageSquare, Inbox, Archive, Tag, Filter, Grid, List, Layout, Play, Pause, Activity, BarChart, PieChart, Layers, Box, Circle, Square, Triangle, Code, Terminal, Database, Server, Globe, DollarSign, ShoppingCart, CreditCard, Gift, Package, Truck, ThumbsUp, ThumbsDown, Smile, Frown, Meh"
+                "\n• Utilities: cn (className merger), _ (lodash)"
+                "\n\n"
+                "STYLING - MODERN SHADCN PATTERNS:"
+                "\n• Use Tailwind CSS classes only. NO inline styles."
+                "\n• MINIMAL AND CLEAN - avoid excessive gradients and decorative elements"
+                "\n"
+                "\n🎨 THEME COLORS (use true black/white, not gray):"
+                "\n  DARK THEME (default): bg-black or bg-neutral-950 for backgrounds, text-white"
+                "\n  Cards/containers: bg-neutral-900 border-neutral-800"
+                "\n  LIGHT THEME: bg-white text-black, Cards: bg-neutral-50 border-neutral-200"
+                "\n"
+                "\n🎨 ACCENT COLORS - Pick ONE randomly from these for variety:"
+                "\n  • Blue: text-blue-500, bg-blue-500, border-blue-500 (trustworthy, tech)"
+                "\n  • Green: text-emerald-500, bg-emerald-500 (success, growth)"
+                "\n  • Cyan: text-cyan-500, bg-cyan-500 (fresh, modern)"
+                "\n  • Orange: text-orange-500, bg-orange-500 (energy, action)"
+                "\n  • Red: text-red-500, bg-red-500 (alerts, important)"
+                "\n  • Amber: text-amber-500, bg-amber-500 (warm, attention)"
+                "\n  ⚠️ AVOID purple - it's overused"
+                "\n"
+                "\n💡 UI PATTERNS:"
+                "\n  • Button hover: hover:bg-{color}-600"
+                "\n  • Subtle backgrounds: bg-{color}-500/10 (10% opacity)"
+                "\n  • Borders: border-{color}-500/20 or border-neutral-800"
+                "\n  • Focus rings: focus:ring-2 focus:ring-{color}-500"
+                "\n\n"
+                "EXAMPLE (modern Shadcn style):"
+                "\n```jsx"
+                "\nexport default function App() {"
+                "\n  const [count, setCount] = useState(0);"
+                "\n  return ("
+                "\n    <div className=\"min-h-screen bg-black p-8 text-white\">"
+                "\n      <Card className=\"max-w-md mx-auto bg-neutral-900 border-neutral-800\">"
+                "\n        <CardHeader>"
+                "\n          <CardTitle className=\"flex items-center gap-2\">"
+                "\n            <Zap className=\"w-5 h-5 text-cyan-500\" />"
+                "\n            Counter"
+                "\n          </CardTitle>"
+                "\n          <CardDescription>Track your count</CardDescription>"
+                "\n        </CardHeader>"
+                "\n        <CardContent className=\"space-y-4\">"
+                "\n          <p className=\"text-5xl font-bold text-center text-cyan-500\">{count}</p>"
+                "\n          <div className=\"flex gap-2\">"
+                "\n            <Button onClick={() => setCount(c => c + 1)} className=\"flex-1 bg-cyan-500 hover:bg-cyan-600\">Increment</Button>"
+                "\n            <Button onClick={() => setCount(0)} variant=\"outline\" className=\"flex-1\">Reset</Button>"
+                "\n          </div>"
+                "\n        </CardContent>"
+                "\n      </Card>"
+                "\n    </div>"
+                "\n  );"
+                "\n}"
+                "\n```"
+                "\n\n"
+                "RULES:"
+                "\n• NO import statements (will break)"
+                "\n• Start with 'export default function App()'"
+                "\n• No fetch/API calls (blocked)"
+                "\n• No localStorage/sessionStorage"
+                "\n• For charts/data visualization, use the create_chart tool instead"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {
+                        "type": "string",
+                        "description": "Short title for the component"
+                    },
+                    "code": {
+                        "type": "string",
+                        "description": "React component code. NO imports. Use modern Shadcn patterns: bg-black/bg-white themes, pick random accent color (blue/green/cyan/orange - avoid purple)."
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Brief description (optional)"
+                    }
+                },
+                "required": ["title", "code"]
+            }
+        }
+    }
+
+
+def get_create_react_component_tool_claude() -> Dict:
+    """Get create_react_component tool definition in Claude/Anthropic format."""
+    openai_spec = get_create_react_component_tool_openai()
+    func = openai_spec["function"]
+    return {
+        "name": func["name"],
+        "description": func["description"],
+        "input_schema": func["parameters"]
+    }
+
+
+def execute_create_react_component(arguments: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Execute the create_react_component tool.
+
+    Note: The actual artifact creation is handled by ArtifactToolExecutor.
+    This function is kept for registry consistency but returns the validated arguments.
+
+    Args:
+        arguments: Dict with title, code, description
+
+    Returns:
+        Dict with validated component data
+    """
+    try:
+        title = arguments.get("title", "React Component")
+        code = arguments.get("code", "")
+        description = arguments.get("description", "")
+
+        if not code.strip():
+            return {
+                "success": False,
+                "error": "Component code is required",
+            }
+
+        return {
+            "success": True,
+            "title": title,
+            "code": code,
+            "description": description,
+        }
+    except Exception as e:
+        logger.exception(f"Error executing create_react_component: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+        }
 
 
 # ============ REGISTRY ============
@@ -300,6 +462,16 @@ class DareToolRegistry:
             "get_openai_schema": get_update_artifact_inline_tool_openai,
             "get_claude_schema": get_update_artifact_inline_tool_claude,
             "executor": None,  # Handled by ArtifactToolExecutor directly
+        },
+        "create_react_component": {
+            "name": "Create React Component",
+            "slug": "create_react_component",
+            "description": "Create interactive React components with Tailwind CSS and Shadcn UI.",
+            "icon": "code",
+            "category": "visualization",
+            "get_openai_schema": get_create_react_component_tool_openai,
+            "get_claude_schema": get_create_react_component_tool_claude,
+            "executor": execute_create_react_component,
         },
     }
     
