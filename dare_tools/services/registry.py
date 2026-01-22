@@ -87,7 +87,7 @@ def get_chart_tool_openai() -> Dict:
         "type": "function",
         "function": {
             "name": "create_chart",
-            "description": "Create a data visualization chart. You MUST call this tool whenever the user asks for ANY type of chart including: bar chart, line chart, pie chart, doughnut chart, area chart, or scatter chart. Do not describe the chart in text - always call this tool to render it visually.",
+            "description": "Create a NEW data visualization chart. Use this ONLY for creating brand new charts. If the user wants to MODIFY, UPDATE, or CHANGE an existing chart, you MUST use the update_artifact tool instead with the existing artifact_id. You MUST call this tool whenever the user asks for ANY type of NEW chart including: bar chart, line chart, pie chart, doughnut chart, area chart, or scatter chart. Do not describe the chart in text - always call this tool to render it visually.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -102,16 +102,25 @@ def get_chart_tool_openai() -> Dict:
                     },
                     "data": {
                         "type": "array",
-                        "description": "Data points for the chart",
+                        "description": "Data points for the chart. IMPORTANT: When updating charts, always preserve existing 'color' fields on data points.",
                         "items": {
                             "type": "object",
                             "properties": {
                                 "label": {"type": "string", "description": "Label for this data point"},
                                 "value": {"type": "number", "description": "Numeric value"},
-                                "color": {"type": "string", "description": "Optional color (hex or name)"}
+                                "color": {"type": "string", "description": "Color for this data point (hex like '#3B82F6' or name like 'blue'). Include this field to customize bar/slice colors."}
                             },
                             "required": ["label", "value"]
                         }
+                    },
+                    "dataKeys": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Array of field names from data objects to chart (e.g., ['value', 'count']). These must match the keys in the data objects."
+                    },
+                    "xAxisKey": {
+                        "type": "string",
+                        "description": "Field name to use for x-axis labels (e.g., 'label', 'month', 'category'). Must match a key in the data objects."
                     },
                     "options": {
                         "type": "object",
@@ -124,7 +133,7 @@ def get_chart_tool_openai() -> Dict:
                         }
                     }
                 },
-                "required": ["chart_type", "title", "data"]
+                "required": ["chart_type", "title", "data", "dataKeys", "xAxisKey"]
             }
         }
     }
@@ -133,6 +142,106 @@ def get_chart_tool_openai() -> Dict:
 def get_chart_tool_claude() -> Dict:
     """Get chart tool definition in Claude/Anthropic format."""
     openai_spec = get_chart_tool_openai()
+    func = openai_spec["function"]
+    return {
+        "name": func["name"],
+        "description": func["description"],
+        "input_schema": func["parameters"]
+    }
+
+
+def get_update_artifact_tool_openai() -> Dict:
+    """Get update_artifact tool definition in OpenAI format."""
+    return {
+        "type": "function",
+        "function": {
+            "name": "update_artifact",
+            "description": (
+                "FULL REWRITE: Replace entire artifact content with new content. "
+                "Use ONLY when making major changes affecting >30% of the content (restructuring, adding many elements, changing chart type). "
+                "For SMALL edits (changing colors, fixing typos, updating single values), use update_artifact_inline instead - it's faster and more precise. "
+                "You MUST reference the artifact_id of the artifact to update."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "artifact_id": {
+                        "type": "integer",
+                        "description": "The ID of the artifact to update. This must be a valid artifact ID from the current conversation."
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": "The new content for the artifact. For diagrams, provide the complete updated Mermaid code. For charts, provide the complete updated JSON configuration."
+                    },
+                    "title": {
+                        "type": "string",
+                        "description": "Optional new title for the artifact. If not provided, keeps the original title."
+                    }
+                },
+                "required": ["artifact_id", "content"]
+            }
+        }
+    }
+
+
+def get_update_artifact_tool_claude() -> Dict:
+    """Get update_artifact tool definition in Claude/Anthropic format."""
+    openai_spec = get_update_artifact_tool_openai()
+    func = openai_spec["function"]
+    return {
+        "name": func["name"],
+        "description": func["description"],
+        "input_schema": func["parameters"]
+    }
+
+
+def get_update_artifact_inline_tool_openai() -> Dict:
+    """Get update_artifact_inline tool definition in OpenAI format.
+
+    This tool enables targeted string replacement for small edits,
+    similar to Claude's artifact update approach.
+    """
+    return {
+        "type": "function",
+        "function": {
+            "name": "update_artifact_inline",
+            "description": (
+                "PREFERRED for small edits: Make targeted string replacement in an artifact. "
+                "USE THIS for: changing colors (e.g., 'red' -> '#3B82F6'), fixing typos, updating values, small additions. "
+                "Example: To change bar colors to blue, find the color values in the JSON and replace them. "
+                "CRITICAL: old_str must be UNIQUE and match EXACTLY (including whitespace). "
+                "If not unique, include more surrounding context. "
+                "For major rewrites (>30% changes), use update_artifact instead."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "artifact_id": {
+                        "type": "integer",
+                        "description": "The ID of the artifact to modify. Must be a valid artifact ID from the current conversation."
+                    },
+                    "old_str": {
+                        "type": "string",
+                        "description": (
+                            "The exact string to find and replace in the artifact content. "
+                            "Must be UNIQUE in the artifact. If the string appears multiple times, "
+                            "include more surrounding context to make it unique."
+                        )
+                    },
+                    "new_str": {
+                        "type": "string",
+                        "description": "The replacement string. Can be empty to delete the old_str."
+                    }
+                },
+                "required": ["artifact_id", "old_str", "new_str"]
+            }
+        }
+    }
+
+
+def get_update_artifact_inline_tool_claude() -> Dict:
+    """Get update_artifact_inline tool definition in Claude/Anthropic format."""
+    openai_spec = get_update_artifact_inline_tool_openai()
     func = openai_spec["function"]
     return {
         "name": func["name"],
@@ -171,6 +280,26 @@ class DareToolRegistry:
             "get_openai_schema": get_chart_tool_openai,
             "get_claude_schema": get_chart_tool_claude,
             "executor": execute_create_chart,
+        },
+        "update_artifact": {
+            "name": "Update Artifact",
+            "slug": "update_artifact",
+            "description": "Update an existing artifact (diagram, chart, etc.) by creating a new version with modified content.",
+            "icon": "edit",
+            "category": "visualization",
+            "get_openai_schema": get_update_artifact_tool_openai,
+            "get_claude_schema": get_update_artifact_tool_claude,
+            "executor": None,  # Handled by ArtifactToolExecutor directly
+        },
+        "update_artifact_inline": {
+            "name": "Update Artifact Inline",
+            "slug": "update_artifact_inline",
+            "description": "Make targeted string replacements in an existing artifact for small edits.",
+            "icon": "edit-inline",
+            "category": "visualization",
+            "get_openai_schema": get_update_artifact_inline_tool_openai,
+            "get_claude_schema": get_update_artifact_inline_tool_claude,
+            "executor": None,  # Handled by ArtifactToolExecutor directly
         },
     }
     
