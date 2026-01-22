@@ -58,6 +58,7 @@ class ArtifactType(models.TextChoices):
     CODE = 'code', 'Code'
     DIAGRAM = 'diagram', 'Diagram'
     CHART = 'chart', 'Chart'
+    REACT = 'react', 'React Component'
 
 
 class ArtifactStatus(models.TextChoices):
@@ -199,5 +200,6 @@ ARTIFACT_CONTENT_TYPES = {
     'diagram': 'text/mermaid',
     'document': 'text/markdown',
     'code': 'text/plain',
+    'react': 'application/vnd.dare.react+jsx',
 }
 
