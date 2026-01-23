@@ -36,6 +36,7 @@ class MemUService:
             return
 
         try:
+            from pydantic import BaseModel
             from memu.app import (
                 MemoryService,
                 LLMConfig,
@@ -43,6 +44,7 @@ class MemUService:
                 DatabaseConfig,
                 RetrieveConfig,
             )
+            from memu.app.settings import UserConfig
 
             # Get OpenAI API key from environment
             openai_api_key = os.getenv("OPENAI_API_KEY")
@@ -61,9 +63,27 @@ class MemUService:
                 }
             )
 
-            # Use SQLite for local, pgvector for production
-            is_local = getattr(settings, "DEBUG", True)
-            if is_local:
+            # Define user model for scoping memories by user_id
+            class DareUserModel(BaseModel):
+                user_id: str | None = None
+            
+            user_config = UserConfig(model=DareUserModel)
+
+            # Use same DB toggle as Django (USE_POSTGRES from env)
+            from config.env import USE_POSTGRES, DB_NAME, DB_USER, DB_PASSWORD, DB_HOST, DB_PORT
+            
+            if USE_POSTGRES:
+                # Use psycopg driver format as per memu-py docs
+                db_url = f"postgresql+psycopg://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+                database_config = {
+                    "metadata_store": {
+                        "provider": "postgres",
+                        "dsn": db_url,
+                        "ddl_mode": "create",
+                    },
+                }
+                logger.info(f"MemU initialized with PostgreSQL at: {DB_HOST}:{DB_PORT}/{DB_NAME}")
+            else:
                 # SQLite database path for local development
                 db_path = os.path.join(settings.BASE_DIR, "memu_local.db")
                 database_config = DatabaseConfig(
@@ -71,10 +91,6 @@ class MemUService:
                     path=db_path,
                 )
                 logger.info(f"MemU initialized with SQLite at: {db_path}")
-            else:
-                # pgvector for production - uses DATABASE_URL from environment
-                database_config = DatabaseConfig()
-                logger.info("MemU initialized with pgvector")
 
             # Configure retrieval with RAG method
             retrieve_config = RetrieveConfig(
@@ -86,6 +102,7 @@ class MemUService:
                 llm_profiles=llm_profiles,
                 database_config=database_config,
                 retrieve_config=retrieve_config,
+                user_config=user_config,
             )
             self._initialized = True
             logger.info("MemU service initialized successfully")
@@ -101,23 +118,19 @@ class MemUService:
 
     async def list_items(self, user_id: str) -> list[dict[str, Any]]:
         """
-        List all memory items for a user.
+        List all memory items for a user with their category names.
         
         Args:
             user_id: The user's unique identifier
             
         Returns:
-            List of memory item dictionaries
+            List of memory item dictionaries with categories populated
         """
         await self._ensure_initialized()
         
         try:
             # List all items from memu
             result = await self._service.list_memory_items()
-            
-            # Debug logging
-            logger.info(f"list_memory_items returned type: {type(result)}")
-            logger.info(f"list_memory_items returned: {result}")
             
             # Handle dict response format {'items': [...]}
             if isinstance(result, dict):
@@ -131,13 +144,59 @@ class MemUService:
             if not items_list:
                 return []
             
-            logger.info(f"Total items in DB: {len(items_list)}")
+            # Fetch categories and build a lookup map (id -> name)
+            categories_result = await self._service.list_memory_categories(where={"user_id": user_id})
+            category_map = {}
+            if isinstance(categories_result, dict):
+                cats = categories_result.get("categories", [])
+            elif isinstance(categories_result, (list, tuple)):
+                cats = categories_result
+            else:
+                cats = []
             
-            # Convert items to dicts if they're objects
-            user_items = []
-            for i, item in enumerate(items_list):
-                logger.info(f"Item {i} type: {type(item)}, value: {item}")
+            for cat in cats:
+                if hasattr(cat, "model_dump"):
+                    cat = cat.model_dump()
+                elif hasattr(cat, "__dict__"):
+                    cat = vars(cat)
+                cat_id = cat.get("id")
+                cat_name = cat.get("name")
+                if cat_id and cat_name:
+                    category_map[cat_id] = cat_name
+            
+            logger.info(f"Category map for user {user_id}: {category_map}")
+            
+            # Get relations from database (item_id -> category_id mappings)
+            relations_map = {}  # item_id -> [category_names]
+            try:
+                db = self._service.database
+                # list_relations() returns a list of relation objects
+                relations = db.category_item_repo.list_relations()
+                for relation in relations:
+                    if hasattr(relation, "model_dump"):
+                        rel = relation.model_dump()
+                    elif hasattr(relation, "__dict__"):
+                        rel = vars(relation)
+                    else:
+                        rel = relation if isinstance(relation, dict) else {}
+                    
+                    item_id = rel.get("item_id")
+                    category_id = rel.get("category_id")
+                    
+                    if item_id and category_id:
+                        cat_name = category_map.get(category_id)
+                        if cat_name:
+                            if item_id not in relations_map:
+                                relations_map[item_id] = []
+                            relations_map[item_id].append(cat_name)
                 
+                logger.info(f"Relations map has {len(relations_map)} items")
+            except Exception as e:
+                logger.warning(f"Could not fetch relations: {e}")
+            
+            # Convert items to dicts and populate categories
+            user_items = []
+            for item in items_list:
                 # Handle both dict and object formats
                 if hasattr(item, "model_dump"):
                     item_dict = item.model_dump()
@@ -146,8 +205,11 @@ class MemUService:
                 elif hasattr(item, "__dict__") and not isinstance(item, str):
                     item_dict = vars(item)
                 else:
-                    # Try to convert to dict representation
-                    item_dict = {"id": str(i), "content": str(item), "memoryType": "unknown", "categories": []}
+                    item_dict = {"id": str(item), "content": str(item), "memory_type": "unknown", "categories": []}
+                
+                # Populate categories from relations map
+                item_id = item_dict.get("id")
+                item_dict["categories"] = relations_map.get(item_id, [])
                 
                 # Add to results
                 user_items.append(item_dict)
@@ -266,7 +328,7 @@ class MemUService:
                 memory_type=memory_type,
                 memory_content=content,
                 memory_categories=categories,
-                user={"id": user_id},
+                user={"user_id": user_id},
             )
             return result
         except Exception as e:
@@ -303,7 +365,7 @@ class MemUService:
             result = await self._service.memorize(
                 resource_url=conv_path,
                 modality="conversation",
-                user={"id": user_id},
+                user={"user_id": user_id},
             )
             
             logger.info(f"[SEED DEBUG] memorize returned type: {type(result)}")
