@@ -9,6 +9,10 @@ from .generation_dto import GenerationConfig
 from .media_dto import MediaConfig
 from .socratic_dto import SocraticConfig
 
+# Minimum max_tokens for Socratic bots to prevent truncated responses
+# This is a hotfix - the proper solution is to make this configurable per bot
+SOCRATIC_MIN_MAX_TOKENS = 8000
+
 
 class LLMQueryRequestBuilder:
     """Builder pattern for constructing LLMQueryRequest from dictionaries.
@@ -56,10 +60,24 @@ class LLMQueryRequestBuilder:
             history_limit=message_data.get("history_limit", 20),
         )
 
+        # Detect Socratic bots platform BEFORE building generation config
+        is_socratic_bots = platform == AuthSourceChoice.SOCRATIC_BOTS if platform else False
+        bot_meta = message_data.get("bot_meta", {})
+        socratic_enabled = is_socratic_bots and not message_data.get("prompt_id")
+
+        # Get max_tokens from message_data with default
+        max_tokens = message_data.get("max_tokens", 8000)
+
+        # HOTFIX: Enforce minimum max_tokens for Socratic bots to prevent truncated responses
+        # Socratic bot conversations created without explicit config get conversation.max_tokens=2048
+        # which is too low for detailed tutoring responses
+        if is_socratic_bots and max_tokens < SOCRATIC_MIN_MAX_TOKENS:
+            max_tokens = SOCRATIC_MIN_MAX_TOKENS
+
         # Build generation config
         generation = GenerationConfig(
             temperature=message_data.get("temperature", 0.7),
-            max_tokens=message_data.get("max_tokens", 8000),
+            max_tokens=max_tokens,
             prompt_id=message_data.get("prompt_id"),
             web_search_enabled=message_data.get("web_search_enabled", False),
             image_generation_enabled=message_data.get("image_generation_enabled", False),
@@ -77,10 +95,6 @@ class LLMQueryRequestBuilder:
         )
 
         # Build Socratic config
-        is_socratic_bots = platform == AuthSourceChoice.SOCRATIC_BOTS if platform else False
-        bot_meta = message_data.get("bot_meta", {})
-        socratic_enabled = is_socratic_bots and not message_data.get("prompt_id")
-
         socratic = SocraticConfig(
             enabled=socratic_enabled,
             advanced_mode=bool(message_data.get("is_advanced")),
