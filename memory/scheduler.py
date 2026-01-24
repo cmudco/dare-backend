@@ -2,7 +2,7 @@
 Memory Extraction Scheduler
 
 Handles scheduling of automatic memory extraction from idle conversations.
-Uses RQ Scheduler to run extraction every 10 minutes.
+Uses RQ Scheduler to run extraction every 12 hours.
 
 Usage:
     from memory.scheduler import MemoryExtractionScheduler
@@ -40,12 +40,12 @@ class MemoryExtractionScheduler:
         """
         self.scheduler = get_scheduler(queue_name)
         self.job_id = 'memory_extraction'
-        self.interval_seconds = 600  # 10 minutes
+        self.interval_seconds = 43200  # 12 hours
 
     def start(self):
         """
         Start the memory extraction scheduler.
-        Runs every 10 minutes to check for idle conversations.
+        Runs every 12 hours to check for idle conversations.
 
         Returns:
             dict: Status information about the scheduled job
@@ -54,7 +54,7 @@ class MemoryExtractionScheduler:
             # Cancel existing job if it exists
             self.stop()
 
-            # Schedule the job to run every 10 minutes
+            # Schedule the job to run every 12 hours
             job = self.scheduler.schedule(
                 scheduled_time=timezone.now(),
                 func=process_memory_extraction,
@@ -64,7 +64,7 @@ class MemoryExtractionScheduler:
                 description='Extract memories from idle conversations',
                 meta={
                     'created_at': timezone.now().isoformat(),
-                    'interval_minutes': 10,
+                    'interval_hours': 12,
                     'scheduler_version': '1.0'
                 }
             )
@@ -75,7 +75,7 @@ class MemoryExtractionScheduler:
                 'status': 'started',
                 'job_id': self.job_id,
                 'next_run': timezone.now().isoformat(),
-                'interval_minutes': 10,
+                'interval_hours': 12,
                 'message': 'Memory extraction scheduler is now active'
             }
 
@@ -135,7 +135,7 @@ class MemoryExtractionScheduler:
                     'description': target_job.description,
                     'next_run': getattr(target_job, 'scheduled_for', 'Unknown'),
                     'created_at': target_job.meta.get('created_at', 'Unknown'),
-                    'interval_minutes': target_job.meta.get('interval_minutes', 10),
+                    'interval_hours': target_job.meta.get('interval_hours', 12),
                     'total_scheduled_jobs': len(scheduled_jobs),
                     'message': 'Scheduler is active and running'
                 }
