@@ -33,6 +33,10 @@ logger = logging.getLogger(__name__)
 class GeminiService:
     """Service for interacting with Google Gemini models."""
 
+    # IMPORTANT: Add 3000 tokens buffer to all API calls.
+    # This is required due to a bug in the Gemini package.
+    TOKEN_BUFFER = 3000
+
     def __init__(self, llm: LLM, api_key: Optional[str] = None):
         """
         Initialize Gemini service.
@@ -177,9 +181,10 @@ class GeminiService:
 
         contents = GeminiMessageFormatter.convert_to_contents(messages)
 
+        # IMPORTANT: Add 3000 tokens buffer due to Gemini package bug
         generation_config = types.GenerateContentConfig(
             temperature=temperature,
-            max_output_tokens=max_tokens,
+            max_output_tokens=max_tokens + self.TOKEN_BUFFER,
             response_mime_type="application/json",
             response_schema=response_schema,
         )
@@ -275,9 +280,10 @@ class GeminiService:
         Returns:
             Gemini generation config
         """
+        # IMPORTANT: Add 3000 tokens buffer due to Gemini package bug
         config = types.GenerateContentConfig(
             temperature=temperature,
-            max_output_tokens=max_tokens,
+            max_output_tokens=max_tokens + self.TOKEN_BUFFER,
         )
 
         if GeminiWebSearchTools.has_google_search(tools):
@@ -417,9 +423,10 @@ class GeminiService:
         """
         contents = GeminiMessageFormatter.convert_to_contents(messages)
 
+        # IMPORTANT: Add 3000 tokens buffer due to Gemini package bug
         generation_config = types.GenerateContentConfig(
             temperature=temperature,
-            max_output_tokens=max_tokens,
+            max_output_tokens=max_tokens + self.TOKEN_BUFFER,
             response_mime_type=response_mime_type,
             response_schema=response_schema
         )

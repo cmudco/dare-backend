@@ -25,105 +25,17 @@ from workflows.utils import convert_keys_to_snake_case
 logger = logging.getLogger(__name__)
 
 
-class WorkflowRunStepSerializer(serializers.ModelSerializer):
-    status = serializers.ChoiceField(
-        choices=WorkflowRunStepStatus.choices,
-        default=WorkflowRunStepStatus.PENDING
-    )
-    snippets = WorkflowStepSnippetSerializer(many=True, read_only=True)
-    web_search_sources = WorkflowStepWebSearchSourceSerializer(many=True, read_only=True)
+# ==========================================
+# SHARED HELPER FUNCTIONS
+# ==========================================
 
-    class Meta:
-        model = WorkflowRunStep
-        fields = [
-            'id', 'step_node', 'order', 'status', 'response', 'error',
-            'metadata', 'created_at', 'updated_at', 'snippets', 'web_search_sources'
-        ]
-        read_only_fields = ['id', 'created_at', 'updated_at', 'snippets', 'web_search_sources']
+def _get_workflow_title(obj):
+    """Get workflow title from related workflow."""
+    return obj.workflow.title if obj.workflow else None
 
-class WorkflowRunSerializer(serializers.ModelSerializer):
-    steps = WorkflowRunStepSerializer(many=True, read_only=True)
-    started_at = serializers.DateTimeField()
-    status = serializers.CharField()
-    workflow_title = serializers.SerializerMethodField()
-    workflow_description = serializers.SerializerMethodField()
-    pending_validations = serializers.SerializerMethodField()
-    has_pending_validation = serializers.SerializerMethodField()
-    is_partial = serializers.BooleanField(read_only=True)
-    nodeStates = serializers.SerializerMethodField()  # V2 compatible - O(1) node access
-
-    class Meta:
-        model = WorkflowRun
-        fields = [
-            'id', 'workflow', 'user', 'started_at', 'ended_at', 'status', 'steps',
-            'workflow_title', 'workflow_description', 'pending_validations', 'has_pending_validation',
-            'is_partial', 'nodeStates'
-        ]
-        read_only_fields = [
-            'id', 'started_at', 'ended_at', 'status', 'steps',
-            'workflow_title', 'workflow_description', 'pending_validations', 'has_pending_validation',
-            'is_partial', 'nodeStates'
-        ]
-
-    def get_workflow_title(self, obj):
-        return obj.workflow.title if obj.workflow else None
-
-    def get_workflow_description(self, obj):
-        return obj.workflow.description if obj.workflow else None
-
-    def get_nodeStates(self, obj):
-        """
-        Build graph-based execution state map for V2 API compatibility.
-        Provides O(1) node access for frontend components.
-        """
-        builder = NodeExecutionStateBuilder()
-        return builder.build_state(obj)
-    
-    def get_has_pending_validation(self, obj):
-        """Check if this workflow run has any steps waiting for human validation."""
-        return obj.steps.filter(status=WorkflowRunStepStatus.PENDING_HUMAN_INPUT).exists()
-    
-    def get_pending_validations(self, obj):
-        """Get all pending validations with route information and AI analysis."""
-        pending_steps = obj.steps.filter(
-            status=WorkflowRunStepStatus.PENDING_HUMAN_INPUT
-        ).select_related('step_node')
-
-        workflow = obj.workflow
-        edges_by_target = {e.target: e for e in workflow.edges.all()}
-        nodes_by_id = {n.node_id: n for n in workflow.nodes.all()}
-
-        validations = []
-
-        for step in pending_steps:
-            step_data = step.step_node.data_object if step.step_node else None
-
-            metadata = step.metadata or {}
-
-            # Handle StructuredOutputNodeData (routing node)
-            if step_data and isinstance(step_data, StructuredOutputNodeData):
-                available_routes = step_data.get_routes()
-
-                # Use 'explanation' instead of 'analysis' for structured output nodes
-                ai_recommendation = metadata.get('ai_recommendation')
-                ai_analysis = metadata.get('explanation') or metadata.get(MetadataKey.ANALYSIS)
-
-                prompt_content = step_data.prompt.content if step_data.prompt else "Evaluate the input and choose the appropriate route."
-
-                validations.append({
-                    'node_id': step.step_node.node_id,
-                    'step_number': step_data.step_number,
-                    'custom_prompt': prompt_content,
-                    'available_routes': available_routes,
-                    'current_response': step.response,
-                    'step_id': step.id,
-                    'ai_recommendation': ai_recommendation,
-                    'ai_analysis': ai_analysis
-                })
-
-        return validations
-
-# StepSerializer removed - using graph-driven architecture only
+def _get_workflow_description(obj):
+    """Get workflow description from related workflow."""
+    return obj.workflow.description if obj.workflow else None
 
 
 class WorkflowSerializer(serializers.ModelSerializer):
@@ -154,7 +66,7 @@ class WorkflowSerializer(serializers.ModelSerializer):
         """Get the latest workflow run with nodeStates for O(1) node access."""
         latest_run = WorkflowRun.active_objects.filter(workflow=obj).order_by('-created_at').first()
         if latest_run:
-            return WorkflowRunSerializer(latest_run).data
+            return WorkflowRunV2Serializer(latest_run).data
         return None
 
     def get_nodes(self, obj):
@@ -515,6 +427,7 @@ class WorkflowRunV2Serializer(serializers.ModelSerializer):
     - All nodes in workflow included (execution + display)
     - Validation context normalized across node types
     - Consistent data shape across all endpoints
+    - NEW: Flat `pendingValidation` for frontend - no extraction needed
 
     Response Structure:
         {
@@ -524,17 +437,13 @@ class WorkflowRunV2Serializer(serializers.ModelSerializer):
             "started_at": datetime,
             "ended_at": datetime | null,
             "status": str,
-            "nodeStates": {
-                "node-id": {
-                    "stepId": int | null,
-                    "nodeType": str,
-                    "status": str,
-                    "response": str | null,
-                    "error": str | null,
-                    "validationContext": dict | null
-                },
-                ...
-            },
+            "nodeStates": {...},
+            "pendingValidation": {
+                "nodeId": str,
+                "routes": [{"name": str, "description": str}, ...],
+                "aiRecommendation": str | null,
+                "context": {"aiAnalysis": str | null}
+            } | null,
             "workflow_title": str,
             "workflow_description": str,
             "is_partial": bool
@@ -542,6 +451,7 @@ class WorkflowRunV2Serializer(serializers.ModelSerializer):
     """
 
     nodeStates = serializers.SerializerMethodField()
+    pendingValidation = serializers.SerializerMethodField()
     started_at = serializers.DateTimeField()
     status = serializers.CharField()
     workflow_title = serializers.SerializerMethodField()
@@ -552,11 +462,11 @@ class WorkflowRunV2Serializer(serializers.ModelSerializer):
         model = WorkflowRun
         fields = [
             'id', 'workflow', 'user', 'started_at', 'ended_at', 'status',
-            'nodeStates',  # NEW - replaces 'steps' from v1
+            'nodeStates', 'pendingValidation',
             'workflow_title', 'workflow_description', 'is_partial'
         ]
         read_only_fields = [
-            'id', 'started_at', 'ended_at', 'status', 'nodeStates',
+            'id', 'started_at', 'ended_at', 'status', 'nodeStates', 'pendingValidation',
             'workflow_title', 'workflow_description', 'is_partial'
         ]
 
@@ -575,6 +485,61 @@ class WorkflowRunV2Serializer(serializers.ModelSerializer):
         builder = NodeExecutionStateBuilder()
         return builder.build_state(obj)
 
-    # Reuse existing methods from v1 serializer
-    get_workflow_title = WorkflowRunSerializer.get_workflow_title
-    get_workflow_description = WorkflowRunSerializer.get_workflow_description
+    def get_pendingValidation(self, obj):
+        """
+        Get flat pending validation data for frontend.
+
+        Returns the first pending validation as a flat object matching
+        frontend's PendingValidation type. Returns null if no pending validation.
+
+        Response Format:
+            {
+                "nodeId": str,
+                "routes": [{"name": str, "description": str}, ...],
+                "aiRecommendation": str | null,
+                "context": {"aiAnalysis": str | null}
+            } | null
+        """
+        # Find the first step waiting for human validation
+        pending_step = obj.steps.filter(
+            status=WorkflowRunStepStatus.PENDING_HUMAN_INPUT
+        ).select_related('step_node').first()
+
+        if not pending_step:
+            return None
+
+        step_data = pending_step.step_node.data_object if pending_step.step_node else None
+        metadata = pending_step.metadata or {}
+
+        # Handle StructuredOutputNodeData (routing node)
+        if step_data and isinstance(step_data, StructuredOutputNodeData):
+            routes = step_data.get_routes()
+            ai_recommendation = metadata.get('ai_recommendation')
+            ai_analysis = metadata.get('explanation') or metadata.get(MetadataKey.ANALYSIS)
+
+            return {
+                'nodeId': pending_step.step_node.node_id,
+                'routes': routes,
+                'aiRecommendation': ai_recommendation,
+                'context': {
+                    'aiAnalysis': ai_analysis
+                }
+            }
+
+        # Fallback for other node types that might need validation
+        return {
+            'nodeId': pending_step.step_node.node_id if pending_step.step_node else None,
+            'routes': [],
+            'aiRecommendation': None,
+            'context': {
+                'aiAnalysis': None
+            }
+        }
+
+    def get_workflow_title(self, obj):
+        """Get workflow title from related workflow."""
+        return _get_workflow_title(obj)
+
+    def get_workflow_description(self, obj):
+        """Get workflow description from related workflow."""
+        return _get_workflow_description(obj)
