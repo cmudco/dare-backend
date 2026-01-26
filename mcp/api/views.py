@@ -7,6 +7,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from asgiref.sync import async_to_sync
 
 from mcp.models import MCPServer, UserMCPConnection, MCPToolExecution
@@ -72,7 +73,7 @@ class MCPServerViewSet(viewsets.ReadOnlyModelViewSet):
 
             # Also update DB cache as fallback
             connection.cached_tools = tools
-            from django.utils import timezone
+
             connection.tools_cached_at = timezone.now()
             connection.save(update_fields=['cached_tools', 'tools_cached_at'])
 

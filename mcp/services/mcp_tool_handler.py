@@ -18,9 +18,9 @@ from django.utils import timezone
 
 from conversations.constants import SenderType, DEFAULT_AI_SENDER_NAME
 from conversations.models import Conversation, Message, MessageToolCall
+from conversations.services.websocket_response_service import WebSocketResponseService
 from core.services.dtos import LLMQueryRequest
 from core.services.dtos.builder import LLMQueryRequestBuilder
-from core.services.llm_service import LLMService
 from mcp.services.mcp_tool_executor import mcp_tool_executor, MCPToolExecutorError
 
 logger = logging.getLogger(__name__)
@@ -48,7 +48,9 @@ class MCPToolHandler:
     """
     
     def __init__(self):
-        self.llm_service = LLMService()
+        # No LLMService here - it's passed via stream_tool_result_response
+        # to avoid circular import (llm_service imports mcp.services)
+        pass
     
     async def handle_tool_calls(
         self,
@@ -112,6 +114,7 @@ class MCPToolHandler:
                 tool_start_payload = {
                     "type": "mcp_tool_call",
                     "messageId": bot_message_id,
+                    "toolCallId": tool_call_id,
                     "toolName": actual_tool_name,
                     "serverSlug": server_slug,
                     "status": "executing",
@@ -135,6 +138,7 @@ class MCPToolHandler:
                 tool_result_payload = {
                     "type": "mcp_tool_result",
                     "messageId": bot_message_id,
+                    "toolCallId": tool_call_id,
                     "toolName": actual_tool_name,
                     "serverSlug": server_slug,
                     "status": "success",
@@ -226,15 +230,16 @@ class MCPToolHandler:
         user,
         platform: str,
         send_callback: Callable,
+        llm_service,
         regenerate: bool = False,
     ) -> str:
         """
         Make a follow-up LLM call with tool results to get the final response.
-        
+
         This implements the second part of multi-turn tool use:
         1. LLM calls tool -> we execute it
         2. Feed results back -> LLM generates human-readable response
-        
+
         Args:
             tool_results: List of tool results from handle_tool_calls
             message_data: Original message data
@@ -244,21 +249,20 @@ class MCPToolHandler:
             user: User instance
             platform: Platform name (DARE/SocraticBots)
             send_callback: Async callback for WebSocket streaming
+            llm_service: LLMService instance for making follow-up calls
             regenerate: Whether this is a regeneration
-            
+
         Returns:
             The accumulated response text
         """
-        from conversations.services.websocket_response_service import WebSocketResponseService
-        
         bot_message_id = message_obj.id
-        
+
         # Build tool results context
         tool_context = "Here are the results from the tools I just used:\n\n"
         for tr in tool_results:
             tool_context += f"**{tr['tool_name']}** result:\n```\n{tr['result'][:2000]}\n```\n\n"
         tool_context += "Please summarize these results in a helpful way for the user."
-        
+
         # Build a new request with tool results as the message
         request = LLMQueryRequestBuilder.from_message_data(
             message=tool_context,
@@ -269,11 +273,11 @@ class MCPToolHandler:
             message_obj=message_obj,
             platform=platform,
         )
-        
+
         response_accumulator = ""
-        
+
         # Stream the follow-up response
-        async for chunk, usage in self.llm_service.query(request):
+        async for chunk, usage in llm_service.query(request):
             if chunk and chunk.strip():
                 response_accumulator += chunk
                 payload = WebSocketResponseService.format_streaming_chunk(
@@ -290,7 +294,7 @@ class MCPToolHandler:
                     }
                 )
                 await send_callback(payload)
-        
+
         return response_accumulator
     
     # ========== Private Helper Methods ==========
@@ -325,10 +329,11 @@ class MCPToolHandler:
         log_method = logger.error if is_expected else logger.exception
         log_method(f"[MCPToolHandler] MCP tool execution failed: {error}")
         
-        # Send error to client - MUST match mcp_tool_call format (toolName, serverSlug)
+        # Send error to client - include toolCallId for frontend matching
         tool_error_payload = {
             "type": "mcp_tool_result",
             "messageId": bot_message_id,
+            "toolCallId": tool_call_id,
             "toolName": actual_tool_name,  # Use actual tool name, not prefixed
             "serverSlug": server_slug,  # Include serverSlug for frontend matching
             "status": "error",

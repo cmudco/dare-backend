@@ -16,6 +16,7 @@ from workflows.handlers.base import ExecutionNode, NodeExecutionContext, NodeExe
 from workflows.models import WorkflowNode, WorkflowRun, WorkflowRunStep, StepNodeData
 from workflows.constants import WorkflowRunStepStatus
 from conversations.models import LLM
+from conversations.services.websocket_response_service import WebSocketResponseService
 from core.services.dtos import LLMQueryRequestBuilder
 
 # Import new utility modules
@@ -120,7 +121,6 @@ class StepNodeHandler(BaseExecutionHandler):
 
             # Send step_started event if streaming callback available
             if context.send_callback:
-                from conversations.services.websocket_response_service import WebSocketResponseService
                 try:
                     await context.send_callback(
                         WebSocketResponseService.format_workflow_step_started(
@@ -172,7 +172,6 @@ class StepNodeHandler(BaseExecutionHandler):
 
             # Send step_completed event if streaming callback available
             if context.send_callback:
-                from conversations.services.websocket_response_service import WebSocketResponseService
                 try:
                     # Serialize citation data for the step_completed event
                     snippets_data, web_sources_data = await database_sync_to_async(

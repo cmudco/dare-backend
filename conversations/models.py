@@ -442,6 +442,14 @@ class Conversation(BaseModel):
         help_text="MCP servers enabled for this conversation (tools become available to the LLM)."
     )
 
+    # DARE Tools integration
+    selected_dare_tools = models.ManyToManyField(
+        'dare_tools.DareTool',
+        blank=True,
+        related_name='conversations',
+        help_text="DARE tools enabled for this conversation."
+    )
+
     active_objects = ActiveObjectsManager()
 
 
@@ -503,6 +511,10 @@ class Conversation(BaseModel):
             # Clone MCP server selections
             if self.selected_mcp_servers.exists():
                 cloned_conversation.selected_mcp_servers.set(self.selected_mcp_servers.all())
+
+            # Clone DARE tool selections
+            if self.selected_dare_tools.exists():
+                cloned_conversation.selected_dare_tools.set(self.selected_dare_tools.all())
 
             if include_messages:
                 # Clone messages
@@ -667,6 +679,18 @@ class Message(BaseModel):
         default=dict,
         blank=True,
         help_text="Learning progress data associated with this message, such as assessment triggers and educational metadata."
+    )
+
+    # Content type for specialized rendering (diagrams, charts, etc.)
+    content_type = models.CharField(
+        max_length=30,
+        default="text",
+        help_text="Type of content for rendering (text, mermaid_diagram, chart, image, audio)."
+    )
+    content_metadata = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Metadata for content rendering (e.g., chart config, diagram type)."
     )
 
     active_objects = ActiveObjectsManager()

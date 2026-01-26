@@ -1,3 +1,4 @@
+import json
 from decimal import Decimal
 from typing import Dict, Optional
 from django.db import models
@@ -62,20 +63,55 @@ class ConversationService:
                 "outputTokens": msg.get("output_tokens", None),
                 "artifactId": msg.get("artifactId", None),
                 "toolCalls": [
-                    {
-                        "id": tc["tool_call_id"],
-                        "toolName": tc["tool_name"],
-                        "serverSlug": tc["server_slug"],
-                        "status": tc["status"],
-                        "result": tc.get("result"),
-                        "error": tc.get("error"),
-                    }
+                    self._build_tool_call_payload(tc)
                     for tc in msg.get("mcp_tool_calls", [])
                 ],
             }
             for msg in serialized_messages
         ]
         return camelize(history)
+
+    def _build_tool_call_payload(self, tc: dict) -> dict:
+        """
+        Build a properly typed tool call payload for FE.
+        
+        Separates DARE results from MCP results into different fields
+        for clean, zero-confusion typing on FE side.
+        """
+        server_slug = tc["server_slug"]
+        parsed_result = self._parse_tool_result(tc.get("result"))
+        
+        payload = {
+            "id": tc["tool_call_id"],
+            "toolName": tc["tool_name"],
+            "serverSlug": server_slug,
+            "status": tc["status"],
+            "error": tc.get("error"),
+        }
+        
+        # Route to correct field based on server
+        if server_slug == "dare":
+            payload["dareResult"] = parsed_result
+        else:
+            payload["mcpResult"] = parsed_result
+            
+        return payload
+
+    def _parse_tool_result(self, result: str):
+        """
+        Parse tool result JSON string and camelize for FE.
+
+        The result is stored as a JSON string in the database, but FE
+        expects a properly camelCased object - no parsing needed on FE side.
+        """
+        if not result:
+            return None
+        try:
+            parsed = json.loads(result)
+            return camelize(parsed)
+        except (json.JSONDecodeError, TypeError):
+            # If parsing fails, return as-is (shouldn't happen normally)
+            return result
 
     async def get_user_email(self, conversation: Conversation) -> str:
         """Fetch user email associated with the conversation."""
