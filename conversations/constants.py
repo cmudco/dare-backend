@@ -76,6 +76,16 @@ class ArtifactAction(models.TextChoices):
     CREATE = 'create', 'Create New'
     MODIFY = 'modify', 'Modify Existing'
 
+
+class ToolCallStatus(models.TextChoices):
+    """Status of MCP tool call execution."""
+    PENDING = 'pending', 'Pending'
+    AWAITING_CONFIRMATION = 'awaiting_confirmation', 'Awaiting Confirmation'
+    EXECUTING = 'executing', 'Executing'
+    COMPLETED = 'completed', 'Completed'
+    FAILED = 'failed', 'Failed'
+    CANCELLED = 'cancelled', 'Cancelled'
+
 # Default message sender names
 DEFAULT_AI_SENDER_NAME = "AI Assistant"
 DEFAULT_ANONYMOUS_USER_NAME = "Anonymous User"

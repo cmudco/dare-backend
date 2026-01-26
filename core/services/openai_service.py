@@ -310,11 +310,11 @@ class OpenAIService:
             params["max_tokens"] = max_tokens
             params["temperature"] = temperature
 
-        # Add tools if provided (for function calling like artifacts)
+        # Add tools if provided (for function calling like MCP)
         if tools:
             params["tools"] = tools
-            # Force tool use when tools are provided - ensures LLM uses tools instead of text
-            params["tool_choice"] = "required"
+            # Let LLM decide when to use tools (auto) - only required for specific use cases
+            params["tool_choice"] = "auto"
 
         return params
 

@@ -87,6 +87,9 @@ class MessageValidationService:
 
             # Advanced mode (support both snake_case and camelCase)
             "is_advanced": data.get("is_advanced", data.get("isAdvanced")),
+
+            # MCP servers for tool calls
+            "mcp_server_ids": cls._get_list(data, "mcp_server_ids"),
         }
 
     @staticmethod

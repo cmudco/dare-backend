@@ -66,6 +66,22 @@ class LLMService:
             llm = await self._resolve_llm(request)
             messages = await self._build_messages_for_request(request, llm)
             all_images = await self._process_media_files(request)
+            
+            # Collect all tools (MCP + any passed externally)
+            all_tools = list(tools) if tools else []
+            
+            # Auto-fetch MCP tools if server IDs provided
+            if request.requires_mcp_tools():
+                logger.info(f"[LLMService] Request has MCP server IDs: {request.mcp_server_ids}")
+                mcp_tools = await self._get_mcp_tools(request, llm)
+                all_tools.extend(mcp_tools)
+            else:
+                logger.debug("[LLMService] No MCP server IDs in request")
+            
+            # Log what tools are being passed
+            if all_tools:
+                tool_names = [t.get('function', {}).get('name', 'unknown') for t in all_tools]
+                logger.info(f"[LLMService] Passing {len(all_tools)} tools to LLM: {tool_names}")
 
             if request.requires_audio_transcription():
                 async for chunk, usage in self._execute_audio_transcription(request, llm):
@@ -75,7 +91,7 @@ class LLMService:
                     yield chunk, usage
             else:
                 async for chunk, usage in self._execute_llm_completion(
-                    request, llm, messages, all_images, tools=tools
+                    request, llm, messages, all_images, tools=all_tools if all_tools else None
                 ):
                     yield chunk, usage
 
@@ -325,3 +341,40 @@ class LLMService:
         tool_func = provider_tools.get(llm.provider)
         return [tool_func()] if tool_func else []
 
+    async def _get_mcp_tools(
+        self,
+        request: LLMQueryRequest,
+        llm: LLM,
+    ) -> list:
+        """Get MCP tools from selected servers.
+        
+        Fetches tools from MCP servers specified in the request and converts
+        them to the appropriate format for the LLM provider.
+        
+        Args:
+            request: LLMQueryRequest with mcp_server_ids
+            llm: LLM model (used to determine tool format)
+            
+        Returns:
+            List of tool definitions in LLM-compatible format
+        """
+        if not request.requires_mcp_tools() or not request.user:
+            return []
+        
+        try:
+            from mcp.services import MCPToolExecutor
+            
+            executor = MCPToolExecutor()
+            tools = await executor.get_tools_for_server_ids(
+                user=request.user,
+                server_ids=list(request.mcp_server_ids),
+                llm_provider=llm.provider,
+            )
+            
+            if tools:
+                logger.info(f"[LLMService] Loaded {len(tools)} MCP tools for request")
+            
+            return tools
+        except Exception as e:
+            logger.warning(f"[LLMService] Failed to get MCP tools: {e}")
+            return []
