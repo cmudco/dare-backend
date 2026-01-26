@@ -16,11 +16,11 @@ logger = logging.getLogger(__name__)
 
 class ArtifactToolExecutor:
     """
-    Handles: create_chart, create_diagram, update_artifact
+    Handles: create_chart, create_diagram, create_react_component, update_artifact
     All tools create Artifact records and emit artifact_created/updated events.
     """
-    
-    SUPPORTED_TOOLS = ['create_chart', 'create_diagram', 'update_artifact', 'update_artifact_inline']
+
+    SUPPORTED_TOOLS = ['create_chart', 'create_diagram', 'update_artifact', 'update_artifact_inline', 'create_react_component']
     
     async def execute(
         self,
@@ -47,6 +47,8 @@ class ArtifactToolExecutor:
             return await self._execute_create_chart(arguments, message, conversation, send_callback)
         elif tool_name == 'create_diagram':
             return await self._execute_create_diagram(arguments, message, conversation, send_callback)
+        elif tool_name == 'create_react_component':
+            return await self._execute_create_react_component(arguments, message, conversation, send_callback)
         elif tool_name == 'update_artifact':
             return await self._execute_update_artifact(arguments, message, conversation, send_callback)
         elif tool_name == 'update_artifact_inline':
@@ -173,7 +175,7 @@ class ArtifactToolExecutor:
         )
         
         logger.info(f"Created diagram artifact {artifact.id}: {title} (type: {diagram_type})")
-        
+
         # Return full result with mermaid_code so LLM has context for modifications
         return {
             'success': True,
@@ -182,7 +184,101 @@ class ArtifactToolExecutor:
             'mermaid_code': mermaid_code,  # Include full code for LLM context
             'diagram_type': diagram_type,
         }
-    
+
+    async def _execute_create_react_component(
+        self,
+        arguments: Dict[str, Any],
+        message: Message,
+        conversation: Conversation,
+        send_callback: Callable,
+    ) -> Dict[str, Any]:
+        """
+        create_react_component → Artifact with content_type='application/vnd.dare.react+jsx'
+
+        Creates a React component artifact that will be rendered in a sandboxed iframe
+        on the frontend with React 18, Tailwind CSS, Shadcn UI, and Recharts pre-loaded.
+
+        Expected arguments (from LLM structured output):
+            - title: Component title/name
+            - code: Complete React component code (JSX)
+            - description: Optional description of component functionality
+        """
+        title = arguments.get('title', 'React Component')
+        code = arguments.get('code', '')
+        description = arguments.get('description', '')
+
+        # Validate code is not empty
+        if not code.strip():
+            return {
+                'success': False,
+                'error': 'Component code is required',
+            }
+
+        # Basic validation - check for component pattern
+        if not self._is_valid_react_component(code):
+            return {
+                'success': False,
+                'error': (
+                    'Invalid React component. Must export a default function component '
+                    'or define an App function. Example: export default function App() { ... }'
+                ),
+            }
+
+        # Sanitize title for filename
+        safe_title = self._sanitize_filename(title)
+        filename = f"{safe_title}.jsx"
+
+        # Create artifact
+        artifact = await self._create_artifact(
+            conversation=conversation,
+            message=message,
+            title=title,
+            content=code,
+            artifact_type=ArtifactType.REACT,
+            filename=filename,
+            content_type=ARTIFACT_CONTENT_TYPES['react'],
+            source_tool='create_react_component',
+            metadata={
+                'description': description,
+                'framework': 'react',
+                'version': '18',
+                'ui_library': 'shadcn',
+            },
+        )
+
+        # Emit artifact_created event
+        await self._emit_artifact_created(
+            send_callback=send_callback,
+            artifact=artifact,
+            message=message,
+        )
+
+        logger.info(f"Created React component artifact {artifact.id}: {title}")
+
+        return {
+            'success': True,
+            'artifact_id': artifact.id,
+            'message': f'Created React component: {title}',
+        }
+
+    def _is_valid_react_component(self, code: str) -> bool:
+        """
+        Basic validation that code looks like a React component.
+        Not a full parser, just catches obvious mistakes.
+        """
+        code_stripped = code.strip()
+
+        # Check for common component patterns
+        patterns = [
+            'export default function',
+            'export default ',
+            'function App',
+            'const App =',
+            'let App =',
+        ]
+
+        return any(pattern in code_stripped for pattern in patterns)
+
     @sync_to_async
     def _create_artifact(
         self,
