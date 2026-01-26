@@ -44,7 +44,7 @@ class DareToolHandler:
     """
     
     # Tools that create visual artifacts - routed to ArtifactToolExecutor
-    ARTIFACT_TOOLS = ['create_chart', 'create_diagram', 'update_artifact', 'update_artifact_inline']
+    ARTIFACT_TOOLS = ['create_chart', 'create_diagram', 'update_artifact', 'update_artifact_inline', 'create_react_component']
     
     def __init__(self):
         # No LLMService here - it's passed via stream_tool_result_response
@@ -263,6 +263,8 @@ class DareToolHandler:
         elif tool_name == "create_chart":
             chart_config = result.get("chart_config", {})
             return f"Chart created successfully. Type: {chart_config.get('type')}, Title: {chart_config.get('title')}"
+        elif tool_name == "create_react_component":
+            return f"React component created successfully. Artifact ID: {result.get('artifact_id')}, Title: {result.get('message', 'Component')}"
         elif tool_name == "update_artifact_inline":
             change = result.get('change_summary', {})
             return (
