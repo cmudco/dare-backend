@@ -50,6 +50,7 @@ LOCAL_APPS = [
     "notifications",
     "api_keys",
     "mcp",
+    "dare_tools",
 ]
 
 THIRD_PARTY_APPS = [

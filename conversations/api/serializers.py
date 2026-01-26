@@ -5,6 +5,7 @@ from prompts.models import Prompt
 from prompts.api.serializers import PromptSerializer
 from users.constants import VectorDBChoice
 from mcp.models import MCPServer
+from dare_tools.models import DareTool
 
 class LLMSerializer(serializers.ModelSerializer):
     class Meta:
@@ -50,6 +51,14 @@ class ConversationSerializer(serializers.ModelSerializer):
         required=False,
         help_text="MCP servers enabled for this conversation."
     )
+    selected_dare_tool_slugs = serializers.SlugRelatedField(
+        queryset=DareTool.active_objects.filter(is_active=True),
+        source='selected_dare_tools',
+        slug_field='slug',
+        many=True,
+        required=False,
+        help_text="DARE tools enabled for this conversation."
+    )
 
     def get_user(self, obj):
         """Return user email or None for anonymous conversations."""
@@ -85,6 +94,7 @@ class ConversationSerializer(serializers.ModelSerializer):
             'feedback_last_prompt_message_count',
             'feedback_last_prompt_timestamp',
             'selected_mcp_server_ids',
+            'selected_dare_tool_slugs',
         ]
         read_only_fields = ['created_at', 'user', 'prompt']
 
@@ -182,8 +192,10 @@ class MessageSerializer(serializers.ModelSerializer):
             'cost',
             'artifactId',
             'mcp_tool_calls',
+            'content_type',
+            'content_metadata',
         ]
-        read_only_fields = ['id', 'created_at', 'sender_name', 'files', 'tags', 'snippets', 'web_search_sources', 'input_tokens', 'output_tokens', 'cost', 'artifactId', 'mcp_tool_calls']
+        read_only_fields = ['id', 'created_at', 'sender_name', 'files', 'tags', 'snippets', 'web_search_sources', 'input_tokens', 'output_tokens', 'cost', 'artifactId', 'mcp_tool_calls', 'content_type', 'content_metadata']
 
     def get_artifactId(self, obj):
         """Get the ID of the first active artifact linked to this message."""

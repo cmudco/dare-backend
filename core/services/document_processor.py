@@ -9,6 +9,7 @@ from channels.db import database_sync_to_async
 from core.config.vector_db import get_user_namespace
 from core.config.processing import CHUNK_SIZE, BATCH_SIZE, DEFAULT_SIMILARITY_THRESHOLD, DEFAULT_TOP_K, OVERLAP_SIZE
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from workflows.models import WorkflowStepSnippet
 
 class DocumentProcessor:
     def __init__(self, openai_client=None, vector_service=None, embedding_service=None, file_processor=None, user_id=None):
@@ -157,7 +158,7 @@ class DocumentProcessor:
     async def _save_workflow_step_snippets(self, snippets_to_save, workflow_run_step_obj):
         """Save retrieved snippets for workflow steps to the database."""
         try:
-            from workflows.models import WorkflowStepSnippet
+
 
             successful_saves = 0
             for i, snippet_data in enumerate(snippets_to_save):
