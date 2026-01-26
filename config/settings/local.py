@@ -43,3 +43,10 @@ WEAVIATE = {
     'COLLECTION_NAME': 'Document',
     'SKIP_INIT_CHECKS': True
 }
+
+# SyftBox local development settings (disabled by default)
+SYFTBOX = {
+    'ENABLED': False,
+    'DATASITES_ROOT': os.path.join(BASE_DIR, 'syftbox_datasites'),
+    'APP_NAME': 'dare',
+}
