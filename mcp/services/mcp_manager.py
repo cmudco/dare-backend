@@ -24,7 +24,6 @@ from mcp.constants import (
     MCP_SUBPROCESS_TIMEOUT,
     ExecutionStatus,
     MCP_USE_DOCKER,
-    MCP_DOCKER_IMAGES,
 )
 from mcp.models import MCPToolExecution, UserMCPConnection
 from mcp.services.mcp_client import MCPClient, MCPClientError
@@ -256,9 +255,9 @@ class MCPManager:
         
         if MCP_USE_DOCKER:
             # Docker mode: run containerized MCP server
-            image = MCP_DOCKER_IMAGES.get(server.slug)
-            if not image:
+            if not server.docker_image:
                 raise MCPManagerError(f"No Docker image configured for {server.slug}")
+            image = server.docker_image
             
             # Build docker run command
             command = "docker"
