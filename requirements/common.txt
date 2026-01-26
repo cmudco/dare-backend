@@ -81,3 +81,7 @@ ffmpeg-python~=0.2.0
 
 # Cross-conversation memory layer (requires Python 3.13+)
 memu-py~=1.3.0
+
+# SyftBox (distributed file storage)
+syft-core
+syft-perm
