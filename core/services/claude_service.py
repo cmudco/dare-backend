@@ -370,52 +370,40 @@ class ClaudeService:
         structured_spec: Dict
     ) -> str:
         """
-        Get structured output using prompt engineering.
+        Get structured output using Claude's native structured output API.
 
-        Claude doesn't have native structured outputs, so we use prompt engineering.
+        Claude now supports native structured outputs via the beta API
+        (structured-outputs-2025-11-13). This method transforms the unified
+        spec to Claude's format and returns JSON.
 
         Args:
             messages: List of messages
             max_tokens: Max tokens to generate
             temperature: Temperature setting
-            structured_spec: Schema specification
+            structured_spec: Unified schema specification
 
         Returns:
-            Generated response with instructions appended
+            JSON string response from the model
         """
-        instruction = SchemaTransformer.transform_for_claude(structured_spec)
+        # Transform unified spec to Claude's JSON schema format
+        response_schema = SchemaTransformer.transform_for_claude(structured_spec)
 
-        if instruction:
-            messages = self._append_instruction_to_messages(messages, instruction)
+        if not response_schema:
+            logger.warning("[Claude] Could not transform spec to schema, falling back to streaming")
+            stream = self.stream_chat_completion(messages, max_tokens, temperature)
+            return await StreamAggregator.aggregate_stream(stream)
 
-        # Use streaming and aggregate
-        stream = self.stream_chat_completion(messages, max_tokens, temperature)
-        return await StreamAggregator.aggregate_stream(stream)
+        # Use native structured output API
+        logger.info(f"[Claude] Using native structured output with schema: {list(response_schema.get('properties', {}).keys())}")
+        result = await self.generate_structured_output(
+            messages=messages,
+            response_schema=response_schema,
+            max_tokens=max_tokens,
+            temperature=temperature
+        )
 
-    def _append_instruction_to_messages(
-        self,
-        messages: List[Dict],
-        instruction: str
-    ) -> List[Dict]:
-        """
-        Append instruction to the last user/assistant message.
-
-        Args:
-            messages: List of messages
-            instruction: Instruction to append
-
-        Returns:
-            Modified messages list
-        """
-        # Find last user/assistant message and append instruction
-        for i in range(len(messages) - 1, -1, -1):
-            if messages[i].get('role') in ['user', 'assistant']:
-                # Copy to avoid mutating original
-                messages[i] = messages[i].copy()
-                messages[i]['content'] = messages[i].get('content', '') + instruction
-                break
-
-        return messages
+        # Return as JSON string (consistent with other providers)
+        return json.dumps(result)
 
     # ==================== Static Methods ====================
 

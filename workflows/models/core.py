@@ -77,38 +77,50 @@ class Workflow(BaseModel):
             title = 'Untitled'
         return f"{title} ({self.user.email})"
 
+    def _get_root_start_node(self):
+        """
+        Get the root start node - the one with NO incoming edges.
+        
+        Chained start nodes have incoming edges from chatOutput nodes.
+        The root start node (which holds the workflow title) has no incoming edges.
+        """
+        start_nodes = list(self.nodes.filter(node_type='start'))
+        if not start_nodes:
+            return None
+        
+        if len(start_nodes) == 1:
+            return start_nodes[0]
+        
+        # Multiple start nodes - find the one with no incoming edges
+        edge_targets = set(self.edges.values_list('target', flat=True))
+        
+        for start_node in start_nodes:
+            if start_node.node_id not in edge_targets:
+                return start_node
+        
+        # Fallback: use first one
+        return start_nodes[0]
+
     @property
     def title(self):
-        """Get workflow title from StartNodeData."""
-        if hasattr(self, '_cached_start_nodes') and self._cached_start_nodes:
-            start_node = self._cached_start_nodes[0]
-        else:
-            start_node = self.nodes.filter(node_type='start').first()
-
+        """Get workflow title from root StartNodeData (no incoming edges)."""
+        start_node = self._get_root_start_node()
         if start_node and start_node.typed_data:
             return start_node.typed_data.title
         return ''
 
     @property
     def description(self):
-        """Get workflow description from StartNodeData."""
-        if hasattr(self, '_cached_start_nodes') and self._cached_start_nodes:
-            start_node = self._cached_start_nodes[0]
-        else:
-            start_node = self.nodes.filter(node_type='start').first()
-
+        """Get workflow description from root StartNodeData."""
+        start_node = self._get_root_start_node()
         if start_node and start_node.typed_data:
             return start_node.typed_data.description
         return ''
 
     @property
     def mode(self):
-        """Get workflow mode from StartNodeData."""
-        if hasattr(self, '_cached_start_nodes') and self._cached_start_nodes:
-            start_node = self._cached_start_nodes[0]
-        else:
-            start_node = self.nodes.filter(node_type='start').first()
-
+        """Get workflow mode from root StartNodeData."""
+        start_node = self._get_root_start_node()
         if start_node and start_node.typed_data:
             mode_str = start_node.typed_data.mode
             return 2 if mode_str == 'parallel' else 1

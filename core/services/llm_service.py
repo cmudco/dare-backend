@@ -1,8 +1,6 @@
 from abc import ABC, abstractmethod
-from channels.db import database_sync_to_async
 from conversations.constants import Provider, SenderType
 from conversations.models import LLM, Conversation, Message
-from conversations.services.audio_transcription_service import AudioTranscriptionService
 from core.services.document_processor import DocumentProcessor
 from core.services.openai_service import OpenAIService
 from core.services.claude_service import ClaudeService
@@ -10,16 +8,24 @@ from core.services.gemini_service import GeminiService
 from core.services.llama_service import LlamaService
 from core.services.custom_llm_service import CustomLLMService
 from core.services.file_processor import FileProcessor
-from core.services.whisper_service import WhisperService
 from core.services.api_key_service import get_provider_api_key, get_provider_api_key_for_user
-from core.services.dtos import LLMQueryRequest, LLMQueryChunk, MessageBuildContext
+from core.services.dtos import LLMQueryRequest, LLMQueryChunk
 from typing import AsyncGenerator, Dict, Tuple, Optional, Any, List
 from files.models import File, Folder
-from prompts.models import Prompt
-from core.services.vector_service import get_vector_service_async
-from datetime import datetime
 import logging
-import base64
+
+from core.services.llm_helpers import (
+    # Database helpers
+    get_media_files_as_images,
+    # Socratic message builders
+    build_classic_socratic_messages,
+    build_advanced_socratic_messages,
+    # Media helpers
+    add_video_transcriptions_to_messages,
+    execute_audio_transcription,
+    # Standard message builders
+    build_standard_messages,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -134,113 +140,14 @@ class LLMService:
         Returns:
             List of message dictionaries
         """
-        build_context = MessageBuildContext.from_request(request)
-
         if request.is_advanced_mode():
-            return await self._build_advanced_messages(build_context)
+            return await build_advanced_socratic_messages(request, self.document_processor)
         else:
-            return await self._build_socratic_messages(build_context)
+            return await build_classic_socratic_messages(request, self.document_processor)
 
-    async def _build_standard_messages(
-        self,
-        request: LLMQueryRequest
-    ) -> List[Dict[str, str]]:
-        """Build messages for standard (non-Socratic) mode.
-
-        Args:
-            request: LLMQueryRequest with context and files
-
-        Returns:
-            List of message dictionaries
-        """
-        messages = []
-
-        prompt = await self.get_prompt(request.generation.prompt_id)
-        if prompt and prompt.strip():
-            messages.append({"role": "assistant", "content": f"Prompt: {prompt}"})
-
-        if request.context.referenced_conversation_ids:
-            referenced_context = await self.get_referenced_conversations_context(
-                request.context.referenced_conversation_ids,
-                request.user.id if request.user else None,
-                None
-            )
-            if referenced_context:
-                messages.append({"role": "user", "content": referenced_context})
-
-        if request.context.file_ids:
-            file_contents = await self.get_full_file_contents(request.context.file_ids)
-            if file_contents:
-                for file_content in file_contents:
-                    messages.append({"role": "user", "content": file_content})
-
-        await self._add_semantic_context_to_messages(request, messages)
-
-        conversation_history = await self.get_conversation_history(
-            request.conversation,
-            limit=request.context.history_limit
-        ) if request.conversation else []
-        messages.extend([msg for msg in conversation_history if msg["content"].strip()])
-
-        messages.append({"role": "user", "content": f"User's message: {request.message}"})
-
-        return messages
-
-    async def _add_semantic_context_to_messages(
-        self,
-        request: LLMQueryRequest,
-        messages: List[Dict[str, str]]
-    ) -> None:
-        """Add semantic search results to messages array.
-
-        Args:
-            request: LLMQueryRequest with context config
-            messages: Messages list to append to (modified in place)
-        """
-        if not (request.context.embedding_ids or request.context.tag_ids or request.context.folder_ids):
-            return
-
-        all_embedding_file_ids = set(request.context.embedding_ids or [])
-        user_id = request.user.id if request.user else None
-
-        if request.context.tag_ids:
-            tagged_file_ids = await self.get_files_from_tags(request.context.tag_ids, user_id)
-            all_embedding_file_ids.update(tagged_file_ids)
-
-        if request.context.folder_ids:
-            folder_file_ids = await self.get_files_from_folders(request.context.folder_ids, user_id)
-            all_embedding_file_ids.update(folder_file_ids)
-
-        if not all_embedding_file_ids:
-            return
-
-        # Use file_owner_id from frontend (DARE user ID) for shared boards, fallback to current user
-        vector_user_id = request.context.file_owner_id or user_id
-
-        logger.info(f"VECTOR CONTEXT: user_id={user_id}, file_owner_id={request.context.file_owner_id}, vector_user_id={vector_user_id}")
-        logger.info(f"VECTOR CONTEXT: file_ids={list(all_embedding_file_ids)}")
-
-        if vector_user_id and vector_user_id != self.document_processor.user_id:
-            self.document_processor.user_id = vector_user_id
-            self.document_processor.vector_service = await get_vector_service_async(vector_user_id)
-
-        effective_threshold = (
-            0.05 if request.is_socratic_mode()
-            else request.context.document_similarity_threshold
-        )
-
-        context = await self.document_processor.search_similar_documents(
-            query_text=request.message,
-            file_ids=list(all_embedding_file_ids),
-            user_id=vector_user_id,  # Use file_owner_id for shared boards
-            top_k=request.context.max_context_snippets,
-            similarity_threshold=effective_threshold,
-            message_obj=request.message_obj,
-            workflow_run_step_obj=request.workflow_run_step_obj
-        )
-
-        if context and context.strip():
-            messages.append({"role": "user", "content": f"Relevant context from documents:\n{context}"})
+    async def _build_standard_messages(self, request: LLMQueryRequest) -> List[Dict[str, str]]:
+        """Build messages for standard (non-Socratic) mode."""
+        return await build_standard_messages(request, self.document_processor, self.file_processor)
 
     async def _process_media_files(self, request: LLMQueryRequest) -> List[Dict]:
         """Process and combine all media files (images and videos).
@@ -261,7 +168,7 @@ class LLMService:
         if request.media.media_ids:
             user_id = request.user.id if request.user else None
             if user_id:
-                media_images = await self.get_media_files_as_images(
+                media_images = await get_media_files_as_images(
                     request.media.media_ids,
                     user_id
                 )
@@ -302,127 +209,14 @@ class LLMService:
         ):
             yield chunk, usage
 
-    async def _execute_audio_transcription(
-        self,
-        request: LLMQueryRequest,
-        llm: LLM
-    ) -> AsyncGenerator[Tuple[str, Dict], None]:
-        """Execute audio transcription request with streaming support.
-
-        For large files that get split into chunks, this yields each chunk's
-        transcription as it completes, allowing real-time progress updates.
-
-        Args:
-            request: LLMQueryRequest with audio transcription settings
-            llm: LLM model (must be Whisper or support audio transcription)
-
-        Yields:
-            Tuple of (chunk: str, usage: Dict) where usage contains:
-            - For intermediate chunks: {"transcription_chunk": {...}}
-            - For final chunk: {"transcription_result": {...}}
-        """
-        # Get audio/video files from media_ids
-        media_files = []
-        if request.context.media_ids:
-            @database_sync_to_async
-            def get_media_files():
-                return list(File.active_objects.filter(
-                    id__in=request.context.media_ids,
-                    media_type__in=['audio', 'video']
-                ))
-
-            media_files = await get_media_files()
-
-        if not media_files:
-            yield "Error: No audio or video files found. Please upload an audio/video file to transcribe.", None
-            return
-
-        settings = request.generation.audio_transcription_settings or {}
-        language = settings.get("language", "auto")
-        # Convert 'auto' to None for Whisper API
-        language = None if language == "auto" else language
-        # Check if streaming is enabled (default True for new behavior)
-        enable_streaming = settings.get("stream_chunks", True)
-
-        # Transcribe each audio/video file
-        accumulated_text = ""
-        final_transcription = None
-
-        for media_file in media_files:
-            try:
-                if enable_streaming:
-                    # Use streaming transcription - yields chunks as they complete
-                    file_name = media_file.name
-                    chunk_texts = []
-                    transcription_error = None
-
-                    async for chunk_data in AudioTranscriptionService.transcribe_audio_file_streaming(
-                        file_obj=media_file,
-                        language=language,
-                        model=llm.identifier
-                    ):
-                        # Check if this is an error response
-                        if chunk_data.get("error"):
-                            transcription_error = chunk_data.get("error_message", "Unknown transcription error")
-                            logger.error(f"Transcription error for {file_name}: {transcription_error}")
-                            break
-
-                        chunk_text = chunk_data["text"]
-                        chunk_texts.append(chunk_text)
-
-                        # Build formatted text progressively
-                        if chunk_data["chunk_index"] == 0:
-                            # First chunk - add header
-                            accumulated_text = f"**Transcription of `{file_name}`**\n\n{chunk_text}"
-                        else:
-                            # Subsequent chunks - append with space
-                            accumulated_text += " " + chunk_text
-
-                        # Yield immediately after each chunk (this is the key fix!)
-                        yield accumulated_text, None
-
-                    # If there was an error, yield it and return
-                    if transcription_error:
-                        yield f"Error transcribing {file_name}: {transcription_error}", None
-                        return
-
-                    # Build final transcription result after all chunks
-                    if chunk_texts:
-                        final_transcription = {
-                            'text': " ".join(chunk_texts),
-                            'language': language or 'auto',
-                            'model': llm.identifier,
-                            'file_id': media_file.id,
-                            'file_name': media_file.name,
-                            'file_size': media_file.size,
-                            'media_type': media_file.media_type,
-                            'transcribed_at': datetime.now().isoformat(),
-                        }
-                else:
-                    # Use original non-streaming transcription
-                    final_transcription = await AudioTranscriptionService.transcribe_audio_file(
-                        file_obj=media_file,
-                        language=language,
-                        model=llm.identifier
-                    )
-
-            except Exception as e:
-                logger.exception(f"Error transcribing media file {media_file.id}: {str(e)}")
-                yield f"Error transcribing {media_file.name}: {str(e)}", None
-                return
-
-        # Yield final result with usage data
-        if final_transcription:
-            result_text = AudioTranscriptionService.format_transcription_for_display(final_transcription)
-
-            # Yield the final transcription text and usage data
-            usage_data = final_transcription.copy()
-            usage_data["transcription_result"] = final_transcription
-
-            yield result_text, usage_data
-        else:
-            file_names = ", ".join([f.name for f in media_files]) if media_files else "unknown"
-            yield f"Error: Transcription failed for {file_names}. Please check the server logs for more details.", None
+    async def _execute_audio_transcription(self, request: LLMQueryRequest, llm: LLM) -> AsyncGenerator[Tuple[str, Dict], None]:
+        """Execute audio transcription with streaming support."""
+        async for chunk, usage in execute_audio_transcription(
+            request.context.media_ids,
+            llm.identifier,
+            request.generation.audio_transcription_settings,
+        ):
+            yield chunk, usage
 
     async def _execute_llm_completion(
         self,
@@ -484,222 +278,10 @@ class LLMService:
 
     # ========== End Query Orchestration Methods ==========
 
-    @database_sync_to_async
-    def get_prompt(self, prompt_id: str = None) -> str:
-        """Fetches the prompt if the prompt_id is provided."""
-        if prompt_id:
-            prompt = Prompt.active_objects.filter(id=prompt_id).first()
-            return prompt.content if prompt else ""
-        return ""
+    async def add_video_transcriptions_to_context(self, media_items: List[Dict], messages: List[Dict], user=None) -> List[Dict]:
+        """Add video transcriptions to message context for LLMs."""
+        return await add_video_transcriptions_to_messages(media_items, messages, user)
 
-    @database_sync_to_async
-    def get_conversation_history(self, conversation: 'Conversation', limit: int = 10, ) -> list:
-        """Retrieves recent chat history for AI context, ignoring placeholders."""
-        messages = Message.active_objects.filter(conversation=conversation).order_by('-created_at')
-        if limit >= 50:
-            messages = messages[2:]
-        else:
-            messages = messages[2:limit+2] if limit > 0 else messages[2:]
-        return [
-            {"role": "user" if msg.sender_type == SenderType.PLAYER else "assistant", "content": msg.message}
-            for msg in reversed(messages)
-        ]
-
-    @database_sync_to_async
-    def get_files_from_tags(self, tag_ids: list, user_id: int) -> list:
-        """Fetch file IDs from tags."""
-        if not tag_ids:
-            return []
-        return list(File.active_objects.filter(tags__id__in=tag_ids, user_id=user_id).distinct().values_list('id', flat=True))
-
-    @database_sync_to_async
-    def get_files_from_folders(self, folder_ids: list, user_id: int) -> list:
-        """Fetch file IDs from folders."""
-        if not folder_ids:
-            return []
-        return list(File.active_objects.filter(folders__id__in=folder_ids, user_id=user_id).distinct().values_list('id', flat=True))
-
-    @database_sync_to_async
-    def get_full_file_contents(self, file_ids: list,) -> list:
-        """Read full content from files for the given file IDs."""
-        if not file_ids:
-            return []
-
-        file_contents = []
-        files = File.active_objects.filter(id__in=file_ids)
-        for file in files:
-            try:
-                content = self.file_processor.read_file_content(file)
-                file_name = file.name or file.file.name
-                formatted_content = f"File: {file_name}\n\n{content}"
-                file_contents.append(formatted_content)
-            except Exception as e:
-                continue
-
-        return file_contents
-
-    @database_sync_to_async
-    def get_media_files_as_images(self, media_ids: list, user_id: int) -> list:
-        """
-        Convert media file IDs to image format for LLM vision API.
-        Reads media files from disk and converts to base64 data URLs.
-
-        Args:
-            media_ids: List of media file IDs
-            user_id: User ID for filtering
-
-        Returns:
-            List of dicts with 'preview' (base64 data URL), 'name', 'type'
-        """
-        if not media_ids:
-            return []
-
-        media_images = []
-
-        # Fetch media files from database
-        media_files = File.active_objects.filter(
-            id__in=media_ids,
-            user_id=user_id,
-            is_media=True  # Only media files
-        )
-
-        for media_file in media_files:
-            try:
-                # Read file from disk
-                with media_file.file.open('rb') as f:
-                    file_data = f.read()
-
-                # Convert to base64
-                base64_data = base64.b64encode(file_data).decode('utf-8')
-
-                # Create data URL
-                data_url = f"data:{media_file.file_type};base64,{base64_data}"
-
-                media_images.append({
-                    'preview': data_url,
-                    'name': media_file.name or media_file.file.name,
-                    'type': media_file.file_type
-                })
-            except Exception as e:
-                logger.error(f"Error reading media file {media_file.id}: {str(e)}")
-                continue
-
-        return media_images
-
-    async def add_video_transcriptions_to_context(
-        self,
-        media_items: List[Dict],
-        messages: List[Dict],
-        user=None
-    ) -> List[Dict]:
-        """
-        Add video transcriptions to message context for LLMs.
-
-        Extracts and transcribes audio from videos, then adds the transcriptions
-        to the message context so LLMs have access to the spoken content.
-
-        Args:
-            media_items: List of media dicts with 'preview', 'type', 'name'
-            messages: List of message dictionaries
-            user: Optional user for API key resolution
-
-        Returns:
-            Updated messages list with video transcriptions added
-        """
-        # Separate videos from images
-        videos = [item for item in media_items if item.get('type', '').startswith('video/')]
-
-        if not videos:
-            return messages
-
-        try:
-            # Initialize Whisper service
-            if user:
-                api_key = await get_provider_api_key_for_user(Provider.OPENAI.value, user)
-            else:
-                api_key = await get_provider_api_key(Provider.OPENAI.value)
-
-            whisper_service = WhisperService(api_key=api_key)
-
-            # Transcribe all videos
-            transcriptions = await whisper_service.transcribe_multiple_videos(videos)
-
-            # Filter out failed transcriptions and build context
-            successful_transcriptions = []
-            for video_name, transcription in transcriptions.items():
-                if transcription:
-                    successful_transcriptions.append(
-                        f"Video '{video_name}' audio transcription:\n{transcription}"
-                    )
-
-            # Add transcriptions to messages before the last user message
-            if successful_transcriptions:
-                transcription_context = (
-                    "=== Video Audio Transcriptions ===\n\n"
-                    + "\n\n".join(successful_transcriptions)
-                    + "\n\n=== End of Video Transcriptions ===\n"
-                )
-
-                # Find last user message and insert transcription before it
-                for i in range(len(messages) - 1, -1, -1):
-                    if messages[i].get("role") == "user":
-                        messages.insert(i, {
-                            "role": "user",
-                            "content": transcription_context
-                        })
-                        break
-
-                logger.info(f"Added transcriptions for {len(successful_transcriptions)} video(s)")
-
-        except Exception as e:
-            logger.error(f"Error transcribing videos: {str(e)}")
-            # Don't fail the entire request if transcription fails
-
-        return messages
-
-    @database_sync_to_async
-    def get_referenced_conversations_context(self, conversation_ids: list, user_id: int, history_limit: int = None) -> str:
-        """Fetch context from referenced conversations.
-
-        Args:
-            conversation_ids: List of conversation IDs to fetch
-            user_id: User ID for filtering
-            history_limit: Optional limit for messages (None = all messages)
-        """
-        if not conversation_ids:
-            return ""
-
-        context_parts = []
-        conversations = Conversation.active_objects.filter(
-            conversation_id__in=conversation_ids,
-            user_id=user_id
-        )
-
-        for conversation in conversations:
-            messages_query = Message.active_objects.filter(
-                conversation=conversation
-            ).order_by('-created_at')
-
-            if history_limit is not None:
-                messages_query = messages_query[:history_limit]
-
-            messages = list(messages_query)
-
-            if messages:
-                conversation_title = conversation.title or "Untitled Conversation"
-                context_parts.append(f"=== Referenced Conversation: {conversation_title} ===")
-
-                for msg in reversed(messages):
-                    role = "User" if msg.sender_type == SenderType.PLAYER else "Assistant"
-                    context_parts.append(f"{role}: {msg.message}")
-
-                context_parts.append("=== End of Referenced Conversation ===\n")
-
-        if context_parts:
-            full_context = "\n".join(context_parts)
-            return f"Referenced conversation context for additional background:\n\n{full_context}"
-
-        return ""
 
     async def _get_ai_service(self, llm: LLM, user=None) -> AIService:
         """
@@ -743,191 +325,3 @@ class LLMService:
         tool_func = provider_tools.get(llm.provider)
         return [tool_func()] if tool_func else []
 
-    # -------- SocraticBooks helpers --------
-    async def _build_socratic_messages(
-        self,
-        context: MessageBuildContext,
-    ) -> list:
-        """Build messages array in the classic SocraticBooks format.
-
-        Args:
-            context: MessageBuildContext with all necessary data
-
-        Returns:
-            List of message dictionaries for LLM
-        """
-        subject = context.subject
-        topic = context.topic
-        learning_goals = context.learning_goals
-        chat_prompt = context.chat_prompt
-
-        # Log the Socratic message components
-        logger.info(
-            f"[LLMService] Building Socratic messages (classic mode): "
-            f"subject={subject}, topic={topic}"
-        )
-        logger.info(
-            f"[LLMService] chat_prompt being attached to system message: "
-            f"{chat_prompt[:150] if chat_prompt else 'N/A'}..."
-        )
-        logger.info(
-            f"[LLMService] learning_goals being attached: "
-            f"{learning_goals[:100] if learning_goals else 'N/A'}..."
-        )
-
-        # System prompt
-        prompt_start = (
-            f"Subject and Topic:\n"
-            f"Your job is to act as a living Socratic book that helps '{subject}' students\n"
-            f"learn about different subjects. This chapter specifically is about '{topic}'."
-        )
-        system_prompt = (
-            prompt_start
-            + "\n\nTeaching Style:\n" + chat_prompt
-            + "\n\nLearning Goals:\n" + learning_goals
-        )
-
-        # Conversation history as simple transcript
-        history_list = await self.get_conversation_history(
-            context.conversation,
-            limit=context.history_limit
-        ) if context.conversation else []
-        transcript_parts = []
-        for h in history_list:
-            role_name = "User" if h["role"] == "user" else "Assistant"
-            content = (h["content"] or "").strip()
-            if content:
-                transcript_parts.append(f"{role_name}: {content}")
-        conversation_history_text = "\n\n".join(transcript_parts) if transcript_parts else "No previous messages."
-
-        file_context_parts = []
-
-        # Retrieve contextual snippets using embedding_ids (avoid full file reads)
-        if context.embedding_ids:
-            # Use file_owner_id for shared boards (e.g., deployed Socratic bots)
-            vector_user_id = context.file_owner_id or context.user_id
-            if vector_user_id and vector_user_id != self.document_processor.user_id:
-                self.document_processor.user_id = vector_user_id
-                self.document_processor.vector_service = await get_vector_service_async(vector_user_id)
-
-            doc_context = await self.document_processor.search_similar_documents(
-                query_text=context.message,
-                file_ids=context.embedding_ids,
-                user_id=vector_user_id,  # Use file_owner_id for shared boards
-                top_k=context.max_context_snippets,
-                similarity_threshold=context.document_similarity_threshold,
-                message_obj=context.message_obj,
-                workflow_run_step_obj=context.workflow_run_step_obj
-            )
-            # print("context", doc_context)
-            if doc_context:
-                for part in doc_context.split("\n\n"):
-                    if part.strip():
-                        file_context_parts.append(part)
-
-        file_context_text = "\n\n".join([p for p in file_context_parts if p and p.strip()])
-        if not file_context_text:
-            file_context_text = "No relevant file content found."
-
-        # User message assembled like the old SocraticBooks format
-        user_message = (
-            "Respond based on the following documents.\n"
-            f"{file_context_text}\n"
-            "And the recent conversation history:\n"
-            f"{conversation_history_text}\n"
-            f"Question: {context.message}\n"
-        )
-
-        return [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_message},
-        ]
-
-    # -------- Advanced Prompt helpers --------
-    async def _build_advanced_messages(
-        self,
-        context: MessageBuildContext,
-    ) -> list:
-        """Build messages using the Advanced Prompt construction provided.
-
-        Args:
-            context: MessageBuildContext with all necessary data
-
-        Returns:
-            List of message dictionaries for LLM
-        """
-        title = context.title or (context.conversation.title if context.conversation and context.conversation.title else "Untitled Conversation")
-        subject = context.subject
-        topic = context.topic
-        learning_goals = context.learning_goals
-        chat_prompt = context.chat_prompt
-
-        # Log the Advanced message components
-        logger.info(
-            f"[LLMService] Building Socratic messages (ADVANCED mode): "
-            f"title={title}, subject={subject}, topic={topic}"
-        )
-        logger.info(
-            f"[LLMService] chat_prompt being attached to system message: "
-            f"{chat_prompt[:150] if chat_prompt else 'N/A'}..."
-        )
-        logger.info(
-            f"[LLMService] learning_goals being attached: "
-            f"{learning_goals[:100] if learning_goals else 'N/A'}..."
-        )
-
-        # Conversation history as a readable transcript
-        history_list = await self.get_conversation_history(
-            context.conversation,
-            limit=context.history_limit
-        ) if context.conversation else []
-        transcript_parts = []
-        for h in history_list:
-            role_name = "User" if h["role"] == "user" else "Assistant"
-            content = (h["content"] or "").strip()
-            if content:
-                transcript_parts.append(f"{role_name}: {content}")
-        conversation_history_text = "\n\n".join(transcript_parts) if transcript_parts else "No previous messages."
-
-        # Build relevant content using embedding-based retrieval (avoid full file reads)
-        relevant_sections = []
-
-        if context.embedding_ids:
-            if context.user_id and context.user_id != self.document_processor.user_id:
-                self.document_processor.user_id = context.user_id
-                self.document_processor.vector_service = await get_vector_service_async(context.user_id)
-
-            doc_context = await self.document_processor.search_similar_documents(
-                query_text=context.message,
-                file_ids=context.embedding_ids,
-                user_id=context.user_id,
-                top_k=context.max_context_snippets,
-                similarity_threshold=context.document_similarity_threshold,
-                message_obj=context.message_obj,
-                workflow_run_step_obj=context.workflow_run_step_obj
-            )
-            # print("context", len(doc_context))
-            if doc_context:
-                for part in doc_context.split("\n\n"):
-                    if part.strip():
-                        relevant_sections.append(part)
-
-        relevant_content_text = "\n\n".join([s for s in relevant_sections if s and s.strip()])
-        if not relevant_content_text:
-            relevant_content_text = "No relevant external content found."
-
-        # Assemble the advanced system prompt exactly as requested
-        system_prompt = (
-            f"Here is a conversation:\n{conversation_history_text}\n\n"
-            f"This is a conversation on {title} (Subject: {subject}, Topic: {topic}).\n"
-            f"We are trying to teach the following learning goals:\n{learning_goals}\n\n"
-            f"{relevant_content_text}\n"
-            f"The latest user message was: \"{context.message}\"\n\n"
-            f"Please respond according to these directions:\n{chat_prompt}"
-        )
-
-        # Include the user message as a separate turn to comply with chat APIs
-        return [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": context.message},
-        ]
