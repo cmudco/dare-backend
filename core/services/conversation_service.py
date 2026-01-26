@@ -25,7 +25,7 @@ class ConversationService:
                 Message.active_objects.filter(conversation=conversation)
                 .select_related('llm')
                 .prefetch_related(
-                    'snippets', 'files', 'tags', 'web_search_sources',
+                    'snippets', 'files', 'tags', 'web_search_sources', 'mcp_tool_calls',
                     # Only prefetch active artifacts to match what serializer expects
                     Prefetch('artifacts', queryset=Artifact.active_objects.all())
                 )
@@ -61,6 +61,17 @@ class ConversationService:
                 "inputTokens": msg.get("input_tokens", None),
                 "outputTokens": msg.get("output_tokens", None),
                 "artifactId": msg.get("artifactId", None),
+                "toolCalls": [
+                    {
+                        "id": tc["tool_call_id"],
+                        "toolName": tc["tool_name"],
+                        "serverSlug": tc["server_slug"],
+                        "status": tc["status"],
+                        "result": tc.get("result"),
+                        "error": tc.get("error"),
+                    }
+                    for tc in msg.get("mcp_tool_calls", [])
+                ],
             }
             for msg in serialized_messages
         ]

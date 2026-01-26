@@ -1,0 +1,20 @@
+"""
+URL routing for MCP API.
+"""
+
+from django.urls import path, include
+from rest_framework.routers import DefaultRouter
+from mcp.api.views import (
+    MCPServerViewSet,
+    UserMCPConnectionViewSet,
+    MCPToolExecutionViewSet,
+)
+
+router = DefaultRouter()
+router.register('servers', MCPServerViewSet, basename='mcp-servers')
+router.register('connections', UserMCPConnectionViewSet, basename='mcp-connections')
+router.register('executions', MCPToolExecutionViewSet, basename='mcp-executions')
+
+urlpatterns = [
+    path('', include(router.urls)),
+]
