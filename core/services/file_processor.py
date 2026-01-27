@@ -24,22 +24,6 @@ from files.models import File
 class FileProcessor:
     """Service for processing different types of files."""
 
-    def _open_file(self, file: File, mode: str = 'rb'):
-        """
-        Open a file using the DynamicStorageFileField.
-
-        The file field automatically routes to the correct storage backend
-        based on the File instance's storage_backend field.
-
-        Args:
-            file: File model instance
-            mode: File open mode
-
-        Returns:
-            File-like object
-        """
-        return file.file.open(mode)
-
     def read_file_content(self, file: File) -> str:
         """Read and extract content from various file types"""
         try:
