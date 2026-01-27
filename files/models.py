@@ -4,6 +4,7 @@ from django.conf import settings
 from common.managers import ActiveObjectsManager
 from common.models import BaseModel, TimeStampMixin
 from core.storage.constants import StorageBackendChoice
+from core.storage.fields import DynamicStorageFileField
 from users.constants import VectorDBChoice
 from .constants import FileStatus
 from django.utils.translation import gettext_lazy as _
@@ -63,7 +64,7 @@ class File(BaseModel):
         related_name='files',
         help_text="The user who owns this file"
     )
-    file = models.FileField(
+    file = DynamicStorageFileField(
         upload_to='files/',
         help_text="The actual file content",
         max_length=255
@@ -165,14 +166,7 @@ class File(BaseModel):
         choices=StorageBackendChoice.choices,
         default=StorageBackendChoice.LOCAL,
         verbose_name=_("Storage Backend"),
-        help_text=_("Where this file is physically stored")
-    )
-    syft_url = models.CharField(
-        max_length=512,
-        blank=True,
-        null=True,
-        verbose_name=_("SyftBox URL"),
-        help_text=_("syft:// URL for accessing this file across datasites")
+        help_text=_("Storage backend for this file (local or SyftBox)")
     )
 
     active_objects = ActiveObjectsManager()
