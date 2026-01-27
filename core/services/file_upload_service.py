@@ -2,12 +2,17 @@ import json
 import logging
 import base64
 import uuid
+from pathlib import Path
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from django.db import transaction
 from django.core.files.base import ContentFile
 from django_rq import enqueue
 
+from core.storage.constants import StorageBackendChoice
+from core.storage.storage_service import get_storage_for_user
+from core.storage.permission_service import SyftBoxPermissionService
+from core.storage.syftbox_client import SyftBoxClientWrapper
 from files.models import File, Folder, Tag
 from files.constants import ALLOWED_FILES, FileStatus
 from files.tasks import process_file_embeddings
@@ -92,8 +97,28 @@ class FileUploadService:
         # Document files go through PROCESSING status and background job
         file_status = FileStatus.FAILED if not is_valid else (FileStatus.PROCESSED if is_media else FileStatus.PROCESSING)
 
+        # Get storage backend based on user preference
+        storage_backend = getattr(user, 'storage_backend', StorageBackendChoice.LOCAL)
+        storage = get_storage_for_user(user)
+
+        # Save file using the appropriate storage backend
+        saved_name = storage.save(f'files/{file_name}', uploaded_file)
+
+        # Generate syft_url if using SyftBox storage
+        syft_url = None
+        if storage_backend == StorageBackendChoice.SYFTBOX:
+            client = SyftBoxClientWrapper(user.email)
+            syft_url = client.get_syft_url(user.email, f'files/{file_name}')
+
+            # Set file permissions for owner
+            permission_service = SyftBoxPermissionService()
+            permission_service.set_file_permissions(
+                file_path=Path(storage.path(saved_name)),
+                owner_email=user.email
+            )
+
         file_data = {
-            'file': uploaded_file,
+            'file': saved_name,
             'name': file_name,
             'file_type': uploaded_file.content_type,
             'size': uploaded_file.size,
@@ -101,7 +126,9 @@ class FileUploadService:
             'status': file_status,
             'vector_db_source': user.vector_db if not is_media else None,  # No vector DB for media files
             'is_media': is_media,
-            'media_type': media_type
+            'media_type': media_type,
+            'storage_backend': storage_backend,
+            'syft_url': syft_url,
         }
 
         file_instance = File.active_objects.create(**file_data)
