@@ -14,6 +14,7 @@ from django.core.files.storage import Storage
 from django.utils.deconstruct import deconstructible
 
 from .syftbox_client import SyftBoxClientWrapper
+from .permission_service import SyftBoxPermissionService
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +99,8 @@ class SyftBoxStorage(Storage):
         """
         Save a file to SyftBox storage.
 
+        Automatically sets owner permissions after saving the file.
+
         Args:
             name: File name/path
             content: File content (File object or similar)
@@ -121,6 +124,19 @@ class SyftBoxStorage(Storage):
                 f.write(content)
 
         logger.debug(f"Saved file to SyftBox: {full_path}")
+
+        # Automatically set owner permissions
+        if self._user_email:
+            try:
+                permission_service = SyftBoxPermissionService()
+                permission_service.set_file_permissions(
+                    file_path=full_path,
+                    owner_email=self._user_email
+                )
+                logger.debug(f"Set SyftBox permissions for: {full_path}")
+            except Exception as e:
+                logger.warning(f"Failed to set SyftBox permissions: {e}")
+
         return name
 
     def delete(self, name: str) -> None:

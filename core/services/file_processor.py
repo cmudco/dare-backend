@@ -18,15 +18,18 @@ try:
 except Exception:
     XLRD_AVAILABLE = False
 
-from core.storage.storage_service import get_file_storage
 from files.models import File
+
 
 class FileProcessor:
     """Service for processing different types of files."""
 
     def _open_file(self, file: File, mode: str = 'rb'):
         """
-        Open a file using the appropriate storage backend.
+        Open a file using the DynamicStorageFileField.
+
+        The file field automatically routes to the correct storage backend
+        based on the File instance's storage_backend field.
 
         Args:
             file: File model instance
@@ -35,8 +38,7 @@ class FileProcessor:
         Returns:
             File-like object
         """
-        storage = get_file_storage(file)
-        return storage.open(file.file.name, mode)
+        return file.file.open(mode)
 
     def read_file_content(self, file: File) -> str:
         """Read and extract content from various file types"""
