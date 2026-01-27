@@ -3,6 +3,7 @@ from django.conf import settings
 
 from common.managers import ActiveObjectsManager
 from common.models import BaseModel, TimeStampMixin
+from core.storage.constants import StorageBackendChoice
 from users.constants import VectorDBChoice
 from .constants import FileStatus
 from django.utils.translation import gettext_lazy as _
@@ -157,6 +158,21 @@ class File(BaseModel):
         null=True,
         blank=True,
         help_text="Cost in USD for generating this image"
+    )
+
+    # SyftBox Storage Fields
+    storage_backend = models.IntegerField(
+        choices=StorageBackendChoice.choices,
+        default=StorageBackendChoice.LOCAL,
+        verbose_name=_("Storage Backend"),
+        help_text=_("Where this file is physically stored")
+    )
+    syft_url = models.CharField(
+        max_length=512,
+        blank=True,
+        null=True,
+        verbose_name=_("SyftBox URL"),
+        help_text=_("syft:// URL for accessing this file across datasites")
     )
 
     active_objects = ActiveObjectsManager()
