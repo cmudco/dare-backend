@@ -10,7 +10,7 @@ from rest_framework import serializers
 from billing.models import Wallet
 from billing.services import WalletService
 from prompts.api.serializers import PromptSerializer
-from users.constants import VectorDBChoice, AuthSourceChoice, ScopeChoice
+from users.constants import VectorDBChoice, AuthSourceChoice, ScopeChoice, RoleChoice
 from users.models import AccessCodeGroup
 from users.utils import detect_platform_from_request, get_platform_access_permission
 
@@ -24,6 +24,7 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
     default_prompt = serializers.SerializerMethodField()
     model_group = serializers.SerializerMethodField()
     auth_source = serializers.ChoiceField(choices=AuthSourceChoice.choices, read_only=True)
+    platform_role = serializers.ChoiceField(choices=RoleChoice.choices, read_only=True)
     billing_mode = serializers.CharField(read_only=True)
     billing_mode_display = serializers.CharField(source='get_billing_mode_display', read_only=True)
     avatar_url = serializers.SerializerMethodField()
@@ -43,6 +44,7 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
             "referral_source",
             "is_onboarding_completed",
             "auth_source",
+            "platform_role",
             "is_dare_accessible",
             "is_socratic_bots_accessible",
             "billing_mode",
@@ -51,7 +53,7 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
             "avatar_preset",
             "avatar_url",
         ]
-        read_only_fields = ["id", "auth_source", "billing_mode", "billing_mode_display", "is_onboarding_completed"]
+        read_only_fields = ["id", "auth_source", "platform_role", "billing_mode", "billing_mode_display", "is_onboarding_completed"]
 
     def get_default_prompt(self, obj):
         if obj.default_prompt:
@@ -206,12 +208,14 @@ class CustomRegisterSerializer(RegisterSerializer):
 
         access_code = self.validated_data.get("access_code")
         code_group = None
-        
+
         if access_code:
             try:
                 code_group = AccessCodeGroup.objects.get(access_code=access_code)
                 code_group.use_code()
                 user.access_code_group = code_group
+                # Assign platform role from access code's default_role
+                user.platform_role = code_group.default_role
             except AccessCodeGroup.DoesNotExist:
                 pass
 
