@@ -7,7 +7,7 @@ from common.managers import ActiveObjectsManager
 from common.models import IsDeletedMixin, TimeStampMixin
 from core.config.processing import CHUNK_SIZE, OVERLAP_SIZE
 from users.managers import UserManager
-from users.constants import VectorDBChoice, AuthSourceChoice, ScopeChoice
+from users.constants import VectorDBChoice, AuthSourceChoice, ScopeChoice, RoleChoice
 from prompts.models import Prompt
 from api_keys.constants import BillingModeChoice
 
@@ -68,6 +68,14 @@ class AccessCodeGroup(TimeStampMixin):
         blank=True,
         help_text=_("Optional initial wallet credit (USD) to grant new users who register with this access code. If left blank, normal defaults apply."),
         verbose_name=_("Initial Wallet Credit (USD)")
+    )
+    # Default role assigned to users who register with this access code
+    default_role = models.CharField(
+        max_length=20,
+        choices=RoleChoice.choices,
+        default=RoleChoice.USER,
+        verbose_name=_("Default Role"),
+        help_text=_("Role assigned to users who register with this access code")
     )
 
     class Meta:
@@ -200,6 +208,15 @@ class User(AbstractUser, IsDeletedMixin):
         default=False,
         verbose_name=_("SocraticBots Access"),
         help_text=_("Whether this user can access SocraticBots platform")
+    )
+
+    # Platform role - determines user's permissions across DARE and SocraticBots
+    platform_role = models.CharField(
+        max_length=20,
+        choices=RoleChoice.choices,
+        default=RoleChoice.USER,
+        verbose_name=_("Platform Role"),
+        help_text=_("User's role across DARE and SocraticBots platforms")
     )
 
     # Billing mode - determines how user pays for API usage
