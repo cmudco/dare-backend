@@ -25,6 +25,13 @@ class AvatarTypeChoice(models.TextChoices):
     CUSTOM = "custom", _("Custom Upload")
 
 
+class RoleChoice(models.TextChoices):
+    SUPERADMIN = "SUPERADMIN", _("Super Admin")
+    RESEARCHER = "RESEARCHER", _("Researcher")
+    CREATOR = "CREATOR", _("Creator")
+    USER = "USER", _("User")
+
+
 # Available preset avatar identifiers - alternating male/female + thumbs
 PRESET_AVATARS = [
     "m1",
