@@ -10,7 +10,8 @@ from typing import Optional, Dict, List, Any
 
 from config import env
 from voice.constants import (
-    ELEVENLABS_AGENTS_ENDPOINT,
+    ELEVENLABS_AGENTS_BASE,
+    ELEVENLABS_AGENTS_CREATE_ENDPOINT,
     ELEVENLABS_SIGNED_URL_ENDPOINT,
     ELEVENLABS_CONVERSATION_ENDPOINT,
     ELEVENLABS_VOICES_ENDPOINT,
@@ -50,13 +51,16 @@ class ElevenLabsService:
         Returns:
             Created agent data including agent_id
         """
+        logger.info(f"Creating ElevenLabs agent with config: {config}")
         async with httpx.AsyncClient() as client:
             response = await client.post(
-                ELEVENLABS_AGENTS_ENDPOINT,
+                ELEVENLABS_AGENTS_CREATE_ENDPOINT,
                 headers=self.headers,
                 json=config,
                 timeout=30.0
             )
+            if response.status_code >= 400:
+                logger.error(f"ElevenLabs API error: {response.status_code} - {response.text}")
             response.raise_for_status()
             return response.json()
 
@@ -72,7 +76,7 @@ class ElevenLabsService:
         """
         async with httpx.AsyncClient() as client:
             response = await client.get(
-                f"{ELEVENLABS_AGENTS_ENDPOINT}/{agent_id}",
+                f"{ELEVENLABS_AGENTS_BASE}/{agent_id}",
                 headers=self.headers,
                 timeout=30.0
             )
@@ -92,7 +96,7 @@ class ElevenLabsService:
         """
         async with httpx.AsyncClient() as client:
             response = await client.patch(
-                f"{ELEVENLABS_AGENTS_ENDPOINT}/{agent_id}",
+                f"{ELEVENLABS_AGENTS_BASE}/{agent_id}",
                 headers=self.headers,
                 json=config,
                 timeout=30.0
@@ -112,7 +116,7 @@ class ElevenLabsService:
         """
         async with httpx.AsyncClient() as client:
             response = await client.delete(
-                f"{ELEVENLABS_AGENTS_ENDPOINT}/{agent_id}",
+                f"{ELEVENLABS_AGENTS_BASE}/{agent_id}",
                 headers=self.headers,
                 timeout=30.0
             )
@@ -128,7 +132,7 @@ class ElevenLabsService:
         """
         async with httpx.AsyncClient() as client:
             response = await client.get(
-                ELEVENLABS_AGENTS_ENDPOINT,
+                ELEVENLABS_AGENTS_BASE,
                 headers=self.headers,
                 timeout=30.0
             )
@@ -221,36 +225,60 @@ class ElevenLabsService:
             first_message: Initial message from agent
             language: Language code
             max_duration_seconds: Max conversation duration
-            conversation_config: Full ElevenLabs config (overrides other params if provided)
+            conversation_config: Full ElevenLabs config (merged with other params).
+                Already in snake_case from DRF camel-case parser.
 
         Returns:
-            Configuration dict for ElevenLabs API
+            Configuration dict for ElevenLabs API (snake_case keys)
         """
-        # If full config is provided, use it as base and override essentials
+        # If full config is provided, use it as base
+        # Note: DRF's djangorestframework-camel-case already converts
+        # incoming camelCase to snake_case, so no conversion needed here
         if conversation_config:
             config = {
                 "name": name,
                 "conversation_config": conversation_config.copy(),
             }
-            # Ensure prompt is updated
+
+            # Ensure nested structures exist
             if "agent" not in config["conversation_config"]:
                 config["conversation_config"]["agent"] = {}
             if "prompt" not in config["conversation_config"]["agent"]:
                 config["conversation_config"]["agent"]["prompt"] = {}
+            if "conversation" not in config["conversation_config"]:
+                config["conversation_config"]["conversation"] = {}
 
+            # Override with explicit params (these take precedence)
             config["conversation_config"]["agent"]["prompt"]["prompt"] = system_prompt
             config["conversation_config"]["agent"]["prompt"]["temperature"] = temperature
 
             if first_message:
                 config["conversation_config"]["agent"]["first_message"] = first_message
 
-            if voice_id:
+            # Handle TTS config - only include if we have a valid voice_id
+            # ElevenLabs requires voice_id if tts section exists
+            tts_config = config["conversation_config"].get("tts", {})
+            effective_voice_id = voice_id or tts_config.get("voice_id", "")
+
+            if effective_voice_id:
+                # Keep tts config but ensure voice_id is set
                 if "tts" not in config["conversation_config"]:
                     config["conversation_config"]["tts"] = {}
-                config["conversation_config"]["tts"]["voice_id"] = voice_id
+                config["conversation_config"]["tts"]["voice_id"] = effective_voice_id
+            else:
+                # Remove tts section entirely if no voice_id - ElevenLabs will use default
+                config["conversation_config"].pop("tts", None)
 
-            if "conversation" not in config["conversation_config"]:
-                config["conversation_config"]["conversation"] = {}
+            # Remove turn section if it has invalid/empty values
+            turn_config = config["conversation_config"].get("turn", {})
+            if turn_config:
+                # Clean up turn config - remove empty values
+                cleaned_turn = {k: v for k, v in turn_config.items() if v}
+                if cleaned_turn:
+                    config["conversation_config"]["turn"] = cleaned_turn
+                else:
+                    config["conversation_config"].pop("turn", None)
+
             config["conversation_config"]["conversation"]["max_duration_seconds"] = max_duration_seconds
 
             return config

@@ -23,7 +23,8 @@ class ConversationStatus(models.TextChoices):
 
 # ElevenLabs API endpoints
 ELEVENLABS_API_BASE = "https://api.elevenlabs.io/v1"
-ELEVENLABS_AGENTS_ENDPOINT = f"{ELEVENLABS_API_BASE}/convai/agents"
+ELEVENLABS_AGENTS_BASE = f"{ELEVENLABS_API_BASE}/convai/agents"
+ELEVENLABS_AGENTS_CREATE_ENDPOINT = f"{ELEVENLABS_AGENTS_BASE}/create"
 ELEVENLABS_SIGNED_URL_ENDPOINT = f"{ELEVENLABS_API_BASE}/convai/conversation/get_signed_url"
 ELEVENLABS_CONVERSATION_ENDPOINT = f"{ELEVENLABS_API_BASE}/convai/conversations"
 ELEVENLABS_VOICES_ENDPOINT = f"{ELEVENLABS_API_BASE}/voices"
