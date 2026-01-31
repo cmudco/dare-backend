@@ -172,8 +172,6 @@ SIMPLE_JWT = {
     "ROTATE_REFRESH_TOKENS": False,
     "BLACKLIST_AFTER_ROTATION": True,
     "UPDATE_LAST_LOGIN": False,
-    # Custom token serializer that adds role claims
-    "TOKEN_OBTAIN_SERIALIZER": "users.jwt_serializers.CustomTokenObtainPairSerializer",
 }
 
 REST_AUTH = {
