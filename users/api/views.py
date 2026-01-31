@@ -289,7 +289,7 @@ class AccessCodeCheckView(APIView):
         Returns:
         {
             "exists": true/false,
-            "scope": "DARE" or "DUAL",
+            "default_role": "USER", "CREATOR", etc.,
             "available_slots": integer,
             "message": "descriptive message"
         }
@@ -300,7 +300,7 @@ class AccessCodeCheckView(APIView):
             return Response(
                 {
                     "exists": False,
-                    "scope": None,
+                    "default_role": None,
                     "available_slots": 0,
                     "message": "Access code is required"
                 },
@@ -321,7 +321,7 @@ class AccessCodeCheckView(APIView):
 
                 return Response({
                     "exists": True,
-                    "scope": code_group.scope,
+                    "default_role": code_group.default_role,
                     "available_slots": 0,
                     "message": message
                 })
@@ -331,15 +331,15 @@ class AccessCodeCheckView(APIView):
 
             return Response({
                 "exists": True,
-                "scope": code_group.scope,
+                "default_role": code_group.default_role,
                 "available_slots": available_slots,
-                "message": f"Access code is available with {code_group.get_scope_display()} scope"
+                "message": f"Access code is available with {code_group.get_default_role_display()} role"
             })
 
         except AccessCodeGroup.DoesNotExist:
             return Response({
                 "exists": False,
-                "scope": None,
+                "default_role": None,
                 "available_slots": 0,
                 "message": "Access code not found"
             })
