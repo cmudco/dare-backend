@@ -72,3 +72,6 @@ WEAVIATE_AUTOSCHEMA_ENABLED = os.getenv("WEAVIATE_AUTOSCHEMA_ENABLED", "False") 
 
 # MCP Docker Configuration
 MCP_USE_DOCKER = os.getenv("MCP_USE_DOCKER", "False") == "True"
+
+# Internal API key for inter-service communication (SB backend -> DARE backend)
+DARE_INTERNAL_KEY = os.getenv("DARE_INTERNAL_KEY", "local-dev-internal-key")
