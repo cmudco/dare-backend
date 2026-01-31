@@ -7,7 +7,7 @@ from common.managers import ActiveObjectsManager
 from common.models import IsDeletedMixin, TimeStampMixin
 from core.config.processing import CHUNK_SIZE, OVERLAP_SIZE
 from users.managers import UserManager
-from users.constants import VectorDBChoice, AuthSourceChoice, ScopeChoice, RoleChoice
+from users.constants import VectorDBChoice, AuthSourceChoice, RoleChoice
 from prompts.models import Prompt
 from api_keys.constants import BillingModeChoice
 
@@ -44,12 +44,14 @@ class AccessCodeGroup(TimeStampMixin):
         verbose_name=_("Notes"),
         help_text=_("Internal notes about this access code group (e.g., class name, semester, purpose)")
     )
+    # DEPRECATED: Platform access is now determined by default_role
+    # This field is kept for backwards compatibility and will be removed in a future migration
     scope = models.CharField(
         max_length=50,
-        choices=ScopeChoice.choices,
-        default=ScopeChoice.DARE,
-        verbose_name=_("Access Scope"),
-        help_text=_("Determines which platforms users can access with this code")
+        choices=[("DARE", "DARE Only"), ("DUAL", "DARE + SocraticBots")],
+        default="DARE",
+        verbose_name=_("Access Scope (Deprecated)"),
+        help_text=_("DEPRECATED: Use default_role instead. Platform access is now role-based.")
     )
     # Link this access code group to a model group to control available LLMs
     model_group = models.ForeignKey(
@@ -83,14 +85,14 @@ class AccessCodeGroup(TimeStampMixin):
         verbose_name_plural = "Access Code Groups"
 
     def __str__(self):
-        scope_indicator = f" [{self.get_scope_display()}]"
+        role_indicator = f" [{self.get_default_role_display()}]"
         expiration_indicator = ""
         if self.expires_at:
             if self.is_expired:
                 expiration_indicator = " [EXPIRED]"
             else:
                 expiration_indicator = f" [Expires: {self.expires_at.strftime('%Y-%m-%d')}]"
-        return f"Access Code: {self.access_code} ({self.current_usage}/{self.max_capacity} used){scope_indicator}{expiration_indicator}"
+        return f"Access Code: {self.access_code} ({self.current_usage}/{self.max_capacity} used){role_indicator}{expiration_indicator}"
 
     @property
     def is_expired(self):
