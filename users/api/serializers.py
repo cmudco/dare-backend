@@ -10,7 +10,7 @@ from rest_framework import serializers
 from billing.models import Wallet
 from billing.services import WalletService
 from prompts.api.serializers import PromptSerializer
-from users.constants import VectorDBChoice, AuthSourceChoice, ScopeChoice, RoleChoice
+from users.constants import VectorDBChoice, AuthSourceChoice, RoleChoice
 from users.models import AccessCodeGroup
 from users.utils import detect_platform_from_request, get_platform_access_permission
 
@@ -219,22 +219,12 @@ class CustomRegisterSerializer(RegisterSerializer):
             except AccessCodeGroup.DoesNotExist:
                 pass
 
-        # Set platform accessibility based on auth_source and access code scope
-        if platform == AuthSourceChoice.DARE:
-            user.is_dare_accessible = True
-            # If access code has DUAL scope, also give SocraticBots access
-            if code_group and code_group.scope == ScopeChoice.DUAL:
-                user.is_socratic_bots_accessible = True
-            else:
-                user.is_socratic_bots_accessible = False
-                
-        elif platform == AuthSourceChoice.SOCRATIC_BOTS:
-            user.is_socratic_bots_accessible = True
-            # If access code has DUAL scope, also give DARE access
-            if code_group and code_group.scope == ScopeChoice.DUAL:
-                user.is_dare_accessible = True
-            else:
-                user.is_dare_accessible = False
+        # Set platform accessibility based on role
+        # Roles with DARE access: SUPERADMIN, RESEARCHER, USER
+        # All roles have SB access
+        dare_roles = {RoleChoice.SUPERADMIN, RoleChoice.RESEARCHER, RoleChoice.USER}
+        user.is_dare_accessible = user.platform_role in dare_roles
+        user.is_socratic_bots_accessible = True  # All roles can access SB
         
         user.save()
 
