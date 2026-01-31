@@ -22,7 +22,7 @@ from conversations.constants import SenderType
 from conversations.models import Conversation, Message
 from files.models import File
 from prompts.models import Prompt
-from users.constants import VectorDBChoice, AuthSourceChoice
+from users.constants import VectorDBChoice, AuthSourceChoice, RoleChoice
 from users.models import AccessCodeGroup
 from users.services import AvatarService, AvatarValidationError
 
@@ -387,4 +387,61 @@ class AvatarViewSet(viewsets.ViewSet):
             return Response(
                 {"error": f"Failed to remove avatar: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class InternalSetRoleView(APIView):
+    """
+    Internal endpoint for inter-service communication.
+    Allows SB backend to set a user's platform_role during migrations.
+
+    Authenticated via X-Internal-Key header (shared secret).
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        # Verify internal key
+        internal_key = request.headers.get('X-Internal-Key', '')
+        expected_key = getattr(settings, 'DARE_INTERNAL_KEY', '')
+        if not internal_key or internal_key != expected_key:
+            return Response(
+                {"error": "Unauthorized"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        user_id = request.data.get('user_id')
+        platform_role = request.data.get('platform_role')
+
+        if not user_id or not platform_role:
+            return Response(
+                {"error": "user_id and platform_role are required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Validate role value
+        valid_roles = [choice[0] for choice in RoleChoice.choices]
+        if platform_role not in valid_roles:
+            return Response(
+                {"error": f"Invalid platform_role. Must be one of: {valid_roles}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            user = User.objects.get(id=user_id)
+            old_role = user.platform_role
+            user.platform_role = platform_role
+            user.save(update_fields=['platform_role'])
+
+            return Response({
+                "success": True,
+                "user_id": user.id,
+                "email": user.email,
+                "old_role": old_role,
+                "new_role": platform_role
+            })
+
+        except User.DoesNotExist:
+            return Response(
+                {"error": f"User with id={user_id} not found"},
+                status=status.HTTP_404_NOT_FOUND
             )
