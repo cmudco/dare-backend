@@ -45,8 +45,6 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
             "is_onboarding_completed",
             "auth_source",
             "platform_role",
-            "is_dare_accessible",
-            "is_socratic_bots_accessible",
             "billing_mode",
             "billing_mode_display",
             "avatar_type",
@@ -219,13 +217,6 @@ class CustomRegisterSerializer(RegisterSerializer):
             except AccessCodeGroup.DoesNotExist:
                 pass
 
-        # Set platform accessibility based on role
-        # Roles with DARE access: SUPERADMIN, RESEARCHER, USER
-        # All roles have SB access
-        dare_roles = {RoleChoice.SUPERADMIN, RoleChoice.RESEARCHER, RoleChoice.USER}
-        user.is_dare_accessible = user.platform_role in dare_roles
-        user.is_socratic_bots_accessible = True  # All roles can access SB
-        
         user.save()
 
         # Apply initial wallet credit with a single transaction
