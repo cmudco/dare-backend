@@ -25,6 +25,9 @@ DEBUG = env.DEBUG == "True"
 
 ALLOWED_HOSTS = env.ALLOWED_HOSTS
 
+# Internal API key for inter-service communication (SB backend -> DARE backend)
+DARE_INTERNAL_KEY = env.DARE_INTERNAL_KEY
+
 DJANGO_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
