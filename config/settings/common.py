@@ -54,7 +54,6 @@ LOCAL_APPS = [
     "api_keys",
     "mcp",
     "dare_tools",
-    "voice",
 ]
 
 THIRD_PARTY_APPS = [
