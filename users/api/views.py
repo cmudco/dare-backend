@@ -396,8 +396,17 @@ class InternalSetRoleView(APIView):
     Allows SB backend to set a user's platform_role during migrations.
 
     Authenticated via X-Internal-Key header (shared secret).
+
+    Smart role assignment logic:
+    - If is_professor=True and user has DARE access (USER role) → RESEARCHER
+    - If is_professor=True and user has no DARE access → CREATOR
+    - If is_professor=False and user has DARE access → USER (unchanged)
+    - If is_professor=False and user has no DARE access → SB_USER
     """
     permission_classes = [AllowAny]
+
+    # Roles that have DARE access
+    DARE_ACCESS_ROLES = {RoleChoice.SUPERADMIN, RoleChoice.RESEARCHER, RoleChoice.USER}
 
     def post(self, request, *args, **kwargs):
         # Verify internal key
@@ -411,25 +420,53 @@ class InternalSetRoleView(APIView):
 
         user_id = request.data.get('user_id')
         platform_role = request.data.get('platform_role')
+        is_professor = request.data.get('is_professor')  # Optional: for smart role assignment
 
-        if not user_id or not platform_role:
+        if not user_id:
             return Response(
-                {"error": "user_id and platform_role are required"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # Validate role value
-        valid_roles = [choice[0] for choice in RoleChoice.choices]
-        if platform_role not in valid_roles:
-            return Response(
-                {"error": f"Invalid platform_role. Must be one of: {valid_roles}"},
+                {"error": "user_id is required"},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
         try:
             user = User.objects.get(id=user_id)
             old_role = user.platform_role
-            user.platform_role = platform_role
+            has_dare_access = old_role in self.DARE_ACCESS_ROLES
+
+            # Smart role assignment if is_professor is provided
+            if is_professor is not None:
+                if is_professor:
+                    # Professor/Creator in SB
+                    if has_dare_access:
+                        # Has DARE access → RESEARCHER (DARE + SB creator)
+                        new_role = RoleChoice.RESEARCHER
+                    else:
+                        # No DARE access → CREATOR (SB only, can create)
+                        new_role = RoleChoice.CREATOR
+                else:
+                    # Student/Consumer in SB
+                    if has_dare_access:
+                        # Has DARE access → USER (DARE + SB consumer) - keep as is
+                        new_role = RoleChoice.USER
+                    else:
+                        # No DARE access → SB_USER (SB only, consumer)
+                        new_role = RoleChoice.SB_USER
+            elif platform_role:
+                # Direct role assignment (legacy behavior)
+                valid_roles = [choice[0] for choice in RoleChoice.choices]
+                if platform_role not in valid_roles:
+                    return Response(
+                        {"error": f"Invalid platform_role. Must be one of: {valid_roles}"},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                new_role = platform_role
+            else:
+                return Response(
+                    {"error": "Either platform_role or is_professor is required"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            user.platform_role = new_role
             user.save(update_fields=['platform_role'])
 
             return Response({
@@ -437,7 +474,9 @@ class InternalSetRoleView(APIView):
                 "user_id": user.id,
                 "email": user.email,
                 "old_role": old_role,
-                "new_role": platform_role
+                "new_role": new_role,
+                "had_dare_access": has_dare_access,
+                "is_professor": is_professor
             })
 
         except User.DoesNotExist:
