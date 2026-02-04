@@ -10,7 +10,7 @@ from users.models import User, AccessCodeGroup
 from billing.services import WalletService
 from django import forms
 from decimal import Decimal
-from users.constants import VectorDBChoice, AuthSourceChoice, ScopeChoice
+from users.constants import VectorDBChoice, AuthSourceChoice, RoleChoice
 from users.filters import LastLoginFilter
 from users.admin_constants import (
     LAST_LOGIN_DISPLAY_RULES,
@@ -34,8 +34,8 @@ class UserInline(admin.TabularInline):
 
 @admin.register(AccessCodeGroup)
 class AccessCodeGroupAdmin(admin.ModelAdmin):
-    list_display = ('access_code', 'scope', 'model_group', 'initial_wallet_credit', 'usage_display', 'expiration_status', 'is_active', 'user_count', 'created_at')
-    list_filter = ('is_active', 'scope', 'created_at', 'model_group')
+    list_display = ('access_code', 'default_role', 'model_group', 'initial_wallet_credit', 'usage_display', 'expiration_status', 'is_active', 'user_count', 'created_at')
+    list_filter = ('is_active', 'default_role', 'created_at', 'model_group')
     search_fields = ('access_code',)
     readonly_fields = ('current_usage', 'created_at', 'updated_at')
     list_editable = ('is_active',)
@@ -82,9 +82,9 @@ class AccessCodeGroupAdmin(admin.ModelAdmin):
         (None, {
             'fields': ('access_code', 'max_capacity', 'is_active', 'expires_at', 'notes')
         }),
-        (_('Platform Access'), {
-            'fields': ('scope',),
-            'description': 'DUAL scope allows users to access both DARE and SocraticBots platforms'
+        (_('Role Assignment'), {
+            'fields': ('default_role',),
+            'description': 'Role assigned to users who register with this access code. Platform access is determined by role: SUPERADMIN/RESEARCHER/USER have DARE access; all roles have SocraticBots access.'
         }),
         (_('Model Access'), {
             'fields': ('model_group',),
@@ -211,9 +211,15 @@ class UserAdmin(DjangoUserAdmin):
               "classes": ("collapse",)
         }),
         (_("Access Control"), {"fields": ("access_code_group",)}),
+        (_("Platform Role"), {
+            "fields": ("platform_role",),
+            "description": "User's role determines permissions across DARE and SocraticBots platforms"
+        }),
         (_("Vector Database Settings"), {"fields": ("vector_db",)}),
-        (_("Platform Settings"), {
-            "fields": ("auth_source", "is_dare_accessible", "is_socratic_bots_accessible")
+        (_("Platform Settings (Legacy)"), {
+            "fields": ("auth_source", "is_dare_accessible", "is_socratic_bots_accessible"),
+            "classes": ("collapse",),
+            "description": "Legacy fields - platform access is now determined by platform_role"
         }),
         (_("Important dates"), {"fields": ("last_login", "date_joined")}),
     )
@@ -222,12 +228,12 @@ class UserAdmin(DjangoUserAdmin):
             None,
             {
                 "classes": ("wide",),
-                "fields": ("email", "password1", "password2", "vector_db", "auth_source", "is_dare_accessible", "is_socratic_bots_accessible", "is_superuser", "is_staff", "is_active"),
+                "fields": ("email", "password1", "password2", "platform_role", "vector_db", "auth_source", "is_superuser", "is_staff", "is_active"),
             },
         ),
     )
-    list_display = ("email", "last_login_display", "date_joined", "activity_status", "is_active", "is_staff", "onboarding_status", "access_code_group", "vector_db")
-    list_filter = ("is_staff", "is_superuser", "is_active", LastLoginFilter, "vector_db", "access_code_group", "auth_source", "is_dare_accessible", "is_socratic_bots_accessible")
+    list_display = ("email", "last_login_display", "date_joined", "activity_status", "is_active", "is_staff", "platform_role", "onboarding_status", "access_code_group", "vector_db")
+    list_filter = ("is_staff", "is_superuser", "is_active", "platform_role", LastLoginFilter, "vector_db", "access_code_group", "auth_source")
     search_fields = ("email", "first_name", "last_name")
     ordering = ("-last_login",)
     actions = ["credit_selected_users", "disable_inactive_accounts"]
