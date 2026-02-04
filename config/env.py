@@ -55,6 +55,7 @@ OPENAI_API_KEY = env('OPENAI_API_KEY')
 CLAUDE_API_KEY = env('CLAUDE_API_KEY')
 GEMINI_API_KEY = env('GEMINI_API_KEY')
 OLLAMA_HOST = env('OLLAMA_HOST', default='http://localhost:11434')
+ELEVENLABS_API_KEY = env('ELEVENLABS_API_KEY', default='')
 
 # redis
 REDIS_HOST = os.getenv("REDIS_HOST")
@@ -71,3 +72,6 @@ WEAVIATE_AUTOSCHEMA_ENABLED = os.getenv("WEAVIATE_AUTOSCHEMA_ENABLED", "False") 
 
 # MCP Docker Configuration
 MCP_USE_DOCKER = os.getenv("MCP_USE_DOCKER", "False") == "True"
+
+# Internal API key for inter-service communication (SB backend -> DARE backend)
+DARE_INTERNAL_KEY = os.getenv("DARE_INTERNAL_KEY", "local-dev-internal-key")
