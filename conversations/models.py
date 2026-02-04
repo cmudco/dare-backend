@@ -457,6 +457,16 @@ class Conversation(BaseModel):
         help_text="DARE tools enabled for this conversation."
     )
 
+    # Agent template integration
+    selected_agent = models.ForeignKey(
+        'agents.Agent',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='conversations_using_agent',
+        help_text="Selected agent template for this conversation."
+    )
+
     active_objects = ActiveObjectsManager()
 
 
@@ -511,7 +521,8 @@ class Conversation(BaseModel):
                 selected_model=self.selected_model,
                 selected_media_ids=self.selected_media_ids.copy() if self.selected_media_ids else [],
                 prompt=self.prompt,
-                sort_order=self.sort_order
+                sort_order=self.sort_order,
+                selected_agent=self.selected_agent,
             )
             cloned_conversation.save()
 
