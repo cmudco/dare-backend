@@ -25,6 +25,7 @@ app_paths = [
     path("", include("api_keys.urls")),
     path("mcp/", include("mcp.urls", namespace="mcp")),
     path("dare/", include("dare_tools.urls", namespace="dare_tools")),
+    path("", include("memory.urls", namespace="memory")),
 ]
 
 other_paths = [

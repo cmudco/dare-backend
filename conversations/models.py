@@ -434,6 +434,13 @@ class Conversation(BaseModel):
         help_text="Timestamp when feedback prompt was last shown"
     )
 
+    # Memory extraction tracking
+    last_memory_extracted_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Timestamp of last memory extraction from this conversation."
+    )
+
     # MCP Server integration
     selected_mcp_servers = models.ManyToManyField(
         'mcp.MCPServer',
