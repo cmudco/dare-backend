@@ -6,6 +6,7 @@ from prompts.api.serializers import PromptSerializer
 from users.constants import VectorDBChoice
 from mcp.models import MCPServer
 from dare_tools.models import DareTool
+from agents.models import Agent
 
 class LLMSerializer(serializers.ModelSerializer):
     class Meta:
@@ -59,6 +60,17 @@ class ConversationSerializer(serializers.ModelSerializer):
         required=False,
         help_text="DARE tools enabled for this conversation."
     )
+    selected_agent = serializers.PrimaryKeyRelatedField(
+        queryset=Agent.active_objects.all(),
+        required=False,
+        allow_null=True,
+        help_text="Selected agent template for this conversation."
+    )
+    selected_agent_name = serializers.CharField(
+        source='selected_agent.name',
+        read_only=True,
+        allow_null=True,
+    )
 
     def get_user(self, obj):
         """Return user email or None for anonymous conversations."""
@@ -95,8 +107,10 @@ class ConversationSerializer(serializers.ModelSerializer):
             'feedback_last_prompt_timestamp',
             'selected_mcp_server_ids',
             'selected_dare_tool_slugs',
+            'selected_agent',
+            'selected_agent_name',
         ]
-        read_only_fields = ['created_at', 'user', 'prompt']
+        read_only_fields = ['created_at', 'user', 'prompt', 'selected_agent_name']
 
 class SnippetSerializer(serializers.ModelSerializer):
     file = FileSerializer(read_only=True)
