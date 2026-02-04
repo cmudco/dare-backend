@@ -36,7 +36,8 @@ class BaseExecutionHandler(BaseNodeHandler):
         self,
         workflow_run: WorkflowRun,
         node: ExecutionNode,
-        step_number: Optional[int] = None
+        step_number: Optional[int] = None,
+        reset_if_exists: bool = False
     ) -> WorkflowRunStep:
         """
         Get or create a WorkflowRunStep for the node.
@@ -45,6 +46,7 @@ class BaseExecutionHandler(BaseNodeHandler):
             workflow_run: The workflow run instance
             node: The execution node
             step_number: Optional step number for ordering
+            reset_if_exists: If True and step exists, reset it for re-execution
 
         Returns:
             WorkflowRunStep instance
@@ -59,6 +61,12 @@ class BaseExecutionHandler(BaseNodeHandler):
                     'status': WorkflowRunStepStatus.PENDING
                 }
             )
+            # Reset the step for re-execution if requested (manual mode re-run)
+            if not created and reset_if_exists:
+                step.status = WorkflowRunStepStatus.PENDING
+                step.response = None
+                step.error = None
+                step.save(update_fields=['status', 'response', 'error'])
             return step
 
         return await database_sync_to_async(_get_or_create)()
