@@ -55,6 +55,7 @@ OPENAI_API_KEY = env('OPENAI_API_KEY')
 CLAUDE_API_KEY = env('CLAUDE_API_KEY')
 GEMINI_API_KEY = env('GEMINI_API_KEY')
 OLLAMA_HOST = env('OLLAMA_HOST', default='http://localhost:11434')
+ELEVENLABS_API_KEY = env('ELEVENLABS_API_KEY', default='sk_abd91c9207d2e10ee703cf032277a11121acf407210b9749')
 
 # redis
 REDIS_HOST = os.getenv("REDIS_HOST")
@@ -75,3 +76,5 @@ MCP_USE_DOCKER = os.getenv("MCP_USE_DOCKER", "False") == "True"
 # Database toggle for local development
 # Set to True to use PostgreSQL (same as staging/prod), False for SQLite
 USE_POSTGRES = os.getenv("USE_POSTGRES", "False").lower() in ("true", "1", "yes")
+# Internal API key for inter-service communication (SB backend -> DARE backend)
+DARE_INTERNAL_KEY = os.getenv("DARE_INTERNAL_KEY", "local-dev-internal-key")

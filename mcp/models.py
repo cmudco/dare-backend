@@ -39,10 +39,17 @@ class MCPServer(BaseModel):
         help_text="Icon identifier for frontend (e.g., 'slack', 'github')"
     )
 
-    # Runtime configuration
+    # Docker configuration (used when MCP_USE_DOCKER=True)
+    docker_image = models.CharField(
+        max_length=255,
+        blank=True,
+        help_text="Docker image to use in production (e.g., 'dare-mcp-slack:latest')"
+    )
+
+    # Runtime configuration (used when MCP_USE_DOCKER=False)
     command = models.CharField(
         max_length=255,
-        help_text="Command to run (e.g., 'npx')"
+        help_text="Command to run in dev mode (e.g., 'npx')"
     )
     args = models.JSONField(
         default=list,
