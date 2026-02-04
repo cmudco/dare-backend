@@ -35,10 +35,4 @@ from config import env as config_env
 
 MCP_USE_DOCKER = config_env.MCP_USE_DOCKER
 
-# Docker image names for each MCP server (keyed by server slug)
-MCP_DOCKER_IMAGES = {
-    'slack': 'dare-mcp-slack:latest',
-    'github': 'dare-mcp-github:latest',
-}
-
 
