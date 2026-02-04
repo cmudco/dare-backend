@@ -15,12 +15,16 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 from billing.scheduler import WalletTopupScheduler
+from memory.scheduler import MemoryExtractionScheduler
 
 def run_all_schedulers():
     logger.info("Starting all background schedulers...")
 
     wallet_scheduler = WalletTopupScheduler()
     wallet_scheduler.start()
+
+    memory_scheduler = MemoryExtractionScheduler()
+    memory_scheduler.start()
 
     logger.info("All schedulers started successfully.")
 

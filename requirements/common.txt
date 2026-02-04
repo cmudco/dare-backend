@@ -84,3 +84,6 @@ langgraph-checkpoint~=2.0.10
 langgraph-checkpoint-postgres~=2.0.12
 asyncpg~=0.30.0
 psycopg[binary]~=3.2.0
+
+# Cross-conversation memory layer
+memu-py~=0.1.0
