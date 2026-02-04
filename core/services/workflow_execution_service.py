@@ -126,8 +126,12 @@ class WorkflowExecutionService:
             # Load existing results for context
             nodes = [exec_node]  # Just this node for loading
             node_results = await self._load_existing_results(workflow_run, nodes)
-            
-            result = await self._execute_node(workflow_run, workflow, exec_node, node_results, send_callback)
+
+            # Execute with is_single_step_execution=True to allow re-running steps
+            result = await self._execute_node(
+                workflow_run, workflow, exec_node, node_results, send_callback,
+                is_single_step_execution=True
+            )
             
             await self._emit(send_callback, WebSocketResponseService.format_workflow_execution_complete(
                 workflow_run_id=workflow_run.id, status='completed' if result.success else 'failed'
@@ -194,13 +198,19 @@ class WorkflowExecutionService:
         return {'success': failed == 0, 'pending_human_input': False,
                 'executed_nodes': len(executed), 'skipped_nodes': len(skipped), 'failed_nodes': failed}
 
-    async def _execute_node(self, workflow_run, workflow, node, node_results, send_callback) -> NodeExecutionResult:
+    async def _execute_node(
+        self, workflow_run, workflow, node, node_results, send_callback,
+        is_single_step_execution: bool = False
+    ) -> NodeExecutionResult:
         """Execute single node via handler registry."""
         # Get dependency results from in-memory dict (not DB)
         previous = await self._get_dep_results_from_memory(workflow, node, node_results)
-        context = NodeExecutionContext(workflow_run=workflow_run, previous_results=previous, 
-                                       send_callback=send_callback)
-        return await node_handler_registry.execute_node(node, context)
+        context = NodeExecutionContext(
+            workflow_run=workflow_run,
+            previous_results=previous,
+            send_callback=send_callback,
+            is_single_step_execution=is_single_step_execution
+        )
         return await node_handler_registry.execute_node(node, context)
 
     # ==================== Node Ordering ====================

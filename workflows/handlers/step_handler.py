@@ -100,9 +100,11 @@ class StepNodeHandler(BaseExecutionHandler):
                 )
 
             # Get or create workflow run step for tracking
+            # In single step execution mode (manual re-run), reset the step to allow re-execution
             workflow_run_step = await self._get_or_create_workflow_run_step(
                 context.workflow_run,
-                node
+                node,
+                reset_if_exists=context.is_single_step_execution
             )
 
             # Update status to running

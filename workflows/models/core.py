@@ -185,20 +185,30 @@ class WorkflowRun(BaseModel):
         steps = self.steps.all()
         if not steps:
             return WorkflowRunStepStatus.RUNNING
-        
+
         # Check if any step is waiting for human input - this takes precedence
         if any(step.status == WorkflowRunStepStatus.PENDING_HUMAN_INPUT for step in steps):
             return WorkflowRunStepStatus.PENDING_HUMAN_INPUT
-        
+
         # Check for failures
         if any(step.status == WorkflowRunStepStatus.FAILED for step in steps):
             return WorkflowRunStepStatus.FAILED
-        
+
+        # Check if any step is currently running
+        if any(step.status == WorkflowRunStepStatus.RUNNING for step in steps):
+            return WorkflowRunStepStatus.RUNNING
+
         # Consider both COMPLETED and SKIPPED as finished states
         finished_statuses = {WorkflowRunStepStatus.COMPLETED, WorkflowRunStepStatus.SKIPPED}
         if all(step.status in finished_statuses for step in steps):
             return WorkflowRunStepStatus.COMPLETED
-        
+
+        # For partial runs: if no step is running and at least one step completed,
+        # consider the partial run as "completed" (idle, ready for next manual step)
+        if self.is_partial:
+            if any(step.status in finished_statuses for step in steps):
+                return WorkflowRunStepStatus.COMPLETED
+
         return WorkflowRunStepStatus.RUNNING
 
     def __str__(self):
