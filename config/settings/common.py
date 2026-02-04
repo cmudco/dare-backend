@@ -25,6 +25,9 @@ DEBUG = env.DEBUG == "True"
 
 ALLOWED_HOSTS = env.ALLOWED_HOSTS
 
+# Internal API key for inter-service communication (SB backend -> DARE backend)
+DARE_INTERNAL_KEY = env.DARE_INTERNAL_KEY
+
 DJANGO_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
@@ -161,7 +164,7 @@ ACCOUNT_LOGIN_METHODS = {"email"}
 ACCOUNT_ADAPTER = "users.adapter.AccountAdapter"
 
 SIMPLE_JWT = {
-        "ACCESS_TOKEN_LIFETIME": timedelta(
+    "ACCESS_TOKEN_LIFETIME": timedelta(
         hours=12
     ),  # TODO: Change to 1 hour or few mins when refresh logic is implemented
     "REFRESH_TOKEN_LIFETIME": timedelta(days=1),  # TODO: Change to 1 day
