@@ -49,7 +49,8 @@ anthropic~=0.75.0
 google-genai~=1.53.0
 
 # LLaMA (via Ollama)
-ollama~=0.4.2
+# ollama~=0.4.2 - upgrading it below to avoid conflict with httpx
+ollama>=0.6.1
 
 rq==2.2.0
 django-rq==3.0.0
