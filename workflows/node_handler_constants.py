@@ -19,3 +19,9 @@ class StepNodeDefaults:
     TEMPERATURE = 0.7
     MAX_CONTEXT_SNIPPETS = 4
     DOCUMENT_SIMILARITY_THRESHOLD = 0.2
+
+
+class FileNodeDefaults:
+    """Default values for FileNodeData model fields."""
+    SIMILARITY_THRESHOLD = 0.5
+    MAX_RESULTS = 10

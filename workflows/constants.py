@@ -2,10 +2,13 @@ from django.db import models
 
 APP_NAME = "workflows"
 
-class Mode(models.IntegerChoices):
-    SERIAL = 1, "Serial"
-    PARALLEL = 2, "Parallel"
-    
+
+class Mode(models.TextChoices):
+    """Workflow execution mode."""
+    SEQUENTIAL = 'sequential', 'Sequential'
+    PARALLEL = 'parallel', 'Parallel'
+
+
 class WorkflowRunStepStatus(models.TextChoices):
     PENDING = 'pending', 'Pending'
     RUNNING = 'running', 'Running'
@@ -13,3 +16,16 @@ class WorkflowRunStepStatus(models.TextChoices):
     FAILED = 'failed', 'Failed'
     SKIPPED = 'skipped', 'Skipped'
     PENDING_HUMAN_INPUT = 'pending_human_input', 'Pending Human Input'
+
+
+class RetrievalMode(models.TextChoices):
+    """How file content is retrieved in a file node."""
+    EMBEDDINGS = 'embeddings', 'Embeddings (Vector Search)'
+    CONTENT = 'content', 'Full Content'
+    BOTH = 'both', 'Both Embeddings and Content'
+
+
+class QuerySource(models.TextChoices):
+    """Source of query text for vector search in file nodes."""
+    PREVIOUS_STEP = 'previous_step', 'Previous Step Output'
+    TEXT_INPUT = 'text_input', 'Text Input'

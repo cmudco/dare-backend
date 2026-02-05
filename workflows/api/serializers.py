@@ -12,7 +12,7 @@ from workflows.models import (
     Workflow, WorkflowRun, WorkflowRunStep,
     # Graph-driven models
     StepNodeData, StartNodeData, ChatOutputNodeData, StructuredOutputNodeData,
-    NotesNodeData, WorkflowNode, WorkflowEdge
+    NotesNodeData, FileNodeData, WorkflowNode, WorkflowEdge
 )
 from workflows.services import NodeExecutionStateBuilder
 from workflows.services.citation_serialization import (
@@ -162,6 +162,17 @@ class NotesNodeDataSerializer(serializers.ModelSerializer):
     class Meta:
         model = NotesNodeData
         fields = ['content']
+
+
+class FileNodeDataSerializer(serializers.ModelSerializer):
+    """Serializer for file node data — dedicated file retrieval."""
+
+    class Meta:
+        model = FileNodeData
+        fields = [
+            'files', 'retrieval_mode', 'similarity_threshold', 'max_results',
+            'query_source', 'text_input', 'include_metadata', 'step_number'
+        ]
 
 
 class WorkflowEdgeSerializer(serializers.ModelSerializer):
@@ -361,6 +372,7 @@ class WorkflowNodeSerializer(serializers.ModelSerializer):
             'chatOutput': ChatOutputNodeDataSerializer,
             'structuredOutput': StructuredOutputNodeDataSerializer,
             'notes': NotesNodeDataSerializer,
+            'file': FileNodeDataSerializer,
         }
 
         serializer_class = data_serializer_map.get(node_type)
@@ -395,6 +407,7 @@ class WorkflowNodeSerializer(serializers.ModelSerializer):
                 'chatOutput': ChatOutputNodeDataSerializer,
                 'structuredOutput': StructuredOutputNodeDataSerializer,
                 'notes': NotesNodeDataSerializer,
+                'file': FileNodeDataSerializer,
             }
             serializer_class = data_serializer_map.get(instance.node_type)
 
