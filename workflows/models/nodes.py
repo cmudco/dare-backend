@@ -229,3 +229,27 @@ class StructuredOutputNodeData(BaseNodeData):
         return f"Structured Output {self.step_number}: {route_names}"
 
 
+class NotesNodeData(BaseNodeData):
+    """
+    Data model for 'notes' type nodes.
+
+    Documentation/comment nodes for workflow annotation.
+    Non-executable - purely for user documentation.
+    """
+    content = models.TextField(
+        blank=True,
+        default='',
+        help_text="Note content/documentation text"
+    )
+
+    def to_dict(self) -> dict:
+        """Convert to React Flow node data format (camelCase)."""
+        return {
+            'content': self.content,
+        }
+
+    def __str__(self) -> str:
+        preview = self.content[:30] if self.content else 'Empty'
+        return f"Note: {preview}..."
+
+
