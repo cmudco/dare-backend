@@ -12,7 +12,7 @@ from workflows.models import (
     Workflow, WorkflowRun, WorkflowRunStep,
     # Graph-driven models
     StepNodeData, StartNodeData, ChatOutputNodeData, StructuredOutputNodeData,
-    WorkflowNode, WorkflowEdge
+    NotesNodeData, WorkflowNode, WorkflowEdge
 )
 from workflows.services import NodeExecutionStateBuilder
 from workflows.services.citation_serialization import (
@@ -154,6 +154,14 @@ class StructuredOutputNodeDataSerializer(serializers.ModelSerializer):
         # Always include the computed routes
         data['routes'] = instance.get_routes()
         return data
+
+
+class NotesNodeDataSerializer(serializers.ModelSerializer):
+    """Serializer for notes node data."""
+
+    class Meta:
+        model = NotesNodeData
+        fields = ['content']
 
 
 class WorkflowEdgeSerializer(serializers.ModelSerializer):
@@ -352,6 +360,7 @@ class WorkflowNodeSerializer(serializers.ModelSerializer):
             'start': StartNodeDataSerializer,
             'chatOutput': ChatOutputNodeDataSerializer,
             'structuredOutput': StructuredOutputNodeDataSerializer,
+            'notes': NotesNodeDataSerializer,
         }
 
         serializer_class = data_serializer_map.get(node_type)
@@ -385,6 +394,7 @@ class WorkflowNodeSerializer(serializers.ModelSerializer):
                 'start': StartNodeDataSerializer,
                 'chatOutput': ChatOutputNodeDataSerializer,
                 'structuredOutput': StructuredOutputNodeDataSerializer,
+                'notes': NotesNodeDataSerializer,
             }
             serializer_class = data_serializer_map.get(instance.node_type)
 
