@@ -24,6 +24,7 @@ from conversations.services.websocket_response_service import WebSocketResponseS
 
 from core.services.document_processor import DocumentProcessor
 from core.services.file_processor import FileProcessor
+from core.services.vector_service import get_vector_service_async
 from files.models import File
 
 
@@ -84,6 +85,19 @@ class FileNodeHandler(BaseNodeHandler):
                 f"[{correlation_id}] Starting file node execution, "
                 f"mode={file_data.retrieval_mode}"
             )
+
+            # Send step_started event so FE initializes streaming state
+            if context.send_callback:
+                try:
+                    await context.send_callback(
+                        WebSocketResponseService.format_workflow_step_started(
+                            node_id=node.id,
+                            step_number=file_data.step_number or 0,
+                            node_type="file"
+                        )
+                    )
+                except Exception as e:
+                    logger.debug(f"Failed to send step_started event: {e}")
 
             # Get active files
             files = await self._get_files(file_data)
@@ -256,9 +270,10 @@ class FileNodeHandler(BaseNodeHandler):
             lambda: context.workflow_run.workflow.user
         )()
 
-        # Initialize document processor with user context
-        document_processor = DocumentProcessor(user_id=user.id)
-        document_processor.update_vector_service(user.id)
+        # Initialize document processor with user's configured vector service
+        # Must use async version to properly check user's vector_db preference (Pinecone/Weaviate)
+        vector_service = await get_vector_service_async(user.id)
+        document_processor = DocumentProcessor(user_id=user.id, vector_service=vector_service)
 
         file_ids = [f.id for f in files]
 
