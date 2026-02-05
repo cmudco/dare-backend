@@ -220,9 +220,11 @@ class WorkflowExecutionService:
         db_nodes = await database_sync_to_async(lambda: list(workflow.nodes.all()))()
         edges = await database_sync_to_async(lambda: list(workflow.edges.all()))()
 
-        nodes = [ExecutionNode(id=n.node_id, type=n.node_type, step_number=None, db_node=n) 
-                 for n in db_nodes]
-        
+        # Filter out non-executable node types (e.g. notes are decorative only)
+        NON_EXECUTABLE_TYPES = {'notes'}
+        nodes = [ExecutionNode(id=n.node_id, type=n.node_type, step_number=None, db_node=n)
+                 for n in db_nodes if n.node_type not in NON_EXECUTABLE_TYPES]
+
         # Kahn's algorithm
         node_map = {n.id: n for n in nodes}
         in_deg = {n.id: 0 for n in nodes}
@@ -232,7 +234,7 @@ class WorkflowExecutionService:
 
         queue = [nid for nid, d in in_deg.items() if d == 0]
         result = []
-        type_order = {'start': 0, 'step': 1, 'structuredOutput': 2, 'chatOutput': 3}
+        type_order = {'start': 0, 'file': 1, 'step': 2, 'structuredOutput': 3, 'chatOutput': 4}
 
         while queue:
             queue.sort(key=lambda nid: type_order.get(node_map[nid].type, 99))
