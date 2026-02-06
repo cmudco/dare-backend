@@ -97,7 +97,7 @@ class FileNodeHandler(BaseNodeHandler):
                         )
                     )
                 except Exception as e:
-                    logger.debug(f"Failed to send step_started event: {e}")
+                    logger.warning(f"Failed to send step_started event: {e}")
 
             # Get active files
             files = await self._get_files(file_data)
@@ -200,7 +200,7 @@ class FileNodeHandler(BaseNodeHandler):
                 )
             )
         except Exception as e:
-            logger.debug(f"WebSocket callback failed for file node {node_id}: {e}")
+            logger.warning(f"WebSocket callback failed for file node {node_id}: {e}")
 
     # ============================================================================
     # Private Helpers
