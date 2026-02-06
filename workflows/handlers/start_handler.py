@@ -15,6 +15,7 @@ from workflows.handlers.base import (
     NodeExecutionResult,
     categorize_error,
 )
+from workflows.handlers.utils.constants import NodeType
 from workflows.models import StartNodeData
 
 
@@ -32,7 +33,7 @@ class StartNodeHandler(BaseNodeHandler):
 
     def can_handle(self, node_type: str) -> bool:
         """Check if this handler can process 'start' nodes."""
-        return node_type == 'start'
+        return node_type == NodeType.START
 
     async def execute(
         self,
@@ -143,7 +144,7 @@ class StartNodeHandler(BaseNodeHandler):
             node_type = result.get('node_type', '')
             output = result.get('output', '')
 
-            if node_type == 'chatOutput' and output:
+            if node_type == NodeType.CHAT_OUTPUT and output:
                 logger.debug(
                     f"Found chain input from Chat Output node {node_id}: "
                     f"{len(output)} chars"
