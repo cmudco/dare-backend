@@ -3,7 +3,7 @@ from django.conf import settings
 
 from common.managers import ActiveObjectsManager
 from common.models import BaseModel, TimeStampMixin
-from workflows.constants import WorkflowRunStepStatus
+from workflows.constants import Mode, WorkflowRunStepStatus
 
 
 class Workflow(BaseModel):
@@ -128,9 +128,8 @@ class Workflow(BaseModel):
         """Get workflow mode from root StartNodeData."""
         start_node = self._get_root_start_node()
         if start_node and start_node.typed_data:
-            mode_str = start_node.typed_data.mode
-            return 2 if mode_str == 'parallel' else 1
-        return 1
+            return start_node.typed_data.mode
+        return Mode.PARALLEL
 
     @property
     def step_nodes(self):
