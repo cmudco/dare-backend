@@ -24,7 +24,9 @@ from workflows.models import (
     Workflow, WorkflowRun, WorkflowRunStep,
     WorkflowNode, WorkflowEdge,
 )
+from workflows.handlers.utils.constants import NodeType
 from workflows.services import WorkflowCloningService
+from workflows.services.workflow_graph_service import WorkflowGraphService
 
 
 logger = logging.getLogger(__name__)
@@ -39,13 +41,13 @@ class WorkflowViewSet(viewsets.ModelViewSet):
         return Workflow.active_objects.filter(
             user=self.request.user
         ).prefetch_related(
-            Prefetch(
-                'nodes',
-                queryset=WorkflowNode.objects.filter(node_type='start').select_related('data_content_type'),
-                to_attr='_cached_start_nodes'
-            ),
             'nodes',
-            'edges'
+            'edges',
+            Prefetch(
+                'runs',
+                queryset=WorkflowRun.active_objects.order_by('-created_at'),
+                to_attr='_prefetched_runs'
+            ),
         ).order_by('display_order', '-created_at')
 
     def perform_create(self, serializer):
@@ -60,67 +62,14 @@ class WorkflowViewSet(viewsets.ModelViewSet):
             base_serializer.is_valid(raise_exception=True)
             self.perform_update(base_serializer)
 
-            # Upsert nodes if provided
+            # Upsert nodes/edges via service layer
             nodes = request.data.get('nodes', None)
-
             if nodes is not None:
-                existing_nodes = {n.node_id: n for n in instance.nodes.all()}
+                WorkflowGraphService.upsert_nodes(instance, nodes)
 
-                seen_ids = set()
-                for n in nodes:
-                    node_id = n.get('node_id') or n.get('id')
-                    if not node_id:
-                        continue
-
-                    seen_ids.add(node_id)
-                    existing = existing_nodes.get(node_id)
-                    payload = {**n, 'workflow': instance.id}
-
-                    if existing:
-                        ser = WorkflowNodeSerializer(existing, data=payload, partial=True)
-                        ser.is_valid(raise_exception=True)
-                        ser.save()
-                    else:
-                        ser = WorkflowNodeSerializer(data=payload)
-                        ser.is_valid(raise_exception=True)
-                        ser.save()
-
-                # Delete nodes that are not in payload
-                nodes_to_delete = instance.nodes.exclude(node_id__in=seen_ids)
-                if nodes_to_delete.exists():
-                    for n in nodes_to_delete:
-                        n.delete()
-
-            # Upsert edges if provided
             edges = request.data.get('edges', None)
-
             if edges is not None:
-                existing_edges = {e.edge_id: e for e in instance.edges.all()}
-
-                seen_eids = set()
-                for e in edges:
-                    edge_id = e.get('edge_id') or e.get('id')
-                    if not edge_id:
-                        continue
-
-                    seen_eids.add(edge_id)
-                    existing_e = existing_edges.get(edge_id)
-                    payload = {**e, 'workflow': instance.id}
-
-                    if existing_e:
-                        ser = WorkflowEdgeSerializer(existing_e, data=payload, partial=True)
-                        ser.is_valid(raise_exception=True)
-                        ser.save()
-                    else:
-                        ser = WorkflowEdgeSerializer(data=payload)
-                        ser.is_valid(raise_exception=True)
-                        ser.save()
-
-                # Delete edges not in payload
-                edges_to_delete = instance.edges.exclude(edge_id__in=seen_eids)
-                if edges_to_delete.exists():
-                    for e in edges_to_delete:
-                        e.delete()
+                WorkflowGraphService.upsert_edges(instance, edges)
 
             # Return full workflow with nodes/edges
             output = self.get_serializer(instance).data
@@ -319,7 +268,7 @@ class WorkflowRunViewSet(viewsets.ModelViewSet):
             for edge in connected_edges:
                 # Check if target is an output node
                 target_node = workflow.nodes.filter(node_id=edge.target).first()
-                if target_node and target_node.node_type in ['chatOutput', 'structuredOutput']:
+                if target_node and target_node.node_type in [NodeType.CHAT_OUTPUT, NodeType.STRUCTURED_OUTPUT]:
                     executed_node_ids.append(edge.target)
 
         # Serialize the partial run using V2 serializer (nodeStates instead of steps)

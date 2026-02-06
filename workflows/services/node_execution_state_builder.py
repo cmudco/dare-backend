@@ -17,6 +17,7 @@ from typing import Dict, Optional, Any
 
 from workflows.constants import WorkflowRunStepStatus
 from workflows.handlers.utils import MetadataKey
+from workflows.handlers.utils.constants import NodeType
 from workflows.models import (
     WorkflowRun,
     WorkflowRunStep,
@@ -91,13 +92,13 @@ class NodeExecutionStateBuilder:
         # Build state for all nodes in the workflow
         node_states = {}
         for node_id, node in nodes_by_id.items():
-            if node.node_type in ['step', 'structuredOutput', 'file']:
+            if node.node_type in [NodeType.STEP, NodeType.STRUCTURED_OUTPUT, NodeType.FILE]:
                 # Execution nodes - have WorkflowRunStep records
                 node_states[node_id] = self._build_execution_node_state(
                     node=node,
                     step=steps_by_node.get(node_id),
                 )
-            elif node.node_type in ['chatOutput', 'start']:
+            elif node.node_type in [NodeType.CHAT_OUTPUT, NodeType.START]:
                 # Display nodes - resolve from connected execution nodes
                 node_states[node_id] = self._build_display_node_state(
                     node=node,
@@ -105,7 +106,7 @@ class NodeExecutionStateBuilder:
                     steps_by_node=steps_by_node,
                     edges_by_target=edges_by_target,
                 )
-            elif node.node_type == 'notes':
+            elif node.node_type == NodeType.NOTES:
                 # Non-executable decorative nodes - skip silently
                 continue
             else:
@@ -155,7 +156,7 @@ class NodeExecutionStateBuilder:
 
         # Extract AI metadata for completed routing nodes (so frontend can display AI analysis)
         metadata = None
-        if node.node_type == 'structuredOutput' and step.metadata:
+        if node.node_type == NodeType.STRUCTURED_OUTPUT and step.metadata:
             metadata = {
                 "aiRecommendation": step.metadata.get(MetadataKey.AI_RECOMMENDATION),
                 "aiAnalysis": step.metadata.get(MetadataKey.ANALYSIS),
@@ -275,12 +276,12 @@ class NodeExecutionStateBuilder:
         Special case for start nodes: they're entry points, not errors.
         For other display nodes: this is likely a configuration issue.
         """
-        if node.node_type == 'start':
+        if node.node_type == NodeType.START:
             # Start nodes are entry points - this is expected
             return {
                 "nodeId": node.node_id,  # Include nodeId to survive key mangling
                 "stepId": None,
-                "nodeType": "start",
+                "nodeType": NodeType.START,
                 "status": "not_executed",
                 "response": None,
                 "error": None,
