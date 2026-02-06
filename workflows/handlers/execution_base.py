@@ -201,7 +201,7 @@ class BaseExecutionHandler(BaseNodeHandler):
                         )
                     except Exception as e:
                         # Don't fail execution if streaming fails
-                        logger.debug(f"Streaming callback failed: {e}")
+                        logger.warning(f"Streaming callback failed: {e}")
 
             if usage:
                 token_usage = usage

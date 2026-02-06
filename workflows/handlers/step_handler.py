@@ -132,7 +132,7 @@ class StepNodeHandler(BaseExecutionHandler):
                         )
                     )
                 except Exception as e:
-                    logger.debug(f"Failed to send step_started event: {e}")
+                    logger.warning(f"Failed to send step_started event: {e}")
 
             # Execute LLM query
             response, token_usage = await self._execute_llm_query(
@@ -196,7 +196,7 @@ class StepNodeHandler(BaseExecutionHandler):
                         )
                     )
                 except Exception as e:
-                    logger.debug(f"Failed to send step_completed event: {e}")
+                    logger.warning(f"Failed to send step_completed event: {e}")
 
             return NodeExecutionResult(
                 success=True,
@@ -273,16 +273,17 @@ class StepNodeHandler(BaseExecutionHandler):
         Returns:
             Formatted message ready for LLM processing
         """
-        # Get prompt content
-        prompt_content = ""
-        prompt = await database_sync_to_async(lambda: step_data.prompt)()
-        if prompt:
-            prompt_content = await database_sync_to_async(lambda: prompt.content)()
+        # Batch DB access: prompt content + text input in a single call
+        def _get_message_inputs():
+            prompt = step_data.prompt
+            return {
+                'prompt_content': prompt.content if prompt else "",
+                'text_input': step_data.text_input or "",
+            }
 
-        # Get text input
-        text_input = await database_sync_to_async(
-            lambda: step_data.text_input or ""
-        )()
+        inputs = await database_sync_to_async(_get_message_inputs)()
+        prompt_content = inputs['prompt_content']
+        text_input = inputs['text_input']
 
         # Use utility to prepare message
         message = await StepMessagePreparer.prepare_message(
