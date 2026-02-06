@@ -8,6 +8,7 @@ from files.api.serializers import FileSerializer
 from prompts.models import Prompt
 from workflows.constants import WorkflowRunStepStatus
 from workflows.handlers.utils import MetadataKey
+from workflows.handlers.utils.constants import NodeType
 from workflows.models import (
     Workflow, WorkflowRun, WorkflowRunStep,
     # Graph-driven models
@@ -63,19 +64,28 @@ class WorkflowSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at', 'user', 'nodes', 'edges', 'title', 'description', 'mode', 'viewport']
 
     def get_latest_run(self, obj):
-        """Get the latest workflow run with nodeStates for O(1) node access."""
-        latest_run = WorkflowRun.active_objects.filter(workflow=obj).order_by('-created_at').first()
+        """Get the latest workflow run with nodeStates for O(1) node access.
+
+        Uses prefetched '_prefetched_runs' from viewset queryset to avoid N+1.
+        Falls back to a direct query if prefetch is missing (e.g. after create).
+        """
+        prefetched_runs = getattr(obj, '_prefetched_runs', None)
+        if prefetched_runs is not None:
+            latest_run = prefetched_runs[0] if prefetched_runs else None
+        else:
+            latest_run = WorkflowRun.active_objects.filter(workflow=obj).order_by('-created_at').first()
+
         if latest_run:
             return WorkflowRunV2Serializer(latest_run).data
         return None
 
     def get_nodes(self, obj):
-        # Will be properly implemented after WorkflowNodeSerializer is defined
-        return []
+        """Serialize workflow nodes to React Flow format."""
+        return WorkflowNodeSerializer(obj.nodes.all(), many=True).data
 
     def get_edges(self, obj):
-        # Will be properly implemented after WorkflowEdgeSerializer is defined
-        return []
+        """Serialize workflow edges to React Flow format."""
+        return WorkflowEdgeSerializer(obj.edges.all(), many=True).data
 
     def create(self, validated_data):
         """Create workflow using graph-driven architecture only."""
@@ -214,14 +224,14 @@ class WorkflowEdgeSerializer(serializers.ModelSerializer):
             return data
 
         # Check for Chat Output → Start Node (chaining)
-        if source_node.node_type == 'chatOutput' and target_node.node_type == 'start':
+        if source_node.node_type == NodeType.CHAT_OUTPUT and target_node.node_type == NodeType.START:
             logger.info(
                 f"Workflow chain connection detected: {source_id} (chatOutput) → "
                 f"{target_id} (start). This will enable start node chaining."
             )
 
         # Check for Start → Start (unusual but allowed)
-        if source_node.node_type == 'start' and target_node.node_type == 'start':
+        if source_node.node_type == NodeType.START and target_node.node_type == NodeType.START:
             logger.warning(
                 f"Start node to start node connection: {source_id} → {target_id}. "
                 f"Ensure this is intentional for workflow chaining."
@@ -367,12 +377,12 @@ class WorkflowNodeSerializer(serializers.ModelSerializer):
 
         # Create appropriate data object based on type
         data_serializer_map = {
-            'step': StepNodeDataSerializer,
-            'start': StartNodeDataSerializer,
-            'chatOutput': ChatOutputNodeDataSerializer,
-            'structuredOutput': StructuredOutputNodeDataSerializer,
-            'notes': NotesNodeDataSerializer,
-            'file': FileNodeDataSerializer,
+            NodeType.STEP: StepNodeDataSerializer,
+            NodeType.START: StartNodeDataSerializer,
+            NodeType.CHAT_OUTPUT: ChatOutputNodeDataSerializer,
+            NodeType.STRUCTURED_OUTPUT: StructuredOutputNodeDataSerializer,
+            NodeType.NOTES: NotesNodeDataSerializer,
+            NodeType.FILE: FileNodeDataSerializer,
         }
 
         serializer_class = data_serializer_map.get(node_type)
@@ -402,12 +412,12 @@ class WorkflowNodeSerializer(serializers.ModelSerializer):
         if data_dict and instance.data_object:
             # Update appropriate data object based on type
             data_serializer_map = {
-                'step': StepNodeDataSerializer,
-                'start': StartNodeDataSerializer,
-                'chatOutput': ChatOutputNodeDataSerializer,
-                'structuredOutput': StructuredOutputNodeDataSerializer,
-                'notes': NotesNodeDataSerializer,
-                'file': FileNodeDataSerializer,
+                NodeType.STEP: StepNodeDataSerializer,
+                NodeType.START: StartNodeDataSerializer,
+                NodeType.CHAT_OUTPUT: ChatOutputNodeDataSerializer,
+                NodeType.STRUCTURED_OUTPUT: StructuredOutputNodeDataSerializer,
+                NodeType.NOTES: NotesNodeDataSerializer,
+                NodeType.FILE: FileNodeDataSerializer,
             }
             serializer_class = data_serializer_map.get(instance.node_type)
 
@@ -430,10 +440,6 @@ class WorkflowNodeSerializer(serializers.ModelSerializer):
         instance.save()
         return instance
 
-
-# Patch WorkflowSerializer methods now that node/edge serializers are defined
-WorkflowSerializer.get_nodes = lambda self, obj: WorkflowNodeSerializer(obj.nodes.all(), many=True).data
-WorkflowSerializer.get_edges = lambda self, obj: WorkflowEdgeSerializer(obj.edges.all(), many=True).data
 
 
 # ==========================================

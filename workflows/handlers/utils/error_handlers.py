@@ -9,6 +9,7 @@ import logging
 from typing import Optional, Tuple, Dict, Any
 from enum import Enum
 
+from workflows.handlers.base import NodeExecutionResult
 from .constants import ErrorCode, ErrorMessage, MetadataKey
 
 
@@ -347,7 +348,7 @@ class NodeHandlerErrorHandler:
 
 class ErrorResultBuilder:
     """
-    Builder for creating standardized error results.
+    Builder for creating standardized NodeExecutionResult errors.
 
     Provides consistent error result structure across handlers.
     """
@@ -357,9 +358,9 @@ class ErrorResultBuilder:
         error: Exception,
         context: Optional[Dict[str, Any]] = None,
         include_category: bool = True
-    ) -> Dict[str, Any]:
+    ) -> NodeExecutionResult:
         """
-        Build a standardized error result dictionary.
+        Build a standardized error NodeExecutionResult.
 
         Args:
             error: The exception that occurred
@@ -367,34 +368,30 @@ class ErrorResultBuilder:
             include_category: Whether to include error category in metadata
 
         Returns:
-            Dictionary with error result structure
+            NodeExecutionResult with error information
         """
         error_message = WorkflowErrorHandler.format_error(error, context)
         category, error_type = WorkflowErrorHandler.categorize_error(error)
 
-        result = {
-            "success": False,
-            "output": None,
-            "error": error_message,
-            "token_usage": None,
-            "execution_time": None,
-            "metadata": {}
-        }
-
+        metadata: Dict[str, Any] = {}
         if include_category:
-            result["metadata"][MetadataKey.ERROR_CATEGORY] = category.value
-            result["metadata"][MetadataKey.ERROR_TYPE] = error_type
+            metadata[MetadataKey.ERROR_CATEGORY] = category.value
+            metadata[MetadataKey.ERROR_TYPE] = error_type
 
-        return result
+        return NodeExecutionResult(
+            success=False,
+            error=error_message,
+            metadata=metadata or None,
+        )
 
     @staticmethod
     def build_validation_error_result(
         node_id: str,
         node_type: str,
         validation_message: str
-    ) -> Dict[str, Any]:
+    ) -> NodeExecutionResult:
         """
-        Build a validation error result.
+        Build a validation error NodeExecutionResult.
 
         Args:
             node_id: The node ID where validation failed
@@ -402,23 +399,20 @@ class ErrorResultBuilder:
             validation_message: The validation error message
 
         Returns:
-            Dictionary with validation error result
+            NodeExecutionResult with validation error
         """
         error_message = NodeHandlerErrorHandler.format_validation_error(
             node_id, node_type, validation_message
         )
 
-        return {
-            "success": False,
-            "output": None,
-            "error": error_message,
-            "token_usage": None,
-            "execution_time": None,
-            "metadata": {
+        return NodeExecutionResult(
+            success=False,
+            error=error_message,
+            metadata={
                 MetadataKey.ERROR_CATEGORY: ErrorCategory.VALIDATION.value,
                 MetadataKey.ERROR_TYPE: "ValidationError"
-            }
-        }
+            },
+        )
 
 
 # ==================== Retry Helper ====================

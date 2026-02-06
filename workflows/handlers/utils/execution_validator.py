@@ -7,6 +7,7 @@ ensuring all required data is present for successful execution.
 import logging
 from typing import List, Tuple
 
+from workflows.handlers.utils.constants import NodeType
 from workflows.models import (
     Workflow, WorkflowNode, StepNodeData,
     StructuredOutputNodeData
@@ -38,8 +39,8 @@ class ExecutionValidator:
         errors = []
 
         # Get all nodes
-        step_nodes = workflow.nodes.filter(node_type='step')
-        structured_output_nodes = workflow.nodes.filter(node_type='structuredOutput')
+        step_nodes = workflow.nodes.filter(node_type=NodeType.STEP)
+        structured_output_nodes = workflow.nodes.filter(node_type=NodeType.STRUCTURED_OUTPUT)
 
         logger.info(f"[ExecutionValidator] Found {step_nodes.count()} step nodes, "
                    f"{structured_output_nodes.count()} structured output nodes")

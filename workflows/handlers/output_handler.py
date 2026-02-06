@@ -14,6 +14,7 @@ from workflows.handlers.base import (
     NodeExecutionResult,
     categorize_error,
 )
+from workflows.handlers.utils.constants import NodeType
 from workflows.models import ChatOutputNodeData
 from conversations.services.websocket_response_service import WebSocketResponseService
 
@@ -31,7 +32,7 @@ class OutputNodeHandler(BaseNodeHandler):
 
     def can_handle(self, node_type: str) -> bool:
         """Check if this handler can process 'chatOutput' nodes."""
-        return node_type == 'chatOutput'
+        return node_type == NodeType.CHAT_OUTPUT
 
     async def execute(
         self,
@@ -66,7 +67,7 @@ class OutputNodeHandler(BaseNodeHandler):
                         )
                     )
                 except Exception as e:
-                    logger.debug(f"Failed to send output step_started event: {e}")
+                    logger.warning(f"Failed to send output step_started event: {e}")
 
             # Get output data from database
             output_data = await database_sync_to_async(
@@ -103,7 +104,7 @@ class OutputNodeHandler(BaseNodeHandler):
                             )
                         )
                     except Exception as e:
-                        logger.debug(f"Failed to send output step_completed event: {e}")
+                        logger.warning(f"Failed to send output step_completed event: {e}")
 
                 return NodeExecutionResult(
                     success=False,
@@ -133,7 +134,7 @@ class OutputNodeHandler(BaseNodeHandler):
                         )
                     )
                 except Exception as e:
-                    logger.debug(f"Failed to send output step_completed event: {e}")
+                    logger.warning(f"Failed to send output step_completed event: {e}")
 
             return NodeExecutionResult(
                 success=True,
