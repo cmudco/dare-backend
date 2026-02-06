@@ -12,7 +12,7 @@ from workflows.models import (
     Workflow, WorkflowRun, WorkflowRunStep,
     # Graph-driven models
     StepNodeData, StartNodeData, ChatOutputNodeData, StructuredOutputNodeData,
-    WorkflowNode, WorkflowEdge
+    NotesNodeData, FileNodeData, WorkflowNode, WorkflowEdge
 )
 from workflows.services import NodeExecutionStateBuilder
 from workflows.services.citation_serialization import (
@@ -56,7 +56,7 @@ class WorkflowSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'user', 'version', 'parent', 'created_at',
             'viewport_x', 'viewport_y', 'viewport_zoom',
-            'manual_mode_enabled', 'display_order',
+            'manual_mode_enabled', 'output_display_mode', 'display_order',
             'nodes', 'edges', 'latest_run',
             'title', 'description', 'mode', 'viewport'
         ]
@@ -154,6 +154,25 @@ class StructuredOutputNodeDataSerializer(serializers.ModelSerializer):
         # Always include the computed routes
         data['routes'] = instance.get_routes()
         return data
+
+
+class NotesNodeDataSerializer(serializers.ModelSerializer):
+    """Serializer for notes node data."""
+
+    class Meta:
+        model = NotesNodeData
+        fields = ['content']
+
+
+class FileNodeDataSerializer(serializers.ModelSerializer):
+    """Serializer for file node data — dedicated file retrieval."""
+
+    class Meta:
+        model = FileNodeData
+        fields = [
+            'files', 'retrieval_mode', 'similarity_threshold', 'max_results',
+            'query_source', 'text_input', 'include_metadata', 'step_number'
+        ]
 
 
 class WorkflowEdgeSerializer(serializers.ModelSerializer):
@@ -352,6 +371,8 @@ class WorkflowNodeSerializer(serializers.ModelSerializer):
             'start': StartNodeDataSerializer,
             'chatOutput': ChatOutputNodeDataSerializer,
             'structuredOutput': StructuredOutputNodeDataSerializer,
+            'notes': NotesNodeDataSerializer,
+            'file': FileNodeDataSerializer,
         }
 
         serializer_class = data_serializer_map.get(node_type)
@@ -385,6 +406,8 @@ class WorkflowNodeSerializer(serializers.ModelSerializer):
                 'start': StartNodeDataSerializer,
                 'chatOutput': ChatOutputNodeDataSerializer,
                 'structuredOutput': StructuredOutputNodeDataSerializer,
+                'notes': NotesNodeDataSerializer,
+                'file': FileNodeDataSerializer,
             }
             serializer_class = data_serializer_map.get(instance.node_type)
 

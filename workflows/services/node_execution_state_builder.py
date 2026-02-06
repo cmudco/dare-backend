@@ -91,7 +91,7 @@ class NodeExecutionStateBuilder:
         # Build state for all nodes in the workflow
         node_states = {}
         for node_id, node in nodes_by_id.items():
-            if node.node_type in ['step', 'structuredOutput']:
+            if node.node_type in ['step', 'structuredOutput', 'file']:
                 # Execution nodes - have WorkflowRunStep records
                 node_states[node_id] = self._build_execution_node_state(
                     node=node,
@@ -105,6 +105,9 @@ class NodeExecutionStateBuilder:
                     steps_by_node=steps_by_node,
                     edges_by_target=edges_by_target,
                 )
+            elif node.node_type == 'notes':
+                # Non-executable decorative nodes - skip silently
+                continue
             else:
                 # Unknown node type - log warning and provide default state
                 logger.warning(f"Unknown node type '{node.node_type}' for node {node_id}")

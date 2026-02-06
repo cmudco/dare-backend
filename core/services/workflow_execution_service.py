@@ -126,8 +126,12 @@ class WorkflowExecutionService:
             # Load existing results for context
             nodes = [exec_node]  # Just this node for loading
             node_results = await self._load_existing_results(workflow_run, nodes)
-            
-            result = await self._execute_node(workflow_run, workflow, exec_node, node_results, send_callback)
+
+            # Execute with is_single_step_execution=True to allow re-running steps
+            result = await self._execute_node(
+                workflow_run, workflow, exec_node, node_results, send_callback,
+                is_single_step_execution=True
+            )
             
             await self._emit(send_callback, WebSocketResponseService.format_workflow_execution_complete(
                 workflow_run_id=workflow_run.id, status='completed' if result.success else 'failed'
@@ -194,13 +198,19 @@ class WorkflowExecutionService:
         return {'success': failed == 0, 'pending_human_input': False,
                 'executed_nodes': len(executed), 'skipped_nodes': len(skipped), 'failed_nodes': failed}
 
-    async def _execute_node(self, workflow_run, workflow, node, node_results, send_callback) -> NodeExecutionResult:
+    async def _execute_node(
+        self, workflow_run, workflow, node, node_results, send_callback,
+        is_single_step_execution: bool = False
+    ) -> NodeExecutionResult:
         """Execute single node via handler registry."""
         # Get dependency results from in-memory dict (not DB)
         previous = await self._get_dep_results_from_memory(workflow, node, node_results)
-        context = NodeExecutionContext(workflow_run=workflow_run, previous_results=previous, 
-                                       send_callback=send_callback)
-        return await node_handler_registry.execute_node(node, context)
+        context = NodeExecutionContext(
+            workflow_run=workflow_run,
+            previous_results=previous,
+            send_callback=send_callback,
+            is_single_step_execution=is_single_step_execution
+        )
         return await node_handler_registry.execute_node(node, context)
 
     # ==================== Node Ordering ====================
@@ -210,9 +220,11 @@ class WorkflowExecutionService:
         db_nodes = await database_sync_to_async(lambda: list(workflow.nodes.all()))()
         edges = await database_sync_to_async(lambda: list(workflow.edges.all()))()
 
-        nodes = [ExecutionNode(id=n.node_id, type=n.node_type, step_number=None, db_node=n) 
-                 for n in db_nodes]
-        
+        # Filter out non-executable node types (e.g. notes are decorative only)
+        NON_EXECUTABLE_TYPES = {'notes'}
+        nodes = [ExecutionNode(id=n.node_id, type=n.node_type, step_number=None, db_node=n)
+                 for n in db_nodes if n.node_type not in NON_EXECUTABLE_TYPES]
+
         # Kahn's algorithm
         node_map = {n.id: n for n in nodes}
         in_deg = {n.id: 0 for n in nodes}
@@ -222,7 +234,7 @@ class WorkflowExecutionService:
 
         queue = [nid for nid, d in in_deg.items() if d == 0]
         result = []
-        type_order = {'start': 0, 'step': 1, 'structuredOutput': 2, 'chatOutput': 3}
+        type_order = {'start': 0, 'file': 1, 'step': 2, 'structuredOutput': 3, 'chatOutput': 4}
 
         while queue:
             queue.sort(key=lambda nid: type_order.get(node_map[nid].type, 99))
