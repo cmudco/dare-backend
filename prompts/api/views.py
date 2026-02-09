@@ -1,11 +1,16 @@
-from rest_framework import viewsets
+from rest_framework import viewsets, status
+from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework import status
+
 from common.permissions import IsOwner
-from prompts.models import Prompt
-from .serializers import PromptSerializer
-from django.db.models import Max
+from prompts.models import Prompt, PublishedPrompt
+from .serializers import (
+    PromptSerializer,
+    PublishedPromptSerializer,
+    PublishPromptSerializer,
+)
+
 
 class PromptViewSet(viewsets.ModelViewSet):
     """Endpoint for listing, retrieving, creating, updating and deleting prompts."""
@@ -105,3 +110,73 @@ class PromptViewSet(viewsets.ModelViewSet):
             request.user.default_prompt = instance
             request.user.save()
         return Response(serializer.data)
+
+    def publish_prompt(self, request, pk=None):
+        """Publish a prompt to the public library."""
+        instance = self.get_object()
+        
+        # Check if already published
+        if hasattr(instance, 'published') and instance.published:
+            return Response(
+                {"detail": "Prompt is already published."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Validate input
+        input_serializer = PublishPromptSerializer(data=request.data)
+        input_serializer.is_valid(raise_exception=True)
+        
+        # Create published record
+        published = PublishedPrompt.objects.create(
+            prompt=instance,
+            description=input_serializer.validated_data.get('description', '')
+        )
+        
+        serializer = PublishedPromptSerializer(published)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    def unpublish_prompt(self, request, pk=None):
+        """Remove a prompt from the public library."""
+        instance = self.get_object()
+        
+        if not hasattr(instance, 'published') or not instance.published:
+            return Response(
+                {"detail": "Prompt is not published."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        instance.published.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class PublishedPromptViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    Public library of published prompts.
+    
+    Provides read-only access to all published prompts and a clone action
+    to copy a published prompt to the current user's prompts.
+    """
+    serializer_class = PublishedPromptSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return PublishedPrompt.active_objects.select_related('prompt', 'prompt__user').all()
+
+    @action(detail=True, methods=['post'])
+    def clone(self, request, pk=None):
+        """Clone a published prompt to user's prompts."""
+        published = self.get_object()
+        
+        cloned = Prompt(
+            user=request.user,
+            title=f"COPY OF - {published.prompt.title}",
+            content=published.prompt.content,
+            version=1,
+            parent=None
+        )
+        cloned.save()
+        
+        return Response(
+            PromptSerializer(cloned).data,
+            status=status.HTTP_201_CREATED
+        )
