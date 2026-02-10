@@ -484,3 +484,85 @@ class InternalSetRoleView(APIView):
                 {"error": f"User with id={user_id} not found"},
                 status=status.HTTP_404_NOT_FOUND
             )
+
+
+class InternalAccessCodeSyncView(APIView):
+    """
+    Endpoint for inter-service communication.
+    Allows SocraticBooks backend to create/update/deactivate AccessCodeGroups
+    when subscription codes are saved in SocraticBooks.
+
+    Authenticated via JWT token (same token used for all DARE API calls).
+
+    POST body:
+    {
+        "access_code": "ABC123",       # The code string
+        "max_capacity": 100,           # Max redemptions (maps from SB limit)
+        "default_role": "SB_USER",     # Role for users who register with this code
+        "action": "sync"               # "sync" (create/update) or "delete" (deactivate)
+    }
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+
+        access_code = request.data.get('access_code', '').strip()
+        action = request.data.get('action', 'sync')
+
+        if not access_code:
+            return Response(
+                {"error": "access_code is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if action == 'delete':
+            # Deactivate the access code group
+            try:
+                code_group = AccessCodeGroup.objects.get(access_code=access_code)
+                code_group.is_active = False
+                code_group.save(update_fields=['is_active'])
+                return Response({
+                    "success": True,
+                    "action": "deactivated",
+                    "access_code": access_code,
+                })
+            except AccessCodeGroup.DoesNotExist:
+                return Response({
+                    "success": True,
+                    "action": "not_found",
+                    "message": "Access code not found, nothing to deactivate",
+                })
+
+        # action == 'sync': create or update
+        max_capacity = request.data.get('max_capacity', 9999)
+        default_role = request.data.get('default_role', RoleChoice.SB_USER)
+
+        # Validate role
+        valid_roles = [choice[0] for choice in RoleChoice.choices]
+        if default_role not in valid_roles:
+            default_role = RoleChoice.SB_USER
+
+        try:
+            max_capacity = int(max_capacity)
+            if max_capacity <= 0:
+                max_capacity = 9999
+        except (TypeError, ValueError):
+            max_capacity = 9999
+
+        code_group, created = AccessCodeGroup.objects.update_or_create(
+            access_code=access_code,
+            defaults={
+                'max_capacity': max_capacity,
+                'default_role': default_role,
+                'is_active': True,
+            }
+        )
+
+        return Response({
+            "success": True,
+            "action": "created" if created else "updated",
+            "access_code": access_code,
+            "max_capacity": code_group.max_capacity,
+            "default_role": code_group.default_role,
+            "is_active": code_group.is_active,
+        })
