@@ -368,6 +368,7 @@ class StepNodeHandler(BaseExecutionHandler):
             workflow_run_step_obj=workflow_run_step,
             structured_spec=structured_spec,
             web_search_enabled=step_config['enable_web_search'],
+            file_owner_id=step_config['file_owner_id'],
         )
 
         response_generator = self.llm_service.query(request)
@@ -405,6 +406,7 @@ class StepNodeHandler(BaseExecutionHandler):
             workflow = context.workflow_run.workflow
             return {
                 'user': workflow.user,
+                'file_owner_id': workflow.file_owner_id,
                 'content_file_ids': list(step_data.content_files.values_list('id', flat=True)),
                 'embedding_file_ids': list(step_data.embedding_files.values_list('id', flat=True)),
                 'prompt_id': step_data.prompt.id if step_data.prompt else None,
