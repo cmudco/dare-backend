@@ -54,7 +54,7 @@ class FileProcessor:
 
     def _read_pdf(self, file: File) -> str:
         """Extract text from PDF file."""
-        with self._open_file(file, 'rb') as f:
+        with file.file.open("rb") as f:
             pdf_reader = PyPDF2.PdfReader(io.BytesIO(f.read()))
             text_content = []
             for page in pdf_reader.pages:
@@ -64,7 +64,7 @@ class FileProcessor:
     def _read_text_file(self, file: File) -> str:
         """Read content from text-based files with encoding detection."""
         # Read file as binary first
-        with self._open_file(file, 'rb') as f:
+        with file.file.open("rb") as f:
             raw_content = f.read()
 
         # List of encodings to try in order of preference
@@ -97,7 +97,7 @@ class FileProcessor:
     def _read_docx(self, file: File) -> str:
         """Extract text from DOCX file."""
         try:
-            with self._open_file(file, 'rb') as f:
+            with file.file.open("rb") as f:
                 with zipfile.ZipFile(f) as docx_zip:
                     with docx_zip.open('word/document.xml') as document_xml:
                         xml_content = document_xml.read()
@@ -122,7 +122,7 @@ class FileProcessor:
     def _read_xlsx(self, file: File) -> str:
         """Extract text from XLSX spreadsheet using openpyxl."""
         try:
-            with self._open_file(file, 'rb') as f:
+            with file.file.open("rb") as f:
                 wb = load_workbook(filename=f, data_only=True, read_only=True)
                 texts = []
                 for ws in wb.worksheets:
@@ -138,7 +138,7 @@ class FileProcessor:
     def _read_xls(self, file: File) -> str:
         """Extract text from legacy XLS spreadsheet using xlrd if available."""
         try:
-            with self._open_file(file, 'rb') as f:
+            with file.file.open("rb") as f:
                 book = xlrd.open_workbook(file_contents=f.read())
                 texts = []
                 for sheet in book.sheets():
