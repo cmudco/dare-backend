@@ -467,6 +467,17 @@ class Conversation(BaseModel):
         help_text="Selected agent template for this conversation."
     )
 
+    # Sharing / publishing
+    is_published = models.BooleanField(
+        default=False,
+        help_text="Whether this conversation is published and visible to other users."
+    )
+    published_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Timestamp when the conversation was published."
+    )
+
     active_objects = ActiveObjectsManager()
 
 
@@ -482,7 +493,7 @@ class Conversation(BaseModel):
         return f"Conversation {self.conversation_id}"
 
     def clone(self, include_messages=True, include_files=True, include_tags=True,
-              include_snippets=True, custom_title=None):
+              include_snippets=True, custom_title=None, user=None):
         """
         Clone this conversation with its messages and associated data.
 
@@ -492,6 +503,7 @@ class Conversation(BaseModel):
             include_tags (bool): Whether to clone tag associations
             include_snippets (bool): Whether to clone snippets
             custom_title (str): Custom title for cloned conversation
+            user (User): Optional user to assign as owner (for forking)
 
         Returns:
             Conversation: The cloned conversation instance
@@ -507,7 +519,7 @@ class Conversation(BaseModel):
 
             # Create cloned conversation
             cloned_conversation = Conversation(
-                user=self.user,
+                user=user if user else self.user,
                 title=cloned_title,
                 source=self.source,
                 max_context_snippets=self.max_context_snippets,
@@ -546,7 +558,11 @@ class Conversation(BaseModel):
                     cloned_message = Message(
                         conversation=cloned_conversation,
                         sender_type=original_message.sender_type,
-                        sender=original_message.sender,
+                        sender=(
+                            user.email
+                            if user and original_message.sender_type == SenderType.PLAYER
+                            else original_message.sender
+                        ),
                         message=original_message.message,
                         llm=original_message.llm,
                         feedback_type=original_message.feedback_type,
