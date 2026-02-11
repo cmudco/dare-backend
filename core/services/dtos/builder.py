@@ -46,11 +46,17 @@ class LLMQueryRequestBuilder:
         Returns:
             Fully constructed LLMQueryRequest with conversation defaults applied
         """
+        # Determine file_owner_id: prioritize message_data, fall back to conversation
+        # This handles forked conversations where file_owner_id is set on the conversation
+        file_owner_id = message_data.get("file_owner_id")
+        if not file_owner_id and conversation and hasattr(conversation, 'file_owner_id'):
+            file_owner_id = conversation.file_owner_id
+
         # Build context config
         context = ContextConfig(
             file_ids=message_data.get("file_ids", []),
             embedding_ids=message_data.get("embedding_ids", []),
-            file_owner_id=message_data.get("file_owner_id"),  # Bot creator's ID
+            file_owner_id=file_owner_id,  # For forked conversations or bot creator's ID
             media_ids=message_data.get("media_ids", []),
             tag_ids=message_data.get("tag_ids", []),
             folder_ids=message_data.get("folder_ids", []),

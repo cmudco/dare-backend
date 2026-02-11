@@ -25,6 +25,8 @@ from ..tasks import process_file_embeddings
 from ..models import File, Tag, Folder
 from .serializers import FileSerializer, TagSerializer, FolderSerializer
 from ..constants import ALLOWED_FILES, FileStatus
+from workflows.models import WorkflowNode, StepNodeData, FileNodeData
+from conversations.models import Conversation
 import logging
 logger = logging.getLogger(__name__)
 
@@ -132,10 +134,13 @@ class FileViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'], url_path='by-owner/(?P<owner_id>[^/.]+)')
     def get_files_by_owner(self, request, owner_id=None):
         """
-        Get files owned by a specific user (for forked workflows).
+        Get files owned by a specific user (for forked workflows and conversations).
 
-        Only returns files that are associated with published workflows,
-        ensuring users can only access shared resources.
+        Returns files that are associated with:
+        1. Published workflows (in step nodes or file nodes)
+        2. Published conversations (selected files/embeddings)
+
+        This ensures users can only access files from shared resources.
         """
         try:
             owner_id = int(owner_id)
@@ -145,10 +150,9 @@ class FileViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        # Get files from the owner that are in published workflows
-        # This ensures we only expose files that are meant to be shared
-        from workflows.models import WorkflowNode, StepNodeData, FileNodeData
+        all_file_ids = set()
 
+        # 1. Get files from published workflows
         step_ct = ContentType.objects.get_for_model(StepNodeData)
         file_ct = ContentType.objects.get_for_model(FileNodeData)
 
@@ -162,25 +166,33 @@ class FileViewSet(viewsets.ModelViewSet):
         file_data_ids = [obj_id for ct_id, obj_id in published_node_data if ct_id == file_ct.id]
 
         # Collect file IDs from StepNodeData using prefetch_related to avoid N+1 queries
-        step_file_ids = set()
         if step_data_ids:
             step_nodes = StepNodeData.objects.filter(
                 id__in=step_data_ids
             ).prefetch_related('content_files', 'embedding_files')
             for step_data in step_nodes:
-                step_file_ids.update(f.id for f in step_data.content_files.all())
-                step_file_ids.update(f.id for f in step_data.embedding_files.all())
+                all_file_ids.update(f.id for f in step_data.content_files.all())
+                all_file_ids.update(f.id for f in step_data.embedding_files.all())
 
         # Collect file IDs from FileNodeData using prefetch_related
-        file_node_file_ids = set()
         if file_data_ids:
             file_nodes = FileNodeData.objects.filter(
                 id__in=file_data_ids
             ).prefetch_related('files')
             for file_data in file_nodes:
-                file_node_file_ids.update(f.id for f in file_data.files.all())
+                all_file_ids.update(f.id for f in file_data.files.all())
 
-        all_file_ids = step_file_ids | file_node_file_ids
+        # 2. Get files from published conversations
+        published_conversations = Conversation.active_objects.filter(
+            user_id=owner_id,
+            is_published=True
+        ).values_list('selected_file_ids', 'selected_embedding_ids')
+
+        for selected_file_ids, selected_embedding_ids in published_conversations:
+            if selected_file_ids:
+                all_file_ids.update(selected_file_ids)
+            if selected_embedding_ids:
+                all_file_ids.update(selected_embedding_ids)
 
         if not all_file_ids:
             return Response({"results": []}, status=status.HTTP_200_OK)
