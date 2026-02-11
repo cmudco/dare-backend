@@ -74,6 +74,17 @@ class DynamicStorageFieldFile(FieldFile):
         """Override storage property to return dynamic storage."""
         return self._get_storage()
 
+    @storage.setter
+    def storage(self, value):
+        """
+        Setter for storage property.
+
+        Since we determine storage dynamically, we ignore any attempts
+        to set storage explicitly. This prevents errors when Django's
+        internal code tries to set the storage attribute.
+        """
+        pass
+
     def open(self, mode='rb'):
         """Open the file using the appropriate storage backend."""
         self._require_file()
