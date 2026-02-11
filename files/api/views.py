@@ -15,6 +15,7 @@ from rest_framework.views import APIView
 from django.http import Http404
 from django.db.models.functions import Lower
 from django.db.models import Count, Q, Prefetch
+from django.contrib.contenttypes.models import ContentType
 
 from core.services.document_processor import DocumentProcessor
 from core.services.file_upload_service import FileUploadService
@@ -191,6 +192,12 @@ class FileViewAPIView(APIView):
                     id=file_id,
                     message__conversation__is_published=True
                 ).first()
+
+                # Fallback: allow access if file belongs to a published workflow
+                # Uses subquery since StepNodeData/FileNodeData connect via GenericFK
+                if not file_obj:
+                    file_obj = self._get_file_from_published_workflow(file_id)
+
                 if not file_obj:
                     raise File.DoesNotExist()
             
@@ -252,6 +259,48 @@ class FileViewAPIView(APIView):
                 {"error": f"Error accessing file: {str(e)}"}, 
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+    def _get_file_from_published_workflow(self, file_id: int):
+        """Check if a file is referenced by a published workflow.
+
+        StepNodeData/FileNodeData → WorkflowNode uses GenericFK, so we query
+        each data model separately and check for published parent workflows.
+
+        Args:
+            file_id: ID of the file to check
+
+        Returns:
+            File instance if found in a published workflow, None otherwise
+        """
+        file_obj = File.active_objects.filter(id=file_id).first()
+        if not file_obj:
+            return None
+
+        # Check StepNodeData content_files and embedding_files
+        step_data_ids = list(
+            StepNodeData.objects.filter(
+                Q(content_files=file_obj) | Q(embedding_files=file_obj)
+            ).values_list('id', flat=True)
+        )
+
+        # Check FileNodeData files
+        file_data_ids = list(
+            FileNodeData.objects.filter(
+                files=file_obj
+            ).values_list('id', flat=True)
+        )
+
+        # Check if any of these data objects belong to published workflows via WorkflowNode
+        step_ct = ContentType.objects.get_for_model(StepNodeData)
+        file_ct = ContentType.objects.get_for_model(FileNodeData)
+
+        is_in_published = WorkflowNode.objects.filter(
+            Q(data_content_type=step_ct, data_object_id__in=step_data_ids) |
+            Q(data_content_type=file_ct, data_object_id__in=file_data_ids),
+            workflow__is_published=True
+        ).exists()
+
+        return file_obj if is_in_published else None
 
 
 class TagViewSet(viewsets.ModelViewSet):

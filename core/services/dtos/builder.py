@@ -147,6 +147,7 @@ class LLMQueryRequestBuilder:
         workflow_run_step_obj: Optional[Any] = None,
         structured_spec: Optional[Dict[str, Any]] = None,
         web_search_enabled: bool = False,
+        file_owner_id: Optional[int] = None,
     ) -> LLMQueryRequest:
         """Build LLMQueryRequest from workflow execution data.
 
@@ -166,6 +167,7 @@ class LLMQueryRequestBuilder:
             workflow_run_step_obj: WorkflowRunStep instance
             structured_spec: JSON schema for structured output
             web_search_enabled: Enable web search for this step
+            file_owner_id: Original owner's user ID for cross-user embedding access
 
         Returns:
             Fully constructed LLMQueryRequest for workflow execution
@@ -179,6 +181,7 @@ class LLMQueryRequestBuilder:
             max_context_snippets=max_context_snippets,
             document_similarity_threshold=document_similarity_threshold,
             history_limit=0,  # Workflows don't use conversation history
+            file_owner_id=file_owner_id,
         )
 
         generation = GenerationConfig(

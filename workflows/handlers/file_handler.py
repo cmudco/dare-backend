@@ -265,15 +265,18 @@ class FileNodeHandler(BaseNodeHandler):
         if not query_text:
             return "No query text available for vector search."
 
-        # Get user from workflow
-        user = await database_sync_to_async(
-            lambda: context.workflow_run.workflow.user
+        # Get user and file_owner_id from workflow
+        # file_owner_id enables cross-user vector search for forked workflows
+        workflow = await database_sync_to_async(
+            lambda: context.workflow_run.workflow
         )()
+        user = await database_sync_to_async(lambda: workflow.user)()
+        vector_user_id = workflow.file_owner_id or user.id
 
-        # Initialize document processor with user's configured vector service
-        # Must use async version to properly check user's vector_db preference (Pinecone/Weaviate)
-        vector_service = await get_vector_service_async(user.id)
-        document_processor = DocumentProcessor(user_id=user.id, vector_service=vector_service)
+        # Initialize document processor with correct vector namespace
+        # Uses file_owner_id for forked workflows (same pattern as semantic_context_helpers.py)
+        vector_service = await get_vector_service_async(vector_user_id)
+        document_processor = DocumentProcessor(user_id=vector_user_id, vector_service=vector_service)
 
         file_ids = [f.id for f in files]
 
