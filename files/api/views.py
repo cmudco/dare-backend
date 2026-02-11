@@ -183,7 +183,16 @@ class FileViewAPIView(APIView):
         
         try:
             # Get the file object with proper ownership check
-            file_obj = File.active_objects.get(id=file_id, user=request.user)
+            try:
+                file_obj = File.active_objects.get(id=file_id, user=request.user)
+            except File.DoesNotExist:
+                # Fallback: allow access if file belongs to a published conversation
+                file_obj = File.active_objects.filter(
+                    id=file_id,
+                    message__conversation__is_published=True
+                ).first()
+                if not file_obj:
+                    raise File.DoesNotExist()
             
             # Ensure file is processed successfully
             if file_obj.status != FileStatus.PROCESSED:
