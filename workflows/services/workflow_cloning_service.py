@@ -2,8 +2,11 @@
 Workflow cloning service for duplicating workflows with all nodes and edges.
 
 Extracted from WorkflowViewSet.clone_workflow for better maintainability
-and separation of concerns.
+and separation of concerns. Supports both same-user cloning and cross-user
+forking with file_owner_id for shared embedding access.
 """
+
+from typing import Optional
 
 from django.contrib.contenttypes.models import ContentType
 
@@ -21,77 +24,103 @@ class WorkflowCloningService:
     type-safe node data objects and maintaining relationships between components.
     """
 
-    def clone_workflow(self, original: Workflow) -> Workflow:
-        """
-        Clone a complete workflow with all nodes and edges.
+    def clone_workflow(
+        self,
+        original: Workflow,
+        target_user=None,
+        file_owner_id: Optional[int] = None,
+    ) -> Workflow:
+        """Clone a complete workflow with all nodes and edges.
 
         Creates a new workflow as a copy of the original, including all nodes
-        with their typed data objects and all connecting edges. The cloned
-        workflow maintains the same structure but is independent of the original.
+        with their typed data objects and all connecting edges.
 
         Args:
             original: The workflow to clone
+            target_user: User who will own the clone. Defaults to original owner.
+            file_owner_id: Original owner's ID for cross-user embedding access.
+                Set when forking a published workflow.
 
         Returns:
             Workflow: The newly created cloned workflow
         """
+        user = target_user or original.user
+        is_cross_user = user != original.user
+
         # Create the base cloned workflow
-        cloned = self._create_cloned_workflow(original)
+        cloned = self._create_cloned_workflow(
+            original, user=user, file_owner_id=file_owner_id
+        )
 
         # Clone all nodes with their data
-        self._clone_nodes(original, cloned)
+        self._clone_nodes(original, cloned, is_cross_user=is_cross_user)
 
         # Clone all edges
         self._clone_edges(original, cloned)
 
         return cloned
 
-    def _create_cloned_workflow(self, original: Workflow) -> Workflow:
-        """
-        Create the base cloned workflow with copied metadata.
+    def _create_cloned_workflow(
+        self,
+        original: Workflow,
+        user=None,
+        file_owner_id: Optional[int] = None,
+    ) -> Workflow:
+        """Create the base cloned workflow with copied metadata.
 
         Args:
             original: Original workflow to copy from
+            user: Owner of the new workflow
+            file_owner_id: Original owner's ID for cross-user file access
 
         Returns:
             Workflow: New workflow instance
         """
         return Workflow.objects.create(
-            user=original.user,
+            user=user or original.user,
             version=1,
             parent=original,
             viewport_x=original.viewport_x,
             viewport_y=original.viewport_y,
-            viewport_zoom=original.viewport_zoom
+            viewport_zoom=original.viewport_zoom,
+            file_owner_id=file_owner_id,
         )
 
-    def _clone_nodes(self, original: Workflow, cloned: Workflow) -> None:
-        """
-        Clone all nodes and their associated data objects.
+    def _clone_nodes(
+        self,
+        original: Workflow,
+        cloned: Workflow,
+        is_cross_user: bool = False,
+    ) -> None:
+        """Clone all nodes and their associated data objects.
 
         Args:
             original: Original workflow with nodes to clone
             cloned: Target workflow to add cloned nodes to
+            is_cross_user: If True, prefix title with 'FORK OF'
         """
         for node in original.nodes.all():
             if node.data_object:
-                cloned_data = self._clone_node_data(node.data_object)
+                cloned_data = self._clone_node_data(
+                    node.data_object, is_cross_user=is_cross_user
+                )
                 if cloned_data:
                     self._create_cloned_node(node, cloned, cloned_data)
 
-    def _clone_node_data(self, data_object):
-        """
-        Clone the typed data object based on its type.
+    def _clone_node_data(self, data_object, is_cross_user: bool = False):
+        """Clone the typed data object based on its type.
 
         Args:
             data_object: The node data object to clone
+            is_cross_user: If True, prefix start node title with 'FORK OF'
 
         Returns:
             Cloned data object instance
         """
         if isinstance(data_object, StartNodeData):
+            prefix = "FORK OF" if is_cross_user else "COPY OF"
             return StartNodeData.objects.create(
-                title=f"COPY OF - {data_object.title}",
+                title=f"{prefix} - {data_object.title}",
                 description=data_object.description,
                 mode=data_object.mode
             )
