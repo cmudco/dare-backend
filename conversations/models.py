@@ -477,6 +477,11 @@ class Conversation(BaseModel):
         blank=True,
         help_text="Timestamp when the conversation was published."
     )
+    file_owner_id = models.IntegerField(
+        null=True,
+        blank=True,
+        help_text="Original file owner's user ID for forked conversations. Used for vector search namespace."
+    )
 
     active_objects = ActiveObjectsManager()
 
@@ -493,7 +498,7 @@ class Conversation(BaseModel):
         return f"Conversation {self.conversation_id}"
 
     def clone(self, include_messages=True, include_files=True, include_tags=True,
-              include_snippets=True, custom_title=None, user=None):
+              include_snippets=True, custom_title=None, user=None, file_owner_id=None):
         """
         Clone this conversation with its messages and associated data.
 
@@ -504,6 +509,8 @@ class Conversation(BaseModel):
             include_snippets (bool): Whether to clone snippets
             custom_title (str): Custom title for cloned conversation
             user (User): Optional user to assign as owner (for forking)
+            file_owner_id (int): Original file owner's user ID for cross-user forks.
+                                 Used for vector search namespace access.
 
         Returns:
             Conversation: The cloned conversation instance
@@ -535,6 +542,11 @@ class Conversation(BaseModel):
                 prompt=self.prompt,
                 sort_order=self.sort_order,
                 selected_agent=self.selected_agent,
+                # Copy file/embedding selections for forked conversations
+                selected_file_ids=self.selected_file_ids.copy() if self.selected_file_ids else [],
+                selected_embedding_ids=self.selected_embedding_ids.copy() if self.selected_embedding_ids else [],
+                # Track original file owner for cross-user vector search
+                file_owner_id=file_owner_id,
             )
             cloned_conversation.save()
 

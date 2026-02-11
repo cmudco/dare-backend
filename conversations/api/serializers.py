@@ -73,6 +73,7 @@ class ConversationSerializer(serializers.ModelSerializer):
     )
     is_owner = serializers.SerializerMethodField()
     owner_email = serializers.SerializerMethodField()
+    owner_user_id = serializers.SerializerMethodField()
 
     def get_user(self, obj):
         """Return user email or None for anonymous conversations."""
@@ -96,6 +97,17 @@ class ConversationSerializer(serializers.ModelSerializer):
         else:
             masked_local = local[0] + '***' + local[-1]
         return f"{masked_local}@{domain}" if domain else masked_local
+
+    def get_owner_user_id(self, obj):
+        """Return owner's user ID for shared conversations (to fetch their files)."""
+        request = self.context.get('request')
+        if not request or not hasattr(request, 'user') or not request.user.is_authenticated:
+            return None
+        # Only expose owner_user_id if the current user is NOT the owner
+        # This is used by the frontend to load owner's files for shared conversations
+        if obj.user_id != request.user.id:
+            return obj.user_id
+        return None
 
     class Meta:
         model = Conversation
@@ -134,8 +146,10 @@ class ConversationSerializer(serializers.ModelSerializer):
             'published_at',
             'is_owner',
             'owner_email',
+            'owner_user_id',
+            'file_owner_id',
         ]
-        read_only_fields = ['created_at', 'user', 'prompt', 'selected_agent_name', 'is_owner', 'owner_email']
+        read_only_fields = ['created_at', 'user', 'prompt', 'selected_agent_name', 'is_owner', 'owner_email', 'owner_user_id', 'file_owner_id']
 
 class SnippetSerializer(serializers.ModelSerializer):
     file = FileSerializer(read_only=True)

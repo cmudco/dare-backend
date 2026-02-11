@@ -273,9 +273,14 @@ class ConversationViewSet(viewsets.ModelViewSet):
                 )
 
             with transaction.atomic():
+                # For cross-user forks, track the original file owner for vector search
+                is_cross_user = conversation.user != request.user
+                file_owner_id = conversation.user.id if is_cross_user else None
+
                 forked = conversation.clone(
                     user=request.user,
-                    custom_title=f"FORK OF - {conversation.title or 'Shared Chat'}"
+                    custom_title=f"FORK OF - {conversation.title or 'Shared Chat'}",
+                    file_owner_id=file_owner_id
                 )
 
             serializer = self.get_serializer(forked)

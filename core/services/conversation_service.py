@@ -137,9 +137,16 @@ class ConversationService:
         all_file_ids = list(set((file_ids or []) + (embedding_ids or [])))
 
         if all_file_ids:
-            files = await database_sync_to_async(
-                lambda: list(File.active_objects.filter(pk__in=all_file_ids, user=conversation.user))
-            )()
+            # For forked conversations, allow files from both current user and original owner
+            def _get_accessible_files():
+                allowed_user_ids = [conversation.user_id]
+                if conversation.file_owner_id:
+                    allowed_user_ids.append(conversation.file_owner_id)
+                return list(File.active_objects.filter(
+                    pk__in=all_file_ids,
+                    user_id__in=allowed_user_ids
+                ))
+            files = await database_sync_to_async(_get_accessible_files)()
             if files:
                 await database_sync_to_async(lambda: message.files.add(*files))()
 
