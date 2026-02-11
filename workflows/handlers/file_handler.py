@@ -99,8 +99,8 @@ class FileNodeHandler(BaseNodeHandler):
                 except Exception as e:
                     logger.warning(f"Failed to send step_started event: {e}")
 
-            # Get active files
-            files = await self._get_files(file_data)
+            # Get active files with ownership validation
+            files = await self._get_files(file_data, context)
             if not files:
                 return NodeExecutionResult(
                     success=True,
@@ -206,11 +206,30 @@ class FileNodeHandler(BaseNodeHandler):
     # Private Helpers
     # ============================================================================
 
-    async def _get_files(self, file_data: FileNodeData) -> List[File]:
-        """Get active, non-deleted files from node data."""
-        return await database_sync_to_async(
-            lambda: list(file_data.files.filter(is_deleted=False, is_active=True))
-        )()
+    async def _get_files(self, file_data: FileNodeData, context: NodeExecutionContext) -> List[File]:
+        """Get active, non-deleted files from node data with ownership validation.
+
+        For forked workflows, files must belong to either:
+        - The current workflow user, OR
+        - The original owner (file_owner_id) for shared file access
+        """
+        def _get_validated_files():
+            workflow = context.workflow_run.workflow
+            # Build list of allowed user IDs
+            allowed_user_ids = [workflow.user_id]
+            if workflow.file_owner_id:
+                allowed_user_ids.append(workflow.file_owner_id)
+
+            # Filter files by ownership + active status
+            return list(
+                file_data.files.filter(
+                    is_deleted=False,
+                    is_active=True,
+                    user_id__in=allowed_user_ids
+                )
+            )
+
+        return await database_sync_to_async(_get_validated_files)()
 
     def _get_query_text(
         self,
@@ -283,7 +302,7 @@ class FileNodeHandler(BaseNodeHandler):
         context_text = await document_processor.search_similar_documents(
             query_text=query_text,
             file_ids=file_ids,
-            user_id=user.id,
+            user_id=vector_user_id,
             top_k=file_data.max_results,
             similarity_threshold=file_data.similarity_threshold,
         )
