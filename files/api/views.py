@@ -129,6 +129,70 @@ class FileViewSet(viewsets.ModelViewSet):
                 file.folders.clear()
             return Response({"status": "Files removed from all folders"}, status=status.HTTP_200_OK)
 
+    @action(detail=False, methods=['get'], url_path='by-owner/(?P<owner_id>[^/.]+)')
+    def get_files_by_owner(self, request, owner_id=None):
+        """
+        Get files owned by a specific user (for forked workflows).
+
+        Only returns files that are associated with published workflows,
+        ensuring users can only access shared resources.
+        """
+        try:
+            owner_id = int(owner_id)
+        except (ValueError, TypeError):
+            return Response(
+                {"error": "Invalid owner ID"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Get files from the owner that are in published workflows
+        # This ensures we only expose files that are meant to be shared
+        from workflows.models import WorkflowNode, StepNodeData, FileNodeData
+
+        step_ct = ContentType.objects.get_for_model(StepNodeData)
+        file_ct = ContentType.objects.get_for_model(FileNodeData)
+
+        # Get node data IDs from published workflows
+        published_node_data = list(WorkflowNode.objects.filter(
+            workflow__is_published=True,
+            workflow__user_id=owner_id
+        ).values_list('data_content_type_id', 'data_object_id'))
+
+        step_data_ids = [obj_id for ct_id, obj_id in published_node_data if ct_id == step_ct.id]
+        file_data_ids = [obj_id for ct_id, obj_id in published_node_data if ct_id == file_ct.id]
+
+        # Collect file IDs from StepNodeData using prefetch_related to avoid N+1 queries
+        step_file_ids = set()
+        if step_data_ids:
+            step_nodes = StepNodeData.objects.filter(
+                id__in=step_data_ids
+            ).prefetch_related('content_files', 'embedding_files')
+            for step_data in step_nodes:
+                step_file_ids.update(f.id for f in step_data.content_files.all())
+                step_file_ids.update(f.id for f in step_data.embedding_files.all())
+
+        # Collect file IDs from FileNodeData using prefetch_related
+        file_node_file_ids = set()
+        if file_data_ids:
+            file_nodes = FileNodeData.objects.filter(
+                id__in=file_data_ids
+            ).prefetch_related('files')
+            for file_data in file_nodes:
+                file_node_file_ids.update(f.id for f in file_data.files.all())
+
+        all_file_ids = step_file_ids | file_node_file_ids
+
+        if not all_file_ids:
+            return Response({"results": []}, status=status.HTTP_200_OK)
+
+        files = File.active_objects.filter(
+            id__in=all_file_ids,
+            user_id=owner_id
+        ).order_by(Lower('name'))
+
+        serializer = self.get_serializer(files, many=True)
+        return Response({"results": serializer.data}, status=status.HTTP_200_OK)
+
     @action(detail=False, methods=['post'], url_path='bulk-delete', parser_classes=[JSONParser])
     def bulk_delete(self, request):
         """
