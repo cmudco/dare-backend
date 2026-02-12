@@ -150,6 +150,13 @@ class WorkflowViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_403_FORBIDDEN
                 )
 
+            # Prevent publishing forked workflows
+            if instance.file_owner_id is not None:
+                return Response(
+                    {"error": "Cannot publish forked workflows. Only original workflows can be published."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
             instance.is_published = not instance.is_published
             instance.published_at = timezone.now() if instance.is_published else None
             instance.save(update_fields=['is_published', 'published_at', 'updated_at'])
