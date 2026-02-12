@@ -28,7 +28,7 @@ class StepNodeData(BaseNodeData):
     )
     prompt = models.ForeignKey(
         'prompts.Prompt',
-        on_delete=models.PROTECT,
+        on_delete=models.SET_NULL,
         null=True,
         blank=True,
         help_text="Prompt template for this step (required for execution)"
@@ -183,7 +183,7 @@ class StructuredOutputNodeData(BaseNodeData):
     """Data model for 'structuredOutput' type nodes - independent routing decision nodes."""
     prompt = models.ForeignKey(
         'prompts.Prompt',
-        on_delete=models.PROTECT,
+        on_delete=models.SET_NULL,
         null=True,
         blank=True,
         help_text="Optional prompt template for routing evaluation (falls back to base prompt if not provided)"
