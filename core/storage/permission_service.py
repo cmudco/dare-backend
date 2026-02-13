@@ -60,7 +60,7 @@ class SyftBoxPermissionService:
             file = sp.open(str(file_path))
 
             # Owner always gets admin access
-            file.grant_admin_access(owner_email)
+            file.grant_admin_access(owner_email, force=True)
 
             # Set read access
             for email in (readable_by or []):
@@ -70,7 +70,7 @@ class SyftBoxPermissionService:
             # Set write access
             for email in (writable_by or []):
                 if email != owner_email:
-                    file.grant_write_access(email)
+                    file.grant_write_access(email, force=True)
 
             logger.info(f"Set permissions for {file_path}")
             return True
@@ -131,7 +131,7 @@ class SyftBoxPermissionService:
             import syft_perm as sp
 
             file = sp.open(str(file_path))
-            file.grant_write_access(user_email)
+            file.grant_write_access(user_email, force=True)
             logger.info(f"Granted write access to {user_email} for {file_path}")
             return True
 
