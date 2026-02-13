@@ -1,5 +1,8 @@
+import logging
+
 from django.db import models
 from django.conf import settings
+from django.utils.translation import gettext_lazy as _
 
 from common.managers import ActiveObjectsManager
 from common.models import BaseModel, TimeStampMixin
@@ -7,7 +10,8 @@ from core.storage.constants import StorageBackendChoice
 from core.storage.fields import DynamicStorageFileField
 from users.constants import VectorDBChoice
 from .constants import FileStatus
-from django.utils.translation import gettext_lazy as _
+
+logger = logging.getLogger(__name__)
 
 
 class Tag(TimeStampMixin):
@@ -175,6 +179,15 @@ class File(BaseModel):
         indexes = [
             models.Index(fields=['user', 'is_deleted', 'is_active'], name='file_user_status_idx'),
         ]
+
+    def delete(self, *args, **kwargs):
+        # Delete the actual file from storage (local or SyftBox)
+        if self.file:
+            try:
+                self.file.delete(save=False)
+            except Exception as e:
+                logger.warning(f"Failed to delete file from storage: {e}")
+        super().delete(*args, **kwargs)
 
     def __str__(self):
         return self.name if self.name else self.file.name
