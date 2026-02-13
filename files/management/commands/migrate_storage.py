@@ -235,9 +235,9 @@ class Command(BaseCommand):
 
         This involves:
         1. Reading the file from current storage
-        2. Saving to new storage
-        3. Updating the file's storage_backend field
-        4. Deleting from old storage (optional, for safety we keep it)
+        2. Deleting from old storage (while backend still points to source)
+        3. Switching storage_backend to the target
+        4. Saving to new storage
         """
         # Read file content from current storage
         file_instance.file.open('rb')
@@ -248,16 +248,11 @@ class Command(BaseCommand):
         filename = Path(file_instance.file.name).name
 
         with transaction.atomic():
-            # Update storage backend BEFORE saving
-            # This ensures DynamicStorageFileField routes to the correct storage
+            file_instance.file.delete(save=False)
+
             file_instance.storage_backend = target_backend
             file_instance.save(update_fields=['storage_backend'])
 
-            # Delete old file (from old storage)
-            old_file_name = file_instance.file.name
-            file_instance.file.delete(save=False)
-
-            # Save to new storage (DynamicStorageFileField will route to correct backend)
             file_instance.file.save(filename, ContentFile(file_content), save=True)
 
         logger.info(
