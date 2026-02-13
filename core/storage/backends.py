@@ -141,13 +141,19 @@ class SyftBoxStorage(Storage):
 
     def delete(self, name: str) -> None:
         """
-        Delete a file from SyftBox storage.
+        Delete a file from SyftBox storage and clean up its permissions.
 
         Args:
             name: File name/path
         """
         full_path = self._full_path(name)
         if full_path.exists():
+            try:
+                permission_service = SyftBoxPermissionService()
+                permission_service.remove_file_permissions(full_path)
+            except Exception as e:
+                logger.warning(f"Failed to clean up SyftBox permissions: {e}")
+
             full_path.unlink()
             logger.debug(f"Deleted file from SyftBox: {full_path}")
 

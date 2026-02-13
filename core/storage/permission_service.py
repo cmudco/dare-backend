@@ -6,8 +6,9 @@ Gracefully handles disabled state by returning success for all operations.
 """
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
+import yaml
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
@@ -203,6 +204,45 @@ class SyftBoxPermissionService:
         except Exception as e:
             logger.error(f"Error checking access: {e}")
             return {'read': False, 'write': False, 'admin': False}
+
+    def remove_file_permissions(self, file_path: Path) -> bool:
+        """
+        Remove permission rules for a file from syft.pub.yaml.
+
+        Called when a file is deleted to clean up stale permission entries.
+
+        Args:
+            file_path: Path to the file being deleted
+
+        Returns:
+            True if permissions were removed successfully
+        """
+        if not self._enabled:
+            return True
+
+        try:
+            syftpub_path = file_path.parent / "syft.pub.yaml"
+            if not syftpub_path.exists():
+                return True
+
+            with open(syftpub_path, "r") as f:
+                content: Dict[str, Any] = yaml.safe_load(f) or {"rules": []}
+
+            rules = content.get("rules", [])
+            pattern = file_path.name
+            original_count = len(rules)
+            content["rules"] = [r for r in rules if r.get("pattern") != pattern]
+
+            if len(content["rules"]) < original_count:
+                with open(syftpub_path, "w") as f:
+                    yaml.dump(content, f, default_flow_style=False, sort_keys=False, indent=2)
+                logger.info(f"Removed permissions for {pattern} from {syftpub_path}")
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Error removing permissions for {file_path}: {e}")
+            return False
 
     def get_file_permissions(self, file_path: Path) -> Optional[Dict]:
         """
