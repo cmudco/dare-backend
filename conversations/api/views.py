@@ -18,7 +18,8 @@ from rest_framework.views import APIView
 from django.shortcuts import get_object_or_404
 
 from conversations.models import Message, Conversation, LLM, Snippet, Artifact, Feedback, ModelCardData
-from conversations.constants import ArtifactStatus
+from conversations.constants import ArtifactStatus, SharingErrorCode, SharingErrorMessage
+from conversations.services.sharing_service import ConversationSharingService, SharingValidationError
 from users.utils import detect_platform_from_request
 from .serializers import (
     MessageSerializer,
@@ -230,30 +231,20 @@ class ConversationViewSet(viewsets.ModelViewSet):
         """
         try:
             instance = self.get_object()
-
-            # Only owner can publish
-            if instance.user != request.user:
-                return Response(
-                    {"error": "Permission denied"},
-                    status=status.HTTP_403_FORBIDDEN
-                )
-
-            # Prevent publishing forked conversations
-            if instance.file_owner_id is not None:
-                return Response(
-                    {"error": "Cannot publish forked conversations. Only original conversations can be published."},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-            instance.is_published = not instance.is_published
-            instance.published_at = timezone.now() if instance.is_published else None
-            instance.save(update_fields=['is_published', 'published_at', 'updated_at'])
-
+            instance = ConversationSharingService.toggle_publish(instance, request.user)
             serializer = self.get_serializer(instance)
             return Response(serializer.data)
 
+        except SharingValidationError as e:
+            status_map = {
+                SharingErrorCode.PERMISSION_DENIED: status.HTTP_403_FORBIDDEN,
+                SharingErrorCode.CANNOT_PUBLISH_FORKED: status.HTTP_400_BAD_REQUEST,
+            }
+            return Response(
+                {"error": str(e), "code": e.error_code},
+                status=status_map.get(e.error_code, status.HTTP_400_BAD_REQUEST),
+            )
         except Exception as e:
-
             logger.error(f"Error publishing conversation {conversation_id}: {str(e)}")
             return Response(
                 {"error": f"Failed to publish conversation: {str(e)}"},
@@ -267,34 +258,16 @@ class ConversationViewSet(viewsets.ModelViewSet):
         Creates a clone owned by the requesting user.
         """
         try:
-            # Look up the conversation directly (not via get_object which filters by owner)
-            conversation = Conversation.active_objects.filter(
-                conversation_id=conversation_id,
-                is_published=True
-            ).first()
-
-            if not conversation:
-                return Response(
-                    {"error": "Conversation not found or not published"},
-                    status=status.HTTP_404_NOT_FOUND
-                )
-
-            with transaction.atomic():
-                # For cross-user forks, track the original file owner for vector search
-                is_cross_user = conversation.user != request.user
-                file_owner_id = conversation.user.id if is_cross_user else None
-
-                forked = conversation.clone(
-                    user=request.user,
-                    custom_title=f"FORK OF - {conversation.title or 'Shared Chat'}",
-                    file_owner_id=file_owner_id
-                )
-
+            forked = ConversationSharingService.fork(conversation_id, request.user)
             serializer = self.get_serializer(forked)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
 
+        except SharingValidationError as e:
+            return Response(
+                {"error": str(e), "code": e.error_code},
+                status=status.HTTP_404_NOT_FOUND,
+            )
         except Exception as e:
-
             logger.error(f"Error forking conversation {conversation_id}: {str(e)}")
             return Response(
                 {"error": f"Failed to fork conversation: {str(e)}"},
@@ -315,19 +288,13 @@ class ConversationViewSet(viewsets.ModelViewSet):
 
             if not conversation:
                 return Response(
-                    {"error": "Conversation not found"},
+                    {"error": SharingErrorMessage.CONVERSATION_NOT_FOUND, "code": SharingErrorCode.NOT_FOUND},
                     status=status.HTTP_404_NOT_FOUND
                 )
 
-            # Allow if owner OR published
-            is_owner = (
-                hasattr(request, 'user')
-                and request.user.is_authenticated
-                and conversation.user == request.user
-            )
-            if not is_owner and not conversation.is_published:
+            if not ConversationSharingService.can_view_messages(conversation, request.user):
                 return Response(
-                    {"error": "Permission denied"},
+                    {"error": SharingErrorMessage.PERMISSION_DENIED, "code": SharingErrorCode.PERMISSION_DENIED},
                     status=status.HTTP_403_FORBIDDEN
                 )
 
@@ -341,10 +308,9 @@ class ConversationViewSet(viewsets.ModelViewSet):
             return Response(serializer.data)
 
         except Exception as e:
-
             logger.error(f"Error listing messages for conversation {conversation_id}: {str(e)}")
             return Response(
-                {"error": f"Failed to list messages: {str(e)}"},
+                {"error": "Failed to list messages"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
