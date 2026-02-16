@@ -105,19 +105,18 @@ class WebSocketResponseService:
         else:
             logger.warning(f"format_message: message_id={message.id}, NO artifact found in DB")
 
-        # Build response matching original format
+        # Build response — field names match MessageSerializer (camelCase via DRF)
         response = {
             "type": message_type,
-            "id": message.id,  # Keep as integer for consistency with conversation_history
+            "id": message.id,
             "message": message.message,
             "artifactId": artifact_id,
             "senderType": message.sender_type,
             "senderName": message.sender or "AI Assistant",
-            "isSender": is_sender,
             "streaming": streaming,
             "regenerate": regenerate,
-            "date": message.created_at.isoformat(),
-            "llmId": llm_id,
+            "createdAt": message.created_at.isoformat(),
+            "llm": llm_id,
             "files": serialized_data.get("files", []),
             "tags": serialized_data.get("tags", []),
             "snippets": serialized_data.get("snippets", []),

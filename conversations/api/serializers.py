@@ -72,6 +72,7 @@ class ConversationSerializer(serializers.ModelSerializer):
         allow_null=True,
     )
     is_owner = serializers.SerializerMethodField()
+    is_forked = serializers.SerializerMethodField()
     owner_email = serializers.SerializerMethodField()
     owner_user_id = serializers.SerializerMethodField()
 
@@ -85,6 +86,10 @@ class ConversationSerializer(serializers.ModelSerializer):
         if not request or not hasattr(request, 'user') or not request.user.is_authenticated:
             return False
         return obj.user_id == request.user.id
+
+    def get_is_forked(self, obj):
+        """Return True if this conversation was forked from another user's conversation."""
+        return obj.file_owner_id is not None
 
     def get_owner_email(self, obj):
         """Return masked owner email for shared conversations."""
@@ -145,11 +150,12 @@ class ConversationSerializer(serializers.ModelSerializer):
             'is_published',
             'published_at',
             'is_owner',
+            'is_forked',
             'owner_email',
             'owner_user_id',
             'file_owner_id',
         ]
-        read_only_fields = ['created_at', 'user', 'prompt', 'selected_agent_name', 'is_owner', 'owner_email', 'owner_user_id', 'file_owner_id']
+        read_only_fields = ['created_at', 'user', 'prompt', 'selected_agent_name', 'is_owner', 'is_forked', 'owner_email', 'owner_user_id', 'file_owner_id']
 
 class SnippetSerializer(serializers.ModelSerializer):
     file = FileSerializer(read_only=True)
@@ -252,9 +258,6 @@ class MessageSerializer(serializers.ModelSerializer):
 
     def get_artifactId(self, obj):
         """Get the ID of the first active artifact linked to this message."""
-        # Use the reverse relation from Artifact -> Message
-        # Filter by is_active=True since the reverse relation uses the default manager
-        # which doesn't filter by is_active automatically
         artifact = obj.artifacts.filter(is_active=True).first()
         return str(artifact.id) if artifact else None
 
