@@ -165,9 +165,11 @@ class WorkflowCloningService:
                 text_input=data_object.text_input,
                 enable_web_search=data_object.enable_web_search
             )
-            # Clone many-to-many relationships
-            cloned_data.content_files.set(data_object.content_files.all())
-            cloned_data.embedding_files.set(data_object.embedding_files.all())
+            # Clone file references only for same-user clones;
+            # cross-user forks start with empty files so users upload their own
+            if not is_cross_user:
+                cloned_data.content_files.set(data_object.content_files.all())
+                cloned_data.embedding_files.set(data_object.embedding_files.all())
             return cloned_data
         elif isinstance(data_object, ChatOutputNodeData):
             return ChatOutputNodeData.objects.create(
