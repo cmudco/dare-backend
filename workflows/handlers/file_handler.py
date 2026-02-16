@@ -209,23 +209,17 @@ class FileNodeHandler(BaseNodeHandler):
     async def _get_files(self, file_data: FileNodeData, context: NodeExecutionContext) -> List[File]:
         """Get active, non-deleted files from node data with ownership validation.
 
-        For forked workflows, files must belong to either:
-        - The current workflow user, OR
-        - The original owner (file_owner_id) for shared file access
+        Files must belong to the current workflow owner.
         """
         def _get_validated_files():
             workflow = context.workflow_run.workflow
-            # Build list of allowed user IDs
-            allowed_user_ids = [workflow.user_id]
-            if workflow.file_owner_id:
-                allowed_user_ids.append(workflow.file_owner_id)
 
             # Filter files by ownership + active status
             return list(
                 file_data.files.filter(
                     is_deleted=False,
                     is_active=True,
-                    user_id__in=allowed_user_ids
+                    user_id=workflow.user_id
                 )
             )
 
@@ -284,25 +278,22 @@ class FileNodeHandler(BaseNodeHandler):
         if not query_text:
             return "No query text available for vector search."
 
-        # Get user and file_owner_id from workflow
-        # file_owner_id enables cross-user vector search for forked workflows
+        # Get user from workflow
         workflow = await database_sync_to_async(
             lambda: context.workflow_run.workflow
         )()
         user = await database_sync_to_async(lambda: workflow.user)()
-        vector_user_id = workflow.file_owner_id or user.id
 
-        # Initialize document processor with correct vector namespace
-        # Uses file_owner_id for forked workflows (same pattern as semantic_context_helpers.py)
-        vector_service = await get_vector_service_async(vector_user_id)
-        document_processor = DocumentProcessor(user_id=vector_user_id, vector_service=vector_service)
+        # Initialize document processor with workflow owner's vector namespace
+        vector_service = await get_vector_service_async(user.id)
+        document_processor = DocumentProcessor(user_id=user.id, vector_service=vector_service)
 
         file_ids = [f.id for f in files]
 
         context_text = await document_processor.search_similar_documents(
             query_text=query_text,
             file_ids=file_ids,
-            user_id=vector_user_id,
+            user_id=user.id,
             top_k=file_data.max_results,
             similarity_threshold=file_data.similarity_threshold,
         )

@@ -78,11 +78,6 @@ class Workflow(BaseModel):
         blank=True,
         help_text="Timestamp when the workflow was published"
     )
-    file_owner_id = models.IntegerField(
-        null=True,
-        blank=True,
-        help_text="Original owner's user ID for shared file/embedding access in forked workflows"
-    )
 
     objects = models.Manager()
     active_objects = ActiveObjectsManager()
