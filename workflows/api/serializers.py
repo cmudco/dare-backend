@@ -60,14 +60,14 @@ class WorkflowSerializer(serializers.ModelSerializer):
             'id', 'user', 'version', 'parent', 'created_at',
             'viewport_x', 'viewport_y', 'viewport_zoom',
             'manual_mode_enabled', 'output_display_mode', 'display_order',
-            'is_published', 'published_at', 'file_owner_id', 'is_forked', 'owner_username',
+            'is_published', 'published_at', 'is_forked', 'owner_username',
             'nodes', 'edges', 'latest_run',
             'title', 'description', 'mode', 'viewport'
         ]
         read_only_fields = [
             'id', 'created_at', 'user', 'nodes', 'edges',
             'title', 'description', 'mode', 'viewport',
-            'published_at', 'file_owner_id', 'is_forked', 'owner_username',
+            'published_at', 'is_forked', 'owner_username',
         ]
 
     def get_owner_username(self, obj: Workflow) -> str:
@@ -77,8 +77,8 @@ class WorkflowSerializer(serializers.ModelSerializer):
         return ""
 
     def get_is_forked(self, obj: Workflow) -> bool:
-        """Return True if this workflow was forked from another user's workflow."""
-        return obj.file_owner_id is not None
+        """Return True if this workflow was forked from another workflow."""
+        return obj.parent is not None
 
     def get_latest_run(self, obj):
         """Get the latest workflow run with nodeStates for O(1) node access.

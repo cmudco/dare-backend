@@ -2,11 +2,10 @@
 Workflow cloning service for duplicating workflows with all nodes and edges.
 
 Extracted from WorkflowViewSet.clone_workflow for better maintainability
-and separation of concerns. Supports both same-user cloning and cross-user
-forking with file_owner_id for shared embedding access.
-"""
+and separation of concerns. Supports both same-user cloning and cross-user forking.
 
-from typing import Optional
+Note: Files are NOT copied during cross-user forks - users upload their own files.
+"""
 
 from django.contrib.contenttypes.models import ContentType
 
@@ -29,18 +28,18 @@ class WorkflowCloningService:
         self,
         original: Workflow,
         target_user=None,
-        file_owner_id: Optional[int] = None,
     ) -> Workflow:
         """Clone a complete workflow with all nodes and edges.
 
         Creates a new workflow as a copy of the original, including all nodes
         with their typed data objects and all connecting edges.
 
+        For cross-user forks: prompts are cloned, but files are NOT copied.
+        Users must upload their own files when running forked workflows.
+
         Args:
             original: The workflow to clone
             target_user: User who will own the clone. Defaults to original owner.
-            file_owner_id: Original owner's ID for cross-user embedding access.
-                Set when forking a published workflow.
 
         Returns:
             Workflow: The newly created cloned workflow
@@ -49,9 +48,7 @@ class WorkflowCloningService:
         is_cross_user = user != original.user
 
         # Create the base cloned workflow
-        cloned = self._create_cloned_workflow(
-            original, user=user, file_owner_id=file_owner_id
-        )
+        cloned = self._create_cloned_workflow(original, user=user)
 
         # Clone all nodes with their data
         self._clone_nodes(original, cloned, target_user=user, is_cross_user=is_cross_user)
@@ -65,14 +62,12 @@ class WorkflowCloningService:
         self,
         original: Workflow,
         user=None,
-        file_owner_id: Optional[int] = None,
     ) -> Workflow:
         """Create the base cloned workflow with copied metadata.
 
         Args:
             original: Original workflow to copy from
             user: Owner of the new workflow
-            file_owner_id: Original owner's ID for cross-user file access
 
         Returns:
             Workflow: New workflow instance
@@ -84,7 +79,6 @@ class WorkflowCloningService:
             viewport_x=original.viewport_x,
             viewport_y=original.viewport_y,
             viewport_zoom=original.viewport_zoom,
-            file_owner_id=file_owner_id,
         )
 
     def _clone_nodes(

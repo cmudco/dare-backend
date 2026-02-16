@@ -167,8 +167,8 @@ class WorkflowViewSet(viewsets.ModelViewSet):
     def fork_workflow(self, request, pk=None):
         """Fork a published workflow for the current user.
 
-        Creates a clone owned by the requesting user with file_owner_id
-        set to the original owner for cross-user embedding/file access.
+        Creates a clone owned by the requesting user. Files are NOT copied -
+        users must upload their own files when running the forked workflow.
         """
         try:
             cloning_service = WorkflowCloningService()

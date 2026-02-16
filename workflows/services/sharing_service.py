@@ -49,7 +49,8 @@ class WorkflowSharingService:
                 SharingErrorCode.PERMISSION_DENIED,
             )
 
-        if workflow.file_owner_id is not None:
+        # Forked workflows cannot be published (check via parent relationship)
+        if workflow.parent is not None:
             raise SharingValidationError(
                 SharingErrorMessage.CANNOT_PUBLISH_FORKED,
                 SharingErrorCode.CANNOT_PUBLISH_FORKED,
@@ -65,6 +66,9 @@ class WorkflowSharingService:
     def fork(workflow_id: int, user, cloning_service) -> Workflow:
         """
         Fork a published workflow for the given user.
+
+        Files are NOT copied - users must upload their own files when running
+        the forked workflow.
 
         Args:
             workflow_id: The ID of the workflow to fork.
@@ -92,7 +96,6 @@ class WorkflowSharingService:
             forked = cloning_service.clone_workflow(
                 original=workflow,
                 target_user=user,
-                file_owner_id=workflow.user.id,
             )
 
         return forked
