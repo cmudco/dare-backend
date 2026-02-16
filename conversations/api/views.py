@@ -20,6 +20,8 @@ from django.shortcuts import get_object_or_404
 from conversations.models import Message, Conversation, LLM, Snippet, Artifact, Feedback, ModelCardData
 from conversations.constants import ArtifactStatus, SharingErrorCode, SharingErrorMessage
 from conversations.services.sharing_service import ConversationSharingService, SharingValidationError
+from conversations.exceptions import SharingAPIException
+from conversations.api.mixins import ConversationSharingMixin
 from users.utils import detect_platform_from_request
 from .serializers import (
     MessageSerializer,
@@ -36,7 +38,7 @@ from .serializers import (
 logger = logging.getLogger(__name__)
 
 
-class ConversationViewSet(viewsets.ModelViewSet):
+class ConversationViewSet(ConversationSharingMixin, viewsets.ModelViewSet):
     """Endpoint for listing, retrieving, creating and updating chat conversations."""
     serializer_class = ConversationSerializer
     permission_classes = [AllowAny]  # Allow both authenticated and anonymous access
@@ -229,27 +231,12 @@ class ConversationViewSet(viewsets.ModelViewSet):
         Toggle the published status of a conversation.
         Only the owner can publish/unpublish.
         """
-        try:
-            instance = self.get_object()
-            instance = ConversationSharingService.toggle_publish(instance, request.user)
-            serializer = self.get_serializer(instance)
-            return Response(serializer.data)
-
-        except SharingValidationError as e:
-            status_map = {
-                SharingErrorCode.PERMISSION_DENIED: status.HTTP_403_FORBIDDEN,
-                SharingErrorCode.CANNOT_PUBLISH_FORKED: status.HTTP_400_BAD_REQUEST,
-            }
-            return Response(
-                {"error": str(e), "code": e.error_code},
-                status=status_map.get(e.error_code, status.HTTP_400_BAD_REQUEST),
+        return self.handle_sharing_operation(
+            lambda: ConversationSharingService.toggle_publish(
+                self.get_object(),
+                request.user
             )
-        except Exception as e:
-            logger.error(f"Error publishing conversation {conversation_id}: {str(e)}")
-            return Response(
-                {"error": f"Failed to publish conversation: {str(e)}"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+        )
 
     @action(detail=True, methods=['post'], url_path='fork')
     def fork_conversation(self, request, conversation_id=None):
@@ -257,22 +244,10 @@ class ConversationViewSet(viewsets.ModelViewSet):
         Fork a published conversation for the current user.
         Creates a clone owned by the requesting user.
         """
-        try:
-            forked = ConversationSharingService.fork(conversation_id, request.user)
-            serializer = self.get_serializer(forked)
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-
-        except SharingValidationError as e:
-            return Response(
-                {"error": str(e), "code": e.error_code},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-        except Exception as e:
-            logger.error(f"Error forking conversation {conversation_id}: {str(e)}")
-            return Response(
-                {"error": f"Failed to fork conversation: {str(e)}"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+        return self.handle_sharing_operation(
+            lambda: ConversationSharingService.fork(conversation_id, request.user),
+            success_status=status.HTTP_201_CREATED
+        )
 
     @action(detail=True, methods=['get'], url_path='messages')
     def list_messages(self, request, conversation_id=None):
@@ -281,38 +256,34 @@ class ConversationViewSet(viewsets.ModelViewSet):
         Allows access if user is the owner or the conversation is published.
         Used for read-only message loading of shared conversations.
         """
-        try:
-            conversation = Conversation.active_objects.filter(
-                conversation_id=conversation_id
-            ).first()
+        conversation = Conversation.active_objects.filter(
+            conversation_id=conversation_id
+        ).first()
 
-            if not conversation:
-                return Response(
-                    {"error": SharingErrorMessage.CONVERSATION_NOT_FOUND, "code": SharingErrorCode.NOT_FOUND},
-                    status=status.HTTP_404_NOT_FOUND
+        if not conversation:
+            raise SharingAPIException(
+                SharingValidationError(
+                    SharingErrorMessage.CONVERSATION_NOT_FOUND,
+                    SharingErrorCode.NOT_FOUND
                 )
-
-            if not ConversationSharingService.can_view_messages(conversation, request.user):
-                return Response(
-                    {"error": SharingErrorMessage.PERMISSION_DENIED, "code": SharingErrorCode.PERMISSION_DENIED},
-                    status=status.HTTP_403_FORBIDDEN
-                )
-
-            messages = Message.active_objects.filter(
-                conversation=conversation
-            ).select_related('llm').prefetch_related(
-                'files', 'tags', 'snippets__file', 'web_search_sources'
-            ).order_by('created_at')
-
-            serializer = MessageSerializer(messages, many=True, context={'request': request})
-            return Response(serializer.data)
-
-        except Exception as e:
-            logger.error(f"Error listing messages for conversation {conversation_id}: {str(e)}")
-            return Response(
-                {"error": "Failed to list messages"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+        if not ConversationSharingService.can_view_messages(conversation, request.user):
+            raise SharingAPIException(
+                SharingValidationError(
+                    SharingErrorMessage.PERMISSION_DENIED,
+                    SharingErrorCode.PERMISSION_DENIED
+                )
+            )
+
+        messages = Message.active_objects.filter(
+            conversation=conversation
+        ).select_related('llm').prefetch_related(
+            'files', 'tags', 'snippets__file', 'web_search_sources'
+        ).order_by('created_at')
+
+        serializer = MessageSerializer(messages, many=True, context={'request': request})
+        return Response(serializer.data)
 
     @action(detail=True, methods=['get'], url_path='artifacts')
     def list_artifacts(self, request, conversation_id=None):
