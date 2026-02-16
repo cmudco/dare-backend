@@ -25,7 +25,8 @@ from workflows.models import (
     WorkflowNode, WorkflowEdge,
 )
 from workflows.handlers.utils.constants import NodeType
-from workflows.services import WorkflowCloningService
+from workflows.constants import SharingErrorCode
+from workflows.services import WorkflowCloningService, WorkflowSharingService, SharingValidationError
 from workflows.services.workflow_graph_service import WorkflowGraphService
 
 
@@ -138,32 +139,23 @@ class WorkflowViewSet(viewsets.ModelViewSet):
     def publish_workflow(self, request, pk=None):
         """Toggle the published status of a workflow.
 
-        Only the owner can publish/unpublish. Mirrors the conversation
-        publish pattern in ConversationViewSet.
+        Only the owner can publish/unpublish.
         """
         try:
             instance = self.get_object()
-
-            if instance.user != request.user:
-                return Response(
-                    {"error": "Permission denied"},
-                    status=status.HTTP_403_FORBIDDEN
-                )
-
-            # Prevent publishing forked workflows
-            if instance.file_owner_id is not None:
-                return Response(
-                    {"error": "Cannot publish forked workflows. Only original workflows can be published."},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-
-            instance.is_published = not instance.is_published
-            instance.published_at = timezone.now() if instance.is_published else None
-            instance.save(update_fields=['is_published', 'published_at', 'updated_at'])
-
+            instance = WorkflowSharingService.toggle_publish(instance, request.user)
             serializer = self.get_serializer(instance)
             return Response(serializer.data)
 
+        except SharingValidationError as e:
+            status_map = {
+                SharingErrorCode.PERMISSION_DENIED: status.HTTP_403_FORBIDDEN,
+                SharingErrorCode.CANNOT_PUBLISH_FORKED: status.HTTP_400_BAD_REQUEST,
+            }
+            return Response(
+                {"error": str(e), "code": e.error_code},
+                status=status_map.get(e.error_code, status.HTTP_400_BAD_REQUEST),
+            )
         except Exception as e:
             logger.error(f"Error publishing workflow {pk}: {str(e)}")
             return Response(
@@ -179,29 +171,16 @@ class WorkflowViewSet(viewsets.ModelViewSet):
         set to the original owner for cross-user embedding/file access.
         """
         try:
-            # Bypass IsOwner — look up directly by pk + is_published
-            workflow = Workflow.active_objects.filter(
-                pk=pk,
-                is_published=True
-            ).first()
-
-            if not workflow:
-                return Response(
-                    {"error": "Workflow not found or not published"},
-                    status=status.HTTP_404_NOT_FOUND
-                )
-
-            with transaction.atomic():
-                cloning_service = WorkflowCloningService()
-                forked_workflow = cloning_service.clone_workflow(
-                    original=workflow,
-                    target_user=request.user,
-                    file_owner_id=workflow.user.id,
-                )
-
-            serializer = self.get_serializer(forked_workflow)
+            cloning_service = WorkflowCloningService()
+            forked = WorkflowSharingService.fork(pk, request.user, cloning_service)
+            serializer = self.get_serializer(forked)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
 
+        except SharingValidationError as e:
+            return Response(
+                {"error": str(e), "code": e.error_code},
+                status=status.HTTP_404_NOT_FOUND,
+            )
         except Exception as e:
             logger.error(f"Error forking workflow {pk}: {str(e)}")
             return Response(
