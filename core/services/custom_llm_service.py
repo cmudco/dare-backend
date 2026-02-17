@@ -8,6 +8,7 @@ including LiteLLM proxy servers and other OpenAI-compatible providers.
 import logging
 from typing import AsyncGenerator, List, Dict, Tuple, Optional
 
+import truststore
 from openai import AsyncOpenAI
 
 from conversations.models import LLM
@@ -21,6 +22,9 @@ from core.services.llm_utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Ensure Python SSL uses the system trust store (fixes many corporate / custom CA issues)
+truststore.inject_into_ssl()
 
 
 class CustomLLMService:
