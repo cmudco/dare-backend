@@ -20,6 +20,7 @@ from django.utils import timezone
 from workflows.handlers.execution_base import BaseExecutionHandler
 from workflows.handlers.base import ExecutionNode, NodeExecutionContext, NodeExecutionResult
 from workflows.models import WorkflowRun, WorkflowRunStep
+from workflows.models.nodes import BaseNodeData
 from workflows.constants import WorkflowRunStepStatus
 from conversations.models import LLM
 from core.services.dtos import LLMQueryRequestBuilder
@@ -77,8 +78,8 @@ class BaseRoutingHandler(BaseExecutionHandler):
     @abstractmethod
     async def _get_prompt_for_routing(
         self,
-        node_data: Any,
-        routes: List[Dict],
+        node_data: BaseNodeData,
+        routes: List[Dict[str, str]],
         route_names: List[str]
     ) -> str:
         """
@@ -95,7 +96,7 @@ class BaseRoutingHandler(BaseExecutionHandler):
         pass
 
     @abstractmethod
-    async def _get_node_data(self, node: ExecutionNode) -> Optional[Any]:
+    async def _get_node_data(self, node: ExecutionNode) -> Optional[BaseNodeData]:
         """
         Get and validate the node-specific data object.
 
@@ -108,7 +109,7 @@ class BaseRoutingHandler(BaseExecutionHandler):
         pass
 
     @abstractmethod
-    async def _get_llm_for_node(self, node_data: Any) -> LLM:
+    async def _get_llm_for_node(self, node_data: BaseNodeData) -> LLM:
         """
         Get the LLM configured for this node.
 
@@ -282,7 +283,7 @@ class BaseRoutingHandler(BaseExecutionHandler):
         self,
         selected_route: str,
         analysis_text: Optional[str],
-        routes: List[Dict],
+        routes: List[Dict[str, str]],
         is_human_validated: bool = False,
         raw_response: Optional[str] = None
     ) -> Dict[str, Any]:
@@ -320,9 +321,9 @@ class BaseRoutingHandler(BaseExecutionHandler):
         workflow_run_step: WorkflowRunStep,
         selected_route: str,
         analysis_text: Optional[str],
-        routes: List[Dict],
+        routes: List[Dict[str, str]],
         node: ExecutionNode,
-        node_data: Any,
+        node_data: BaseNodeData,
         start_time,
         correlation_id: str,
         raw_response: Optional[str] = None
@@ -376,16 +377,17 @@ class BaseRoutingHandler(BaseExecutionHandler):
         end_time = timezone.now()
         execution_time = (end_time - start_time).total_seconds()
 
-        # Get additional data for frontend
-        step_number = await database_sync_to_async(
-            lambda: node_data.step_number
-        )()
-        prompt_obj = await database_sync_to_async(
-            lambda: node_data.prompt
-        )()
-        custom_prompt = await database_sync_to_async(
-            lambda: prompt_obj.content if prompt_obj else ""
-        )()
+        # Batch DB access: step_number + prompt content in a single call
+        def _get_frontend_data():
+            prompt_obj = node_data.prompt
+            return {
+                'step_number': node_data.step_number,
+                'custom_prompt': prompt_obj.content if prompt_obj else "",
+            }
+
+        frontend_data = await database_sync_to_async(_get_frontend_data)()
+        step_number = frontend_data['step_number']
+        custom_prompt = frontend_data['custom_prompt']
 
         # Return special result that pauses execution
         return NodeExecutionResult(
@@ -397,7 +399,7 @@ class BaseRoutingHandler(BaseExecutionHandler):
             metadata={
                 MetadataKey.PENDING_HUMAN_VALIDATION: True,
                 MetadataKey.AI_RECOMMENDATION: selected_route,
-                MetadataKey.AI_ANALYSIS: analysis_text or "",
+                MetadataKey.ANALYSIS: analysis_text or "",
                 MetadataKey.AVAILABLE_ROUTES: routes,
                 'node_id': node.id,
                 'step_number': step_number,
@@ -436,7 +438,7 @@ class BaseRoutingHandler(BaseExecutionHandler):
 
     async def _process_routing_billing(
         self,
-        node_data: Any,
+        node_data: BaseNodeData,
         workflow_run: WorkflowRun,
         node: ExecutionNode,
         token_usage: Optional[Dict]
@@ -462,7 +464,7 @@ class BaseRoutingHandler(BaseExecutionHandler):
             step_node_id=node_db_id
         )
 
-    async def _get_routes_from_node_data(self, node_data: Any) -> List[Dict]:
+    async def _get_routes_from_node_data(self, node_data: BaseNodeData) -> List[Dict[str, str]]:
         """
         Get routes configuration from node data.
 

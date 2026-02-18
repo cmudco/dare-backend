@@ -1,13 +1,27 @@
-from config.env import BASE_DIR
+from config.env import BASE_DIR, env, USE_POSTGRES
 from config.settings.common import *
 
-# Database
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": os.path.join(env.BASE_DIR, "db.sqlite3"),
+# Database - Toggle between SQLite and PostgreSQL via USE_POSTGRES env var
+if USE_POSTGRES:
+    # Use PostgreSQL (same as staging/prod)
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": env.DB_NAME,
+            "USER": env.DB_USER,
+            "PASSWORD": env.DB_PASSWORD,
+            "HOST": env.DB_HOST,
+            "PORT": env.DB_PORT,
+        }
     }
-}
+else:
+    # Use SQLite for local development
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": os.path.join(env.BASE_DIR, "db.sqlite3"),
+        }
+    }
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/4.1/howto/static-files/

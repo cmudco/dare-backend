@@ -1,9 +1,12 @@
 from rest_framework import serializers
-from conversations.models import LLM, Message, Conversation, Snippet, WebSearchSource, Artifact, ArtifactCheckpoint, Feedback, ModelCardData, PublicFeedbackSourceCluster, PublicFeedbackSource
+from conversations.models import LLM, Message, Conversation, Snippet, WebSearchSource, Artifact, ArtifactCheckpoint, Feedback, ModelCardData, PublicFeedbackSourceCluster, PublicFeedbackSource, MessageToolCall
 from files.api.serializers import FileSerializer, TagSerializer
 from prompts.models import Prompt
 from prompts.api.serializers import PromptSerializer
 from users.constants import VectorDBChoice
+from mcp.models import MCPServer
+from dare_tools.models import DareTool
+from agents.models import Agent
 
 class LLMSerializer(serializers.ModelSerializer):
     class Meta:
@@ -42,6 +45,32 @@ class ConversationSerializer(serializers.ModelSerializer):
         allow_blank=True,
         help_text="Session ID for anonymous public bot conversations."
     )
+    selected_mcp_server_ids = serializers.PrimaryKeyRelatedField(
+        queryset=MCPServer.active_objects.all(),
+        source='selected_mcp_servers',
+        many=True,
+        required=False,
+        help_text="MCP servers enabled for this conversation."
+    )
+    selected_dare_tool_slugs = serializers.SlugRelatedField(
+        queryset=DareTool.active_objects.filter(is_active=True),
+        source='selected_dare_tools',
+        slug_field='slug',
+        many=True,
+        required=False,
+        help_text="DARE tools enabled for this conversation."
+    )
+    selected_agent = serializers.PrimaryKeyRelatedField(
+        queryset=Agent.active_objects.all(),
+        required=False,
+        allow_null=True,
+        help_text="Selected agent template for this conversation."
+    )
+    selected_agent_name = serializers.CharField(
+        source='selected_agent.name',
+        read_only=True,
+        allow_null=True,
+    )
 
     def get_user(self, obj):
         """Return user email or None for anonymous conversations."""
@@ -76,8 +105,12 @@ class ConversationSerializer(serializers.ModelSerializer):
             'feedback_auto_prompt_count',
             'feedback_last_prompt_message_count',
             'feedback_last_prompt_timestamp',
+            'selected_mcp_server_ids',
+            'selected_dare_tool_slugs',
+            'selected_agent',
+            'selected_agent_name',
         ]
-        read_only_fields = ['created_at', 'user', 'prompt']
+        read_only_fields = ['created_at', 'user', 'prompt', 'selected_agent_name']
 
 class SnippetSerializer(serializers.ModelSerializer):
     file = FileSerializer(read_only=True)
@@ -116,6 +149,22 @@ class WebSearchSourceSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class MessageToolCallSerializer(serializers.ModelSerializer):
+    """Serializer for MCP tool calls within messages."""
+
+    class Meta:
+        model = MessageToolCall
+        fields = [
+            'tool_call_id',
+            'tool_name',
+            'server_slug',
+            'status',
+            'result',
+            'error',
+        ]
+        read_only_fields = fields
+
+
 class MessageSerializer(serializers.ModelSerializer):
     sender_name = serializers.ReadOnlyField(read_only=True)
     files = FileSerializer(many=True, read_only=True)
@@ -129,6 +178,7 @@ class MessageSerializer(serializers.ModelSerializer):
     web_search_sources = WebSearchSourceSerializer(many=True, read_only=True)
     llm = serializers.PrimaryKeyRelatedField(read_only=True, allow_null=True)
     artifactId = serializers.SerializerMethodField()
+    mcp_tool_calls = MessageToolCallSerializer(many=True, read_only=True)
 
     class Meta:
         model = Message
@@ -155,8 +205,11 @@ class MessageSerializer(serializers.ModelSerializer):
             'output_tokens',
             'cost',
             'artifactId',
+            'mcp_tool_calls',
+            'content_type',
+            'content_metadata',
         ]
-        read_only_fields = ['id', 'created_at', 'sender_name', 'files', 'tags', 'snippets', 'web_search_sources', 'input_tokens', 'output_tokens', 'cost', 'artifactId']
+        read_only_fields = ['id', 'created_at', 'sender_name', 'files', 'tags', 'snippets', 'web_search_sources', 'input_tokens', 'output_tokens', 'cost', 'artifactId', 'mcp_tool_calls', 'content_type', 'content_metadata']
 
     def get_artifactId(self, obj):
         """Get the ID of the first active artifact linked to this message."""
@@ -175,26 +228,23 @@ class ArtifactCheckpointSerializer(serializers.ModelSerializer):
         fields = [
             'id',
             'content_snapshot',
-            'current_section',
-            'iteration_count',
-            'state_data',
             'created_at',
         ]
         read_only_fields = fields
 
 
 class ArtifactSerializer(serializers.ModelSerializer):
-    """Serializer for artifacts with progress tracking and versioning."""
+    """
+    Clean artifact serializer for DARE tool outputs (charts, diagrams).
+    
+    Removed legacy fields: outline, language, estimated_sections, current_section,
+    progress, sections_remaining, word_count, latest_checkpoint.
+    """
 
-    # IDs returned as natural types (integers) from Django
     conversation_id = serializers.CharField(source='conversation.conversation_id', read_only=True)
     message_id = serializers.PrimaryKeyRelatedField(source='message', read_only=True)
-    progress = serializers.FloatField(read_only=True)
-    sections_remaining = serializers.IntegerField(read_only=True)
-    word_count = serializers.IntegerField(read_only=True)
-    latest_checkpoint = serializers.SerializerMethodField()
     
-    # Versioning fields - use PrimaryKeyRelatedField for natural integer IDs
+    # Versioning fields
     parent_artifact_id = serializers.PrimaryKeyRelatedField(
         source='parent_artifact',
         read_only=True,
@@ -213,47 +263,22 @@ class ArtifactSerializer(serializers.ModelSerializer):
             'message_id',
             'artifact_type',
             'title',
-            'language',
-            'outline',
             'content',
-            'estimated_sections',
-            'current_section',
+            'filename',
+            'content_type',
+            'source_tool',
             'status',
-            'version',
             'metadata',
-            'progress',
-            'sections_remaining',
-            'word_count',
-            'latest_checkpoint',
-            # Versioning fields
-            'parent_artifact_id',
-            'artifact_group_id',
-            'version_history',
-            'created_at',
-            'updated_at',
-        ]
-        read_only_fields = [
-            'id',
-            'conversation_id',
-            'message_id',
+            # Versioning
             'version',
-            'progress',
-            'sections_remaining',
-            'word_count',
-            'latest_checkpoint',
             'parent_artifact_id',
             'artifact_group_id',
             'version_history',
+            # Timestamps
             'created_at',
             'updated_at',
         ]
-
-    def get_latest_checkpoint(self, obj):
-        """Get the latest checkpoint for this artifact."""
-        checkpoint = obj.checkpoints.order_by('-created_at').first()
-        if checkpoint:
-            return ArtifactCheckpointSerializer(checkpoint).data
-        return None
+        read_only_fields = fields
 
     def get_version_history(self, obj):
         """Get list of versions in this artifact's group."""
@@ -267,16 +292,15 @@ class ArtifactSerializer(serializers.ModelSerializer):
 
 
 class ArtifactListSerializer(serializers.ModelSerializer):
-    """Lightweight serializer for artifact lists (without full content)."""
+    """
+    Lightweight artifact serializer for lists (content loaded on demand).
+    
+    Used in conversation history and artifact lists.
+    """
 
-    # IDs returned as natural types (integers) from Django
     conversation_id = serializers.CharField(source='conversation.conversation_id', read_only=True)
-    progress = serializers.FloatField(read_only=True)
-    word_count = serializers.IntegerField(read_only=True)
-    # Content fields - empty strings to prevent frontend crashes, full content loaded on demand
-    outline = serializers.SerializerMethodField()
-    content = serializers.SerializerMethodField()
-    # Versioning fields - use PrimaryKeyRelatedField for natural integer IDs
+    
+    # Versioning fields
     parent_artifact_id = serializers.PrimaryKeyRelatedField(
         source='parent_artifact',
         read_only=True,
@@ -293,29 +317,17 @@ class ArtifactListSerializer(serializers.ModelSerializer):
             'conversation_id',
             'artifact_type',
             'title',
-            'language',
-            'outline',
-            'content',
+            'filename',
+            'content_type',
+            'source_tool',
             'status',
-            'estimated_sections',
-            'current_section',
-            'progress',
-            'word_count',
-            # Versioning fields
+            # Versioning
             'version',
             'parent_artifact_id',
             'artifact_group_id',
             'created_at',
         ]
         read_only_fields = fields
-    
-    def get_outline(self, obj):
-        """Return empty string - full outline loaded on demand."""
-        return ''
-    
-    def get_content(self, obj):
-        """Return empty string - full content loaded on demand."""
-        return ''
 
 
 class PublicFeedbackSourceSerializer(serializers.ModelSerializer):
