@@ -41,6 +41,7 @@ class WebSocketMessageType(Enum):
     ARTIFACT_PAUSE = "artifact_pause"
     ARTIFACT_COMPLETE = "artifact_complete"
     ARTIFACT_MODIFY_INIT = "artifact_modify_init"  # Modification started (append sections)
+    ARTIFACT_CREATED = "artifact_created"  # Tool-created artifact (chart, diagram)
 
 class WebSocketAction(Enum):
     """WebSocket actions for incoming messages."""
@@ -56,6 +57,8 @@ class ArtifactType(models.TextChoices):
     DOCUMENT = 'document', 'Document'
     CODE = 'code', 'Code'
     DIAGRAM = 'diagram', 'Diagram'
+    CHART = 'chart', 'Chart'
+    REACT = 'react', 'React Component'
 
 
 class ArtifactStatus(models.TextChoices):
@@ -75,6 +78,16 @@ class ArtifactAction(models.TextChoices):
     AUTO = 'auto', 'Auto Detect'
     CREATE = 'create', 'Create New'
     MODIFY = 'modify', 'Modify Existing'
+
+
+class ToolCallStatus(models.TextChoices):
+    """Status of MCP tool call execution."""
+    PENDING = 'pending', 'Pending'
+    AWAITING_CONFIRMATION = 'awaiting_confirmation', 'Awaiting Confirmation'
+    EXECUTING = 'executing', 'Executing'
+    COMPLETED = 'completed', 'Completed'
+    FAILED = 'failed', 'Failed'
+    CANCELLED = 'cancelled', 'Cancelled'
 
 # Default message sender names
 DEFAULT_AI_SENDER_NAME = "AI Assistant"
@@ -165,3 +178,28 @@ class ErrorMessage:
     ARTIFACT_NOT_FOUND = "Artifact not found"
     ARTIFACT_ALREADY_COMPLETE = "Artifact is already complete"
     MISSING_ARTIFACT_ID = "Missing artifact_id"
+
+
+# Extension-to-Renderer Mapping for unified artifact system
+ARTIFACT_RENDERERS = {
+    '.json': 'chart',      # application/vnd.dare.chart+json
+    '.mmd': 'mermaid',     # text/mermaid
+    '.md': 'markdown',
+    '.py': 'code',
+    '.js': 'code',
+    '.ts': 'code',
+    '.jsx': 'react',
+    '.tsx': 'react',
+    '.html': 'iframe',
+    '.svg': 'svg',
+}
+
+# Content type mappings for artifacts
+ARTIFACT_CONTENT_TYPES = {
+    'chart': 'application/vnd.dare.chart+json',
+    'diagram': 'text/mermaid',
+    'document': 'text/markdown',
+    'code': 'text/plain',
+    'react': 'application/vnd.dare.react+jsx',
+}
+

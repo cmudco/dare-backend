@@ -7,6 +7,8 @@ from users.api.views import (
     ChunkingSettingsViewSet,
     AccessCodeCheckView,
     AvatarViewSet,
+    InternalSetRoleView,
+    InternalAccessCodeSyncView,
     token_health_check,
 )
 from users.constants import APP_NAME
@@ -27,6 +29,8 @@ urlpatterns = [
     path("stats/", UserStatsView.as_view(), name="user-stats"),
     path("token-health/", token_health_check, name="token-health-check"),
     path("access-codes/check/", AccessCodeCheckView.as_view(), name="access-code-check"),
+    path("internal/set-role/", InternalSetRoleView.as_view(), name="internal-set-role"),
+    path("internal/sync-access-code/", InternalAccessCodeSyncView.as_view(), name="internal-sync-access-code"),
 
     path("", include(router.urls)),
 ]

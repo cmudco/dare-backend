@@ -21,6 +21,7 @@ from workflows.models import (
     Workflow, WorkflowRun, WorkflowRunStep, StepNodeData
 )
 from workflows.constants import WorkflowRunStepStatus
+from workflows.handlers.utils.constants import NodeType
 
 
 User = get_user_model()
@@ -141,7 +142,7 @@ def create_workflow_run(
 
         # Get step nodes and create WorkflowRunStep for each
         step_nodes = workflow.nodes.filter(
-            node_type='step'
+            node_type=NodeType.STEP
         ).select_related('data_content_type')
 
         for step_node in step_nodes:
@@ -191,7 +192,7 @@ def create_partial_workflow_run(workflow_id: int, user) -> Optional[WorkflowRun]
 
         # Get step nodes and create WorkflowRunStep for each
         step_nodes = workflow.nodes.filter(
-            node_type='step'
+            node_type=NodeType.STEP
         ).select_related('data_content_type')
 
         for step_node in step_nodes:

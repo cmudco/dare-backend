@@ -105,7 +105,14 @@ def should_run_learning_progress(platform: str, explicit_flag: bool | None = Non
 
 def get_platform_access_permission(user, platform):
     """
-    Check if a user has access to a specific platform.
+    Check if a user has access to a specific platform based on their role.
+
+    Role-based access matrix:
+    - SUPERADMIN: DARE + SB
+    - RESEARCHER: DARE + SB
+    - USER: DARE + SB (consumer only in SB)
+    - CREATOR: SB only
+    - SB_USER: SB only
 
     Args:
         user: User instance
@@ -114,10 +121,20 @@ def get_platform_access_permission(user, platform):
     Returns:
         bool: True if user has access to the platform
     """
+    from users.constants import RoleChoice
+
+    role = getattr(user, 'platform_role', RoleChoice.USER)
+
+    # Roles with DARE access
+    dare_roles = {RoleChoice.SUPERADMIN, RoleChoice.RESEARCHER, RoleChoice.USER}
+
+    # All roles have SB access (at minimum as consumer)
+    sb_roles = {RoleChoice.SUPERADMIN, RoleChoice.RESEARCHER, RoleChoice.USER, RoleChoice.CREATOR, RoleChoice.SB_USER}
+
     if platform == AuthSourceChoice.DARE:
-        return user.is_dare_accessible
+        return role in dare_roles
     elif platform == AuthSourceChoice.SOCRATIC_BOTS:
-        return user.is_socratic_bots_accessible
+        return role in sb_roles
 
     return False
 

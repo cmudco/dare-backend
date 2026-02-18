@@ -9,6 +9,7 @@ backend (ExecutionValidator). This module consolidates all validation rules in o
 """
 
 from typing import Tuple, List, Dict, Set
+from workflows.handlers.utils.constants import NodeType
 from workflows.models import Workflow
 
 
@@ -65,12 +66,12 @@ class WorkflowValidator:
         errors.extend(start_errors)
 
         # 2. Validate that at least one step node exists
-        step_nodes = [n for n in nodes if n.node_type == 'step']
+        step_nodes = [n for n in nodes if n.node_type == NodeType.STEP]
         if len(step_nodes) == 0:
             errors.append('At least one step is required')
 
         # 3. Validate graph connectivity (all nodes reachable from start nodes)
-        start_nodes = [n for n in nodes if n.node_type == 'start']
+        start_nodes = [n for n in nodes if n.node_type == NodeType.START]
         if len(start_nodes) > 0 and len(step_nodes) > 0:
             connectivity_errors = WorkflowValidator._check_graph_connectivity(
                 start_nodes, step_nodes, edges_by_source
@@ -84,7 +85,7 @@ class WorkflowValidator:
         errors.extend(step_errors)
 
         # 5. Validate structured output nodes (execution mode)
-        structured_nodes = [n for n in nodes if n.node_type == 'structuredOutput']
+        structured_nodes = [n for n in nodes if n.node_type == NodeType.STRUCTURED_OUTPUT]
         structured_errors = WorkflowValidator._validate_structured_output_nodes(
             structured_nodes, step_nodes, edges_by_source, edges_by_target,
             node_lookup, for_execution=True
@@ -125,7 +126,7 @@ class WorkflowValidator:
             - Each start node has a description
         """
         errors: List[str] = []
-        start_nodes = [n for n in nodes if n.node_type == 'start']
+        start_nodes = [n for n in nodes if n.node_type == NodeType.START]
 
         if len(start_nodes) == 0:
             errors.append('At least one start node is required')
@@ -162,7 +163,7 @@ class WorkflowValidator:
         # Build lookup: step_number -> chatOutput nodes
         outputs_by_step: Dict[int, List] = {}
         for node in node_lookup.values():
-            if node.node_type == 'chatOutput':
+            if node.node_type == NodeType.CHAT_OUTPUT:
                 step_number = getattr(node.typed_data, 'step_number', None)
                 if step_number is not None:
                     if step_number not in outputs_by_step:
@@ -294,7 +295,7 @@ class WorkflowValidator:
                 # Check if route connects to a step node (if connected)
                 if len(route_connections) == 1:
                     target_node = node_lookup.get(route_connections[0].target)
-                    if target_node and target_node.node_type != 'step':
+                    if target_node and target_node.node_type != NodeType.STEP:
                         errors.append(
                             f"{so_label} route \"{route_name}\": "
                             f"Must connect to a step node."

@@ -22,7 +22,7 @@ from conversations.constants import SenderType
 from conversations.models import Conversation, Message
 from files.models import File
 from prompts.models import Prompt
-from users.constants import VectorDBChoice, AuthSourceChoice
+from users.constants import VectorDBChoice, AuthSourceChoice, RoleChoice
 from users.models import AccessCodeGroup
 from users.services import AvatarService, AvatarValidationError
 
@@ -289,7 +289,7 @@ class AccessCodeCheckView(APIView):
         Returns:
         {
             "exists": true/false,
-            "scope": "DARE" or "DUAL",
+            "default_role": "USER", "CREATOR", etc.,
             "available_slots": integer,
             "message": "descriptive message"
         }
@@ -300,7 +300,7 @@ class AccessCodeCheckView(APIView):
             return Response(
                 {
                     "exists": False,
-                    "scope": None,
+                    "default_role": None,
                     "available_slots": 0,
                     "message": "Access code is required"
                 },
@@ -321,7 +321,7 @@ class AccessCodeCheckView(APIView):
 
                 return Response({
                     "exists": True,
-                    "scope": code_group.scope,
+                    "default_role": code_group.default_role,
                     "available_slots": 0,
                     "message": message
                 })
@@ -331,15 +331,15 @@ class AccessCodeCheckView(APIView):
 
             return Response({
                 "exists": True,
-                "scope": code_group.scope,
+                "default_role": code_group.default_role,
                 "available_slots": available_slots,
-                "message": f"Access code is available with {code_group.get_scope_display()} scope"
+                "message": f"Access code is available with {code_group.get_default_role_display()} role"
             })
 
         except AccessCodeGroup.DoesNotExist:
             return Response({
                 "exists": False,
-                "scope": None,
+                "default_role": None,
                 "available_slots": 0,
                 "message": "Access code not found"
             })
@@ -388,3 +388,181 @@ class AvatarViewSet(viewsets.ViewSet):
                 {"error": f"Failed to remove avatar: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+
+class InternalSetRoleView(APIView):
+    """
+    Internal endpoint for inter-service communication.
+    Allows SB backend to set a user's platform_role during migrations.
+
+    Authenticated via X-Internal-Key header (shared secret).
+
+    Smart role assignment logic:
+    - If is_professor=True and user has DARE access (USER role) → RESEARCHER
+    - If is_professor=True and user has no DARE access → CREATOR
+    - If is_professor=False and user has DARE access → USER (unchanged)
+    - If is_professor=False and user has no DARE access → SB_USER
+    """
+    permission_classes = [AllowAny]
+
+    # Roles that have DARE access
+    DARE_ACCESS_ROLES = {RoleChoice.SUPERADMIN, RoleChoice.RESEARCHER, RoleChoice.USER}
+
+    def post(self, request, *args, **kwargs):
+        # Verify internal key
+        internal_key = request.headers.get('X-Internal-Key', '')
+        expected_key = getattr(settings, 'DARE_INTERNAL_KEY', '')
+        if not internal_key or internal_key != expected_key:
+            return Response(
+                {"error": "Unauthorized"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        user_id = request.data.get('user_id')
+        platform_role = request.data.get('platform_role')
+        is_professor = request.data.get('is_professor')  # Optional: for smart role assignment
+
+        if not user_id:
+            return Response(
+                {"error": "user_id is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            user = User.objects.get(id=user_id)
+            old_role = user.platform_role
+            has_dare_access = old_role in self.DARE_ACCESS_ROLES
+
+            # Smart role assignment if is_professor is provided
+            if is_professor is not None:
+                if is_professor:
+                    # Professor/Creator in SB
+                    if has_dare_access:
+                        # Has DARE access → RESEARCHER (DARE + SB creator)
+                        new_role = RoleChoice.RESEARCHER
+                    else:
+                        # No DARE access → CREATOR (SB only, can create)
+                        new_role = RoleChoice.CREATOR
+                else:
+                    # Student/Consumer in SB
+                    if has_dare_access:
+                        # Has DARE access → USER (DARE + SB consumer) - keep as is
+                        new_role = RoleChoice.USER
+                    else:
+                        # No DARE access → SB_USER (SB only, consumer)
+                        new_role = RoleChoice.SB_USER
+            elif platform_role:
+                # Direct role assignment (legacy behavior)
+                valid_roles = [choice[0] for choice in RoleChoice.choices]
+                if platform_role not in valid_roles:
+                    return Response(
+                        {"error": f"Invalid platform_role. Must be one of: {valid_roles}"},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                new_role = platform_role
+            else:
+                return Response(
+                    {"error": "Either platform_role or is_professor is required"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            user.platform_role = new_role
+            user.save(update_fields=['platform_role'])
+
+            return Response({
+                "success": True,
+                "user_id": user.id,
+                "email": user.email,
+                "old_role": old_role,
+                "new_role": new_role,
+                "had_dare_access": has_dare_access,
+                "is_professor": is_professor
+            })
+
+        except User.DoesNotExist:
+            return Response(
+                {"error": f"User with id={user_id} not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+
+class InternalAccessCodeSyncView(APIView):
+    """
+    Endpoint for inter-service communication.
+    Allows SocraticBooks backend to create/update/deactivate AccessCodeGroups
+    when subscription codes are saved in SocraticBooks.
+
+    Authenticated via JWT token (same token used for all DARE API calls).
+
+    POST body:
+    {
+        "access_code": "ABC123",       # The code string
+        "max_capacity": 100,           # Max redemptions (maps from SB limit)
+        "default_role": "SB_USER",     # Role for users who register with this code
+        "action": "sync"               # "sync" (create/update) or "delete" (deactivate)
+    }
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, *args, **kwargs):
+
+        access_code = request.data.get('access_code', '').strip()
+        action = request.data.get('action', 'sync')
+
+        if not access_code:
+            return Response(
+                {"error": "access_code is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        if action == 'delete':
+            # Deactivate the access code group
+            try:
+                code_group = AccessCodeGroup.objects.get(access_code=access_code)
+                code_group.is_active = False
+                code_group.save(update_fields=['is_active'])
+                return Response({
+                    "success": True,
+                    "action": "deactivated",
+                    "access_code": access_code,
+                })
+            except AccessCodeGroup.DoesNotExist:
+                return Response({
+                    "success": True,
+                    "action": "not_found",
+                    "message": "Access code not found, nothing to deactivate",
+                })
+
+        # action == 'sync': create or update
+        max_capacity = request.data.get('max_capacity', 9999)
+        default_role = request.data.get('default_role', RoleChoice.SB_USER)
+
+        # Validate role
+        valid_roles = [choice[0] for choice in RoleChoice.choices]
+        if default_role not in valid_roles:
+            default_role = RoleChoice.SB_USER
+
+        try:
+            max_capacity = int(max_capacity)
+            if max_capacity <= 0:
+                max_capacity = 9999
+        except (TypeError, ValueError):
+            max_capacity = 9999
+
+        code_group, created = AccessCodeGroup.objects.update_or_create(
+            access_code=access_code,
+            defaults={
+                'max_capacity': max_capacity,
+                'default_role': default_role,
+                'is_active': True,
+            }
+        )
+
+        return Response({
+            "success": True,
+            "action": "created" if created else "updated",
+            "access_code": access_code,
+            "max_capacity": code_group.max_capacity,
+            "default_role": code_group.default_role,
+            "is_active": code_group.is_active,
+        })

@@ -5,6 +5,8 @@ from .nodes import (
     StartNodeData,
     ChatOutputNodeData,
     StructuredOutputNodeData,
+    NotesNodeData,
+    FileNodeData,
 )
 
 from .graph import (
@@ -30,6 +32,8 @@ __all__ = [
     'StartNodeData',
     'ChatOutputNodeData',
     'StructuredOutputNodeData',
+    'NotesNodeData',
+    'FileNodeData',
     'WorkflowNode',
     'WorkflowEdge',
     'Workflow',

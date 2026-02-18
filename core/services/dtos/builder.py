@@ -101,6 +101,12 @@ class LLMQueryRequestBuilder:
             bot_meta=bot_meta,
         )
 
+        # Extract MCP server IDs from frontend payload
+        mcp_server_ids = tuple(message_data.get("mcp_server_ids") or [])
+        
+        # Extract DARE tool slugs from frontend payload
+        dare_tool_slugs = tuple(message_data.get("dare_tool_slugs") or [])
+
         # Build request
         request = LLMQueryRequest(
             message=message,
@@ -113,6 +119,8 @@ class LLMQueryRequestBuilder:
             socratic=socratic,
             message_obj=message_obj,
             workflow_run_step_obj=workflow_run_step_obj,
+            mcp_server_ids=mcp_server_ids,
+            dare_tool_slugs=dare_tool_slugs,
         )
 
         # Message-level settings from frontend always take precedence.

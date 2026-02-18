@@ -46,6 +46,15 @@ class LLMQueryRequest:
     socratic: SocraticConfig = field(default_factory=SocraticConfig)
     message_obj: Optional[Any] = None  # Message model
     workflow_run_step_obj: Optional[Any] = None  # WorkflowRunStep model
+    
+    # MCP tool integration
+    mcp_server_ids: tuple[int, ...] = field(default_factory=tuple)  # Selected MCP server IDs
+    
+    # DARE native tools integration
+    dare_tool_slugs: tuple[str, ...] = field(default_factory=tuple)  # Selected DARE tool slugs
+    
+    # Tool results for follow-up calls
+    tool_results: list = field(default_factory=list)  # Results from previous tool calls
 
     def __post_init__(self):
         """Validate request data."""
@@ -79,6 +88,18 @@ class LLMQueryRequest:
     def requires_artifact_generation(self) -> bool:
         """Check if artifact generation is enabled."""
         return self.generation.artifacts_enabled
+    
+    def requires_mcp_tools(self) -> bool:
+        """Check if MCP tools should be loaded."""
+        return len(self.mcp_server_ids) > 0
+    
+    def requires_dare_tools(self) -> bool:
+        """Check if DARE tools should be loaded."""
+        return len(self.dare_tool_slugs) > 0
+    
+    def has_tool_results(self) -> bool:
+        """Check if there are tool results from a previous call."""
+        return len(self.tool_results) > 0
 
     def with_conversation_defaults(self, conversation: Any) -> 'LLMQueryRequest':
         """Apply conversation-level defaults for generation settings.
