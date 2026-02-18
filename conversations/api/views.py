@@ -253,6 +253,38 @@ class ConversationViewSet(viewsets.ModelViewSet):
         serializer = ArtifactCheckpointSerializer(checkpoints, many=True)
         return Response(serializer.data)
 
+    @action(detail=True, methods=['get'], url_path='artifacts/(?P<artifact_id>[^/.]+)/versions')
+    def artifact_versions(self, request, conversation_id=None, artifact_id=None):
+        """
+        Get version history for an artifact.
+        
+        Returns all versions in the artifact's group, ordered by version number.
+        """
+        conversation = self.get_object()
+        
+        try:
+            artifact = Artifact.active_objects.get(
+                id=artifact_id,
+                conversation=conversation
+            )
+        except Artifact.DoesNotExist:
+            return Response(
+                {"error": "Artifact not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Get all versions in this artifact's group
+        if not artifact.artifact_group:
+            # Single artifact with no group - just return itself
+            versions = [artifact]
+        else:
+            versions = artifact.artifact_group.versions.filter(
+                is_active=True
+            ).order_by('version')
+        
+        serializer = ArtifactListSerializer(versions, many=True)
+        return Response(serializer.data)
+
     @action(detail=True, methods=['get'], url_path='export-pdf')
     def export_pdf(self, request, conversation_id=None):
         """Export conversation history as a PDF."""

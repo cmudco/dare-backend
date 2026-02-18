@@ -13,6 +13,8 @@ import logging
 from typing import Optional, List, Dict, Any, Tuple
 from channels.db import database_sync_to_async
 
+from workflows.handlers.utils.constants import NodeType
+
 from .constants import MetadataKey
 from .validation_helpers import RouteValidator
 
@@ -57,7 +59,7 @@ class RouteResolver:
                     if edge.target == step_node_id:
                         src_node = workflow.nodes.filter(
                             node_id=edge.source,
-                            node_type='structuredOutput'
+                            node_type=NodeType.STRUCTURED_OUTPUT
                         ).first()
 
                         if src_node and src_node.data_object:

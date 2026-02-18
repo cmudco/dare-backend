@@ -14,7 +14,9 @@ from workflows.handlers.base import (
     NodeExecutionResult,
     categorize_error,
 )
+from workflows.handlers.utils.constants import NodeType
 from workflows.models import ChatOutputNodeData
+from conversations.services.websocket_response_service import WebSocketResponseService
 
 
 logger = logging.getLogger(__name__)
@@ -30,7 +32,7 @@ class OutputNodeHandler(BaseNodeHandler):
 
     def can_handle(self, node_type: str) -> bool:
         """Check if this handler can process 'chatOutput' nodes."""
-        return node_type == 'chatOutput'
+        return node_type == NodeType.CHAT_OUTPUT
 
     async def execute(
         self,
@@ -54,6 +56,19 @@ class OutputNodeHandler(BaseNodeHandler):
             NodeExecutionResult with the formatted output from source step
         """
         try:
+            # Send step_started event for output node
+            if context.send_callback:
+                try:
+                    await context.send_callback(
+                        WebSocketResponseService.format_workflow_step_started(
+                            node_id=node.id,
+                            step_number=node.step_number or 0,
+                            node_type="chatOutput"
+                        )
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to send output step_started event: {e}")
+
             # Get output data from database
             output_data = await database_sync_to_async(
                 lambda: node.db_node.data_object
@@ -65,7 +80,7 @@ class OutputNodeHandler(BaseNodeHandler):
                     error="Invalid output node data"
                 )
 
-            # NEW: Find source step node via edges
+            # Find source step node via edges
             source_output = await self._get_source_step_output(node, context)
 
             if source_output is None:
@@ -77,6 +92,19 @@ class OutputNodeHandler(BaseNodeHandler):
                         error="No input received from source step node"
                     )
                 )()
+
+                # Send step_completed event with failed status
+                if context.send_callback:
+                    try:
+                        await context.send_callback(
+                            WebSocketResponseService.format_workflow_step_completed(
+                                node_id=node.id,
+                                response="",
+                                status="failed"
+                            )
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to send output step_completed event: {e}")
 
                 return NodeExecutionResult(
                     success=False,
@@ -94,6 +122,19 @@ class OutputNodeHandler(BaseNodeHandler):
             )()
 
             logger.info(f"Successfully updated output node {node.id}")
+
+            # Send step_completed event for output node
+            if context.send_callback:
+                try:
+                    await context.send_callback(
+                        WebSocketResponseService.format_workflow_step_completed(
+                            node_id=node.id,
+                            response=source_output,
+                            status="completed"
+                        )
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to send output step_completed event: {e}")
 
             return NodeExecutionResult(
                 success=True,

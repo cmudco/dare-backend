@@ -1,6 +1,7 @@
 from django.db import models
 from django.core.validators import MinValueValidator, MaxValueValidator
-from workflows.node_handler_constants import StepNodeDefaults
+from workflows.node_handler_constants import StepNodeDefaults, FileNodeDefaults
+from workflows.constants import Mode, RetrievalMode, QuerySource
 
 
 class BaseNodeData(models.Model):
@@ -125,8 +126,8 @@ class StartNodeData(BaseNodeData):
     )
     mode = models.CharField(
         max_length=20,
-        choices=[('sequential', 'Sequential'), ('parallel', 'Parallel')],
-        default='sequential',
+        choices=Mode.choices,
+        default=Mode.SEQUENTIAL,
         help_text="Workflow execution mode"
     )
 
@@ -227,5 +228,94 @@ class StructuredOutputNodeData(BaseNodeData):
         if len(routes) > 3:
             route_names += f' (+{len(routes) - 3} more)'
         return f"Structured Output {self.step_number}: {route_names}"
+
+
+class NotesNodeData(BaseNodeData):
+    """
+    Data model for 'notes' type nodes.
+
+    Documentation/comment nodes for workflow annotation.
+    Non-executable - purely for user documentation.
+    """
+    content = models.TextField(
+        blank=True,
+        default='',
+        help_text="Note content/documentation text"
+    )
+
+    def to_dict(self) -> dict:
+        """Convert to React Flow node data format (camelCase)."""
+        return {
+            'content': self.content,
+        }
+
+    def __str__(self) -> str:
+        preview = self.content[:30] if self.content else 'Empty'
+        return f"Note: {preview}..."
+
+
+class FileNodeData(BaseNodeData):
+    """
+    Data model for 'file' type nodes — dedicated file retrieval.
+
+    Simpler than step nodes: no LLM processing, purely retrieval.
+    Supports embeddings (vector search) and full content modes.
+    """
+    files = models.ManyToManyField(
+        'files.File',
+        related_name='file_node_files',
+        blank=True,
+        help_text="Files to retrieve content from"
+    )
+    retrieval_mode = models.CharField(
+        max_length=20,
+        choices=RetrievalMode.choices,
+        default=RetrievalMode.EMBEDDINGS,
+        help_text="How to retrieve file content"
+    )
+    similarity_threshold = models.FloatField(
+        default=FileNodeDefaults.SIMILARITY_THRESHOLD,
+        validators=[MinValueValidator(0.0), MaxValueValidator(1.0)],
+        help_text="Minimum similarity score for vector search results (0.0-1.0)"
+    )
+    max_results = models.PositiveIntegerField(
+        default=FileNodeDefaults.MAX_RESULTS,
+        help_text="Maximum number of snippets to retrieve"
+    )
+    query_source = models.CharField(
+        max_length=20,
+        choices=QuerySource.choices,
+        default=QuerySource.PREVIOUS_STEP,
+        help_text="Source of query text for vector search"
+    )
+    text_input = models.TextField(
+        blank=True,
+        default='',
+        help_text="Custom query text (used when query_source is 'text_input')"
+    )
+    include_metadata = models.BooleanField(
+        default=True,
+        help_text="Include file names and similarity scores in output"
+    )
+    step_number = models.PositiveIntegerField(
+        help_text="Step order in workflow"
+    )
+
+    def to_dict(self) -> dict:
+        """Convert to React Flow node data format (camelCase)."""
+        return {
+            'files': list(self.files.values_list('id', flat=True)),
+            'retrievalMode': self.retrieval_mode,
+            'similarityThreshold': self.similarity_threshold,
+            'maxResults': self.max_results,
+            'querySource': self.query_source,
+            'textInput': self.text_input,
+            'includeMetadata': self.include_metadata,
+            'stepNumber': self.step_number,
+        }
+
+    def __str__(self) -> str:
+        file_count = self.files.count()
+        return f"File Node (Step {self.step_number}): {file_count} files, {self.retrieval_mode} mode"
 
 

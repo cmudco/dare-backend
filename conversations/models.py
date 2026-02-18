@@ -434,6 +434,39 @@ class Conversation(BaseModel):
         help_text="Timestamp when feedback prompt was last shown"
     )
 
+    # Memory extraction tracking
+    last_memory_extracted_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Timestamp of last memory extraction from this conversation."
+    )
+
+    # MCP Server integration
+    selected_mcp_servers = models.ManyToManyField(
+        'mcp.MCPServer',
+        blank=True,
+        related_name='conversations',
+        help_text="MCP servers enabled for this conversation (tools become available to the LLM)."
+    )
+
+    # DARE Tools integration
+    selected_dare_tools = models.ManyToManyField(
+        'dare_tools.DareTool',
+        blank=True,
+        related_name='conversations',
+        help_text="DARE tools enabled for this conversation."
+    )
+
+    # Agent template integration
+    selected_agent = models.ForeignKey(
+        'agents.Agent',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='conversations_using_agent',
+        help_text="Selected agent template for this conversation."
+    )
+
     active_objects = ActiveObjectsManager()
 
 
@@ -488,9 +521,18 @@ class Conversation(BaseModel):
                 selected_model=self.selected_model,
                 selected_media_ids=self.selected_media_ids.copy() if self.selected_media_ids else [],
                 prompt=self.prompt,
-                sort_order=self.sort_order
+                sort_order=self.sort_order,
+                selected_agent=self.selected_agent,
             )
             cloned_conversation.save()
+
+            # Clone MCP server selections
+            if self.selected_mcp_servers.exists():
+                cloned_conversation.selected_mcp_servers.set(self.selected_mcp_servers.all())
+
+            # Clone DARE tool selections
+            if self.selected_dare_tools.exists():
+                cloned_conversation.selected_dare_tools.set(self.selected_dare_tools.all())
 
             if include_messages:
                 # Clone messages
@@ -657,6 +699,18 @@ class Message(BaseModel):
         help_text="Learning progress data associated with this message, such as assessment triggers and educational metadata."
     )
 
+    # Content type for specialized rendering (diagrams, charts, etc.)
+    content_type = models.CharField(
+        max_length=30,
+        default="text",
+        help_text="Type of content for rendering (text, mermaid_diagram, chart, image, audio)."
+    )
+    content_metadata = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Metadata for content rendering (e.g., chart config, diagram type)."
+    )
+
     active_objects = ActiveObjectsManager()
 
     @property
@@ -685,6 +739,100 @@ class Message(BaseModel):
             models.Index(fields=['conversation', 'created_at'], name='msg_conv_created_idx'),
             models.Index(fields=['conversation', 'sender_type'], name='msg_conv_sender_idx'),
         ]
+
+
+class MessageToolCall(BaseModel):
+    """
+    Tracks MCP tool calls within a message.
+    
+    When an LLM decides to call an MCP tool, we store the request here.
+    After execution, we update with the result. This enables:
+    - Multi-turn tool use (feeding results back to LLM)
+    - User confirmation for write operations
+    - Audit trail of all tool executions
+    - UI display of tool status and results
+    """
+    message = models.ForeignKey(
+        Message,
+        on_delete=models.CASCADE,
+        related_name='mcp_tool_calls',
+        help_text="The AI message that requested this tool call."
+    )
+    
+    # From LLM response
+    tool_call_id = models.CharField(
+        max_length=100,
+        help_text="Unique ID from LLM (e.g., 'call_abc123' or 'toolu_abc123')."
+    )
+    server_slug = models.CharField(
+        max_length=100,
+        help_text="MCP server slug (e.g., 'slack')."
+    )
+    tool_name = models.CharField(
+        max_length=200,
+        help_text="Name of the tool (e.g., 'channels_list')."
+    )
+    arguments = models.JSONField(
+        default=dict,
+        help_text="Arguments passed to the tool."
+    )
+    
+    # Execution state
+    status = models.CharField(
+        max_length=30,
+        choices=[
+            ('pending', 'Pending'),
+            ('awaiting_confirmation', 'Awaiting Confirmation'),
+            ('executing', 'Executing'),
+            ('completed', 'Completed'),
+            ('failed', 'Failed'),
+            ('cancelled', 'Cancelled'),
+        ],
+        default='pending',
+        help_text="Current status of the tool call."
+    )
+    requires_confirmation = models.BooleanField(
+        default=False,
+        help_text="Whether this tool requires user confirmation before execution."
+    )
+    
+    # Result after execution
+    result = models.TextField(
+        null=True,
+        blank=True,
+        help_text="Result text from tool execution."
+    )
+    error = models.TextField(
+        null=True,
+        blank=True,
+        help_text="Error message if execution failed."
+    )
+    executed_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When the tool was executed."
+    )
+    
+    # Link to MCP execution audit
+    mcp_execution = models.ForeignKey(
+        'mcp.MCPToolExecution',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='message_tool_calls',
+        help_text="Link to the MCP execution audit record."
+    )
+    
+    class Meta:
+        ordering = ['created_at']
+        indexes = [
+            models.Index(fields=['message', 'status'], name='mtc_msg_status_idx'),
+            models.Index(fields=['tool_call_id'], name='mtc_call_id_idx'),
+        ]
+    
+    def __str__(self):
+        return f"{self.server_slug}.{self.tool_name} ({self.status})"
+
 
 class Snippet(BaseModel):
     """
@@ -934,6 +1082,26 @@ class Artifact(BaseModel):
         default=dict,
         blank=True,
         help_text="Additional metadata (LLM used, token counts, etc.)."
+    )
+
+    # Unified artifact system fields
+    filename = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        help_text="Filename with extension (e.g., 'chart.json', 'diagram.mmd') - determines renderer."
+    )
+    content_type = models.CharField(
+        max_length=100,
+        blank=True,
+        default="",
+        help_text="MIME-like content type (e.g., 'application/vnd.dare.chart+json', 'text/mermaid')."
+    )
+    source_tool = models.CharField(
+        max_length=50,
+        blank=True,
+        default="",
+        help_text="DARE tool that created this artifact (e.g., 'create_chart', 'create_diagram')."
     )
 
     # Version tracking for modifications

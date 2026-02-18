@@ -14,15 +14,18 @@ class AuthSourceChoice(models.TextChoices):
     SOCRATIC_BOTS = "SocraticBots", _("SocraticBots")
 
 
-class ScopeChoice(models.TextChoices):
-    DARE = "DARE", _("DARE Only")
-    DUAL = "DUAL", _("DARE + SocraticBots")
-
-
 class AvatarTypeChoice(models.TextChoices):
     INITIALS = "initials", _("Initials")
     PRESET = "preset", _("Preset Avatar")
     CUSTOM = "custom", _("Custom Upload")
+
+
+class RoleChoice(models.TextChoices):
+    SUPERADMIN = "SUPERADMIN", _("Super Admin")
+    RESEARCHER = "RESEARCHER", _("Researcher")
+    USER = "USER", _("User")
+    CREATOR = "CREATOR", _("Creator")
+    SB_USER = "SB_USER", _("SocraticBots User")
 
 
 # Available preset avatar identifiers - alternating male/female + thumbs

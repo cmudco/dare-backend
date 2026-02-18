@@ -3,7 +3,7 @@ from django.conf import settings
 
 from common.managers import ActiveObjectsManager
 from common.models import BaseModel, TimeStampMixin
-from workflows.constants import WorkflowRunStepStatus
+from workflows.constants import Mode, WorkflowRunStepStatus
 
 
 class Workflow(BaseModel):
@@ -56,6 +56,12 @@ class Workflow(BaseModel):
     manual_mode_enabled = models.BooleanField(
         default=False,
         help_text="Whether manual mode (step-by-step execution) is enabled for this workflow"
+    )
+    output_display_mode = models.CharField(
+        max_length=10,
+        choices=[('panel', 'Panel'), ('nodes', 'Nodes')],
+        default='panel',
+        help_text="Where to display workflow output: 'panel' (execution panel) or 'nodes' (output nodes)"
     )
     display_order = models.PositiveIntegerField(
         default=0,
@@ -122,9 +128,8 @@ class Workflow(BaseModel):
         """Get workflow mode from root StartNodeData."""
         start_node = self._get_root_start_node()
         if start_node and start_node.typed_data:
-            mode_str = start_node.typed_data.mode
-            return 2 if mode_str == 'parallel' else 1
-        return 1
+            return start_node.typed_data.mode
+        return Mode.PARALLEL
 
     @property
     def step_nodes(self):
@@ -179,20 +184,30 @@ class WorkflowRun(BaseModel):
         steps = self.steps.all()
         if not steps:
             return WorkflowRunStepStatus.RUNNING
-        
+
         # Check if any step is waiting for human input - this takes precedence
         if any(step.status == WorkflowRunStepStatus.PENDING_HUMAN_INPUT for step in steps):
             return WorkflowRunStepStatus.PENDING_HUMAN_INPUT
-        
+
         # Check for failures
         if any(step.status == WorkflowRunStepStatus.FAILED for step in steps):
             return WorkflowRunStepStatus.FAILED
-        
+
+        # Check if any step is currently running
+        if any(step.status == WorkflowRunStepStatus.RUNNING for step in steps):
+            return WorkflowRunStepStatus.RUNNING
+
         # Consider both COMPLETED and SKIPPED as finished states
         finished_statuses = {WorkflowRunStepStatus.COMPLETED, WorkflowRunStepStatus.SKIPPED}
         if all(step.status in finished_statuses for step in steps):
             return WorkflowRunStepStatus.COMPLETED
-        
+
+        # For partial runs: if no step is running and at least one step completed,
+        # consider the partial run as "completed" (idle, ready for next manual step)
+        if self.is_partial:
+            if any(step.status in finished_statuses for step in steps):
+                return WorkflowRunStepStatus.COMPLETED
+
         return WorkflowRunStepStatus.RUNNING
 
     def __str__(self):

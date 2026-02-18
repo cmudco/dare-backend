@@ -41,3 +41,35 @@ class Prompt(BaseModel):
 
     def __str__(self):
         return f"{self.title} ({self.user.email})"
+
+
+class PublishedPrompt(BaseModel):
+    """
+    A prompt published to the public library.
+    
+    When a user publishes a prompt, a PublishedPrompt record is created.
+    When they unpublish, this record is deleted. This allows tracking
+    publication metadata without modifying the original Prompt model.
+    """
+    prompt = models.OneToOneField(
+        'Prompt',
+        on_delete=models.CASCADE,
+        related_name='published',
+        help_text="The original prompt being published."
+    )
+    description = models.TextField(
+        blank=True,
+        help_text="Optional description for the library."
+    )
+    published_at = models.DateTimeField(auto_now_add=True)
+
+    objects = models.Manager()
+    active_objects = ActiveObjectsManager()
+
+    class Meta:
+        ordering = ['-published_at']
+        verbose_name = "Published Prompt"
+        verbose_name_plural = "Published Prompts"
+
+    def __str__(self):
+        return f"Published: {self.prompt.title}"

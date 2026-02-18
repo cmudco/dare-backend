@@ -70,10 +70,12 @@ class NodeExecutionContext:
         workflow_run: The current workflow run instance
         previous_results: Results from previously executed nodes (edge-based filtering)
         send_callback: Optional async callback for streaming progress updates to clients
+        is_single_step_execution: True when executing a single step in manual mode (allows re-runs)
     """
     workflow_run: WorkflowRun
     previous_results: Dict[str, Any]
     send_callback: Optional[Any] = None  # Callable[[Dict], Awaitable[None]]
+    is_single_step_execution: bool = False  # Manual mode single step execution
     # REMOVED: current_input (use previous_results with edge-based filtering)
 
 
