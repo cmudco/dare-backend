@@ -35,10 +35,6 @@ from .billing_helpers import (
     handle_insufficient_balance,
 )
 
-from .artifact_helpers import (
-    handle_artifact_intent,
-)
-
 from .finalization_helpers import (
     finalize_message,
 )
@@ -66,8 +62,6 @@ __all__ = [
     # Billing helpers
     "update_public_bot_budget",
     "handle_insufficient_balance",
-    # Artifact helpers
-    "handle_artifact_intent",
     # Finalization helpers
     "finalize_message",
     # Regeneration helpers

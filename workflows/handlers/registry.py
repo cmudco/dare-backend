@@ -13,6 +13,7 @@ from workflows.handlers.base import (
     NodeExecutionContext,
     NodeExecutionResult,
 )
+from workflows.handlers.file_handler import FileNodeHandler
 from workflows.handlers.output_handler import OutputNodeHandler
 from workflows.handlers.start_handler import StartNodeHandler
 from workflows.handlers.step_handler import StepNodeHandler
@@ -42,6 +43,7 @@ class NodeHandlerRegistry:
         self.register_handler(StructuredOutputNodeHandler())
         self.register_handler(OutputNodeHandler())
         self.register_handler(StartNodeHandler())
+        self.register_handler(FileNodeHandler())
 
         logger.info("Registered default node handlers")
 

@@ -20,6 +20,7 @@ from decimal import Decimal
 from channels.db import database_sync_to_async
 from djangorestframework_camel_case.util import camelize
 
+from conversations.api.serializers import ArtifactListSerializer
 from conversations.models import Conversation, Message, LLM, Artifact
 from conversations.constants import (
     SenderType,
@@ -39,9 +40,6 @@ from conversations.services.websocket_response_service import WebSocketResponseS
 from conversations.services.message_validation_service import MessageValidationService
 from conversations.services.image_generation_service import ImageGenerationService
 from conversations.services.web_search_source_service import WebSearchSourceService
-# Simplified artifact services (replaced legacy LangGraph system)
-from conversations.services.artifact_intent_service import ArtifactIntentService
-from conversations.services.simple_artifact_coordinator import SimpleArtifactCoordinator
 from users.utils import should_run_learning_progress
 from conversations.services.message_helpers import (
     build_transcription_data,
@@ -57,13 +55,13 @@ from conversations.services.message_helpers import (
     # Billing helpers
     update_public_bot_budget,
     handle_insufficient_balance,
-    # Artifact helpers
-    handle_artifact_intent,
     # Finalization helpers
     finalize_message,
     # Regeneration helpers
     prepare_regeneration_data,
 )
+from mcp.services import mcp_tool_handler
+from dare_tools.services import dare_tool_handler
 
 logger = logging.getLogger(__name__)
 
@@ -101,13 +99,6 @@ class MessageCoordinator:
         # Track active artifact generation tasks for cancellation
         self._artifact_tasks: Dict[str, asyncio.Task] = {}
 
-        # Simplified artifact services
-        self.intent_service = ArtifactIntentService()
-        self.simple_artifact_coordinator = SimpleArtifactCoordinator(
-            conversation=conversation,
-            user=user,
-            send_callback=send_callback,
-        )
 
     async def send(self, data: Dict[str, Any]):
         """Send data through WebSocket if callback is available."""
@@ -220,24 +211,6 @@ class MessageCoordinator:
     ) -> None:
         """Update bot budget for public bot conversations."""
         return await update_public_bot_budget(self.conversation, cost, message_obj)
-
-
-    async def _handle_artifact_intent(
-        self,
-        message_data: Dict[str, Any],
-        message_obj: Message,
-        llm: LLM,
-    ) -> bool:
-        """Handle artifact intent detection and routing."""
-        return await handle_artifact_intent(
-            message_data=message_data,
-            message_obj=message_obj,
-            llm=llm,
-            conversation=self.conversation,
-            user=self.user,
-            intent_service=self.intent_service,
-            simple_artifact_coordinator=self.simple_artifact_coordinator,
-        )
 
 
     async def handle_new_message(
@@ -462,13 +435,9 @@ class MessageCoordinator:
             llm: LLM instance to use
             regenerate: Whether this is a regeneration request
         """
-        # Check if artifacts mode is enabled
-        artifacts_enabled = message_data.get("artifacts_enabled", False)
-        active_artifact_id = message_data.get("active_artifact_id")
-
-        if artifacts_enabled and not regenerate:
-            if await self._handle_artifact_intent(message_data, message_obj, llm):
-                return
+        # Note: artifacts_enabled controls tool injection via LLMQueryRequestBuilder
+        # LLM naturally decides when to use create_artifact/update_artifact tools
+        # No longer using intent detection - tools handle artifact creation directly
 
         try:
             bot_message_id = message_obj.id  # Keep as integer for consistency
@@ -478,6 +447,7 @@ class MessageCoordinator:
             generated_transcription_data = None
 
             # Build LLM query request using DTO builder
+            # Note: mcp_server_ids are automatically extracted in the builder
             request = LLMQueryRequestBuilder.from_message_data(
                 message=message_data["message"],
                 conversation=self.conversation,
@@ -488,10 +458,35 @@ class MessageCoordinator:
                 platform=self.platform,
             )
 
-            # Stream from LLM service
+            # Track tool results for multi-turn tool use
+            mcp_tool_results = []
+
+            # Stream from LLM service (MCP tools fetched internally if mcp_server_ids present)
             async for chunk, usage in self.llm_service.query(request):
                 if usage:
                     token_usage = usage
+
+                    # Handle MCP tool calls if present
+                    if usage.get("tool_calls"):
+                        # Handle MCP tool calls
+                        tool_results = await mcp_tool_handler.handle_tool_calls(
+                            tool_calls=usage["tool_calls"],
+                            message=message_obj,
+                            user=self.user,
+                            conversation=self.conversation,
+                            send_callback=self.send,
+                        )
+                        mcp_tool_results.extend(tool_results)
+                        
+                        # Handle DARE tool calls (internal tools like diagrams, charts)
+                        dare_results = await dare_tool_handler.handle_tool_calls(
+                            tool_calls=usage["tool_calls"],
+                            message=message_obj,
+                            user=self.user,
+                            conversation=self.conversation,
+                            send_callback=self.send,
+                        )
+                        mcp_tool_results.extend(dare_results)
 
                     # Handle generated image
                     if usage.get("image_bytes"):
@@ -532,6 +527,41 @@ class MessageCoordinator:
                     )
                     await self.send(payload)
 
+            # If we have MCP tool results, ALWAYS make a follow-up LLM call
+            # Even if there's text, it's just the LLM "thinking" before calling tools
+            # The LLM needs to see the tool results to generate the final response
+            if mcp_tool_results:
+                logger.info(
+                    f"[MessageCoordinator] Making follow-up LLM call with {len(mcp_tool_results)} tool results"
+                )
+                try:
+                    # The follow-up response REPLACES any partial text from before tool calls
+                    ai_response_accumulator = await mcp_tool_handler.stream_tool_result_response(
+                        tool_results=mcp_tool_results,
+                        message_data=message_data,
+                        message_obj=message_obj,
+                        llm=llm,
+                        conversation=self.conversation,
+                        user=self.user,
+                        platform=self.platform,
+                        send_callback=self.send,
+                        llm_service=self.llm_service,
+                        regenerate=regenerate,
+                    )
+                except Exception as e:
+                    # If follow-up call fails, generate a fallback error message
+                    logger.exception(f"[MessageCoordinator] Follow-up LLM call failed: {e}")
+                    # Build fallback response from tool results
+                    error_parts = []
+                    for tr in mcp_tool_results:
+                        if tr.get("result", "").startswith("Error:"):
+                            error_parts.append(f"Tool `{tr['tool_name']}`: {tr['result']}")
+                    if error_parts:
+                        ai_response_accumulator = "I encountered some issues while executing the requested tools:\n\n" + "\n".join(error_parts)
+                    else:
+                        ai_response_accumulator = "I was unable to complete the tool execution. Please try again."
+
+            # Ensure we always finalize the message
             if ai_response_accumulator.strip():
                 # Save web search sources if present (before finalization)
                 await self._save_web_search_sources(message_obj, token_usage, regenerate)
@@ -548,6 +578,20 @@ class MessageCoordinator:
                 # Run learning progress assessment (Socratic only, sequential after AI response)
                 if not regenerate and should_run_learning_progress(self.platform, message_data.get("enable_progress")):
                     await self._run_learning_progress_stream(message_data, message_obj, llm)
+            elif mcp_tool_results:
+                # Edge case: tool results exist but no response was generated
+                # This shouldn't happen after the fix above, but handle defensively
+                logger.warning(
+                    f"[MessageCoordinator] Tool results existed but no response generated. "
+                    f"Finalizing with fallback message."
+                )
+                fallback_message = "The tool execution completed but I was unable to generate a response. Please try again."
+                await self._finalize_message(
+                    message_obj=message_obj,
+                    ai_response=fallback_message,
+                    token_usage=token_usage,
+                    regenerate=regenerate,
+                )
 
         except Exception as e:
             logger.exception(f"Error streaming AI response: {str(e)}")
@@ -696,7 +740,7 @@ class MessageCoordinator:
     async def _fetch_conversation_artifacts(self):
         """Fetch all artifacts for the current conversation."""
         def _get_artifacts():
-            from conversations.api.serializers import ArtifactListSerializer
+
             artifacts = Artifact.active_objects.filter(
                 conversation=self.conversation
             ).select_related('conversation', 'artifact_group', 'parent_artifact').order_by('-created_at')
@@ -729,3 +773,4 @@ class MessageCoordinator:
                 "assessment": None
             }
             await self.send(payload)
+

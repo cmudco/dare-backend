@@ -1,6 +1,10 @@
+import logging
 from abc import ABC, abstractmethod
+from typing import AsyncGenerator, Dict, Tuple, Optional, Any, List
+
 from conversations.constants import Provider, SenderType
 from conversations.models import LLM, Conversation, Message
+from core.integrations import ToolFetcher
 from core.services.document_processor import DocumentProcessor
 from core.services.openai_service import OpenAIService
 from core.services.claude_service import ClaudeService
@@ -10,9 +14,7 @@ from core.services.custom_llm_service import CustomLLMService
 from core.services.file_processor import FileProcessor
 from core.services.api_key_service import get_provider_api_key, get_provider_api_key_for_user
 from core.services.dtos import LLMQueryRequest, LLMQueryChunk
-from typing import AsyncGenerator, Dict, Tuple, Optional, Any, List
 from files.models import File, Folder
-import logging
 
 from core.services.llm_helpers import (
     # Database helpers
@@ -45,6 +47,7 @@ class LLMService:
     def __init__(self):
         self.document_processor = DocumentProcessor(vector_service=None)
         self.file_processor = FileProcessor()
+        self.tool_fetcher = ToolFetcher()
 
     async def query(
         self,
@@ -67,6 +70,9 @@ class LLMService:
             messages = await self._build_messages_for_request(request, llm)
             all_images = await self._process_media_files(request)
 
+            # Collect all tools (MCP + DARE + any passed externally) via ToolFetcher
+            all_tools = await self.tool_fetcher.get_all_tools(request, llm, tools)
+
             if request.requires_audio_transcription():
                 async for chunk, usage in self._execute_audio_transcription(request, llm):
                     yield chunk, usage
@@ -75,7 +81,7 @@ class LLMService:
                     yield chunk, usage
             else:
                 async for chunk, usage in self._execute_llm_completion(
-                    request, llm, messages, all_images, tools=tools
+                    request, llm, messages, all_images, tools=all_tools if all_tools else None
                 ):
                     yield chunk, usage
 
@@ -324,4 +330,3 @@ class LLMService:
 
         tool_func = provider_tools.get(llm.provider)
         return [tool_func()] if tool_func else []
-

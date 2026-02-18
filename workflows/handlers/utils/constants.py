@@ -17,6 +17,8 @@ class NodeType:
     STEP = "step"
     CHAT_OUTPUT = "chatOutput"
     STRUCTURED_OUTPUT = "structuredOutput"
+    NOTES = "notes"
+    FILE = "file"
 
 
 # ==================== Edge Handle Formats ====================

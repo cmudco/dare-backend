@@ -1,0 +1,70 @@
+[
+    {
+        "model": "mcp.mcpserver",
+        "pk": 1,
+        "fields": {
+            "name": "Slack",
+            "slug": "slack",
+            "description": "Send messages, search channels, and read conversations in your Slack workspace using your personal token.",
+            "icon": "slack",
+            "docker_image": "dare-mcp-slack:latest",
+            "command": "npx",
+            "args": [
+                "-y",
+                "slack-mcp-server@latest"
+            ],
+            "required_credentials": [
+                {
+                    "key": "slack_mcp_xoxp_token",
+                    "label": "User OAuth Token",
+                    "type": "password",
+                    "placeholder": "xoxp-your-user-token",
+                    "required": true,
+                    "helpText": "Your personal Slack User OAuth Token (starts with xoxp-)"
+                }
+            ],
+            "credentials_help_url": "https://api.slack.com/apps",
+            "extra_env_vars": {
+                "SLACK_MCP_ADD_MESSAGE_TOOL": "true"
+            },
+            "setup_guide": "## Quick Setup (App Manifest)\n\n1. Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** → **From an app manifest**\n\n2. Select your workspace and paste this JSON:\n\n```json\n{\n    \"display_information\": {\n        \"name\": \"DARE MCP\"\n    },\n    \"oauth_config\": {\n        \"scopes\": {\n            \"user\": [\n                \"channels:history\",\n                \"channels:read\",\n                \"groups:history\",\n                \"groups:read\",\n                \"im:history\",\n                \"im:read\",\n                \"im:write\",\n                \"mpim:history\",\n                \"mpim:read\",\n                \"mpim:write\",\n                \"users:read\",\n                \"chat:write\",\n                \"search:read\"\n            ]\n        }\n    },\n    \"settings\": {\n        \"org_deploy_enabled\": false,\n        \"socket_mode_enabled\": false,\n        \"token_rotation_enabled\": false\n    }\n}\n```\n\n3. Click **Create** → **Install to Workspace** → Copy the `xoxp-...` token!",
+            "is_active": true,
+            "is_deleted": false,
+            "created_at": "2026-01-13T00:00:00Z",
+            "updated_at": "2026-01-14T00:00:00Z"
+        }
+    },
+    {
+        "model": "mcp.mcpserver",
+        "pk": 2,
+        "fields": {
+            "name": "GitHub",
+            "slug": "github",
+            "description": "Search repositories, manage issues and pull requests, view code, and interact with GitHub from your conversations.",
+            "icon": "github",
+            "docker_image": "dare-mcp-github:latest",
+            "command": "npx",
+            "args": [
+                "-y",
+                "@modelcontextprotocol/server-github"
+            ],
+            "required_credentials": [
+                {
+                    "key": "github_personal_access_token",
+                    "label": "Personal Access Token",
+                    "type": "password",
+                    "placeholder": "ghp_... or github_pat_...",
+                    "required": true,
+                    "helpText": "Your GitHub Personal Access Token (classic or fine-grained)"
+                }
+            ],
+            "credentials_help_url": "https://github.com/settings/personal-access-tokens/new",
+            "extra_env_vars": {},
+            "setup_guide": "## Getting a GitHub Personal Access Token\n\n1. Go to [GitHub Settings → Personal Access Tokens](https://github.com/settings/tokens)\n\n2. Click **Generate new token** → Choose **Fine-grained** (recommended) or **Classic**\n\n3. For Fine-grained tokens:\n   - Set a descriptive name (e.g., \"DARE MCP\")\n   - Set expiration (90 days recommended)\n   - Select repositories you want to access\n   - Under Permissions, grant:\n     - **Contents**: Read and write\n     - **Issues**: Read and write\n     - **Pull requests**: Read and write\n     - **Metadata**: Read-only (automatically selected)\n\n4. For Classic tokens, select scopes:\n   - `repo` (full repository access)\n   - `read:org` (optional, for organization access)\n\n5. Click **Generate token** and copy it immediately!",
+            "is_active": true,
+            "is_deleted": false,
+            "created_at": "2026-01-14T00:00:00Z",
+            "updated_at": "2026-01-14T00:00:00Z"
+        }
+    }
+]

@@ -1,0 +1,82 @@
+[
+    {
+        "model": "dare_tools.daretool",
+        "pk": 1,
+        "fields": {
+            "name": "Create Diagram",
+            "slug": "create_diagram",
+            "description": "Create visual diagrams including flowcharts, sequence diagrams, mindmaps, state diagrams, and class diagrams using Mermaid syntax.",
+            "icon": "diagram",
+            "category": "visualization",
+            "function_name": "create_diagram",
+            "is_active": true,
+            "is_deleted": false,
+            "created_at": "2026-01-15T00:00:00Z",
+            "updated_at": "2026-01-15T00:00:00Z"
+        }
+    },
+    {
+        "model": "dare_tools.daretool",
+        "pk": 2,
+        "fields": {
+            "name": "Create Chart",
+            "slug": "create_chart",
+            "description": "Create data visualization charts including bar charts, line charts, pie charts, and more for displaying statistics and data.",
+            "icon": "chart",
+            "category": "visualization",
+            "function_name": "create_chart",
+            "is_active": true,
+            "is_deleted": false,
+            "created_at": "2026-01-15T00:00:00Z",
+            "updated_at": "2026-01-15T00:00:00Z"
+        }
+    },
+    {
+        "model": "dare_tools.daretool",
+        "pk": 3,
+        "fields": {
+            "name": "Update Artifact",
+            "slug": "update_artifact",
+            "description": "Update an existing artifact (diagram, chart, etc.) by creating a new version with modified content. Use for major rewrites affecting >30% of content.",
+            "icon": "edit",
+            "category": "visualization",
+            "function_name": "update_artifact",
+            "is_active": true,
+            "is_deleted": false,
+            "created_at": "2026-01-15T00:00:00Z",
+            "updated_at": "2026-01-15T00:00:00Z"
+        }
+    },
+    {
+        "model": "dare_tools.daretool",
+        "pk": 4,
+        "fields": {
+            "name": "Update Artifact Inline",
+            "slug": "update_artifact_inline",
+            "description": "Make targeted string replacements in an existing artifact for small edits. Use for: fixing typos, changing colors, updating single values.",
+            "icon": "edit-inline",
+            "category": "visualization",
+            "function_name": "update_artifact_inline",
+            "is_active": true,
+            "is_deleted": false,
+            "created_at": "2026-01-15T00:00:00Z",
+            "updated_at": "2026-01-15T00:00:00Z"
+        }
+    },
+    {
+        "model": "dare_tools.daretool",
+        "pk": 5,
+        "fields": {
+            "name": "Create React Component",
+            "slug": "create_react_component",
+            "description": "Create interactive React components rendered in a sandboxed environment. Use for: interactive UIs, forms, dashboards, games, data visualizations, widgets. Supports React 18, Tailwind CSS, Shadcn UI components, Lucide icons, and Recharts.",
+            "icon": "code",
+            "category": "visualization",
+            "function_name": "create_react_component",
+            "is_active": true,
+            "is_deleted": false,
+            "created_at": "2026-01-15T00:00:00Z",
+            "updated_at": "2026-01-15T00:00:00Z"
+        }
+    }
+]
