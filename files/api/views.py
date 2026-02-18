@@ -1,32 +1,33 @@
 import json
+import logging
 import mimetypes
 import os
-from django_rq import enqueue, get_queue
-from django.http import FileResponse
 
-from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
-from rest_framework import viewsets
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.exceptions import ValidationError
-from rest_framework.decorators import action
-from rest_framework.response import Response
-from rest_framework import status
-from rest_framework.views import APIView
-from django.http import Http404
-from django.db.models.functions import Lower
+from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.db.models import Count, Q, Prefetch
+from django.db.models.functions import Lower
+from django.http import FileResponse, Http404
+from django_rq import enqueue, get_queue
+from rest_framework import status, viewsets
+from rest_framework.decorators import action
+from rest_framework.exceptions import ValidationError
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.response import Response
+from rest_framework.views import APIView
 
-from core.services.document_processor import DocumentProcessor
-from core.services.file_upload_service import FileUploadService
-from core.services.file_processor import FileProcessor
 from common.permissions import IsOwner
-from ..tasks import process_file_embeddings
-from ..models import File, Tag, Folder
-from .serializers import FileSerializer, TagSerializer, FolderSerializer
+from core.services.document_processor import DocumentProcessor
+from core.services.file_processor import FileProcessor
+from core.services.file_upload_service import FileUploadService
 from ..constants import ALLOWED_FILES, FileStatus
 from conversations.models import Conversation
-import logging
+from ..models import File, Folder, Tag
+from .serializers import FileSerializer, FolderSerializer, TagSerializer
+
 logger = logging.getLogger(__name__)
+User = get_user_model()
 
 
 class FileViewSet(viewsets.ModelViewSet):
@@ -402,3 +403,97 @@ class FolderViewSet(viewsets.ModelViewSet):
         folder.files.remove(*files)
 
         return Response({'status': 'files removed from folder'})
+
+
+# ============================================================================
+# Internal API - Inter-service Communication
+# ============================================================================
+
+
+class InternalFileUploadView(APIView):
+    """
+    Internal endpoint for inter-service file upload.
+
+    Allows socraticbooks-backend to upload files on behalf of users without
+    requiring a user JWT token. Used for webhook-triggered transcript uploads.
+
+    Authenticated via X-Internal-Key header (shared secret).
+    """
+    permission_classes = [AllowAny]
+    parser_classes = (MultiPartParser, FormParser)
+
+    def post(self, request) -> Response:
+        """
+        Upload file(s) on behalf of a user.
+
+        Request body:
+            - user_id: Target user's ID (required)
+            - files: File(s) to upload (required)
+            - names: Filename(s) for the uploaded files (optional)
+            - tags: JSON array of tag IDs (optional)
+
+        Returns:
+            List of created file objects
+        """
+        # Verify internal key
+        internal_key = request.headers.get('X-Internal-Key', '')
+        expected_key = getattr(settings, 'DARE_INTERNAL_KEY', '')
+
+        if not internal_key or internal_key != expected_key:
+            logger.warning("Internal file upload: Invalid or missing internal key")
+            return Response(
+                {"error": "Unauthorized"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        # Get target user
+        user_id = request.data.get('user_id')
+        if not user_id:
+            return Response(
+                {"error": "user_id is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            user = User.objects.get(id=user_id)
+        except User.DoesNotExist:
+            return Response(
+                {"error": f"User with id {user_id} not found"},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Get uploaded files
+        uploaded_files = request.FILES.getlist('files')
+        if not uploaded_files:
+            return Response(
+                {"error": "No files uploaded"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Get optional parameters
+        file_names = request.data.getlist('names') if hasattr(request.data, 'getlist') else []
+        tags_data = request.data.get('tags', '[]')
+        tag_ids = FileUploadService.parse_tags(tags_data)
+
+        try:
+            file_instances = FileUploadService.upload_files(
+                uploaded_files, file_names, user, tag_ids
+            )
+            serializer = FileSerializer(file_instances, many=True)
+            logger.info(
+                f"Internal file upload: {len(file_instances)} file(s) "
+                f"uploaded for user {user_id}"
+            )
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+        except ValueError as e:
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            logger.error(f"Internal file upload error: {str(e)}")
+            return Response(
+                {"error": f"Error uploading files: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
