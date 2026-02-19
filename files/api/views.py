@@ -24,6 +24,7 @@ from ..tasks import process_file_embeddings
 from ..models import File, Tag, Folder
 from .serializers import FileSerializer, TagSerializer, FolderSerializer
 from ..constants import ALLOWED_FILES, FileStatus
+from conversations.models import Conversation
 import logging
 logger = logging.getLogger(__name__)
 
@@ -128,6 +129,47 @@ class FileViewSet(viewsets.ModelViewSet):
                 file.folders.clear()
             return Response({"status": "Files removed from all folders"}, status=status.HTTP_200_OK)
 
+    @action(detail=False, methods=['get'], url_path='by-owner/(?P<owner_id>[^/.]+)')
+    def get_files_by_owner(self, request, owner_id=None):
+        """
+        Get files owned by a specific user (for forked conversations).
+
+        Returns files that are associated with published conversations.
+        This ensures users can only access files from shared conversations.
+        """
+        try:
+            owner_id = int(owner_id)
+        except (ValueError, TypeError):
+            return Response(
+                {"error": "Invalid owner ID"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        all_file_ids = set()
+
+        # Get files from published conversations
+        published_conversations = Conversation.active_objects.filter(
+            user_id=owner_id,
+            is_published=True
+        ).values_list('selected_file_ids', 'selected_embedding_ids')
+
+        for selected_file_ids, selected_embedding_ids in published_conversations:
+            if selected_file_ids:
+                all_file_ids.update(selected_file_ids)
+            if selected_embedding_ids:
+                all_file_ids.update(selected_embedding_ids)
+
+        if not all_file_ids:
+            return Response({"results": []}, status=status.HTTP_200_OK)
+
+        files = File.active_objects.filter(
+            id__in=all_file_ids,
+            user_id=owner_id
+        ).order_by(Lower('name'))
+
+        serializer = self.get_serializer(files, many=True)
+        return Response({"results": serializer.data}, status=status.HTTP_200_OK)
+
     @action(detail=False, methods=['post'], url_path='bulk-delete', parser_classes=[JSONParser])
     def bulk_delete(self, request):
         """
@@ -183,7 +225,17 @@ class FileViewAPIView(APIView):
         
         try:
             # Get the file object with proper ownership check
-            file_obj = File.active_objects.get(id=file_id, user=request.user)
+            try:
+                file_obj = File.active_objects.get(id=file_id, user=request.user)
+            except File.DoesNotExist:
+                # Fallback: allow access if file belongs to a published conversation
+                file_obj = File.active_objects.filter(
+                    id=file_id,
+                    message__conversation__is_published=True
+                ).first()
+
+                if not file_obj:
+                    raise File.DoesNotExist()
             
             # Ensure file is processed successfully
             if file_obj.status != FileStatus.PROCESSED:

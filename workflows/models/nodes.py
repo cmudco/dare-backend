@@ -28,7 +28,7 @@ class StepNodeData(BaseNodeData):
     )
     prompt = models.ForeignKey(
         'prompts.Prompt',
-        on_delete=models.PROTECT,
+        on_delete=models.SET_NULL,
         null=True,
         blank=True,
         help_text="Prompt template for this step (required for execution)"
@@ -90,11 +90,16 @@ class StepNodeData(BaseNodeData):
 
     def to_dict(self):
         """Convert to React Flow node data format."""
+        content_files_qs = self.content_files.values_list('id', 'name')
+        embedding_files_qs = self.embedding_files.values_list('id', 'name')
         return {
             'agent': self.agent.id if self.agent else None,
             'prompt': self.prompt.id if self.prompt else None,
-            'contentFiles': list(self.content_files.values_list('id', flat=True)),
-            'embeddingFiles': list(self.embedding_files.values_list('id', flat=True)),
+            'promptTitle': self.prompt.title if self.prompt else None,
+            'contentFiles': [fid for fid, _ in content_files_qs],
+            'contentFileNames': {fid: fname for fid, fname in content_files_qs},
+            'embeddingFiles': [fid for fid, _ in embedding_files_qs],
+            'embeddingFileNames': {fid: fname for fid, fname in embedding_files_qs},
             'llm': self.llm.id if self.llm else None,
             'stepNumber': self.step_number,
             'maxTokens': self.max_tokens,
@@ -178,7 +183,7 @@ class StructuredOutputNodeData(BaseNodeData):
     """Data model for 'structuredOutput' type nodes - independent routing decision nodes."""
     prompt = models.ForeignKey(
         'prompts.Prompt',
-        on_delete=models.PROTECT,
+        on_delete=models.SET_NULL,
         null=True,
         blank=True,
         help_text="Optional prompt template for routing evaluation (falls back to base prompt if not provided)"
@@ -215,6 +220,7 @@ class StructuredOutputNodeData(BaseNodeData):
     def to_dict(self):
         return {
             'prompt': self.prompt.id if self.prompt else None,
+            'promptTitle': self.prompt.title if self.prompt else None,
             'routes': self.get_routes(),
             'stepNumber': self.step_number,
             'requireHumanValidation': self.require_human_validation,
@@ -303,8 +309,10 @@ class FileNodeData(BaseNodeData):
 
     def to_dict(self) -> dict:
         """Convert to React Flow node data format (camelCase)."""
+        files_qs = self.files.values_list('id', 'name')
         return {
-            'files': list(self.files.values_list('id', flat=True)),
+            'files': [fid for fid, _ in files_qs],
+            'fileNames': {fid: fname for fid, fname in files_qs},
             'retrievalMode': self.retrieval_mode,
             'similarityThreshold': self.similarity_threshold,
             'maxResults': self.max_results,

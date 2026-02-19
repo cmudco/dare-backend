@@ -25,7 +25,8 @@ from workflows.models import (
     WorkflowNode, WorkflowEdge,
 )
 from workflows.handlers.utils.constants import NodeType
-from workflows.services import WorkflowCloningService
+from workflows.constants import SharingErrorCode
+from workflows.services import WorkflowCloningService, WorkflowSharingService, SharingValidationError
 from workflows.services.workflow_graph_service import WorkflowGraphService
 
 
@@ -33,11 +34,26 @@ logger = logging.getLogger(__name__)
 
 
 class WorkflowViewSet(viewsets.ModelViewSet):
-    """Endpoint for listing, retrieving, creating, updating and deleting workflows."""
+    """Endpoint for listing, retrieving, creating, updating and deleting workflows.
+
+    Supports ?shared=true query param to list published workflows from other users.
+    """
     serializer_class = WorkflowSerializer
     permission_classes = [IsAuthenticated, IsOwner]
 
     def get_queryset(self):
+        # Shared library: published workflows from other users
+        shared = self.request.query_params.get('shared', None)
+        if shared == 'true':
+            return Workflow.active_objects.filter(
+                is_published=True
+            ).exclude(
+                user=self.request.user
+            ).select_related('user').prefetch_related(
+                'nodes',
+                'edges',
+            ).order_by('-published_at')
+
         return Workflow.active_objects.filter(
             user=self.request.user
         ).prefetch_related(
@@ -110,15 +126,67 @@ class WorkflowViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='clone')
     def clone_workflow(self, request, pk=None):
-        """Custom action to clone a workflow using graph-driven architecture."""
+        """Clone a workflow for the current user (same-user clone)."""
         instance = self.get_object()
 
-        # Use the dedicated cloning service
         cloning_service = WorkflowCloningService()
         cloned_workflow = cloning_service.clone_workflow(instance)
 
         serializer = self.get_serializer(cloned_workflow)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['post'], url_path='publish')
+    def publish_workflow(self, request, pk=None):
+        """Toggle the published status of a workflow.
+
+        Only the owner can publish/unpublish.
+        """
+        try:
+            instance = self.get_object()
+            instance = WorkflowSharingService.toggle_publish(instance, request.user)
+            serializer = self.get_serializer(instance)
+            return Response(serializer.data)
+
+        except SharingValidationError as e:
+            status_map = {
+                SharingErrorCode.PERMISSION_DENIED: status.HTTP_403_FORBIDDEN,
+                SharingErrorCode.CANNOT_PUBLISH_FORKED: status.HTTP_400_BAD_REQUEST,
+            }
+            return Response(
+                {"error": str(e), "code": e.error_code},
+                status=status_map.get(e.error_code, status.HTTP_400_BAD_REQUEST),
+            )
+        except Exception as e:
+            logger.error(f"Error publishing workflow {pk}: {str(e)}")
+            return Response(
+                {"error": f"Failed to publish workflow: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+    @action(detail=True, methods=['post'], url_path='fork')
+    def fork_workflow(self, request, pk=None):
+        """Fork a published workflow for the current user.
+
+        Creates a clone owned by the requesting user. Files are NOT copied -
+        users must upload their own files when running the forked workflow.
+        """
+        try:
+            cloning_service = WorkflowCloningService()
+            forked = WorkflowSharingService.fork(pk, request.user, cloning_service)
+            serializer = self.get_serializer(forked)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+        except SharingValidationError as e:
+            return Response(
+                {"error": str(e), "code": e.error_code},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        except Exception as e:
+            logger.error(f"Error forking workflow {pk}: {str(e)}")
+            return Response(
+                {"error": f"Failed to fork workflow: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
     @action(detail=True, methods=['patch'], url_path='toggle-manual-mode')
     def toggle_manual_mode(self, request, pk=None):
