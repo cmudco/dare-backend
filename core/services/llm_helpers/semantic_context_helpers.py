@@ -97,11 +97,8 @@ async def add_semantic_context_to_messages(
     if not all_embedding_file_ids:
         return
 
-    # Use file_owner_id for shared boards, fallback to current user
+    # Use file_owner_id for shared boards/conversations, fallback to current user
     vector_user_id = file_owner_id or user_id
-
-    logger.info(f"VECTOR CONTEXT: user_id={user_id}, file_owner_id={file_owner_id}, vector_user_id={vector_user_id}")
-    logger.info(f"VECTOR CONTEXT: file_ids={list(all_embedding_file_ids)}")
 
     # Initialize vector service if user context changed
     if vector_user_id and vector_user_id != document_processor.user_id:

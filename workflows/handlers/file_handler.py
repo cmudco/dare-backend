@@ -99,8 +99,8 @@ class FileNodeHandler(BaseNodeHandler):
                 except Exception as e:
                     logger.warning(f"Failed to send step_started event: {e}")
 
-            # Get active files
-            files = await self._get_files(file_data)
+            # Get active files with ownership validation
+            files = await self._get_files(file_data, context)
             if not files:
                 return NodeExecutionResult(
                     success=True,
@@ -206,11 +206,24 @@ class FileNodeHandler(BaseNodeHandler):
     # Private Helpers
     # ============================================================================
 
-    async def _get_files(self, file_data: FileNodeData) -> List[File]:
-        """Get active, non-deleted files from node data."""
-        return await database_sync_to_async(
-            lambda: list(file_data.files.filter(is_deleted=False, is_active=True))
-        )()
+    async def _get_files(self, file_data: FileNodeData, context: NodeExecutionContext) -> List[File]:
+        """Get active, non-deleted files from node data with ownership validation.
+
+        Files must belong to the current workflow owner.
+        """
+        def _get_validated_files():
+            workflow = context.workflow_run.workflow
+
+            # Filter files by ownership + active status
+            return list(
+                file_data.files.filter(
+                    is_deleted=False,
+                    is_active=True,
+                    user_id=workflow.user_id
+                )
+            )
+
+        return await database_sync_to_async(_get_validated_files)()
 
     def _get_query_text(
         self,
@@ -266,12 +279,12 @@ class FileNodeHandler(BaseNodeHandler):
             return "No query text available for vector search."
 
         # Get user from workflow
-        user = await database_sync_to_async(
-            lambda: context.workflow_run.workflow.user
+        workflow = await database_sync_to_async(
+            lambda: context.workflow_run.workflow
         )()
+        user = await database_sync_to_async(lambda: workflow.user)()
 
-        # Initialize document processor with user's configured vector service
-        # Must use async version to properly check user's vector_db preference (Pinecone/Weaviate)
+        # Initialize document processor with workflow owner's vector namespace
         vector_service = await get_vector_service_async(user.id)
         document_processor = DocumentProcessor(user_id=user.id, vector_service=vector_service)
 
