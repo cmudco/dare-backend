@@ -84,7 +84,14 @@ class AccessCodeGroupAdmin(admin.ModelAdmin):
         }),
         (_('Role Assignment'), {
             'fields': ('default_role',),
-            'description': 'Role assigned to users who register with this access code. Platform access is determined by role: SUPERADMIN/RESEARCHER/USER have DARE access; all roles have SocraticBots access.'
+            'description': (
+                'Role assigned to users who register with this access code.<br><br>'
+                '<strong>SUPERADMIN</strong> — Full DARE platform access + SocraticBooks creator + admin privileges.<br>'
+                '<strong>RESEARCHER</strong> — DARE platform access + SocraticBooks creator (can create and manage books).<br>'
+                '<strong>USER</strong> — DARE platform access + SocraticBooks student/consumer (can read and interact with books).<br>'
+                '<strong>CREATOR</strong> — No DARE access + SocraticBooks creator (can create and manage books only).<br>'
+                '<strong>SB_USER</strong> — No DARE access + SocraticBooks student/consumer only.'
+            )
         }),
         (_('Model Access'), {
             'fields': ('model_group',),
@@ -213,7 +220,14 @@ class UserAdmin(DjangoUserAdmin):
         (_("Access Control"), {"fields": ("access_code_group",)}),
         (_("Platform Role"), {
             "fields": ("platform_role",),
-            "description": "User's role determines permissions across DARE and SocraticBots platforms"
+            "description": (
+                "User's role determines permissions across DARE and SocraticBots platforms.<br>"
+                "<strong>SUPERADMIN</strong> — Full DARE + SB creator + admin privileges. "
+                "<strong>RESEARCHER</strong> — DARE access + SB creator. "
+                "<strong>USER</strong> — DARE access + SB student/consumer. "
+                "<strong>CREATOR</strong> — No DARE + SB creator. "
+                "<strong>SB_USER</strong> — No DARE + SB student/consumer only."
+            )
         }),
         (_("Vector Database Settings"), {"fields": ("vector_db",)}),
         (_("Platform Settings (Legacy)"), {

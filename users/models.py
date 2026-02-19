@@ -77,7 +77,11 @@ class AccessCodeGroup(TimeStampMixin):
         choices=RoleChoice.choices,
         default=RoleChoice.USER,
         verbose_name=_("Default Role"),
-        help_text=_("Role assigned to users who register with this access code")
+        help_text=_("Role assigned to users who register with this access code. "
+                    "RESEARCHER: DARE platform access + SocraticBooks creator (can create/manage books). "
+                    "USER: DARE platform access + SocraticBooks student/consumer (can read/interact with books). "
+                    "CREATOR: No DARE access + SocraticBooks creator (can create/manage books). "
+                    "SB_USER: No DARE access + SocraticBooks student/consumer only.")
     )
 
     class Meta:
@@ -218,7 +222,11 @@ class User(AbstractUser, IsDeletedMixin):
         choices=RoleChoice.choices,
         default=RoleChoice.USER,
         verbose_name=_("Platform Role"),
-        help_text=_("User's role across DARE and SocraticBots platforms")
+        help_text=_("User's role across DARE and SocraticBots platforms. "
+                    "RESEARCHER: DARE access + SB creator. "
+                    "USER: DARE access + SB student/consumer. "
+                    "CREATOR: No DARE + SB creator. "
+                    "SB_USER: No DARE + SB student/consumer only.")
     )
 
     # Billing mode - determines how user pays for API usage
