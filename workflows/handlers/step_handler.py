@@ -128,7 +128,8 @@ class StepNodeHandler(BaseExecutionHandler):
                         WebSocketResponseService.format_workflow_step_started(
                             node_id=node.id,
                             step_number=node.step_number or 0,
-                            node_type="step"
+                            node_type="step",
+                            workflow_run_id=context.workflow_run.id
                         )
                     )
                 except Exception as e:
@@ -192,7 +193,8 @@ class StepNodeHandler(BaseExecutionHandler):
                             metadata={
                                 "snippets": snippets_data,
                                 "webSearchSources": web_sources_data,
-                            } if snippets_data or web_sources_data else None
+                            } if snippets_data or web_sources_data else None,
+                            workflow_run_id=context.workflow_run.id
                         )
                     )
                 except Exception as e:
@@ -377,7 +379,8 @@ class StepNodeHandler(BaseExecutionHandler):
         return await self._execute_llm_query_with_collection(
             response_generator,
             send_callback=context.send_callback,
-            node_id=node_id
+            node_id=node_id,
+            workflow_run_id=context.workflow_run.id
         )
 
     async def _get_step_execution_config(
@@ -404,13 +407,18 @@ class StepNodeHandler(BaseExecutionHandler):
         """
         def _get_config():
             workflow = context.workflow_run.workflow
-            return {
+            config = {
                 'user': workflow.user,
                 'content_file_ids': list(step_data.content_files.values_list('id', flat=True)),
                 'embedding_file_ids': list(step_data.embedding_files.values_list('id', flat=True)),
                 'prompt_id': step_data.prompt.id if step_data.prompt else None,
                 'enable_web_search': step_data.enable_web_search,
             }
+            if context.batch_file_id and context.is_start_connected:
+                content_file_ids = config['content_file_ids']
+                if context.batch_file_id not in content_file_ids:
+                    config['content_file_ids'] = [context.batch_file_id] + content_file_ids
+            return config
 
         return await database_sync_to_async(_get_config)()
 
