@@ -15,6 +15,7 @@ from workflows.handlers.base import ExecutionNode, NodeExecutionContext, NodeExe
 from workflows.models import StructuredOutputNodeData
 from workflows.constants import WorkflowRunStepStatus
 from conversations.models import LLM
+from conversations.services.websocket_response_service import WebSocketResponseService
 
 from workflows.handlers.utils import (
     NodeType,
@@ -95,12 +96,27 @@ class StructuredOutputNodeHandler(BaseRoutingHandler):
             )
 
             # Update status to running
-            await self._update_step_status(
+            started_at = await self._update_step_status(
                 workflow_run_step,
                 WorkflowRunStepStatus.RUNNING
             )
 
             logger.info(f"[{correlation_id}] Starting structured output node execution")
+
+            # Send step_started event if streaming callback available
+            if context.send_callback:
+                try:
+                    await context.send_callback(
+                        WebSocketResponseService.format_workflow_step_started(
+                            node_id=node.id,
+                            step_number=step_number or 0,
+                            node_type=NodeType.STRUCTURED_OUTPUT,
+                            started_at=started_at,
+                            workflow_run_id=context.workflow_run.id
+                        )
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to send structured output step_started event: {e}")
 
             # Get routes configuration
             routes = await self._get_routes_from_node_data(so_data)

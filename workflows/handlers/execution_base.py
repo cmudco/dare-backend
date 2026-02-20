@@ -66,7 +66,8 @@ class BaseExecutionHandler(BaseNodeHandler):
                 step.status = WorkflowRunStepStatus.PENDING
                 step.response = None
                 step.error = None
-                step.save(update_fields=['status', 'response', 'error'])
+                step.started_at = None
+                step.save(update_fields=['status', 'response', 'error', 'started_at'])
             return step
 
         return await database_sync_to_async(_get_or_create)()
@@ -91,6 +92,15 @@ class BaseExecutionHandler(BaseNodeHandler):
         """
         def _update():
             update_kwargs = {'status': status}
+            started_at_value = None
+
+            if status == WorkflowRunStepStatus.RUNNING:
+                # Capture the first start timestamp to preserve execution order.
+                if workflow_run_step.started_at is None:
+                    started_at_value = timezone.now()
+                    update_kwargs['started_at'] = started_at_value
+                else:
+                    started_at_value = workflow_run_step.started_at
             
             if response is not None:
                 update_kwargs['response'] = response
@@ -106,8 +116,9 @@ class BaseExecutionHandler(BaseNodeHandler):
                 update_kwargs['metadata'] = existing_metadata
             
             WorkflowRunStep.objects.filter(id=workflow_run_step.id).update(**update_kwargs)
+            return started_at_value
 
-        await database_sync_to_async(_update)()
+        return await database_sync_to_async(_update)()
 
     async def _process_billing(
         self,
