@@ -62,6 +62,16 @@ class OpenAIService:
             self._client = AsyncOpenAI(api_key=self.api_key)
         return self._client
 
+    def _uses_max_completion_tokens(self) -> bool:
+        """
+        Determine whether this model expects max_completion_tokens instead of max_tokens.
+
+        Some OpenAI reasoning models (e.g., o1/o3 families) reject max_tokens.
+        """
+        if self.is_reasoning:
+            return True
+        return self.model.startswith(("o1", "o3"))
+
     async def stream_chat_completion(
         self,
         messages: List[Dict[str, str]],
@@ -189,7 +199,7 @@ class OpenAIService:
             "response_format": response_format,
         }
 
-        if self.is_reasoning:
+        if self._uses_max_completion_tokens():
             params["max_completion_tokens"] = max_tokens
         else:
             params["max_tokens"] = max_tokens
@@ -304,7 +314,7 @@ class OpenAIService:
         }
 
         # Reasoning models use different parameter names
-        if self.is_reasoning:
+        if self._uses_max_completion_tokens():
             params["max_completion_tokens"] = max_tokens
         else:
             params["max_tokens"] = max_tokens
@@ -387,7 +397,7 @@ class OpenAIService:
             "response_format": response_format,
         }
         
-        if self.is_reasoning:
+        if self._uses_max_completion_tokens():
             params["max_completion_tokens"] = 1024
         else:
             params["max_tokens"] = 1024
