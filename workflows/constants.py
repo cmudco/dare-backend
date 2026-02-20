@@ -18,6 +18,12 @@ class WorkflowRunStepStatus(models.TextChoices):
     PENDING_HUMAN_INPUT = 'pending_human_input', 'Pending Human Input'
 
 
+class BatchRunStatus(models.TextChoices):
+    RUNNING = 'running', 'Running'
+    COMPLETED = 'completed', 'Completed'
+    FAILED = 'failed', 'Failed'
+
+
 class RetrievalMode(models.TextChoices):
     """How file content is retrieved in a file node."""
     EMBEDDINGS = 'embeddings', 'Embeddings (Vector Search)'

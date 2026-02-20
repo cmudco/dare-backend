@@ -478,7 +478,8 @@ class WebSocketResponseService:
         cls,
         node_id: str,
         step_number: int,
-        node_type: str = "step"
+        node_type: str = "step",
+        workflow_run_id: Optional[int] = None
     ) -> Dict[str, Any]:
         """
         Format workflow step started message for WebSocket transmission.
@@ -498,6 +499,7 @@ class WebSocketResponseService:
             "nodeId": node_id,
             "stepNumber": step_number,
             "nodeType": node_type,
+            **({"workflowRunId": workflow_run_id} if workflow_run_id else {}),
         }
 
     @classmethod
@@ -505,7 +507,8 @@ class WebSocketResponseService:
         cls,
         node_id: str,
         chunk: str,
-        accumulated_tokens: Optional[int] = None
+        accumulated_tokens: Optional[int] = None,
+        workflow_run_id: Optional[int] = None
     ) -> Dict[str, Any]:
         """
         Format workflow step streaming chunk for WebSocket transmission.
@@ -527,6 +530,8 @@ class WebSocketResponseService:
         }
         if accumulated_tokens is not None:
             payload["accumulatedTokens"] = accumulated_tokens
+        if workflow_run_id:
+            payload["workflowRunId"] = workflow_run_id
         return payload
 
     @classmethod
@@ -536,7 +541,8 @@ class WebSocketResponseService:
         response: str,
         status: str,
         tokens: Optional[Dict[str, int]] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
+        workflow_run_id: Optional[int] = None
     ) -> Dict[str, Any]:
         """
         Format workflow step completion message for WebSocket transmission.
@@ -563,6 +569,8 @@ class WebSocketResponseService:
             payload["tokens"] = tokens
         if metadata:
             payload["metadata"] = metadata
+        if workflow_run_id:
+            payload["workflowRunId"] = workflow_run_id
         return payload
 
     @classmethod
@@ -607,7 +615,8 @@ class WebSocketResponseService:
         cls,
         node_id: Optional[str],
         error: str,
-        error_type: Optional[str] = None
+        error_type: Optional[str] = None,
+        workflow_run_id: Optional[int] = None
     ) -> Dict[str, Any]:
         """
         Format workflow error message for WebSocket transmission.
@@ -630,6 +639,8 @@ class WebSocketResponseService:
             payload["nodeId"] = node_id
         if error_type:
             payload["errorType"] = error_type
+        if workflow_run_id:
+            payload["workflowRunId"] = workflow_run_id
         return payload
 
     @classmethod
@@ -638,7 +649,8 @@ class WebSocketResponseService:
         node_id: str,
         routes: List[Dict[str, Any]],
         context: Optional[Dict[str, Any]] = None,
-        ai_recommendation: Optional[str] = None
+        ai_recommendation: Optional[str] = None,
+        workflow_run_id: Optional[int] = None
     ) -> Dict[str, Any]:
         """
         Format human validation required message for WebSocket transmission.
@@ -663,5 +675,100 @@ class WebSocketResponseService:
             payload["context"] = context
         if ai_recommendation:
             payload["aiRecommendation"] = ai_recommendation
+        if workflow_run_id:
+            payload["workflowRunId"] = workflow_run_id
         return payload
 
+    # ========== Batch Execution Response Formatters ==========
+
+    @classmethod
+    def format_batch_started(
+        cls,
+        batch_id: int,
+        total_files: int,
+        workflow_id: int
+    ) -> Dict[str, Any]:
+        """
+        Format batch started message for WebSocket transmission.
+
+        Args:
+            batch_id: Batch run ID
+            total_files: Total number of files in the batch
+            workflow_id: Workflow ID being executed
+
+        Returns:
+            Dictionary ready for JSON serialization
+        """
+        return {
+            "type": "batch_started",
+            "batchId": batch_id,
+            "totalFiles": total_files,
+            "workflowId": workflow_id,
+        }
+
+    @classmethod
+    def format_batch_progress(
+        cls,
+        batch_id: int,
+        index: int,
+        total: int,
+        file_id: int,
+        file_name: str,
+        status: str,
+        workflow_run_id: Optional[int] = None
+    ) -> Dict[str, Any]:
+        """
+        Format batch progress message for WebSocket transmission.
+
+        Args:
+            batch_id: Batch run ID
+            index: 1-based index of the file in the batch
+            total: Total file count
+            file_id: File ID being processed
+            file_name: Display name for the file
+            status: Status ('running', 'completed', 'failed')
+            workflow_run_id: Workflow run ID (optional)
+
+        Returns:
+            Dictionary ready for JSON serialization
+        """
+        payload = {
+            "type": "batch_progress",
+            "batchId": batch_id,
+            "index": index,
+            "total": total,
+            "fileId": file_id,
+            "fileName": file_name,
+            "status": status,
+        }
+        if workflow_run_id:
+            payload["workflowRunId"] = workflow_run_id
+        return payload
+
+    @classmethod
+    def format_batch_complete(
+        cls,
+        batch_id: int,
+        completed_count: int,
+        failed_count: int,
+        total_files: int
+    ) -> Dict[str, Any]:
+        """
+        Format batch completed message for WebSocket transmission.
+
+        Args:
+            batch_id: Batch run ID
+            completed_count: Number of completed runs
+            failed_count: Number of failed runs
+            total_files: Total file count
+
+        Returns:
+            Dictionary ready for JSON serialization
+        """
+        return {
+            "type": "batch_complete",
+            "batchId": batch_id,
+            "completedCount": completed_count,
+            "failedCount": failed_count,
+            "totalFiles": total_files,
+        }

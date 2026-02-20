@@ -166,6 +166,7 @@ class BaseExecutionHandler(BaseNodeHandler):
         llm_query_generator,
         send_callback=None,
         node_id: Optional[str] = None,
+        workflow_run_id: Optional[int] = None,
     ) -> tuple[str, Dict]:
         """
         Execute LLM query and collect full response with token usage.
@@ -196,7 +197,8 @@ class BaseExecutionHandler(BaseNodeHandler):
                             WebSocketResponseService.format_workflow_step_streaming(
                                 node_id=node_id,
                                 chunk=chunk,
-                                accumulated_tokens=accumulated_tokens
+                                accumulated_tokens=accumulated_tokens,
+                                workflow_run_id=workflow_run_id
                             )
                         )
                     except Exception as e:

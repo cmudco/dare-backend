@@ -93,7 +93,8 @@ class FileNodeHandler(BaseNodeHandler):
                         WebSocketResponseService.format_workflow_step_started(
                             node_id=node.id,
                             step_number=file_data.step_number or 0,
-                            node_type="file"
+                            node_type="file",
+                            workflow_run_id=context.workflow_run.id
                         )
                     )
                 except Exception as e:
@@ -197,6 +198,7 @@ class FileNodeHandler(BaseNodeHandler):
                     response=self._build_ws_response(output),
                     status="completed",
                     metadata=metadata,
+                    workflow_run_id=context.workflow_run.id,
                 )
             )
         except Exception as e:
