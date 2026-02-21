@@ -431,6 +431,7 @@ class InternalFileUploadView(APIView):
             - files: File(s) to upload (required)
             - names: Filename(s) for the uploaded files (optional)
             - tags: JSON array of tag IDs (optional)
+            - tag_labels: JSON array of tag label strings (optional, creates tags if needed)
 
         Returns:
             List of created file objects
@@ -474,6 +475,17 @@ class InternalFileUploadView(APIView):
         file_names = request.data.getlist('names') if hasattr(request.data, 'getlist') else []
         tags_data = request.data.get('tags', '[]')
         tag_ids = FileUploadService.parse_tags(tags_data)
+
+        # Support tag_labels: create-or-get tags by label string
+        tag_labels_data = request.data.get('tag_labels', '[]')
+        try:
+            tag_labels = json.loads(tag_labels_data) if tag_labels_data else []
+        except json.JSONDecodeError:
+            tag_labels = []
+        for label in tag_labels:
+            tag, _ = Tag.objects.get_or_create(label=label, defaults={'user': user})
+            if tag.id not in tag_ids:
+                tag_ids.append(tag.id)
 
         try:
             file_instances = FileUploadService.upload_files(
