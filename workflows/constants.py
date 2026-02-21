@@ -29,3 +29,27 @@ class QuerySource(models.TextChoices):
     """Source of query text for vector search in file nodes."""
     PREVIOUS_STEP = 'previous_step', 'Previous Step Output'
     TEXT_INPUT = 'text_input', 'Text Input'
+
+
+# ============================================================================
+# Workflow Sharing Constants
+# ============================================================================
+
+FORK_TITLE_PREFIX = "FORK OF"
+DEFAULT_FORK_TITLE = "Untitled Workflow"
+
+
+class SharingErrorCode:
+    """Error codes for workflow sharing API responses."""
+    PERMISSION_DENIED = "permission_denied"
+    NOT_FOUND = "not_found"
+    CANNOT_PUBLISH_FORKED = "cannot_publish_forked"
+    FORK_FAILED = "fork_failed"
+
+
+class SharingErrorMessage:
+    """Error messages for workflow sharing API responses."""
+    PERMISSION_DENIED = "Permission denied"
+    WORKFLOW_NOT_FOUND = "Workflow not found"
+    WORKFLOW_NOT_PUBLISHED = "Workflow not found or not published"
+    CANNOT_PUBLISH_FORKED = "Cannot publish forked workflows. Only original workflows can be published."
