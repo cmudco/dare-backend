@@ -243,10 +243,9 @@ class DareToolHandler:
                     metadata={
                         "senderName": DEFAULT_AI_SENDER_NAME,
                         "senderType": SenderType.AI_ASSISTANT,
-                        "isSender": False,
                         "streaming": True,
                         "regenerate": regenerate,
-                        "date": message_obj.created_at.isoformat(),
+                        "createdAt": message_obj.created_at.isoformat(),
                     }
                 )
                 await send_callback(camelize(payload))
