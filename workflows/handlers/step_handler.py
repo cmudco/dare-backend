@@ -368,6 +368,7 @@ class StepNodeHandler(BaseExecutionHandler):
             workflow_run_step_obj=workflow_run_step,
             structured_spec=structured_spec,
             web_search_enabled=step_config['enable_web_search'],
+            file_owner_id=None,  # Workflows don't share files cross-user
         )
 
         response_generator = self.llm_service.query(request)

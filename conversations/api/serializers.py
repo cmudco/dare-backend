@@ -71,10 +71,48 @@ class ConversationSerializer(serializers.ModelSerializer):
         read_only=True,
         allow_null=True,
     )
+    is_owner = serializers.SerializerMethodField()
+    is_forked = serializers.SerializerMethodField()
+    owner_email = serializers.SerializerMethodField()
+    owner_user_id = serializers.SerializerMethodField()
 
     def get_user(self, obj):
         """Return user email or None for anonymous conversations."""
         return obj.user.email if obj.user else None
+
+    def get_is_owner(self, obj):
+        """Return True if the requesting user owns this conversation."""
+        request = self.context.get('request')
+        if not request or not hasattr(request, 'user') or not request.user.is_authenticated:
+            return False
+        return obj.user_id == request.user.id
+
+    def get_is_forked(self, obj):
+        """Return True if this conversation was forked from another user's conversation."""
+        return obj.file_owner_id is not None
+
+    def get_owner_email(self, obj):
+        """Return masked owner email for shared conversations."""
+        if not obj.user or not obj.user.email:
+            return None
+        email = obj.user.email
+        local, domain = email.split('@', 1) if '@' in email else (email, '')
+        if len(local) <= 2:
+            masked_local = local[0] + '***'
+        else:
+            masked_local = local[0] + '***' + local[-1]
+        return f"{masked_local}@{domain}" if domain else masked_local
+
+    def get_owner_user_id(self, obj):
+        """Return owner's user ID for shared conversations (to fetch their files)."""
+        request = self.context.get('request')
+        if not request or not hasattr(request, 'user') or not request.user.is_authenticated:
+            return None
+        # Only expose owner_user_id if the current user is NOT the owner
+        # This is used by the frontend to load owner's files for shared conversations
+        if obj.user_id != request.user.id:
+            return obj.user_id
+        return None
 
     class Meta:
         model = Conversation
@@ -109,8 +147,15 @@ class ConversationSerializer(serializers.ModelSerializer):
             'selected_dare_tool_slugs',
             'selected_agent',
             'selected_agent_name',
+            'is_published',
+            'published_at',
+            'is_owner',
+            'is_forked',
+            'owner_email',
+            'owner_user_id',
+            'file_owner_id',
         ]
-        read_only_fields = ['created_at', 'user', 'prompt', 'selected_agent_name']
+        read_only_fields = ['created_at', 'user', 'prompt', 'selected_agent_name', 'is_owner', 'is_forked', 'owner_email', 'owner_user_id', 'file_owner_id']
 
 class SnippetSerializer(serializers.ModelSerializer):
     file = FileSerializer(read_only=True)
@@ -213,9 +258,6 @@ class MessageSerializer(serializers.ModelSerializer):
 
     def get_artifactId(self, obj):
         """Get the ID of the first active artifact linked to this message."""
-        # Use the reverse relation from Artifact -> Message
-        # Filter by is_active=True since the reverse relation uses the default manager
-        # which doesn't filter by is_active automatically
         artifact = obj.artifacts.filter(is_active=True).first()
         return str(artifact.id) if artifact else None
 

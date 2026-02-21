@@ -68,6 +68,17 @@ class Workflow(BaseModel):
         help_text="Order in which workflows are displayed in the UI. Higher values appear later."
     )
 
+    # Publishing / sharing fields
+    is_published = models.BooleanField(
+        default=False,
+        help_text="Whether this workflow is published and visible in the shared library"
+    )
+    published_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Timestamp when the workflow was published"
+    )
+
     objects = models.Manager()
     active_objects = ActiveObjectsManager()
 
