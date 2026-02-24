@@ -33,7 +33,7 @@ from urllib.parse import urlparse, urlunparse
 from django.core.management.base import BaseCommand
 from django.utils.text import slugify
 
-from conversations.models import ModelCardData, PublicFeedbackSourceCluster, PublicFeedbackSource
+from conversations.models import LLM, ModelCardData, PublicFeedbackSourceCluster, PublicFeedbackSource
 
 # Try to import anthropic (optional - only needed for search/analysis stages)
 try:
@@ -1117,11 +1117,15 @@ Each cluster number corresponds to the sources listed below.
             ]
 
         elif model_arg == 'live':
-            # Only those linked to operational LLM
-            return [
-                (mc.name, True)
-                for mc in ModelCardData.objects.filter(llm__isnull=False)
-            ]
+            # Bootstrap ModelCardData from active LLMs (handles cold start)
+            models = []
+            for llm in LLM.objects.filter(is_active=True):
+                mc, created = ModelCardData.objects.get_or_create(
+                    llm=llm,
+                    defaults={'name': llm.name, 'slug': slugify(llm.name)}
+                )
+                models.append((mc.name, True))
+            return models
 
         elif model_arg == 'cached':
             # scan cache directory for model data to load
