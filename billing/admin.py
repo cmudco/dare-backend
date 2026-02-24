@@ -75,6 +75,11 @@ class WalletAdmin(admin.ModelAdmin):
     ordering = ("-balance",)
     readonly_fields = ("balance", "created_at", "updated_at")
 
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        if db_field.name == 'user':
+            kwargs['queryset'] = db_field.related_model.objects.order_by('email')
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
+
 @admin.register(Transaction)
 class TransactionAdmin(admin.ModelAdmin):
     list_display = (
@@ -99,6 +104,7 @@ class TransactionAdmin(admin.ModelAdmin):
         TokenUsageFilter,
     )
     search_fields = ('user__email', 'message', 'llm_name')
+    ordering = ('-created_at',)
     date_hierarchy = 'created_at'
     readonly_fields = (
         'display_amount',
@@ -109,6 +115,11 @@ class TransactionAdmin(admin.ModelAdmin):
         'created_at',
         'updated_at'
     )
+
+    def formfield_for_foreignkey(self, db_field, request, **kwargs):
+        if db_field.name == 'user':
+            kwargs['queryset'] = db_field.related_model.objects.order_by('email')
+        return super().formfield_for_foreignkey(db_field, request, **kwargs)
 
     def display_amount(self, obj):
         """Display formatted amount from the model property."""
