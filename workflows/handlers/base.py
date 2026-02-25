@@ -76,6 +76,8 @@ class NodeExecutionContext:
     previous_results: Dict[str, Any]
     send_callback: Optional[Any] = None  # Callable[[Dict], Awaitable[None]]
     is_single_step_execution: bool = False  # Manual mode single step execution
+    batch_file_id: Optional[int] = None  # Batch run injected file ID
+    is_start_connected: bool = False  # True if node connects directly to root start
     # REMOVED: current_input (use previous_results with edge-based filtering)
 
 

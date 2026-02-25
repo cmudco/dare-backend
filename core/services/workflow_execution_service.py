@@ -32,7 +32,8 @@ class WorkflowExecutionService:
         self,
         workflow_run: WorkflowRun = None,
         workflow_run_id: int = None,
-        send_callback=None
+        send_callback=None,
+        batch_file_id: Optional[int] = None
     ) -> Dict[str, Any]:
         """Execute workflow from start or resume from where it left off."""
         try:
@@ -42,12 +43,24 @@ class WorkflowExecutionService:
                 )()
             
             workflow = await database_sync_to_async(lambda: workflow_run.workflow)()
+            effective_batch_file_id = batch_file_id or workflow_run.batch_file_id
+            start_connected_step_node_ids = []
+            if effective_batch_file_id:
+                start_connected_step_node_ids = await self._get_start_connected_step_node_ids(workflow)
+
             nodes = await self._get_ordered_nodes(workflow)
             
             if not nodes:
                 return {'success': False, 'error': 'No nodes found'}
 
-            result = await self._run_nodes(workflow_run, workflow, nodes, send_callback)
+            result = await self._run_nodes(
+                workflow_run,
+                workflow,
+                nodes,
+                send_callback,
+                batch_file_id=effective_batch_file_id,
+                start_connected_step_node_ids=start_connected_step_node_ids
+            )
 
             # Finalize if not waiting for human
             if not result.get('pending_human_input'):
@@ -59,7 +72,9 @@ class WorkflowExecutionService:
         except Exception as e:
             logger.error(f"Workflow execution failed: {e}", exc_info=True)
             await self._emit(send_callback, WebSocketResponseService.format_workflow_error(
-                node_id=None, error=str(e)
+                node_id=None,
+                error=str(e),
+                workflow_run_id=workflow_run.id if workflow_run else None
             ))
             return {'success': False, 'error': str(e)}
 
@@ -145,9 +160,19 @@ class WorkflowExecutionService:
 
     # ==================== Core Loop ====================
 
-    async def _run_nodes(self, workflow_run, workflow, nodes, send_callback) -> Dict[str, Any]:
+    async def _run_nodes(
+        self,
+        workflow_run,
+        workflow,
+        nodes,
+        send_callback,
+        batch_file_id: Optional[int] = None,
+        start_connected_step_node_ids: Optional[List[str]] = None
+    ) -> Dict[str, Any]:
         """Main loop: iterate nodes, skip completed, check routing, execute."""
         executed, skipped, failed = [], [], 0
+        start_connected_step_node_ids = start_connected_step_node_ids or []
+        is_batch_execution = bool(batch_file_id or getattr(workflow_run, 'batch_run_id', None))
         
         # In-memory results dict for routing decisions during this execution
         # This is needed because routing depends on results from nodes executed in THIS run
@@ -174,19 +199,42 @@ class WorkflowExecutionService:
                 continue
 
             # Execute
-            result = await self._execute_node(workflow_run, workflow, node, node_results, send_callback)
+            result = await self._execute_node(
+                workflow_run,
+                workflow,
+                node,
+                node_results,
+                send_callback,
+                batch_file_id=batch_file_id,
+                is_start_connected=node.id in start_connected_step_node_ids
+            )
             node_results[node.id] = result
             executed.append(node.id)
 
             # Human validation pause?
             if self._is_pending_human(result):
+                if is_batch_execution:
+                    await self._fail_pending_human_step(
+                        workflow_run,
+                        node,
+                        send_callback
+                    )
+                    failed += 1
+                    return {
+                        'success': False,
+                        'pending_human_input': False,
+                        'executed_nodes': len(executed),
+                        'skipped_nodes': len(skipped),
+                        'failed_nodes': failed
+                    }
                 await self._emit(send_callback, WebSocketResponseService.format_workflow_validation_required(
                     node_id=node.id,
                     routes=result.metadata.get('available_routes', []),
                     context={'stepNumber': result.metadata.get('step_number'),
                              'customPrompt': result.metadata.get('custom_prompt'),
                              'aiAnalysis': result.metadata.get('ai_analysis')},
-                    ai_recommendation=result.metadata.get('ai_recommendation')
+                    ai_recommendation=result.metadata.get('ai_recommendation'),
+                    workflow_run_id=workflow_run.id
                 ))
                 logger.info(f"Sent validation_required for node {node.id}")
                 return {'success': False, 'pending_human_input': True, 
@@ -200,7 +248,9 @@ class WorkflowExecutionService:
 
     async def _execute_node(
         self, workflow_run, workflow, node, node_results, send_callback,
-        is_single_step_execution: bool = False
+        is_single_step_execution: bool = False,
+        batch_file_id: Optional[int] = None,
+        is_start_connected: bool = False
     ) -> NodeExecutionResult:
         """Execute single node via handler registry."""
         # Get dependency results from in-memory dict (not DB)
@@ -209,7 +259,9 @@ class WorkflowExecutionService:
             workflow_run=workflow_run,
             previous_results=previous,
             send_callback=send_callback,
-            is_single_step_execution=is_single_step_execution
+            is_single_step_execution=is_single_step_execution,
+            batch_file_id=batch_file_id,
+            is_start_connected=is_start_connected
         )
         return await node_handler_registry.execute_node(node, context)
 
@@ -247,6 +299,24 @@ class WorkflowExecutionService:
                         queue.append(e.target)
 
         return result
+
+    # ==================== Batch Helpers ====================
+
+    async def _get_start_connected_step_node_ids(self, workflow) -> List[str]:
+        """Get node_ids of step nodes directly connected to root start node."""
+        start_node = await database_sync_to_async(workflow._get_root_start_node)()
+        if not start_node:
+            return []
+
+        edges = await database_sync_to_async(lambda: list(workflow.edges.all()))()
+        step_nodes = await database_sync_to_async(
+            lambda: {n.node_id for n in workflow.nodes.filter(node_type='step')}
+        )()
+
+        return [
+            e.target for e in edges
+            if e.source == start_node.node_id and e.target in step_nodes
+        ]
 
     # ==================== Routing ====================
 
@@ -477,6 +547,30 @@ class WorkflowExecutionService:
                     workflow_run=workflow_run, step_node=node.db_node
                 ).update(status=WorkflowRunStepStatus.SKIPPED, response='Skipped: routing')
             )()
+
+    async def _fail_pending_human_step(self, workflow_run, node, send_callback):
+        """Fail pending human validation steps for batch runs."""
+        error_message = "Human validation is not supported in batch runs."
+        if node.type in ('step', 'structuredOutput'):
+            await database_sync_to_async(
+                lambda: WorkflowRunStep.objects.filter(
+                    workflow_run=workflow_run,
+                    step_node=node.db_node,
+                    status=WorkflowRunStepStatus.PENDING_HUMAN_INPUT
+                ).update(
+                    status=WorkflowRunStepStatus.FAILED,
+                    error=error_message
+                )
+            )()
+
+        await self._emit(
+            send_callback,
+            WebSocketResponseService.format_workflow_error(
+                node_id=node.id,
+                error=error_message,
+                workflow_run_id=workflow_run.id
+            )
+        )
 
     # ==================== Helpers ====================
 
