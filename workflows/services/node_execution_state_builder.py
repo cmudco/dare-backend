@@ -140,6 +140,7 @@ class NodeExecutionStateBuilder:
             return {
                 "nodeId": node.node_id,  # Include nodeId to survive key mangling
                 "stepId": None,
+                "startedAt": None,
                 "nodeType": node.node_type,
                 "status": "pending",
                 "response": None,
@@ -171,6 +172,7 @@ class NodeExecutionStateBuilder:
         return {
             "nodeId": node.node_id,  # Include nodeId to survive key mangling
             "stepId": step.id,
+            "startedAt": step.started_at,
             "nodeType": node.node_type,
             "status": step.status,
             "response": step.response,
@@ -229,6 +231,7 @@ class NodeExecutionStateBuilder:
             return {
                 "nodeId": node.node_id,  # Include nodeId to survive key mangling
                 "stepId": None,  # Display nodes don't have their own steps
+                "startedAt": source_step.started_at,
                 "nodeType": node.node_type,
                 "status": source_step.status,
                 "response": source_step.response,
@@ -260,6 +263,7 @@ class NodeExecutionStateBuilder:
         return {
             "nodeId": node.node_id,  # Include nodeId to survive key mangling
             "stepId": None,
+            "startedAt": None,
             "nodeType": node.node_type,
             "status": "pending",
             "response": None,
@@ -281,6 +285,7 @@ class NodeExecutionStateBuilder:
             return {
                 "nodeId": node.node_id,  # Include nodeId to survive key mangling
                 "stepId": None,
+                "startedAt": None,
                 "nodeType": NodeType.START,
                 "status": "not_executed",
                 "response": None,
@@ -295,6 +300,7 @@ class NodeExecutionStateBuilder:
             return {
                 "nodeId": node.node_id,  # Include nodeId to survive key mangling
                 "stepId": None,
+                "startedAt": None,
                 "nodeType": node.node_type,
                 "status": "no_source",
                 "response": None,
@@ -309,6 +315,7 @@ class NodeExecutionStateBuilder:
         return {
             "nodeId": node.node_id,  # Include nodeId to survive key mangling
             "stepId": None,
+            "startedAt": None,
             "nodeType": node.node_type,
             "status": "error",
             "response": None,
@@ -323,6 +330,7 @@ class NodeExecutionStateBuilder:
         return {
             "nodeId": node.node_id,  # Include nodeId to survive key mangling
             "stepId": None,
+            "startedAt": None,
             "nodeType": node.node_type,
             "status": "unknown",
             "response": None,

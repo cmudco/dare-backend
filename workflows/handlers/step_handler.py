@@ -108,7 +108,7 @@ class StepNodeHandler(BaseExecutionHandler):
             )
 
             # Update status to running
-            await self._update_step_status(
+            started_at = await self._update_step_status(
                 workflow_run_step,
                 WorkflowRunStepStatus.RUNNING
             )
@@ -129,6 +129,7 @@ class StepNodeHandler(BaseExecutionHandler):
                             node_id=node.id,
                             step_number=node.step_number or 0,
                             node_type="step",
+                            started_at=started_at,
                             workflow_run_id=context.workflow_run.id
                         )
                     )

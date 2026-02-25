@@ -317,6 +317,11 @@ class WorkflowRunStep(TimeStampMixin):
     order = models.PositiveIntegerField(
         help_text="Order of this step in the run."
     )
+    started_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Timestamp when this step started executing."
+    )
     status = models.CharField(
         max_length=20,
         choices=WorkflowRunStepStatus.choices,
