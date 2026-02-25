@@ -3,7 +3,8 @@ from django.conf import settings
 
 from common.managers import ActiveObjectsManager
 from common.models import BaseModel, TimeStampMixin
-from workflows.constants import Mode, WorkflowRunStepStatus
+from files.models import File
+from workflows.constants import Mode, WorkflowRunStepStatus, BatchRunStatus
 
 
 class Workflow(BaseModel):
@@ -157,6 +158,60 @@ class Workflow(BaseModel):
         }
 
 
+class BatchRun(BaseModel):
+    """
+    Represents a batch execution of a workflow across multiple files.
+    """
+    workflow = models.ForeignKey(
+        'Workflow',
+        on_delete=models.CASCADE,
+        related_name='batch_runs',
+        help_text="Workflow being executed in batch."
+    )
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name='workflow_batch_runs',
+        help_text="User who initiated this batch run."
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=BatchRunStatus.choices,
+        default=BatchRunStatus.RUNNING,
+        help_text="Batch execution status."
+    )
+    total_files = models.PositiveIntegerField(
+        default=0,
+        help_text="Total number of files in this batch."
+    )
+    completed_count = models.PositiveIntegerField(
+        default=0,
+        help_text="Number of completed workflow runs in this batch."
+    )
+    failed_count = models.PositiveIntegerField(
+        default=0,
+        help_text="Number of failed workflow runs in this batch."
+    )
+    ended_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Timestamp when the batch finished."
+    )
+
+    objects = models.Manager()
+    active_objects = ActiveObjectsManager()
+
+    @property
+    def started_at(self):
+        return self.created_at
+
+    def __str__(self):
+        return (
+            f"Batch {self.id} for {self.workflow.title} by {self.user.email} "
+            f"({self.completed_count}/{self.total_files} completed)"
+        )
+
+
 class WorkflowRun(BaseModel):
     """
     Represents an instance of a workflow execution.
@@ -181,6 +236,22 @@ class WorkflowRun(BaseModel):
     is_partial = models.BooleanField(
         default=False,
         help_text="Whether this is a partial run (manual step-by-step execution) or complete workflow run."
+    )
+    batch_run = models.ForeignKey(
+        'BatchRun',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='workflow_runs',
+        help_text="Batch run this workflow execution belongs to."
+    )
+    batch_file = models.ForeignKey(
+        File,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='batch_workflow_runs',
+        help_text="File injected into start-connected steps for this batch run."
     )
 
     objects = models.Manager()
@@ -245,6 +316,11 @@ class WorkflowRunStep(TimeStampMixin):
     )
     order = models.PositiveIntegerField(
         help_text="Order of this step in the run."
+    )
+    started_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="Timestamp when this step started executing."
     )
     status = models.CharField(
         max_length=20,

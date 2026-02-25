@@ -6,6 +6,7 @@ This handler stores and formats final output from workflow steps.
 import logging
 from typing import Optional
 from channels.db import database_sync_to_async
+from django.utils import timezone
 
 from workflows.handlers.base import (
     BaseNodeHandler,
@@ -59,11 +60,14 @@ class OutputNodeHandler(BaseNodeHandler):
             # Send step_started event for output node
             if context.send_callback:
                 try:
+                    started_at = timezone.now()
                     await context.send_callback(
                         WebSocketResponseService.format_workflow_step_started(
                             node_id=node.id,
                             step_number=node.step_number or 0,
-                            node_type="chatOutput"
+                            node_type="chatOutput",
+                            started_at=started_at,
+                            workflow_run_id=context.workflow_run.id
                         )
                     )
                 except Exception as e:
@@ -100,7 +104,8 @@ class OutputNodeHandler(BaseNodeHandler):
                             WebSocketResponseService.format_workflow_step_completed(
                                 node_id=node.id,
                                 response="",
-                                status="failed"
+                                status="failed",
+                                workflow_run_id=context.workflow_run.id
                             )
                         )
                     except Exception as e:
@@ -130,7 +135,8 @@ class OutputNodeHandler(BaseNodeHandler):
                         WebSocketResponseService.format_workflow_step_completed(
                             node_id=node.id,
                             response=source_output,
-                            status="completed"
+                            status="completed",
+                            workflow_run_id=context.workflow_run.id
                         )
                     )
                 except Exception as e:
