@@ -142,7 +142,7 @@ def _extract_conversation_memories(conversation: Conversation, memu_service) -> 
         # Format messages for MemU
         messages = [
             {
-                "role": "user" if msg.sender_type == 0 else "assistant",
+                "role": "user" if msg.sender_type == 1 else "assistant",
                 "content": msg.message
             }
             for msg in messages_qs
