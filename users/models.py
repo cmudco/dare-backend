@@ -6,6 +6,7 @@ from django.utils.translation import gettext_lazy as _
 from common.managers import ActiveObjectsManager
 from common.models import IsDeletedMixin, TimeStampMixin
 from core.config.processing import CHUNK_SIZE, OVERLAP_SIZE
+from core.storage.constants import StorageBackendChoice
 from users.managers import UserManager
 from users.constants import VectorDBChoice, AuthSourceChoice, RoleChoice
 from prompts.models import Prompt
@@ -146,6 +147,12 @@ class User(AbstractUser, IsDeletedMixin):
         default=VectorDBChoice.WEAVIATE,
         verbose_name=_("Vector Database"),
         help_text=_("Vector database to use for this user's data")
+    )
+    storage_backend = models.IntegerField(
+        choices=StorageBackendChoice.choices,
+        default=StorageBackendChoice.LOCAL,
+        verbose_name=_("Storage Backend"),
+        help_text=_("Preferred storage backend for new file uploads")
     )
     default_prompt = models.ForeignKey(
         Prompt,

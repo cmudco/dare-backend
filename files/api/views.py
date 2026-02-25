@@ -217,10 +217,13 @@ class FileViewSet(viewsets.ModelViewSet):
 
 class FileViewAPIView(APIView):
     permission_classes = [IsAuthenticated, IsOwner]
-    
+
     def get(self, request, file_id):
         """
         Serve the actual file for viewing with proper content type headers.
+
+        Uses DynamicStorageFileField which automatically routes to the correct
+        storage backend (local or SyftBox) based on the file's storage_backend field.
         """
         logger.info(f"File view request - User: {request.user}, File ID: {file_id}")
         
@@ -241,23 +244,21 @@ class FileViewAPIView(APIView):
             # Ensure file is processed successfully
             if file_obj.status != FileStatus.PROCESSED:
                 return Response(
-                    {"error": "File is not ready for viewing"}, 
+                    {"error": "File is not ready for viewing"},
                     status=status.HTTP_400_BAD_REQUEST
                 )
-            
-            # Get the actual file path
-            file_path = file_obj.file.path
-            
-            if not os.path.exists(file_path):
+
+            file_name = file_obj.file.name
+
+            if not file_obj.file.exists():
                 return Response(
-                    {"error": "File not found on disk"}, 
+                    {"error": "File not found in storage"},
                     status=status.HTTP_404_NOT_FOUND
                 )
-            
-            # Determine content type
-            content_type, _ = mimetypes.guess_type(file_path)
+
+            content_type, _ = mimetypes.guess_type(file_name)
             if not content_type:
-                ext = os.path.splitext(file_path)[1].lower()
+                ext = os.path.splitext(file_name)[1].lower()
                 if ext == '.pdf':
                     content_type = 'application/pdf'
                 elif ext in ['.txt', '.md']:
@@ -266,34 +267,36 @@ class FileViewAPIView(APIView):
                     content_type = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
                 else:
                     content_type = 'application/octet-stream'
-            
+
+            file_obj.file.open('rb')
+
             # Create file response
             response = FileResponse(
-                open(file_path, 'rb'),
+                file_obj.file,
                 content_type=content_type,
                 as_attachment=False
             )
-            
+
             # Set CORS headers
             response['Access-Control-Allow-Origin'] = '*'
             response['Access-Control-Allow-Methods'] = 'GET'
             response['Access-Control-Allow-Headers'] = 'Authorization, Content-Type'
-            
+
             # Set filename
-            filename = file_obj.name or os.path.basename(file_path)
+            filename = file_obj.name or os.path.basename(file_name)
             response['Content-Disposition'] = f'inline; filename="{filename}"'
-            
+
             return response
-            
+
         except File.DoesNotExist:
             return Response(
-                {"error": "File not found"}, 
+                {"error": "File not found"},
                 status=status.HTTP_404_NOT_FOUND
             )
         except Exception as e:
             logger.error(f"Error in FileViewAPIView: {str(e)}")
             return Response(
-                {"error": f"Error accessing file: {str(e)}"}, 
+                {"error": f"Error accessing file: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
 
