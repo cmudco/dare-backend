@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import tempfile
+import threading
 from typing import Any, Optional
 
 from django.conf import settings
@@ -16,12 +17,13 @@ logger = logging.getLogger(__name__)
 
 # Singleton instance
 _memu_service: Optional["MemUService"] = None
+_init_lock = threading.Lock()
 
 
 class MemUService:
     """
     Wrapper for memu-py MemoryService.
-    
+
     Handles initialization with appropriate database config based on environment
     and provides simplified async methods for memory operations.
     """
@@ -35,6 +37,13 @@ class MemUService:
         if self._initialized:
             return
 
+        with _init_lock:
+            # Double-check after acquiring lock
+            if self._initialized:
+                return
+            self._do_init()
+
+    def _do_init(self):
         try:
             from pydantic import BaseModel
             from memu.app import (
