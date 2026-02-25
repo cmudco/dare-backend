@@ -230,6 +230,7 @@ class UserAdmin(DjangoUserAdmin):
             )
         }),
         (_("Vector Database Settings"), {"fields": ("vector_db",)}),
+        (_("Storage Settings"), {"fields": ("storage_backend",)}),
         (_("Platform Settings (Legacy)"), {
             "fields": ("auth_source", "is_dare_accessible", "is_socratic_bots_accessible"),
             "classes": ("collapse",),
@@ -242,12 +243,12 @@ class UserAdmin(DjangoUserAdmin):
             None,
             {
                 "classes": ("wide",),
-                "fields": ("email", "password1", "password2", "platform_role", "vector_db", "auth_source", "is_superuser", "is_staff", "is_active"),
+                "fields": ("email", "password1", "password2", "platform_role", "vector_db", "storage_backend", "auth_source", "is_superuser", "is_staff", "is_active"),
             },
         ),
     )
-    list_display = ("email", "last_login_display", "date_joined", "activity_status", "is_active", "is_staff", "platform_role", "onboarding_status", "access_code_group", "vector_db")
-    list_filter = ("is_staff", "is_superuser", "is_active", "platform_role", LastLoginFilter, "vector_db", "access_code_group", "auth_source")
+    list_display = ("email", "last_login_display", "date_joined", "activity_status", "is_active", "is_staff", "platform_role", "onboarding_status", "access_code_group", "vector_db", "storage_backend")
+    list_filter = ("is_staff", "is_superuser", "is_active", "platform_role", LastLoginFilter, "vector_db", "storage_backend", "access_code_group", "auth_source")
     search_fields = ("email", "first_name", "last_name")
     ordering = ("-last_login",)
     actions = ["credit_selected_users", "disable_inactive_accounts"]
