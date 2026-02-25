@@ -7,6 +7,7 @@ dictionaries with camelCase keys.
 """
 
 import logging
+from datetime import datetime
 from typing import Dict, Any, Optional, List
 
 from channels.db import database_sync_to_async
@@ -479,6 +480,7 @@ class WebSocketResponseService:
         node_id: str,
         step_number: int,
         node_type: str = "step",
+        started_at: Optional[datetime] = None,
         workflow_run_id: Optional[int] = None
     ) -> Dict[str, Any]:
         """
@@ -490,17 +492,21 @@ class WebSocketResponseService:
             node_id: Unique identifier for the node
             step_number: Sequential step number in the workflow
             node_type: Type of node ('step', 'structuredOutput', etc.)
+            started_at: Server timestamp when the step started
 
         Returns:
             Dictionary ready for JSON serialization
         """
-        return {
+        payload = {
             "type": "step_started",
             "nodeId": node_id,
             "stepNumber": step_number,
             "nodeType": node_type,
             **({"workflowRunId": workflow_run_id} if workflow_run_id else {}),
         }
+        if started_at:
+            payload["startedAt"] = started_at.isoformat()
+        return payload
 
     @classmethod
     def format_workflow_step_streaming(
