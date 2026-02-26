@@ -11,6 +11,7 @@ from datetime import timedelta
 from django.db.models import Count
 from django.utils import timezone
 from django_rq import job
+from asgiref.sync import async_to_sync
 
 from conversations.models import Conversation
 
@@ -58,6 +59,8 @@ def process_memory_extraction():
     
     try:
         memu_service = get_memu_service()
+        # Initialize once before batch; fail fast if memu-py/config is broken
+        async_to_sync(memu_service._ensure_initialized)()
     except Exception as e:
         logger.error(f"Failed to initialize MemU service: {e}")
         return {"status": "error", "message": str(e)}
@@ -125,9 +128,6 @@ def _extract_conversation_memories(conversation: Conversation, memu_service) -> 
     Returns:
         bool: True if extraction succeeded, False otherwise
     """
-    import asyncio
-    from asgiref.sync import async_to_sync
-    
     try:
         user_id = str(conversation.user.id)
         
