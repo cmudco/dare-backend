@@ -14,19 +14,31 @@ django.setup()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+from config.environment import config, features
 from billing.scheduler import WalletTopupScheduler
 from memory.scheduler import MemoryExtractionScheduler
 
 def run_all_schedulers():
-    logger.info("Starting all background schedulers...")
+    logger.info(
+        "Starting background schedulers... (environment: %s)",
+        config.environment,
+    )
 
-    wallet_scheduler = WalletTopupScheduler()
-    wallet_scheduler.start()
+    if features.enable_wallet_topup_scheduler:
+        wallet_scheduler = WalletTopupScheduler()
+        wallet_scheduler.start()
+        logger.info("Wallet topup scheduler started.")
+    else:
+        logger.info("Wallet topup scheduler DISABLED for this environment.")
 
-    memory_scheduler = MemoryExtractionScheduler()
-    memory_scheduler.start()
+    if features.enable_memory_extraction_scheduler:
+        memory_scheduler = MemoryExtractionScheduler()
+        memory_scheduler.start()
+        logger.info("Memory extraction scheduler started.")
+    else:
+        logger.info("Memory extraction scheduler DISABLED for this environment.")
 
-    logger.info("All schedulers started successfully.")
+    logger.info("Scheduler startup complete.")
 
 if __name__ == "__main__":
     run_all_schedulers()
