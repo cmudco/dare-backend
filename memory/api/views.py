@@ -66,20 +66,20 @@ class MemoryViewSet(ViewSet):
 
     def retrieve(self, request, pk=None):
         """
-        Retrieve a single memory item.
-        
+        Retrieve a single memory item owned by the authenticated user.
+
         GET /api/memory/items/<id>/
         """
         try:
             service = get_memu_service()
-            item = async_to_sync(service.get_item)(pk)
-            
+            item = async_to_sync(service.get_item)(pk, self.get_user_id())
+
             if not item:
                 return Response(
                     {"error": "Memory item not found"},
                     status=status.HTTP_404_NOT_FOUND,
                 )
-            
+
             serializer = MemoryItemSerializer(item)
             return Response(serializer.data, status=status.HTTP_200_OK)
         except Exception as e:
@@ -91,15 +91,20 @@ class MemoryViewSet(ViewSet):
 
     def destroy(self, request, pk=None):
         """
-        Delete a memory item.
-        
+        Delete a memory item owned by the authenticated user.
+
         DELETE /api/memory/items/<id>/
         """
         try:
             service = get_memu_service()
-            async_to_sync(service.delete_item)(pk)
-            
+            async_to_sync(service.delete_item)(pk, self.get_user_id())
+
             return Response(status=status.HTTP_204_NO_CONTENT)
+        except PermissionError:
+            return Response(
+                {"error": "Memory item not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
         except Exception as e:
             logger.error(f"Failed to delete memory item {pk}: {e}")
             return Response(
