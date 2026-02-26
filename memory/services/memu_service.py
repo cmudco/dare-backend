@@ -2,16 +2,26 @@
 MemU Service Wrapper
 
 Provides a service layer for cross-conversation memory using memu-py.
-Uses SQLite for local development and pgvector for production.
+Requires PostgreSQL with pgvector for memory storage.
 """
 import json
 import logging
 import os
 import tempfile
 import threading
+import traceback
 from typing import Any, Optional
 
-from django.conf import settings
+from pydantic import BaseModel
+from memu.app import (
+    MemoryService,
+    LLMConfig,
+    LLMProfilesConfig,
+    RetrieveConfig,
+)
+from memu.app.settings import UserConfig
+
+from config.env import USE_POSTGRES, DB_NAME, DB_USER, DB_PASSWORD, DB_HOST, DB_PORT
 
 logger = logging.getLogger(__name__)
 
@@ -45,16 +55,6 @@ class MemUService:
 
     def _do_init(self):
         try:
-            from pydantic import BaseModel
-            from memu.app import (
-                MemoryService,
-                LLMConfig,
-                LLMProfilesConfig,
-                DatabaseConfig,
-                RetrieveConfig,
-            )
-            from memu.app.settings import UserConfig
-
             # Get OpenAI API key from environment
             openai_api_key = os.getenv("OPENAI_API_KEY")
             if not openai_api_key:
@@ -75,31 +75,25 @@ class MemUService:
             # Define user model for scoping memories by user_id
             class DareUserModel(BaseModel):
                 user_id: str | None = None
-            
+
             user_config = UserConfig(model=DareUserModel)
 
-            # Use same DB toggle as Django (USE_POSTGRES from env)
-            from config.env import USE_POSTGRES, DB_NAME, DB_USER, DB_PASSWORD, DB_HOST, DB_PORT
-            
-            if USE_POSTGRES:
-                # Use psycopg driver format as per memu-py docs
-                db_url = f"postgresql+psycopg://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-                database_config = {
-                    "metadata_store": {
-                        "provider": "postgres",
-                        "dsn": db_url,
-                        "ddl_mode": "create",
-                    },
-                }
-                logger.info(f"MemU initialized with PostgreSQL at: {DB_HOST}:{DB_PORT}/{DB_NAME}")
-            else:
-                # SQLite database path for local development
-                db_path = os.path.join(settings.BASE_DIR, "memu_local.db")
-                database_config = DatabaseConfig(
-                    provider="sqlite",
-                    path=db_path,
+            # MemU requires PostgreSQL — skip initialization if not configured
+            if not USE_POSTGRES:
+                raise RuntimeError(
+                    "MemU requires PostgreSQL (USE_POSTGRES=True). "
+                    "Memory features are disabled."
                 )
-                logger.info(f"MemU initialized with SQLite at: {db_path}")
+
+            db_url = f"postgresql+psycopg://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+            database_config = {
+                "metadata_store": {
+                    "provider": "postgres",
+                    "dsn": db_url,
+                    "ddl_mode": "create",
+                },
+            }
+            logger.info(f"MemU initialized with PostgreSQL at: {DB_HOST}:{DB_PORT}/{DB_NAME}")
 
             # Configure retrieval with RAG method
             retrieve_config = RetrieveConfig(
@@ -116,11 +110,6 @@ class MemUService:
             self._initialized = True
             logger.info("MemU service initialized successfully")
 
-        except ImportError as e:
-            logger.error(f"Failed to import memu-py: {e}")
-            raise ImportError(
-                "memu-py is not installed. Run: pip install memu-py"
-            ) from e
         except Exception as e:
             logger.error(f"Failed to initialize MemU service: {e}")
             raise
@@ -227,7 +216,6 @@ class MemUService:
             return user_items
         except Exception as e:
             logger.error(f"Failed to list memory items for user {user_id}: {e}")
-            import traceback
             logger.error(traceback.format_exc())
             raise
 
@@ -419,7 +407,6 @@ class MemUService:
             return result if result else {"items": [], "categories": [], "resource": None}
         except Exception as e:
             logger.error(f"Failed to memorize conversation for user {user_id}: {e}")
-            import traceback
             logger.error(traceback.format_exc())
             raise
 
