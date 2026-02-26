@@ -19,8 +19,11 @@ Usage:
 """
 
 import logging
+from datetime import timedelta
+
 from django.utils import timezone
 from django_rq import get_scheduler
+
 from .tasks import process_memory_extraction
 
 logger = logging.getLogger(__name__)
@@ -182,8 +185,6 @@ class MemoryExtractionScheduler:
         Returns:
             dict: Information about the scheduled test job
         """
-        from datetime import timedelta
-        
         try:
             test_job_id = f"{self.job_id}_test_{timezone.now().strftime('%Y%m%d_%H%M%S')}"
 
