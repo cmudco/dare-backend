@@ -311,6 +311,13 @@ RQ_QUEUES = {
         'DB': REDIS_DB,
         'PASSWORD': REDIS_PASSWORD if REDIS_PASSWORD else None,
     },
+    'simple_queue': {
+        'HOST': REDIS_HOST,
+        'PORT': REDIS_PORT,
+        'DB': REDIS_DB,
+        'PASSWORD': REDIS_PASSWORD if REDIS_PASSWORD else None,
+        'DEFAULT_TIMEOUT': 3600,
+    },
 }
 
 RQ_SHOW_ADMIN_LINK = True
