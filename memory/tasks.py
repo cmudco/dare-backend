@@ -32,7 +32,7 @@ EXTRACTION_COOLDOWN_HOURS = 1
 BATCH_SIZE = 50
 
 
-@job
+@job("simple_queue")
 def process_memory_extraction():
     """
     Extract memories from eligible conversations.
@@ -171,7 +171,7 @@ def _extract_conversation_memories(conversation: Conversation, memu_service) -> 
         return False
 
 
-@job
+@job("simple_queue")
 def extract_single_conversation(conversation_id: int):
     """
     Extract memories from a specific conversation.
