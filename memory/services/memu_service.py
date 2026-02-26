@@ -2,7 +2,7 @@
 MemU Service Wrapper
 
 Provides a service layer for cross-conversation memory using memu-py.
-Uses SQLite for local development and pgvector for production.
+Requires PostgreSQL with pgvector for memory storage.
 """
 import json
 import logging
@@ -10,8 +10,6 @@ import os
 import tempfile
 import threading
 from typing import Any, Optional
-
-from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +48,6 @@ class MemUService:
                 MemoryService,
                 LLMConfig,
                 LLMProfilesConfig,
-                DatabaseConfig,
                 RetrieveConfig,
             )
             from memu.app.settings import UserConfig
@@ -78,28 +75,24 @@ class MemUService:
             
             user_config = UserConfig(model=DareUserModel)
 
-            # Use same DB toggle as Django (USE_POSTGRES from env)
+            # MemU requires PostgreSQL — skip initialization if not configured
             from config.env import USE_POSTGRES, DB_NAME, DB_USER, DB_PASSWORD, DB_HOST, DB_PORT
-            
-            if USE_POSTGRES:
-                # Use psycopg driver format as per memu-py docs
-                db_url = f"postgresql+psycopg://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-                database_config = {
-                    "metadata_store": {
-                        "provider": "postgres",
-                        "dsn": db_url,
-                        "ddl_mode": "create",
-                    },
-                }
-                logger.info(f"MemU initialized with PostgreSQL at: {DB_HOST}:{DB_PORT}/{DB_NAME}")
-            else:
-                # SQLite database path for local development
-                db_path = os.path.join(settings.BASE_DIR, "memu_local.db")
-                database_config = DatabaseConfig(
-                    provider="sqlite",
-                    path=db_path,
+
+            if not USE_POSTGRES:
+                raise RuntimeError(
+                    "MemU requires PostgreSQL (USE_POSTGRES=True). "
+                    "Memory features are disabled."
                 )
-                logger.info(f"MemU initialized with SQLite at: {db_path}")
+
+            db_url = f"postgresql+psycopg://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+            database_config = {
+                "metadata_store": {
+                    "provider": "postgres",
+                    "dsn": db_url,
+                    "ddl_mode": "create",
+                },
+            }
+            logger.info(f"MemU initialized with PostgreSQL at: {DB_HOST}:{DB_PORT}/{DB_NAME}")
 
             # Configure retrieval with RAG method
             retrieve_config = RetrieveConfig(
