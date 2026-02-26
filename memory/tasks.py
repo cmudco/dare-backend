@@ -58,6 +58,9 @@ def process_memory_extraction():
     
     try:
         memu_service = get_memu_service()
+        # Initialize once before batch; fail fast if memu-py/config is broken
+        from asgiref.sync import async_to_sync
+        async_to_sync(memu_service._ensure_initialized)()
     except Exception as e:
         logger.error(f"Failed to initialize MemU service: {e}")
         return {"status": "error", "message": str(e)}
