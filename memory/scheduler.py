@@ -34,7 +34,7 @@ class MemoryExtractionScheduler:
     Handles scheduling of automatic memory extraction.
     """
 
-    def __init__(self, queue_name='scheduler'):
+    def __init__(self, queue_name="simple_queue"):
         """
         Initialize the scheduler.
 
