@@ -10,6 +10,7 @@ from rest_framework import serializers
 from billing.models import Wallet
 from billing.services import WalletService
 from prompts.api.serializers import PromptSerializer
+from core.storage.constants import StorageBackendChoice
 from users.constants import VectorDBChoice, AuthSourceChoice, RoleChoice
 from users.models import AccessCodeGroup
 from users.utils import detect_platform_from_request, get_platform_access_permission
@@ -28,6 +29,7 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
     billing_mode = serializers.CharField(read_only=True)
     billing_mode_display = serializers.CharField(source='get_billing_mode_display', read_only=True)
     avatar_url = serializers.SerializerMethodField()
+    is_syftbox_file_storage = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -50,6 +52,7 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
             "avatar_type",
             "avatar_preset",
             "avatar_url",
+            "is_syftbox_file_storage",
         ]
         read_only_fields = ["id", "auth_source", "platform_role", "billing_mode", "billing_mode_display", "is_onboarding_completed"]
 
@@ -71,6 +74,9 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
                 "isActive": group.is_active
             }
         return None
+
+    def get_is_syftbox_file_storage(self, obj):
+        return obj.storage_backend == StorageBackendChoice.SYFTBOX
 
     def get_avatar_url(self, obj):
         """Return absolute URL for avatar, or None if not set."""
