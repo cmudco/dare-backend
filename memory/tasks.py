@@ -14,6 +14,7 @@ from django_rq import job
 from asgiref.sync import async_to_sync
 
 from conversations.models import Conversation
+from memory.services import get_memu_service
 
 logger = logging.getLogger(__name__)
 
@@ -45,8 +46,6 @@ def process_memory_extraction():
     Returns:
         dict: Stats about the extraction run
     """
-    from memory.services import get_memu_service
-    
     stats = {
         "total_checked": 0,
         "eligible": 0,
@@ -180,12 +179,10 @@ def extract_single_conversation(conversation_id: int):
     
     Args:
         conversation_id: ID of the conversation to process
-        
+
     Returns:
         dict: Result of the extraction
     """
-    from memory.services import get_memu_service
-    
     try:
         conversation = Conversation.active_objects.get(id=conversation_id)
     except Conversation.DoesNotExist:
