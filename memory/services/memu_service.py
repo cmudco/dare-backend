@@ -9,7 +9,19 @@ import logging
 import os
 import tempfile
 import threading
+import traceback
 from typing import Any, Optional
+
+from pydantic import BaseModel
+from memu.app import (
+    MemoryService,
+    LLMConfig,
+    LLMProfilesConfig,
+    RetrieveConfig,
+)
+from memu.app.settings import UserConfig
+
+from config.env import USE_POSTGRES, DB_NAME, DB_USER, DB_PASSWORD, DB_HOST, DB_PORT
 
 logger = logging.getLogger(__name__)
 
@@ -43,15 +55,6 @@ class MemUService:
 
     def _do_init(self):
         try:
-            from pydantic import BaseModel
-            from memu.app import (
-                MemoryService,
-                LLMConfig,
-                LLMProfilesConfig,
-                RetrieveConfig,
-            )
-            from memu.app.settings import UserConfig
-
             # Get OpenAI API key from environment
             openai_api_key = os.getenv("OPENAI_API_KEY")
             if not openai_api_key:
@@ -72,12 +75,10 @@ class MemUService:
             # Define user model for scoping memories by user_id
             class DareUserModel(BaseModel):
                 user_id: str | None = None
-            
+
             user_config = UserConfig(model=DareUserModel)
 
             # MemU requires PostgreSQL — skip initialization if not configured
-            from config.env import USE_POSTGRES, DB_NAME, DB_USER, DB_PASSWORD, DB_HOST, DB_PORT
-
             if not USE_POSTGRES:
                 raise RuntimeError(
                     "MemU requires PostgreSQL (USE_POSTGRES=True). "
@@ -109,11 +110,6 @@ class MemUService:
             self._initialized = True
             logger.info("MemU service initialized successfully")
 
-        except ImportError as e:
-            logger.error(f"Failed to import memu-py: {e}")
-            raise ImportError(
-                "memu-py is not installed. Run: pip install memu-py"
-            ) from e
         except Exception as e:
             logger.error(f"Failed to initialize MemU service: {e}")
             raise
@@ -220,7 +216,6 @@ class MemUService:
             return user_items
         except Exception as e:
             logger.error(f"Failed to list memory items for user {user_id}: {e}")
-            import traceback
             logger.error(traceback.format_exc())
             raise
 
@@ -412,7 +407,6 @@ class MemUService:
             return result if result else {"items": [], "categories": [], "resource": None}
         except Exception as e:
             logger.error(f"Failed to memorize conversation for user {user_id}: {e}")
-            import traceback
             logger.error(traceback.format_exc())
             raise
 
