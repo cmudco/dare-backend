@@ -138,8 +138,8 @@ class MemUService:
         await self._ensure_initialized()
         
         try:
-            # List all items from memu
-            result = await self._service.list_memory_items()
+            # List only this user's items from memu
+            result = await self._service.list_memory_items(where={"user_id": user_id})
             
             # Handle dict response format {'items': [...]}
             if isinstance(result, dict):
@@ -254,42 +254,75 @@ class MemUService:
             logger.error(f"Failed to search memories for user {user_id}: {e}")
             raise
 
-    async def get_item(self, item_id: str) -> Optional[dict[str, Any]]:
+    async def get_item(self, item_id: str, user_id: str) -> Optional[dict[str, Any]]:
         """
-        Get a single memory item by ID.
-        
+        Get a single memory item by ID, scoped to the given user.
+
         Args:
             item_id: The memory item's unique identifier
-            
+            user_id: The user's unique identifier (for ownership verification)
+
         Returns:
-            Memory item dict or None if not found
+            Memory item dict or None if not found or not owned by user
         """
         await self._ensure_initialized()
-        
+
         try:
-            result = await self._service.get_memory_item(memory_id=item_id)
-            return result
+            # Verify ownership: list user's items and check if this item belongs to them
+            result = await self._service.list_memory_items(where={"user_id": user_id})
+            items_list = result.get("items", []) if isinstance(result, dict) else result if isinstance(result, (list, tuple)) else []
+
+            for item in items_list:
+                if hasattr(item, "model_dump"):
+                    item_dict = item.model_dump()
+                elif isinstance(item, dict):
+                    item_dict = item
+                elif hasattr(item, "__dict__"):
+                    item_dict = vars(item)
+                else:
+                    continue
+
+                if str(item_dict.get("id")) == str(item_id):
+                    return item_dict
+
+            return None
         except Exception as e:
-            logger.error(f"Failed to get memory item {item_id}: {e}")
+            logger.error(f"Failed to get memory item {item_id} for user {user_id}: {e}")
             raise
 
-    async def delete_item(self, item_id: str) -> bool:
+    async def delete_item(self, item_id: str, user_id: str) -> bool:
         """
-        Delete a memory item.
-        
+        Delete a memory item, scoped to the given user.
+
         Args:
             item_id: The memory item's unique identifier
-            
+            user_id: The user's unique identifier (for ownership verification)
+
         Returns:
             True if deleted successfully
+
+        Raises:
+            PermissionError: If the item does not belong to the user
         """
         await self._ensure_initialized()
-        
+
         try:
-            await self._service.delete_memory_item(memory_id=item_id)
+            # Verify ownership before deleting
+            item = await self.get_item(item_id, user_id)
+            if item is None:
+                raise PermissionError(
+                    f"Memory item {item_id} not found or not owned by user {user_id}"
+                )
+
+            await self._service.delete_memory_item(
+                memory_id=item_id,
+                user={"user_id": user_id},
+            )
             return True
+        except PermissionError:
+            raise
         except Exception as e:
-            logger.error(f"Failed to delete memory item {item_id}: {e}")
+            logger.error(f"Failed to delete memory item {item_id} for user {user_id}: {e}")
             raise
 
     async def clear_all(self, user_id: str) -> bool:
@@ -438,10 +471,10 @@ class MemUService:
         
         logger.info(f"[SEED DEBUG] Seeding complete. Total items created: {len(all_items)}")
         
-        # Check what's in the DB after seeding
+        # Check what's in the DB after seeding (scoped to this user)
         try:
-            check_result = await self._service.list_memory_items()
-            logger.info(f"[SEED DEBUG] Post-seed DB check: {check_result}")
+            check_result = await self._service.list_memory_items(where={"user_id": user_id})
+            logger.info(f"[SEED DEBUG] Post-seed DB check for user {user_id}: {check_result}")
         except Exception as e:
             logger.error(f"[SEED DEBUG] Failed to check DB: {e}")
 
