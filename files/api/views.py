@@ -430,7 +430,7 @@ class InternalFileUploadView(APIView):
         Upload file(s) on behalf of a user.
 
         Request body:
-            - user_id: Target user's ID (required)
+            - user_email: Target user's email (required)
             - files: File(s) to upload (required)
             - names: Filename(s) for the uploaded files (optional)
             - tags: JSON array of tag IDs (optional)
@@ -450,19 +450,19 @@ class InternalFileUploadView(APIView):
                 status=status.HTTP_403_FORBIDDEN
             )
 
-        # Get target user
-        user_id = request.data.get('user_id')
-        if not user_id:
+        # Get target user by email (cross-environment safe identifier)
+        user_email = request.data.get('user_email')
+        if not user_email:
             return Response(
-                {"error": "user_id is required"},
+                {"error": "user_email is required"},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
         try:
-            user = User.objects.get(id=user_id)
+            user = User.objects.get(email=user_email)
         except User.DoesNotExist:
             return Response(
-                {"error": f"User with id {user_id} not found"},
+                {"error": f"User with email {user_email} not found"},
                 status=status.HTTP_404_NOT_FOUND
             )
 
@@ -497,7 +497,7 @@ class InternalFileUploadView(APIView):
             serializer = FileSerializer(file_instances, many=True)
             logger.info(
                 f"Internal file upload: {len(file_instances)} file(s) "
-                f"uploaded for user {user_id}"
+                f"uploaded for user {user_email}"
             )
             return Response(serializer.data, status=status.HTTP_201_CREATED)
 
