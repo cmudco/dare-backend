@@ -87,7 +87,7 @@ class AccessCodeGroupAdmin(admin.ModelAdmin):
             'description': (
                 'Role assigned to users who register with this access code.<br><br>'
                 '<strong>SUPERADMIN</strong> — Full DARE platform access + SocraticBooks creator + admin privileges.<br>'
-                '<strong>ADMIN</strong> — DARE platform administration + cross-user agent management + SocraticBooks creator access.<br>'
+                '<strong>SUPERVISOR</strong> — DARE platform access + cross-user bot/agent management in SocraticBooks + creator access.<br>'
                 '<strong>RESEARCHER</strong> — DARE platform access + SocraticBooks creator (can create and manage books).<br>'
                 '<strong>USER</strong> — DARE platform access + SocraticBooks student/consumer (can read and interact with books).<br>'
                 '<strong>CREATOR</strong> — No DARE access + SocraticBooks creator (can create and manage books only).<br>'
@@ -224,7 +224,7 @@ class UserAdmin(DjangoUserAdmin):
             "description": (
                 "User's role determines permissions across DARE and SocraticBots platforms.<br>"
                 "<strong>SUPERADMIN</strong> — Full DARE + SB creator + admin privileges. "
-                "<strong>ADMIN</strong> — DARE admin access + cross-user agent management + SB creator access. "
+                "<strong>SUPERVISOR</strong> — DARE access + cross-user bot/agent management in SB + creator access. "
                 "<strong>RESEARCHER</strong> — DARE access + SB creator. "
                 "<strong>USER</strong> — DARE access + SB student/consumer. "
                 "<strong>CREATOR</strong> — No DARE + SB creator. "

@@ -79,7 +79,7 @@ class AccessCodeGroup(TimeStampMixin):
         default=RoleChoice.USER,
         verbose_name=_("Default Role"),
         help_text=_("Role assigned to users who register with this access code. "
-                    "ADMIN: DARE platform administration + cross-user agent management + SocraticBooks creator access. "
+                    "SUPERVISOR: DARE platform access + cross-user bot/agent management in SocraticBooks + creator access. "
                     "RESEARCHER: DARE platform access + SocraticBooks creator (can create/manage books). "
                     "USER: DARE platform access + SocraticBooks student/consumer (can read/interact with books). "
                     "CREATOR: No DARE access + SocraticBooks creator (can create/manage books). "
