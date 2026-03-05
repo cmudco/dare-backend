@@ -27,13 +27,13 @@ class IsSuperAdmin(BasePermission):
         )
 
 
-class IsAdminOrAbove(BasePermission):
+class IsSupervisorOrAbove(BasePermission):
     """
-    Permission class that allows Admins and above (Admins, SuperAdmins).
+    Permission class that allows Supervisors and above (Supervisors, SuperAdmins).
     """
-    message = "Only admins or super administrators can perform this action."
+    message = "Only supervisors or super administrators can perform this action."
 
-    ALLOWED_ROLES = [RoleChoice.SUPERADMIN, RoleChoice.ADMIN]
+    ALLOWED_ROLES = [RoleChoice.SUPERADMIN, RoleChoice.SUPERVISOR]
 
     def has_permission(self, request, view):
         if not request.user.is_authenticated:
@@ -49,7 +49,7 @@ class IsResearcherOrAbove(BasePermission):
     """
     message = "Only researchers or administrators can perform this action."
 
-    ALLOWED_ROLES = [RoleChoice.SUPERADMIN, RoleChoice.ADMIN, RoleChoice.RESEARCHER]
+    ALLOWED_ROLES = [RoleChoice.SUPERADMIN, RoleChoice.SUPERVISOR, RoleChoice.RESEARCHER]
 
     def has_permission(self, request, view):
         if not request.user.is_authenticated:
@@ -65,7 +65,7 @@ class IsCreatorOrAbove(BasePermission):
     """
     message = "Only creators or higher can perform this action."
 
-    ALLOWED_ROLES = [RoleChoice.SUPERADMIN, RoleChoice.ADMIN, RoleChoice.RESEARCHER, RoleChoice.CREATOR]
+    ALLOWED_ROLES = [RoleChoice.SUPERADMIN, RoleChoice.SUPERVISOR, RoleChoice.RESEARCHER, RoleChoice.CREATOR]
 
     def has_permission(self, request, view):
         if not request.user.is_authenticated:

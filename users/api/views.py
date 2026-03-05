@@ -406,7 +406,7 @@ class InternalSetRoleView(APIView):
     permission_classes = [AllowAny]
 
     # Roles that have DARE access
-    DARE_ACCESS_ROLES = {RoleChoice.SUPERADMIN, RoleChoice.ADMIN, RoleChoice.RESEARCHER, RoleChoice.USER}
+    DARE_ACCESS_ROLES = {RoleChoice.SUPERADMIN, RoleChoice.SUPERVISOR, RoleChoice.RESEARCHER, RoleChoice.USER}
 
     def post(self, request, *args, **kwargs):
         # Verify internal key
