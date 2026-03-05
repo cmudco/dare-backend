@@ -8,7 +8,8 @@ from users.constants import RoleChoice
 
 # Role hierarchy mapping - higher number means higher privileges
 ROLE_HIERARCHY = {
-    RoleChoice.SUPERADMIN: 4,
+    RoleChoice.SUPERADMIN: 5,
+    RoleChoice.ADMIN: 4,
     RoleChoice.RESEARCHER: 3,
     RoleChoice.CREATOR: 2,
     RoleChoice.USER: 1,
@@ -59,6 +60,11 @@ def is_researcher_or_above(user) -> bool:
     return has_role_or_higher(user, RoleChoice.RESEARCHER)
 
 
+def is_admin_or_above(user) -> bool:
+    """Check if user is an Admin or higher."""
+    return has_role_or_higher(user, RoleChoice.ADMIN)
+
+
 def is_creator_or_above(user) -> bool:
     """Check if user is a Creator or higher."""
     return has_role_or_higher(user, RoleChoice.CREATOR)
@@ -76,6 +82,7 @@ def get_role_display(role: str) -> str:
     """
     role_displays = {
         RoleChoice.SUPERADMIN: "Super Admin",
+        RoleChoice.ADMIN: "Admin",
         RoleChoice.RESEARCHER: "Researcher",
         RoleChoice.CREATOR: "Creator",
         RoleChoice.USER: "User",

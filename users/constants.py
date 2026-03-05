@@ -22,6 +22,7 @@ class AvatarTypeChoice(models.TextChoices):
 
 class RoleChoice(models.TextChoices):
     SUPERADMIN = "SUPERADMIN", _("Super Admin")
+    ADMIN = "ADMIN", _("Admin")
     RESEARCHER = "RESEARCHER", _("Researcher")
     USER = "USER", _("User")
     CREATOR = "CREATOR", _("Creator")
