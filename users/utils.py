@@ -126,10 +126,10 @@ def get_platform_access_permission(user, platform):
     role = getattr(user, 'platform_role', RoleChoice.USER)
 
     # Roles with DARE access
-    dare_roles = {RoleChoice.SUPERADMIN, RoleChoice.RESEARCHER, RoleChoice.USER}
+    dare_roles = {RoleChoice.SUPERADMIN, RoleChoice.ADMIN, RoleChoice.RESEARCHER, RoleChoice.USER}
 
     # All roles have SB access (at minimum as consumer)
-    sb_roles = {RoleChoice.SUPERADMIN, RoleChoice.RESEARCHER, RoleChoice.USER, RoleChoice.CREATOR, RoleChoice.SB_USER}
+    sb_roles = {RoleChoice.SUPERADMIN, RoleChoice.ADMIN, RoleChoice.RESEARCHER, RoleChoice.USER, RoleChoice.CREATOR, RoleChoice.SB_USER}
 
     if platform == AuthSourceChoice.DARE:
         return role in dare_roles
