@@ -1,8 +1,9 @@
-from django.contrib import admin
+from django.contrib import admin, messages
 from django.contrib.auth import get_user_model
 from django.urls import reverse
 from django import forms
 
+from conversations.services.socratic_dependency_service import SocraticDependencyService
 from core.helpers.admin_utils import (
     render_code_block,
     render_empty_placeholder,
@@ -22,7 +23,6 @@ class LLMAdmin(admin.ModelAdmin):
     list_display = ("name", "identifier", "provider", "base_url_display")
     search_fields = ("name", "identifier", "base_url")
     list_filter = ("provider",)
-
     fieldsets = (
         ("Model Information", {
             "fields": ("name", "identifier", "description", "provider")
@@ -46,6 +46,27 @@ class LLMAdmin(admin.ModelAdmin):
             return obj.base_url
         return "-"
     base_url_display.short_description = "Base URL"
+
+    def delete_view(self, request, object_id, extra_context=None):
+        """Add Socratic Books dependency warnings to the delete confirmation page."""
+        dependency_data = SocraticDependencyService.get_dependent_bots(
+            int(object_id)
+        )
+
+        if dependency_data and dependency_data.get("dependent_bots_count", 0) > 0:
+            bot_names = [
+                f"{b['bot_title']} ({b['bot_group_title']}) [{b['usage_type']}]"
+                for b in dependency_data["dependent_bots"]
+            ]
+            warning_msg = (
+                f"WARNING: This model is used by "
+                f"{dependency_data['dependent_bots_count']} Socratic Books bot(s): "
+                + ", ".join(bot_names)
+                + ". Deleting it will break these bots."
+            )
+            messages.warning(request, warning_msg)
+
+        return super().delete_view(request, object_id, extra_context=extra_context)
 
 @admin.register(Conversation)
 class ConversationAdmin(admin.ModelAdmin):
