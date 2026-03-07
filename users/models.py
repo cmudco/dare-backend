@@ -79,6 +79,7 @@ class AccessCodeGroup(TimeStampMixin):
         default=RoleChoice.USER,
         verbose_name=_("Default Role"),
         help_text=_("Role assigned to users who register with this access code. "
+                    "SUPERVISOR: DARE platform access + cross-user bot/agent management in SocraticBooks + creator access. "
                     "RESEARCHER: DARE platform access + SocraticBooks creator (can create/manage books). "
                     "USER: DARE platform access + SocraticBooks student/consumer (can read/interact with books). "
                     "CREATOR: No DARE access + SocraticBooks creator (can create/manage books). "
@@ -230,6 +231,7 @@ class User(AbstractUser, IsDeletedMixin):
         default=RoleChoice.USER,
         verbose_name=_("Platform Role"),
         help_text=_("User's role across DARE and SocraticBots platforms. "
+                    "ADMIN: DARE admin access + SB creator + voice agent. "
                     "RESEARCHER: DARE access + SB creator. "
                     "USER: DARE access + SB student/consumer. "
                     "CREATOR: No DARE + SB creator. "
