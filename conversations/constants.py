@@ -18,6 +18,11 @@ class Provider(Enum):
     def choices(cls):
         return [(provider.value, provider.name.replace("_", " ").title()) for provider in cls]
 
+class ModelTier(models.TextChoices):
+    PREMIUM = 'premium', 'Premium'
+    STANDARD = 'standard', 'Standard'
+    ECONOMY = 'economy', 'Economy'
+
 class FeedbackType(models.TextChoices):
     LIKE = 'like', 'Like'
     DISLIKE = 'dislike', 'Dislike'
