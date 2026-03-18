@@ -19,9 +19,9 @@ User = get_user_model()
 
 @admin.register(LLM)
 class LLMAdmin(admin.ModelAdmin):
-    list_display = ("name", "identifier", "provider", "base_url_display")
+    list_display = ("name", "identifier", "provider", "tier", "base_url_display")
     search_fields = ("name", "identifier", "base_url")
-    list_filter = ("provider",)
+    list_filter = ("provider", "tier")
 
     fieldsets = (
         ("Model Information", {
@@ -33,6 +33,18 @@ class LLMAdmin(admin.ModelAdmin):
         }),
         ("Capabilities", {
             "fields": ("is_reasoning", "supports_vision", "is_image_generator")
+        }),
+        ("Classification", {
+            "fields": ("tier",),
+            "description": (
+                "Model Tier Guide — choose the tier based on the model's token pricing:<br>"
+                "<b>Premium</b>: Flagship models — input &ge; $10/M or output &ge; $30/M "
+                "(e.g., Claude Opus, GPT-4.5)<br>"
+                "<b>Standard</b>: Mid-range models — moderate pricing "
+                "(e.g., Claude Sonnet, GPT-4o, Gemini Pro)<br>"
+                "<b>Economy</b>: Cost-optimized — input &le; $1/M and output &le; $4/M "
+                "(e.g., Claude Haiku, GPT-4o-mini, Gemini Flash Lite)"
+            ),
         }),
         ("Pricing", {
             "fields": ("input_token_rate_per_million", "output_token_rate_per_million"),

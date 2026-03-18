@@ -11,7 +11,7 @@ from agents.models import Agent
 class LLMSerializer(serializers.ModelSerializer):
     class Meta:
         model = LLM
-        fields = ['id', 'name', 'identifier', 'provider', 'description', 'is_reasoning', 'is_image_generator', 'is_audio_transcriber', 'input_token_rate_per_million', 'output_token_rate_per_million']
+        fields = ['id', 'name', 'identifier', 'provider', 'description', 'is_reasoning', 'is_image_generator', 'is_audio_transcriber', 'input_token_rate_per_million', 'output_token_rate_per_million', 'tier']
 
 class ConversationSerializer(serializers.ModelSerializer):
     user = serializers.SerializerMethodField()

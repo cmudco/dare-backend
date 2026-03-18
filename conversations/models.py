@@ -10,7 +10,7 @@ from django.utils import timezone
 from common.managers import ActiveObjectsManager
 from common.models import BaseModel, TimeStampMixin
 from core.fields import EncryptedCharField
-from .constants import Provider, SenderType, FeedbackType, ConversationSource, ArtifactType, ArtifactStatus
+from .constants import Provider, SenderType, FeedbackType, ConversationSource, ArtifactType, ArtifactStatus, ModelTier
 
 
 class LLM(models.Model):
@@ -41,6 +41,17 @@ class LLM(models.Model):
     is_audio_transcriber = models.BooleanField(
         default=False,
         help_text="Whether the model supports audio transcription (e.g., Whisper, Gemini)."
+    )
+    tier = models.CharField(
+        max_length=20,
+        choices=ModelTier.choices,
+        default=ModelTier.STANDARD,
+        help_text=(
+            "Cost/capability tier for grouping models in the UI. "
+            "Premium: Flagship models — input >= $10/M or output >= $30/M (e.g., Claude Opus, GPT-4.5). "
+            "Standard: Mid-range models — moderate pricing (e.g., Claude Sonnet, GPT-4o, Gemini Pro). "
+            "Economy: Cost-optimized — input <= $1/M and output <= $4/M (e.g., Claude Haiku, GPT-4o-mini, Gemini Flash Lite)."
+        ),
     )
 
     input_token_rate_per_million = models.DecimalField(
