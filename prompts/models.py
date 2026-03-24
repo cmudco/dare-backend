@@ -33,6 +33,14 @@ class Prompt(BaseModel):
         related_name='children',
         help_text="Original prompt this was cloned from."
     )
+    forked_from_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="shared_prompt_copies",
+        help_text="Original owner when this prompt was cloned from another user."
+    )
 
     active_objects = ActiveObjectsManager()
 
