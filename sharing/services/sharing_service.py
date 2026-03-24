@@ -112,6 +112,20 @@ class SharingService:
         return getattr(entity, "title", None) or str(entity)
 
     @staticmethod
+    def _is_forwarded_copy(entity_type: str, entity, owner: User) -> bool:
+        """Return True when an item originated from another user."""
+        if entity_type == "conversation":
+            return entity.file_owner_id is not None
+
+        if entity_type == "workflow":
+            return entity.parent is not None and entity.parent.user_id != owner.id
+
+        if entity_type == "prompt":
+            return entity.forked_from_user_id is not None
+
+        return False
+
+    @staticmethod
     def share_item(
         entity_type: str,
         object_id: str,
@@ -144,6 +158,12 @@ class SharingService:
             raise SharingValidationError(
                 SharingErrorMessage.PERMISSION_DENIED,
                 SharingErrorCode.PERMISSION_DENIED,
+            )
+
+        if SharingService._is_forwarded_copy(entity_type, entity, shared_by):
+            raise SharingValidationError(
+                SharingErrorMessage.FORWARDED_SHARE_NOT_ALLOWED,
+                SharingErrorCode.FORWARDED_SHARE_NOT_ALLOWED,
             )
 
         entity_title = SharingService._get_entity_title(entity)
