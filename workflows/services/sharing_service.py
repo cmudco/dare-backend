@@ -9,6 +9,7 @@ import logging
 from django.db import transaction
 from django.utils import timezone
 
+from sharing.services.sharing_service import SharingService
 from workflows.constants import (
     SharingErrorCode,
     SharingErrorMessage,
@@ -85,6 +86,12 @@ class WorkflowSharingService:
             pk=workflow_id,
             is_published=True,
         ).first()
+
+        # Also allow forking if directly shared with the user
+        if not workflow:
+            candidate = Workflow.active_objects.filter(pk=workflow_id).first()
+            if candidate and SharingService.can_access(user, "workflow", candidate.pk):
+                workflow = candidate
 
         if not workflow:
             raise SharingValidationError(

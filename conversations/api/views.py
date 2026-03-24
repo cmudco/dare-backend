@@ -22,6 +22,7 @@ from conversations.constants import ArtifactStatus, SharingErrorCode, SharingErr
 from conversations.services.sharing_service import ConversationSharingService, SharingValidationError
 from conversations.exceptions import SharingAPIException
 from conversations.api.mixins import ConversationSharingMixin
+from sharing.services.sharing_service import SharingService
 from users.utils import detect_platform_from_request
 from .serializers import (
     MessageSerializer,
@@ -214,13 +215,18 @@ class ConversationViewSet(ConversationSharingMixin, viewsets.ModelViewSet):
         try:
             instance = self.get_object()
         except (Http404, NotFound):
-            # Fallback: check if it's a published conversation
+            # Fallback: allow published or directly shared conversations
             conversation_id = kwargs.get('conversation_id') or self.kwargs.get('conversation_id')
             instance = Conversation.active_objects.filter(
                 conversation_id=conversation_id,
-                is_published=True
             ).select_related('selected_model', 'prompt', 'user').first()
             if not instance:
+                raise NotFound("Conversation not found")
+            if not instance.is_published and not SharingService.can_access(
+                request.user,
+                "conversation",
+                conversation_id,
+            ):
                 raise NotFound("Conversation not found")
         serializer = self.get_serializer(instance)
         return Response(serializer.data)
