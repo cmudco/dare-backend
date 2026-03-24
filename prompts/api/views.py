@@ -5,11 +5,25 @@ from rest_framework.response import Response
 
 from common.permissions import IsOwner
 from prompts.models import Prompt, PublishedPrompt
+from sharing.services.sharing_service import SharingService
 from .serializers import (
     PromptSerializer,
     PublishedPromptSerializer,
     PublishPromptSerializer,
 )
+
+
+def clone_prompt_to_user(source_prompt: Prompt, user) -> Prompt:
+    """Create a user-owned copy of a prompt."""
+    cloned_prompt = Prompt(
+        user=user,
+        title=f"COPY OF - {source_prompt.title}",
+        content=source_prompt.content,
+        version=1,
+        parent=None,
+    )
+    cloned_prompt.save()
+    return cloned_prompt
 
 
 class PromptViewSet(viewsets.ModelViewSet):
@@ -86,16 +100,27 @@ class PromptViewSet(viewsets.ModelViewSet):
 
     def clone_prompt(self, request, pk=None):
         """Custom action to clone a prompt."""
-        instance = self.get_object()
-        
-        cloned_prompt = Prompt(
-            user=instance.user,
-            title=f"COPY OF - {instance.title}",
-            content=instance.content,
-            version=1,
-            parent=None
-        )
-        cloned_prompt.save()
+        instance = Prompt.active_objects.filter(pk=pk, user=request.user).first()
+        if not instance:
+            instance = Prompt.active_objects.filter(pk=pk).first()
+
+        if not instance:
+            return Response(
+                {"detail": "Prompt not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if instance.user != request.user and not SharingService.can_access(
+            request.user,
+            "prompt",
+            instance.pk,
+        ):
+            return Response(
+                {"detail": "You do not have permission to clone this prompt."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        cloned_prompt = clone_prompt_to_user(instance, request.user)
 
         serializer = self.get_serializer(cloned_prompt)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -166,15 +191,7 @@ class PublishedPromptViewSet(viewsets.ReadOnlyModelViewSet):
     def clone(self, request, pk=None):
         """Clone a published prompt to user's prompts."""
         published = self.get_object()
-        
-        cloned = Prompt(
-            user=request.user,
-            title=f"COPY OF - {published.prompt.title}",
-            content=published.prompt.content,
-            version=1,
-            parent=None
-        )
-        cloned.save()
+        cloned = clone_prompt_to_user(published.prompt, request.user)
         
         return Response(
             PromptSerializer(cloned).data,
