@@ -73,6 +73,7 @@ class ConversationSerializer(serializers.ModelSerializer):
     )
     is_owner = serializers.SerializerMethodField()
     is_forked = serializers.SerializerMethodField()
+    can_share = serializers.SerializerMethodField()
     owner_email = serializers.SerializerMethodField()
     owner_user_id = serializers.SerializerMethodField()
 
@@ -90,6 +91,10 @@ class ConversationSerializer(serializers.ModelSerializer):
     def get_is_forked(self, obj):
         """Return True if this conversation was forked from another user's conversation."""
         return obj.file_owner_id is not None
+
+    def get_can_share(self, obj):
+        """Return True when the conversation is not a cross-user fork."""
+        return obj.file_owner_id is None
 
     def get_owner_email(self, obj):
         """Return masked owner email for shared conversations."""
@@ -151,11 +156,12 @@ class ConversationSerializer(serializers.ModelSerializer):
             'published_at',
             'is_owner',
             'is_forked',
+            'can_share',
             'owner_email',
             'owner_user_id',
             'file_owner_id',
         ]
-        read_only_fields = ['created_at', 'user', 'prompt', 'selected_agent_name', 'is_owner', 'is_forked', 'owner_email', 'owner_user_id', 'file_owner_id']
+        read_only_fields = ['created_at', 'user', 'prompt', 'selected_agent_name', 'is_owner', 'is_forked', 'can_share', 'owner_email', 'owner_user_id', 'file_owner_id']
 
 class SnippetSerializer(serializers.ModelSerializer):
     file = FileSerializer(read_only=True)
