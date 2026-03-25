@@ -5,6 +5,7 @@ This module extracts message building logic from handlers into reusable,
 testable components following the pattern from LLM provider message formatters.
 """
 import logging
+import string
 from typing import Dict, List, Optional, Any
 
 from channels.db import database_sync_to_async
@@ -91,9 +92,13 @@ class MessagePreparer:
         """
         Collect valid outputs from previous node results.
 
+        When multiple results are present and include_node_ids is True,
+        labels are anonymized as Response A, Response B, etc. instead of
+        exposing raw node IDs. Single results keep the original format.
+
         Args:
             previous_results: Dictionary of previous node results
-            include_node_ids: Whether to include node IDs in output labels
+            include_node_ids: Whether to include labels in output
 
         Returns:
             List of formatted output strings from previous nodes
@@ -103,13 +108,21 @@ class MessagePreparer:
         if not previous_results:
             return outputs
 
+        has_multiple = len(previous_results) > 1
+        label_index = 0
+
         for node_id, result_data in previous_results.items():
             if MessagePreparer.is_valid_result(result_data):
                 output_text = result_data['output']
                 if include_node_ids:
-                    outputs.append(f"Result from {node_id}:\n{output_text}")
+                    if has_multiple:
+                        label = string.ascii_uppercase[label_index]
+                        outputs.append(f"Response {label}:\n{output_text}")
+                    else:
+                        outputs.append(f"Result from {node_id}:\n{output_text}")
                 else:
                     outputs.append(output_text)
+                label_index += 1
 
         return outputs
 

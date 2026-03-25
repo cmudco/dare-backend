@@ -33,7 +33,7 @@ from urllib.parse import urlparse, urlunparse
 from django.core.management.base import BaseCommand
 from django.utils.text import slugify
 
-from conversations.models import ModelCardData, PublicFeedbackSourceCluster, PublicFeedbackSource
+from conversations.models import LLM, ModelCardData, PublicFeedbackSourceCluster, PublicFeedbackSource
 
 # Try to import anthropic (optional - only needed for search/analysis stages)
 try:
@@ -620,7 +620,7 @@ class Command(BaseCommand):
         self.stdout.write(f"  Backend: {options['backend']}")
         self.stdout.write('')
 
-        models = self.resolve_models(options['model'], Path(options['cache_dir']))
+        models = self.resolve_models(options['model'], Path(options['cache_dir']), dry_run=options['dry_run'])
 
         if options['dry_run']:
             self.stdout.write(f"Would process {len(models)} model(s):")
@@ -1107,7 +1107,7 @@ Each cluster number corresponds to the sources listed below.
             return False
 
 
-    def resolve_models(self, model_arg: str, cache_dir: Path = None) -> list:
+    def resolve_models(self, model_arg: str, cache_dir: Path = None, dry_run: bool = False) -> list:
         """Resolve model argument to list of model tuples of the form (name, is_live)."""
         if model_arg == 'tracked':
             # All ModelCardData records
@@ -1117,11 +1117,23 @@ Each cluster number corresponds to the sources listed below.
             ]
 
         elif model_arg == 'live':
-            # Only those linked to operational LLM
-            return [
-                (mc.name, True)
-                for mc in ModelCardData.objects.filter(llm__isnull=False)
-            ]
+            # Bootstrap ModelCardData from active LLMs (handles cold start)
+            models = []
+            for llm in LLM.objects.all():
+                if dry_run:
+                    # Just report what exists or would be created
+                    try:
+                        mc = ModelCardData.objects.get(llm=llm)
+                        models.append((mc.name, True))
+                    except ModelCardData.DoesNotExist:
+                        models.append((llm.name, True))
+                else:
+                    mc, created = ModelCardData.objects.get_or_create(
+                        llm=llm,
+                        defaults={'name': llm.name, 'slug': slugify(llm.name)}
+                    )
+                    models.append((mc.name, True))
+            return models
 
         elif model_arg == 'cached':
             # scan cache directory for model data to load

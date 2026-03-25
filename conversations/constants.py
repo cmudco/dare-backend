@@ -180,6 +180,30 @@ class ErrorMessage:
     MISSING_ARTIFACT_ID = "Missing artifact_id"
 
 
+# ============================================================================
+# Conversation Sharing Constants
+# ============================================================================
+
+FORK_TITLE_PREFIX = "FORK OF - "
+DEFAULT_FORK_TITLE = "Shared Chat"
+
+
+class SharingErrorCode:
+    """Error codes for conversation/workflow sharing API responses."""
+    PERMISSION_DENIED = "permission_denied"
+    NOT_FOUND = "not_found"
+    CANNOT_PUBLISH_FORKED = "cannot_publish_forked"
+    FORK_FAILED = "fork_failed"
+
+
+class SharingErrorMessage:
+    """Error messages for conversation/workflow sharing API responses."""
+    PERMISSION_DENIED = "Permission denied"
+    CONVERSATION_NOT_FOUND = "Conversation not found"
+    CONVERSATION_NOT_PUBLISHED = "Conversation not found or not published"
+    CANNOT_PUBLISH_FORKED = "Cannot publish forked conversations. Only original conversations can be published."
+
+
 # Extension-to-Renderer Mapping for unified artifact system
 ARTIFACT_RENDERERS = {
     '.json': 'chart',      # application/vnd.dare.chart+json

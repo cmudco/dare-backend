@@ -55,6 +55,7 @@ LOCAL_APPS = [
     "mcp",
     "dare_tools",
     "memory",
+    "sharing",
 ]
 
 THIRD_PARTY_APPS = [
@@ -311,6 +312,13 @@ RQ_QUEUES = {
         'DB': REDIS_DB,
         'PASSWORD': REDIS_PASSWORD if REDIS_PASSWORD else None,
     },
+    'simple_queue': {
+        'HOST': REDIS_HOST,
+        'PORT': REDIS_PORT,
+        'DB': REDIS_DB,
+        'PASSWORD': REDIS_PASSWORD if REDIS_PASSWORD else None,
+        'DEFAULT_TIMEOUT': 3600,
+    },
 }
 
 RQ_SHOW_ADMIN_LINK = True
@@ -325,4 +333,11 @@ WEAVIATE = {
     'COLLECTION_NAME': env.WEAVIATE_COLLECTION_NAME,
     'SKIP_INIT_CHECKS': env.WEAVIATE_SKIP_INIT_CHECKS,
     'AUTOSCHEMA_ENABLED': env.WEAVIATE_AUTOSCHEMA_ENABLED
+}
+
+# SyftBox Settings (distributed file storage)
+SYFTBOX = {
+    'ENABLED': env.SYFTBOX_ENABLED,
+    'DATASITES_ROOT': env.SYFTBOX_DATASITES_ROOT,
+    'APP_NAME': env.SYFTBOX_APP_NAME,
 }

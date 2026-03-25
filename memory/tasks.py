@@ -11,8 +11,10 @@ from datetime import timedelta
 from django.db.models import Count
 from django.utils import timezone
 from django_rq import job
+from asgiref.sync import async_to_sync
 
 from conversations.models import Conversation
+from memory.services import get_memu_service
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +32,7 @@ EXTRACTION_COOLDOWN_HOURS = 1
 BATCH_SIZE = 50
 
 
-@job
+@job("simple_queue")
 def process_memory_extraction():
     """
     Extract memories from eligible conversations.
@@ -44,8 +46,6 @@ def process_memory_extraction():
     Returns:
         dict: Stats about the extraction run
     """
-    from memory.services import get_memu_service
-    
     stats = {
         "total_checked": 0,
         "eligible": 0,
@@ -58,6 +58,8 @@ def process_memory_extraction():
     
     try:
         memu_service = get_memu_service()
+        # Initialize once before batch; fail fast if memu-py/config is broken
+        async_to_sync(memu_service._ensure_initialized)()
     except Exception as e:
         logger.error(f"Failed to initialize MemU service: {e}")
         return {"status": "error", "message": str(e)}
@@ -125,9 +127,6 @@ def _extract_conversation_memories(conversation: Conversation, memu_service) -> 
     Returns:
         bool: True if extraction succeeded, False otherwise
     """
-    import asyncio
-    from asgiref.sync import async_to_sync
-    
     try:
         user_id = str(conversation.user.id)
         
@@ -142,7 +141,7 @@ def _extract_conversation_memories(conversation: Conversation, memu_service) -> 
         # Format messages for MemU
         messages = [
             {
-                "role": "user" if msg.sender_type == 0 else "assistant",
+                "role": "user" if msg.sender_type == 1 else "assistant",
                 "content": msg.message
             }
             for msg in messages_qs
@@ -172,7 +171,7 @@ def _extract_conversation_memories(conversation: Conversation, memu_service) -> 
         return False
 
 
-@job
+@job("simple_queue")
 def extract_single_conversation(conversation_id: int):
     """
     Extract memories from a specific conversation.
@@ -180,12 +179,10 @@ def extract_single_conversation(conversation_id: int):
     
     Args:
         conversation_id: ID of the conversation to process
-        
+
     Returns:
         dict: Result of the extraction
     """
-    from memory.services import get_memu_service
-    
     try:
         conversation = Conversation.active_objects.get(id=conversation_id)
     except Conversation.DoesNotExist:
