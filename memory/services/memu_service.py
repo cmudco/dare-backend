@@ -2,26 +2,38 @@
 MemU Service Wrapper
 
 Provides a service layer for cross-conversation memory using memu-py.
-Uses SQLite for local development and pgvector for production.
+Requires PostgreSQL with pgvector for memory storage.
 """
 import json
 import logging
 import os
 import tempfile
+import threading
+import traceback
 from typing import Any, Optional
 
-from django.conf import settings
+from pydantic import BaseModel
+from memu.app import (
+    MemoryService,
+    LLMConfig,
+    LLMProfilesConfig,
+    RetrieveConfig,
+)
+from memu.app.settings import UserConfig
+
+from config.env import USE_POSTGRES, DB_NAME, DB_USER, DB_PASSWORD, DB_HOST, DB_PORT
 
 logger = logging.getLogger(__name__)
 
 # Singleton instance
 _memu_service: Optional["MemUService"] = None
+_init_lock = threading.Lock()
 
 
 class MemUService:
     """
     Wrapper for memu-py MemoryService.
-    
+
     Handles initialization with appropriate database config based on environment
     and provides simplified async methods for memory operations.
     """
@@ -35,17 +47,14 @@ class MemUService:
         if self._initialized:
             return
 
-        try:
-            from pydantic import BaseModel
-            from memu.app import (
-                MemoryService,
-                LLMConfig,
-                LLMProfilesConfig,
-                DatabaseConfig,
-                RetrieveConfig,
-            )
-            from memu.app.settings import UserConfig
+        with _init_lock:
+            # Double-check after acquiring lock
+            if self._initialized:
+                return
+            self._do_init()
 
+    def _do_init(self):
+        try:
             # Get OpenAI API key from environment
             openai_api_key = os.getenv("OPENAI_API_KEY")
             if not openai_api_key:
@@ -66,31 +75,25 @@ class MemUService:
             # Define user model for scoping memories by user_id
             class DareUserModel(BaseModel):
                 user_id: str | None = None
-            
+
             user_config = UserConfig(model=DareUserModel)
 
-            # Use same DB toggle as Django (USE_POSTGRES from env)
-            from config.env import USE_POSTGRES, DB_NAME, DB_USER, DB_PASSWORD, DB_HOST, DB_PORT
-            
-            if USE_POSTGRES:
-                # Use psycopg driver format as per memu-py docs
-                db_url = f"postgresql+psycopg://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-                database_config = {
-                    "metadata_store": {
-                        "provider": "postgres",
-                        "dsn": db_url,
-                        "ddl_mode": "create",
-                    },
-                }
-                logger.info(f"MemU initialized with PostgreSQL at: {DB_HOST}:{DB_PORT}/{DB_NAME}")
-            else:
-                # SQLite database path for local development
-                db_path = os.path.join(settings.BASE_DIR, "memu_local.db")
-                database_config = DatabaseConfig(
-                    provider="sqlite",
-                    path=db_path,
+            # MemU requires PostgreSQL — skip initialization if not configured
+            if not USE_POSTGRES:
+                raise RuntimeError(
+                    "MemU requires PostgreSQL (USE_POSTGRES=True). "
+                    "Memory features are disabled."
                 )
-                logger.info(f"MemU initialized with SQLite at: {db_path}")
+
+            db_url = f"postgresql+psycopg://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+            database_config = {
+                "metadata_store": {
+                    "provider": "postgres",
+                    "dsn": db_url,
+                    "ddl_mode": "create",
+                },
+            }
+            logger.info(f"MemU initialized with PostgreSQL at: {DB_HOST}:{DB_PORT}/{DB_NAME}")
 
             # Configure retrieval with RAG method
             retrieve_config = RetrieveConfig(
@@ -107,11 +110,6 @@ class MemUService:
             self._initialized = True
             logger.info("MemU service initialized successfully")
 
-        except ImportError as e:
-            logger.error(f"Failed to import memu-py: {e}")
-            raise ImportError(
-                "memu-py is not installed. Run: pip install memu-py"
-            ) from e
         except Exception as e:
             logger.error(f"Failed to initialize MemU service: {e}")
             raise
@@ -129,8 +127,8 @@ class MemUService:
         await self._ensure_initialized()
         
         try:
-            # List all items from memu
-            result = await self._service.list_memory_items()
+            # List only this user's items from memu
+            result = await self._service.list_memory_items(where={"user_id": user_id})
             
             # Handle dict response format {'items': [...]}
             if isinstance(result, dict):
@@ -218,7 +216,6 @@ class MemUService:
             return user_items
         except Exception as e:
             logger.error(f"Failed to list memory items for user {user_id}: {e}")
-            import traceback
             logger.error(traceback.format_exc())
             raise
 
@@ -245,42 +242,75 @@ class MemUService:
             logger.error(f"Failed to search memories for user {user_id}: {e}")
             raise
 
-    async def get_item(self, item_id: str) -> Optional[dict[str, Any]]:
+    async def get_item(self, item_id: str, user_id: str) -> Optional[dict[str, Any]]:
         """
-        Get a single memory item by ID.
-        
+        Get a single memory item by ID, scoped to the given user.
+
         Args:
             item_id: The memory item's unique identifier
-            
+            user_id: The user's unique identifier (for ownership verification)
+
         Returns:
-            Memory item dict or None if not found
+            Memory item dict or None if not found or not owned by user
         """
         await self._ensure_initialized()
-        
+
         try:
-            result = await self._service.get_memory_item(memory_id=item_id)
-            return result
+            # Verify ownership: list user's items and check if this item belongs to them
+            result = await self._service.list_memory_items(where={"user_id": user_id})
+            items_list = result.get("items", []) if isinstance(result, dict) else result if isinstance(result, (list, tuple)) else []
+
+            for item in items_list:
+                if hasattr(item, "model_dump"):
+                    item_dict = item.model_dump()
+                elif isinstance(item, dict):
+                    item_dict = item
+                elif hasattr(item, "__dict__"):
+                    item_dict = vars(item)
+                else:
+                    continue
+
+                if str(item_dict.get("id")) == str(item_id):
+                    return item_dict
+
+            return None
         except Exception as e:
-            logger.error(f"Failed to get memory item {item_id}: {e}")
+            logger.error(f"Failed to get memory item {item_id} for user {user_id}: {e}")
             raise
 
-    async def delete_item(self, item_id: str) -> bool:
+    async def delete_item(self, item_id: str, user_id: str) -> bool:
         """
-        Delete a memory item.
-        
+        Delete a memory item, scoped to the given user.
+
         Args:
             item_id: The memory item's unique identifier
-            
+            user_id: The user's unique identifier (for ownership verification)
+
         Returns:
             True if deleted successfully
+
+        Raises:
+            PermissionError: If the item does not belong to the user
         """
         await self._ensure_initialized()
-        
+
         try:
-            await self._service.delete_memory_item(memory_id=item_id)
+            # Verify ownership before deleting
+            item = await self.get_item(item_id, user_id)
+            if item is None:
+                raise PermissionError(
+                    f"Memory item {item_id} not found or not owned by user {user_id}"
+                )
+
+            await self._service.delete_memory_item(
+                memory_id=item_id,
+                user={"user_id": user_id},
+            )
             return True
+        except PermissionError:
+            raise
         except Exception as e:
-            logger.error(f"Failed to delete memory item {item_id}: {e}")
+            logger.error(f"Failed to delete memory item {item_id} for user {user_id}: {e}")
             raise
 
     async def clear_all(self, user_id: str) -> bool:
@@ -377,7 +407,6 @@ class MemUService:
             return result if result else {"items": [], "categories": [], "resource": None}
         except Exception as e:
             logger.error(f"Failed to memorize conversation for user {user_id}: {e}")
-            import traceback
             logger.error(traceback.format_exc())
             raise
 
@@ -429,10 +458,10 @@ class MemUService:
         
         logger.info(f"[SEED DEBUG] Seeding complete. Total items created: {len(all_items)}")
         
-        # Check what's in the DB after seeding
+        # Check what's in the DB after seeding (scoped to this user)
         try:
-            check_result = await self._service.list_memory_items()
-            logger.info(f"[SEED DEBUG] Post-seed DB check: {check_result}")
+            check_result = await self._service.list_memory_items(where={"user_id": user_id})
+            logger.info(f"[SEED DEBUG] Post-seed DB check for user {user_id}: {check_result}")
         except Exception as e:
             logger.error(f"[SEED DEBUG] Failed to check DB: {e}")
 

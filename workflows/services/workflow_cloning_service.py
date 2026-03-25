@@ -2,11 +2,14 @@
 Workflow cloning service for duplicating workflows with all nodes and edges.
 
 Extracted from WorkflowViewSet.clone_workflow for better maintainability
-and separation of concerns.
+and separation of concerns. Supports both same-user cloning and cross-user forking.
+
+Note: Files are NOT copied during cross-user forks - users upload their own files.
 """
 
 from django.contrib.contenttypes.models import ContentType
 
+from prompts.models import Prompt
 from workflows.models import (
     Workflow, WorkflowNode, WorkflowEdge,
     StartNodeData, StepNodeData, ChatOutputNodeData, StructuredOutputNodeData
@@ -21,84 +24,130 @@ class WorkflowCloningService:
     type-safe node data objects and maintaining relationships between components.
     """
 
-    def clone_workflow(self, original: Workflow) -> Workflow:
-        """
-        Clone a complete workflow with all nodes and edges.
+    def clone_workflow(
+        self,
+        original: Workflow,
+        target_user=None,
+    ) -> Workflow:
+        """Clone a complete workflow with all nodes and edges.
 
         Creates a new workflow as a copy of the original, including all nodes
-        with their typed data objects and all connecting edges. The cloned
-        workflow maintains the same structure but is independent of the original.
+        with their typed data objects and all connecting edges.
+
+        For cross-user forks: prompts are cloned, but files are NOT copied.
+        Users must upload their own files when running forked workflows.
 
         Args:
             original: The workflow to clone
+            target_user: User who will own the clone. Defaults to original owner.
 
         Returns:
             Workflow: The newly created cloned workflow
         """
+        user = target_user or original.user
+        is_cross_user = user != original.user
+
         # Create the base cloned workflow
-        cloned = self._create_cloned_workflow(original)
+        cloned = self._create_cloned_workflow(original, user=user)
 
         # Clone all nodes with their data
-        self._clone_nodes(original, cloned)
+        self._clone_nodes(original, cloned, target_user=user, is_cross_user=is_cross_user)
 
         # Clone all edges
         self._clone_edges(original, cloned)
 
         return cloned
 
-    def _create_cloned_workflow(self, original: Workflow) -> Workflow:
-        """
-        Create the base cloned workflow with copied metadata.
+    def _create_cloned_workflow(
+        self,
+        original: Workflow,
+        user=None,
+    ) -> Workflow:
+        """Create the base cloned workflow with copied metadata.
 
         Args:
             original: Original workflow to copy from
+            user: Owner of the new workflow
 
         Returns:
             Workflow: New workflow instance
         """
         return Workflow.objects.create(
-            user=original.user,
+            user=user or original.user,
             version=1,
             parent=original,
             viewport_x=original.viewport_x,
             viewport_y=original.viewport_y,
-            viewport_zoom=original.viewport_zoom
+            viewport_zoom=original.viewport_zoom,
         )
 
-    def _clone_nodes(self, original: Workflow, cloned: Workflow) -> None:
-        """
-        Clone all nodes and their associated data objects.
+    def _clone_nodes(
+        self,
+        original: Workflow,
+        cloned: Workflow,
+        target_user=None,
+        is_cross_user: bool = False,
+    ) -> None:
+        """Clone all nodes and their associated data objects.
 
         Args:
             original: Original workflow with nodes to clone
             cloned: Target workflow to add cloned nodes to
+            target_user: User who will own the cloned workflow
+            is_cross_user: If True, prefix title with 'FORK OF' and clone prompts
         """
         for node in original.nodes.all():
             if node.data_object:
-                cloned_data = self._clone_node_data(node.data_object)
+                cloned_data = self._clone_node_data(
+                    node.data_object,
+                    target_user=target_user,
+                    is_cross_user=is_cross_user
+                )
                 if cloned_data:
                     self._create_cloned_node(node, cloned, cloned_data)
 
-    def _clone_node_data(self, data_object):
-        """
-        Clone the typed data object based on its type.
+    def _clone_node_data(self, data_object, target_user=None, is_cross_user: bool = False):
+        """Clone the typed data object based on its type.
 
         Args:
             data_object: The node data object to clone
+            target_user: User who will own the cloned data (for prompt cloning)
+            is_cross_user: If True, prefix start node title with 'FORK OF' and clone prompts
 
         Returns:
             Cloned data object instance
         """
         if isinstance(data_object, StartNodeData):
+            prefix = "FORK OF" if is_cross_user else "COPY OF"
+            title = data_object.title or "Untitled Workflow"
             return StartNodeData.objects.create(
-                title=f"COPY OF - {data_object.title}",
+                title=f"{prefix} - {title}",
                 description=data_object.description,
                 mode=data_object.mode
             )
         elif isinstance(data_object, StepNodeData):
+            # For cross-user forks, clone the prompt instead of referencing original
+            cloned_prompt = None
+            if data_object.prompt:
+                if is_cross_user:
+                    if not target_user:
+                        raise ValueError("target_user is required for cross-user workflow cloning")
+                    # Create a copy of the prompt owned by the target user
+                    prompt_title = data_object.prompt.title or "Untitled Prompt"
+                    cloned_prompt = Prompt.active_objects.create(
+                        user=target_user,
+                        title=f"FORK OF - {prompt_title}",
+                        content=data_object.prompt.content,
+                        version=1,
+                        parent=None  # No parent link for forked prompts
+                    )
+                else:
+                    # Same-user clone: reference the original prompt
+                    cloned_prompt = data_object.prompt
+
             cloned_data = StepNodeData.objects.create(
                 agent=data_object.agent,
-                prompt=data_object.prompt,
+                prompt=cloned_prompt,
                 llm=data_object.llm,
                 step_number=data_object.step_number,
                 max_tokens=data_object.max_tokens,
@@ -110,9 +159,11 @@ class WorkflowCloningService:
                 text_input=data_object.text_input,
                 enable_web_search=data_object.enable_web_search
             )
-            # Clone many-to-many relationships
-            cloned_data.content_files.set(data_object.content_files.all())
-            cloned_data.embedding_files.set(data_object.embedding_files.all())
+            # Clone file references only for same-user clones;
+            # cross-user forks start with empty files so users upload their own
+            if not is_cross_user:
+                cloned_data.content_files.set(data_object.content_files.all())
+                cloned_data.embedding_files.set(data_object.embedding_files.all())
             return cloned_data
         elif isinstance(data_object, ChatOutputNodeData):
             return ChatOutputNodeData.objects.create(
@@ -122,8 +173,25 @@ class WorkflowCloningService:
                 error=''
             )
         elif isinstance(data_object, StructuredOutputNodeData):
+            # For cross-user forks, clone the prompt instead of referencing original
+            cloned_prompt = None
+            if data_object.prompt:
+                if is_cross_user:
+                    if not target_user:
+                        raise ValueError("target_user is required for cross-user workflow cloning")
+                    prompt_title = data_object.prompt.title or "Untitled Prompt"
+                    cloned_prompt = Prompt.active_objects.create(
+                        user=target_user,
+                        title=f"FORK OF - {prompt_title}",
+                        content=data_object.prompt.content,
+                        version=1,
+                        parent=None
+                    )
+                else:
+                    cloned_prompt = data_object.prompt
+
             return StructuredOutputNodeData.objects.create(
-                prompt=data_object.prompt,
+                prompt=cloned_prompt,
                 routes=data_object.routes,
                 step_number=data_object.step_number,
                 require_human_validation=data_object.require_human_validation,

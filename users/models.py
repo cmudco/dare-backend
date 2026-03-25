@@ -6,6 +6,7 @@ from django.utils.translation import gettext_lazy as _
 from common.managers import ActiveObjectsManager
 from common.models import IsDeletedMixin, TimeStampMixin
 from core.config.processing import CHUNK_SIZE, OVERLAP_SIZE
+from core.storage.constants import StorageBackendChoice
 from users.managers import UserManager
 from users.constants import VectorDBChoice, AuthSourceChoice, RoleChoice
 from prompts.models import Prompt
@@ -77,7 +78,12 @@ class AccessCodeGroup(TimeStampMixin):
         choices=RoleChoice.choices,
         default=RoleChoice.USER,
         verbose_name=_("Default Role"),
-        help_text=_("Role assigned to users who register with this access code")
+        help_text=_("Role assigned to users who register with this access code. "
+                    "SUPERVISOR: DARE platform access + cross-user bot/agent management in SocraticBooks + creator access. "
+                    "RESEARCHER: DARE platform access + SocraticBooks creator (can create/manage books). "
+                    "USER: DARE platform access + SocraticBooks student/consumer (can read/interact with books). "
+                    "CREATOR: No DARE access + SocraticBooks creator (can create/manage books). "
+                    "SB_USER: No DARE access + SocraticBooks student/consumer only.")
     )
 
     class Meta:
@@ -142,6 +148,12 @@ class User(AbstractUser, IsDeletedMixin):
         default=VectorDBChoice.WEAVIATE,
         verbose_name=_("Vector Database"),
         help_text=_("Vector database to use for this user's data")
+    )
+    storage_backend = models.IntegerField(
+        choices=StorageBackendChoice.choices,
+        default=StorageBackendChoice.LOCAL,
+        verbose_name=_("Storage Backend"),
+        help_text=_("Preferred storage backend for new file uploads")
     )
     default_prompt = models.ForeignKey(
         Prompt,
@@ -218,7 +230,12 @@ class User(AbstractUser, IsDeletedMixin):
         choices=RoleChoice.choices,
         default=RoleChoice.USER,
         verbose_name=_("Platform Role"),
-        help_text=_("User's role across DARE and SocraticBots platforms")
+        help_text=_("User's role across DARE and SocraticBots platforms. "
+                    "ADMIN: DARE admin access + SB creator + voice agent. "
+                    "RESEARCHER: DARE access + SB creator. "
+                    "USER: DARE access + SB student/consumer. "
+                    "CREATOR: No DARE + SB creator. "
+                    "SB_USER: No DARE + SB student/consumer only.")
     )
 
     # Billing mode - determines how user pays for API usage

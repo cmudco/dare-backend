@@ -16,6 +16,7 @@ from .graph import (
 
 from .core import (
     Workflow,
+    BatchRun,
     WorkflowRun,
     WorkflowRunStep,
 )
@@ -37,6 +38,7 @@ __all__ = [
     'WorkflowNode',
     'WorkflowEdge',
     'Workflow',
+    'BatchRun',
     'WorkflowRun',
     'WorkflowRunStep',
     'WorkflowStepSnippet',

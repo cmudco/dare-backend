@@ -84,7 +84,15 @@ class AccessCodeGroupAdmin(admin.ModelAdmin):
         }),
         (_('Role Assignment'), {
             'fields': ('default_role',),
-            'description': 'Role assigned to users who register with this access code. Platform access is determined by role: SUPERADMIN/RESEARCHER/USER have DARE access; all roles have SocraticBots access.'
+            'description': (
+                'Role assigned to users who register with this access code.<br><br>'
+                '<strong>SUPERADMIN</strong> — Full DARE platform access + SocraticBooks creator + admin privileges.<br>'
+                '<strong>SUPERVISOR</strong> — DARE platform access + cross-user bot/agent management in SocraticBooks + creator access.<br>'
+                '<strong>RESEARCHER</strong> — DARE platform access + SocraticBooks creator (can create and manage books).<br>'
+                '<strong>USER</strong> — DARE platform access + SocraticBooks student/consumer (can read and interact with books).<br>'
+                '<strong>CREATOR</strong> — No DARE access + SocraticBooks creator (can create and manage books only).<br>'
+                '<strong>SB_USER</strong> — No DARE access + SocraticBooks student/consumer only.'
+            )
         }),
         (_('Model Access'), {
             'fields': ('model_group',),
@@ -213,9 +221,18 @@ class UserAdmin(DjangoUserAdmin):
         (_("Access Control"), {"fields": ("access_code_group",)}),
         (_("Platform Role"), {
             "fields": ("platform_role",),
-            "description": "User's role determines permissions across DARE and SocraticBots platforms"
+            "description": (
+                "User's role determines permissions across DARE and SocraticBots platforms.<br>"
+                "<strong>SUPERADMIN</strong> — Full DARE + SB creator + admin privileges. "
+                "<strong>SUPERVISOR</strong> — DARE access + cross-user bot/agent management in SB + creator access. "
+                "<strong>RESEARCHER</strong> — DARE access + SB creator. "
+                "<strong>USER</strong> — DARE access + SB student/consumer. "
+                "<strong>CREATOR</strong> — No DARE + SB creator. "
+                "<strong>SB_USER</strong> — No DARE + SB student/consumer only."
+            )
         }),
         (_("Vector Database Settings"), {"fields": ("vector_db",)}),
+        (_("Storage Settings"), {"fields": ("storage_backend",)}),
         (_("Platform Settings (Legacy)"), {
             "fields": ("auth_source", "is_dare_accessible", "is_socratic_bots_accessible"),
             "classes": ("collapse",),
@@ -228,12 +245,12 @@ class UserAdmin(DjangoUserAdmin):
             None,
             {
                 "classes": ("wide",),
-                "fields": ("email", "password1", "password2", "platform_role", "vector_db", "auth_source", "is_superuser", "is_staff", "is_active"),
+                "fields": ("email", "password1", "password2", "platform_role", "vector_db", "storage_backend", "auth_source", "is_superuser", "is_staff", "is_active"),
             },
         ),
     )
-    list_display = ("email", "last_login_display", "date_joined", "activity_status", "is_active", "is_staff", "platform_role", "onboarding_status", "access_code_group", "vector_db")
-    list_filter = ("is_staff", "is_superuser", "is_active", "platform_role", LastLoginFilter, "vector_db", "access_code_group", "auth_source")
+    list_display = ("email", "last_login_display", "date_joined", "activity_status", "is_active", "is_staff", "platform_role", "onboarding_status", "access_code_group", "vector_db", "storage_backend")
+    list_filter = ("is_staff", "is_superuser", "is_active", "platform_role", LastLoginFilter, "vector_db", "storage_backend", "access_code_group", "auth_source")
     search_fields = ("email", "first_name", "last_name")
     ordering = ("-last_login",)
     actions = ["credit_selected_users", "disable_inactive_accounts"]

@@ -45,6 +45,9 @@ class WorkflowSerializer(serializers.ModelSerializer):
     nodes = serializers.SerializerMethodField()
     edges = serializers.SerializerMethodField()
     latest_run = serializers.SerializerMethodField()
+    owner_username = serializers.SerializerMethodField()
+    is_forked = serializers.SerializerMethodField()
+    can_share = serializers.SerializerMethodField()
 
     # Dynamic properties from StartNodeData
     title = serializers.ReadOnlyField()
@@ -58,10 +61,32 @@ class WorkflowSerializer(serializers.ModelSerializer):
             'id', 'user', 'version', 'parent', 'created_at',
             'viewport_x', 'viewport_y', 'viewport_zoom',
             'manual_mode_enabled', 'output_display_mode', 'display_order',
+            'is_published', 'published_at', 'is_forked', 'can_share', 'owner_username',
             'nodes', 'edges', 'latest_run',
             'title', 'description', 'mode', 'viewport'
         ]
-        read_only_fields = ['id', 'created_at', 'user', 'nodes', 'edges', 'title', 'description', 'mode', 'viewport']
+        read_only_fields = [
+            'id', 'created_at', 'user', 'nodes', 'edges',
+            'title', 'description', 'mode', 'viewport',
+            'published_at', 'is_forked', 'can_share', 'owner_username',
+        ]
+
+    def get_owner_username(self, obj: Workflow) -> str:
+        """Get the display name of the workflow owner for library views."""
+        if hasattr(obj, 'user') and obj.user:
+            return obj.user.get_full_name() or obj.user.email
+        return ""
+
+    def get_is_forked(self, obj: Workflow) -> bool:
+        """Return True if this workflow was forked from another workflow."""
+        return obj.parent is not None
+
+    def get_can_share(self, obj: Workflow) -> bool:
+        """Return True when the workflow is not a cross-user fork."""
+        return not (
+            obj.parent is not None
+            and obj.parent.user_id != obj.user_id
+        )
 
     def get_latest_run(self, obj):
         """Get the latest workflow run with nodeStates for O(1) node access.

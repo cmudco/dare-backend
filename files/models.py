@@ -1,11 +1,17 @@
+import logging
+
 from django.db import models
 from django.conf import settings
+from django.utils.translation import gettext_lazy as _
 
 from common.managers import ActiveObjectsManager
 from common.models import BaseModel, TimeStampMixin
+from core.storage.constants import StorageBackendChoice
+from core.storage.fields import DynamicStorageFileField
 from users.constants import VectorDBChoice
 from .constants import FileStatus
-from django.utils.translation import gettext_lazy as _
+
+logger = logging.getLogger(__name__)
 
 
 class Tag(TimeStampMixin):
@@ -62,7 +68,7 @@ class File(BaseModel):
         related_name='files',
         help_text="The user who owns this file"
     )
-    file = models.FileField(
+    file = DynamicStorageFileField(
         upload_to='files/',
         help_text="The actual file content",
         max_length=255
@@ -159,12 +165,29 @@ class File(BaseModel):
         help_text="Cost in USD for generating this image"
     )
 
+    # SyftBox Storage Fields
+    storage_backend = models.IntegerField(
+        choices=StorageBackendChoice.choices,
+        default=StorageBackendChoice.LOCAL,
+        verbose_name=_("Storage Backend"),
+        help_text=_("Storage backend for this file (local or SyftBox)")
+    )
+
     active_objects = ActiveObjectsManager()
 
     class Meta:
         indexes = [
             models.Index(fields=['user', 'is_deleted', 'is_active'], name='file_user_status_idx'),
         ]
+
+    def delete(self, *args, **kwargs):
+        # Delete the actual file from storage (local or SyftBox)
+        if self.file:
+            try:
+                self.file.delete(save=False)
+            except Exception as e:
+                logger.warning(f"Failed to delete file from storage: {e}")
+        super().delete(*args, **kwargs)
 
     def __str__(self):
         return self.name if self.name else self.file.name
