@@ -7,6 +7,8 @@ and manage workflow run steps (step_handler, structured_output_handler).
 import logging
 from typing import Dict, Optional
 from channels.db import database_sync_to_async
+from django.db.models import TextField, Value
+from django.db.models.functions import Coalesce, Concat
 from django.utils import timezone
 
 from workflows.handlers.base import BaseNodeHandler, ExecutionNode, NodeExecutionContext, NodeExecutionResult, categorize_error
@@ -101,6 +103,9 @@ class BaseExecutionHandler(BaseNodeHandler):
                     update_kwargs['started_at'] = started_at_value
                 else:
                     started_at_value = workflow_run_step.started_at
+                # Clear stale persisted output before a new stream starts.
+                update_kwargs['response'] = ''
+                update_kwargs['error'] = None
             
             if response is not None:
                 update_kwargs['response'] = response
@@ -119,6 +124,31 @@ class BaseExecutionHandler(BaseNodeHandler):
             return started_at_value
 
         return await database_sync_to_async(_update)()
+
+    async def _append_step_response_chunk(
+        self,
+        workflow_run_step: WorkflowRunStep,
+        chunk: str
+    ) -> None:
+        """
+        Persist a streamed chunk so reconnects can restore the exact preview.
+
+        Args:
+            workflow_run_step: Step receiving streamed output
+            chunk: Newly streamed text chunk
+        """
+        if not chunk:
+            return
+
+        await database_sync_to_async(
+            lambda: WorkflowRunStep.objects.filter(id=workflow_run_step.id).update(
+                response=Concat(
+                    Coalesce('response', Value('')),
+                    Value(chunk),
+                    output_field=TextField(),
+                )
+            )
+        )()
 
     async def _process_billing(
         self,
@@ -178,6 +208,7 @@ class BaseExecutionHandler(BaseNodeHandler):
         send_callback=None,
         node_id: Optional[str] = None,
         workflow_run_id: Optional[int] = None,
+        workflow_run_step: Optional[WorkflowRunStep] = None,
     ) -> tuple[str, Dict]:
         """
         Execute LLM query and collect full response with token usage.
@@ -200,6 +231,12 @@ class BaseExecutionHandler(BaseNodeHandler):
             if chunk:
                 full_response += chunk
                 accumulated_tokens += 1  # Approximate token count
+
+                if workflow_run_step:
+                    await self._append_step_response_chunk(
+                        workflow_run_step,
+                        chunk
+                    )
 
                 # Stream chunk to client if callback provided
                 if send_callback and node_id:
