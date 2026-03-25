@@ -8,11 +8,22 @@ class PromptSerializer(serializers.ModelSerializer):
     user = serializers.ReadOnlyField(source='user.email')
     createdAt = serializers.DateTimeField(source='created_at', read_only=True)
     isPublished = serializers.SerializerMethodField()
+    canShare = serializers.SerializerMethodField()
 
     class Meta:
         model = Prompt
-        fields = ['id', 'title', 'content', 'createdAt', 'user', 'version', 'parent', 'isPublished']
-        read_only_fields = ['id', 'user', 'isPublished']
+        fields = [
+            'id',
+            'title',
+            'content',
+            'createdAt',
+            'user',
+            'version',
+            'parent',
+            'isPublished',
+            'canShare',
+        ]
+        read_only_fields = ['id', 'user', 'isPublished', 'canShare']
 
     def get_isPublished(self, obj):
         """Check if this prompt has a published record."""
@@ -20,6 +31,10 @@ class PromptSerializer(serializers.ModelSerializer):
             return obj.published is not None
         except PublishedPrompt.DoesNotExist:
             return False
+
+    def get_canShare(self, obj):
+        """Return True when the prompt is an original user-owned item."""
+        return obj.forked_from_user_id is None
 
 
 class PublishedPromptSerializer(serializers.ModelSerializer):
