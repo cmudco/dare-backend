@@ -30,6 +30,8 @@ app_name = APP_NAME
 urlpatterns = [
     path('', include(router.urls)),
     path('conversations/<str:conversation_id>/clone/', ConversationViewSet.as_view({'post': 'clone_conversation'}), name='conversation-clone'),
+    path('conversations/<str:conversation_id>/publish/', ConversationViewSet.as_view({'post': 'publish_conversation'}), name='conversation-publish'),
+    path('conversations/<str:conversation_id>/fork/', ConversationViewSet.as_view({'post': 'fork_conversation'}), name='conversation-fork'),
     path('artifacts/<int:artifact_id>/status/', ArtifactStatusView.as_view(), name='artifact-status'),
     path('artifacts/<int:artifact_id>/content/', ArtifactContentView.as_view(), name='artifact-content'),
     # Anonymous conversations endpoint (JWT authenticated)

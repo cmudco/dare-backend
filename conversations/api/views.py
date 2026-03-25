@@ -9,6 +9,7 @@ from django.conf import settings
 from django.db import transaction
 from django.db.models import Count
 from django.http import HttpResponse
+from django.http import Http404, HttpResponse
 from django.template.loader import render_to_string
 from django.utils import timezone
 from rest_framework import viewsets, generics, status, mixins
@@ -20,7 +21,11 @@ from rest_framework.views import APIView
 from django.shortcuts import get_object_or_404
 
 from conversations.models import Message, Conversation, LLM, Snippet, Artifact, Feedback, ModelCardData
-from conversations.constants import ArtifactStatus
+from conversations.constants import ArtifactStatus, SharingErrorCode, SharingErrorMessage
+from conversations.services.sharing_service import ConversationSharingService, SharingValidationError
+from conversations.exceptions import SharingAPIException
+from conversations.api.mixins import ConversationSharingMixin
+from sharing.services.sharing_service import SharingService
 from users.utils import detect_platform_from_request
 from .serializers import (
     MessageSerializer,
@@ -34,8 +39,10 @@ from .serializers import (
     ModelCardDataListSerializer,
 )
 
+logger = logging.getLogger(__name__)
 
-class ConversationViewSet(viewsets.ModelViewSet):
+
+class ConversationViewSet(ConversationSharingMixin, viewsets.ModelViewSet):
     """Endpoint for listing, retrieving, creating and updating chat conversations."""
     serializer_class = ConversationSerializer
     permission_classes = [AllowAny]  # Allow both authenticated and anonymous access
@@ -43,6 +50,21 @@ class ConversationViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         platform_source = detect_platform_from_request(self.request)
+
+        # Shared conversations: published by other users
+        shared = self.request.query_params.get('shared', None)
+        if shared == 'true':
+            if hasattr(self.request, 'user') and self.request.user and self.request.user.is_authenticated:
+                queryset = Conversation.active_objects.filter(
+                    is_published=True,
+                    source=platform_source
+                ).exclude(user=self.request.user)
+            else:
+                queryset = Conversation.active_objects.filter(
+                    is_published=True,
+                    source=platform_source
+                )
+            return queryset.select_related('selected_model', 'prompt', 'user').order_by('-published_at')
 
         anonymous_session_id = self.request.query_params.get('anonymous_session_id', None)
 
@@ -140,7 +162,7 @@ class ConversationViewSet(viewsets.ModelViewSet):
         deleted_conversations = []
         failed_conversations = []
 
-        logger = logging.getLogger(__name__)
+
 
         for conversation in conversations:
             try:
@@ -181,12 +203,96 @@ class ConversationViewSet(viewsets.ModelViewSet):
                 return Response(serializer.data, status=status.HTTP_201_CREATED)
 
         except Exception as e:
-            logger = logging.getLogger(__name__)
+
             logger.error(f"Error cloning conversation {conversation_id}: {str(e)}")
             return Response(
                 {"error": f"Failed to clone conversation: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+    def retrieve(self, request, *args, **kwargs):
+        """
+        Override retrieve to allow fetching published conversations
+        even if the user is not the owner.
+        """
+        try:
+            instance = self.get_object()
+        except (Http404, NotFound):
+            # Fallback: allow published or directly shared conversations
+            conversation_id = kwargs.get('conversation_id') or self.kwargs.get('conversation_id')
+            instance = Conversation.active_objects.filter(
+                conversation_id=conversation_id,
+            ).select_related('selected_model', 'prompt', 'user').first()
+            if not instance:
+                raise NotFound("Conversation not found")
+            if not instance.is_published and not SharingService.can_access(
+                request.user,
+                "conversation",
+                conversation_id,
+            ):
+                raise NotFound("Conversation not found")
+        serializer = self.get_serializer(instance)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'], url_path='publish')
+    def publish_conversation(self, request, conversation_id=None):
+        """
+        Toggle the published status of a conversation.
+        Only the owner can publish/unpublish.
+        """
+        return self.handle_sharing_operation(
+            lambda: ConversationSharingService.toggle_publish(
+                self.get_object(),
+                request.user
+            )
+        )
+
+    @action(detail=True, methods=['post'], url_path='fork')
+    def fork_conversation(self, request, conversation_id=None):
+        """
+        Fork a published conversation for the current user.
+        Creates a clone owned by the requesting user.
+        """
+        return self.handle_sharing_operation(
+            lambda: ConversationSharingService.fork(conversation_id, request.user),
+            success_status=status.HTTP_201_CREATED
+        )
+
+    @action(detail=True, methods=['get'], url_path='messages')
+    def list_messages(self, request, conversation_id=None):
+        """
+        List messages for a conversation.
+        Allows access if user is the owner or the conversation is published.
+        Used for read-only message loading of shared conversations.
+        """
+        conversation = Conversation.active_objects.filter(
+            conversation_id=conversation_id
+        ).first()
+
+        if not conversation:
+            raise SharingAPIException(
+                SharingValidationError(
+                    SharingErrorMessage.CONVERSATION_NOT_FOUND,
+                    SharingErrorCode.NOT_FOUND
+                )
+            )
+
+        if not ConversationSharingService.can_view_messages(conversation, request.user):
+            raise SharingAPIException(
+                SharingValidationError(
+                    SharingErrorMessage.PERMISSION_DENIED,
+                    SharingErrorCode.PERMISSION_DENIED
+                )
+            )
+
+        messages = Message.active_objects.filter(
+            conversation=conversation
+        ).select_related('llm').prefetch_related(
+            'files', 'tags', 'snippets__file', 'web_search_sources'
+        ).order_by('created_at')
+
+        serializer = MessageSerializer(messages, many=True, context={'request': request})
+        return Response(serializer.data)
 
     @action(detail=True, methods=['get'], url_path='artifacts')
     def list_artifacts(self, request, conversation_id=None):
@@ -398,7 +504,7 @@ class ConversationViewSet(viewsets.ModelViewSet):
             return response
 
         except Exception as e:
-            logger = logging.getLogger(__name__)
+
             logger.error(f"Error exporting conversation {conversation_id} to PDF: {str(e)}")
             return Response(
                 {"error": f"Failed to export conversation: {str(e)}"},
@@ -447,7 +553,7 @@ class MessageViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_404_NOT_FOUND
             )
         except Exception as e:
-            logger = logging.getLogger(__name__)
+
             logger.error(f"Error soft deleting message {pk}: {str(e)}")
             return Response(
                 {"error": f"Failed to delete message: {str(e)}"},
@@ -494,7 +600,7 @@ class ArtifactStatusView(APIView):
         artifact.status = new_status
         artifact.save(update_fields=['status', 'updated_at'])
 
-        logger = logging.getLogger(__name__)
+
         logger.info(f"Artifact {artifact_id} status updated to {new_status} via REST API")
 
         return Response({
@@ -522,7 +628,7 @@ class ArtifactContentView(APIView):
 
         Returns the newly created artifact version.
         """
-        logger = logging.getLogger(__name__)
+
         
         new_content = request.data.get('content')
         if new_content is None:
@@ -612,7 +718,7 @@ class FeedbackViewSet(mixins.CreateModelMixin, viewsets.GenericViewSet):
     def perform_create(self, serializer):
         """Save the feedback with the current user."""
         serializer.save(user=self.request.user)
-        logger = logging.getLogger(__name__)
+
         logger.info(
             f"Feedback submitted by {self.request.user.email}: "
             f"{serializer.data.get('emotion')} - {serializer.data.get('category')}"

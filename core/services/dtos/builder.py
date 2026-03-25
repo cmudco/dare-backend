@@ -46,11 +46,17 @@ class LLMQueryRequestBuilder:
         Returns:
             Fully constructed LLMQueryRequest with conversation defaults applied
         """
+        # Determine file_owner_id: prioritize message_data, fall back to conversation
+        # This handles forked conversations where file_owner_id is set on the conversation
+        file_owner_id = message_data.get("file_owner_id")
+        if not file_owner_id and conversation and hasattr(conversation, 'file_owner_id'):
+            file_owner_id = conversation.file_owner_id
+
         # Build context config
         context = ContextConfig(
             file_ids=message_data.get("file_ids", []),
             embedding_ids=message_data.get("embedding_ids", []),
-            file_owner_id=message_data.get("file_owner_id"),  # Bot creator's ID
+            file_owner_id=file_owner_id,  # For forked conversations or bot creator's ID
             media_ids=message_data.get("media_ids", []),
             tag_ids=message_data.get("tag_ids", []),
             folder_ids=message_data.get("folder_ids", []),
@@ -147,6 +153,7 @@ class LLMQueryRequestBuilder:
         workflow_run_step_obj: Optional[Any] = None,
         structured_spec: Optional[Dict[str, Any]] = None,
         web_search_enabled: bool = False,
+        file_owner_id: Optional[int] = None,
     ) -> LLMQueryRequest:
         """Build LLMQueryRequest from workflow execution data.
 
@@ -166,6 +173,7 @@ class LLMQueryRequestBuilder:
             workflow_run_step_obj: WorkflowRunStep instance
             structured_spec: JSON schema for structured output
             web_search_enabled: Enable web search for this step
+            file_owner_id: Original owner's user ID for cross-user embedding access
 
         Returns:
             Fully constructed LLMQueryRequest for workflow execution
@@ -179,6 +187,7 @@ class LLMQueryRequestBuilder:
             max_context_snippets=max_context_snippets,
             document_similarity_threshold=document_similarity_threshold,
             history_limit=0,  # Workflows don't use conversation history
+            file_owner_id=file_owner_id,
         )
 
         generation = GenerationConfig(

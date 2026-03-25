@@ -66,7 +66,8 @@ class BaseExecutionHandler(BaseNodeHandler):
                 step.status = WorkflowRunStepStatus.PENDING
                 step.response = None
                 step.error = None
-                step.save(update_fields=['status', 'response', 'error'])
+                step.started_at = None
+                step.save(update_fields=['status', 'response', 'error', 'started_at'])
             return step
 
         return await database_sync_to_async(_get_or_create)()
@@ -91,6 +92,15 @@ class BaseExecutionHandler(BaseNodeHandler):
         """
         def _update():
             update_kwargs = {'status': status}
+            started_at_value = None
+
+            if status == WorkflowRunStepStatus.RUNNING:
+                # Capture the first start timestamp to preserve execution order.
+                if workflow_run_step.started_at is None:
+                    started_at_value = timezone.now()
+                    update_kwargs['started_at'] = started_at_value
+                else:
+                    started_at_value = workflow_run_step.started_at
             
             if response is not None:
                 update_kwargs['response'] = response
@@ -106,8 +116,9 @@ class BaseExecutionHandler(BaseNodeHandler):
                 update_kwargs['metadata'] = existing_metadata
             
             WorkflowRunStep.objects.filter(id=workflow_run_step.id).update(**update_kwargs)
+            return started_at_value
 
-        await database_sync_to_async(_update)()
+        return await database_sync_to_async(_update)()
 
     async def _process_billing(
         self,
@@ -166,6 +177,7 @@ class BaseExecutionHandler(BaseNodeHandler):
         llm_query_generator,
         send_callback=None,
         node_id: Optional[str] = None,
+        workflow_run_id: Optional[int] = None,
     ) -> tuple[str, Dict]:
         """
         Execute LLM query and collect full response with token usage.
@@ -196,7 +208,8 @@ class BaseExecutionHandler(BaseNodeHandler):
                             WebSocketResponseService.format_workflow_step_streaming(
                                 node_id=node_id,
                                 chunk=chunk,
-                                accumulated_tokens=accumulated_tokens
+                                accumulated_tokens=accumulated_tokens,
+                                workflow_run_id=workflow_run_id
                             )
                         )
                     except Exception as e:
