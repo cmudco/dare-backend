@@ -55,6 +55,7 @@ LOCAL_APPS = [
     "mcp",
     "dare_tools",
     "memory",
+    "sharing",
 ]
 
 THIRD_PARTY_APPS = [
