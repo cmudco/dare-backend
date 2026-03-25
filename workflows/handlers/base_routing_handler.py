@@ -144,7 +144,10 @@ class BaseRoutingHandler(BaseExecutionHandler):
         route_names: List[str],
         structured_spec: Optional[Dict],
         workflow_run: WorkflowRun,
-        correlation_id: str
+        correlation_id: str,
+        send_callback=None,
+        node_id: Optional[str] = None,
+        workflow_run_step: Optional[WorkflowRunStep] = None,
     ) -> Tuple[str, Optional[str], Optional[Dict]]:
         """
         Execute LLM query for routing decision with structured output.
@@ -184,7 +187,11 @@ class BaseRoutingHandler(BaseExecutionHandler):
 
         # Collect response using base handler
         full_response, token_usage = await self._execute_llm_query_with_collection(
-            response_generator
+            response_generator,
+            send_callback=send_callback,
+            node_id=node_id,
+            workflow_run_id=workflow_run.id,
+            workflow_run_step=workflow_run_step,
         )
 
         logger.debug(f"[{correlation_id}] LLM response received, parsing routing decision")
@@ -477,4 +484,3 @@ class BaseRoutingHandler(BaseExecutionHandler):
         return await database_sync_to_async(
             lambda: node_data.get_routes()
         )()
-

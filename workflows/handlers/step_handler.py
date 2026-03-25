@@ -381,7 +381,8 @@ class StepNodeHandler(BaseExecutionHandler):
             response_generator,
             send_callback=context.send_callback,
             node_id=node_id,
-            workflow_run_id=context.workflow_run.id
+            workflow_run_id=context.workflow_run.id,
+            workflow_run_step=workflow_run_step,
         )
 
     async def _get_step_execution_config(
