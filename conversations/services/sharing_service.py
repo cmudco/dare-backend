@@ -17,6 +17,7 @@ from conversations.constants import (
     SharingErrorMessage,
 )
 from conversations.models import Conversation
+from sharing.services.sharing_service import SharingService
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +85,18 @@ class ConversationSharingService:
             is_published=True,
         ).first()
 
+        # Also allow forking if directly shared with the user
+        if not conversation:
+            candidate = Conversation.active_objects.filter(
+                conversation_id=conversation_id,
+            ).first()
+            if candidate and SharingService.can_access(
+                user,
+                "conversation",
+                candidate.conversation_id,
+            ):
+                conversation = candidate
+
         if not conversation:
             raise SharingValidationError(
                 SharingErrorMessage.CONVERSATION_NOT_PUBLISHED,
@@ -108,11 +121,15 @@ class ConversationSharingService:
         """
         Check if a user can view messages for a conversation.
 
-        Returns True if the user is the owner or the conversation is published.
+        Returns True if the user is the owner, the conversation is published,
+        or the conversation has been directly shared with the user.
         """
         is_owner = (
             hasattr(user, 'is_authenticated')
             and user.is_authenticated
             and conversation.user == user
         )
-        return is_owner or conversation.is_published
+        if is_owner or conversation.is_published:
+            return True
+
+        return SharingService.can_access(user, "conversation", conversation.conversation_id)
