@@ -154,7 +154,10 @@ class StructuredOutputNodeHandler(BaseRoutingHandler):
                 route_names=route_names,
                 structured_spec=structured_spec,
                 workflow_run=context.workflow_run,
-                correlation_id=correlation_id
+                correlation_id=correlation_id,
+                send_callback=context.send_callback,
+                node_id=node.id,
+                workflow_run_step=workflow_run_step,
             )
 
             # Process billing
