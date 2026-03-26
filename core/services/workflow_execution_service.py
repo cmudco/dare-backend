@@ -132,9 +132,13 @@ class WorkflowExecutionService:
         try:
             workflow = await database_sync_to_async(lambda: workflow_run.workflow)()
             
-            step_node = await database_sync_to_async(
-                lambda: WorkflowNode.objects.filter(workflow=workflow, node_id=step_node_id).first()
-            )()
+            def _load_step_node():
+                node = WorkflowNode.objects.filter(workflow=workflow, node_id=step_node_id).first()
+                if node:
+                    node._prefetched_data_object = node.data_object
+                return node
+
+            step_node = await database_sync_to_async(_load_step_node)()
             if not step_node:
                 return {'success': False, 'error': f'Step {step_node_id} not found'}
 
@@ -146,7 +150,7 @@ class WorkflowExecutionService:
             exec_node = ExecutionNode(
                 id=step_node.node_id,
                 type=step_node.node_type,
-                label=step_node.label,
+                label=getattr(step_node._prefetched_data_object, 'label', '') or '',
                 db_node=step_node,
             )
             
@@ -281,7 +285,15 @@ class WorkflowExecutionService:
 
     async def _get_ordered_nodes(self, workflow) -> List[ExecutionNode]:
         """Get nodes in topological order."""
-        db_nodes = await database_sync_to_async(lambda: list(workflow.nodes.all()))()
+        def _load_nodes_with_data():
+            nodes = list(workflow.nodes.all())
+            # Eagerly access data_object in sync context to avoid
+            # SynchronousOnlyOperation when used in async code
+            for node in nodes:
+                node._prefetched_data_object = node.data_object
+            return nodes
+
+        db_nodes = await database_sync_to_async(_load_nodes_with_data)()
         edges = await database_sync_to_async(lambda: list(workflow.edges.all()))()
 
         # Filter out non-executable node types (e.g. notes are decorative only)
@@ -290,7 +302,7 @@ class WorkflowExecutionService:
             ExecutionNode(
                 id=node.node_id,
                 type=node.node_type,
-                label=node.label,
+                label=getattr(node._prefetched_data_object, 'label', '') or '',
                 db_node=node,
             )
             for node in db_nodes

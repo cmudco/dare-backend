@@ -91,7 +91,7 @@ class ExecutionValidator:
             errors.append(f"Step node {node.node_id}: Invalid data type")
             return errors
 
-        step_label = node.label or node.node_id
+        step_label = getattr(step_data, 'label', '') or node.node_id
         logger.info(f"[ExecutionValidator] Step {step_label} - "
                    f"has_prompt={step_data.prompt is not None}, "
                    f"has_llm={step_data.llm is not None}, "
@@ -137,7 +137,8 @@ class ExecutionValidator:
             errors.append(f"Structured output node {node.node_id}: Invalid data type")
             return errors
 
-        node_label = f"Structured Output {node.label}" if node.label else "Structured Output node"
+        data_label = getattr(struct_data, 'label', '')
+        node_label = f"Structured Output {data_label}" if data_label else "Structured Output node"
 
         # Validate prompt OR text_input (at least one REQUIRED)
         has_prompt = struct_data.prompt is not None

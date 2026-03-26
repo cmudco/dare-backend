@@ -29,7 +29,7 @@ class WorkflowAdmin(admin.ModelAdmin):
 # New node data admins
 @admin.register(WorkflowNode)
 class WorkflowNodeAdmin(admin.ModelAdmin):
-    list_display = ('workflow', 'node_id', 'node_type', 'label', 'position_x', 'position_y')
+    list_display = ('workflow', 'node_id', 'node_type', 'position_x', 'position_y')
     list_filter = ('node_type', 'workflow')
     search_fields = ('node_id', 'workflow__user__email')
 
