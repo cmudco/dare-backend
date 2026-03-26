@@ -172,7 +172,7 @@ class NodeExecutionStateBuilder:
         return {
 
             "stepId": step.id,
-            "startedAt": step.started_at,
+            "startedAt": step.started_at.isoformat() if step.started_at else None,
             "nodeType": node.node_type,
             "status": step.status,
             "response": step.response,
@@ -231,7 +231,7 @@ class NodeExecutionStateBuilder:
             return {
     
                 "stepId": None,  # Display nodes don't have their own steps
-                "startedAt": source_step.started_at,
+                "startedAt": source_step.started_at.isoformat() if source_step.started_at else None,
                 "nodeType": node.node_type,
                 "status": source_step.status,
                 "response": source_step.response,
@@ -401,5 +401,5 @@ class NodeExecutionStateBuilder:
             "customPrompt": custom_prompt,
             "aiRecommendation": ai_recommendation,
             "aiAnalysis": ai_analysis,
-            "label": node.label,
+            "label": getattr(node.data_object, 'label', '') or '',
         }
