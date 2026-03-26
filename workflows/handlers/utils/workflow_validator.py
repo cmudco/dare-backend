@@ -160,19 +160,20 @@ class WorkflowValidator:
         """
         errors: List[str] = []
 
-        # Build lookup: step_number -> chatOutput nodes
-        outputs_by_step: Dict[int, List] = {}
+        # Build lookup: label -> chatOutput nodes
+        outputs_by_label: Dict[str, List] = {}
         for node in node_lookup.values():
             if node.node_type == NodeType.CHAT_OUTPUT:
-                step_number = getattr(node.typed_data, 'step_number', None)
-                if step_number is not None:
-                    if step_number not in outputs_by_step:
-                        outputs_by_step[step_number] = []
-                    outputs_by_step[step_number].append(node)
+                label = getattr(node.typed_data, 'label', None)
+                if label:
+                    if label not in outputs_by_label:
+                        outputs_by_label[label] = []
+                    outputs_by_label[label].append(node)
 
         for step_node in step_nodes:
             data = step_node.typed_data
-            step_number = getattr(data, 'step_number', None)
+            label = getattr(data, 'label', None)
+            step_label = label or step_node.node_id
 
             # Validate execution requirements
             if for_execution:
@@ -180,22 +181,22 @@ class WorkflowValidator:
                 prompt = getattr(data, 'prompt', None)
                 if not prompt:
                     errors.append(
-                        f"Step {step_number}: Missing required prompt. Please select a prompt before running."
+                        f"Step {step_label}: Missing required prompt. Please select a prompt before running."
                     )
 
                 # Check LLM
                 llm = getattr(data, 'llm', None)
                 if not llm:
                     errors.append(
-                        f"Step {step_number}: Missing required LLM. Please select an LLM before running."
+                        f"Step {step_label}: Missing required LLM. Please select an LLM before running."
                     )
 
             # Validate connection to output node
-            if step_number is not None:
-                outputs_for_step = outputs_by_step.get(step_number, [])
+            if label:
+                outputs_for_step = outputs_by_label.get(label, [])
                 if not outputs_for_step:
                     errors.append(
-                        f"Step {step_number} must have an output node."
+                        f"Step {step_label} must have an output node."
                     )
                     continue
 
@@ -208,7 +209,7 @@ class WorkflowValidator:
 
                 if not has_output_edge:
                     errors.append(
-                        f"Step {step_number} must connect to its output node."
+                        f"Step {step_label} must connect to its output node."
                     )
 
         return errors
@@ -233,8 +234,8 @@ class WorkflowValidator:
         for structured_node in structured_nodes:
             data = structured_node.typed_data
             routes = getattr(data, 'routes', []) or []
-            so_step_number = getattr(data, 'step_number', None)
-            so_label = f"Structured Output {so_step_number}" if so_step_number else "Structured Output node"
+            label = getattr(data, 'label', None)
+            so_label = f"Structured Output {label}" if label else "Structured Output node"
 
             # Validate execution requirements
             if for_execution:
@@ -359,8 +360,8 @@ class WorkflowValidator:
         for step_node in step_nodes:
             if step_node.node_id not in reachable:
                 step_data = step_node.typed_data
-                step_number = getattr(step_data, 'step_number', None)
-                step_label = f"Step {step_number}" if step_number else f"Step {step_node.node_id}"
+                label = getattr(step_data, 'label', None)
+                step_label = f"Step {label}" if label else f"Step {step_node.node_id}"
                 errors.append(
                     f"{step_label} must be reachable from a Start node."
                 )

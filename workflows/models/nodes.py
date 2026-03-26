@@ -1,7 +1,86 @@
+from dataclasses import dataclass, field
+from typing import Iterable
+
 from django.db import models
 from django.core.validators import MinValueValidator, MaxValueValidator
 from workflows.node_handler_constants import StepNodeDefaults, FileNodeDefaults
 from workflows.constants import Mode, RetrievalMode, QuerySource
+
+
+@dataclass(frozen=True)
+class NodeFileReference:
+    file_id: int
+    file_name: str
+
+
+@dataclass(frozen=True)
+class PrefetchedNodeFileRelations:
+    step_content_files: dict[int, tuple[NodeFileReference, ...]] = field(default_factory=dict)
+    step_embedding_files: dict[int, tuple[NodeFileReference, ...]] = field(default_factory=dict)
+    file_node_files: dict[int, tuple[NodeFileReference, ...]] = field(default_factory=dict)
+
+    def get_step_content_files(self, node_data_id: int) -> tuple[NodeFileReference, ...]:
+        return self.step_content_files.get(node_data_id, ())
+
+    def get_step_embedding_files(self, node_data_id: int) -> tuple[NodeFileReference, ...]:
+        return self.step_embedding_files.get(node_data_id, ())
+
+    def get_file_node_files(self, node_data_id: int) -> tuple[NodeFileReference, ...]:
+        return self.file_node_files.get(node_data_id, ())
+
+
+def _group_file_rows(rows: Iterable[tuple[int, int, str]]) -> dict[int, tuple[NodeFileReference, ...]]:
+    grouped: dict[int, list[NodeFileReference]] = {}
+    for node_data_id, file_id, file_name in rows:
+        grouped.setdefault(node_data_id, []).append(
+            NodeFileReference(file_id=file_id, file_name=file_name)
+        )
+    return {
+        node_data_id: tuple(file_refs)
+        for node_data_id, file_refs in grouped.items()
+    }
+
+
+def build_prefetched_node_file_relations(nodes) -> PrefetchedNodeFileRelations:
+    """Precompute all node/file M2M data needed for node serialization."""
+    step_node_data_ids = [node.data_object_id for node in nodes if node.node_type == "step"]
+    file_node_data_ids = [node.data_object_id for node in nodes if node.node_type == "file"]
+
+    step_content_files: dict[int, tuple[NodeFileReference, ...]] = {}
+    step_embedding_files: dict[int, tuple[NodeFileReference, ...]] = {}
+    file_node_files: dict[int, tuple[NodeFileReference, ...]] = {}
+
+    if step_node_data_ids:
+        step_content_files = _group_file_rows(
+            StepNodeData.content_files.through.objects.filter(
+                stepnodedata_id__in=step_node_data_ids
+            ).values_list("stepnodedata_id", "file_id", "file__name")
+        )
+        step_embedding_files = _group_file_rows(
+            StepNodeData.embedding_files.through.objects.filter(
+                stepnodedata_id__in=step_node_data_ids
+            ).values_list("stepnodedata_id", "file_id", "file__name")
+        )
+
+    if file_node_data_ids:
+        file_node_files = _group_file_rows(
+            FileNodeData.files.through.objects.filter(
+                filenodedata_id__in=file_node_data_ids
+            ).values_list("filenodedata_id", "file_id", "file__name")
+        )
+
+    return PrefetchedNodeFileRelations(
+        step_content_files=step_content_files,
+        step_embedding_files=step_embedding_files,
+        file_node_files=file_node_files,
+    )
+
+
+def _serialize_file_refs(file_refs: tuple[NodeFileReference, ...]) -> tuple[list[int], dict[int, str]]:
+    return (
+        [file_ref.file_id for file_ref in file_refs],
+        {file_ref.file_id: file_ref.file_name for file_ref in file_refs},
+    )
 
 
 class BaseNodeData(models.Model):
@@ -12,7 +91,7 @@ class BaseNodeData(models.Model):
     class Meta:
         abstract = True
 
-    def to_dict(self):
+    def to_dict(self, relations: PrefetchedNodeFileRelations | None = None):
         """Convert to dict for API serialization. Override in subclasses."""
         raise NotImplementedError("Subclasses must implement to_dict()")
 
@@ -52,7 +131,6 @@ class StepNodeData(BaseNodeData):
         blank=True,
         help_text="Language model for this step"
     )
-    step_number = models.PositiveIntegerField(help_text="Step order in workflow")
     max_tokens = models.PositiveIntegerField(
         default=StepNodeDefaults.MAX_TOKENS,
         help_text="Maximum tokens for LLM response"
@@ -88,20 +166,22 @@ class StepNodeData(BaseNodeData):
         help_text="If true, enable web search for this step's LLM"
     )
 
-    def to_dict(self):
+    def to_dict(self, relations: PrefetchedNodeFileRelations | None = None):
         """Convert to React Flow node data format."""
-        content_files_qs = self.content_files.values_list('id', 'name')
-        embedding_files_qs = self.embedding_files.values_list('id', 'name')
+        node_relations = relations or PrefetchedNodeFileRelations()
+        content_file_refs = node_relations.get_step_content_files(self.id)
+        embedding_file_refs = node_relations.get_step_embedding_files(self.id)
+        content_file_ids, content_file_names = _serialize_file_refs(content_file_refs)
+        embedding_file_ids, embedding_file_names = _serialize_file_refs(embedding_file_refs)
         return {
             'agent': self.agent.id if self.agent else None,
             'prompt': self.prompt.id if self.prompt else None,
             'promptTitle': self.prompt.title if self.prompt else None,
-            'contentFiles': [fid for fid, _ in content_files_qs],
-            'contentFileNames': {fid: fname for fid, fname in content_files_qs},
-            'embeddingFiles': [fid for fid, _ in embedding_files_qs],
-            'embeddingFileNames': {fid: fname for fid, fname in embedding_files_qs},
+            'contentFiles': content_file_ids,
+            'contentFileNames': content_file_names,
+            'embeddingFiles': embedding_file_ids,
+            'embeddingFileNames': embedding_file_names,
             'llm': self.llm.id if self.llm else None,
-            'stepNumber': self.step_number,
             'maxTokens': self.max_tokens,
             'temperature': self.temperature,
             'maxContextSnippets': self.max_context_snippets,
@@ -113,7 +193,7 @@ class StepNodeData(BaseNodeData):
         }
 
     def __str__(self):
-        return f"Step {self.step_number}: {self.prompt.title if self.prompt else 'No Prompt'}"
+        return f"StepNodeData {self.pk}: {self.prompt.title if self.prompt else 'No Prompt'}"
 
 
 class StartNodeData(BaseNodeData):
@@ -136,7 +216,7 @@ class StartNodeData(BaseNodeData):
         help_text="Workflow execution mode"
     )
 
-    def to_dict(self):
+    def to_dict(self, relations: PrefetchedNodeFileRelations | None = None):
         return {
             'title': self.title,
             'description': self.description,
@@ -149,9 +229,6 @@ class StartNodeData(BaseNodeData):
 
 class ChatOutputNodeData(BaseNodeData):
     """Data model for 'chatOutput' type nodes."""
-    step_number = models.PositiveIntegerField(
-        help_text="Associated step number for output"
-    )
     status = models.CharField(
         max_length=20,
         blank=True,
@@ -166,16 +243,15 @@ class ChatOutputNodeData(BaseNodeData):
         help_text="Error message if step failed"
     )
 
-    def to_dict(self):
+    def to_dict(self, relations: PrefetchedNodeFileRelations | None = None):
         return {
-            'stepNumber': self.step_number,
             'status': self.status,
             'response': self.response,
             'error': self.error,
         }
 
     def __str__(self):
-        return f"Output for Step {self.step_number}"
+        return f"ChatOutputNodeData {self.pk}"
 
 
 
@@ -192,9 +268,6 @@ class StructuredOutputNodeData(BaseNodeData):
         default=list,
         blank=True,
         help_text="List of route definitions: [{'name': '1', 'description': '...'}, ...]"
-    )
-    step_number = models.PositiveIntegerField(
-        help_text="Step number for execution ordering"
     )
     require_human_validation = models.BooleanField(
         default=False,
@@ -217,12 +290,11 @@ class StructuredOutputNodeData(BaseNodeData):
         """Get routes for structured output node."""
         return self.routes if self.routes else []
 
-    def to_dict(self):
+    def to_dict(self, relations: PrefetchedNodeFileRelations | None = None):
         return {
             'prompt': self.prompt.id if self.prompt else None,
             'promptTitle': self.prompt.title if self.prompt else None,
             'routes': self.get_routes(),
-            'stepNumber': self.step_number,
             'requireHumanValidation': self.require_human_validation,
             'llm': self.llm.id if self.llm else None,
             'textInput': self.text_input,
@@ -233,7 +305,7 @@ class StructuredOutputNodeData(BaseNodeData):
         route_names = ' / '.join([r['name'] for r in routes[:3]])
         if len(routes) > 3:
             route_names += f' (+{len(routes) - 3} more)'
-        return f"Structured Output {self.step_number}: {route_names}"
+        return f"StructuredOutputNodeData {self.pk}: {route_names}"
 
 
 class NotesNodeData(BaseNodeData):
@@ -249,7 +321,7 @@ class NotesNodeData(BaseNodeData):
         help_text="Note content/documentation text"
     )
 
-    def to_dict(self) -> dict:
+    def to_dict(self, relations: PrefetchedNodeFileRelations | None = None) -> dict:
         """Convert to React Flow node data format (camelCase)."""
         return {
             'content': self.content,
@@ -303,27 +375,23 @@ class FileNodeData(BaseNodeData):
         default=True,
         help_text="Include file names and similarity scores in output"
     )
-    step_number = models.PositiveIntegerField(
-        help_text="Step order in workflow"
-    )
 
-    def to_dict(self) -> dict:
+    def to_dict(self, relations: PrefetchedNodeFileRelations | None = None) -> dict:
         """Convert to React Flow node data format (camelCase)."""
-        files_qs = self.files.values_list('id', 'name')
+        node_relations = relations or PrefetchedNodeFileRelations()
+        file_refs = node_relations.get_file_node_files(self.id)
+        file_ids, file_names = _serialize_file_refs(file_refs)
         return {
-            'files': [fid for fid, _ in files_qs],
-            'fileNames': {fid: fname for fid, fname in files_qs},
+            'files': file_ids,
+            'fileNames': file_names,
             'retrievalMode': self.retrieval_mode,
             'similarityThreshold': self.similarity_threshold,
             'maxResults': self.max_results,
             'querySource': self.query_source,
             'textInput': self.text_input,
             'includeMetadata': self.include_metadata,
-            'stepNumber': self.step_number,
         }
 
     def __str__(self) -> str:
         file_count = self.files.count()
-        return f"File Node (Step {self.step_number}): {file_count} files, {self.retrieval_mode} mode"
-
-
+        return f"FileNodeData {self.pk}: {file_count} files, {self.retrieval_mode} mode"

@@ -85,14 +85,9 @@ class StructuredOutputNodeHandler(BaseRoutingHandler):
                 )
 
             # Get or create workflow run step
-            step_number = await database_sync_to_async(
-                lambda: so_data.step_number
-            )()
-
             workflow_run_step = await self._get_or_create_workflow_run_step(
                 context.workflow_run,
                 node,
-                step_number
             )
 
             # Update status to running
@@ -109,7 +104,7 @@ class StructuredOutputNodeHandler(BaseRoutingHandler):
                     await context.send_callback(
                         WebSocketResponseService.format_workflow_step_started(
                             node_id=node.id,
-                            step_number=step_number or 0,
+                            label=node.label,
                             node_type=NodeType.STRUCTURED_OUTPUT,
                             started_at=started_at,
                             workflow_run_id=context.workflow_run.id
