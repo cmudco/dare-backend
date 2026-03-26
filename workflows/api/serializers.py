@@ -20,7 +20,7 @@ from workflows.services.citation_serialization import (
     WorkflowStepSnippetSerializer,
     WorkflowStepWebSearchSourceSerializer,
 )
-from workflows.utils import convert_keys_to_snake_case
+from djangorestframework_camel_case.util import underscoreize
 
 
 logger = logging.getLogger(__name__)
@@ -414,7 +414,7 @@ class WorkflowNodeSerializer(serializers.ModelSerializer):
 
         if serializer_class:
             # Convert camelCase keys to snake_case (frontend sends camelCase)
-            snake_case_data = convert_keys_to_snake_case(data_dict or {})
+            snake_case_data = underscoreize(data_dict or {})
 
             # Filter incoming data to only allowed fields for the target serializer
             allowed_fields = set(getattr(serializer_class.Meta, 'fields', []))
@@ -448,7 +448,7 @@ class WorkflowNodeSerializer(serializers.ModelSerializer):
 
             if serializer_class:
                 # Convert camelCase keys to snake_case (frontend sends camelCase)
-                snake_case_data = convert_keys_to_snake_case(data_dict)
+                snake_case_data = underscoreize(data_dict)
 
                 # Filter incoming data to only allowed fields for the target serializer
                 allowed_fields = set(serializer_class().get_fields().keys())
