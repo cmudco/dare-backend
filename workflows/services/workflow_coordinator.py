@@ -17,6 +17,7 @@ import logging
 from typing import Dict, Any, Optional, Callable, Awaitable, List
 
 from asgiref.sync import sync_to_async
+from djangorestframework_camel_case.util import camelize
 from django_rq import get_queue
 from conversations.services.websocket_response_service import WebSocketResponseService
 from core.services.workflow_execution_service import WorkflowExecutionService
@@ -40,6 +41,11 @@ from workflows.services.workflow_run_service import (
 
 
 logger = logging.getLogger(__name__)
+
+# Fields to preserve from camelize() key mangling — these contain
+# user-generated dict keys (node IDs) that must not be camelCase-converted.
+# Used for socket emissions. REST uses the same setting via JSON_UNDERSCOREIZE.
+_CAMELIZE_IGNORE_FIELDS = ('nodeStates',)
 
 
 class WorkflowCoordinator:
@@ -190,7 +196,8 @@ class WorkflowCoordinator:
             run_status = await sync_to_async(
                 lambda: {
                     'type': 'workflow_status',
-                    **WorkflowRunV2Serializer(workflow_run).data
+                    **camelize(WorkflowRunV2Serializer(workflow_run).data,
+                               ignore_fields=_CAMELIZE_IGNORE_FIELDS)
                 }
             )()
             await self.sio.emit(
@@ -233,7 +240,8 @@ class WorkflowCoordinator:
         latest_run_data = None
         if workflow_run:
             latest_run_data = await sync_to_async(
-                lambda: WorkflowRunV2Serializer(workflow_run).data
+                lambda: camelize(WorkflowRunV2Serializer(workflow_run).data,
+                                 ignore_fields=_CAMELIZE_IGNORE_FIELDS)
             )()
             run_id = latest_run_data.get('id')
             room_name = f'workflow_run_{run_id}'
