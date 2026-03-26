@@ -13,7 +13,8 @@ from workflows.models import (
     Workflow, WorkflowRun, WorkflowRunStep,
     # Graph-driven models
     StepNodeData, StartNodeData, ChatOutputNodeData, StructuredOutputNodeData,
-    NotesNodeData, FileNodeData, WorkflowNode, WorkflowEdge
+    NotesNodeData, FileNodeData, WorkflowNode, WorkflowEdge,
+    PrefetchedNodeFileRelations, build_prefetched_node_file_relations,
 )
 from workflows.services import NodeExecutionStateBuilder
 from workflows.services.citation_serialization import (
@@ -106,7 +107,16 @@ class WorkflowSerializer(serializers.ModelSerializer):
 
     def get_nodes(self, obj):
         """Serialize workflow nodes to React Flow format."""
-        return WorkflowNodeSerializer(obj.nodes.all(), many=True).data
+        nodes = list(obj.nodes.all())
+        node_file_relations = build_prefetched_node_file_relations(nodes)
+        return WorkflowNodeSerializer(
+            nodes,
+            many=True,
+            context={
+                **self.context,
+                'node_file_relations': node_file_relations,
+            },
+        ).data
 
     def get_edges(self, obj):
         """Serialize workflow edges to React Flow format."""
@@ -144,7 +154,7 @@ class StepNodeDataSerializer(serializers.ModelSerializer):
     class Meta:
         model = StepNodeData
         fields = [
-            'agent', 'prompt', 'content_files', 'embedding_files', 'llm', 'step_number',
+            'agent', 'prompt', 'content_files', 'embedding_files', 'llm',
             'max_tokens', 'temperature', 'max_context_snippets',
             'document_similarity_threshold', 'use_previous_step_files',
             'use_previous_step_embeddings', 'text_input',
@@ -161,7 +171,7 @@ class StartNodeDataSerializer(serializers.ModelSerializer):
 class ChatOutputNodeDataSerializer(serializers.ModelSerializer):
     class Meta:
         model = ChatOutputNodeData
-        fields = ['step_number', 'status', 'response', 'error']
+        fields = ['status', 'response', 'error']
 
 
 
@@ -181,7 +191,7 @@ class StructuredOutputNodeDataSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = StructuredOutputNodeData
-        fields = ['prompt', 'llm', 'routes', 'require_human_validation', 'step_number', 'text_input']
+        fields = ['prompt', 'llm', 'routes', 'require_human_validation', 'text_input']
 
     def to_representation(self, instance):
         """Include computed routes via get_routes() method."""
@@ -206,7 +216,7 @@ class FileNodeDataSerializer(serializers.ModelSerializer):
         model = FileNodeData
         fields = [
             'files', 'retrieval_mode', 'similarity_threshold', 'max_results',
-            'query_source', 'text_input', 'include_metadata', 'step_number'
+            'query_source', 'text_input', 'include_metadata'
         ]
 
 
@@ -323,14 +333,14 @@ class WorkflowEdgeSerializer(serializers.ModelSerializer):
 
 
 class WorkflowNodeSerializer(serializers.ModelSerializer):
-    # Accept node data for creation; representation uses instance.data property
+    # Accept node data for creation; representation uses typed node serialization
     data = serializers.JSONField(write_only=True, required=False)
 
     class Meta:
         model = WorkflowNode
         fields = [
             'workflow',
-            'node_id', 'node_type', 'position_x', 'position_y', 'width', 'height',
+            'node_id', 'node_type', 'label', 'position_x', 'position_y', 'width', 'height',
             'selected', 'dragging', 'draggable', 'selectable', 'connectable',
             'deletable', 'hidden', 'source_position', 'target_position', 'parent_id',
             'z_index', 'drag_handle', 'style', 'class_name', 'data'
@@ -364,7 +374,7 @@ class WorkflowNodeSerializer(serializers.ModelSerializer):
             if ck in mapped and sk not in mapped:
                 mapped[sk] = mapped.pop(ck)
         # Coerce nullable-like CharFields to empty strings
-        for k in ['source_position', 'target_position', 'drag_handle', 'class_name']:
+        for k in ['source_position', 'target_position', 'drag_handle', 'class_name', 'label']:
             if mapped.get(k, None) is None:
                 mapped[k] = ''
 
@@ -372,11 +382,16 @@ class WorkflowNodeSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         """Convert to React Flow Node format."""
+        node_file_relations = self.context.get(
+            'node_file_relations',
+            PrefetchedNodeFileRelations(),
+        )
         return {
             'id': instance.node_id,
             'type': instance.node_type,
+            'label': instance.label,
             'position': {'x': instance.position_x, 'y': instance.position_y},
-            'data': instance.data,  # Calls the @property method
+            'data': instance.serialize_data(node_file_relations),
             'selected': instance.selected,
             'dragging': instance.dragging,
             'draggable': instance.draggable,

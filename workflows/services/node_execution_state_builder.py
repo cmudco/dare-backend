@@ -364,7 +364,7 @@ class NodeExecutionStateBuilder:
                 "customPrompt": str,
                 "aiRecommendation": str | null,
                 "aiAnalysis": str | null,
-                "stepNumber": int | null
+                "label": str | null
             }
 
             Returns None if not a validation-capable node or missing data.
@@ -396,13 +396,10 @@ class NodeExecutionStateBuilder:
         # Extract AI recommendation using standardized key
         ai_recommendation = metadata.get(MetadataKey.AI_RECOMMENDATION)
 
-        # Extract step number
-        step_number = getattr(node_data, 'step_number', None)
-
         return {
             "availableRoutes": available_routes,
             "customPrompt": custom_prompt,
             "aiRecommendation": ai_recommendation,
             "aiAnalysis": ai_analysis,
-            "stepNumber": step_number,
+            "label": node.label,
         }

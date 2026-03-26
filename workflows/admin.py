@@ -29,7 +29,7 @@ class WorkflowAdmin(admin.ModelAdmin):
 # New node data admins
 @admin.register(WorkflowNode)
 class WorkflowNodeAdmin(admin.ModelAdmin):
-    list_display = ('workflow', 'node_id', 'node_type', 'position_x', 'position_y')
+    list_display = ('workflow', 'node_id', 'node_type', 'label', 'position_x', 'position_y')
     list_filter = ('node_type', 'workflow')
     search_fields = ('node_id', 'workflow__user__email')
 
@@ -41,7 +41,7 @@ class WorkflowEdgeAdmin(admin.ModelAdmin):
 
 @admin.register(StepNodeData)
 class StepNodeDataAdmin(admin.ModelAdmin):
-    list_display = ('step_number', 'prompt', 'llm', 'temperature')
+    list_display = ('id', 'prompt', 'llm', 'temperature')
     list_filter = ('llm', 'created_at')
     search_fields = ('prompt__title',)
 
@@ -53,5 +53,5 @@ class StartNodeDataAdmin(admin.ModelAdmin):
 
 @admin.register(ChatOutputNodeData)
 class ChatOutputNodeDataAdmin(admin.ModelAdmin):
-    list_display = ('step_number', 'status', 'created_at')
+    list_display = ('id', 'status', 'created_at')
     list_filter = ('status', 'created_at')
