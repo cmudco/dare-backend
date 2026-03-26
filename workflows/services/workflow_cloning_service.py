@@ -229,7 +229,6 @@ class WorkflowCloningService:
             parent_id=original_node.parent_id,
             z_index=original_node.z_index,
             drag_handle=original_node.drag_handle,
-            label=original_node.label,
             style=original_node.style,
             class_name=original_node.class_name,
             data_content_type=ContentType.objects.get_for_model(cloned_data),

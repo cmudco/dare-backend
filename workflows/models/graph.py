@@ -114,14 +114,6 @@ class WorkflowNode(TimeStampMixin):
         help_text="CSS class for drag handles (node.dragHandle)"
     )
 
-    # Display label (user-editable, presentation-only — execution order is graph-derived)
-    label = models.CharField(
-        max_length=255,
-        blank=True,
-        default='',
-        help_text="Display label for this node (e.g. 'Step 1', 'Research', 'Summarize')"
-    )
-
     # Styling Properties
     style = models.JSONField(
         default=dict,

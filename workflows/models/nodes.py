@@ -98,6 +98,12 @@ class BaseNodeData(models.Model):
 
 class StepNodeData(BaseNodeData):
     """Data model for 'step' type nodes - replaces Step model entirely."""
+    label = models.CharField(
+        max_length=255,
+        blank=True,
+        default='',
+        help_text="Display label (e.g. 'Step 1', 'Research')"
+    )
     agent = models.ForeignKey(
         'agents.Agent',
         on_delete=models.SET_NULL,
@@ -174,6 +180,7 @@ class StepNodeData(BaseNodeData):
         content_file_ids, content_file_names = _serialize_file_refs(content_file_refs)
         embedding_file_ids, embedding_file_names = _serialize_file_refs(embedding_file_refs)
         return {
+            'label': self.label,
             'agent': self.agent.id if self.agent else None,
             'prompt': self.prompt.id if self.prompt else None,
             'promptTitle': self.prompt.title if self.prompt else None,
@@ -229,6 +236,12 @@ class StartNodeData(BaseNodeData):
 
 class ChatOutputNodeData(BaseNodeData):
     """Data model for 'chatOutput' type nodes."""
+    label = models.CharField(
+        max_length=255,
+        blank=True,
+        default='',
+        help_text="Display label (e.g. 'Step 1 Output')"
+    )
     status = models.CharField(
         max_length=20,
         blank=True,
@@ -245,6 +258,7 @@ class ChatOutputNodeData(BaseNodeData):
 
     def to_dict(self, relations: PrefetchedNodeFileRelations | None = None):
         return {
+            'label': self.label,
             'status': self.status,
             'response': self.response,
             'error': self.error,
@@ -257,6 +271,12 @@ class ChatOutputNodeData(BaseNodeData):
 
 class StructuredOutputNodeData(BaseNodeData):
     """Data model for 'structuredOutput' type nodes - independent routing decision nodes."""
+    label = models.CharField(
+        max_length=255,
+        blank=True,
+        default='',
+        help_text="Display label (e.g. 'Router 1')"
+    )
     prompt = models.ForeignKey(
         'prompts.Prompt',
         on_delete=models.SET_NULL,
@@ -292,6 +312,7 @@ class StructuredOutputNodeData(BaseNodeData):
 
     def to_dict(self, relations: PrefetchedNodeFileRelations | None = None):
         return {
+            'label': self.label,
             'prompt': self.prompt.id if self.prompt else None,
             'promptTitle': self.prompt.title if self.prompt else None,
             'routes': self.get_routes(),
@@ -339,6 +360,12 @@ class FileNodeData(BaseNodeData):
     Simpler than step nodes: no LLM processing, purely retrieval.
     Supports embeddings (vector search) and full content modes.
     """
+    label = models.CharField(
+        max_length=255,
+        blank=True,
+        default='',
+        help_text="Display label (e.g. 'File 1')"
+    )
     files = models.ManyToManyField(
         'files.File',
         related_name='file_node_files',
@@ -382,6 +409,7 @@ class FileNodeData(BaseNodeData):
         file_refs = node_relations.get_file_node_files(self.id)
         file_ids, file_names = _serialize_file_refs(file_refs)
         return {
+            'label': self.label,
             'files': file_ids,
             'fileNames': file_names,
             'retrievalMode': self.retrieval_mode,
