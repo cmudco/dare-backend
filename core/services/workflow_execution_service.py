@@ -19,6 +19,7 @@ from workflows.models import Workflow, WorkflowRun, WorkflowRunStep, WorkflowNod
 from workflows.node_handlers import (
     node_handler_registry, NodeExecutionContext, NodeExecutionResult, ExecutionNode
 )
+from workflows.services.run_status import RunStatusManager
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +72,16 @@ class WorkflowExecutionService:
 
         except Exception as e:
             logger.error(f"Workflow execution failed: {e}", exc_info=True)
+            if workflow_run is not None:
+                await database_sync_to_async(RunStatusManager.mark_failed)(
+                    workflow_run,
+                    error_message=str(e),
+                )
+                await database_sync_to_async(
+                    lambda: WorkflowRun.objects.filter(id=workflow_run.id).update(
+                        ended_at=timezone.now()
+                    )
+                )()
             await self._emit(send_callback, WebSocketResponseService.format_workflow_error(
                 node_id=None,
                 error=str(e),
@@ -102,6 +113,7 @@ class WorkflowExecutionService:
 
             if not updated:
                 return {'success': False, 'error': 'No pending validation found'}
+            await database_sync_to_async(RunStatusManager.recompute)(workflow_run)
 
             logger.info(f"Human validation: run={workflow_run.id}, node={node_id}, route={chosen_route}")
             return await self.execute_workflow(workflow_run=workflow_run, send_callback=send_callback)
@@ -131,12 +143,12 @@ class WorkflowExecutionService:
             if missing:
                 return {'success': False, 'error': f'Missing deps: {", ".join(missing)}', 'missing_dependencies': missing}
 
-            step_number = await database_sync_to_async(
-                lambda: getattr(step_node.data_object, 'step_number', None)
-            )()
-
-            exec_node = ExecutionNode(id=step_node.node_id, type=step_node.node_type, 
-                                      step_number=step_number, db_node=step_node)
+            exec_node = ExecutionNode(
+                id=step_node.node_id,
+                type=step_node.node_type,
+                label=step_node.label,
+                db_node=step_node,
+            )
             
             # Load existing results for context
             nodes = [exec_node]  # Just this node for loading
@@ -230,7 +242,7 @@ class WorkflowExecutionService:
                 await self._emit(send_callback, WebSocketResponseService.format_workflow_validation_required(
                     node_id=node.id,
                     routes=result.metadata.get('available_routes', []),
-                    context={'stepNumber': result.metadata.get('step_number'),
+                    context={'label': result.metadata.get('label'),
                              'customPrompt': result.metadata.get('custom_prompt'),
                              'aiAnalysis': result.metadata.get('ai_analysis')},
                     ai_recommendation=result.metadata.get('ai_recommendation'),
@@ -274,8 +286,16 @@ class WorkflowExecutionService:
 
         # Filter out non-executable node types (e.g. notes are decorative only)
         NON_EXECUTABLE_TYPES = {'notes'}
-        nodes = [ExecutionNode(id=n.node_id, type=n.node_type, step_number=None, db_node=n)
-                 for n in db_nodes if n.node_type not in NON_EXECUTABLE_TYPES]
+        nodes = [
+            ExecutionNode(
+                id=node.node_id,
+                type=node.node_type,
+                label=node.label,
+                db_node=node,
+            )
+            for node in db_nodes
+            if node.node_type not in NON_EXECUTABLE_TYPES
+        ]
 
         # Kahn's algorithm
         node_map = {n.id: n for n in nodes}
@@ -304,7 +324,7 @@ class WorkflowExecutionService:
 
     async def _get_start_connected_step_node_ids(self, workflow) -> List[str]:
         """Get node_ids of step nodes directly connected to root start node."""
-        start_node = await database_sync_to_async(workflow._get_root_start_node)()
+        start_node = await database_sync_to_async(lambda: workflow.root_start_node)()
         if not start_node:
             return []
 
@@ -531,28 +551,35 @@ class WorkflowExecutionService:
 
     async def _finalize_run(self, workflow_run, status, send_callback):
         """Update run status and emit completion."""
+        ended_at = timezone.now()
         if status in ('completed', 'failed'):
+            if status == 'failed':
+                await database_sync_to_async(RunStatusManager.mark_failed)(workflow_run)
+            else:
+                await database_sync_to_async(RunStatusManager.recompute)(workflow_run)
             await database_sync_to_async(
-                lambda: WorkflowRun.objects.filter(id=workflow_run.id).update(ended_at=timezone.now())
+                lambda: WorkflowRun.objects.filter(id=workflow_run.id).update(ended_at=ended_at)
             )()
         await self._emit(send_callback, WebSocketResponseService.format_workflow_execution_complete(
-            workflow_run_id=workflow_run.id, status=status, ended_at=timezone.now().isoformat()
+            workflow_run_id=workflow_run.id, status=status, ended_at=ended_at.isoformat()
         ))
 
     async def _mark_skipped(self, workflow_run, node):
         """Mark step as skipped."""
         if node.type in ('step', 'structuredOutput'):
-            await database_sync_to_async(
+            updated = await database_sync_to_async(
                 lambda: WorkflowRunStep.objects.filter(
                     workflow_run=workflow_run, step_node=node.db_node
                 ).update(status=WorkflowRunStepStatus.SKIPPED, response='Skipped: routing')
             )()
+            if updated:
+                await database_sync_to_async(RunStatusManager.recompute)(workflow_run)
 
     async def _fail_pending_human_step(self, workflow_run, node, send_callback):
         """Fail pending human validation steps for batch runs."""
         error_message = "Human validation is not supported in batch runs."
         if node.type in ('step', 'structuredOutput'):
-            await database_sync_to_async(
+            updated = await database_sync_to_async(
                 lambda: WorkflowRunStep.objects.filter(
                     workflow_run=workflow_run,
                     step_node=node.db_node,
@@ -562,6 +589,8 @@ class WorkflowExecutionService:
                     error=error_message
                 )
             )()
+            if updated:
+                await database_sync_to_async(RunStatusManager.recompute)(workflow_run)
 
         await self._emit(
             send_callback,

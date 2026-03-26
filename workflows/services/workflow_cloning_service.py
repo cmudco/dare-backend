@@ -56,6 +56,9 @@ class WorkflowCloningService:
         # Clone all edges
         self._clone_edges(original, cloned)
 
+        # Resolve root start node for the cloned workflow
+        cloned.resolve_root_start_node()
+
         return cloned
 
     def _create_cloned_workflow(
@@ -149,7 +152,6 @@ class WorkflowCloningService:
                 agent=data_object.agent,
                 prompt=cloned_prompt,
                 llm=data_object.llm,
-                step_number=data_object.step_number,
                 max_tokens=data_object.max_tokens,
                 temperature=data_object.temperature,
                 max_context_snippets=data_object.max_context_snippets,
@@ -167,7 +169,6 @@ class WorkflowCloningService:
             return cloned_data
         elif isinstance(data_object, ChatOutputNodeData):
             return ChatOutputNodeData.objects.create(
-                step_number=data_object.step_number,
                 status='',
                 response='',
                 error=''
@@ -193,7 +194,6 @@ class WorkflowCloningService:
             return StructuredOutputNodeData.objects.create(
                 prompt=cloned_prompt,
                 routes=data_object.routes,
-                step_number=data_object.step_number,
                 require_human_validation=data_object.require_human_validation,
                 llm=data_object.llm,
                 text_input=data_object.text_input
@@ -229,6 +229,7 @@ class WorkflowCloningService:
             parent_id=original_node.parent_id,
             z_index=original_node.z_index,
             drag_handle=original_node.drag_handle,
+            label=original_node.label,
             style=original_node.style,
             class_name=original_node.class_name,
             data_content_type=ContentType.objects.get_for_model(cloned_data),

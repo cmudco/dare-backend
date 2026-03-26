@@ -3,6 +3,7 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 
 from common.models import TimeStampMixin
+from .nodes import PrefetchedNodeFileRelations, build_prefetched_node_file_relations
 
 
 class WorkflowNode(TimeStampMixin):
@@ -113,6 +114,14 @@ class WorkflowNode(TimeStampMixin):
         help_text="CSS class for drag handles (node.dragHandle)"
     )
 
+    # Display label (user-editable, presentation-only — execution order is graph-derived)
+    label = models.CharField(
+        max_length=255,
+        blank=True,
+        default='',
+        help_text="Display label for this node (e.g. 'Step 1', 'Research', 'Summarize')"
+    )
+
     # Styling Properties
     style = models.JSONField(
         default=dict,
@@ -146,9 +155,17 @@ class WorkflowNode(TimeStampMixin):
     @property
     def data(self):
         """Get node data as dict for API compatibility."""
-        if self.data_object:
-            return self.data_object.to_dict()
-        return {}
+        return self.serialize_data()
+
+    def serialize_data(
+        self,
+        relations: PrefetchedNodeFileRelations | None = None,
+    ) -> dict:
+        """Serialize the typed node payload with precomputed file relations."""
+        if not self.data_object:
+            return {}
+        node_relations = relations or build_prefetched_node_file_relations([self])
+        return self.data_object.to_dict(relations=node_relations)
 
     @property
     def typed_data(self):
