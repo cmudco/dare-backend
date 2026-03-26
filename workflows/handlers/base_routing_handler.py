@@ -384,17 +384,10 @@ class BaseRoutingHandler(BaseExecutionHandler):
         end_time = timezone.now()
         execution_time = (end_time - start_time).total_seconds()
 
-        # Batch DB access: step_number + prompt content in a single call
-        def _get_frontend_data():
-            prompt_obj = node_data.prompt
-            return {
-                'step_number': node_data.step_number,
-                'custom_prompt': prompt_obj.content if prompt_obj else "",
-            }
-
-        frontend_data = await database_sync_to_async(_get_frontend_data)()
-        step_number = frontend_data['step_number']
-        custom_prompt = frontend_data['custom_prompt']
+        # Get custom prompt from node data
+        custom_prompt = await database_sync_to_async(
+            lambda: node_data.prompt.content if node_data.prompt else ""
+        )()
 
         # Return special result that pauses execution
         return NodeExecutionResult(
@@ -409,7 +402,7 @@ class BaseRoutingHandler(BaseExecutionHandler):
                 MetadataKey.ANALYSIS: analysis_text or "",
                 MetadataKey.AVAILABLE_ROUTES: routes,
                 'node_id': node.id,
-                'step_number': step_number,
+                'label': node.label,
                 'custom_prompt': custom_prompt
             }
         )

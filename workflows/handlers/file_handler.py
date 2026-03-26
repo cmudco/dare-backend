@@ -93,7 +93,7 @@ class FileNodeHandler(BaseNodeHandler):
                     await context.send_callback(
                         WebSocketResponseService.format_workflow_step_started(
                             node_id=node.id,
-                            step_number=file_data.step_number or 0,
+                            label=node.label,
                             node_type="file",
                             started_at=started_at,
                             workflow_run_id=context.workflow_run.id

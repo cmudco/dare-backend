@@ -48,14 +48,14 @@ class ExecutionNode:
     Attributes:
         id: Unique node identifier
         type: Node type ('start', 'step', 'chatOutput', 'structuredOutput')
-        step_number: Optional step ordering number
+        label: Optional display label
         db_node: Reference to the database WorkflowNode object
         next_node_id: ID of the next node in the flow
         output_node_id: ID of corresponding output node (for step nodes)
     """
     id: str
     type: str
-    step_number: Optional[int]
+    label: Optional[str]
     db_node: WorkflowNode
     next_node_id: Optional[str] = None
     output_node_id: Optional[str] = None

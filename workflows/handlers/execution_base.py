@@ -14,6 +14,8 @@ from django.utils import timezone
 from workflows.handlers.base import BaseNodeHandler, ExecutionNode, NodeExecutionContext, NodeExecutionResult, categorize_error
 from workflows.models import WorkflowRun, WorkflowRunStep
 from workflows.constants import WorkflowRunStepStatus
+from workflows.services.run_ordering import get_workflow_run_order_map
+from workflows.services.run_status import RunStatusManager
 from core.services.billing_service import BillingService
 from conversations.models import LLM
 from conversations.services.websocket_response_service import WebSocketResponseService
@@ -38,7 +40,7 @@ class BaseExecutionHandler(BaseNodeHandler):
         self,
         workflow_run: WorkflowRun,
         node: ExecutionNode,
-        step_number: Optional[int] = None,
+        order: Optional[int] = None,
         reset_if_exists: bool = False
     ) -> WorkflowRunStep:
         """
@@ -47,19 +49,21 @@ class BaseExecutionHandler(BaseNodeHandler):
         Args:
             workflow_run: The workflow run instance
             node: The execution node
-            step_number: Optional step number for ordering
+            order: Optional graph-derived order for persistence
             reset_if_exists: If True and step exists, reset it for re-execution
 
         Returns:
             WorkflowRunStep instance
         """
         def _get_or_create():
-            order = step_number if step_number is not None else (node.step_number or 0)
+            persisted_order = order
+            if persisted_order is None:
+                persisted_order = get_workflow_run_order_map(workflow_run.workflow).get(node.id, 0)
             step, created = WorkflowRunStep.objects.get_or_create(
                 workflow_run=workflow_run,
                 step_node=node.db_node,
                 defaults={
-                    'order': order,
+                    'order': persisted_order,
                     'status': WorkflowRunStepStatus.PENDING
                 }
             )
@@ -70,6 +74,7 @@ class BaseExecutionHandler(BaseNodeHandler):
                 step.error = None
                 step.started_at = None
                 step.save(update_fields=['status', 'response', 'error', 'started_at'])
+                RunStatusManager.recompute(workflow_run)
             return step
 
         return await database_sync_to_async(_get_or_create)()
@@ -121,6 +126,7 @@ class BaseExecutionHandler(BaseNodeHandler):
                 update_kwargs['metadata'] = existing_metadata
             
             WorkflowRunStep.objects.filter(id=workflow_run_step.id).update(**update_kwargs)
+            RunStatusManager.recompute(workflow_run_step.workflow_run_id)
             return started_at_value
 
         return await database_sync_to_async(_update)()

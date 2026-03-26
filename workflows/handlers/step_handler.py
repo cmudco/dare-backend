@@ -127,7 +127,7 @@ class StepNodeHandler(BaseExecutionHandler):
                     await context.send_callback(
                         WebSocketResponseService.format_workflow_step_started(
                             node_id=node.id,
-                            step_number=node.step_number or 0,
+                            label=node.label,
                             node_type="step",
                             started_at=started_at,
                             workflow_run_id=context.workflow_run.id
