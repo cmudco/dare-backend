@@ -93,7 +93,7 @@ class SingleStepExecutor:
                     'workflow_event',
                     WebSocketResponseService.format_workflow_execution_complete(
                         workflow_run_id=workflow_run_id,
-                        status='completed' if result.get('success') else 'failed'
+                        status='completed' if result.success else 'failed'
                     ),
                     room=room_name,
                     namespace=self.namespace

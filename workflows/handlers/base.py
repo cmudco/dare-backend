@@ -7,7 +7,7 @@ Provides the abstract base class (BaseNodeHandler) and shared dataclasses
 import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Callable, Coroutine, Dict, Optional
+from typing import Any, Callable, Coroutine, Dict, List, Optional
 
 from channels.db import database_sync_to_async
 from django.core.exceptions import ValidationError
@@ -65,6 +65,17 @@ class NodeExecutionResult:
     token_usage: Optional[Dict] = None
     execution_time: Optional[float] = None
     metadata: Optional[Dict] = None
+
+
+@dataclass
+class ExecutionResult:
+    """Result of a full workflow or single-step execution."""
+    success: bool
+    error: Optional[str] = None
+    pending_human_input: bool = False
+    executed_nodes: int = 0
+    skipped_nodes: int = 0
+    failed_nodes: int = 0
 
 
 class BaseNodeHandler(ABC):
