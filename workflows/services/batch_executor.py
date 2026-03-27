@@ -6,17 +6,22 @@ and enqueues individual workflow runs via Django RQ.
 """
 
 import logging
+from datetime import timedelta
 from typing import Dict, Any, Optional, List
 
 from asgiref.sync import sync_to_async
+from django.utils import timezone
 from django_rq import get_queue
 
 from conversations.services.websocket_response_service import WebSocketResponseService
 from files.constants import FileStatus
 from files.models import File
-from workflows.constants import WorkflowRunStepStatus
+from workflows.constants import BatchRunStatus, WorkflowRunStepStatus
 from workflows.models import BatchRun, WorkflowRun
-from workflows.services.workflow_run_repository import WorkflowRunRepository
+from workflows.services.workflow_run_repository import (
+    WorkflowRunRepository,
+    STALE_RUN_THRESHOLD_MINUTES,
+)
 from workflows.tasks import run_batch_workflow
 
 
@@ -107,6 +112,22 @@ class BatchExecutor:
             )
             if not batch_run:
                 return None
+
+            # Clean up stale batch runs stuck in "running" state
+            if batch_run.status == BatchRunStatus.RUNNING:
+                stale_threshold = timezone.now() - timedelta(
+                    minutes=STALE_RUN_THRESHOLD_MINUTES
+                )
+                if batch_run.created_at < stale_threshold:
+                    logger.warning(
+                        f"Cleaning up stale batch run {batch_run.id} for workflow {workflow_id} "
+                        f"(created at {batch_run.created_at})"
+                    )
+                    BatchRun.objects.filter(id=batch_run.id).update(
+                        status=BatchRunStatus.FAILED,
+                        ended_at=timezone.now()
+                    )
+                    batch_run.refresh_from_db()
 
             runs = (
                 WorkflowRun.objects.filter(batch_run=batch_run)
