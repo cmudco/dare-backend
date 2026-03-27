@@ -19,7 +19,7 @@ from files.models import File
 from workflows.constants import BatchRunStatus
 from workflows.models import BatchRun
 from core.services.workflow_execution_service import WorkflowExecutionService
-from workflows.services.workflow_run_service import create_workflow_run
+from workflows.services.workflow_run_repository import WorkflowRunRepository
 
 
 logger = logging.getLogger(__name__)
@@ -161,7 +161,7 @@ def run_batch_workflow(
         return
 
     try:
-        workflow_run = async_to_sync(create_workflow_run)(
+        workflow_run = async_to_sync(WorkflowRunRepository.create_full_run)(
             workflow_id,
             user,
             ''
