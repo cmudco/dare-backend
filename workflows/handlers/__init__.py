@@ -7,6 +7,7 @@ EventEmitter centralizes WebSocket event dispatch.
 from workflows.handlers.base import (
     BaseNodeHandler,
     ExecutionNode,
+    ExecutionResult,
     NodeExecutionContext,
     NodeExecutionResult,
     categorize_error,
@@ -27,6 +28,7 @@ __all__ = [
     'BaseExecutionHandler',
     'BaseRoutingHandler',
     'ExecutionNode',
+    'ExecutionResult',
     'NodeExecutionContext',
     'NodeExecutionResult',
     'categorize_error',
