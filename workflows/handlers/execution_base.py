@@ -1,24 +1,30 @@
 """
-Base execution handler with common billing, status updates, and error handling.
+Base execution handler with common billing, status updates, and streaming.
 
-This module provides shared functionality for handlers that execute LLM calls
-and manage workflow run steps (step_handler, structured_output_handler).
+Shared by handlers that execute LLM calls (step_handler, structured_output_handler).
 """
 import logging
 from typing import Dict, Optional
+
 from channels.db import database_sync_to_async
 from django.db.models import TextField, Value
 from django.db.models.functions import Coalesce, Concat
 from django.utils import timezone
 
-from workflows.handlers.base import BaseNodeHandler, ExecutionNode, NodeExecutionContext, NodeExecutionResult, categorize_error
-from workflows.models import WorkflowRun, WorkflowRunStep
+from conversations.models import LLM
+from core.services.billing_service import BillingService
 from workflows.constants import WorkflowRunStepStatus
+from workflows.handlers.base import (
+    BaseNodeHandler,
+    ExecutionNode,
+    NodeExecutionContext,
+    NodeExecutionResult,
+    categorize_error,
+)
+from workflows.handlers.event_emitter import EventEmitter
+from workflows.models import WorkflowRun, WorkflowRunStep
 from workflows.services.run_ordering import get_workflow_run_order_map
 from workflows.services.run_status import RunStatusManager
-from core.services.billing_service import BillingService
-from conversations.models import LLM
-from conversations.services.websocket_response_service import WebSocketResponseService
 
 
 logger = logging.getLogger(__name__)
@@ -27,34 +33,26 @@ logger = logging.getLogger(__name__)
 class BaseExecutionHandler(BaseNodeHandler):
     """
     Base handler for nodes that execute LLM calls.
-    
-    Provides common patterns for:
+
+    Provides:
     - Workflow run step creation/retrieval
-    - Status management
-    - Billing processing
-    - Token usage collection
-    - Error handling
+    - Status management (with RunStatusManager cascade)
+    - Streaming with chunk persistence for reconnect resilience
+    - Billing processing (non-blocking — failures don't fail execution)
+    - Standardized error result building
     """
+
+    # ==================== Run Step Management ====================
 
     async def _get_or_create_workflow_run_step(
         self,
         workflow_run: WorkflowRun,
         node: ExecutionNode,
         order: Optional[int] = None,
-        reset_if_exists: bool = False
+        reset_if_exists: bool = False,
     ) -> WorkflowRunStep:
-        """
-        Get or create a WorkflowRunStep for the node.
+        """Get or create a WorkflowRunStep. Resets it if reset_if_exists (manual re-run)."""
 
-        Args:
-            workflow_run: The workflow run instance
-            node: The execution node
-            order: Optional graph-derived order for persistence
-            reset_if_exists: If True and step exists, reset it for re-execution
-
-        Returns:
-            WorkflowRunStep instance
-        """
         def _get_or_create():
             persisted_order = order
             if persisted_order is None:
@@ -64,10 +62,9 @@ class BaseExecutionHandler(BaseNodeHandler):
                 step_node=node.db_node,
                 defaults={
                     'order': persisted_order,
-                    'status': WorkflowRunStepStatus.PENDING
-                }
+                    'status': WorkflowRunStepStatus.PENDING,
+                },
             )
-            # Reset the step for re-execution if requested (manual mode re-run)
             if not created and reset_if_exists:
                 step.status = WorkflowRunStepStatus.PENDING
                 step.response = None
@@ -79,70 +76,62 @@ class BaseExecutionHandler(BaseNodeHandler):
 
         return await database_sync_to_async(_get_or_create)()
 
+    # ==================== Status Updates ====================
+
     async def _update_step_status(
         self,
         workflow_run_step: WorkflowRunStep,
         status: str,
         response: Optional[str] = None,
         error: Optional[str] = None,
-        metadata: Optional[Dict] = None
+        metadata: Optional[Dict] = None,
     ):
         """
-        Update workflow run step status and optional fields.
+        Atomically update step status/response/error/metadata.
 
-        Args:
-            workflow_run_step: Workflow run step to update
-            status: New status
-            response: Optional response text
-            error: Optional error message
-            metadata: Optional metadata dictionary
+        Returns started_at timestamp when transitioning to RUNNING.
         """
+
         def _update():
             update_kwargs = {'status': status}
             started_at_value = None
 
             if status == WorkflowRunStepStatus.RUNNING:
-                # Capture the first start timestamp to preserve execution order.
                 if workflow_run_step.started_at is None:
                     started_at_value = timezone.now()
                     update_kwargs['started_at'] = started_at_value
                 else:
                     started_at_value = workflow_run_step.started_at
-                # Clear stale persisted output before a new stream starts.
+                # Clear stale output before a new stream starts
                 update_kwargs['response'] = ''
                 update_kwargs['error'] = None
-            
+
             if response is not None:
                 update_kwargs['response'] = response
-            
+
             if error is not None:
                 update_kwargs['error'] = error
-            
+
             if metadata is not None:
-                # Merge with existing metadata
                 step = WorkflowRunStep.objects.get(id=workflow_run_step.id)
                 existing_metadata = step.metadata or {}
                 existing_metadata.update(metadata)
                 update_kwargs['metadata'] = existing_metadata
-            
+
             WorkflowRunStep.objects.filter(id=workflow_run_step.id).update(**update_kwargs)
             RunStatusManager.recompute(workflow_run_step.workflow_run_id)
             return started_at_value
 
         return await database_sync_to_async(_update)()
 
+    # ==================== Streaming ====================
+
     async def _append_step_response_chunk(
         self,
         workflow_run_step: WorkflowRunStep,
-        chunk: str
+        chunk: str,
     ) -> None:
-        """
-        Persist a streamed chunk so reconnects can restore the exact preview.
-
-        Args:
-            workflow_run_step: Step receiving streamed output
-            chunk: Newly streamed text chunk
-        """
+        """Persist a streamed chunk so reconnects can restore the exact preview."""
         if not chunk:
             return
 
@@ -156,78 +145,22 @@ class BaseExecutionHandler(BaseNodeHandler):
             )
         )()
 
-    async def _process_billing(
-        self,
-        token_usage: Dict,
-        llm: LLM,
-        user,
-        step_node_id: Optional[int] = None
-    ) -> bool:
-        """
-        Process billing for token usage.
-
-        Args:
-            token_usage: Token usage statistics
-            llm: LLM instance used
-            user: User to bill
-            step_node_id: Optional step node ID for tracking
-
-        Returns:
-            bool: True if billing succeeded, False otherwise
-        """
-        if not token_usage or not token_usage.get('input_tokens') or not token_usage.get('output_tokens'):
-            logger.debug("No token usage data available for billing")
-            return True
-
-        try:
-            billing_service = BillingService()
-
-            billing_success = await database_sync_to_async(
-                billing_service.process_workflow_billing
-            )(
-                user=user,
-                llm=llm,
-                input_tokens=token_usage['input_tokens'],
-                output_tokens=token_usage['output_tokens'],
-                step_node_id=step_node_id
-            )
-
-            if not billing_success:
-                logger.warning(
-                    f"Billing failed for step_node_id={step_node_id}, but continuing execution"
-                )
-                return False
-
-            return True
-
-        except Exception as billing_error:
-            logger.error(
-                f"Billing error for step_node_id={step_node_id}: {str(billing_error)}",
-                exc_info=True
-            )
-            # Continue execution even if billing fails
-            return False
-
     async def _execute_llm_query_with_collection(
         self,
         llm_query_generator,
-        send_callback=None,
+        emitter: EventEmitter,
         node_id: Optional[str] = None,
-        workflow_run_id: Optional[int] = None,
         workflow_run_step: Optional[WorkflowRunStep] = None,
     ) -> tuple[str, Dict]:
         """
-        Execute LLM query and collect full response with token usage.
+        Consume an LLM async generator, collecting the full response and streaming
+        chunks to the frontend via EventEmitter.
 
-        Supports real-time streaming via send_callback for WebSocket clients.
+        Each chunk is:
+        1. Appended to the DB (reconnect resilience)
+        2. Emitted to the frontend via WebSocket
 
-        Args:
-            llm_query_generator: Async generator from llm_service.query()
-            send_callback: Optional async callback for streaming chunks to clients
-            node_id: Optional node ID for streaming events
-
-        Returns:
-            tuple: (full_response, token_usage)
+        Returns (full_response, token_usage).
         """
         full_response = ""
         token_usage = {}
@@ -236,80 +169,83 @@ class BaseExecutionHandler(BaseNodeHandler):
         async for chunk, usage in llm_query_generator:
             if chunk:
                 full_response += chunk
-                accumulated_tokens += 1  # Approximate token count
+                accumulated_tokens += 1
 
                 if workflow_run_step:
-                    await self._append_step_response_chunk(
-                        workflow_run_step,
-                        chunk
-                    )
+                    await self._append_step_response_chunk(workflow_run_step, chunk)
 
-                # Stream chunk to client if callback provided
-                if send_callback and node_id:
-                    try:
-                        await send_callback(
-                            WebSocketResponseService.format_workflow_step_streaming(
-                                node_id=node_id,
-                                chunk=chunk,
-                                accumulated_tokens=accumulated_tokens,
-                                workflow_run_id=workflow_run_id
-                            )
-                        )
-                    except Exception as e:
-                        # Don't fail execution if streaming fails
-                        logger.warning(f"Streaming callback failed: {e}")
+                if node_id:
+                    await emitter.step_streaming(node_id, chunk, accumulated_tokens)
 
             if usage:
                 token_usage = usage
 
         return full_response, token_usage
 
+    # ==================== Billing ====================
+
+    async def _process_billing(
+        self,
+        token_usage: Dict,
+        llm: LLM,
+        user,
+        step_node_id: Optional[int] = None,
+    ) -> bool:
+        """Process billing for token usage. Returns False on failure (non-blocking)."""
+        if not token_usage or not token_usage.get('input_tokens') or not token_usage.get('output_tokens'):
+            return True
+
+        try:
+            billing_service = BillingService()
+            billing_success = await database_sync_to_async(
+                billing_service.process_workflow_billing
+            )(
+                user=user,
+                llm=llm,
+                input_tokens=token_usage['input_tokens'],
+                output_tokens=token_usage['output_tokens'],
+                step_node_id=step_node_id,
+            )
+
+            if not billing_success:
+                logger.warning(f"Billing failed for step_node_id={step_node_id}")
+                return False
+
+            return True
+
+        except Exception as billing_error:
+            logger.error(
+                f"Billing error for step_node_id={step_node_id}: {billing_error}",
+                exc_info=True,
+            )
+            return False
+
+    # ==================== Helpers ====================
+
     async def _get_user_from_workflow_run(self, workflow_run: WorkflowRun):
-        """
-        Get user from workflow run.
-
-        Args:
-            workflow_run: Workflow run instance
-
-        Returns:
-            User instance
-        """
-        return await database_sync_to_async(
-            lambda: workflow_run.workflow.user
-        )()
+        """Get user from workflow run."""
+        return await database_sync_to_async(lambda: workflow_run.workflow.user)()
 
     def _build_error_result(
         self,
         exception: Exception,
         node: ExecutionNode,
         start_time,
-        custom_message: Optional[str] = None
+        custom_message: Optional[str] = None,
     ) -> NodeExecutionResult:
-        """
-        Build a NodeExecutionResult for an error.
-
-        Args:
-            exception: The exception that occurred
-            node: Execution node
-            start_time: Execution start time
-            custom_message: Optional custom error message
-
-        Returns:
-            NodeExecutionResult with error information
-        """
+        """Build a standardized error NodeExecutionResult."""
         error_category, error_type = categorize_error(exception)
-        error_msg = custom_message or f"{error_category}: {str(exception)}"
-        
+        error_msg = custom_message or f"{error_category}: {exception}"
+
         logger.error(
-            f"{error_category} in node {node.id} ({error_type}): {str(exception)}",
-            exc_info=True
+            f"{error_category} in node {node.id} ({error_type}): {exception}",
+            exc_info=True,
         )
 
-        end_time = timezone.now()
-        execution_time = (end_time - start_time).total_seconds()
+        execution_time = (timezone.now() - start_time).total_seconds()
 
         return NodeExecutionResult(
             success=False,
             error=error_msg,
-            execution_time=execution_time
+            execution_time=execution_time,
         )

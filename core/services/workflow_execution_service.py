@@ -296,13 +296,14 @@ class WorkflowExecutionService:
         db_nodes = await database_sync_to_async(_load_nodes_with_data)()
         edges = await database_sync_to_async(lambda: list(workflow.edges.all()))()
 
-        # Filter out non-executable node types (e.g. notes are decorative only)
-        NON_EXECUTABLE_TYPES = {'notes'}
+        # Filter out non-executable node types
+        # notes: decorative only, chatOutput: display-only (derives state from source step)
+        NON_EXECUTABLE_TYPES = {'notes', 'chatOutput'}
         nodes = [
             ExecutionNode(
                 id=node.node_id,
                 type=node.node_type,
-                label=getattr(node._prefetched_data_object, 'label', '') or '',
+                label=node.label or '',
                 db_node=node,
             )
             for node in db_nodes
