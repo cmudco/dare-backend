@@ -3,7 +3,6 @@ Workflow background tasks (RQ jobs).
 """
 import asyncio
 import logging
-import threading
 from typing import Optional
 
 from asgiref.sync import async_to_sync
@@ -26,49 +25,23 @@ logger = logging.getLogger(__name__)
 User = get_user_model()
 
 
-_emit_loop: Optional[asyncio.AbstractEventLoop] = None
-_emit_loop_thread: Optional[threading.Thread] = None
-
-
-def _ensure_emit_loop() -> asyncio.AbstractEventLoop:
-    global _emit_loop, _emit_loop_thread
-    if _emit_loop and _emit_loop.is_running():
-        return _emit_loop
-
-    loop = asyncio.new_event_loop()
-
-    def _run_loop():
-        asyncio.set_event_loop(loop)
-        loop.run_forever()
-
-    thread = threading.Thread(target=_run_loop, daemon=True)
-    thread.start()
-
-    _emit_loop = loop
-    _emit_loop_thread = thread
-    return loop
-
-
-def _schedule_emit(room_name: str, event_data: dict) -> "asyncio.Future[None]":
-    loop = _ensure_emit_loop()
-    return asyncio.run_coroutine_threadsafe(
-        sio.emit(
-            'workflow_event',
-            event_data,
-            room=room_name,
-            namespace='/workflow'
-        ),
-        loop
-    )
-
-
 def _emit_to_user_room(user_id: int, event_data: dict) -> None:
+    """Emit workflow event to user room synchronously."""
     room_name = f'workflow_user_{user_id}'
-    future = _schedule_emit(room_name, event_data)
+    loop = asyncio.new_event_loop()
     try:
-        future.result()
+        loop.run_until_complete(
+            sio.emit(
+                'workflow_event',
+                event_data,
+                room=room_name,
+                namespace='/workflow'
+            )
+        )
     except Exception as exc:
         logger.warning(f"Failed to emit workflow_event to {room_name}: {exc}")
+    finally:
+        loop.close()
 
 
 def _get_file_display_name(file_obj: Optional[File]) -> str:
@@ -220,15 +193,13 @@ def run_batch_workflow(
         )
     )
 
-    send_callback = _build_send_callback(user_id)
-
     try:
         result = async_to_sync(WorkflowExecutionService().execute_workflow)(
             workflow_run=workflow_run,
-            send_callback=send_callback,
+            send_callback=None,
             batch_file_id=file_id
         )
-        success = bool(result.get('success'))
+        success = result.success
     except Exception as e:
         logger.exception(f"Batch workflow execution error: {e}")
         success = False
@@ -256,16 +227,3 @@ def run_batch_workflow(
     )
 
     _finalize_batch_run(batch_run_id, user_id)
-
-
-def _build_send_callback(user_id: int):
-    room_name = f'workflow_user_{user_id}'
-
-    async def send_callback(event_data: dict):
-        future = _schedule_emit(room_name, event_data)
-        try:
-            await asyncio.wrap_future(future)
-        except Exception as exc:
-            logger.warning(f"Failed to emit workflow_event to {room_name}: {exc}")
-
-    return send_callback
