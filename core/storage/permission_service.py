@@ -4,6 +4,7 @@ Service for managing SyftBox file permissions.
 Uses syft-perm package for permission operations when SyftBox is enabled.
 Gracefully handles disabled state by returning success for all operations.
 """
+
 import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -25,7 +26,7 @@ class SyftBoxPermissionService:
 
     def __init__(self):
         """Initialize the permission service."""
-        self._enabled = settings.SYFTBOX.get('ENABLED', False)
+        self._enabled = settings.SYFTBOX.get("ENABLED", False)
 
     @property
     def is_enabled(self) -> bool:
@@ -37,7 +38,7 @@ class SyftBoxPermissionService:
         file_path: Path,
         owner_email: str,
         readable_by: Optional[List[str]] = None,
-        writable_by: Optional[List[str]] = None
+        writable_by: Optional[List[str]] = None,
     ) -> bool:
         """
         Set permissions for a file in SyftBox.
@@ -64,12 +65,12 @@ class SyftBoxPermissionService:
             file.grant_admin_access(owner_email, force=True)
 
             # Set read access
-            for email in (readable_by or []):
+            for email in readable_by or []:
                 if email != owner_email:
                     file.grant_read_access(email)
 
             # Set write access
-            for email in (writable_by or []):
+            for email in writable_by or []:
                 if email != owner_email:
                     file.grant_write_access(email, force=True)
 
@@ -186,24 +187,24 @@ class SyftBoxPermissionService:
         """
         # When disabled, grant all access (local storage behavior)
         if not self._enabled:
-            return {'read': True, 'write': True, 'admin': True}
+            return {"read": True, "write": True, "admin": True}
 
         try:
             import syft_perm as sp
 
             file = sp.open(str(file_path))
             return {
-                'read': file.has_read_access(user_email),
-                'write': getattr(file, 'has_write_access', lambda x: False)(user_email),
-                'admin': getattr(file, 'has_admin_access', lambda x: False)(user_email),
+                "read": file.has_read_access(user_email),
+                "write": getattr(file, "has_write_access", lambda x: False)(user_email),
+                "admin": getattr(file, "has_admin_access", lambda x: False)(user_email),
             }
 
         except ImportError:
             logger.warning("syft-perm package not available")
-            return {'read': True, 'write': True, 'admin': True}
+            return {"read": True, "write": True, "admin": True}
         except Exception as e:
             logger.error(f"Error checking access: {e}")
-            return {'read': False, 'write': False, 'admin': False}
+            return {"read": False, "write": False, "admin": False}
 
     def remove_file_permissions(self, file_path: Path) -> bool:
         """
@@ -235,13 +236,73 @@ class SyftBoxPermissionService:
 
             if len(content["rules"]) < original_count:
                 with open(syftpub_path, "w") as f:
-                    yaml.dump(content, f, default_flow_style=False, sort_keys=False, indent=2)
+                    yaml.dump(
+                        content, f, default_flow_style=False, sort_keys=False, indent=2
+                    )
                 logger.info(f"Removed permissions for {pattern} from {syftpub_path}")
 
             return True
 
         except Exception as e:
             logger.error(f"Error removing permissions for {file_path}: {e}")
+            return False
+
+    def grant_everyone_read_access(self, file_path: Path) -> bool:
+        """
+        Grant read access to all users via the SyftBox wildcard '*'.
+
+        Args:
+            file_path: Path to the file
+
+        Returns:
+            True if access was granted successfully
+        """
+        if not self._enabled:
+            logger.debug("SyftBox not enabled, skipping grant everyone read access")
+            return True
+
+        try:
+            import syft_perm as sp
+
+            file = sp.open(str(file_path))
+            file.grant_read_access("*")
+            logger.info(f"Granted everyone read access for {file_path}")
+            return True
+
+        except ImportError:
+            logger.warning("syft-perm package not available")
+            return True
+        except Exception as e:
+            logger.error(f"Error granting everyone read access: {e}")
+            return False
+
+    def revoke_everyone_read_access(self, file_path: Path) -> bool:
+        """
+        Revoke the wildcard '*' read access from a file.
+
+        Args:
+            file_path: Path to the file
+
+        Returns:
+            True if access was revoked successfully
+        """
+        if not self._enabled:
+            logger.debug("SyftBox not enabled, skipping revoke everyone read access")
+            return True
+
+        try:
+            import syft_perm as sp
+
+            file = sp.open(str(file_path))
+            file.revoke_read_access("*")
+            logger.info(f"Revoked everyone read access for {file_path}")
+            return True
+
+        except ImportError:
+            logger.warning("syft-perm package not available")
+            return True
+        except Exception as e:
+            logger.error(f"Error revoking everyone read access: {e}")
             return False
 
     def get_file_permissions(self, file_path: Path) -> Optional[Dict]:
@@ -262,7 +323,7 @@ class SyftBoxPermissionService:
 
             file = sp.open(str(file_path))
             # Return raw permission data if available
-            if hasattr(file, 'permissions'):
+            if hasattr(file, "permissions"):
                 return file.permissions
             return None
 
