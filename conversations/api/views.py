@@ -5,7 +5,10 @@ import tempfile
 import weasyprint
 from decimal import Decimal
 
+from django.conf import settings
 from django.db import transaction
+from django.db.models import Count
+from django.http import HttpResponse
 from django.http import Http404, HttpResponse
 from django.template.loader import render_to_string
 from django.utils import timezone
@@ -782,3 +785,63 @@ class ModelCardDataViewSet(viewsets.ReadOnlyModelViewSet):
                 return card
 
         raise NotFound("Model card not found")
+
+
+class AnonymousConversationsView(APIView):
+    """
+    Endpoint to fetch anonymous conversations for a public bot.
+
+    Used by SocraticBots backend to display anonymous public bot conversations.
+    Requires JWT authentication (professor's token).
+
+    Query params:
+        bot_id (required): Socratic Bot ID to filter by
+
+    Returns:
+        List of anonymous conversations with conversationId, createdAt, messageCount, sessionId
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        # Get required bot_id param
+        bot_id = request.query_params.get('bot_id')
+        if not bot_id:
+            return Response(
+                {'error': 'bot_id query parameter is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            bot_id = int(bot_id)
+        except ValueError:
+            return Response(
+                {'error': 'bot_id must be an integer'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Build queryset for anonymous SocraticBots conversations
+        queryset = Conversation.active_objects.filter(
+            bot_id=bot_id,
+            source='SocraticBots',
+            user__isnull=True,  # Only anonymous conversations
+            anonymous_session_id__isnull=False
+        ).annotate(
+            message_count=Count('messages')
+        ).order_by('-created_at')
+
+        # Build response data
+        conversations = []
+        for conv in queryset:
+            conversations.append({
+                'conversation_id': conv.conversation_id,
+                'title': conv.title or f'Anonymous Session {conv.anonymous_session_id[:8]}',
+                'created_at': conv.created_at.isoformat(),
+                'message_count': conv.message_count,
+                'session_id': conv.anonymous_session_id,
+                'bot_id': conv.bot_id,
+            })
+
+        return Response({
+            'conversations': conversations,
+            'total_count': len(conversations),
+        })
