@@ -22,6 +22,7 @@ from conversations.constants import ArtifactStatus, SharingErrorCode, SharingErr
 from conversations.services.sharing_service import ConversationSharingService, SharingValidationError
 from conversations.exceptions import SharingAPIException
 from conversations.api.mixins import ConversationSharingMixin
+from conversations.services.socratic_dependency_service import SocraticDependencyService
 from sharing.services.sharing_service import SharingService
 from users.utils import detect_platform_from_request
 from .serializers import (
@@ -700,6 +701,39 @@ class LLMViewSet(viewsets.ModelViewSet):
         queryset = LLM.objects.all().order_by('name')
         serializer = self.get_serializer(queryset, many=True)
         return Response(serializer.data)
+
+    def destroy(self, request, *args, **kwargs):
+        """
+        Override destroy to check for Socratic Books bot dependencies before deletion.
+
+        If dependent bots exist and ?confirm=true is not provided, returns a 409 Conflict
+        response with the list of dependent bots instead of deleting.
+
+        If ?confirm=true is provided, proceeds with deletion regardless of dependencies.
+        """
+        instance = self.get_object()
+        confirm = request.query_params.get('confirm', '').lower() == 'true'
+
+        if not confirm:
+            dependency_data = SocraticDependencyService.get_dependent_bots(instance.id)
+
+            if dependency_data and dependency_data.get('dependent_bots_count', 0) > 0:
+                return Response(
+                    {
+                        'warning': True,
+                        'message': (
+                            f"This model is used by {dependency_data['dependent_bots_count']} "
+                            f"Socratic Books bot(s). Deleting it will break these bots."
+                        ),
+                        'model_id': instance.id,
+                        'model_name': instance.name,
+                        'dependent_bots': dependency_data['dependent_bots'],
+                        'confirm_url': f'/api/conversations/llms/{instance.id}/?confirm=true',
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+
+        return super().destroy(request, *args, **kwargs)
 
 
 class FeedbackViewSet(mixins.CreateModelMixin, viewsets.GenericViewSet):
