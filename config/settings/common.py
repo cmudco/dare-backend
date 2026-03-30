@@ -152,6 +152,10 @@ REST_FRAMEWORK = {
     "PAGE_SIZE": 500, # TODO: temporarily increasing page size, until we add pagination on FE
     "JSON_UNDERSCOREIZE": {
         "ignore_keys": ("password1", "password2", "new_password1", "new_password2", "old_password"),
+        # Preserve dict keys under these fields from camelCase conversion.
+        # nodeStates is a dict keyed by user-generated node IDs (e.g. '-ybkjiGpAUdvp01WwZodV_9')
+        # that contain underscores — camelize() would mangle them without this.
+        "ignore_fields": ("nodeStates",),
     },
 }
 

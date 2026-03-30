@@ -80,6 +80,17 @@ class Workflow(BaseModel):
         help_text="Timestamp when the workflow was published"
     )
 
+    # Stored FK to the root start node (the one with no incoming edges).
+    # Set via resolve_root_start_node() after nodes/edges are created or updated.
+    root_start_node = models.ForeignKey(
+        'workflows.WorkflowNode',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='+',
+        help_text="Root start node (no incoming edges). Holds workflow title/description/mode."
+    )
+
     objects = models.Manager()
     active_objects = ActiveObjectsManager()
 
@@ -87,42 +98,33 @@ class Workflow(BaseModel):
         ordering = ['display_order', '-created_at']
 
     def __str__(self):
-        # Get title from StartNodeData
-        start_node = self.nodes.filter(node_type='start').first()
+        start_node = self.root_start_node
         if start_node and start_node.typed_data:
             title = start_node.typed_data.title
         else:
             title = 'Untitled'
         return f"{title} ({self.user.email})"
 
-    def _get_root_start_node(self):
-        """
-        Get the root start node - the one with NO incoming edges.
-        
-        Chained start nodes have incoming edges from chatOutput nodes.
-        The root start node (which holds the workflow title) has no incoming edges.
-        """
+    def resolve_root_start_node(self) -> None:
+        """Find the root start node (no incoming edges) and persist the FK."""
         start_nodes = list(self.nodes.filter(node_type='start'))
         if not start_nodes:
-            return None
-        
-        if len(start_nodes) == 1:
-            return start_nodes[0]
-        
-        # Multiple start nodes - find the one with no incoming edges
-        edge_targets = set(self.edges.values_list('target', flat=True))
-        
-        for start_node in start_nodes:
-            if start_node.node_id not in edge_targets:
-                return start_node
-        
-        # Fallback: use first one
-        return start_nodes[0]
+            root = None
+        elif len(start_nodes) == 1:
+            root = start_nodes[0]
+        else:
+            edge_targets = set(self.edges.values_list('target', flat=True))
+            root = next(
+                (sn for sn in start_nodes if sn.node_id not in edge_targets),
+                None,
+            )
+        self.root_start_node = root
+        self.save(update_fields=['root_start_node'])
 
     @property
     def title(self):
-        """Get workflow title from root StartNodeData (no incoming edges)."""
-        start_node = self._get_root_start_node()
+        """Get workflow title from root StartNodeData."""
+        start_node = self.root_start_node
         if start_node and start_node.typed_data:
             return start_node.typed_data.title
         return ''
@@ -130,7 +132,7 @@ class Workflow(BaseModel):
     @property
     def description(self):
         """Get workflow description from root StartNodeData."""
-        start_node = self._get_root_start_node()
+        start_node = self.root_start_node
         if start_node and start_node.typed_data:
             return start_node.typed_data.description
         return ''
@@ -138,7 +140,7 @@ class Workflow(BaseModel):
     @property
     def mode(self):
         """Get workflow mode from root StartNodeData."""
-        start_node = self._get_root_start_node()
+        start_node = self.root_start_node
         if start_node and start_node.typed_data:
             return start_node.typed_data.mode
         return Mode.PARALLEL
@@ -233,6 +235,12 @@ class WorkflowRun(BaseModel):
         blank=True,
         help_text="Timestamp when the run ended."
     )
+    status = models.CharField(
+        max_length=20,
+        choices=WorkflowRunStepStatus.choices,
+        default=WorkflowRunStepStatus.RUNNING,
+        help_text="Current status of the workflow run."
+    )
     is_partial = models.BooleanField(
         default=False,
         help_text="Whether this is a partial run (manual step-by-step execution) or complete workflow run."
@@ -260,37 +268,6 @@ class WorkflowRun(BaseModel):
     @property
     def started_at(self):
         return self.created_at
-
-    @property
-    def status(self):
-        steps = self.steps.all()
-        if not steps:
-            return WorkflowRunStepStatus.RUNNING
-
-        # Check if any step is waiting for human input - this takes precedence
-        if any(step.status == WorkflowRunStepStatus.PENDING_HUMAN_INPUT for step in steps):
-            return WorkflowRunStepStatus.PENDING_HUMAN_INPUT
-
-        # Check for failures
-        if any(step.status == WorkflowRunStepStatus.FAILED for step in steps):
-            return WorkflowRunStepStatus.FAILED
-
-        # Check if any step is currently running
-        if any(step.status == WorkflowRunStepStatus.RUNNING for step in steps):
-            return WorkflowRunStepStatus.RUNNING
-
-        # Consider both COMPLETED and SKIPPED as finished states
-        finished_statuses = {WorkflowRunStepStatus.COMPLETED, WorkflowRunStepStatus.SKIPPED}
-        if all(step.status in finished_statuses for step in steps):
-            return WorkflowRunStepStatus.COMPLETED
-
-        # For partial runs: if no step is running and at least one step completed,
-        # consider the partial run as "completed" (idle, ready for next manual step)
-        if self.is_partial:
-            if any(step.status in finished_statuses for step in steps):
-                return WorkflowRunStepStatus.COMPLETED
-
-        return WorkflowRunStepStatus.RUNNING
 
     def __str__(self):
         run_type = "Partial run" if self.is_partial else "Run"

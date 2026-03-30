@@ -363,17 +363,18 @@ class BillingService:
             if step_node_id:
                 step_node = WorkflowNode.objects.get(id=step_node_id)
                 workflow = step_node.workflow
-                step_number = getattr(step_node.data_object, 'step_number', None) if step_node.data_object else None
-                step_order = step_number or 1
+                node_label = getattr(step_node.data_object, 'label', None) if step_node.data_object else None
             else:
                 workflow = None
-                step_order = 0
+                node_label = None
 
             workflow_title = workflow.title if workflow else "Unknown Workflow"
             workflow_id = workflow.id if workflow else "N/A"
 
-            if step_order > 0:
-                transaction_message = f"Workflow {workflow_id} : Title - {workflow_title} | Step #{step_order} "
+            if node_label:
+                transaction_message = (
+                    f"Workflow {workflow_id} : Title - {workflow_title} | Node {node_label} "
+                )
             else:
                 transaction_message = f"Workflow {workflow_id} : Title - {workflow_title} | Routing Node "
 

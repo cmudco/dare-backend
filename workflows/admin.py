@@ -41,7 +41,7 @@ class WorkflowEdgeAdmin(admin.ModelAdmin):
 
 @admin.register(StepNodeData)
 class StepNodeDataAdmin(admin.ModelAdmin):
-    list_display = ('step_number', 'prompt', 'llm', 'temperature')
+    list_display = ('id', 'prompt', 'llm', 'temperature')
     list_filter = ('llm', 'created_at')
     search_fields = ('prompt__title',)
 
@@ -53,5 +53,5 @@ class StartNodeDataAdmin(admin.ModelAdmin):
 
 @admin.register(ChatOutputNodeData)
 class ChatOutputNodeDataAdmin(admin.ModelAdmin):
-    list_display = ('step_number', 'status', 'created_at')
+    list_display = ('id', 'status', 'created_at')
     list_filter = ('status', 'created_at')
