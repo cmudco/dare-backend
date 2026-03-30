@@ -48,6 +48,19 @@ def should_execute(
         if not source_node:
             continue
 
+        # chatOutput nodes are non-executable pass-throughs — resolve to their source step
+        if source_node.node_type == 'chatOutput':
+            chat_source_id = next(
+                (e.source for e in graph.edge_map_by_target.get(source_node_id, [])),
+                None
+            )
+            if chat_source_id and chat_source_id in node_results:
+                chat_source_result = node_results[chat_source_id]
+                is_skipped = chat_source_result.metadata and chat_source_result.metadata.get('skipped')
+                if not is_skipped:
+                    any_non_routing_valid = True
+            continue
+
         if source_node_id not in node_results:
             continue
 
