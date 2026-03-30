@@ -22,7 +22,7 @@ import socketio
 from conversations.socket_server import sio
 from conversations.namespaces.utils import detect_platform_from_socketio_environ
 from workflows.services.workflow_coordinator import WorkflowCoordinator
-from workflows.services.workflow_run_service import get_user
+from workflows.services.workflow_run_repository import WorkflowRunRepository
 
 
 logger = logging.getLogger(__name__)
@@ -95,7 +95,7 @@ class WorkflowNamespace(socketio.AsyncNamespace):
                 )
 
             # Fetch user from database
-            user = await get_user(user_id)
+            user = await WorkflowRunRepository.get_user(user_id)
             if not user:
                 raise socketio.exceptions.ConnectionRefusedError('User not found')
 
