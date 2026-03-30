@@ -1,4 +1,5 @@
 from django.db.models import Sum, Count
+from django.utils import timezone
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -8,6 +9,8 @@ from billing.api.serializers import WalletSerializer, TransactionSerializer
 from billing.models import Transaction
 from billing.constants import TransactionTypeChoice
 from common.pagination import CustomPageNumberPagination
+from conversations.models import Message
+from core.services.energy_service import compute_relatable_stats
 from users.utils import detect_platform_from_request
 
 class BillingViewSet(viewsets.ViewSet):
@@ -122,6 +125,98 @@ class BillingViewSet(viewsets.ViewSet):
         }
 
         return Response(response_data)
+
+    @action(detail=False, methods=['get'], url_path='energy-stats')
+    def energy_stats(self, request):
+        """
+        Get aggregated energy/environmental impact stats for the authenticated user.
+
+        Query parameters:
+            period: "7d", "30d", "90d", "all" (default: "all")
+
+        Returns overall totals, relatable stats, and per-model breakdown.
+        """
+        platform = detect_platform_from_request(request)
+        period = request.query_params.get("period", "all")
+
+        # Base queryset: user's messages with energy data via conversation source
+        base_qs = Message.active_objects.filter(
+            conversation__user=request.user,
+            conversation__source=platform,
+            energy_wh__isnull=False,
+            energy_wh__gt=0,
+        )
+
+        # Apply date filter
+        if period != "all":
+            days_map = {"7d": 7, "30d": 30, "90d": 90}
+            days = days_map.get(period, 0)
+            if days:
+                cutoff = timezone.now() - timezone.timedelta(days=days)
+                base_qs = base_qs.filter(created_at__gte=cutoff)
+
+        # Overall aggregates
+        totals = base_qs.aggregate(
+            total_energy_wh=Sum("energy_wh"),
+            total_carbon_g=Sum("carbon_g"),
+            total_water_ml=Sum("water_ml"),
+            message_count=Count("id"),
+        )
+
+        total_energy = float(totals["total_energy_wh"] or 0)
+        total_carbon = float(totals["total_carbon_g"] or 0)
+        total_water = float(totals["total_water_ml"] or 0)
+        message_count = totals["message_count"] or 0
+
+        # Relatable stats from total energy
+        relatable = compute_relatable_stats(total_energy)
+
+        # Per-model breakdown
+        per_model = (
+            base_qs
+            .values("llm__id", "llm__name", "llm__identifier", "llm__provider")
+            .annotate(
+                energy_wh_sum=Sum("energy_wh"),
+                carbon_g_sum=Sum("carbon_g"),
+                water_ml_sum=Sum("water_ml"),
+                message_count=Count("id"),
+            )
+            .order_by("-energy_wh_sum")
+        )
+
+        models_breakdown = [
+            {
+                "llmId": row["llm__id"],
+                "llmName": row["llm__name"],
+                "llmIdentifier": row["llm__identifier"],
+                "llmProvider": row["llm__provider"],
+                "energyWh": float(row["energy_wh_sum"] or 0),
+                "carbonG": float(row["carbon_g_sum"] or 0),
+                "waterMl": float(row["water_ml_sum"] or 0),
+                "messageCount": row["message_count"],
+            }
+            for row in per_model
+        ]
+
+        return Response({
+            "overallStats": {
+                "totalEnergyWh": round(total_energy, 4),
+                "totalCarbonG": round(total_carbon, 4),
+                "totalWaterMl": round(total_water, 4),
+                "messageCount": message_count,
+            },
+            "relatableStats": {
+                "phoneBatteryPct": round(relatable.phone_battery_pct, 4),
+                "googleSearchesEquiv": round(relatable.google_searches_equiv, 2),
+                "ledBulbSeconds": round(relatable.led_bulb_seconds, 2),
+                "netflixSeconds": round(relatable.netflix_seconds, 2),
+                "evMeters": round(relatable.ev_meters, 2),
+                "fridgeSeconds": round(relatable.fridge_seconds, 2),
+                "humanThinkingSeconds": round(relatable.human_thinking_seconds, 2),
+            },
+            "modelsBreakdown": models_breakdown,
+            "period": period,
+        })
 
     @action(detail=True, methods=['get'], url_path='transactions/(?P<transaction_id>[^/.]+)')
     def transaction_detail(self, request, pk=None, transaction_id=None):
