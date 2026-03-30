@@ -86,6 +86,9 @@ memu-py~=1.2.0
 # memu-py with PostgreSQL uses postgresql+psycopg:// (requires psycopg3, not psycopg2)
 psycopg[binary]~=3.2.0
 
+# Energy/environmental impact tracking for LLM calls
+ecologits>=0.10.0
+
 # SyftBox (distributed file storage)
 syft-core
 syft-perm

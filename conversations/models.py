@@ -694,6 +694,29 @@ class Message(BaseModel):
         help_text="Cost of this message in USD based on token usage and LLM pricing."
     )
 
+    # Energy/environmental impact tracking
+    energy_wh = models.DecimalField(
+        max_digits=10,
+        decimal_places=6,
+        null=True,
+        blank=True,
+        help_text="Estimated energy consumption in Watt-hours."
+    )
+    carbon_g = models.DecimalField(
+        max_digits=10,
+        decimal_places=6,
+        null=True,
+        blank=True,
+        help_text="Estimated carbon emissions in grams CO2 equivalent."
+    )
+    water_ml = models.DecimalField(
+        max_digits=10,
+        decimal_places=6,
+        null=True,
+        blank=True,
+        help_text="Estimated water usage in milliliters."
+    )
+
     # Unified feedback system
     feedback_type = models.CharField(
         max_length=10,
