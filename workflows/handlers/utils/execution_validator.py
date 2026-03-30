@@ -91,24 +91,25 @@ class ExecutionValidator:
             errors.append(f"Step node {node.node_id}: Invalid data type")
             return errors
 
-        logger.info(f"[ExecutionValidator] Step {step_data.step_number} - "
+        step_label = getattr(step_data, 'label', '') or node.node_id
+        logger.info(f"[ExecutionValidator] Step {step_label} - "
                    f"has_prompt={step_data.prompt is not None}, "
                    f"has_llm={step_data.llm is not None}, "
                    f"prompt_id={step_data.prompt_id if hasattr(step_data, 'prompt_id') else 'N/A'}, "
-                   f"llm_id={step_data.llm_id if hasattr(step_data, 'llm_id') else 'N/A'}")
+                    f"llm_id={step_data.llm_id if hasattr(step_data, 'llm_id') else 'N/A'}")
 
         # Validate prompt (REQUIRED)
         if not step_data.prompt:
             logger.warning(f"[ExecutionValidator] Step node {node.node_id}: Missing prompt")
             errors.append(
-                f"Step {step_data.step_number}: Missing required prompt. Please select a prompt before running."
+                f"Step {step_label}: Missing required prompt. Please select a prompt before running."
             )
 
         # Validate LLM (REQUIRED)
         if not step_data.llm:
             logger.warning(f"[ExecutionValidator] Step node {node.node_id}: Missing LLM")
             errors.append(
-                f"Step {step_data.step_number}: Missing required LLM. Please select an LLM before running."
+                f"Step {step_label}: Missing required LLM. Please select an LLM before running."
             )
 
         return errors
@@ -136,8 +137,8 @@ class ExecutionValidator:
             errors.append(f"Structured output node {node.node_id}: Invalid data type")
             return errors
 
-        step_number = getattr(struct_data, 'step_number', None)
-        node_label = f"Structured Output {step_number}" if step_number else "Structured Output node"
+        data_label = getattr(struct_data, 'label', '')
+        node_label = f"Structured Output {data_label}" if data_label else "Structured Output node"
 
         # Validate prompt OR text_input (at least one REQUIRED)
         has_prompt = struct_data.prompt is not None

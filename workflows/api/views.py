@@ -49,15 +49,15 @@ class WorkflowViewSet(viewsets.ModelViewSet):
                 is_published=True
             ).exclude(
                 user=self.request.user
-            ).select_related('user').prefetch_related(
-                'nodes',
+            ).select_related('user', 'root_start_node').prefetch_related(
+                Prefetch('nodes', queryset=WorkflowNode.objects.select_related('data_content_type')),
                 'edges',
             ).order_by('-published_at')
 
         return Workflow.active_objects.filter(
             user=self.request.user
-        ).prefetch_related(
-            'nodes',
+        ).select_related('root_start_node').prefetch_related(
+            Prefetch('nodes', queryset=WorkflowNode.objects.select_related('data_content_type')),
             'edges',
             Prefetch(
                 'runs',
@@ -87,6 +87,10 @@ class WorkflowViewSet(viewsets.ModelViewSet):
             if edges is not None:
                 WorkflowGraphService.upsert_edges(instance, edges)
 
+            # Re-resolve root start node after graph changes
+            if nodes is not None or edges is not None:
+                instance.resolve_root_start_node()
+
             # Return full workflow with nodes/edges
             output = self.get_serializer(instance).data
             return Response(output, status=status.HTTP_200_OK)
@@ -115,6 +119,9 @@ class WorkflowViewSet(viewsets.ModelViewSet):
                 edge_ser = WorkflowEdgeSerializer(data={**e, 'workflow': workflow.id})
                 edge_ser.is_valid(raise_exception=True)
                 edge_ser.save()
+
+            # Resolve root start node after graph is created
+            workflow.resolve_root_start_node()
 
             # Return full workflow with nodes and edges
             output = self.get_serializer(workflow).data

@@ -88,7 +88,7 @@ class DependencySorter:
                 key=lambda n: (
                     node_depths.get(n.id, 0),
                     DependencySorter._get_type_priority(n),
-                    n.step_number or 0
+                    n.id
                 )
             )
 

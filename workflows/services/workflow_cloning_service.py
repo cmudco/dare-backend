@@ -12,7 +12,8 @@ from django.contrib.contenttypes.models import ContentType
 from prompts.models import Prompt
 from workflows.models import (
     Workflow, WorkflowNode, WorkflowEdge,
-    StartNodeData, StepNodeData, ChatOutputNodeData, StructuredOutputNodeData
+    StartNodeData, StepNodeData, ChatOutputNodeData, StructuredOutputNodeData,
+    NotesNodeData, FileNodeData,
 )
 
 
@@ -56,6 +57,9 @@ class WorkflowCloningService:
         # Clone all edges
         self._clone_edges(original, cloned)
 
+        # Resolve root start node for the cloned workflow
+        cloned.resolve_root_start_node()
+
         return cloned
 
     def _create_cloned_workflow(
@@ -79,6 +83,8 @@ class WorkflowCloningService:
             viewport_x=original.viewport_x,
             viewport_y=original.viewport_y,
             viewport_zoom=original.viewport_zoom,
+            manual_mode_enabled=original.manual_mode_enabled,
+            output_display_mode=original.output_display_mode,
         )
 
     def _clone_nodes(
@@ -146,10 +152,10 @@ class WorkflowCloningService:
                     cloned_prompt = data_object.prompt
 
             cloned_data = StepNodeData.objects.create(
+                label=data_object.label,
                 agent=data_object.agent,
                 prompt=cloned_prompt,
                 llm=data_object.llm,
-                step_number=data_object.step_number,
                 max_tokens=data_object.max_tokens,
                 temperature=data_object.temperature,
                 max_context_snippets=data_object.max_context_snippets,
@@ -167,7 +173,7 @@ class WorkflowCloningService:
             return cloned_data
         elif isinstance(data_object, ChatOutputNodeData):
             return ChatOutputNodeData.objects.create(
-                step_number=data_object.step_number,
+                label=data_object.label,
                 status='',
                 response='',
                 error=''
@@ -191,13 +197,30 @@ class WorkflowCloningService:
                     cloned_prompt = data_object.prompt
 
             return StructuredOutputNodeData.objects.create(
+                label=data_object.label,
                 prompt=cloned_prompt,
                 routes=data_object.routes,
-                step_number=data_object.step_number,
                 require_human_validation=data_object.require_human_validation,
                 llm=data_object.llm,
                 text_input=data_object.text_input
             )
+        elif isinstance(data_object, NotesNodeData):
+            return NotesNodeData.objects.create(
+                content=data_object.content
+            )
+        elif isinstance(data_object, FileNodeData):
+            cloned_data = FileNodeData.objects.create(
+                label=data_object.label,
+                retrieval_mode=data_object.retrieval_mode,
+                similarity_threshold=data_object.similarity_threshold,
+                max_results=data_object.max_results,
+                query_source=data_object.query_source,
+                text_input=data_object.text_input,
+                include_metadata=data_object.include_metadata,
+            )
+            if not is_cross_user:
+                cloned_data.files.set(data_object.files.all())
+            return cloned_data
         return None
 
     def _create_cloned_node(self, original_node: WorkflowNode, cloned_workflow: Workflow, cloned_data) -> None:

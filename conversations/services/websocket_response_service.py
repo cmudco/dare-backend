@@ -482,7 +482,7 @@ class WebSocketResponseService:
     def format_workflow_step_started(
         cls,
         node_id: str,
-        step_number: int,
+        label: Optional[str],
         node_type: str = "step",
         started_at: Optional[datetime] = None,
         workflow_run_id: Optional[int] = None
@@ -494,7 +494,7 @@ class WebSocketResponseService:
 
         Args:
             node_id: Unique identifier for the node
-            step_number: Sequential step number in the workflow
+            label: User-visible node label
             node_type: Type of node ('step', 'structuredOutput', etc.)
             started_at: Server timestamp when the step started
 
@@ -504,7 +504,7 @@ class WebSocketResponseService:
         payload = {
             "type": "step_started",
             "nodeId": node_id,
-            "stepNumber": step_number,
+            "label": label,
             "nodeType": node_type,
             **({"workflowRunId": workflow_run_id} if workflow_run_id else {}),
         }

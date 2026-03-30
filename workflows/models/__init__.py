@@ -1,6 +1,9 @@
 # Import all models for backward compatibility
 from .nodes import (
     BaseNodeData,
+    NodeFileReference,
+    PrefetchedNodeFileRelations,
+    build_prefetched_node_file_relations,
     StepNodeData,
     StartNodeData,
     ChatOutputNodeData,
@@ -29,6 +32,9 @@ from .citations import (
 # Make all models available at package level
 __all__ = [
     'BaseNodeData',
+    'NodeFileReference',
+    'PrefetchedNodeFileRelations',
+    'build_prefetched_node_file_relations',
     'StepNodeData',
     'StartNodeData',
     'ChatOutputNodeData',

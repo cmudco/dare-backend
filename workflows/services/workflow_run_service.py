@@ -22,6 +22,8 @@ from workflows.models import (
 )
 from workflows.constants import WorkflowRunStepStatus
 from workflows.handlers.utils.constants import NodeType
+from workflows.services.run_ordering import get_workflow_run_order_map
+from workflows.services.run_status import RunStatusManager
 
 
 User = get_user_model()
@@ -144,6 +146,7 @@ def create_workflow_run(
         step_nodes = workflow.nodes.filter(
             node_type=NodeType.STEP
         ).select_related('data_content_type')
+        order_by_node_id = get_workflow_run_order_map(workflow)
 
         for step_node in step_nodes:
             step_data = step_node.data_object
@@ -151,9 +154,11 @@ def create_workflow_run(
                 WorkflowRunStep.objects.create(
                     workflow_run=workflow_run,
                     step_node=step_node,
-                    order=step_data.step_number if step_data.step_number else 0,
+                    order=order_by_node_id.get(step_node.node_id, 0),
                     status=WorkflowRunStepStatus.PENDING
                 )
+
+        RunStatusManager.recompute(workflow_run)
 
         return workflow_run
 
@@ -194,6 +199,7 @@ def create_partial_workflow_run(workflow_id: int, user) -> Optional[WorkflowRun]
         step_nodes = workflow.nodes.filter(
             node_type=NodeType.STEP
         ).select_related('data_content_type')
+        order_by_node_id = get_workflow_run_order_map(workflow)
 
         for step_node in step_nodes:
             step_data = step_node.data_object
@@ -201,9 +207,11 @@ def create_partial_workflow_run(workflow_id: int, user) -> Optional[WorkflowRun]
                 WorkflowRunStep.objects.create(
                     workflow_run=workflow_run,
                     step_node=step_node,
-                    order=step_data.step_number if step_data.step_number else 0,
+                    order=order_by_node_id.get(step_node.node_id, 0),
                     status=WorkflowRunStepStatus.PENDING
                 )
+
+        RunStatusManager.recompute(workflow_run)
 
         return workflow_run
 
@@ -246,7 +254,7 @@ def get_existing_partial_run(workflow_id: int, user) -> Optional[WorkflowRun]:
                 f"Cleaning up stale partial run {partial_run.id} for workflow {workflow_id} "
                 f"(started at {partial_run.started_at})"
             )
-            partial_run.status = WorkflowRunStepStatus.FAILED
+            RunStatusManager.mark_failed(partial_run)
             partial_run.ended_at = timezone.now()
             partial_run.save(update_fields=['status', 'ended_at'])
             return None
@@ -283,6 +291,7 @@ def convert_partial_to_full_run(
     step_nodes = workflow.nodes.filter(
         node_type='step'
     ).select_related('data_content_type')
+    order_by_node_id = get_workflow_run_order_map(workflow)
 
     for step_node in step_nodes:
         if step_node.node_id not in existing_step_node_ids:
@@ -291,9 +300,11 @@ def convert_partial_to_full_run(
                 WorkflowRunStep.objects.create(
                     workflow_run=partial_run,
                     step_node=step_node,
-                    order=step_data.step_number if step_data.step_number else 0,
+                    order=order_by_node_id.get(step_node.node_id, 0),
                     status=WorkflowRunStepStatus.PENDING
                 )
+
+    RunStatusManager.recompute(partial_run)
 
     return partial_run
 
@@ -363,7 +374,7 @@ def get_latest_workflow_run_obj(workflow_id: int, user) -> Optional[WorkflowRun]
                     f"Cleaning up stale run {latest_run.id} for workflow {workflow_id} "
                     f"(started at {latest_run.started_at})"
                 )
-                latest_run.status = WorkflowRunStepStatus.FAILED
+                RunStatusManager.mark_failed(latest_run)
                 latest_run.ended_at = timezone.now()
                 latest_run.save(update_fields=['status', 'ended_at'])
 
