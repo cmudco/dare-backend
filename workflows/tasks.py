@@ -1,7 +1,6 @@
 """
 Workflow background tasks (RQ jobs).
 """
-import asyncio
 import logging
 from typing import Optional
 
@@ -28,20 +27,15 @@ User = get_user_model()
 def _emit_to_user_room(user_id: int, event_data: dict) -> None:
     """Emit workflow event to user room synchronously."""
     room_name = f'workflow_user_{user_id}'
-    loop = asyncio.new_event_loop()
     try:
-        loop.run_until_complete(
-            sio.emit(
-                'workflow_event',
-                event_data,
-                room=room_name,
-                namespace='/workflow'
-            )
+        async_to_sync(sio.emit)(
+            'workflow_event',
+            event_data,
+            room=room_name,
+            namespace='/workflow'
         )
     except Exception as exc:
         logger.warning(f"Failed to emit workflow_event to {room_name}: {exc}")
-    finally:
-        loop.close()
 
 
 def _get_file_display_name(file_obj: Optional[File]) -> str:
