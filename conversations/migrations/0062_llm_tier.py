@@ -11,16 +11,16 @@ def classify_existing_llms(apps, schema_editor):
         if input_rate >= 10.0 or output_rate >= 30.0:
             llm.tier = "premium"
         elif (input_rate <= 1.0 and output_rate <= 4.0) and (input_rate > 0 or output_rate > 0):
-            llm.tier = "economy"
+            llm.tier = "flash"
         else:
-            llm.tier = "standard"
+            llm.tier = "advanced"
         llm.save(update_fields=["tier"])
 
 
 def reverse_classify(apps, schema_editor):
-    """Reset all tiers to standard."""
+    """Reset all tiers to advanced."""
     LLM = apps.get_model("conversations", "LLM")
-    LLM.objects.all().update(tier="standard")
+    LLM.objects.all().update(tier="advanced")
 
 
 class Migration(migrations.Migration):
@@ -36,15 +36,15 @@ class Migration(migrations.Migration):
             field=models.CharField(
                 choices=[
                     ("premium", "Premium"),
-                    ("standard", "Standard"),
-                    ("economy", "Economy"),
+                    ("advanced", "Advanced"),
+                    ("flash", "Flash"),
                 ],
-                default="standard",
+                default="advanced",
                 help_text=(
                     "Cost/capability tier for grouping models in the UI. "
-                    "Premium: Flagship models — input >= $10/M or output >= $30/M (e.g., Claude Opus, GPT-4.5). "
-                    "Standard: Mid-range models — moderate pricing (e.g., Claude Sonnet, GPT-4o, Gemini Pro). "
-                    "Economy: Cost-optimized — input <= $1/M and output <= $4/M (e.g., Claude Haiku, GPT-4o-mini, Gemini Flash Lite)."
+                    "Premium: Flagship models (e.g., Claude Opus, GPT-4.5). "
+                    "Advanced: Mid-range models (e.g., Claude Sonnet, GPT-4o, Gemini Pro). "
+                    "Flash: Fast, cost-optimized models (e.g., Claude Haiku, GPT-4o-mini, Gemini Flash)."
                 ),
                 max_length=20,
             ),
