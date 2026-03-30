@@ -26,9 +26,10 @@ logger = logging.getLogger(__name__)
 
 @admin.register(LLM)
 class LLMAdmin(admin.ModelAdmin):
-    list_display = ("name", "identifier", "provider", "base_url_display")
+    list_display = ("name", "identifier", "provider", "tier", "base_url_display")
     search_fields = ("name", "identifier", "base_url")
-    list_filter = ("provider",)
+    list_filter = ("provider", "tier")
+
     fieldsets = (
         ("Model Information", {
             "fields": ("name", "identifier", "description", "provider")
@@ -39,6 +40,15 @@ class LLMAdmin(admin.ModelAdmin):
         }),
         ("Capabilities", {
             "fields": ("is_reasoning", "supports_vision", "is_image_generator")
+        }),
+        ("Classification", {
+            "fields": ("tier",),
+            "description": (
+                "Model Tier Guide — choose the tier based on the model's capability and cost:<br>"
+                "<b>Premium</b>: Flagship models (e.g., Claude Opus, GPT-4.5)<br>"
+                "<b>Advanced</b>: Mid-range models (e.g., Claude Sonnet, GPT-4o, Gemini Pro)<br>"
+                "<b>Flash</b>: Fast, cost-optimized models (e.g., Claude Haiku, GPT-4o-mini, Gemini Flash)"
+            ),
         }),
         ("Pricing", {
             "fields": ("input_token_rate_per_million", "output_token_rate_per_million"),
