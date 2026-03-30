@@ -117,6 +117,32 @@ class Transaction(TimeStampMixin):
         help_text=("Platform where this transaction originated: DARE or SocraticBots"),
     )
 
+    # Energy/environmental impact tracking
+    energy_wh = models.DecimalField(
+        max_digits=10,
+        decimal_places=6,
+        null=True,
+        blank=True,
+        verbose_name=("Energy (Wh)"),
+        help_text=("Estimated energy consumption in Watt-hours"),
+    )
+    carbon_g = models.DecimalField(
+        max_digits=10,
+        decimal_places=6,
+        null=True,
+        blank=True,
+        verbose_name=("Carbon (g CO2e)"),
+        help_text=("Estimated carbon emissions in grams CO2 equivalent"),
+    )
+    water_ml = models.DecimalField(
+        max_digits=10,
+        decimal_places=6,
+        null=True,
+        blank=True,
+        verbose_name=("Water (mL)"),
+        help_text=("Estimated water usage in milliliters"),
+    )
+
     class Meta:
         verbose_name = ("Transaction")
         verbose_name_plural = ("Transactions")

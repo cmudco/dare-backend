@@ -130,6 +130,10 @@ class WebSocketResponseService:
             "cost": str(cost) if cost is not None else None,
             "inputTokens": input_tokens,
             "outputTokens": output_tokens,
+            "energyWh": serialized_data.get("energy_wh"),
+            "carbonG": serialized_data.get("carbon_g"),
+            "waterMl": serialized_data.get("water_ml"),
+            "energyStats": serialized_data.get("energy_stats"),
             "learningProgressData": learning_progress_data or {},
             "generatedImage": generated_image,
             "generatedTranscription": generated_transcription
