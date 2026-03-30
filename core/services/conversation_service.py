@@ -60,6 +60,10 @@ class ConversationService:
                 "cost": msg.get("cost", None),
                 "inputTokens": msg.get("input_tokens", None),
                 "outputTokens": msg.get("output_tokens", None),
+                "energyWh": msg.get("energy_wh", None),
+                "carbonG": msg.get("carbon_g", None),
+                "waterMl": msg.get("water_ml", None),
+                "energyStats": msg.get("energy_stats", None),
                 "artifactId": msg.get("artifactId", None),
                 "toolCalls": [
                     self._build_tool_call_payload(tc)
