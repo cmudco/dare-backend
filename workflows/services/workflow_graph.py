@@ -58,6 +58,37 @@ async def load_graph(workflow) -> WorkflowGraph:
     )
 
 
+def _build_effective_edges(graph: WorkflowGraph, exec_ids: set) -> Dict[str, set]:
+    """
+    Build effective adjacency for executable nodes, resolving through non-executable
+    pass-through nodes (chatOutput, notes).
+
+    If step A → chatOutput → step B, this produces A → {B}.
+    """
+    # Raw adjacency from graph edges: source → [targets]
+    adj: Dict[str, list] = defaultdict(list)
+    for e in graph.edges:
+        adj[e.source].append(e.target)
+
+    # For each executable source, walk forward through non-executable nodes
+    effective: Dict[str, set] = defaultdict(set)
+    for src in exec_ids:
+        visited = set()
+        stack = list(adj.get(src, []))
+        while stack:
+            nid = stack.pop()
+            if nid in visited:
+                continue
+            visited.add(nid)
+            if nid in exec_ids:
+                effective[src].add(nid)
+            else:
+                # Non-executable pass-through — keep walking
+                stack.extend(adj.get(nid, []))
+
+    return effective
+
+
 def get_ordered_exec_nodes(graph: WorkflowGraph) -> List[ExecutionNode]:
     """Topological sort of executable nodes using Kahn's algorithm with heapq."""
     exec_nodes = [
@@ -72,10 +103,15 @@ def get_ordered_exec_nodes(graph: WorkflowGraph) -> List[ExecutionNode]:
     ]
 
     exec_map = {n.id: n for n in exec_nodes}
+    exec_ids = set(exec_map.keys())
+
+    # Resolve edges through non-executable nodes (chatOutput, notes)
+    effective_edges = _build_effective_edges(graph, exec_ids)
+
     in_deg = {n.id: 0 for n in exec_nodes}
-    for e in graph.edges:
-        if e.target in in_deg:
-            in_deg[e.target] += 1
+    for src, targets in effective_edges.items():
+        for tgt in targets:
+            in_deg[tgt] += 1
 
     # heapq entries: (type_priority, node_id)
     heap = [
@@ -88,13 +124,12 @@ def get_ordered_exec_nodes(graph: WorkflowGraph) -> List[ExecutionNode]:
     while heap:
         _, nid = heapq.heappop(heap)
         result.append(exec_map[nid])
-        for e in graph.edges:
-            if e.source == nid and e.target in in_deg:
-                in_deg[e.target] -= 1
-                if in_deg[e.target] == 0:
-                    heapq.heappush(
-                        heap,
-                        (TYPE_ORDER.get(exec_map[e.target].type, 99), e.target)
-                    )
+        for tgt in effective_edges.get(nid, set()):
+            in_deg[tgt] -= 1
+            if in_deg[tgt] == 0:
+                heapq.heappush(
+                    heap,
+                    (TYPE_ORDER.get(exec_map[tgt].type, 99), tgt)
+                )
 
     return result
