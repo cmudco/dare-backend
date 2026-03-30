@@ -44,13 +44,10 @@ class LLMAdmin(admin.ModelAdmin):
         ("Classification", {
             "fields": ("tier",),
             "description": (
-                "Model Tier Guide — choose the tier based on the model's token pricing:<br>"
-                "<b>Premium</b>: Flagship models — input &ge; $10/M or output &ge; $30/M "
-                "(e.g., Claude Opus, GPT-4.5)<br>"
-                "<b>Standard</b>: Mid-range models — moderate pricing "
-                "(e.g., Claude Sonnet, GPT-4o, Gemini Pro)<br>"
-                "<b>Economy</b>: Cost-optimized — input &le; $1/M and output &le; $4/M "
-                "(e.g., Claude Haiku, GPT-4o-mini, Gemini Flash Lite)"
+                "Model Tier Guide — choose the tier based on the model's capability and cost:<br>"
+                "<b>Premium</b>: Flagship models (e.g., Claude Opus, GPT-4.5)<br>"
+                "<b>Advanced</b>: Mid-range models (e.g., Claude Sonnet, GPT-4o, Gemini Pro)<br>"
+                "<b>Flash</b>: Fast, cost-optimized models (e.g., Claude Haiku, GPT-4o-mini, Gemini Flash)"
             ),
         }),
         ("Pricing", {

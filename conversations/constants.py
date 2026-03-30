@@ -20,8 +20,8 @@ class Provider(Enum):
 
 class ModelTier(models.TextChoices):
     PREMIUM = 'premium', 'Premium'
-    STANDARD = 'standard', 'Standard'
-    ECONOMY = 'economy', 'Economy'
+    ADVANCED = 'advanced', 'Advanced'
+    FLASH = 'flash', 'Flash'
 
 class FeedbackType(models.TextChoices):
     LIKE = 'like', 'Like'

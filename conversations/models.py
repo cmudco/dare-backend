@@ -45,12 +45,12 @@ class LLM(models.Model):
     tier = models.CharField(
         max_length=20,
         choices=ModelTier.choices,
-        default=ModelTier.STANDARD,
+        default=ModelTier.ADVANCED,
         help_text=(
             "Cost/capability tier for grouping models in the UI. "
-            "Premium: Flagship models — input >= $10/M or output >= $30/M (e.g., Claude Opus, GPT-4.5). "
-            "Standard: Mid-range models — moderate pricing (e.g., Claude Sonnet, GPT-4o, Gemini Pro). "
-            "Economy: Cost-optimized — input <= $1/M and output <= $4/M (e.g., Claude Haiku, GPT-4o-mini, Gemini Flash Lite)."
+            "Premium: Flagship models (e.g., Claude Opus, GPT-4.5). "
+            "Advanced: Mid-range models (e.g., Claude Sonnet, GPT-4o, Gemini Pro). "
+            "Flash: Fast, cost-optimized models (e.g., Claude Haiku, GPT-4o-mini, Gemini Flash)."
         ),
     )
 
