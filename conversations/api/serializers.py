@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from conversations.models import LLM, Message, Conversation, Snippet, WebSearchSource, Artifact, ArtifactCheckpoint, Feedback, ModelCardData, PublicFeedbackSourceCluster, PublicFeedbackSource, MessageToolCall
+from core.services.energy_service import compute_relatable_stats
 from files.api.serializers import FileSerializer, TagSerializer
 from prompts.models import Prompt
 from prompts.api.serializers import PromptSerializer
@@ -230,6 +231,7 @@ class MessageSerializer(serializers.ModelSerializer):
     llm = serializers.PrimaryKeyRelatedField(read_only=True, allow_null=True)
     artifactId = serializers.SerializerMethodField()
     mcp_tool_calls = MessageToolCallSerializer(many=True, read_only=True)
+    energy_stats = serializers.SerializerMethodField()
 
     class Meta:
         model = Message
@@ -255,17 +257,36 @@ class MessageSerializer(serializers.ModelSerializer):
             'input_tokens',
             'output_tokens',
             'cost',
+            'energy_wh',
+            'carbon_g',
+            'water_ml',
+            'energy_stats',
             'artifactId',
             'mcp_tool_calls',
             'content_type',
             'content_metadata',
         ]
-        read_only_fields = ['id', 'created_at', 'sender_name', 'files', 'tags', 'snippets', 'web_search_sources', 'input_tokens', 'output_tokens', 'cost', 'artifactId', 'mcp_tool_calls', 'content_type', 'content_metadata']
+        read_only_fields = ['id', 'created_at', 'sender_name', 'files', 'tags', 'snippets', 'web_search_sources', 'input_tokens', 'output_tokens', 'cost', 'energy_wh', 'carbon_g', 'water_ml', 'energy_stats', 'artifactId', 'mcp_tool_calls', 'content_type', 'content_metadata']
 
     def get_artifactId(self, obj):
         """Get the ID of the first active artifact linked to this message."""
         artifact = obj.artifacts.filter(is_active=True).first()
         return str(artifact.id) if artifact else None
+
+    def get_energy_stats(self, obj):
+        """Compute relatable energy stats at read time from stored energy_wh."""
+        if not obj.energy_wh or obj.energy_wh <= 0:
+            return None
+        stats = compute_relatable_stats(float(obj.energy_wh))
+        return {
+            "phoneBatteryPct": round(stats.phone_battery_pct, 4),
+            "googleSearchesEquiv": round(stats.google_searches_equiv, 2),
+            "ledBulbSeconds": round(stats.led_bulb_seconds, 2),
+            "netflixSeconds": round(stats.netflix_seconds, 2),
+            "evMeters": round(stats.ev_meters, 2),
+            "fridgeSeconds": round(stats.fridge_seconds, 2),
+            "humanThinkingSeconds": round(stats.human_thinking_seconds, 2),
+        }
 
 
 class ArtifactCheckpointSerializer(serializers.ModelSerializer):
