@@ -7,8 +7,6 @@ import logging
 from typing import Dict, Optional
 
 from channels.db import database_sync_to_async
-from django.db.models import TextField, Value
-from django.db.models.functions import Coalesce, Concat
 from django.utils import timezone
 
 from conversations.models import LLM
@@ -126,39 +124,15 @@ class BaseExecutionHandler(BaseNodeHandler):
 
     # ==================== Streaming ====================
 
-    async def _append_step_response_chunk(
-        self,
-        workflow_run_step: WorkflowRunStep,
-        chunk: str,
-    ) -> None:
-        """Persist a streamed chunk so reconnects can restore the exact preview."""
-        if not chunk:
-            return
-
-        await database_sync_to_async(
-            lambda: WorkflowRunStep.objects.filter(id=workflow_run_step.id).update(
-                response=Concat(
-                    Coalesce('response', Value('')),
-                    Value(chunk),
-                    output_field=TextField(),
-                )
-            )
-        )()
-
     async def _execute_llm_query_with_collection(
         self,
         llm_query_generator,
         emitter: EventEmitter,
         node_id: Optional[str] = None,
-        workflow_run_step: Optional[WorkflowRunStep] = None,
     ) -> tuple[str, Dict]:
         """
         Consume an LLM async generator, collecting the full response and streaming
         chunks to the frontend via EventEmitter.
-
-        Each chunk is:
-        1. Appended to the DB (reconnect resilience)
-        2. Emitted to the frontend via WebSocket
 
         Returns (full_response, token_usage).
         """
@@ -170,9 +144,6 @@ class BaseExecutionHandler(BaseNodeHandler):
             if chunk:
                 full_response += chunk
                 accumulated_tokens += 1
-
-                if workflow_run_step:
-                    await self._append_step_response_chunk(workflow_run_step, chunk)
 
                 if node_id:
                     await emitter.step_streaming(node_id, chunk, accumulated_tokens)

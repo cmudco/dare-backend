@@ -112,7 +112,6 @@ class BaseRoutingHandler(BaseExecutionHandler):
             self.llm_service.query(request),
             emitter=emitter,
             node_id=node_id,
-            workflow_run_step=workflow_run_step,
         )
 
         logger.debug(f"[{correlation_id}] LLM response received, parsing routing decision")
