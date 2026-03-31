@@ -2,18 +2,20 @@
 Batch Executor
 
 Batch file execution management. Validates files, creates BatchRun,
-and enqueues individual workflow runs via Django RQ.
+and runs individual workflow executions as concurrent asyncio tasks.
 """
 
+import asyncio
 import logging
 from datetime import timedelta
 from typing import Dict, Any, Optional, List
 
 from asgiref.sync import sync_to_async
+from django.db.models import F
 from django.utils import timezone
-from django_rq import get_queue
 
 from conversations.services.websocket_response_service import WebSocketResponseService
+from core.services.workflow_execution_service import WorkflowExecutionService
 from files.constants import FileStatus
 from files.models import File
 from workflows.constants import BatchRunStatus, WorkflowRunStepStatus
@@ -22,7 +24,6 @@ from workflows.services.workflow_run_repository import (
     WorkflowRunRepository,
     STALE_RUN_THRESHOLD_MINUTES,
 )
-from workflows.tasks import run_batch_workflow
 
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,7 @@ class BatchExecutor:
     def __init__(self, sio, namespace: str = '/workflow'):
         self.sio = sio
         self.namespace = namespace
+        self.execution_service = WorkflowExecutionService()
 
     async def start(
         self,
@@ -43,7 +45,7 @@ class BatchExecutor:
         workflow_id: Optional[int],
         file_ids: List[int]
     ) -> Dict[str, Any]:
-        """Start batch execution by enqueuing a workflow run for each file."""
+        """Start batch execution by running a concurrent asyncio task per file."""
         if not workflow_id:
             return {'error': 'Missing workflowId'}
         if not file_ids:
@@ -80,21 +82,15 @@ class BatchExecutor:
             namespace=self.namespace
         )
 
-        queue = get_queue()
+        total = len(valid_files)
         for index, file_obj in enumerate(valid_files, start=1):
-            queue.enqueue(
-                run_batch_workflow,
-                batch_run.id,
-                workflow_id,
-                user.id,
-                file_obj.id,
-                index,
-                len(valid_files)
+            asyncio.create_task(
+                self._run_single(batch_run.id, workflow_id, user, file_obj, index, total)
             )
 
         logger.info(
             f"Started batch execution: user={user.id}, workflow_id={workflow_id}, "
-            f"batch_id={batch_run.id}, total_files={len(valid_files)}"
+            f"batch_id={batch_run.id}, total_files={total}"
         )
         return {'success': True, 'batchId': batch_run.id}
 
@@ -174,6 +170,121 @@ class BatchExecutor:
         return await sync_to_async(_fetch_summary)()
 
     # ==================== Internal ====================
+
+    async def _run_single(
+        self,
+        batch_run_id: int,
+        workflow_id: int,
+        user,
+        file_obj: File,
+        index: int,
+        total: int,
+    ) -> None:
+        """Execute a workflow run for a single file in a batch."""
+        room_name = f'workflow_user_{user.id}'
+        file_name = file_obj.name or file_obj.file.name
+
+        async def emit(event_data: dict) -> None:
+            try:
+                await self.sio.emit(
+                    'workflow_event', event_data, room=room_name, namespace=self.namespace
+                )
+            except Exception as exc:
+                logger.warning(f"Failed to emit batch event to {room_name}: {exc}")
+
+        workflow_run = await WorkflowRunRepository.create_full_run(workflow_id, user, '')
+        if not workflow_run:
+            await sync_to_async(
+                lambda: BatchRun.objects.filter(id=batch_run_id).update(
+                    failed_count=F('failed_count') + 1
+                )
+            )()
+            await emit(WebSocketResponseService.format_batch_progress(
+                batch_id=batch_run_id, index=index, total=total,
+                file_id=file_obj.id, file_name=file_name, status='failed'
+            ))
+            await self._finalize(batch_run_id, user.id)
+            return
+
+        await sync_to_async(
+            lambda: WorkflowRun.objects.filter(id=workflow_run.id).update(
+                batch_run_id=batch_run_id, batch_file_id=file_obj.id
+            )
+        )()
+
+        await emit(WebSocketResponseService.format_batch_progress(
+            batch_id=batch_run_id, index=index, total=total,
+            file_id=file_obj.id, file_name=file_name, status='running',
+            workflow_run_id=workflow_run.id
+        ))
+
+        try:
+            result = await self.execution_service.execute_workflow(
+                workflow_run=workflow_run,
+                send_callback=None,
+                batch_file_id=file_obj.id
+            )
+            success = result.success
+        except Exception as exc:
+            logger.exception(f"Batch workflow execution error: {exc}")
+            success = False
+
+        if success:
+            await sync_to_async(
+                lambda: BatchRun.objects.filter(id=batch_run_id).update(
+                    completed_count=F('completed_count') + 1
+                )
+            )()
+        else:
+            await sync_to_async(
+                lambda: BatchRun.objects.filter(id=batch_run_id).update(
+                    failed_count=F('failed_count') + 1
+                )
+            )()
+
+        await emit(WebSocketResponseService.format_batch_progress(
+            batch_id=batch_run_id, index=index, total=total,
+            file_id=file_obj.id, file_name=file_name,
+            status='completed' if success else 'failed',
+            workflow_run_id=workflow_run.id
+        ))
+
+        await self._finalize(batch_run_id, user.id)
+
+    async def _finalize(self, batch_run_id: int, user_id: int) -> None:
+        """Finalize the batch run once all files have completed or failed."""
+        def _check_and_finalize():
+            batch_run = BatchRun.objects.filter(id=batch_run_id).first()
+            if not batch_run:
+                return None
+            if batch_run.completed_count + batch_run.failed_count < batch_run.total_files:
+                return None
+            status = (
+                BatchRunStatus.FAILED
+                if batch_run.failed_count > 0
+                else BatchRunStatus.COMPLETED
+            )
+            BatchRun.objects.filter(id=batch_run_id).update(
+                status=status, ended_at=timezone.now()
+            )
+            return (status, batch_run.completed_count, batch_run.failed_count, batch_run.total_files)
+
+        result = await sync_to_async(_check_and_finalize)()
+        if result is None:
+            return
+
+        _status, completed, failed, total = result
+        await self.sio.emit(
+            'workflow_event',
+            WebSocketResponseService.format_batch_complete(
+                batch_id=batch_run_id,
+                completed_count=completed,
+                failed_count=failed,
+                total_files=total
+            ),
+            room=f'workflow_user_{user_id}',
+            namespace=self.namespace
+        )
 
     @staticmethod
     async def _get_valid_files(
