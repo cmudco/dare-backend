@@ -161,7 +161,6 @@ class StepNodeHandler(BaseExecutionHandler):
             self.llm_service.query(request),
             emitter=emitter,
             node_id=node_id,
-            workflow_run_step=run_step,
         )
 
     async def _save_web_search_sources(
