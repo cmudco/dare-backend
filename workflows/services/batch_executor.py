@@ -20,6 +20,7 @@ from files.constants import FileStatus
 from files.models import File
 from workflows.constants import BatchRunStatus, WorkflowRunStepStatus
 from workflows.models import BatchRun, WorkflowRun
+from workflows.services.live_executor import create_send_callback
 from workflows.services.workflow_run_repository import (
     WorkflowRunRepository,
     STALE_RUN_THRESHOLD_MINUTES,
@@ -219,14 +220,23 @@ class BatchExecutor:
         ))
 
         try:
+            send_callback = create_send_callback(self.sio, workflow_run.id, self.namespace)
             result = await self.execution_service.execute_workflow(
                 workflow_run=workflow_run,
-                send_callback=None,
+                send_callback=send_callback,
                 batch_file_id=file_obj.id
             )
             success = result.success
+            if not success and result.error:
+                logger.error(
+                    f"Batch file failed: batch_run={batch_run_id}, file={file_obj.id} "
+                    f"({file_name}), workflow_run={workflow_run.id}, error={result.error}"
+                )
         except Exception as exc:
-            logger.exception(f"Batch workflow execution error: {exc}")
+            logger.exception(
+                f"Batch workflow execution error: batch_run={batch_run_id}, "
+                f"file={file_obj.id} ({file_name}), workflow_run={workflow_run.id}"
+            )
             success = False
 
         if success:
