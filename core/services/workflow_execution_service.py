@@ -223,6 +223,10 @@ class WorkflowExecutionService:
 
             if not result.success:
                 failed += 1
+                if result.error and node.type not in ('step', 'structuredOutput'):
+                    await WorkflowRunRepository.mark_node_failed(
+                        workflow_run, node.db_node, result.error
+                    )
 
         return ExecutionResult(
             success=failed == 0, executed_nodes=executed,
