@@ -351,6 +351,20 @@ class WorkflowRunRepository:
 
     @staticmethod
     @sync_to_async
+    def mark_node_failed(workflow_run: WorkflowRun, db_node: WorkflowNode, error: str) -> None:
+        """Create or update a step record as failed with the error message."""
+        WorkflowRunStep.objects.update_or_create(
+            workflow_run=workflow_run,
+            step_node=db_node,
+            defaults={
+                'status': WorkflowRunStepStatus.FAILED,
+                'error': error,
+            }
+        )
+        RunStatusManager.recompute(workflow_run)
+
+    @staticmethod
+    @sync_to_async
     def finalize_run(workflow_run: WorkflowRun, status: str) -> None:
         """Mark run as completed or failed and set ended_at."""
         ended_at = timezone.now()
