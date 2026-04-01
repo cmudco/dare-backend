@@ -84,3 +84,4 @@ DARE_INTERNAL_KEY = os.getenv("DARE_INTERNAL_KEY", "local-dev-internal-key")
 SYFTBOX_ENABLED = os.getenv("SYFTBOX_ENABLED", "False") == "True"
 SYFTBOX_DATASITES_ROOT = os.getenv("SYFTBOX_DATASITES_ROOT", None)
 SYFTBOX_APP_NAME = os.getenv("SYFTBOX_APP_NAME", "dare")
+SYFTBOX_BASE_URL = os.getenv("SYFTBOX_BASE_URL", "https://syftbox.net")
