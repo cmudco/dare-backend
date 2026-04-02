@@ -66,14 +66,14 @@ class SyftBoxFileService:
         """
         Request a presigned download URL (POST) then fetch the object bytes from S3.
 
-        API: POST /api/v1/blob/download with JSON body ``{"key": "<path>"}``;
+        API: POST /api/v1/blob/download with JSON body ``{"keys": ["<path>"]}``;
         response contains ``urls`` with ``key`` / ``url`` pairs.
         """
         self._validate_file_path(file_path)
         try:
             result = self.http_client.post(
                 url=BLOB_DOWNLOAD,
-                data={"key": file_path},
+                data={"keys": [file_path]},
                 access_token=access_token,
             )
         except SyftBoxException as error:
