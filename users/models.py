@@ -6,6 +6,7 @@ from django.utils.translation import gettext_lazy as _
 from common.managers import ActiveObjectsManager
 from common.models import IsDeletedMixin, TimeStampMixin
 from core.config.processing import CHUNK_SIZE, OVERLAP_SIZE
+from core.fields import EncryptedCharField
 from core.storage.constants import StorageBackendChoice
 from users.managers import UserManager
 from users.constants import VectorDBChoice, AuthSourceChoice, RoleChoice
@@ -222,6 +223,18 @@ class User(AbstractUser, IsDeletedMixin):
         default=False,
         verbose_name=_("SocraticBots Access"),
         help_text=_("Whether this user can access SocraticBots platform")
+    )
+    syftbox_access_token = EncryptedCharField(
+        blank=True,
+        null=True,
+        verbose_name=_("Syftbox Access Token"),
+        help_text=_("Latest Syftbox OAuth access token for this user")
+    )
+    syftbox_refresh_token = EncryptedCharField(
+        blank=True,
+        null=True,
+        verbose_name=_("Syftbox Refresh Token"),
+        help_text=_("Latest Syftbox OAuth refresh token for this user")
     )
 
     # Platform role - determines user's permissions across DARE and SocraticBots

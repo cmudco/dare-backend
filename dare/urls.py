@@ -27,6 +27,7 @@ app_paths = [
     path("dare/", include("dare_tools.urls", namespace="dare_tools")),
     path("", include("memory.urls", namespace="memory")),
     path("", include("sharing.urls", namespace="sharing")),
+    path("syftbox/", include("syftbox.urls", namespace="syftbox")),
 ]
 
 other_paths = [
