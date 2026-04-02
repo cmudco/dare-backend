@@ -70,6 +70,7 @@ class PermissionBuilder:
             access["read"] = normalized_readers
             updated_rule["pattern"] = normalized_pattern
             updated_rule["access"] = access
+            self.rules[self.rules.index(existing_rule)] = updated_rule
             return self 
         else:
             self.rules.append(
