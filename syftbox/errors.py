@@ -27,7 +27,7 @@ class SyftBoxErrorCode(str, Enum):
 
 
 @dataclass
-class SyftBoxError(Exception):
+class SyftBoxException(Exception):
     code: SyftBoxErrorCode
     message: str
     details: Any = None

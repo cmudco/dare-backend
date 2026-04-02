@@ -5,7 +5,7 @@ from typing import Any
 import requests
 
 from syftbox.constants import REQUEST_TIMEOUT
-from syftbox.errors import SyftBoxError, SyftBoxErrorCode
+from syftbox.errors import SyftBoxException, SyftBoxErrorCode
 
 
 class HttpClient:
@@ -33,9 +33,13 @@ class HttpClient:
         try:
             response = requests.request(method=method, url=url, **request_kwargs)
         except requests.Timeout as error:
-            raise SyftBoxError(SyftBoxErrorCode.TIMEOUT, "SyftBox request timed out", cause=error)
+            raise SyftBoxException(
+                SyftBoxErrorCode.TIMEOUT,
+                "SyftBox request timed out",
+                cause=error,
+            )
         except requests.RequestException as error:
-            raise SyftBoxError(
+            raise SyftBoxException(
                 SyftBoxErrorCode.NETWORK_ERROR,
                 "Network error while calling SyftBox",
                 cause=error,
@@ -52,7 +56,7 @@ class HttpClient:
 
         if response.status_code >= 400:
             message = payload.get("message") if isinstance(payload, dict) else "Request failed"
-            raise SyftBoxError(
+            raise SyftBoxException(
                 SyftBoxErrorCode.UNKNOWN_ERROR,
                 message or "Request failed",
                 details=payload,

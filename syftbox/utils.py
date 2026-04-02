@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from syftbox.errors import SyftBoxError, SyftBoxErrorCode
+from syftbox.errors import SyftBoxException, SyftBoxErrorCode
 
 
 def raise_syftbox_error(
@@ -11,9 +11,11 @@ def raise_syftbox_error(
     fallback_message: str,
     details: Any = None,
 ) -> None:
-    if isinstance(error, SyftBoxError):
+    if isinstance(error, SyftBoxException):
         raise error
-    raise SyftBoxError(fallback_code, fallback_message, details=details, cause=error)
+    raise SyftBoxException(
+        fallback_code, fallback_message, details=details, cause=error
+    )
 
 
 def wrap_as_syftbox_error(
@@ -22,6 +24,8 @@ def wrap_as_syftbox_error(
     message: str,
     details: Any = None,
 ) -> None:
-    if isinstance(error, SyftBoxError):
-        raise SyftBoxError(code, f"{message}: {error.message}", details=details, cause=error)
-    raise SyftBoxError(code, message, details=details, cause=error)
+    if isinstance(error, SyftBoxException):
+        raise SyftBoxException(
+            code, f"{message}: {error.message}", details=details, cause=error
+        )
+    raise SyftBoxException(code, message, details=details, cause=error)

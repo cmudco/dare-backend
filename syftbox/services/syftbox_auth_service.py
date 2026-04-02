@@ -5,7 +5,7 @@ from typing import Any
 
 from syftbox.constants import REFRESH_TOKEN, REQUEST_OTP, VERIFY_OTP
 from syftbox.dtos import AuthTokens
-from syftbox.errors import SyftBoxError, SyftBoxErrorCode
+from syftbox.errors import SyftBoxException, SyftBoxErrorCode
 from syftbox.services.http_client import HttpClient
 from syftbox.utils import raise_syftbox_error
 
@@ -33,7 +33,7 @@ class SyftBoxAuthService:
     def verify_otp(self, email: str, code: str) -> AuthTokens:
         """Verify OTP and return token payload."""
         if not code:
-            raise SyftBoxError(
+            raise SyftBoxException(
                 SyftBoxErrorCode.INVALID_REQUEST,
                 "OTP code is required",
                 {"email": email},
@@ -45,8 +45,11 @@ class SyftBoxAuthService:
                 refresh_token=response["refreshToken"],
             )
         except Exception as error:
-            if isinstance(error, SyftBoxError) and error.code == SyftBoxErrorCode.AUTHENTICATION_FAILED:
-                raise SyftBoxError(
+            if (
+                isinstance(error, SyftBoxException)
+                and error.code == SyftBoxErrorCode.AUTHENTICATION_FAILED
+            ):
+                raise SyftBoxException(
                     SyftBoxErrorCode.OTP_INVALID,
                     "Invalid OTP code",
                     {"email": email},
@@ -61,7 +64,9 @@ class SyftBoxAuthService:
 
     def refresh_token(self, refresh_token: str) -> AuthTokens:
         if not refresh_token:
-            raise SyftBoxError(SyftBoxErrorCode.TOKEN_EXPIRED, "No refresh token available")
+            raise SyftBoxException(
+                SyftBoxErrorCode.TOKEN_EXPIRED, "No refresh token available"
+            )
         try:
             response = self.http_client.post(REFRESH_TOKEN, data={"refreshToken": refresh_token})
             return AuthTokens(
@@ -69,8 +74,11 @@ class SyftBoxAuthService:
                 refresh_token=response["refreshToken"],
             )
         except Exception as error:
-            if isinstance(error, SyftBoxError) and error.code == SyftBoxErrorCode.AUTHENTICATION_FAILED:
-                raise SyftBoxError(
+            if (
+                isinstance(error, SyftBoxException)
+                and error.code == SyftBoxErrorCode.AUTHENTICATION_FAILED
+            ):
+                raise SyftBoxException(
                     SyftBoxErrorCode.TOKEN_EXPIRED,
                     "Refresh token is invalid or expired",
                     cause=error,
