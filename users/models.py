@@ -223,6 +223,18 @@ class User(AbstractUser, IsDeletedMixin):
         verbose_name=_("SocraticBots Access"),
         help_text=_("Whether this user can access SocraticBots platform")
     )
+    syftbox_access_token = models.TextField(
+        blank=True,
+        null=True,
+        verbose_name=_("Syftbox Access Token"),
+        help_text=_("Latest Syftbox OAuth access token for this user")
+    )
+    syftbox_refresh_token = models.TextField(
+        blank=True,
+        null=True,
+        verbose_name=_("Syftbox Refresh Token"),
+        help_text=_("Latest Syftbox OAuth refresh token for this user")
+    )
 
     # Platform role - determines user's permissions across DARE and SocraticBots
     platform_role = models.CharField(
