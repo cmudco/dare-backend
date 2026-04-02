@@ -4,10 +4,8 @@ from typing import Any
 from urllib.parse import quote
 
 from syftbox.constants import BLOB_UPLOAD_ACL
-from syftbox.enums import PermissionIdentifier, PermissionPreset
-from syftbox.errors import SyftBoxError, SyftBoxErrorCode
+from syftbox.errors import SyftBoxException, SyftBoxErrorCode
 from syftbox.services.http_client import HttpClient
-from syftbox.services.permission_builder import PermissionBuilder
 from syftbox.services.syftbox_file_service import SyftBoxFileService
 
 import yaml
@@ -16,234 +14,120 @@ import yaml
 class SyftBoxPermissionService:
     """Service responsible for SyftBox ACL/permission uploads."""
 
-    def __init__(self, http_client: HttpClient | None = None) -> None:
-        self.http_client = http_client or HttpClient()
-        self.builder = PermissionBuilder()
+    def __init__(self) -> None:
+        self.http_client = HttpClient()
 
-    def add_rule(self, pattern: str) -> PermissionBuilder:
-        return self.builder.add_rule(pattern)
-
-    def validate_config(self, config: dict[str, Any]) -> dict[str, Any]:
-        errors: list[str] = []
-        rules = config.get("rules", [])
-        if not isinstance(rules, list):
-            errors.append("rules must be a list")
-            rules = []
-
-        seen: set[str] = set()
-        for i, rule in enumerate(rules, start=1):
-            if not isinstance(rule, dict):
-                errors.append(f"Rule {i}: rule must be an object")
-                continue
-
-            pattern = str(rule.get("pattern", "")).strip()
-            if not pattern:
-                errors.append(f"Rule {i}: pattern is required")
-                continue
-            if pattern in seen:
-                errors.append(f'Rule {i}: duplicate pattern "{pattern}"')
-            seen.add(pattern)
-
-        return {"valid": not errors, "errors": errors or None}
-
-    def save(
+    def set_read_permissions(
         self,
         access_token: str,
-        key: str,
-        validate: bool = True,
+        acl_path: str,
+        pattern: str,
+        owner_email: str,
+        readers: list[str],
     ) -> dict[str, Any]:
-        config = self.builder.build()
-        return self.upload_acl(
-            access_token=access_token, key=key, config=config, validate=validate
-        )
+        """
+        Upsert one rule in `syft.pub.yaml` for the provided `pattern`.
 
-    def upload_acl(
-        self,
-        access_token: str,
-        key: str,
-        config: dict[str, Any],
-        validate: bool = True,
-    ) -> dict[str, Any]:
-        final_key = self._normalize_key(key)
+        Frontend contract (simplified):
+          - acl_path points to `syft.pub.yaml` file key
+          - pattern is the target file name inside ACL rules
+          - owner_email becomes `access.admin`
+          - readers list becomes `access.read`
+          - only read permissions are managed for now; `write`/`create` remain empty
+        """
+        if not access_token or not isinstance(access_token, str):
+            raise SyftBoxException(
+                SyftBoxErrorCode.INVALID_REQUEST, "access_token must be provided"
+            )
+        if not isinstance(acl_path, str) or not acl_path.strip():
+            raise SyftBoxException(
+                SyftBoxErrorCode.INVALID_REQUEST, "acl_path must be provided"
+            )
+        if not isinstance(pattern, str) or not pattern.strip():
+            raise SyftBoxException(
+                SyftBoxErrorCode.INVALID_REQUEST, "pattern must be provided"
+            )
+        if not isinstance(owner_email, str) or not owner_email.strip():
+            raise SyftBoxException(
+                SyftBoxErrorCode.INVALID_REQUEST, "owner_email must be provided"
+            )
+        if not isinstance(readers, list):
+            raise SyftBoxException(
+                SyftBoxErrorCode.INVALID_REQUEST, "readers must be a list"
+            )
+
+        syftpub_path = acl_path.strip()
+
         existing_config = self._download_existing_acl(
-            access_token=access_token, key=final_key
+            access_token=access_token, file_path=syftpub_path
         )
+        new_rule: dict[str, Any] = {
+            "pattern": pattern.strip(),
+            "access": {
+                "admin": [owner_email],
+                "write": [],
+                "create": [],
+                "read": readers,
+            },
+        }
         merged_config = self._merge_configs(
-            existing_config=existing_config, new_config=config
+            existing_config=existing_config, new_config={"rules": [new_rule]}
         )
-        if validate:
-            check = self.validate_config(merged_config)
-            if not check["valid"]:
-                raise SyftBoxError(
-                    SyftBoxErrorCode.INVALID_REQUEST,
-                    "Permission validation failed",
-                    check,
-                )
+        return self._upload_acl_yaml(
+            access_token=access_token, file_path=syftpub_path, config=merged_config
+        )
 
-        encoded_key = quote(final_key, safe="/")
-        url = f"{BLOB_UPLOAD_ACL}?key={encoded_key}"
-
-        response = self.http_client.request(
+    def _upload_acl_yaml(
+        self, access_token: str, file_path: str, config: dict[str, Any]
+    ) -> dict[str, Any]:
+        # Upload `syft.pub.yaml` rules via SyftBox `upload/acl` endpoint.
+        encoded_file_path = quote(file_path, safe="/")
+        url = f"{BLOB_UPLOAD_ACL}?key={encoded_file_path}"
+        return self.http_client.request(
             method="PUT",
             url=url,
-            files={"file": self._to_yaml(merged_config).encode("utf-8")},
+            files={"file": self._to_yaml(config).encode("utf-8")},
             access_token=access_token,
         )
-        self.builder.clear()
-        return response
-
-    def apply_preset(
-        self,
-        access_token: str,
-        key: str,
-        preset: PermissionPreset,
-        users: list[str] | None = None,
-    ) -> dict[str, Any]:
-        self.builder.clear()
-        if preset == PermissionPreset.PUBLIC:
-            self.builder.add_rule("**").allow_read(PermissionIdentifier.EVERYONE.value)
-        elif preset == PermissionPreset.PRIVATE:
-            self.builder.add_rule("**").deny_all()
-        elif preset == PermissionPreset.INBOX:
-            self.builder.add_rule("**").allow_write(PermissionIdentifier.EVERYONE.value)
-        elif preset == PermissionPreset.SHARED:
-            if not users:
-                raise SyftBoxError(
-                    SyftBoxErrorCode.INVALID_REQUEST,
-                    "Shared preset requires at least one user",
-                )
-            self.builder.add_rule("**").allow_read(users).allow_write(users)
-        else:
-            raise SyftBoxError(
-                SyftBoxErrorCode.INVALID_REQUEST, f"Unknown preset: {preset}"
-            )
-
-        return self.save(access_token=access_token, key=key, validate=True)
-
-    def upload_acl_from_user_permissions(
-        self,
-        access_token: str,
-        key: str,
-        user_permissions: list[dict[str, Any]],
-        include_default_public_read_rule: bool = True,
-        default_pattern: str = "**",
-        validate: bool = True,
-    ) -> dict[str, Any]:
-        """
-        Build and upload ACL from a simplified user permission payload.
-
-        Accepted item shape (all keys optional except user/email):
-        - user/email: user identifier (typically email)
-        - pattern (or file_name/filename): rule pattern; falls back to `default_pattern`
-        - read: bool flag for read access (default False)
-        - write: bool flag for write access (default False)
-        """
-        config = self.build_config_from_user_permissions(
-            user_permissions=user_permissions,
-            include_default_public_read_rule=include_default_public_read_rule,
-            default_pattern=default_pattern,
-        )
-        return self.upload_acl(
-            access_token=access_token,
-            key=key,
-            config=config,
-            validate=validate,
-        )
-
-    def build_config_from_user_permissions(
-        self,
-        user_permissions: list[dict[str, Any]],
-        include_default_public_read_rule: bool = True,
-        default_pattern: str = "**",
-    ) -> dict[str, Any]:
-        if not isinstance(user_permissions, list):
-            raise SyftBoxError(
-                SyftBoxErrorCode.INVALID_REQUEST,
-                "user_permissions must be a list",
-            )
-
-        rules_map: dict[str, dict[str, set[str]]] = {}
-        for index, item in enumerate(user_permissions, start=1):
-            if not isinstance(item, dict):
-                raise SyftBoxError(
-                    SyftBoxErrorCode.INVALID_REQUEST,
-                    f"user_permissions[{index}] must be an object",
-                )
-
-            user = str(item.get("user") or item.get("email") or "").strip()
-            if not user:
-                raise SyftBoxError(
-                    SyftBoxErrorCode.INVALID_REQUEST,
-                    f"user_permissions[{index}] requires user or email",
-                )
-
-            pattern = str(item.get("pattern") or default_pattern).strip()
-            if not pattern:
-                raise SyftBoxError(
-                    SyftBoxErrorCode.INVALID_REQUEST,
-                    f"user_permissions[{index}] pattern cannot be empty",
-                )
-
-            can_read = bool(item.get("read", False))
-            can_write = bool(item.get("write", False))
-
-            if pattern not in rules_map:
-                rules_map[pattern] = {"read": set(), "write": set()}
-
-            if can_read:
-                rules_map[pattern]["read"].add(user)
-            if can_write:
-                rules_map[pattern]["write"].add(user)
-                # Write access typically implies the same user can read.
-                rules_map[pattern]["read"].add(user)
-
-        rules: list[dict[str, Any]] = []
-        if include_default_public_read_rule:
-            rules.append(
-                {
-                    "pattern": "**",
-                    "access": {
-                        "read": [PermissionIdentifier.EVERYONE.value],
-                        "write": [],
-                    },
-                }
-            )
-
-        for pattern, access in rules_map.items():
-            rules.append(
-                {
-                    "pattern": pattern,
-                    "access": {
-                        "read": sorted(access["read"]),
-                        "write": sorted(access["write"]),
-                    },
-                }
-            )
-
-        return {"rules": rules}
 
     def _to_yaml(self, config: dict[str, Any]) -> str:
         payload: dict[str, Any] = {"rules": []}
         for rule in config.get("rules", []):
-            access = {}
-            for mode in ("read", "write"):
-                vals = (rule.get("access") or {}).get(mode) or []
-                if vals:
-                    access[mode] = vals
-            payload["rules"].append(
-                {"pattern": rule.get("pattern", ""), "access": access}
-            )
+            if not isinstance(rule, dict):
+                continue
+            pattern = str(rule.get("pattern", "")).strip()
+            if not pattern:
+                continue
+
+            raw_access = rule.get("access") or {}
+            if not isinstance(raw_access, dict):
+                raw_access = {}
+
+            # SyftBox ACL expects keys like: admin/write/create/read (arrays).
+            access: dict[str, Any] = {}
+            for key in ("admin", "write", "create", "read"):
+                vals = raw_access.get(key) or []
+                if isinstance(vals, list):
+                    access[key] = [str(v).strip() for v in vals if str(v).strip()]
+                elif isinstance(vals, str):
+                    v = vals.strip()
+                    access[key] = [v] if v else []
+                else:
+                    access[key] = []
+
+            # Preserve any extra keys that may exist in the source YAML.
+            for extra_key, extra_val in raw_access.items():
+                if extra_key not in access:
+                    access[extra_key] = extra_val
+
+            payload["rules"].append({"pattern": pattern, "access": access})
         return yaml.safe_dump(payload, sort_keys=False)
 
-    def _normalize_key(self, key: str) -> str:
-        if key.endswith("syft.pub.yaml"):
-            return key
-        normalized = key.rstrip("/\\")
-        return f"{normalized}/syft.pub.yaml"
-
-    def _download_existing_acl(self, access_token: str, key: str) -> dict[str, Any]:
-        file_service = SyftBoxFileService(http_client=self.http_client)
-        raw = file_service.download(access_token=access_token, key=key)
+    def _download_existing_acl(
+        self, access_token: str, file_path: str
+    ) -> dict[str, Any]:
+        file_service = SyftBoxFileService()
+        raw = file_service.download(access_token=access_token, file_path=file_path)
         if not raw:
             return {"rules": []}
 
