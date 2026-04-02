@@ -57,23 +57,20 @@ class PermissionBuilder:
 
         normalized_pattern = pattern.strip()
         normalized_readers = self._normalize_str_list(readers)
-
-        for idx, existing in enumerate(self.rules):
-            existing_pattern = str(existing.get("pattern", "")).strip()
-            if existing_pattern == normalized_pattern:
-                updated_rule = dict(existing)
-                raw_access = updated_rule.get("access")
-                access: dict[str, Any] = (
-                    dict(raw_access) if isinstance(raw_access, dict) else {}
-                )
-                access["admin"] = [self.owner_email]
-                access["write"] = []
-                access["create"] = []
-                access["read"] = normalized_readers
-                updated_rule["pattern"] = normalized_pattern
-                updated_rule["access"] = access
-                self.rules[idx] = updated_rule
-                break
+        existing_rule = next((rule for rule in self.rules if rule.get("pattern") == normalized_pattern), None)
+        if existing_rule:
+            updated_rule = dict(existing_rule)
+            raw_access = updated_rule.get("access")
+            access: dict[str, Any] = (
+                dict(raw_access) if isinstance(raw_access, dict) else {}
+            )
+            access["admin"] = [self.owner_email]
+            access["write"] = []
+            access["create"] = []
+            access["read"] = normalized_readers
+            updated_rule["pattern"] = normalized_pattern
+            updated_rule["access"] = access
+            return self 
         else:
             self.rules.append(
                 {
