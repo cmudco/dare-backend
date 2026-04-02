@@ -1,10 +1,10 @@
 from syftbox.dtos import AuthTokens
 from syftbox.enums import PermissionIdentifier, PermissionPreset
-from syftbox.errors import SyftBoxError, SyftBoxErrorCode
+from syftbox.errors import SyftBoxException, SyftBoxErrorCode
 from syftbox.types import AccessControl, PermissionConfig, PermissionRule
 
 __all__ = [
-    "SyftBoxError",
+    "SyftBoxException",
     "SyftBoxErrorCode",
     "AuthTokens",
     "PermissionIdentifier",
