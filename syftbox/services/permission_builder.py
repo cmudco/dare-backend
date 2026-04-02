@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ..errors import SyftBoxError, SyftBoxErrorCode
+from ..errors import SyftBoxException, SyftBoxErrorCode
 from ..types import AccessControl, PermissionConfig, PermissionRule
 
 
@@ -48,7 +48,7 @@ class PermissionBuilder:
 
     def _ensure_rule(self) -> None:
         if not self.current_rule:
-            raise SyftBoxError(
+            raise SyftBoxException(
                 SyftBoxErrorCode.INVALID_REQUEST,
                 "No rule is being built. Call add_rule() first.",
             )

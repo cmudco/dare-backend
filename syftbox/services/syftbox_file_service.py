@@ -4,7 +4,7 @@ from typing import Any
 import requests
 
 from syftbox.constants import BLOB_DELETE, BLOB_DOWNLOAD, BLOB_UPLOAD, REQUEST_TIMEOUT
-from syftbox.errors import SyftBoxError, SyftBoxErrorCode
+from syftbox.errors import SyftBoxException, SyftBoxErrorCode
 from syftbox.services.http_client import HttpClient
 from syftbox.utils import raise_syftbox_error
 
@@ -12,15 +12,15 @@ from syftbox.utils import raise_syftbox_error
 class SyftBoxFileService:
     """Service responsible for SyftBox file management operations."""
 
-    def __init__(self, http_client: HttpClient | None = None) -> None:
+    def __init__(self) -> None:
         """Initialize file service dependencies."""
-        self.http_client = http_client
+        self.http_client = HttpClient()
 
-    def upload(self, access_token: str, key: str, data: bytes) -> dict[str, Any]:
-        self._validate_key(key)
+    def upload(self, access_token: str, file_path: str, data: bytes) -> dict[str, Any]:
+        self._validate_file_path(file_path)
         self._validate_data(data)
-        encoded_key = quote(key, safe="/")
-        url = f"{BLOB_UPLOAD}?key={encoded_key}"
+        encoded_file_path = quote(file_path, safe="/")
+        url = f"{BLOB_UPLOAD}?key={encoded_file_path}"
 
         try:
             # Keep multipart field name aligned with SyftBox API.
@@ -35,23 +35,23 @@ class SyftBoxFileService:
                 error,
                 SyftBoxErrorCode.BLOB_UPLOAD_FAILED,
                 "Failed to upload blob",
-                {"key": key, "size": len(data)},
+                {"file_path": file_path, "size": len(data)},
             )
 
-    def delete(self, access_token: str, keys: list[str]) -> dict[str, Any]:
-        if not keys:
-            raise SyftBoxError(
-                SyftBoxErrorCode.INVALID_REQUEST, "At least one key is required"
+    def delete(self, access_token: str, file_paths: list[str]) -> dict[str, Any]:
+        if not file_paths:
+            raise SyftBoxException(
+                SyftBoxErrorCode.INVALID_REQUEST, "At least one file path is required"
             )
 
-        for key in keys:
-            self._validate_key(key)
+        for file_path in file_paths:
+            self._validate_file_path(file_path)
 
         try:
             return self.http_client.request(
                 method="POST",
                 url=BLOB_DELETE,
-                data={"keys": keys},
+                data={"keys": file_paths},
                 access_token=access_token,
             )
         except Exception as error:
@@ -59,31 +59,31 @@ class SyftBoxFileService:
                 error,
                 SyftBoxErrorCode.BLOB_DELETE_FAILED,
                 "Failed to delete blobs",
-                {"keys": keys},
+                {"file_paths": file_paths},
             )
 
-    def download(self, access_token: str, key: str) -> bytes:
+    def download(self, access_token: str, file_path: str) -> bytes:
         """
         Request a presigned download URL (POST) then fetch the object bytes from S3.
 
         API: POST /api/v1/blob/download with JSON body ``{"key": "<path>"}``;
         response contains ``urls`` with ``key`` / ``url`` pairs.
         """
-        self._validate_key(key)
+        self._validate_file_path(file_path)
         try:
             result = self.http_client.post(
                 url=BLOB_DOWNLOAD,
-                data={"key": key},
+                data={"key": file_path},
                 access_token=access_token,
             )
-        except SyftBoxError as error:
+        except SyftBoxException as error:
             details = error.details if isinstance(error.details, dict) else {}
             if details.get("status_code") == 404:
                 return b""
-            raise SyftBoxError(
+            raise SyftBoxException(
                 SyftBoxErrorCode.BLOB_DOWNLOAD_FAILED,
                 "Failed to request blob download URL",
-                {"key": key, "upstream": error.details},
+                {"file_path": file_path, "upstream": error.details},
                 error,
             ) from error
         except Exception as error:
@@ -91,29 +91,31 @@ class SyftBoxFileService:
                 error,
                 SyftBoxErrorCode.BLOB_DOWNLOAD_FAILED,
                 "Failed to request blob download URL",
-                {"key": key},
+                {"file_path": file_path},
             )
 
         errors = result.get("errors") or []
         if errors:
-            raise SyftBoxError(
+            raise SyftBoxException(
                 SyftBoxErrorCode.BLOB_DOWNLOAD_FAILED,
                 "SyftBox returned errors for blob download",
-                details={"key": key, "errors": errors},
+                details={"file_path": file_path, "errors": errors},
             )
 
         urls = result.get("urls") or []
-        presigned_url = self._pick_presigned_url(urls, key)
+        presigned_url = self._pick_presigned_url(urls, file_path)
         if not presigned_url:
             return b""
 
         return self._fetch_presigned_url(presigned_url)
 
-    def _pick_presigned_url(self, urls: list[dict[str, Any]], key: str) -> str | None:
+    def _pick_presigned_url(
+        self, urls: list[dict[str, Any]], file_path: str
+    ) -> str | None:
         for item in urls:
             if not isinstance(item, dict):
                 continue
-            if item.get("key") == key and item.get("url"):
+            if item.get("key") == file_path and item.get("url"):
                 return str(item["url"])
         for item in urls:
             if isinstance(item, dict) and item.get("url"):
@@ -124,13 +126,13 @@ class SyftBoxFileService:
         try:
             response = requests.get(url, timeout=REQUEST_TIMEOUT)
         except requests.Timeout as error:
-            raise SyftBoxError(
+            raise SyftBoxException(
                 SyftBoxErrorCode.TIMEOUT,
                 "Download from presigned URL timed out",
                 cause=error,
             )
         except requests.RequestException as error:
-            raise SyftBoxError(
+            raise SyftBoxException(
                 SyftBoxErrorCode.NETWORK_ERROR,
                 "Network error while downloading blob from presigned URL",
                 cause=error,
@@ -139,7 +141,7 @@ class SyftBoxFileService:
         if response.status_code == 404:
             return b""
         if response.status_code >= 400:
-            raise SyftBoxError(
+            raise SyftBoxException(
                 SyftBoxErrorCode.BLOB_DOWNLOAD_FAILED,
                 "Failed to download blob from presigned URL",
                 details={
@@ -149,28 +151,34 @@ class SyftBoxFileService:
             )
         return response.content
 
-    def _validate_key(self, key: str) -> None:
-        if not isinstance(key, str) or not key:
-            raise SyftBoxError(
-                SyftBoxErrorCode.INVALID_REQUEST, "Key must be a non-empty string"
-            )
-        if len(key) > 1024:
-            raise SyftBoxError(
+    def _validate_file_path(self, file_path: str) -> None:
+        if not isinstance(file_path, str) or not file_path:
+            raise SyftBoxException(
                 SyftBoxErrorCode.INVALID_REQUEST,
-                "Key is too long (max 1024 chars)",
+                "File path must be a non-empty string",
             )
-        if any(char in key for char in ("\0", "\n", "\r")):
-            raise SyftBoxError(
-                SyftBoxErrorCode.INVALID_REQUEST, "Key contains invalid characters"
+        if len(file_path) > 1024:
+            raise SyftBoxException(
+                SyftBoxErrorCode.INVALID_REQUEST,
+                "File path is too long (max 1024 chars)",
+            )
+        if any(char in file_path for char in ("\0", "\n", "\r")):
+            raise SyftBoxException(
+                SyftBoxErrorCode.INVALID_REQUEST,
+                "File path contains invalid characters",
             )
 
     def _validate_data(self, data: bytes) -> None:
         if not isinstance(data, (bytes, bytearray)):
-            raise SyftBoxError(SyftBoxErrorCode.INVALID_REQUEST, "Data must be bytes")
+            raise SyftBoxException(
+                SyftBoxErrorCode.INVALID_REQUEST, "Data must be bytes"
+            )
         if len(data) == 0:
-            raise SyftBoxError(SyftBoxErrorCode.INVALID_REQUEST, "Data cannot be empty")
+            raise SyftBoxException(
+                SyftBoxErrorCode.INVALID_REQUEST, "Data cannot be empty"
+            )
         if len(data) > 100 * 1024 * 1024:
-            raise SyftBoxError(
+            raise SyftBoxException(
                 SyftBoxErrorCode.INVALID_REQUEST,
                 "Data is too large (max 100MB)",
             )
