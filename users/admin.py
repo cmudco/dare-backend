@@ -233,6 +233,14 @@ class UserAdmin(DjangoUserAdmin):
         }),
         (_("Vector Database Settings"), {"fields": ("vector_db",)}),
         (_("Storage Settings"), {"fields": ("storage_backend",)}),
+        (
+            _("Syftbox"),
+            {
+                "fields": ("syftbox_access_token", "syftbox_refresh_token"),
+                "classes": ("collapse",),
+                "description": _("OAuth tokens for Syftbox storage (shown read-only)."),
+            },
+        ),
         (_("Platform Settings (Legacy)"), {
             "fields": ("auth_source", "is_dare_accessible", "is_socratic_bots_accessible"),
             "classes": ("collapse",),
@@ -306,6 +314,13 @@ class UserAdmin(DjangoUserAdmin):
         """Disable user accounts that haven't been active"""
         count = queryset.filter(is_active=True).update(is_active=False)
         self.message_user(request, f"Disabled {count} user account(s).", level=messages.SUCCESS)
+
+    def get_readonly_fields(self, request, obj=None):
+        return (
+            *super().get_readonly_fields(request, obj),
+            "syftbox_access_token",
+            "syftbox_refresh_token",
+        )
 
 
 admin.site.register(User, UserAdmin)
