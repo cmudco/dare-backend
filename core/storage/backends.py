@@ -3,17 +3,28 @@ Custom Django storage backend for SyftBox integration.
 
 Implements Django's Storage interface to store files in SyftBox datasites.
 """
+
+from __future__ import annotations
+
+import io
 import logging
 from datetime import datetime
 from pathlib import Path
+import posixpath
 from typing import Optional
 
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.core.files.base import File
 from django.core.files.storage import Storage
 from django.utils.deconstruct import deconstructible
 
-from .syftbox_client import SyftBoxClientWrapper
+from syftbox.errors import SyftBoxErrorCode, SyftBoxException
+from syftbox.services.syftbox_file_service import SyftBoxFileService
+from syftbox.services.syftbox_permission_service import (
+    SyftBoxPermissionService as SyftBoxApiPermissionService,
+)
+
 from .permission_service import SyftBoxPermissionService
 
 logger = logging.getLogger(__name__)
@@ -36,9 +47,32 @@ class SyftBoxStorage(Storage):
 
         Args:
             user_email: Email of the user (maps to datasite). Can be set later.
+    
         """
         self._user_email = user_email
-        self._client = SyftBoxClientWrapper(user_email)
+        self._app_name = settings.SYFTBOX.get("APP_NAME", "dare")
+
+    def get_access_token(self) -> str:
+        """SyftBox access token from the user row (callers can refresh user before save)."""
+        if not self._user_email:
+            return ""
+        User = get_user_model()
+        user = User.objects.get(email=self._user_email)
+        return (user.syftbox_access_token or "").strip()
+
+    def _read_file_content_as_bytes(self, content) -> bytes:
+        if hasattr(content, "chunks"):
+            return b"".join(chunk for chunk in content.chunks())
+        if hasattr(content, "read"):
+            return content.read()
+        return bytes(content)
+
+    def _build_file_path(self, name: str) -> str:
+        """SyftBox blob ``key``: ``{email}/app_data/{app}/{name}`` (uploader = ``self._user_email``)."""
+        if not self._user_email:
+            raise ValueError("user_email must be set for SyftBox blob key")
+        rel = name.lstrip("/")
+        return f"{self._user_email}/app_data/{self._app_name}/files/{rel}"
 
     @property
     def user_email(self) -> Optional[str]:
@@ -47,9 +81,14 @@ class SyftBoxStorage(Storage):
 
     @user_email.setter
     def user_email(self, value: str):
-        """Set the user email and reinitialize the client."""
+        """Set the user email."""
         self._user_email = value
-        self._client = SyftBoxClientWrapper(value)
+
+    def _get_datasites_root(self) -> Path:
+        datasites_root = settings.SYFTBOX.get("DATASITES_ROOT")
+        if not datasites_root:
+            raise ValueError("SYFTBOX_DATASITES_ROOT is not configured")
+        return Path(datasites_root)
 
     def _get_base_path(self) -> Path:
         """
@@ -63,7 +102,7 @@ class SyftBoxStorage(Storage):
         """
         if not self._user_email:
             raise ValueError("user_email must be set before file operations")
-        return self._client.get_files_directory(self._user_email)
+        return self._get_datasites_root() / self._user_email / "app_data" / self._app_name / "files"
 
     def _full_path(self, name: str) -> Path:
         """
@@ -92,50 +131,36 @@ class SyftBoxStorage(Storage):
         Returns:
             Django File object
         """
-        full_path = self._full_path(name)
-        return File(open(full_path, mode))
+        token = self.get_access_token()
+        if not token:
+            raise SyftBoxException(
+                SyftBoxErrorCode.INVALID_CREDENTIALS,
+                "SyftBox access token is missing for this user.",
+            )
+        file_path = self._build_file_path(name)
+        data = SyftBoxFileService().download(token, file_path)
+        return File(io.BytesIO(data))
 
     def _save(self, name: str, content) -> str:
-        """
-        Save a file to SyftBox storage.
+        data = self._read_file_content_as_bytes(content)
 
-        Automatically sets owner permissions after saving the file.
-
-        Args:
-            name: File name/path
-            content: File content (File object or similar)
-
-        Returns:
-            The name of the saved file
-        """
-        full_path = self._full_path(name)
-
-        # Ensure directory exists
-        full_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Write the file
-        with open(full_path, 'wb') as f:
-            if hasattr(content, 'chunks'):
-                for chunk in content.chunks():
-                    f.write(chunk)
-            elif hasattr(content, 'read'):
-                f.write(content.read())
-            else:
-                f.write(content)
-
-        logger.debug(f"Saved file to SyftBox: {full_path}")
-
-        # Automatically set owner permissions
-        if self._user_email:
-            try:
-                permission_service = SyftBoxPermissionService()
-                permission_service.set_file_permissions(
-                    file_path=full_path,
-                    owner_email=self._user_email
+        if data:
+            token = self.get_access_token()
+            if not token:
+                raise SyftBoxException(
+                    SyftBoxErrorCode.INVALID_CREDENTIALS,
+                    "SyftBox access token is missing for this user.",
                 )
-                logger.debug(f"Set SyftBox permissions for: {full_path}")
-            except Exception as e:
-                logger.warning(f"Failed to set SyftBox permissions: {e}")
+            file_path = self._build_file_path(name)
+            SyftBoxFileService().upload(token, file_path, data)
+            acl_path = self._build_file_path("syft.pub.yaml")
+            pattern = posixpath.basename(name.lstrip("/"))
+            SyftBoxApiPermissionService(owner_email=self._user_email).set_read_permissions(
+                access_token=token,
+                acl_path=acl_path,
+                pattern=pattern,
+                readers=[self._user_email],
+            )
 
         return name
 
@@ -222,7 +247,7 @@ class SyftBoxStorage(Storage):
         if not name.startswith('files/'):
             name = f'files/{name}'
 
-        return self._client.get_syft_url(self._user_email, name)
+        return f"syft://{self._user_email}/{self._app_name}/{name}"
 
     def path(self, name: str) -> str:
         """
