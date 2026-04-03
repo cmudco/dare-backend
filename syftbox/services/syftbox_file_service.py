@@ -78,7 +78,7 @@ class SyftBoxFileService:
             )
         except SyftBoxException as error:
             details = error.details if isinstance(error.details, dict) else {}
-            if details.get("status_code") == 404:
+            if details.get("status_code") in (400, 404):
                 return b""
             raise SyftBoxException(
                 SyftBoxErrorCode.BLOB_DOWNLOAD_FAILED,

@@ -24,10 +24,10 @@ from core.services.file_processor import FileProcessor
 from core.services.file_upload_service import FileUploadService
 from core.storage.constants import StorageBackendChoice
 from core.storage.permission_service import SyftBoxPermissionService
-from core.storage.syftbox_client import SyftBoxClientWrapper
 
 from ..constants import ALLOWED_FILES, FileStatus
 from ..models import File, FileShare, Folder, Tag
+from ..utils import syftbox_oauth_token
 from .serializers import (
     FileSerializer,
     FileShareSerializer,
@@ -43,6 +43,13 @@ class FileViewSet(viewsets.ModelViewSet):
     serializer_class = FileSerializer
     permission_classes = [IsAuthenticated, IsOwner]
     parser_classes = (MultiPartParser, FormParser, JSONParser)
+
+    def _syftbox_on_upload(self, user) -> None:
+        if not settings.SYFTBOX.get("ENABLED", False):
+            return
+        if getattr(user, "storage_backend", None) != StorageBackendChoice.SYFTBOX:
+            return
+        syftbox_oauth_token(user)
 
     def get_queryset(self):
         return (
@@ -71,6 +78,7 @@ class FileViewSet(viewsets.ModelViewSet):
         overlap_size = request.data.get("overlap_size")
 
         try:
+            self._syftbox_on_upload(request.user)
             file_instances = FileUploadService.upload_files(
                 uploaded_files,
                 file_names,
@@ -284,8 +292,8 @@ class FileViewSet(viewsets.ModelViewSet):
 
     def _get_syftbox_file_path(self, file_obj):
         """Return the SyftBox filesystem path for a file."""
-        syftbox_client = SyftBoxClientWrapper()
-        return syftbox_client.get_file_path(file_obj.user.email, file_obj.file.name)
+        # SyftBoxClientWrapper usage intentionally disabled.
+        return file_obj.file.path
 
     @action(
         detail=True,
