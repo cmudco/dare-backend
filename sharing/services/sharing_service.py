@@ -2,14 +2,15 @@
 Sharing Service
 
 Handles sharing items (conversations, workflows, prompts) with specific users
-by email. Centralizes all sharing business logic.
+by email or with all users in the same access code group.
+Centralizes all sharing business logic.
 """
 import logging
 from typing import List, Optional
 
 from django.contrib.contenttypes.models import ContentType
 from django.db import IntegrityError, transaction
-from django.db.models import QuerySet
+from django.db.models import Q, QuerySet
 
 from notifications.constants import (
     NotificationAction,
@@ -228,6 +229,69 @@ class SharingService:
         return ShareResult(shared=successes, failed=failures)
 
     @staticmethod
+    def share_with_access_code_group(
+        entity_type: str,
+        object_id: str,
+        shared_by: User,
+        message: str = "",
+    ) -> SharedItem:
+        """
+        Share an item with all users belonging to the same access code group
+        as the sharing user.
+
+        Args:
+            entity_type: One of 'conversation', 'workflow', 'prompt'.
+            object_id: Primary key of the entity.
+            shared_by: The user performing the share.
+            message: Optional message to include.
+
+        Returns:
+            The created or updated SharedItem (group share record).
+
+        Raises:
+            SharingValidationError: If the user has no access code group, the
+                entity type is invalid, the entity is not found, or the user
+                is not the owner.
+        """
+        if not shared_by.access_code_group_id:
+            raise SharingValidationError(
+                "You are not part of an access code group.",
+                SharingErrorCode.PERMISSION_DENIED,
+            )
+
+        content_type = SharingService._get_content_type(entity_type)
+        entity = SharingService._get_entity(content_type, object_id)
+
+        entity_owner = getattr(entity, "user", None)
+        if entity_owner is None or entity_owner != shared_by:
+            raise SharingValidationError(
+                SharingErrorMessage.PERMISSION_DENIED,
+                SharingErrorCode.PERMISSION_DENIED,
+            )
+
+        if SharingService._is_forwarded_copy(entity_type, entity, shared_by):
+            raise SharingValidationError(
+                SharingErrorMessage.FORWARDED_SHARE_NOT_ALLOWED,
+                SharingErrorCode.FORWARDED_SHARE_NOT_ALLOWED,
+            )
+
+        with transaction.atomic():
+            shared_item, _ = SharedItem.objects.update_or_create(
+                content_type=content_type,
+                object_id=object_id,
+                shared_with_group=shared_by.access_code_group,
+                defaults={
+                    "shared_by": shared_by,
+                    "shared_with": None,
+                    "message": message,
+                    "is_active": True,
+                    "is_deleted": False,
+                },
+            )
+
+        return shared_item
+
+    @staticmethod
     def revoke_share(share_id: int, user: User) -> None:
         """
         Revoke a specific share. Only the user who shared it can revoke.
@@ -263,6 +327,9 @@ class SharingService:
         """
         Get all items shared with a user, optionally filtered by entity type.
 
+        Includes both direct (individual) shares and access code group shares
+        where the user belongs to the target group.
+
         Args:
             user: The recipient user.
             entity_type: Optional filter ('conversation', 'workflow', 'prompt').
@@ -270,9 +337,15 @@ class SharingService:
         Returns:
             QuerySet of SharedItem instances.
         """
-        qs = SharedItem.active_objects.filter(
-            shared_with=user,
-        ).select_related("content_type", "shared_by")
+        q = Q(shared_with=user)
+        if user.access_code_group_id:
+            q |= Q(shared_with_group=user.access_code_group)
+
+        qs = (
+            SharedItem.active_objects.filter(q)
+            .exclude(shared_by=user)
+            .select_related("content_type", "shared_by", "shared_with_group")
+        )
 
         if entity_type:
             content_type = SharingService._get_content_type(entity_type)
@@ -297,7 +370,7 @@ class SharingService:
         """
         qs = SharedItem.active_objects.filter(
             shared_by=user,
-        ).select_related("content_type", "shared_with")
+        ).select_related("content_type", "shared_with", "shared_with_group")
 
         if entity_type:
             content_type = SharingService._get_content_type(entity_type)
@@ -338,7 +411,7 @@ class SharingService:
         return SharedItem.active_objects.filter(
             content_type=content_type,
             object_id=object_id,
-        ).select_related("shared_with").order_by("-created_at")
+        ).select_related("shared_with", "shared_with_group").order_by("-created_at")
 
     @staticmethod
     def can_access(user: User, entity_type: str, object_id) -> bool:
@@ -358,10 +431,14 @@ class SharingService:
         except SharingValidationError:
             return False
 
+        q = Q(shared_with=user)
+        if user.access_code_group_id:
+            q |= Q(shared_with_group=user.access_code_group)
+
         return SharedItem.active_objects.filter(
+            q,
             content_type=content_type,
             object_id=str(object_id),
-            shared_with=user,
         ).exists()
 
     @staticmethod
