@@ -36,7 +36,9 @@ class SharedItemSerializer(serializers.ModelSerializer):
 
     content_type = serializers.SerializerMethodField()
     shared_by_email = serializers.CharField(source="shared_by.email", read_only=True)
-    shared_with_email = serializers.CharField(source="shared_with.email", read_only=True)
+    shared_with_email = serializers.SerializerMethodField()
+    is_group_share = serializers.SerializerMethodField()
+    group_access_code = serializers.SerializerMethodField()
     entity_title = serializers.SerializerMethodField()
     entity_description = serializers.SerializerMethodField()
     entity_content = serializers.SerializerMethodField()
@@ -52,6 +54,8 @@ class SharedItemSerializer(serializers.ModelSerializer):
             "object_id",
             "shared_by_email",
             "shared_with_email",
+            "is_group_share",
+            "group_access_code",
             "message",
             "entity_title",
             "entity_description",
@@ -61,6 +65,20 @@ class SharedItemSerializer(serializers.ModelSerializer):
             "entity_step_count",
             "created_at",
         ]
+
+    def get_shared_with_email(self, obj: SharedItem) -> str | None:
+        """Return recipient email, or None for group shares."""
+        if obj.shared_with_id:
+            return obj.shared_with.email
+        return None
+
+    def get_is_group_share(self, obj: SharedItem) -> bool:
+        return obj.shared_with_group_id is not None
+
+    def get_group_access_code(self, obj: SharedItem) -> str | None:
+        if obj.shared_with_group_id:
+            return obj.shared_with_group.access_code
+        return None
 
     def get_content_type(self, obj: SharedItem) -> str:
         """Return the entity type label (e.g. 'conversation')."""
@@ -122,13 +140,30 @@ class SharedItemSerializer(serializers.ModelSerializer):
 class ShareRecipientSerializer(serializers.ModelSerializer):
     """Serializer for listing recipients of a shared item."""
 
-    email = serializers.CharField(source="shared_with.email", read_only=True)
+    email = serializers.SerializerMethodField()
     shared_at = serializers.DateTimeField(source="created_at", read_only=True)
+    is_group_share = serializers.SerializerMethodField()
+    group_access_code = serializers.SerializerMethodField()
 
     class Meta:
         model = SharedItem
         fields = [
             "id",
             "email",
+            "is_group_share",
+            "group_access_code",
             "shared_at",
         ]
+
+    def get_email(self, obj: SharedItem) -> str | None:
+        if obj.shared_with_id:
+            return obj.shared_with.email
+        return None
+
+    def get_is_group_share(self, obj: SharedItem) -> bool:
+        return obj.shared_with_group_id is not None
+
+    def get_group_access_code(self, obj: SharedItem) -> str | None:
+        if obj.shared_with_group_id:
+            return obj.shared_with_group.access_code
+        return None

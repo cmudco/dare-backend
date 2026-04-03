@@ -133,6 +133,40 @@ class SharedItemViewSet(viewsets.GenericViewSet):
         serializer = SharedItemSerializer(qs, many=True)
         return Response({"results": serializer.data})
 
+    @action(detail=False, methods=["post"], url_path="share-with-group")
+    def share_with_group(self, request):
+        """
+        Share an item with all users in the requester's access code group.
+
+        POST /api/sharing/share-with-group/
+        Body: { contentType, objectId, message? }
+        """
+        entity_type = request.data.get("contentType")
+        object_id = request.data.get("objectId")
+        message = request.data.get("message", "")
+
+        if not entity_type or not object_id:
+            return Response(
+                {"error": "Both 'contentType' and 'objectId' are required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            shared_item = SharingService.share_with_access_code_group(
+                entity_type=entity_type,
+                object_id=str(object_id),
+                shared_by=request.user,
+                message=message,
+            )
+        except SharingValidationError as e:
+            return Response(
+                {"error": str(e), "error_code": e.error_code},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        serializer = ShareRecipientSerializer(shared_item)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
     @action(detail=False, methods=["get"], url_path="recipients")
     def recipients(self, request):
         """
