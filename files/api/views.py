@@ -27,7 +27,6 @@ from core.storage.permission_service import SyftBoxPermissionService
 
 from ..constants import ALLOWED_FILES, FileStatus
 from ..models import File, FileShare, Folder, Tag
-from ..utils import syftbox_oauth_token
 from .serializers import (
     FileSerializer,
     FileShareSerializer,
@@ -43,13 +42,6 @@ class FileViewSet(viewsets.ModelViewSet):
     serializer_class = FileSerializer
     permission_classes = [IsAuthenticated, IsOwner]
     parser_classes = (MultiPartParser, FormParser, JSONParser)
-
-    def _syftbox_on_upload(self, user) -> None:
-        if not settings.SYFTBOX.get("ENABLED", False):
-            return
-        if getattr(user, "storage_backend", None) != StorageBackendChoice.SYFTBOX:
-            return
-        syftbox_oauth_token(user)
 
     def get_queryset(self):
         return (
@@ -78,7 +70,6 @@ class FileViewSet(viewsets.ModelViewSet):
         overlap_size = request.data.get("overlap_size")
 
         try:
-            self._syftbox_on_upload(request.user)
             file_instances = FileUploadService.upload_files(
                 uploaded_files,
                 file_names,

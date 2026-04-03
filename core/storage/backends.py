@@ -37,8 +37,7 @@ class SyftBoxStorage(Storage):
 
     Files are stored in: datasites/{user_email}/app_data/{app_name}/files/
 
-    This storage backend requires a user_email to be set before performing
-    file operations. The email maps to the user's SyftBox datasite.
+    The user email maps to the user's SyftBox datasite.
     """
 
     def __init__(self, user_email: Optional[str] = None):
@@ -53,12 +52,10 @@ class SyftBoxStorage(Storage):
         self._app_name = settings.SYFTBOX.get("APP_NAME", "dare")
 
     def get_access_token(self) -> str:
-        """SyftBox access token from the user row (callers can refresh user before save)."""
-        if not self._user_email:
-            return ""
+        """SyftBox access token (refreshes via ``User.access_token`` when expired)."""
         User = get_user_model()
         user = User.objects.get(email=self._user_email)
-        return (user.syftbox_access_token or "").strip()
+        return user.access_token
 
     def _read_file_content_as_bytes(self, content) -> bytes:
         if hasattr(content, "chunks"):
@@ -69,8 +66,6 @@ class SyftBoxStorage(Storage):
 
     def _build_file_path(self, name: str) -> str:
         """SyftBox blob ``key``: ``{email}/app_data/{app}/{name}`` (uploader = ``self._user_email``)."""
-        if not self._user_email:
-            raise ValueError("user_email must be set for SyftBox blob key")
         rel = name.lstrip("/")
         return f"{self._user_email}/app_data/{self._app_name}/files/{rel}"
 
@@ -84,25 +79,23 @@ class SyftBoxStorage(Storage):
         """Set the user email."""
         self._user_email = value
 
-    def _get_datasites_root(self) -> Path:
-        datasites_root = settings.SYFTBOX.get("DATASITES_ROOT")
-        if not datasites_root:
-            raise ValueError("SYFTBOX_DATASITES_ROOT is not configured")
-        return Path(datasites_root)
-
     def _get_base_path(self) -> Path:
         """
         Get base path for current user's file storage.
 
         Returns:
             Path to user's files directory
-
-        Raises:
-            ValueError: If user_email is not set
         """
-        if not self._user_email:
-            raise ValueError("user_email must be set before file operations")
-        return self._get_datasites_root() / self._user_email / "app_data" / self._app_name / "files"
+        datasites_root = settings.SYFTBOX.get("DATASITES_ROOT")
+        if not datasites_root:
+            raise ValueError("SYFTBOX DATASITES_ROOT is not configured in settings")
+        return (
+            Path(datasites_root)
+            / self._user_email
+            / "app_data"
+            / self._app_name
+            / "files"
+        )
 
     def _full_path(self, name: str) -> Path:
         """
@@ -239,9 +232,6 @@ class SyftBoxStorage(Storage):
         Returns:
             syft:// URL string
         """
-        if not self._user_email:
-            raise ValueError("user_email must be set to generate URL")
-
         # Normalize name
         name = name.lstrip('/')
         if not name.startswith('files/'):
