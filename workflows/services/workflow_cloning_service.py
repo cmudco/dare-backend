@@ -170,6 +170,7 @@ class WorkflowCloningService:
             if not is_cross_user:
                 cloned_data.content_files.set(data_object.content_files.all())
                 cloned_data.embedding_files.set(data_object.embedding_files.all())
+                cloned_data.tags.set(data_object.tags.all())
             return cloned_data
         elif isinstance(data_object, ChatOutputNodeData):
             return ChatOutputNodeData.objects.create(

@@ -154,7 +154,7 @@ class StepNodeDataSerializer(serializers.ModelSerializer):
     class Meta:
         model = StepNodeData
         fields = [
-            'label', 'agent', 'prompt', 'content_files', 'embedding_files', 'llm',
+            'label', 'agent', 'prompt', 'content_files', 'embedding_files', 'tags', 'llm',
             'max_tokens', 'temperature', 'max_context_snippets',
             'document_similarity_threshold', 'use_previous_step_files',
             'use_previous_step_embeddings', 'text_input',
