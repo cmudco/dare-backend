@@ -6,144 +6,91 @@ from django.conf import settings
 from django.db import migrations, models
 
 
-def _get_table_columns(cursor, table_name: str) -> set[str]:
-    return {
-        row[1]
-        for row in cursor.execute(f'PRAGMA table_info("{table_name}")').fetchall()
-    }
-
-
-def _get_index_columns(cursor, table_name: str) -> set[tuple[str, ...]]:
-    index_columns: set[tuple[str, ...]] = set()
-    for _, index_name, *_ in cursor.execute(
-        f'PRAGMA index_list("{table_name}")'
-    ).fetchall():
-        columns = tuple(
-            row[2]
-            for row in cursor.execute(f'PRAGMA index_info("{index_name}")').fetchall()
-        )
-        if columns:
-            index_columns.add(columns)
-    return index_columns
-
-
-def repair_conversation_schema(apps, schema_editor):
-    cursor = schema_editor.connection.cursor()
-    existing_tables = {
-        row[0]
-        for row in cursor.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()
-    }
-
-    conversation_table = "conversations_conversation"
-    summary_table = "conversations_conversationgroupsummary"
-
-    if conversation_table in existing_tables:
-        conversation_columns = _get_table_columns(cursor, conversation_table)
-        if "is_favorite" not in conversation_columns:
-            schema_editor.execute(
-                f'ALTER TABLE "{conversation_table}" '
-                'ADD COLUMN "is_favorite" bool NOT NULL DEFAULT 0'
-            )
-
-    if summary_table not in existing_tables:
-        schema_editor.execute(
-            f'''
-            CREATE TABLE "{summary_table}" (
-                "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
-                "created_at" datetime NOT NULL,
-                "updated_at" datetime NOT NULL,
-                "is_active" bool NOT NULL DEFAULT 1,
-                "is_deleted" bool NOT NULL DEFAULT 0,
-                "group_number" integer unsigned NOT NULL CHECK ("group_number" >= 0),
-                "conversation_ids" text NOT NULL CHECK ((JSON_VALID("conversation_ids") OR "conversation_ids" IS NULL)),
-                "summary" text NOT NULL,
-                "input_tokens" integer NOT NULL DEFAULT 0,
-                "output_tokens" integer NOT NULL DEFAULT 0,
-                "llm_id" bigint NULL REFERENCES "conversations_llm" ("id") DEFERRABLE INITIALLY DEFERRED,
-                "user_id" bigint NOT NULL REFERENCES "users_user" ("id") DEFERRABLE INITIALLY DEFERRED
-            )
-            '''
-        )
-    else:
-        summary_columns = _get_table_columns(cursor, summary_table)
-        if "is_active" not in summary_columns:
-            schema_editor.execute(
-                f'ALTER TABLE "{summary_table}" '
-                'ADD COLUMN "is_active" bool NOT NULL DEFAULT 1'
-            )
-        if "is_deleted" not in summary_columns:
-            schema_editor.execute(
-                f'ALTER TABLE "{summary_table}" '
-                'ADD COLUMN "is_deleted" bool NOT NULL DEFAULT 0'
-            )
-
-    summary_indexes = _get_index_columns(cursor, summary_table)
-    if ("user_id", "group_number") not in summary_indexes:
-        schema_editor.execute(
-            f'CREATE UNIQUE INDEX "unique_conversation_summary_group" '
-            f'ON "{summary_table}" ("user_id", "group_number")'
-        )
-    if ("user_id",) not in summary_indexes:
-        schema_editor.execute(
-            f'CREATE INDEX "conversations_conversationgroupsummary_user_id_idx" '
-            f'ON "{summary_table}" ("user_id")'
-        )
-    if ("llm_id",) not in summary_indexes:
-        schema_editor.execute(
-            f'CREATE INDEX "conversations_conversationgroupsummary_llm_id_idx" '
-            f'ON "{summary_table}" ("llm_id")'
-        )
-
-
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('conversations', '0064_backfill_energy_tracking'),
+        ("conversations", "0064_backfill_energy_tracking"),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 
     operations = [
-        migrations.SeparateDatabaseAndState(
-            database_operations=[
-                migrations.RunPython(
-                    repair_conversation_schema,
-                    migrations.RunPython.noop,
+        migrations.AddField(
+            model_name="conversation",
+            name="is_favorite",
+            field=models.BooleanField(
+                default=False,
+                help_text="Whether this conversation is marked as a favorite by its owner.",
+            ),
+        ),
+        migrations.CreateModel(
+            name="ConversationGroupSummary",
+            fields=[
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True,
+                        primary_key=True,
+                        serialize=False,
+                        verbose_name="ID",
+                    ),
+                ),
+                ("created_at", models.DateTimeField(auto_now_add=True)),
+                ("updated_at", models.DateTimeField(auto_now=True)),
+                ("is_active", models.BooleanField(default=True)),
+                ("is_deleted", models.BooleanField(default=False)),
+                (
+                    "group_number",
+                    models.PositiveIntegerField(
+                        help_text="Sequential group index for completed conversations."
+                    ),
+                ),
+                (
+                    "conversation_ids",
+                    models.JSONField(
+                        default=list,
+                        help_text="Conversation IDs included in this summary group.",
+                    ),
+                ),
+                (
+                    "summary",
+                    models.TextField(
+                        help_text="LLM-generated summary for the conversation group."
+                    ),
+                ),
+                ("input_tokens", models.IntegerField(default=0)),
+                ("output_tokens", models.IntegerField(default=0)),
+                (
+                    "llm",
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name="+",
+                        to="conversations.llm",
+                    ),
+                ),
+                (
+                    "user",
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="conversation_group_summaries",
+                        to=settings.AUTH_USER_MODEL,
+                    ),
                 ),
             ],
-            state_operations=[
-                migrations.AddField(
-                    model_name='conversation',
-                    name='is_favorite',
-                    field=models.BooleanField(default=False, help_text='Whether this conversation is marked as a favorite by its owner.'),
-                ),
-                migrations.CreateModel(
-                    name='ConversationGroupSummary',
-                    fields=[
-                        ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
-                        ('created_at', models.DateTimeField(auto_now_add=True)),
-                        ('updated_at', models.DateTimeField(auto_now=True)),
-                        ('is_active', models.BooleanField(default=True)),
-                        ('is_deleted', models.BooleanField(default=False)),
-                        ('group_number', models.PositiveIntegerField(help_text='Sequential group index for completed conversations.')),
-                        ('conversation_ids', models.JSONField(default=list, help_text='Conversation IDs included in this summary group.')),
-                        ('summary', models.TextField(help_text='LLM-generated summary for the conversation group.')),
-                        ('input_tokens', models.IntegerField(default=0)),
-                        ('output_tokens', models.IntegerField(default=0)),
-                        ('llm', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='+', to='conversations.llm')),
-                        ('user', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='conversation_group_summaries', to=settings.AUTH_USER_MODEL)),
-                    ],
-                    options={
-                        'verbose_name': 'Conversation Group Summary',
-                        'verbose_name_plural': 'Conversation Group Summaries',
-                        'ordering': ['user', 'group_number'],
-                        'constraints': [models.UniqueConstraint(fields=('user', 'group_number'), name='unique_conversation_summary_group')],
-                    },
-                    managers=[
-                        ('active_objects', django.db.models.manager.Manager()),
-                    ],
-                ),
+            options={
+                "verbose_name": "Conversation Group Summary",
+                "verbose_name_plural": "Conversation Group Summaries",
+                "ordering": ["user", "group_number"],
+                "constraints": [
+                    models.UniqueConstraint(
+                        fields=("user", "group_number"),
+                        name="unique_conversation_summary_group",
+                    )
+                ],
+            },
+            managers=[
+                ("active_objects", django.db.models.manager.Manager()),
             ],
         ),
     ]
