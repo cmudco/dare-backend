@@ -18,6 +18,8 @@ class ContextConfig:
         tag_ids: Tag IDs to fetch associated files
         folder_ids: Folder IDs to fetch contained files
         referenced_conversation_ids: Previous conversation IDs for context
+        referenced_conversation_history_limit: Max messages to include per referenced conversation
+        referenced_summary_ids: Conversation summary IDs to include as context
         max_context_snippets: Maximum number of retrieved document snippets
         document_similarity_threshold: Minimum similarity score for retrieval
         history_limit: Number of conversation messages to include
@@ -29,6 +31,8 @@ class ContextConfig:
     tag_ids: List[str] = field(default_factory=list)
     folder_ids: List[str] = field(default_factory=list)
     referenced_conversation_ids: List[str] = field(default_factory=list)
+    referenced_conversation_history_limit: int = 10
+    referenced_summary_ids: List[int] = field(default_factory=list)
     max_context_snippets: int = 4
     document_similarity_threshold: float = 0.5
     history_limit: int = 20
@@ -41,4 +45,5 @@ class ContextConfig:
             or self.tag_ids
             or self.folder_ids
             or self.referenced_conversation_ids
+            or self.referenced_summary_ids
         )

@@ -48,6 +48,8 @@ class MessageValidationService:
             "tag_ids": cls._get_list(data, "tag_ids"),
             "folder_ids": cls._get_list(data, "folder_ids"),
             "referenced_conversation_ids": cls._get_list(data, "referenced_conversation_ids"),
+            "referenced_conversation_history_limit": data.get("referenced_conversation_history_limit", 10),
+            "referenced_summary_ids": cls._get_list(data, "referenced_summary_ids"),
 
             # LLM configuration
             "llm_id": data.get("llm_id"),

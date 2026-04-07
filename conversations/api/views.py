@@ -1,30 +1,33 @@
 import logging
-import markdown
 import os
 import tempfile
-import weasyprint
 from decimal import Decimal
 
+import markdown
+import weasyprint
 from django.conf import settings
 from django.db import transaction
 from django.db.models import Count
-from django.http import HttpResponse
 from django.http import Http404, HttpResponse
+from django.shortcuts import get_object_or_404
 from django.template.loader import render_to_string
 from django.utils import timezone
-from rest_framework import viewsets, generics, status, mixins
+from rest_framework import generics, mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import NotFound
-from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from django.shortcuts import get_object_or_404
 
-from conversations.models import Message, Conversation, LLM, Snippet, Artifact, Feedback, ModelCardData
-from conversations.constants import ArtifactStatus, SharingErrorCode, SharingErrorMessage
-from conversations.services.sharing_service import ConversationSharingService, SharingValidationError
-from conversations.exceptions import SharingAPIException
 from conversations.api.mixins import ConversationSharingMixin
+from conversations.constants import ArtifactStatus, SharingErrorCode, SharingErrorMessage
+from conversations.exceptions import SharingAPIException
+from conversations.models import Artifact, Conversation, ConversationSummary, Feedback, LLM, Message, ModelCardData, Snippet
+from conversations.services.conversation_preference_service import (
+    ConversationPreferenceError,
+    ConversationPreferenceService,
+)
+from conversations.services.sharing_service import ConversationSharingService, SharingValidationError
 from conversations.services.socratic_dependency_service import SocraticDependencyService
 from sharing.services.sharing_service import SharingService
 from users.utils import detect_platform_from_request
@@ -38,6 +41,7 @@ from .serializers import (
     FeedbackSerializer,
     ModelCardDataSerializer,
     ModelCardDataListSerializer,
+    ConversationSummarySerializer,
 )
 
 logger = logging.getLogger(__name__)
@@ -235,6 +239,7 @@ class ConversationViewSet(ConversationSharingMixin, viewsets.ModelViewSet):
         serializer = self.get_serializer(instance)
         return Response(serializer.data)
 
+
     @action(detail=True, methods=['post'], url_path='publish')
     def publish_conversation(self, request, conversation_id=None):
         """
@@ -258,6 +263,30 @@ class ConversationViewSet(ConversationSharingMixin, viewsets.ModelViewSet):
             lambda: ConversationSharingService.fork(conversation_id, request.user),
             success_status=status.HTTP_201_CREATED
         )
+
+    @action(
+        detail=True,
+        methods=['post'],
+        url_path='favorite',
+        permission_classes=[IsAuthenticated],
+    )
+    def toggle_favorite(self, request, conversation_id=None):
+        """Toggle the favorite flag for an owned conversation."""
+        conversation = self.get_object()
+
+        try:
+            updated_conversation = ConversationPreferenceService.toggle_favorite(
+                conversation,
+                request.user,
+            )
+        except ConversationPreferenceError as exc:
+            return Response(
+                {"error": str(exc)},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        serializer = self.get_serializer(updated_conversation)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['get'], url_path='messages')
     def list_messages(self, request, conversation_id=None):
@@ -511,6 +540,18 @@ class ConversationViewSet(ConversationSharingMixin, viewsets.ModelViewSet):
                 {"error": f"Failed to export conversation: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+
+class ConversationSummaryViewSet(viewsets.ReadOnlyModelViewSet):
+    """Read-only endpoint for the current user's per-conversation summaries."""
+
+    serializer_class = ConversationSummarySerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return ConversationSummary.active_objects.filter(
+            conversation__user=self.request.user
+        ).select_related('conversation', 'llm').order_by('-updated_at', '-created_at')
 
 
 class MessageViewSet(viewsets.ModelViewSet):
