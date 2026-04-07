@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from conversations.models import LLM, Message, Conversation, Snippet, WebSearchSource, Artifact, ArtifactCheckpoint, Feedback, ModelCardData, PublicFeedbackSourceCluster, PublicFeedbackSource, MessageToolCall
+from conversations.models import LLM, Message, Conversation, Snippet, WebSearchSource, Artifact, ArtifactCheckpoint, Feedback, ModelCardData, PublicFeedbackSourceCluster, PublicFeedbackSource, MessageToolCall, ConversationSummary
 from core.services.energy_service import compute_relatable_stats
 from files.api.serializers import FileSerializer, TagSerializer
 from prompts.models import Prompt
@@ -153,6 +153,7 @@ class ConversationSerializer(serializers.ModelSerializer):
             'selected_dare_tool_slugs',
             'selected_agent',
             'selected_agent_name',
+            'is_favorite',
             'is_published',
             'published_at',
             'is_owner',
@@ -162,7 +163,37 @@ class ConversationSerializer(serializers.ModelSerializer):
             'owner_user_id',
             'file_owner_id',
         ]
-        read_only_fields = ['created_at', 'user', 'prompt', 'selected_agent_name', 'is_owner', 'is_forked', 'can_share', 'owner_email', 'owner_user_id', 'file_owner_id']
+        read_only_fields = ['created_at', 'user', 'prompt', 'selected_agent_name', 'is_favorite', 'is_owner', 'is_forked', 'can_share', 'owner_email', 'owner_user_id', 'file_owner_id']
+
+
+class ConversationSummarySerializer(serializers.ModelSerializer):
+    conversation_id = serializers.CharField(
+        source='conversation.conversation_id',
+        read_only=True,
+    )
+    conversation_title = serializers.CharField(
+        source='conversation.title',
+        read_only=True,
+        allow_null=True,
+    )
+    llm_name = serializers.CharField(source='llm.name', read_only=True)
+
+    class Meta:
+        model = ConversationSummary
+        fields = [
+            'id',
+            'conversation_id',
+            'conversation_title',
+            'summary',
+            'llm',
+            'llm_name',
+            'input_tokens',
+            'output_tokens',
+            'summarized_message_count',
+            'created_at',
+            'updated_at',
+        ]
+        read_only_fields = fields
 
 class SnippetSerializer(serializers.ModelSerializer):
     file = FileSerializer(read_only=True)

@@ -15,6 +15,7 @@ from .db_helpers import (
     get_conversation_history,
     get_full_file_contents,
     get_referenced_conversations_context,
+    get_referenced_summaries_context,
 )
 from .semantic_context_helpers import add_semantic_context_to_messages
 
@@ -61,10 +62,18 @@ async def build_standard_messages(
         referenced_context = await get_referenced_conversations_context(
             request.context.referenced_conversation_ids,
             user_id,
-            None
+            request.context.referenced_conversation_history_limit,
         )
         if referenced_context:
             messages.append({"role": "user", "content": referenced_context})
+
+    # Add selected conversation summary context
+    if request.context.referenced_summary_ids:
+        summary_context = await get_referenced_summaries_context(
+            request.context.referenced_summary_ids,
+        )
+        if summary_context:
+            messages.append({"role": "user", "content": summary_context})
 
     # Add full file contents
     if request.context.file_ids:

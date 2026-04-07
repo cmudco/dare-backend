@@ -13,7 +13,7 @@ import base64
 import logging
 from channels.db import database_sync_to_async
 
-from conversations.models import Conversation, Message, Artifact
+from conversations.models import Conversation, ConversationSummary, Message, Artifact
 from conversations.constants import SenderType
 from files.models import File
 from prompts.models import Prompt
@@ -307,7 +307,7 @@ def get_media_files_as_images(media_ids: list, user_id: int) -> list:
 def get_referenced_conversations_context(
     conversation_ids: list,
     user_id: int,
-    history_limit: int = None
+    history_limit: Optional[int] = None,
 ) -> str:
     """Fetch context from referenced conversations.
 
@@ -353,3 +353,34 @@ def get_referenced_conversations_context(
         return f"Referenced conversation context for additional background:\n\n{full_context}"
 
     return ""
+
+
+@database_sync_to_async
+def get_referenced_summaries_context(summary_ids: List[int]) -> str:
+    """Fetch context from selected conversation summaries.
+
+    Args:
+        summary_ids: List of ConversationSummary primary keys
+
+    Returns:
+        Formatted context string with the selected summaries
+    """
+    if not summary_ids:
+        return ""
+
+    summaries = ConversationSummary.active_objects.filter(
+        id__in=summary_ids
+    ).select_related("conversation")
+
+    context_parts = []
+    for summary in summaries:
+        title = summary.conversation.title or "Untitled Conversation"
+        context_parts.append(f"=== Conversation Summary: {title} ===")
+        context_parts.append(summary.summary)
+        context_parts.append("=== End of Summary ===\n")
+
+    if not context_parts:
+        return ""
+
+    full_context = "\n".join(context_parts)
+    return f"Conversation summary context for additional background:\n\n{full_context}"
