@@ -478,6 +478,11 @@ class Conversation(BaseModel):
         help_text="Selected agent template for this conversation."
     )
 
+    is_favorite = models.BooleanField(
+        default=False,
+        help_text="Whether this conversation is marked as a favorite by its owner."
+    )
+
     # Sharing / publishing
     is_published = models.BooleanField(
         default=False,
@@ -1328,3 +1333,39 @@ class Feedback(BaseModel):
 
     def __str__(self):
         return f"Feedback from {self.user.email}: {self.emotion} - {self.category or 'No category'}"
+
+
+class ConversationSummary(BaseModel):
+    """Stores a rolling summary for a single conversation."""
+
+    conversation = models.OneToOneField(
+        Conversation,
+        on_delete=models.CASCADE,
+        related_name="conversation_summary",
+    )
+    summary = models.TextField(
+        help_text="LLM-generated summary for the conversation."
+    )
+    llm = models.ForeignKey(
+        "LLM",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    input_tokens = models.IntegerField(default=0)
+    output_tokens = models.IntegerField(default=0)
+    summarized_message_count = models.PositiveIntegerField(
+        default=0,
+        help_text="Number of completed AI assistant messages covered by this summary.",
+    )
+
+    active_objects = ActiveObjectsManager()
+
+    class Meta:
+        ordering = ["-updated_at"]
+        verbose_name = "Conversation Summary"
+        verbose_name_plural = "Conversation Summaries"
+
+    def __str__(self):
+        return f"Summary for {self.conversation.conversation_id}"

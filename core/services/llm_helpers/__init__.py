@@ -21,6 +21,7 @@ from .db_helpers import (
     get_full_file_contents,
     get_media_files_as_images,
     get_referenced_conversations_context,
+    get_referenced_summaries_context,
     convert_file_to_base64_dict,
 )
 
@@ -56,6 +57,7 @@ __all__ = [
     "get_full_file_contents",
     "get_media_files_as_images",
     "get_referenced_conversations_context",
+    "get_referenced_summaries_context",
     "convert_file_to_base64_dict",
     # Socratic message builders
     "build_classic_socratic_messages",

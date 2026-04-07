@@ -52,7 +52,13 @@ class FileSerializer(serializers.ModelSerializer):
         ]
 
     def get_size(self, obj):
-        return obj.file.size if obj.file else None
+        if not obj.file:
+            return None
+
+        try:
+            return obj.file.size
+        except (FileNotFoundError, OSError, ValueError):
+            return None
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
