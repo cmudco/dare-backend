@@ -61,6 +61,8 @@ class LLMQueryRequestBuilder:
             tag_ids=message_data.get("tag_ids", []),
             folder_ids=message_data.get("folder_ids", []),
             referenced_conversation_ids=message_data.get("referenced_conversation_ids", []),
+            referenced_conversation_history_limit=message_data.get("referenced_conversation_history_limit", 10),
+            referenced_summary_ids=message_data.get("referenced_summary_ids", []),
             max_context_snippets=message_data.get("max_context_snippets", 4),
             document_similarity_threshold=message_data.get("document_similarity_threshold", 0.5),
             history_limit=message_data.get("history_limit", 20),
