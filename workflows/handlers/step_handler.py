@@ -146,6 +146,7 @@ class StepNodeHandler(BaseExecutionHandler):
             llm=llm,
             file_ids=config['content_file_ids'] or None,
             embedding_ids=config['embedding_file_ids'] or None,
+            tag_ids=config['tag_ids'] or None,
             prompt_id=config['prompt_id'],
             temperature=step_data.temperature,
             max_tokens=step_data.max_tokens,
@@ -265,6 +266,7 @@ class StepNodeHandler(BaseExecutionHandler):
                 'user': workflow.user,
                 'content_file_ids': list(step_data.content_files.values_list('id', flat=True)),
                 'embedding_file_ids': list(step_data.embedding_files.values_list('id', flat=True)),
+                'tag_ids': list(step_data.tags.values_list('id', flat=True)),
                 'prompt_id': step_data.prompt.id if step_data.prompt else None,
                 'enable_web_search': step_data.enable_web_search,
             }
