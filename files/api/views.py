@@ -24,7 +24,6 @@ from core.services.file_processor import FileProcessor
 from core.services.file_upload_service import FileUploadService
 from core.storage.constants import StorageBackendChoice
 from core.storage.permission_service import SyftBoxPermissionService
-from core.storage.syftbox_client import SyftBoxClientWrapper
 
 from ..constants import ALLOWED_FILES, FileStatus
 from ..models import File, FileShare, Folder, Tag
@@ -284,8 +283,8 @@ class FileViewSet(viewsets.ModelViewSet):
 
     def _get_syftbox_file_path(self, file_obj):
         """Return the SyftBox filesystem path for a file."""
-        syftbox_client = SyftBoxClientWrapper()
-        return syftbox_client.get_file_path(file_obj.user.email, file_obj.file.name)
+        # SyftBoxClientWrapper usage intentionally disabled.
+        return file_obj.file.path
 
     @action(
         detail=True,

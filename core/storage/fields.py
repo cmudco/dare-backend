@@ -4,6 +4,7 @@ Custom Django FileField that dynamically routes to the correct storage backend.
 This module provides a DynamicStorageFileField that automatically determines
 the storage backend based on the model instance's storage_backend field.
 """
+
 import logging
 from typing import Optional
 
@@ -146,6 +147,9 @@ class DynamicStorageFieldFile(FieldFile):
     def size(self):
         """Get file size using the appropriate storage backend."""
         self._require_file()
+        if self.instance and getattr(self.instance, "storage_backend", None) == StorageBackendChoice.SYFTBOX:
+            if getattr(self.instance, "size", None) is not None:
+                return self.instance.size
         storage = self._get_storage()
         return storage.size(self.name)
 
