@@ -30,6 +30,7 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
     billing_mode_display = serializers.CharField(source='get_billing_mode_display', read_only=True)
     avatar_url = serializers.SerializerMethodField()
     is_syftbox_file_storage = serializers.SerializerMethodField()
+    access_code_group = serializers.SerializerMethodField()
 
     class Meta:
         model = User
@@ -53,6 +54,7 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
             "avatar_preset",
             "avatar_url",
             "is_syftbox_file_storage",
+            "access_code_group",
         ]
         read_only_fields = ["id", "auth_source", "platform_role", "billing_mode", "billing_mode_display", "is_onboarding_completed"]
 
@@ -94,6 +96,16 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
         
         # Fallback: return the relative URL
         return obj.avatar_url
+
+    def get_access_code_group(self, obj):
+        acg = getattr(obj, "access_code_group", None)
+        if not acg:
+            return None
+        return {
+            "id": acg.id,
+            "accessCode": acg.access_code,
+            "memberCount": acg.users.filter(is_active=True).count(),
+        }
 
     def to_representation(self, instance):
         representation = super().to_representation(instance)

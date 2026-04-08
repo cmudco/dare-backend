@@ -191,3 +191,41 @@ class SharedItemViewSet(viewsets.GenericViewSet):
 
         serializer = ShareRecipientSerializer(qs, many=True)
         return Response({"results": serializer.data})
+
+    @action(detail=False, methods=["get"], url_path="my-group")
+    def my_group(self, request):
+        """
+        Return the current user's access code group info and members.
+
+        GET /api/sharing/my-group/
+        """
+        group = request.user.access_code_group
+        if not group:
+            return Response(
+                {"hasGroup": False, "group": None, "members": []},
+            )
+
+        members = (
+            group.users
+            .filter(is_active=True)
+            .exclude(pk=request.user.pk)
+            .values_list("email", "first_name", "last_name")
+        )
+
+        return Response(
+            {
+                "hasGroup": True,
+                "group": {
+                    "id": group.id,
+                    "accessCode": group.access_code,
+                    "memberCount": members.count() + 1,
+                },
+                "members": [
+                    {
+                        "email": email,
+                        "name": f"{first} {last}".strip() or email,
+                    }
+                    for email, first, last in members
+                ],
+            },
+        )
