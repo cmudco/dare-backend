@@ -69,6 +69,23 @@ class SyftBoxStorage(Storage):
         rel = name.lstrip("/")
         return f"{self._user_email}/app_data/{self._app_name}/files/{rel}"
 
+    def build_permission_context(self, name: str) -> tuple[str, str, str]:
+        """
+        Build token and ACL context for a file permission rule.
+
+        Returns:
+            tuple(access_token, acl_path, pattern)
+        """
+        token = self.get_access_token()
+        if not token:
+            raise SyftBoxException(
+                SyftBoxErrorCode.INVALID_CREDENTIALS,
+                "SyftBox access token is missing for this user.",
+            )
+        acl_path = self._build_file_path("syft.pub.yaml")
+        pattern = posixpath.basename(name.lstrip("/"))
+        return token, acl_path, pattern
+
     @property
     def user_email(self) -> Optional[str]:
         """Get the current user email."""
@@ -138,16 +155,9 @@ class SyftBoxStorage(Storage):
         data = self._read_file_content_as_bytes(content)
 
         if data:
-            token = self.get_access_token()
-            if not token:
-                raise SyftBoxException(
-                    SyftBoxErrorCode.INVALID_CREDENTIALS,
-                    "SyftBox access token is missing for this user.",
-                )
+            token, acl_path, pattern = self.build_permission_context(name)
             file_path = self._build_file_path(name)
             SyftBoxFileService().upload(token, file_path, data)
-            acl_path = self._build_file_path("syft.pub.yaml")
-            pattern = posixpath.basename(name.lstrip("/"))
             SyftBoxApiPermissionService(owner_email=self._user_email).set_read_permissions(
                 access_token=token,
                 acl_path=acl_path,
