@@ -1,64 +1,18 @@
-import logging
-
 from django.contrib.auth.models import AbstractUser
 from django.db import models
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
-from syftbox.errors import SyftBoxErrorCode, SyftBoxException
-from syftbox.services.syftbox_auth_service import SyftBoxAuthService
-
 from common.managers import ActiveObjectsManager
 from common.models import IsDeletedMixin, TimeStampMixin
 from core.config.processing import CHUNK_SIZE, OVERLAP_SIZE
 from core.fields import EncryptedCharField
+from core.models import SyftBoxTokenMixin
 from core.storage.constants import StorageBackendChoice
 from users.managers import UserManager
 from users.constants import VectorDBChoice, AuthSourceChoice, RoleChoice
-from users.utils import syftbox_jwt_expired
 from prompts.models import Prompt
 from api_keys.constants import BillingModeChoice
-
-logger = logging.getLogger(__name__)
-
-
-class SyftBoxTokenMixin:
-    """
-    SyftBox OAuth helpers on ``User``.
-
-    Use ``user.access_token`` anywhere a valid SyftBox bearer token is required;
-    it returns a non-expired access token and refreshes via the stored refresh
-    token when needed.
-    """
-
-    @property
-    def access_token(self) -> str:
-        access = (self.syftbox_access_token or "").strip()
-        refresh = (self.syftbox_refresh_token or "").strip()
-
-        if not access and not refresh:
-            raise SyftBoxException(
-                SyftBoxErrorCode.INVALID_CREDENTIALS,
-                "SyftBox is not linked for this user.",
-                details={"user_id": self.pk},
-            )
-
-        if access and not syftbox_jwt_expired(access):
-            return access
-
-        if not refresh:
-            raise SyftBoxException(
-                SyftBoxErrorCode.TOKEN_EXPIRED,
-                "SyftBox access token expired and no refresh token stored.",
-                details={"user_id": self.pk},
-            )
-
-        tokens = SyftBoxAuthService().refresh_token(refresh)
-        self.syftbox_access_token = tokens.access_token
-        self.syftbox_refresh_token = tokens.refresh_token
-        self.save(update_fields=["syftbox_access_token", "syftbox_refresh_token"])
-        logger.info("Refreshed SyftBox tokens for user_id=%s", self.pk)
-        return tokens.access_token
 
 
 class AccessCodeGroup(TimeStampMixin):
