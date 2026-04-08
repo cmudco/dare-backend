@@ -7,6 +7,7 @@ class PromptSerializer(serializers.ModelSerializer):
     """Serializer for user's own prompts."""
     user = serializers.ReadOnlyField(source='user.email')
     createdAt = serializers.DateTimeField(source='created_at', read_only=True)
+    content = serializers.CharField(trim_whitespace=False)
     isPublished = serializers.SerializerMethodField()
     canShare = serializers.SerializerMethodField()
 
