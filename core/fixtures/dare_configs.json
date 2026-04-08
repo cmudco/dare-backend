@@ -3,7 +3,7 @@
         "model": "core.dareconfig",
         "pk": 1,
         "fields": {
-            "project_email": "zainabfatima200011@gmail.com",
+            "project_email": "",
             "syftbox_access_token": "",
             "syftbox_refresh_token": "",
             "is_active": true,
