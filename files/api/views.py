@@ -19,11 +19,17 @@ from rest_framework.views import APIView
 
 from common.permissions import IsOwner
 from conversations.models import Conversation
+from core.models import DareConfig
 from core.services.document_processor import DocumentProcessor
 from core.services.file_processor import FileProcessor
 from core.services.file_upload_service import FileUploadService
+from core.storage.backends import SyftBoxStorage
 from core.storage.constants import StorageBackendChoice
 from core.storage.permission_service import SyftBoxPermissionService
+from syftbox.services.syftbox_file_service import SyftBoxFileService
+from syftbox.services.syftbox_permission_service import (
+    SyftBoxPermissionService as SyftBoxApiPermissionService,
+)
 
 from ..constants import ALLOWED_FILES, FileStatus
 from ..models import File, FileShare, Folder, Tag
@@ -286,6 +292,23 @@ class FileViewSet(viewsets.ModelViewSet):
         # SyftBoxClientWrapper usage intentionally disabled.
         return file_obj.file.path
 
+    def _set_syftbox_read_permissions(self, owner_user, file_obj, readers):
+        """Apply SyftBox read ACL for a file using the provided reader emails."""
+        storage = SyftBoxStorage(user_email=owner_user.email)
+        token, acl_path, pattern = storage.build_permission_context(file_obj.name)
+        SyftBoxApiPermissionService(owner_email=owner_user.email).set_read_permissions(
+            access_token=token,
+            acl_path=acl_path,
+            pattern=pattern,
+            readers=readers,
+        )
+
+    def _get_import_access_token(self, request, is_publicly_shared):
+        """Resolve SyftBox token for import reads."""
+        if is_publicly_shared:
+            return DareConfig.active_objects.first().access_token
+        return request.user.access_token
+
     @action(
         detail=True,
         methods=["post", "delete"],
@@ -348,8 +371,13 @@ class FileViewSet(viewsets.ModelViewSet):
             )
 
         try:
-            SyftBoxPermissionService().grant_read_access(
-                self._get_syftbox_file_path(file_obj), shared_with_user.email
+            all_shared_emails = list(
+                FileShare.objects.filter(file=file_obj, shared_with__isnull=False)
+                .values_list("shared_with__email", flat=True)
+                .distinct()
+            )
+            self._set_syftbox_read_permissions(
+                owner_user=request.user, file_obj=file_obj, readers=all_shared_emails
             )
         except Exception as e:
             logger.error(
@@ -389,8 +417,15 @@ class FileViewSet(viewsets.ModelViewSet):
             )
 
         try:
-            SyftBoxPermissionService().revoke_access(
-                self._get_syftbox_file_path(file_obj), shared_with_user.email
+            remaining_shared_emails = list(
+                FileShare.objects.filter(file=file_obj, shared_with__isnull=False)
+                .values_list("shared_with__email", flat=True)
+                .distinct()
+            )
+            self._set_syftbox_read_permissions(
+                owner_user=request.user,
+                file_obj=file_obj,
+                readers=remaining_shared_emails,
             )
         except Exception as e:
             logger.error(
@@ -442,8 +477,11 @@ class FileViewSet(viewsets.ModelViewSet):
             )
             if created:
                 try:
-                    permission_service.grant_everyone_read_access(
-                        self._get_syftbox_file_path(file_obj)
+                    config = DareConfig.active_objects.first()
+                    self._set_syftbox_read_permissions(
+                        owner_user=request.user,
+                        file_obj=file_obj,
+                        readers=[config.project_email],
                     )
                 except Exception as e:
                     logger.error(
@@ -592,6 +630,9 @@ class FileViewSet(viewsets.ModelViewSet):
             .filter(Q(shared_with=request.user) | Q(shared_with=None))
             .exists()
         )
+        is_publicly_shared = FileShare.objects.filter(
+            file=original, shared_with=None
+        ).exists()
 
         if not has_access:
             return Response(
@@ -600,9 +641,17 @@ class FileViewSet(viewsets.ModelViewSet):
             )
 
         try:
-            original.file.open("rb")
-            file_bytes = original.file.read()
-            original.file.close()
+            if original.storage_backend == StorageBackendChoice.SYFTBOX:
+                owner_storage = SyftBoxStorage(user_email=original.user.email)
+                syftbox_key = owner_storage._build_file_path(original.file.name)
+                access_token = self._get_import_access_token(
+                    request, is_publicly_shared
+                )
+                file_bytes = SyftBoxFileService().download(access_token, syftbox_key)
+            else:
+                original.file.open("rb")
+                file_bytes = original.file.read()
+                original.file.close()
         except Exception as e:
             logger.error(f"Failed to read source file {original.id}: {e}")
             return Response(
@@ -684,12 +733,6 @@ class FileViewAPIView(APIView):
 
             file_name = file_obj.file.name
 
-            if not file_obj.file.exists():
-                return Response(
-                    {"error": "File not found in storage"},
-                    status=status.HTTP_404_NOT_FOUND,
-                )
-
             content_type, _ = mimetypes.guess_type(file_name)
             if not content_type:
                 ext = os.path.splitext(file_name)[1].lower()
@@ -702,7 +745,15 @@ class FileViewAPIView(APIView):
                 else:
                     content_type = "application/octet-stream"
 
-            file_obj.file.open("rb")
+            try:
+                if file_obj.storage_backend == StorageBackendChoice.SYFTBOX:
+                    file_obj.file.open("rb")
+                else:
+                    if not file_obj.file.exists():
+                        raise FileNotFoundError("File not found in storage")
+                    file_obj.file.open("rb")
+            except Exception as exc:
+                raise FileNotFoundError("File not found in storage") from exc
 
             # Create file response
             response = FileResponse(
@@ -723,6 +774,11 @@ class FileViewAPIView(APIView):
         except File.DoesNotExist:
             return Response(
                 {"error": "File not found"}, status=status.HTTP_404_NOT_FOUND
+            )
+        except FileNotFoundError:
+            return Response(
+                {"error": "File not found in storage"},
+                status=status.HTTP_404_NOT_FOUND,
             )
         except Exception as e:
             logger.error(f"Error in FileViewAPIView: {str(e)}")
