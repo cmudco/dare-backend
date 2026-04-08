@@ -14,6 +14,7 @@ from rest_framework.response import Response
 from sharing.api.serializers import (
     ShareRecipientSerializer,
     ShareRequestSerializer,
+    ShareWithGroupRequestSerializer,
     SharedItemSerializer,
 )
 from sharing.models import SharedItem
@@ -141,22 +142,15 @@ class SharedItemViewSet(viewsets.GenericViewSet):
         POST /api/sharing/share-with-group/
         Body: { contentType, objectId, message? }
         """
-        entity_type = request.data.get("contentType")
-        object_id = request.data.get("objectId")
-        message = request.data.get("message", "")
-
-        if not entity_type or not object_id:
-            return Response(
-                {"error": "Both 'contentType' and 'objectId' are required."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        serializer = ShareWithGroupRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
 
         try:
             shared_item = SharingService.share_with_access_code_group(
-                entity_type=entity_type,
-                object_id=str(object_id),
+                entity_type=serializer.validated_data["content_type"],
+                object_id=serializer.validated_data["object_id"],
                 shared_by=request.user,
-                message=message,
+                message=serializer.validated_data.get("message", ""),
             )
         except SharingValidationError as e:
             return Response(

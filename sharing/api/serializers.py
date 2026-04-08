@@ -31,6 +31,26 @@ class ShareRequestSerializer(serializers.Serializer):
     )
 
 
+class ShareWithGroupRequestSerializer(serializers.Serializer):
+    """Validates incoming share-with-group requests."""
+
+    content_type = serializers.ChoiceField(
+        choices=list(SHAREABLE_MODELS.keys()),
+        help_text="Entity type: conversation, workflow, or prompt.",
+    )
+    object_id = serializers.CharField(
+        max_length=100,
+        help_text="Identifier of the entity to share (PK or conversation_id).",
+    )
+    message = serializers.CharField(
+        required=False,
+        default="",
+        allow_blank=True,
+        max_length=500,
+        help_text="Optional message to include with the share.",
+    )
+
+
 class SharedItemSerializer(serializers.ModelSerializer):
     """Serializer for SharedItem with entity summary."""
 
