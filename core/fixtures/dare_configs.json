@@ -3,9 +3,9 @@
         "model": "core.dareconfig",
         "pk": 1,
         "fields": {
-            "project_email": "zainabfatima200011@gmail.com",
-            "syftbox_access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0eXBlIjoiYWNjZXNzIiwiaXNzIjoiaHR0cHM6Ly9zeWZ0Ym94Lm5ldCIsInN1YiI6InphaW5hYmZhdGltYTIwMDAxMUBnbWFpbC5jb20iLCJleHAiOjE3NzU4MjMzMjMsImlhdCI6MTc3NTU2NDEyMywianRpIjoiNmU5ZjVjNTQtZDZmNC00NWY0LWIwYzItZmQyZTQ5ZTliNzM2In0.ralx6Jt68efA8Fz0rK0QZHDGuixv-0Eg2Woql3v_xuU",
-            "syftbox_refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0eXBlIjoicmVmcmVzaCIsImlzcyI6Imh0dHBzOi8vc3lmdGJveC5uZXQiLCJzdWIiOiJ6YWluYWJmYXRpbWEyMDAwMTFAZ21haWwuY29tIiwiZXhwIjoxNzc4MTU2MTIzLCJpYXQiOjE3NzU1NjQxMjMsImp0aSI6ImE5MWI0YzZmLWEwZTQtNGI3OS04ZjE0LWYwNmJiMmFmNDlkOSJ9.CYZMtrMlb_6Z30H9iDWIPAkWJGxopn-_3AHw4RtzZFI",
+            "project_email": "",
+            "syftbox_access_token": "",
+            "syftbox_refresh_token": "",
             "is_active": true,
             "is_deleted": false,
             "created_at": "2026-04-07T00:00:00Z",

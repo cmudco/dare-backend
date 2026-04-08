@@ -7,7 +7,7 @@ from common.managers import ActiveObjectsManager
 from common.models import IsDeletedMixin, TimeStampMixin
 from core.config.processing import CHUNK_SIZE, OVERLAP_SIZE
 from core.fields import EncryptedCharField
-from core.models import SyftBoxTokenMixin
+from syftbox.mixins import SyftBoxTokenMixin
 from core.storage.constants import StorageBackendChoice
 from users.managers import UserManager
 from users.constants import VectorDBChoice, AuthSourceChoice, RoleChoice
