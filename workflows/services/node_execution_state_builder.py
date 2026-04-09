@@ -57,11 +57,13 @@ class NodeExecutionStateBuilder:
             {
                 "node-id": {
                     "stepId": int | null,
+                    "startedAt": str | null,
                     "nodeType": str,
                     "status": str,
                     "response": str | null,
                     "error": str | null,
                     "validationContext": dict | null,
+                    "metadata": dict | null,
                     "snippets": list,
                     "webSearchSources": list
                 }
@@ -131,15 +133,14 @@ class NodeExecutionStateBuilder:
             step: Corresponding WorkflowRunStep if executed, None otherwise
 
         Returns:
-            Node state dictionary with nodeId, stepId, status, response, etc.
-            Note: nodeId is included inside the object because DRF CamelCase
-            renderer may mangle dictionary keys that contain underscore patterns.
+            Node state dictionary with stepId, status, response, etc.
         """
         if step is None:
             # Node not yet executed in this run
             return {
-                "nodeId": node.node_id,  # Include nodeId to survive key mangling
+    
                 "stepId": None,
+                "startedAt": None,
                 "nodeType": node.node_type,
                 "status": "pending",
                 "response": None,
@@ -169,8 +170,9 @@ class NodeExecutionStateBuilder:
         snippets_data, web_search_sources_data = serialize_step_citations(step)
 
         return {
-            "nodeId": node.node_id,  # Include nodeId to survive key mangling
+
             "stepId": step.id,
+            "startedAt": step.started_at.isoformat() if step.started_at else None,
             "nodeType": node.node_type,
             "status": step.status,
             "response": step.response,
@@ -227,8 +229,9 @@ class NodeExecutionStateBuilder:
             snippets_data, web_search_sources_data = serialize_step_citations(source_step)
 
             return {
-                "nodeId": node.node_id,  # Include nodeId to survive key mangling
+    
                 "stepId": None,  # Display nodes don't have their own steps
+                "startedAt": source_step.started_at.isoformat() if source_step.started_at else None,
                 "nodeType": node.node_type,
                 "status": source_step.status,
                 "response": source_step.response,
@@ -258,8 +261,9 @@ class NodeExecutionStateBuilder:
 
         # Source exists but has no step and no incoming edge - not executed yet
         return {
-            "nodeId": node.node_id,  # Include nodeId to survive key mangling
+
             "stepId": None,
+            "startedAt": None,
             "nodeType": node.node_type,
             "status": "pending",
             "response": None,
@@ -279,8 +283,9 @@ class NodeExecutionStateBuilder:
         if node.node_type == NodeType.START:
             # Start nodes are entry points - this is expected
             return {
-                "nodeId": node.node_id,  # Include nodeId to survive key mangling
+    
                 "stepId": None,
+                "startedAt": None,
                 "nodeType": NodeType.START,
                 "status": "not_executed",
                 "response": None,
@@ -293,8 +298,9 @@ class NodeExecutionStateBuilder:
             # Other display nodes without connections - likely misconfigured
             logger.warning(f"Display node {node.node_id} has no incoming edge")
             return {
-                "nodeId": node.node_id,  # Include nodeId to survive key mangling
+    
                 "stepId": None,
+                "startedAt": None,
                 "nodeType": node.node_type,
                 "status": "no_source",
                 "response": None,
@@ -307,8 +313,9 @@ class NodeExecutionStateBuilder:
     def _build_error_state(self, node: WorkflowNode, error_message: str) -> Dict[str, Any]:
         """Build error state for a node."""
         return {
-            "nodeId": node.node_id,  # Include nodeId to survive key mangling
+
             "stepId": None,
+            "startedAt": None,
             "nodeType": node.node_type,
             "status": "error",
             "response": None,
@@ -321,8 +328,9 @@ class NodeExecutionStateBuilder:
     def _build_default_state(self, node: WorkflowNode) -> Dict[str, Any]:
         """Build default state for unknown node types."""
         return {
-            "nodeId": node.node_id,  # Include nodeId to survive key mangling
+
             "stepId": None,
+            "startedAt": None,
             "nodeType": node.node_type,
             "status": "unknown",
             "response": None,
@@ -356,7 +364,7 @@ class NodeExecutionStateBuilder:
                 "customPrompt": str,
                 "aiRecommendation": str | null,
                 "aiAnalysis": str | null,
-                "stepNumber": int | null
+                "label": str | null
             }
 
             Returns None if not a validation-capable node or missing data.
@@ -388,13 +396,10 @@ class NodeExecutionStateBuilder:
         # Extract AI recommendation using standardized key
         ai_recommendation = metadata.get(MetadataKey.AI_RECOMMENDATION)
 
-        # Extract step number
-        step_number = getattr(node_data, 'step_number', None)
-
         return {
             "availableRoutes": available_routes,
             "customPrompt": custom_prompt,
             "aiRecommendation": ai_recommendation,
             "aiAnalysis": ai_analysis,
-            "stepNumber": step_number,
+            "label": getattr(node.data_object, 'label', '') or '',
         }

@@ -1,8 +1,13 @@
-from django.contrib import admin
+import logging
+
+from django.contrib import admin, messages
 from django.contrib.auth import get_user_model
 from django.urls import reverse
 from django import forms
+from django.utils.html import escape
+from django.utils.safestring import mark_safe
 
+from conversations.services.socratic_dependency_service import SocraticDependencyService
 from core.helpers.admin_utils import (
     render_code_block,
     render_empty_placeholder,
@@ -16,12 +21,14 @@ from .models import LLM, Conversation, Message, ModelGroup, ProviderAPIKey, Feed
 from .proxy_models import MessageWithFeedback
 
 User = get_user_model()
+logger = logging.getLogger(__name__)
+
 
 @admin.register(LLM)
 class LLMAdmin(admin.ModelAdmin):
-    list_display = ("name", "identifier", "provider", "base_url_display")
+    list_display = ("name", "identifier", "provider", "tier", "base_url_display")
     search_fields = ("name", "identifier", "base_url")
-    list_filter = ("provider",)
+    list_filter = ("provider", "tier")
 
     fieldsets = (
         ("Model Information", {
@@ -33,6 +40,15 @@ class LLMAdmin(admin.ModelAdmin):
         }),
         ("Capabilities", {
             "fields": ("is_reasoning", "supports_vision", "is_image_generator")
+        }),
+        ("Classification", {
+            "fields": ("tier",),
+            "description": (
+                "Model Tier Guide — choose the tier based on the model's capability and cost:<br>"
+                "<b>Premium</b>: Flagship models (e.g., Claude Opus, GPT-4.5)<br>"
+                "<b>Advanced</b>: Mid-range models (e.g., Claude Sonnet, GPT-4o, Gemini Pro)<br>"
+                "<b>Flash</b>: Fast, cost-optimized models (e.g., Claude Haiku, GPT-4o-mini, Gemini Flash)"
+            ),
         }),
         ("Pricing", {
             "fields": ("input_token_rate_per_million", "output_token_rate_per_million"),
@@ -46,6 +62,46 @@ class LLMAdmin(admin.ModelAdmin):
             return obj.base_url
         return "-"
     base_url_display.short_description = "Base URL"
+
+    def delete_view(self, request, object_id, extra_context=None):
+        """Add Socratic Books dependency warnings with owner info to the delete confirmation page."""
+        # Only show warning on GET (confirmation page), not on POST (actual deletion)
+        if request.method == "GET":
+            dependency_data = SocraticDependencyService.get_dependent_bots(
+                int(object_id)
+            )
+
+            if dependency_data and dependency_data.get("dependent_bots_count", 0) > 0:
+                bot_items = "".join(
+                    f"<li style='background: none; padding: 0; margin: 4px 0; list-style-type: disc;'>"
+                    f"<strong>{escape(b['bot_title'])}</strong> "
+                    f"({escape(b['bot_group_title'])}) &mdash; "
+                    f"<em>{escape(b['usage_type'])}</em> &mdash; "
+                    f"Owner: {escape(b.get('owner_email') or 'Unknown')}</li>"
+                    for b in dependency_data["dependent_bots"]
+                )
+                warning_html = (
+                    f"<strong>\u26A0 Socratic Books Dependency Warning</strong><br><br>"
+                    f"This model is used by <strong>{dependency_data['dependent_bots_count']}</strong> "
+                    f"Socratic Books bot(s). Deleting it will break these bots:"
+                    f"<ul style='margin: 8px 0; padding-left: 20px;'>{bot_items}</ul>"
+                )
+                messages.warning(request, mark_safe(warning_html))
+
+        return super().delete_view(request, object_id, extra_context=extra_context)
+
+    def delete_model(self, request, obj):
+        """Handle LLM deletion with Socratic Books sync, notifications, and cleanup."""
+        result = SocraticDependencyService.handle_model_deletion(obj.pk, obj.name)
+
+        if result["nullify_failed"]:
+            messages.error(
+                request,
+                "Could not sync deletion with Socratic Books backend. "
+                "Affected bots may retain stale model references."
+            )
+
+        super().delete_model(request, obj)
 
 @admin.register(Conversation)
 class ConversationAdmin(admin.ModelAdmin):

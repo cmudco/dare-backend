@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from config.env import BASE_DIR, env, USE_POSTGRES
 from config.settings.common import *
 
@@ -42,4 +44,13 @@ WEAVIATE = {
     'PORT': 8080,
     'COLLECTION_NAME': 'Document',
     'SKIP_INIT_CHECKS': True
+}
+
+# SyftBox local development settings
+SYFTBOX = {
+    'ENABLED': env.SYFTBOX_ENABLED,
+    'DATASITES_ROOT': env.SYFTBOX_DATASITES_ROOT or os.path.join(
+        str(Path.home()), 'SyftBox', 'datasites'
+    ),
+    'APP_NAME': env.SYFTBOX_APP_NAME,
 }

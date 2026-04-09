@@ -6,6 +6,7 @@ from channels.db import database_sync_to_async
 from billing.constants import TransactionTypeChoice
 from billing.models import Transaction, Wallet
 from conversations.models import LLM, Message
+from core.services.energy_service import compute_impact
 from workflows.models import Workflow, WorkflowRun, WorkflowNode
 from api_keys.constants import BillingModeChoice
 from users.constants import AuthSourceChoice
@@ -18,6 +19,37 @@ logger = logging.getLogger(__name__)
 
 class BillingService:
     """Handles wallet balance checks and transaction processing."""
+
+    @staticmethod
+    def _compute_energy_impact(message_obj: Message) -> dict:
+        """Compute energy impact for a message and return values as Decimals.
+
+        Returns a dict with energy_wh, carbon_g, water_ml ready to set on
+        Message or pass to Transaction.objects.create().
+        Returns empty dict if computation is not applicable.
+        """
+        llm = message_obj.llm
+        output_tokens = message_obj.output_tokens
+        if not llm or not output_tokens:
+            return {}
+
+        try:
+            impact = compute_impact(
+                output_tokens=output_tokens,
+                provider_name=llm.provider,
+                model_name=llm.identifier,
+            )
+            if impact.energy_wh == 0.0:
+                return {}
+
+            return {
+                "energy_wh": Decimal(str(round(impact.energy_wh, 6))),
+                "carbon_g": Decimal(str(round(impact.carbon_g, 6))),
+                "water_ml": Decimal(str(round(impact.water_ml, 6))),
+            }
+        except Exception as e:
+            logger.warning("Energy impact computation failed: %s", e)
+            return {}
 
     async def check_sufficient_credits(self, user: 'User', llm: LLM, estimated_input_tokens: int = 500, estimated_output_tokens: int = 1000) -> bool:
         """
@@ -174,6 +206,13 @@ class BillingService:
                     message_obj.cost = cost
                     logger.debug(f"Input tokens: {message_obj.input_tokens}, Output tokens: {message_obj.output_tokens}, Cost: {cost}")
 
+                    # Compute energy/environmental impact
+                    energy_data = self._compute_energy_impact(message_obj)
+                    if energy_data:
+                        message_obj.energy_wh = energy_data["energy_wh"]
+                        message_obj.carbon_g = energy_data["carbon_g"]
+                        message_obj.water_ml = energy_data["water_ml"]
+
                     if cost > Decimal('0.00'):
                         user = message_obj.conversation.user
 
@@ -199,7 +238,8 @@ class BillingService:
                                     input_tokens=message_obj.input_tokens,
                                     output_tokens=message_obj.output_tokens,
                                     billing_mode=BillingModeChoice.OWN_API,
-                                    platform=transaction_platform
+                                    platform=transaction_platform,
+                                    **energy_data,
                                 )
                         else:
                             # WALLET mode - charge user's wallet
@@ -232,7 +272,8 @@ class BillingService:
                                     input_tokens=message_obj.input_tokens,
                                     output_tokens=message_obj.output_tokens,
                                     billing_mode=BillingModeChoice.WALLET,
-                                    platform=transaction_platform
+                                    platform=transaction_platform,
+                                    **energy_data,
                                 )
                                 wallet.refresh_from_db()
             message_obj.save()
@@ -288,6 +329,13 @@ class BillingService:
                         f"Output tokens: {message_obj.output_tokens}, Cost: {cost}"
                     )
 
+                    # Compute energy/environmental impact
+                    energy_data = self._compute_energy_impact(message_obj)
+                    if energy_data:
+                        message_obj.energy_wh = energy_data["energy_wh"]
+                        message_obj.carbon_g = energy_data["carbon_g"]
+                        message_obj.water_ml = energy_data["water_ml"]
+
             message_obj.save()
             return message_obj, cost
 
@@ -315,17 +363,18 @@ class BillingService:
             if step_node_id:
                 step_node = WorkflowNode.objects.get(id=step_node_id)
                 workflow = step_node.workflow
-                step_number = getattr(step_node.data_object, 'step_number', None) if step_node.data_object else None
-                step_order = step_number or 1
+                node_label = getattr(step_node.data_object, 'label', None) if step_node.data_object else None
             else:
                 workflow = None
-                step_order = 0
+                node_label = None
 
             workflow_title = workflow.title if workflow else "Unknown Workflow"
             workflow_id = workflow.id if workflow else "N/A"
 
-            if step_order > 0:
-                transaction_message = f"Workflow {workflow_id} : Title - {workflow_title} | Step #{step_order} "
+            if node_label:
+                transaction_message = (
+                    f"Workflow {workflow_id} : Title - {workflow_title} | Node {node_label} "
+                )
             else:
                 transaction_message = f"Workflow {workflow_id} : Title - {workflow_title} | Routing Node "
 
@@ -433,6 +482,14 @@ class BillingService:
             message_obj.input_tokens = input_tokens
             message_obj.output_tokens = output_tokens
             message_obj.cost = cost
+
+            # Compute energy/environmental impact
+            energy_data = await database_sync_to_async(self._compute_energy_impact)(message_obj)
+            if energy_data:
+                message_obj.energy_wh = energy_data["energy_wh"]
+                message_obj.carbon_g = energy_data["carbon_g"]
+                message_obj.water_ml = energy_data["water_ml"]
+
             await database_sync_to_async(message_obj.save)()
 
             # Get billing mode
@@ -441,6 +498,9 @@ class BillingService:
             # Get platform from conversation
             conversation = await database_sync_to_async(lambda: message_obj.conversation)()
             transaction_platform = await database_sync_to_async(lambda: conversation.source)()
+
+            # Capture energy_data for lambda closures
+            ed = energy_data
 
             if billing_mode == BillingModeChoice.OWN_API:
                 # User is using their own API key - create tracking transaction with $0
@@ -456,6 +516,7 @@ class BillingService:
                         output_tokens=output_tokens,
                         billing_mode=BillingModeChoice.OWN_API,
                         platform=transaction_platform,
+                        **ed,
                     )
                 )()
             else:
@@ -481,6 +542,7 @@ class BillingService:
                         output_tokens=output_tokens,
                         billing_mode=BillingModeChoice.WALLET,
                         platform=transaction_platform,
+                        **ed,
                     )
                 )()
 

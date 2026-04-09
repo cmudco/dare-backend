@@ -2,12 +2,14 @@ import json
 import logging
 import base64
 import uuid
+from pathlib import Path
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 from django.db import transaction
 from django.core.files.base import ContentFile
 from django_rq import enqueue
 
+from core.storage.constants import StorageBackendChoice
 from files.models import File, Folder, Tag
 from files.constants import ALLOWED_FILES, FileStatus
 from files.tasks import process_file_embeddings
@@ -92,19 +94,24 @@ class FileUploadService:
         # Document files go through PROCESSING status and background job
         file_status = FileStatus.FAILED if not is_valid else (FileStatus.PROCESSED if is_media else FileStatus.PROCESSING)
 
-        file_data = {
-            'file': uploaded_file,
-            'name': file_name,
-            'file_type': uploaded_file.content_type,
-            'size': uploaded_file.size,
-            'user': user,
-            'status': file_status,
-            'vector_db_source': user.vector_db if not is_media else None,  # No vector DB for media files
-            'is_media': is_media,
-            'media_type': media_type
-        }
+        # Get storage backend based on user preference
+        storage_backend = getattr(user, 'storage_backend', StorageBackendChoice.LOCAL)
 
-        file_instance = File.active_objects.create(**file_data)
+        # Create File instance (without saving file yet)
+        file_instance = File(
+            name=file_name,
+            file_type=uploaded_file.content_type,
+            size=uploaded_file.size,
+            user=user,
+            status=file_status,
+            vector_db_source=user.vector_db if not is_media else None,  # No vector DB for media files
+            is_media=is_media,
+            media_type=media_type,
+            storage_backend=storage_backend,
+        )
+
+        file_instance.file.save(file_name, uploaded_file, save=False)
+        file_instance.save()
 
         if tag_ids:
             tags = Tag.objects.filter(id__in=tag_ids)
@@ -254,6 +261,10 @@ class FileUploadService:
             # Detect media type
             is_media, media_type = FileUploadService.detect_media_type(mime_type)
 
+            storage_backend = StorageBackendChoice.LOCAL
+            if user:
+                storage_backend = getattr(user, 'storage_backend', StorageBackendChoice.LOCAL)
+
             # Create File object
             file_obj = File(
                 user=user,  # Can be None for public bots
@@ -264,6 +275,7 @@ class FileUploadService:
                 is_media=is_media,
                 media_type=media_type or 'image',
                 is_generated=False,  # User-uploaded, not AI-generated
+                storage_backend=storage_backend,
             )
 
             # Save the image file

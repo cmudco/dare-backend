@@ -78,3 +78,10 @@ MCP_USE_DOCKER = os.getenv("MCP_USE_DOCKER", "False") == "True"
 USE_POSTGRES = os.getenv("USE_POSTGRES", "False").lower() in ("true", "1", "yes")
 # Internal API key for inter-service communication (SB backend -> DARE backend)
 DARE_INTERNAL_KEY = os.getenv("DARE_INTERNAL_KEY", "local-dev-internal-key")
+
+
+# SyftBox Configuration
+SYFTBOX_ENABLED = os.getenv("SYFTBOX_ENABLED", "False") == "True"
+SYFTBOX_DATASITES_ROOT = os.getenv("SYFTBOX_DATASITES_ROOT", None)
+SYFTBOX_APP_NAME = os.getenv("SYFTBOX_APP_NAME", "dare")
+SYFTBOX_BASE_URL = os.getenv("SYFTBOX_BASE_URL", "https://syftbox.net")

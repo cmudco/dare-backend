@@ -1,7 +1,10 @@
 """
 Utility functions for platform detection and authentication.
 """
+import time
 from urllib.parse import urlparse
+
+import jwt
 from config.env import (
     DARE_FRONTEND_URL,
     SOCRATIC_BOTS_FRONTEND_URL,
@@ -155,3 +158,22 @@ def get_platform_frontend_url(platform):
         return SOCRATIC_BOTS_FRONTEND_URL
 
     return None
+
+
+def syftbox_jwt_expired(access_token: str, leeway_seconds: int = 60) -> bool:
+    """
+    Return True if a SyftBox JWT access token is missing ``exp`` or is past expiry
+    (with optional leeway), without verifying the signature.
+    """
+    try:
+        payload = jwt.decode(
+            access_token,
+            algorithms=["RS256", "HS256", "ES256"],
+            options={"verify_signature": False},
+        )
+    except jwt.exceptions.InvalidTokenError:
+        return False
+    exp = payload.get("exp")
+    if exp is None:
+        return False
+    return time.time() >= (float(exp) - leeway_seconds)

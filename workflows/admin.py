@@ -1,9 +1,12 @@
 from django.contrib import admin
+from django.utils.html import format_html
 from .models import (
     Workflow,
     # Graph-driven models
     WorkflowNode, WorkflowEdge,
-    StepNodeData, StartNodeData, ChatOutputNodeData
+    StepNodeData, StartNodeData, ChatOutputNodeData,
+    # Execution models
+    BatchRun, WorkflowRun, WorkflowRunStep,
 )
 
 class WorkflowNodeInline(admin.TabularInline):
@@ -41,7 +44,7 @@ class WorkflowEdgeAdmin(admin.ModelAdmin):
 
 @admin.register(StepNodeData)
 class StepNodeDataAdmin(admin.ModelAdmin):
-    list_display = ('step_number', 'prompt', 'llm', 'temperature')
+    list_display = ('id', 'prompt', 'llm', 'temperature')
     list_filter = ('llm', 'created_at')
     search_fields = ('prompt__title',)
 
@@ -53,5 +56,61 @@ class StartNodeDataAdmin(admin.ModelAdmin):
 
 @admin.register(ChatOutputNodeData)
 class ChatOutputNodeDataAdmin(admin.ModelAdmin):
-    list_display = ('step_number', 'status', 'created_at')
+    list_display = ('id', 'status', 'created_at')
     list_filter = ('status', 'created_at')
+
+
+# ==================== Execution Models ====================
+
+class WorkflowRunStepInline(admin.TabularInline):
+    model = WorkflowRunStep
+    extra = 0
+    fields = ('order', 'step_node', 'status', 'error', 'started_at', 'created_at')
+    readonly_fields = ('order', 'step_node', 'status', 'error', 'started_at', 'created_at')
+    ordering = ('order',)
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+
+class WorkflowRunInline(admin.TabularInline):
+    model = WorkflowRun
+    extra = 0
+    fields = ('id', 'status', 'batch_file', 'created_at', 'ended_at')
+    readonly_fields = ('id', 'status', 'batch_file', 'created_at', 'ended_at')
+
+    def has_add_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(BatchRun)
+class BatchRunAdmin(admin.ModelAdmin):
+    list_display = ('id', 'workflow', 'user', 'status', 'total_files', 'completed_count', 'failed_count', 'created_at', 'ended_at')
+    list_filter = ('status', 'created_at')
+    search_fields = ('user__email', 'workflow__title')
+    ordering = ('-created_at',)
+    readonly_fields = ('workflow', 'user', 'status', 'total_files', 'completed_count', 'failed_count', 'created_at', 'ended_at')
+    inlines = [WorkflowRunInline]
+
+
+@admin.register(WorkflowRun)
+class WorkflowRunAdmin(admin.ModelAdmin):
+    list_display = ('id', 'workflow', 'user', 'status', 'batch_run', 'batch_file', 'created_at', 'ended_at')
+    list_filter = ('status', 'created_at')
+    search_fields = ('user__email', 'workflow__title')
+    ordering = ('-created_at',)
+    readonly_fields = ('workflow', 'user', 'status', 'batch_run', 'batch_file', 'is_partial', 'created_at', 'ended_at')
+    inlines = [WorkflowRunStepInline]
+
+
+@admin.register(WorkflowRunStep)
+class WorkflowRunStepAdmin(admin.ModelAdmin):
+    list_display = ('id', 'workflow_run', 'order', 'step_node', 'status', 'has_error', 'started_at', 'created_at')
+    list_filter = ('status', 'created_at')
+    search_fields = ('workflow_run__workflow__title', 'workflow_run__user__email', 'error')
+    ordering = ('-created_at', 'order')
+    readonly_fields = ('workflow_run', 'step_node', 'order', 'status', 'response', 'error', 'metadata', 'started_at', 'created_at')
+
+    @admin.display(boolean=True, description='Error?')
+    def has_error(self, obj):
+        return bool(obj.error)

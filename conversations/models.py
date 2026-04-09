@@ -10,7 +10,7 @@ from django.utils import timezone
 from common.managers import ActiveObjectsManager
 from common.models import BaseModel, TimeStampMixin
 from core.fields import EncryptedCharField
-from .constants import Provider, SenderType, FeedbackType, ConversationSource, ArtifactType, ArtifactStatus
+from .constants import Provider, SenderType, FeedbackType, ConversationSource, ArtifactType, ArtifactStatus, ModelTier
 
 
 class LLM(models.Model):
@@ -41,6 +41,17 @@ class LLM(models.Model):
     is_audio_transcriber = models.BooleanField(
         default=False,
         help_text="Whether the model supports audio transcription (e.g., Whisper, Gemini)."
+    )
+    tier = models.CharField(
+        max_length=20,
+        choices=ModelTier.choices,
+        default=ModelTier.ADVANCED,
+        help_text=(
+            "Cost/capability tier for grouping models in the UI. "
+            "Premium: Flagship models (e.g., Claude Opus, GPT-4.5). "
+            "Advanced: Mid-range models (e.g., Claude Sonnet, GPT-4o, Gemini Pro). "
+            "Flash: Fast, cost-optimized models (e.g., Claude Haiku, GPT-4o-mini, Gemini Flash)."
+        ),
     )
 
     input_token_rate_per_million = models.DecimalField(
@@ -467,6 +478,11 @@ class Conversation(BaseModel):
         help_text="Selected agent template for this conversation."
     )
 
+    is_favorite = models.BooleanField(
+        default=False,
+        help_text="Whether this conversation is marked as a favorite by its owner."
+    )
+
     # Sharing / publishing
     is_published = models.BooleanField(
         default=False,
@@ -681,6 +697,29 @@ class Message(BaseModel):
         default=Decimal('0.000000'),
         validators=[MinValueValidator(0)],
         help_text="Cost of this message in USD based on token usage and LLM pricing."
+    )
+
+    # Energy/environmental impact tracking
+    energy_wh = models.DecimalField(
+        max_digits=10,
+        decimal_places=6,
+        null=True,
+        blank=True,
+        help_text="Estimated energy consumption in Watt-hours."
+    )
+    carbon_g = models.DecimalField(
+        max_digits=10,
+        decimal_places=6,
+        null=True,
+        blank=True,
+        help_text="Estimated carbon emissions in grams CO2 equivalent."
+    )
+    water_ml = models.DecimalField(
+        max_digits=10,
+        decimal_places=6,
+        null=True,
+        blank=True,
+        help_text="Estimated water usage in milliliters."
     )
 
     # Unified feedback system
@@ -1294,3 +1333,39 @@ class Feedback(BaseModel):
 
     def __str__(self):
         return f"Feedback from {self.user.email}: {self.emotion} - {self.category or 'No category'}"
+
+
+class ConversationSummary(BaseModel):
+    """Stores a rolling summary for a single conversation."""
+
+    conversation = models.OneToOneField(
+        Conversation,
+        on_delete=models.CASCADE,
+        related_name="conversation_summary",
+    )
+    summary = models.TextField(
+        help_text="LLM-generated summary for the conversation."
+    )
+    llm = models.ForeignKey(
+        "LLM",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+    )
+    input_tokens = models.IntegerField(default=0)
+    output_tokens = models.IntegerField(default=0)
+    summarized_message_count = models.PositiveIntegerField(
+        default=0,
+        help_text="Number of completed AI assistant messages covered by this summary.",
+    )
+
+    active_objects = ActiveObjectsManager()
+
+    class Meta:
+        ordering = ["-updated_at"]
+        verbose_name = "Conversation Summary"
+        verbose_name_plural = "Conversation Summaries"
+
+    def __str__(self):
+        return f"Summary for {self.conversation.conversation_id}"

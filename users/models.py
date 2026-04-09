@@ -6,10 +6,14 @@ from django.utils.translation import gettext_lazy as _
 from common.managers import ActiveObjectsManager
 from common.models import IsDeletedMixin, TimeStampMixin
 from core.config.processing import CHUNK_SIZE, OVERLAP_SIZE
+from core.fields import EncryptedCharField
+from syftbox.mixins import SyftBoxTokenMixin
+from core.storage.constants import StorageBackendChoice
 from users.managers import UserManager
 from users.constants import VectorDBChoice, AuthSourceChoice, RoleChoice
 from prompts.models import Prompt
 from api_keys.constants import BillingModeChoice
+
 
 class AccessCodeGroup(TimeStampMixin):
     """
@@ -127,7 +131,7 @@ class AccessCodeGroup(TimeStampMixin):
         """Reactivate all users associated with this access code group"""
         return self.users.update(is_active=True)
 
-class User(AbstractUser, IsDeletedMixin):
+class User(SyftBoxTokenMixin, AbstractUser, IsDeletedMixin):
     username = None
     email = models.EmailField(_("email"), unique=True, blank=False, null=False)
     REQUIRED_FIELDS = []
@@ -147,6 +151,12 @@ class User(AbstractUser, IsDeletedMixin):
         default=VectorDBChoice.WEAVIATE,
         verbose_name=_("Vector Database"),
         help_text=_("Vector database to use for this user's data")
+    )
+    storage_backend = models.IntegerField(
+        choices=StorageBackendChoice.choices,
+        default=StorageBackendChoice.LOCAL,
+        verbose_name=_("Storage Backend"),
+        help_text=_("Preferred storage backend for new file uploads")
     )
     default_prompt = models.ForeignKey(
         Prompt,
@@ -215,6 +225,18 @@ class User(AbstractUser, IsDeletedMixin):
         default=False,
         verbose_name=_("SocraticBots Access"),
         help_text=_("Whether this user can access SocraticBots platform")
+    )
+    syftbox_access_token = EncryptedCharField(
+        blank=True,
+        null=True,
+        verbose_name=_("Syftbox Access Token"),
+        help_text=_("Latest Syftbox OAuth access token for this user")
+    )
+    syftbox_refresh_token = EncryptedCharField(
+        blank=True,
+        null=True,
+        verbose_name=_("Syftbox Refresh Token"),
+        help_text=_("Latest Syftbox OAuth refresh token for this user")
     )
 
     # Platform role - determines user's permissions across DARE and SocraticBots

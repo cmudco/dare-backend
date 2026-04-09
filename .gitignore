@@ -39,6 +39,9 @@ static/
 # VSCode
 .vscode/
 
+# Pycharm
+.idea/
+
 # Cursor
 .cursor/
 

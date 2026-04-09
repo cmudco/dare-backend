@@ -13,14 +13,15 @@ from workflows.models import (
     Workflow, WorkflowRun, WorkflowRunStep,
     # Graph-driven models
     StepNodeData, StartNodeData, ChatOutputNodeData, StructuredOutputNodeData,
-    NotesNodeData, FileNodeData, WorkflowNode, WorkflowEdge
+    NotesNodeData, FileNodeData, WorkflowNode, WorkflowEdge,
+    PrefetchedNodeFileRelations, build_prefetched_node_file_relations,
 )
 from workflows.services import NodeExecutionStateBuilder
 from workflows.services.citation_serialization import (
     WorkflowStepSnippetSerializer,
     WorkflowStepWebSearchSourceSerializer,
 )
-from workflows.utils import convert_keys_to_snake_case
+from djangorestframework_camel_case.util import underscoreize
 
 
 logger = logging.getLogger(__name__)
@@ -47,6 +48,7 @@ class WorkflowSerializer(serializers.ModelSerializer):
     latest_run = serializers.SerializerMethodField()
     owner_username = serializers.SerializerMethodField()
     is_forked = serializers.SerializerMethodField()
+    can_share = serializers.SerializerMethodField()
 
     # Dynamic properties from StartNodeData
     title = serializers.ReadOnlyField()
@@ -60,14 +62,14 @@ class WorkflowSerializer(serializers.ModelSerializer):
             'id', 'user', 'version', 'parent', 'created_at',
             'viewport_x', 'viewport_y', 'viewport_zoom',
             'manual_mode_enabled', 'output_display_mode', 'display_order',
-            'is_published', 'published_at', 'is_forked', 'owner_username',
+            'is_published', 'published_at', 'is_forked', 'can_share', 'owner_username',
             'nodes', 'edges', 'latest_run',
             'title', 'description', 'mode', 'viewport'
         ]
         read_only_fields = [
             'id', 'created_at', 'user', 'nodes', 'edges',
             'title', 'description', 'mode', 'viewport',
-            'published_at', 'is_forked', 'owner_username',
+            'published_at', 'is_forked', 'can_share', 'owner_username',
         ]
 
     def get_owner_username(self, obj: Workflow) -> str:
@@ -79,6 +81,13 @@ class WorkflowSerializer(serializers.ModelSerializer):
     def get_is_forked(self, obj: Workflow) -> bool:
         """Return True if this workflow was forked from another workflow."""
         return obj.parent is not None
+
+    def get_can_share(self, obj: Workflow) -> bool:
+        """Return True when the workflow is not a cross-user fork."""
+        return not (
+            obj.parent is not None
+            and obj.parent.user_id != obj.user_id
+        )
 
     def get_latest_run(self, obj):
         """Get the latest workflow run with nodeStates for O(1) node access.
@@ -98,7 +107,16 @@ class WorkflowSerializer(serializers.ModelSerializer):
 
     def get_nodes(self, obj):
         """Serialize workflow nodes to React Flow format."""
-        return WorkflowNodeSerializer(obj.nodes.all(), many=True).data
+        nodes = list(obj.nodes.all())
+        node_file_relations = build_prefetched_node_file_relations(nodes)
+        return WorkflowNodeSerializer(
+            nodes,
+            many=True,
+            context={
+                **self.context,
+                'node_file_relations': node_file_relations,
+            },
+        ).data
 
     def get_edges(self, obj):
         """Serialize workflow edges to React Flow format."""
@@ -136,7 +154,7 @@ class StepNodeDataSerializer(serializers.ModelSerializer):
     class Meta:
         model = StepNodeData
         fields = [
-            'agent', 'prompt', 'content_files', 'embedding_files', 'llm', 'step_number',
+            'label', 'agent', 'prompt', 'content_files', 'embedding_files', 'tags', 'llm',
             'max_tokens', 'temperature', 'max_context_snippets',
             'document_similarity_threshold', 'use_previous_step_files',
             'use_previous_step_embeddings', 'text_input',
@@ -153,7 +171,7 @@ class StartNodeDataSerializer(serializers.ModelSerializer):
 class ChatOutputNodeDataSerializer(serializers.ModelSerializer):
     class Meta:
         model = ChatOutputNodeData
-        fields = ['step_number', 'status', 'response', 'error']
+        fields = ['label', 'status', 'response', 'error']
 
 
 
@@ -173,7 +191,7 @@ class StructuredOutputNodeDataSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = StructuredOutputNodeData
-        fields = ['prompt', 'llm', 'routes', 'require_human_validation', 'step_number', 'text_input']
+        fields = ['label', 'prompt', 'llm', 'routes', 'require_human_validation', 'text_input']
 
     def to_representation(self, instance):
         """Include computed routes via get_routes() method."""
@@ -197,8 +215,8 @@ class FileNodeDataSerializer(serializers.ModelSerializer):
     class Meta:
         model = FileNodeData
         fields = [
-            'files', 'retrieval_mode', 'similarity_threshold', 'max_results',
-            'query_source', 'text_input', 'include_metadata', 'step_number'
+            'label', 'files', 'retrieval_mode', 'similarity_threshold', 'max_results',
+            'query_source', 'text_input', 'include_metadata'
         ]
 
 
@@ -315,7 +333,7 @@ class WorkflowEdgeSerializer(serializers.ModelSerializer):
 
 
 class WorkflowNodeSerializer(serializers.ModelSerializer):
-    # Accept node data for creation; representation uses instance.data property
+    # Accept node data for creation; representation uses typed node serialization
     data = serializers.JSONField(write_only=True, required=False)
 
     class Meta:
@@ -360,15 +378,26 @@ class WorkflowNodeSerializer(serializers.ModelSerializer):
             if mapped.get(k, None) is None:
                 mapped[k] = ''
 
+        # Label lives inside data, not on WorkflowNode. If frontend sends it at the
+        # root level (backwards compat), move it into the data dict.
+        if 'label' in mapped:
+            data = mapped.get('data') or {}
+            data.setdefault('label', mapped.pop('label'))
+            mapped['data'] = data
+
         return super().to_internal_value(mapped)
 
     def to_representation(self, instance):
         """Convert to React Flow Node format."""
+        node_file_relations = self.context.get(
+            'node_file_relations',
+            PrefetchedNodeFileRelations(),
+        )
         return {
             'id': instance.node_id,
             'type': instance.node_type,
             'position': {'x': instance.position_x, 'y': instance.position_y},
-            'data': instance.data,  # Calls the @property method
+            'data': instance.serialize_data(node_file_relations),
             'selected': instance.selected,
             'dragging': instance.dragging,
             'draggable': instance.draggable,
@@ -406,7 +435,7 @@ class WorkflowNodeSerializer(serializers.ModelSerializer):
 
         if serializer_class:
             # Convert camelCase keys to snake_case (frontend sends camelCase)
-            snake_case_data = convert_keys_to_snake_case(data_dict or {})
+            snake_case_data = underscoreize(data_dict or {})
 
             # Filter incoming data to only allowed fields for the target serializer
             allowed_fields = set(getattr(serializer_class.Meta, 'fields', []))
@@ -440,7 +469,7 @@ class WorkflowNodeSerializer(serializers.ModelSerializer):
 
             if serializer_class:
                 # Convert camelCase keys to snake_case (frontend sends camelCase)
-                snake_case_data = convert_keys_to_snake_case(data_dict)
+                snake_case_data = underscoreize(data_dict)
 
                 # Filter incoming data to only allowed fields for the target serializer
                 allowed_fields = set(serializer_class().get_fields().keys())

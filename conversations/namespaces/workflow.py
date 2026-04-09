@@ -22,7 +22,7 @@ import socketio
 from conversations.socket_server import sio
 from conversations.namespaces.utils import detect_platform_from_socketio_environ
 from workflows.services.workflow_coordinator import WorkflowCoordinator
-from workflows.services.workflow_run_service import get_user
+from workflows.services.workflow_run_repository import WorkflowRunRepository
 
 
 logger = logging.getLogger(__name__)
@@ -95,7 +95,7 @@ class WorkflowNamespace(socketio.AsyncNamespace):
                 )
 
             # Fetch user from database
-            user = await get_user(user_id)
+            user = await WorkflowRunRepository.get_user(user_id)
             if not user:
                 raise socketio.exceptions.ConnectionRefusedError('User not found')
 
@@ -245,6 +245,36 @@ class WorkflowNamespace(socketio.AsyncNamespace):
 
         except Exception as e:
             logger.exception(f"Subscribe workflow error: {str(e)}")
+            return {'error': str(e)}
+
+    # ==================== Batch Events ====================
+
+    async def on_start_batch_execution(self, sid: str, data: dict) -> dict:
+        """
+        Start batch workflow execution for multiple files.
+
+        Args:
+            sid: Socket session ID
+            data: {'workflowId': int, 'fileIds': list[int]}
+
+        Returns:
+            {'success': True, 'batchId': int} or {'error': 'message'}
+        """
+        try:
+            session = self.sessions.get(sid)
+            if not session:
+                return {'error': 'Not authenticated'}
+
+            return await self.coordinator.start_batch_execution(
+                sid=sid,
+                user=session['user'],
+                session=session,
+                workflow_id=data.get('workflowId'),
+                file_ids=data.get('fileIds', [])
+            )
+
+        except Exception as e:
+            logger.exception(f"Start batch execution error: {str(e)}")
             return {'error': str(e)}
 
     # ==================== Execution Events ====================

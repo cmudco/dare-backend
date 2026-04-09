@@ -1,27 +1,35 @@
 import logging
-import markdown
 import os
 import tempfile
-import weasyprint
 from decimal import Decimal
 
+import markdown
+import weasyprint
+from django.conf import settings
 from django.db import transaction
+from django.db.models import Count
 from django.http import Http404, HttpResponse
+from django.shortcuts import get_object_or_404
 from django.template.loader import render_to_string
 from django.utils import timezone
-from rest_framework import viewsets, generics, status, mixins
+from rest_framework import generics, mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import NotFound
-from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from django.shortcuts import get_object_or_404
 
-from conversations.models import Message, Conversation, LLM, Snippet, Artifact, Feedback, ModelCardData
-from conversations.constants import ArtifactStatus, SharingErrorCode, SharingErrorMessage
-from conversations.services.sharing_service import ConversationSharingService, SharingValidationError
-from conversations.exceptions import SharingAPIException
 from conversations.api.mixins import ConversationSharingMixin
+from conversations.constants import ArtifactStatus, SharingErrorCode, SharingErrorMessage
+from conversations.exceptions import SharingAPIException
+from conversations.models import Artifact, Conversation, ConversationSummary, Feedback, LLM, Message, ModelCardData, Snippet
+from conversations.services.conversation_preference_service import (
+    ConversationPreferenceError,
+    ConversationPreferenceService,
+)
+from conversations.services.sharing_service import ConversationSharingService, SharingValidationError
+from conversations.services.socratic_dependency_service import SocraticDependencyService
+from sharing.services.sharing_service import SharingService
 from users.utils import detect_platform_from_request
 from .serializers import (
     MessageSerializer,
@@ -33,6 +41,7 @@ from .serializers import (
     FeedbackSerializer,
     ModelCardDataSerializer,
     ModelCardDataListSerializer,
+    ConversationSummarySerializer,
 )
 
 logger = logging.getLogger(__name__)
@@ -214,16 +223,22 @@ class ConversationViewSet(ConversationSharingMixin, viewsets.ModelViewSet):
         try:
             instance = self.get_object()
         except (Http404, NotFound):
-            # Fallback: check if it's a published conversation
+            # Fallback: allow published or directly shared conversations
             conversation_id = kwargs.get('conversation_id') or self.kwargs.get('conversation_id')
             instance = Conversation.active_objects.filter(
                 conversation_id=conversation_id,
-                is_published=True
             ).select_related('selected_model', 'prompt', 'user').first()
             if not instance:
                 raise NotFound("Conversation not found")
+            if not instance.is_published and not SharingService.can_access(
+                request.user,
+                "conversation",
+                conversation_id,
+            ):
+                raise NotFound("Conversation not found")
         serializer = self.get_serializer(instance)
         return Response(serializer.data)
+
 
     @action(detail=True, methods=['post'], url_path='publish')
     def publish_conversation(self, request, conversation_id=None):
@@ -248,6 +263,30 @@ class ConversationViewSet(ConversationSharingMixin, viewsets.ModelViewSet):
             lambda: ConversationSharingService.fork(conversation_id, request.user),
             success_status=status.HTTP_201_CREATED
         )
+
+    @action(
+        detail=True,
+        methods=['post'],
+        url_path='favorite',
+        permission_classes=[IsAuthenticated],
+    )
+    def toggle_favorite(self, request, conversation_id=None):
+        """Toggle the favorite flag for an owned conversation."""
+        conversation = self.get_object()
+
+        try:
+            updated_conversation = ConversationPreferenceService.toggle_favorite(
+                conversation,
+                request.user,
+            )
+        except ConversationPreferenceError as exc:
+            return Response(
+                {"error": str(exc)},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        serializer = self.get_serializer(updated_conversation)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=['get'], url_path='messages')
     def list_messages(self, request, conversation_id=None):
@@ -503,6 +542,18 @@ class ConversationViewSet(ConversationSharingMixin, viewsets.ModelViewSet):
             )
 
 
+class ConversationSummaryViewSet(viewsets.ReadOnlyModelViewSet):
+    """Read-only endpoint for the current user's per-conversation summaries."""
+
+    serializer_class = ConversationSummarySerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return ConversationSummary.active_objects.filter(
+            conversation__user=self.request.user
+        ).select_related('conversation', 'llm').order_by('-updated_at', '-created_at')
+
+
 class MessageViewSet(viewsets.ModelViewSet):
     """Endpoint for creating/retrieving messages within a conversation."""
     serializer_class = MessageSerializer
@@ -659,7 +710,7 @@ class LLMViewSet(viewsets.ModelViewSet):
     """Endpoint for listing available LLM models."""
     serializer_class = LLMSerializer
     permission_classes = [IsAuthenticated]
-    queryset = LLM.objects.all().order_by('name')
+    queryset = LLM.objects.all().order_by('tier', 'name')
 
     def get_queryset(self):
         """
@@ -673,17 +724,17 @@ class LLMViewSet(viewsets.ModelViewSet):
 
         # No access code group: all models
         if not getattr(user, 'access_code_group', None):
-            return LLM.objects.all().order_by('name')
+            return LLM.objects.all().order_by('tier', 'name')
 
         acg = user.access_code_group
         # ACG without model group or inactive group: all models
         if not getattr(acg, 'model_group', None):
-            return LLM.objects.all().order_by('name')
+            return LLM.objects.all().order_by('tier', 'name')
         if not acg.model_group.is_active:
-            return LLM.objects.all().order_by('name')
+            return LLM.objects.all().order_by('tier', 'name')
 
         # Restrict to allowed models from the access code group's model group
-        return acg.model_group.allowed_models.all().order_by('name')
+        return acg.model_group.allowed_models.all().order_by('tier', 'name')
 
     @action(detail=False, methods=['get'])
     def all_models(self, request):
@@ -691,9 +742,42 @@ class LLMViewSet(viewsets.ModelViewSet):
         Return all LLM models without filtering by user's groups.
         This is used for displaying model names in historical conversations.
         """
-        queryset = LLM.objects.all().order_by('name')
+        queryset = LLM.objects.all().order_by('tier', 'name')
         serializer = self.get_serializer(queryset, many=True)
         return Response(serializer.data)
+
+    def destroy(self, request, *args, **kwargs):
+        """
+        Override destroy to check for Socratic Books bot dependencies before deletion.
+
+        If dependent bots exist and ?confirm=true is not provided, returns a 409 Conflict
+        response with the list of dependent bots instead of deleting.
+
+        If ?confirm=true is provided, proceeds with deletion regardless of dependencies.
+        """
+        instance = self.get_object()
+        confirm = request.query_params.get('confirm', '').lower() == 'true'
+
+        if not confirm:
+            dependency_data = SocraticDependencyService.get_dependent_bots(instance.id)
+
+            if dependency_data and dependency_data.get('dependent_bots_count', 0) > 0:
+                return Response(
+                    {
+                        'warning': True,
+                        'message': (
+                            f"This model is used by {dependency_data['dependent_bots_count']} "
+                            f"Socratic Books bot(s). Deleting it will break these bots."
+                        ),
+                        'model_id': instance.id,
+                        'model_name': instance.name,
+                        'dependent_bots': dependency_data['dependent_bots'],
+                        'confirm_url': f'/api/conversations/llms/{instance.id}/?confirm=true',
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+
+        return super().destroy(request, *args, **kwargs)
 
 
 class FeedbackViewSet(mixins.CreateModelMixin, viewsets.GenericViewSet):
@@ -742,3 +826,63 @@ class ModelCardDataViewSet(viewsets.ReadOnlyModelViewSet):
                 return card
 
         raise NotFound("Model card not found")
+
+
+class AnonymousConversationsView(APIView):
+    """
+    Endpoint to fetch anonymous conversations for a public bot.
+
+    Used by SocraticBots backend to display anonymous public bot conversations.
+    Requires JWT authentication (professor's token).
+
+    Query params:
+        bot_id (required): Socratic Bot ID to filter by
+
+    Returns:
+        List of anonymous conversations with conversationId, createdAt, messageCount, sessionId
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        # Get required bot_id param
+        bot_id = request.query_params.get('bot_id')
+        if not bot_id:
+            return Response(
+                {'error': 'bot_id query parameter is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            bot_id = int(bot_id)
+        except ValueError:
+            return Response(
+                {'error': 'bot_id must be an integer'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Build queryset for anonymous SocraticBots conversations
+        queryset = Conversation.active_objects.filter(
+            bot_id=bot_id,
+            source='SocraticBots',
+            user__isnull=True,  # Only anonymous conversations
+            anonymous_session_id__isnull=False
+        ).annotate(
+            message_count=Count('messages')
+        ).order_by('-created_at')
+
+        # Build response data
+        conversations = []
+        for conv in queryset:
+            conversations.append({
+                'conversation_id': conv.conversation_id,
+                'title': conv.title or f'Anonymous Session {conv.anonymous_session_id[:8]}',
+                'created_at': conv.created_at.isoformat(),
+                'message_count': conv.message_count,
+                'session_id': conv.anonymous_session_id,
+                'bot_id': conv.bot_id,
+            })
+
+        return Response({
+            'conversations': conversations,
+            'total_count': len(conversations),
+        })

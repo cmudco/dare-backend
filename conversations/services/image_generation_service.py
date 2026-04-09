@@ -11,6 +11,7 @@ from datetime import datetime
 from django.core.files.base import ContentFile
 from files.models import File
 from files.constants import FileStatus
+from core.storage.constants import StorageBackendChoice
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,10 @@ class ImageGenerationService:
             prefix = "dalle_public" if is_public else "dalle_generated"
             filename = f"{prefix}_{timestamp}.png"
 
+            storage_backend = StorageBackendChoice.LOCAL
+            if user:
+                storage_backend = getattr(user, 'storage_backend', StorageBackendChoice.LOCAL)
+
             # Create File object
             file_obj = File(
                 user=user,  # Can be None for public bots
@@ -62,7 +67,8 @@ class ImageGenerationService:
                     'size': metadata.get('size', '1024x1024'),
                     'quality': metadata.get('quality', 'standard'),
                     'style': metadata.get('style', 'vivid'),
-                }
+                },
+                storage_backend=storage_backend,
             )
 
             # Save the image file
