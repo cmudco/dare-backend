@@ -4,7 +4,6 @@ Custom LLM service implementation for OpenAI-compatible endpoints.
 This service enables integration with custom LLM endpoints that follow the OpenAI API specification,
 including LiteLLM proxy servers and other OpenAI-compatible providers.
 """
-import httpx
 import logging
 from typing import AsyncGenerator, List, Dict, Tuple, Optional
 
@@ -48,8 +47,7 @@ class CustomLLMService:
         # Initialize OpenAI client with custom base URL
         self.client = AsyncOpenAI(
             api_key=api_key,
-            base_url=llm.base_url,
-            http_client=httpx.AsyncClient(verify=False),
+            base_url=llm.base_url
         )
         self.model = llm.identifier
         self.is_reasoning = llm.is_reasoning
