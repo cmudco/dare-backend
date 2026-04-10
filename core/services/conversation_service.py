@@ -65,6 +65,7 @@ class ConversationService:
                 "waterMl": msg.get("water_ml", None),
                 "energyStats": msg.get("energy_stats", None),
                 "artifactId": msg.get("artifactId", None),
+                "memoryContextData": msg.get("memory_context_data") or [],
                 "toolCalls": [
                     self._build_tool_call_payload(tc)
                     for tc in msg.get("mcp_tool_calls", [])

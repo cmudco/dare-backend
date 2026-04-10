@@ -136,7 +136,8 @@ class WebSocketResponseService:
             "energyStats": serialized_data.get("energy_stats"),
             "learningProgressData": learning_progress_data or {},
             "generatedImage": generated_image,
-            "generatedTranscription": generated_transcription
+            "generatedTranscription": generated_transcription,
+            "memoryContextData": serialized_data.get("memory_context_data") or [],
         }
 
         return cls._dict_to_camel_case(response)

@@ -67,22 +67,32 @@ class LLMService:
         """
         try:
             llm = await self._resolve_llm(request)
+            self._pending_memory_context = []
             messages = await self._build_messages_for_request(request, llm)
             all_images = await self._process_media_files(request)
 
             # Collect all tools (MCP + DARE + any passed externally) via ToolFetcher
             all_tools = await self.tool_fetcher.get_all_tools(request, llm, tools)
 
+            # Capture memory context to attach to final usage
+            memory_context = self._pending_memory_context
+
             if request.requires_audio_transcription():
                 async for chunk, usage in self._execute_audio_transcription(request, llm):
+                    if usage and memory_context:
+                        usage["memory_context"] = memory_context
                     yield chunk, usage
             elif request.requires_image_generation():
                 async for chunk, usage in self._execute_image_generation(request, llm):
+                    if usage and memory_context:
+                        usage["memory_context"] = memory_context
                     yield chunk, usage
             else:
                 async for chunk, usage in self._execute_llm_completion(
                     request, llm, messages, all_images, tools=all_tools if all_tools else None
                 ):
+                    if usage and memory_context:
+                        usage["memory_context"] = memory_context
                     yield chunk, usage
 
         except Exception as e:
@@ -153,7 +163,10 @@ class LLMService:
 
     async def _build_standard_messages(self, request: LLMQueryRequest) -> List[Dict[str, str]]:
         """Build messages for standard (non-Socratic) mode."""
-        return await build_standard_messages(request, self.document_processor, self.file_processor)
+        result = await build_standard_messages(request, self.document_processor, self.file_processor)
+        # Store memory context for inclusion in final usage data
+        self._pending_memory_context = result.memory_context
+        return result.messages
 
     async def _process_media_files(self, request: LLMQueryRequest) -> List[Dict]:
         """Process and combine all media files (images and videos).
