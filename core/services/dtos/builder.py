@@ -66,6 +66,7 @@ class LLMQueryRequestBuilder:
             max_context_snippets=message_data.get("max_context_snippets", 4),
             document_similarity_threshold=message_data.get("document_similarity_threshold", 0.5),
             history_limit=message_data.get("history_limit", 20),
+            use_memory=bool(message_data.get("use_memory", False)),
         )
 
         # Detect Socratic bots platform BEFORE building generation config

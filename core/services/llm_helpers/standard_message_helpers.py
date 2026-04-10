@@ -5,7 +5,8 @@ Async functions for building standard (non-Socratic) LLM message arrays.
 """
 
 import logging
-from typing import List, Dict
+from dataclasses import dataclass, field
+from typing import List, Dict, Any
 
 from core.services.document_processor import DocumentProcessor
 from core.services.file_processor import FileProcessor
@@ -18,16 +19,24 @@ from .db_helpers import (
     get_referenced_summaries_context,
 )
 from .semantic_context_helpers import add_semantic_context_to_messages
+from .memory_context_helpers import add_memory_context_to_messages
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class MessageBuildResult:
+    """Result from building LLM messages, including any side-channel data."""
+    messages: List[Dict[str, str]] = field(default_factory=list)
+    memory_context: List[Dict[str, Any]] = field(default_factory=list)
 
 
 async def build_standard_messages(
     request: LLMQueryRequest,
     document_processor: DocumentProcessor,
     file_processor: FileProcessor,
-) -> List[Dict[str, str]]:
+) -> MessageBuildResult:
     """
     Build messages for standard (non-Socratic) mode.
 
@@ -36,6 +45,7 @@ async def build_standard_messages(
     - Referenced conversation context
     - File contents
     - Semantic document context (via vector search)
+    - Memory context (semantic search on user's memory store)
     - Conversation history
     - Current user message
 
@@ -45,12 +55,13 @@ async def build_standard_messages(
         file_processor: FileProcessor for reading file contents
 
     Returns:
-        List of message dictionaries for LLM
+        MessageBuildResult with messages and any memory context items used
     """
     # Extract commonly used values from request
     user_id = request.user.id if request.user else None
 
     messages = []
+    memory_context = []
 
     # Add prompt if provided
     prompt = await get_prompt(request.generation.prompt_id)
@@ -99,6 +110,14 @@ async def build_standard_messages(
         workflow_run_step_obj=request.workflow_run_step_obj,
     )
 
+    # Add memory context (semantic search against user's memory store)
+    if request.context.use_memory and user_id:
+        memory_context = await add_memory_context_to_messages(
+            messages=messages,
+            query=request.message,
+            user_id=user_id,
+        )
+
     # Add conversation history
     conversation_history = await get_conversation_history(
         request.conversation,
@@ -109,4 +128,4 @@ async def build_standard_messages(
     # Add current user message
     messages.append({"role": "user", "content": f"User's message: {request.message}"})
 
-    return messages
+    return MessageBuildResult(messages=messages, memory_context=memory_context)

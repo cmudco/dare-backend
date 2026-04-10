@@ -23,6 +23,7 @@ class ContextConfig:
         max_context_snippets: Maximum number of retrieved document snippets
         document_similarity_threshold: Minimum similarity score for retrieval
         history_limit: Number of conversation messages to include
+        use_memory: Whether to search user's memory store using the message
     """
     file_ids: List[str] = field(default_factory=list)
     embedding_ids: List[str] = field(default_factory=list)
@@ -36,6 +37,7 @@ class ContextConfig:
     max_context_snippets: int = 4
     document_similarity_threshold: float = 0.5
     history_limit: int = 20
+    use_memory: bool = False
 
     def has_any_context(self) -> bool:
         """Check if any context source is configured."""
@@ -46,4 +48,5 @@ class ContextConfig:
             or self.folder_ids
             or self.referenced_conversation_ids
             or self.referenced_summary_ids
+            or self.use_memory
         )
