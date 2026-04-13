@@ -79,6 +79,124 @@ def execute_create_chart(arguments: Dict[str, Any]) -> Dict[str, Any]:
         }
 
 
+def execute_create_docx(arguments: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Execute the create_docx tool.
+
+    Args:
+        arguments: Dict with title and blocks
+
+    Returns:
+        Dict with validated document configuration
+    """
+    try:
+        title = arguments.get("title", "").strip()
+        blocks = arguments.get("blocks", [])
+
+        if not title:
+            return {
+                "success": False,
+                "error": "Document title is required",
+            }
+
+        if not isinstance(blocks, list) or not blocks:
+            return {
+                "success": False,
+                "error": "At least one document block is required",
+            }
+
+        allowed_alignments = {"left", "center", "right"}
+        supported_types = {"heading", "paragraph", "list", "table", "blockquote"}
+
+        for index, block in enumerate(blocks):
+            if not isinstance(block, dict):
+                return {
+                    "success": False,
+                    "error": f"Block {index + 1} must be an object",
+                }
+
+            block_type = block.get("type")
+            if block_type not in supported_types:
+                return {
+                    "success": False,
+                    "error": f"Unsupported block type in block {index + 1}: {block_type}",
+                }
+
+            if block_type == "heading":
+                level = block.get("level")
+                text = block.get("text", "").strip()
+                if level not in [1, 2, 3, 4] or not text:
+                    return {
+                        "success": False,
+                        "error": f"Heading block {index + 1} requires level 1-4 and text",
+                    }
+
+            elif block_type == "paragraph":
+                text = block.get("text", "").strip()
+                alignment = block.get("alignment", "left")
+                if not text:
+                    return {
+                        "success": False,
+                        "error": f"Paragraph block {index + 1} requires text",
+                    }
+                if alignment not in allowed_alignments:
+                    return {
+                        "success": False,
+                        "error": f"Paragraph block {index + 1} has invalid alignment",
+                    }
+
+            elif block_type == "list":
+                items = block.get("items", [])
+                if not isinstance(items, list) or not items:
+                    return {
+                        "success": False,
+                        "error": f"List block {index + 1} requires items",
+                    }
+
+            elif block_type == "blockquote":
+                text = block.get("text", "").strip()
+                if not text:
+                    return {
+                        "success": False,
+                        "error": f"Blockquote block {index + 1} requires text",
+                    }
+
+            elif block_type == "table":
+                headers = block.get("headers", [])
+                rows = block.get("rows", [])
+                if not isinstance(headers, list) or not headers:
+                    return {
+                        "success": False,
+                        "error": f"Table block {index + 1} requires headers",
+                    }
+                if not isinstance(rows, list):
+                    return {
+                        "success": False,
+                        "error": f"Table block {index + 1} rows must be a list",
+                    }
+                header_count = len(headers)
+                for row_idx, row in enumerate(rows):
+                    if not isinstance(row, list) or len(row) != header_count:
+                        return {
+                            "success": False,
+                            "error": f"Table block {index + 1}, row {row_idx + 1} must have {header_count} cells",
+                        }
+
+        return {
+            "success": True,
+            "doc_config": {
+                "title": title,
+                "blocks": blocks,
+            },
+        }
+    except Exception as e:
+        logger.exception(f"Error executing create_docx: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+        }
+
+
 # ============ TOOL DEFINITIONS ============
 
 def get_chart_tool_openai() -> Dict:
@@ -150,6 +268,107 @@ def get_chart_tool_claude() -> Dict:
     }
 
 
+def get_create_docx_tool_openai() -> Dict:
+    """Get create_docx tool definition in OpenAI format."""
+    return {
+        "type": "function",
+        "function": {
+            "name": "create_docx",
+            "description": (
+                "Create a NEW structured Word document artifact. "
+                "Use this ONLY for creating brand new documents. "
+                "If the user wants to MODIFY, UPDATE, or CHANGE an existing document, "
+                "you MUST use the update_artifact tool instead with the existing artifact_id "
+                "and provide the complete updated JSON document spec as the content. "
+                "Use this when the user asks for a document, proposal, report, brief, "
+                "plan, summary, or other downloadable structured output. "
+                "Structure the document with heading blocks (level 1 for main sections, "
+                "level 2 for subsections), paragraphs for body text (2-4 sentences each), "
+                "lists for enumerations, tables for tabular data, and blockquotes for "
+                "callouts or important notes. Always start with a level 1 heading. "
+                "Use multiple blocks to create a well-structured, professional document. "
+                "Ensure each table row has the same number of cells as headers. "
+                "Do not answer with plain text when a structured document is requested."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {
+                        "type": "string",
+                        "description": "Document title displayed at the top of the document.",
+                    },
+                    "blocks": {
+                        "type": "array",
+                        "description": (
+                            "Ordered list of document blocks. Start with a level 1 heading, "
+                            "then use paragraphs, lists, tables, and blockquotes to build "
+                            "a complete, well-structured document."
+                        ),
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "type": {
+                                    "type": "string",
+                                    "enum": ["heading", "paragraph", "list", "table", "blockquote"],
+                                },
+                                "level": {
+                                    "type": "integer",
+                                    "enum": [1, 2, 3, 4],
+                                    "description": "Heading level (1=main section, 2=subsection, 3-4=sub-subsection). Only for heading blocks.",
+                                },
+                                "text": {
+                                    "type": "string",
+                                    "description": "Text content. Required for heading, paragraph, and blockquote blocks.",
+                                },
+                                "alignment": {
+                                    "type": "string",
+                                    "enum": ["left", "center", "right"],
+                                    "description": "Text alignment. Only for paragraph blocks. Defaults to left.",
+                                },
+                                "ordered": {
+                                    "type": "boolean",
+                                    "description": "Whether the list is numbered (true) or bulleted (false). Only for list blocks.",
+                                },
+                                "items": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "description": "List items. Only for list blocks.",
+                                },
+                                "headers": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "description": "Table column headers. Only for table blocks.",
+                                },
+                                "rows": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                    },
+                                    "description": "Table data rows. Each row must have the same number of cells as headers. Only for table blocks.",
+                                },
+                            },
+                            "required": ["type"],
+                        },
+                    },
+                },
+                "required": ["title", "blocks"],
+            },
+        },
+    }
+
+
+def get_create_docx_tool_claude() -> Dict:
+    """Get create_docx tool definition in Claude/Anthropic format."""
+    openai_spec = get_create_docx_tool_openai()
+    func = openai_spec["function"]
+    return {
+        "name": func["name"],
+        "description": func["description"],
+        "input_schema": func["parameters"],
+    }
+
+
 def get_update_artifact_tool_openai() -> Dict:
     """Get update_artifact tool definition in OpenAI format."""
     return {
@@ -165,8 +384,12 @@ def get_update_artifact_tool_openai() -> Dict:
                 "\n• Major rewrites (>30% of content)"
                 "\n\n"
                 "This is PREFERRED over multiple update_artifact_inline calls. "
-                "Always provide the COMPLETE new code - partial updates will break the artifact. "
-                "You MUST reference the artifact_id of the artifact to update."
+                "Always provide the COMPLETE new content - partial updates will break the artifact. "
+                "You MUST reference the artifact_id of the artifact to update. "
+                "For React components, provide the full code. "
+                "For diagrams, provide the complete Mermaid code. "
+                "For docx documents, provide the complete JSON document spec "
+                "with title and blocks array (same format as create_docx)."
             ),
             "parameters": {
                 "type": "object",
@@ -177,7 +400,7 @@ def get_update_artifact_tool_openai() -> Dict:
                     },
                     "content": {
                         "type": "string",
-                        "description": "The COMPLETE new content for the artifact. For React components, provide the full code. For diagrams, provide the complete Mermaid code."
+                        "description": "The COMPLETE new content for the artifact. For React components, provide the full code. For diagrams, provide the complete Mermaid code. For docx documents, provide the complete JSON string with {\"title\": \"...\", \"blocks\": [...]} structure."
                     },
                     "title": {
                         "type": "string",
@@ -449,6 +672,16 @@ class DareToolRegistry:
             "get_openai_schema": get_chart_tool_openai,
             "get_claude_schema": get_chart_tool_claude,
             "executor": execute_create_chart,
+        },
+        "create_docx": {
+            "name": "Create Docx",
+            "slug": "create_docx",
+            "description": "Create structured Word-style documents with headings, paragraphs, lists, and tables.",
+            "icon": "file-text",
+            "category": "visualization",
+            "get_openai_schema": get_create_docx_tool_openai,
+            "get_claude_schema": get_create_docx_tool_claude,
+            "executor": execute_create_docx,
         },
         "update_artifact": {
             "name": "Update Artifact",
