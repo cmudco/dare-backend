@@ -10,17 +10,19 @@ from asgiref.sync import sync_to_async
 
 from conversations.models import Artifact, Message, Conversation, ArtifactGroup
 from conversations.constants import ArtifactStatus, ArtifactType, ARTIFACT_CONTENT_TYPES
+from core.services.llm_utils.diagram_tool import json_to_mermaid
+from dare_tools.services.registry import execute_create_docx
 
 logger = logging.getLogger(__name__)
 
 
 class ArtifactToolExecutor:
     """
-    Handles: create_chart, create_diagram, create_react_component, update_artifact
+    Handles: create_chart, create_diagram, create_docx, create_react_component, update_artifact
     All tools create Artifact records and emit artifact_created/updated events.
     """
 
-    SUPPORTED_TOOLS = ['create_chart', 'create_diagram', 'update_artifact', 'update_artifact_inline', 'create_react_component']
+    SUPPORTED_TOOLS = ['create_chart', 'create_diagram', 'create_docx', 'update_artifact', 'update_artifact_inline', 'create_react_component']
     
     async def execute(
         self,
@@ -47,6 +49,8 @@ class ArtifactToolExecutor:
             return await self._execute_create_chart(arguments, message, conversation, send_callback)
         elif tool_name == 'create_diagram':
             return await self._execute_create_diagram(arguments, message, conversation, send_callback)
+        elif tool_name == 'create_docx':
+            return await self._execute_create_docx(arguments, message, conversation, send_callback)
         elif tool_name == 'create_react_component':
             return await self._execute_create_react_component(arguments, message, conversation, send_callback)
         elif tool_name == 'update_artifact':
@@ -141,8 +145,6 @@ class ArtifactToolExecutor:
 
         The nodes/edges are converted to mermaid syntax using json_to_mermaid().
         """
-        from core.services.llm_utils.diagram_tool import json_to_mermaid
-
         title = arguments.get('title', 'Diagram')
         diagram_type = arguments.get('diagram_type', 'flowchart')
 
@@ -183,6 +185,59 @@ class ArtifactToolExecutor:
             'message': f'Created diagram: {title}',
             'mermaid_code': mermaid_code,  # Include full code for LLM context
             'diagram_type': diagram_type,
+        }
+
+    async def _execute_create_docx(
+        self,
+        arguments: Dict[str, Any],
+        message: Message,
+        conversation: Conversation,
+        send_callback: Callable,
+    ) -> Dict[str, Any]:
+        """
+        create_docx → Artifact with content_type='application/vnd.dare.docx+json'
+
+        Expected arguments:
+            - title: Document title
+            - blocks: Ordered list of content blocks
+        """
+        validation_result = execute_create_docx(arguments)
+        if not validation_result.get('success'):
+            return validation_result
+
+        doc_config = validation_result.get('doc_config', {})
+        title = doc_config.get('title', 'Document')
+        blocks = doc_config.get('blocks', [])
+
+        safe_title = self._sanitize_filename(title)
+        filename = f"{safe_title}.docx"
+        content = json.dumps(doc_config, indent=2)
+
+        artifact = await self._create_artifact(
+            conversation=conversation,
+            message=message,
+            title=title,
+            content=content,
+            artifact_type=ArtifactType.DOCX,
+            filename=filename,
+            content_type=ARTIFACT_CONTENT_TYPES['docx'],
+            source_tool='create_docx',
+            metadata={'blockCount': len(blocks)},
+        )
+
+        await self._emit_artifact_created(
+            send_callback=send_callback,
+            artifact=artifact,
+            message=message,
+        )
+
+        logger.info(f"Created docx artifact {artifact.id}: {title}")
+
+        return {
+            'success': True,
+            'artifact_id': artifact.id,
+            'message': f'Created document: {title}',
+            'doc_config': doc_config,
         }
 
     async def _execute_create_react_component(
@@ -672,4 +727,3 @@ class ArtifactToolExecutor:
 
 # Global executor instance
 artifact_tool_executor = ArtifactToolExecutor()
-

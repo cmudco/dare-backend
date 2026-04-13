@@ -64,6 +64,7 @@ class ArtifactType(models.TextChoices):
     DIAGRAM = 'diagram', 'Diagram'
     CHART = 'chart', 'Chart'
     REACT = 'react', 'React Component'
+    DOCX = 'docx', 'Word Document'
 
 
 class ArtifactStatus(models.TextChoices):
@@ -213,6 +214,7 @@ class SharingErrorMessage:
 ARTIFACT_RENDERERS = {
     '.json': 'chart',      # application/vnd.dare.chart+json
     '.mmd': 'mermaid',     # text/mermaid
+    '.docx': 'docx',
     '.md': 'markdown',
     '.py': 'code',
     '.js': 'code',
@@ -227,8 +229,8 @@ ARTIFACT_RENDERERS = {
 ARTIFACT_CONTENT_TYPES = {
     'chart': 'application/vnd.dare.chart+json',
     'diagram': 'text/mermaid',
+    'docx': 'application/vnd.dare.docx+json',
     'document': 'text/markdown',
     'code': 'text/plain',
     'react': 'application/vnd.dare.react+jsx',
 }
-
