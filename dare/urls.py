@@ -3,6 +3,11 @@ from django.conf.urls.static import static
 from django.contrib import admin
 from django.urls import include, path
 from django.http import HttpResponse
+from drf_spectacular.views import (
+    SpectacularAPIView,
+    SpectacularRedocView,
+    SpectacularSwaggerView,
+)
 
 def empty_view(request):
     return HttpResponse('')
@@ -30,11 +35,17 @@ app_paths = [
     path("syftbox/", include("syftbox.urls", namespace="syftbox")),
 ]
 
+api_docs_paths = [
+    path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
+    path("api/docs/", SpectacularSwaggerView.as_view(url_name="schema"), name="swagger-ui"),
+    path("api/redoc/", SpectacularRedocView.as_view(url_name="schema"), name="redoc"),
+]
+
 other_paths = [
     path('password-reset/<str:uidb64>/<str:token>/', empty_view, name='password_reset_confirm'),
 ]
 
-urlpatterns = admin_paths + app_paths + other_paths
+urlpatterns = admin_paths + app_paths + api_docs_paths + other_paths
 
 # Use the settings object to get the MEDIA_ROOT and MEDIA_URL
 urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
