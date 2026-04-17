@@ -1,0 +1,61 @@
+site_name: DARE Backend Documentation
+site_description: Primary AI/auth/file backend for the DARE platform
+docs_dir: docs
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - toc.follow
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: red
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: red
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+nav:
+  - Home: index.md
+  - Getting Started: getting-started.md
+  - Architecture:
+    - System Overview: architecture/overview.md
+    - Socket.IO Events: architecture/socketio-events.md
+    - Data Flows: architecture/data-flows.md
+  - API Reference: api/dare-backend.md
+  - Development:
+    - Code Standards: code-standards.md
+    - Serialization Contract: serialization.md
+  - Deployment:
+    - Infrastructure: deployment/infrastructure.md
+    - Procedures: deployment/procedures.md
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.details
+  - admonition
+  - tables
+  - toc:
+      permalink: true
+
+plugins:
+  - search
