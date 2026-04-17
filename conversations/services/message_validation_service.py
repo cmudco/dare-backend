@@ -95,6 +95,9 @@ class MessageValidationService:
 
             # DARE tools for internal tool calls
             "dare_tool_slugs": cls._get_list(data, "dare_tool_slugs"),
+
+            # Whether to search user's memory store for context
+            "use_memory": bool(data.get("use_memory", False)),
         }
 
     @staticmethod

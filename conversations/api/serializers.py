@@ -296,8 +296,9 @@ class MessageSerializer(serializers.ModelSerializer):
             'mcp_tool_calls',
             'content_type',
             'content_metadata',
+            'memory_context_data',
         ]
-        read_only_fields = ['id', 'created_at', 'sender_name', 'files', 'tags', 'snippets', 'web_search_sources', 'input_tokens', 'output_tokens', 'cost', 'energy_wh', 'carbon_g', 'water_ml', 'energy_stats', 'artifactId', 'mcp_tool_calls', 'content_type', 'content_metadata']
+        read_only_fields = ['id', 'created_at', 'sender_name', 'files', 'tags', 'snippets', 'web_search_sources', 'input_tokens', 'output_tokens', 'cost', 'energy_wh', 'carbon_g', 'water_ml', 'energy_stats', 'artifactId', 'mcp_tool_calls', 'content_type', 'content_metadata', 'memory_context_data']
 
     def get_artifactId(self, obj):
         """Get the ID of the first active artifact linked to this message."""

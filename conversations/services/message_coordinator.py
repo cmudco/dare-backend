@@ -199,6 +199,24 @@ class MessageCoordinator:
             sources=token_usage["web_search_sources"],
         )
 
+    async def _save_memory_context(
+        self,
+        message_obj: 'Message',
+        token_usage: Optional[Dict],
+    ) -> None:
+        """
+        Save memory context items to the message if present in token usage.
+
+        Args:
+            message_obj: Message to save memory context on
+            token_usage: Usage dict possibly containing memory_context
+        """
+        if not token_usage or not token_usage.get("memory_context"):
+            return
+
+        message_obj.memory_context_data = token_usage["memory_context"]
+        await database_sync_to_async(message_obj.save)(update_fields=['memory_context_data'])
+
     async def _mark_as_regenerated(self, message: 'Message') -> None:
         """Mark a message as regenerated if applicable."""
         message.is_regenerated = True
@@ -564,6 +582,9 @@ class MessageCoordinator:
             if ai_response_accumulator.strip():
                 # Save web search sources if present (before finalization)
                 await self._save_web_search_sources(message_obj, token_usage, regenerate)
+
+                # Save memory context if present (before finalization)
+                await self._save_memory_context(message_obj, token_usage)
 
                 await self._finalize_message(
                     message_obj=message_obj,
