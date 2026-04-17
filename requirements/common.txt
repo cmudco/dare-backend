@@ -26,6 +26,7 @@ sentry-sdk~= 2.26.1
 
 # DRF
 djangorestframework-camel-case~=1.4.2
+drf-spectacular~=0.28.0
 djangorestframework_simplejwt~=5.5.0
 
 requests~=2.32.3
