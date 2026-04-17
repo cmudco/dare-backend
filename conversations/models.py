@@ -765,6 +765,11 @@ class Message(BaseModel):
         blank=True,
         help_text="Learning progress data associated with this message, such as assessment triggers and educational metadata."
     )
+    memory_context_data = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Memory items used as context for this message. List of {content, memory_type, categories}."
+    )
 
     # Content type for specialized rendering (diagrams, charts, etc.)
     content_type = models.CharField(
