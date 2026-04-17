@@ -39,12 +39,12 @@ class DareToolHandler:
     3. Persist execution records to database
     4. Make follow-up LLM calls with tool results
     
-    Visual tools (create_chart, create_diagram) are routed to ArtifactToolExecutor
+    Visual tools (create_chart, create_diagram, create_docx) are routed to ArtifactToolExecutor
     for unified artifact panel rendering.
     """
-    
+
     # Tools that create visual artifacts - routed to ArtifactToolExecutor
-    ARTIFACT_TOOLS = ['create_chart', 'create_diagram', 'update_artifact', 'update_artifact_inline', 'create_react_component']
+    ARTIFACT_TOOLS = ['create_chart', 'create_diagram', 'create_docx', 'update_artifact', 'update_artifact_inline', 'create_react_component']
     
     def __init__(self):
         # No LLMService here - it's passed via stream_tool_result_response
@@ -258,10 +258,23 @@ class DareToolHandler:
             return f"Error: {result.get('error', 'Unknown error')}"
 
         if tool_name == "create_diagram":
-            return f"Diagram created successfully. Mermaid code:\n```mermaid\n{result.get('mermaid_code', '')}\n```"
+            return (
+                f"Diagram created successfully. Artifact ID: {result.get('artifact_id')}. "
+                f"Mermaid code:\n```mermaid\n{result.get('mermaid_code', '')}\n```"
+            )
         elif tool_name == "create_chart":
             chart_config = result.get("chart_config", {})
-            return f"Chart created successfully. Type: {chart_config.get('type')}, Title: {chart_config.get('title')}"
+            return (
+                f"Chart created successfully. Artifact ID: {result.get('artifact_id')}. "
+                f"Type: {chart_config.get('type')}, Title: {chart_config.get('title')}"
+            )
+        elif tool_name == "create_docx":
+            doc_config = result.get("doc_config", {})
+            return (
+                f"Document created successfully. Artifact ID: {result.get('artifact_id')}. "
+                f"Title: {doc_config.get('title')}, "
+                f"Blocks: {len(doc_config.get('blocks', []))}"
+            )
         elif tool_name == "create_react_component":
             return f"React component created successfully. Artifact ID: {result.get('artifact_id')}, Title: {result.get('message', 'Component')}"
         elif tool_name == "update_artifact_inline":
