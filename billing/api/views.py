@@ -1,17 +1,52 @@
-from django.db.models import Sum, Count
+from django.core.exceptions import PermissionDenied, ValidationError
+from django.db.models import Count, Sum
 from django.utils import timezone
-from rest_framework import viewsets, status
+from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
-from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from common.permissions import IsOwner
-from billing.api.serializers import WalletSerializer, TransactionSerializer
-from billing.models import Transaction
+from rest_framework.response import Response
+
+from billing.api.serializers import (
+    AllocateSerializer,
+    EffectivePolicySerializer,
+    FundBudgetSerializer,
+    GroupWalletReadSerializer,
+    GroupWalletWriteSerializer,
+    MemberRowSerializer,
+    OwnedGroupSerializer,
+    SystemRefillPolicySerializer,
+    TransactionSerializer,
+    UpsertUserOverrideSerializer,
+    UserRefillOverrideSerializer,
+    WalletSerializer,
+)
 from billing.constants import TransactionTypeChoice
+from billing.group_wallet_service import (
+    AllocateToMemberRequest,
+    FundGroupBudgetRequest,
+    GroupWalletService,
+    UpdateGroupPolicyRequest,
+    UpsertUserOverrideRequest,
+)
+from billing.models import (
+    GroupWallet,
+    SystemRefillPolicy,
+    Transaction,
+    UserRefillOverride,
+)
+from billing.services import WalletService
 from common.pagination import CustomPageNumberPagination
+from common.permissions import IsSuperAdmin
 from conversations.models import Message
 from core.services.energy_service import compute_relatable_stats
+from users.models import User
 from users.utils import detect_platform_from_request
+
+
+def _validation_response(exc: ValidationError):
+    detail = getattr(exc, "message_dict", None) or {"detail": exc.messages}
+    return Response(detail, status=status.HTTP_400_BAD_REQUEST)
+
 
 class BillingViewSet(viewsets.ViewSet):
     """
@@ -29,6 +64,12 @@ class BillingViewSet(viewsets.ViewSet):
         serializer = WalletSerializer(wallet)
         return Response(serializer.data)
 
+    @action(detail=False, methods=['get'], url_path='effective-policy')
+    def effective_policy(self, request):
+        """Return the caller's resolved refill policy (amount + period + sources)."""
+        policy = WalletService.get_effective_refill_policy(request.user)
+        return Response(EffectivePolicySerializer(policy).data)
+
     @action(detail=False, methods=['get'])
     def transactions(self, request):
         """
@@ -36,10 +77,8 @@ class BillingViewSet(viewsets.ViewSet):
 
         Each platform (DARE or SocraticBots) only sees its own transactions.
         """
-        # Detect platform from request headers
         platform = detect_platform_from_request(request)
 
-        # Filter transactions by user AND platform
         queryset = Transaction.objects.filter(
             user=request.user,
             platform=platform
@@ -55,13 +94,6 @@ class BillingViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=['get'])
     def model_stats(self, request):
-        """
-        Get per-model token usage and cost statistics for the authenticated user
-        filtered by platform.
-
-        Each platform (DARE or SocraticBots) only sees its own statistics.
-        """
-        # Detect platform from request headers
         platform = detect_platform_from_request(request)
 
         per_model_stats = Transaction.objects.filter(
@@ -128,18 +160,9 @@ class BillingViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=['get'], url_path='energy-stats')
     def energy_stats(self, request):
-        """
-        Get aggregated energy/environmental impact stats for the authenticated user.
-
-        Query parameters:
-            period: "7d", "30d", "90d", "all" (default: "all")
-
-        Returns overall totals, relatable stats, and per-model breakdown.
-        """
         platform = detect_platform_from_request(request)
         period = request.query_params.get("period", "all")
 
-        # Base queryset: user's messages with energy data via conversation source
         base_qs = Message.active_objects.filter(
             conversation__user=request.user,
             conversation__source=platform,
@@ -147,7 +170,6 @@ class BillingViewSet(viewsets.ViewSet):
             energy_wh__gt=0,
         )
 
-        # Apply date filter
         if period != "all":
             days_map = {"7d": 7, "30d": 30, "90d": 90}
             days = days_map.get(period, 0)
@@ -155,7 +177,6 @@ class BillingViewSet(viewsets.ViewSet):
                 cutoff = timezone.now() - timezone.timedelta(days=days)
                 base_qs = base_qs.filter(created_at__gte=cutoff)
 
-        # Overall aggregates
         totals = base_qs.aggregate(
             total_energy_wh=Sum("energy_wh"),
             total_carbon_g=Sum("carbon_g"),
@@ -168,10 +189,8 @@ class BillingViewSet(viewsets.ViewSet):
         total_water = float(totals["total_water_ml"] or 0)
         message_count = totals["message_count"] or 0
 
-        # Relatable stats from total energy
         relatable = compute_relatable_stats(total_energy)
 
-        # Per-model breakdown
         per_model = (
             base_qs
             .values("llm__id", "llm__name", "llm__identifier", "llm__provider")
@@ -220,12 +239,6 @@ class BillingViewSet(viewsets.ViewSet):
 
     @action(detail=True, methods=['get'], url_path='transactions/(?P<transaction_id>[^/.]+)')
     def transaction_detail(self, request, pk=None, transaction_id=None):
-        """
-        Retrieve a specific transaction filtered by platform.
-
-        Users can only view transactions from their current platform.
-        """
-        # Detect platform from request headers
         platform = detect_platform_from_request(request)
 
         try:
@@ -242,17 +255,233 @@ class BillingViewSet(viewsets.ViewSet):
                 status=status.HTTP_404_NOT_FOUND
             )
 
+    @action(
+        detail=False,
+        methods=['put', 'delete'],
+        permission_classes=[IsAuthenticated, IsSuperAdmin],
+        url_path=r'users/(?P<user_id>[^/.]+)/refill-override',
+    )
+    def admin_user_refill_override(self, request, user_id=None):
+        """
+        Admin endpoint to upsert or clear a per-user refill override.
+        Scope: platform-wide (any user, any group).
+        """
+        try:
+            target = User.objects.get(pk=user_id)
+        except User.DoesNotExist:
+            return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if request.method.lower() == 'delete':
+            UserRefillOverride.objects.filter(user=target).delete()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+
+        serializer = UpsertUserOverrideSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        try:
+            override = GroupWalletService.upsert_user_override(UpsertUserOverrideRequest(
+                owner_or_admin=request.user,
+                target_user_id=target.id,
+                refill_amount=data.get('refill_amount'),
+                refill_period_days=data.get('refill_period_days'),
+                reason=data.get('reason', ''),
+                clear_amount=data.get('clear_amount', False),
+                clear_period=data.get('clear_period', False),
+            ))
+        except ValidationError as exc:
+            return _validation_response(exc)
+        if override is None:
+            return Response(None)
+        return Response(UserRefillOverrideSerializer(override).data)
+
     def paginate_queryset(self, queryset):
-        """
-        Return a paginated queryset.
-        """
         if not hasattr(self, 'paginator'):
             self.paginator = self.pagination_class()
         return self.paginator.paginate_queryset(queryset, self.request, view=self)
 
     def get_paginated_response(self, data):
-        """
-        Return a paginated response.
-        """
         assert hasattr(self, 'paginator')
         return self.paginator.get_paginated_response(data)
+
+
+class SystemRefillPolicyViewSet(viewsets.ViewSet):
+    """Singleton endpoints for reading/updating the platform refill default. Admin-only."""
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
+
+    def list(self, request):
+        policy = SystemRefillPolicy.load()
+        return Response(SystemRefillPolicySerializer(policy).data)
+
+    def partial_update(self, request, pk=None):
+        policy = SystemRefillPolicy.load()
+        serializer = SystemRefillPolicySerializer(policy, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+
+class GroupWalletViewSet(viewsets.GenericViewSet, mixins.UpdateModelMixin):
+    """
+    Owner-scoped endpoints for managing a group's wallet policy and allocations.
+    Admins can also operate on any group via the admin-only actions (fund).
+    """
+    permission_classes = [IsAuthenticated]
+    serializer_class = GroupWalletReadSerializer
+
+    def get_queryset(self):
+        user = self.request.user
+        qs = GroupWallet.objects.select_related("group", "group__group_owner")
+        if GroupWalletService.is_admin(user):
+            return qs
+        return qs.filter(group__group_owner=user, group__is_active=True)
+
+    # --- Owner-facing reads ------------------------------------------------
+
+    @action(detail=False, methods=['get'], url_path='owned')
+    def owned(self, request):
+        groups = GroupWalletService.list_owned_groups(request.user)
+        serializer = OwnedGroupSerializer(groups, many=True)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['get'], url_path='members')
+    def members(self, request, pk=None):
+        group_wallet = self.get_object()
+        users = group_wallet.group.users.all().select_related("wallet", "refill_override")
+        serializer = MemberRowSerializer(users, many=True)
+        return Response(serializer.data)
+
+    # --- Owner-facing writes ----------------------------------------------
+
+    def partial_update(self, request, pk=None):
+        group_wallet = self.get_object()
+        serializer = GroupWalletWriteSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        try:
+            updated = GroupWalletService.update_group_policy(UpdateGroupPolicyRequest(
+                group_wallet_id=group_wallet.id,
+                owner=request.user,
+                refill_amount=data.get('refill_amount'),
+                refill_period_days=data.get('refill_period_days'),
+                is_active=data.get('is_active'),
+                clear_amount=data.get('clear_amount', False),
+                clear_period=data.get('clear_period', False),
+            ))
+        except PermissionDenied as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_403_FORBIDDEN)
+        except ValidationError as exc:
+            return _validation_response(exc)
+
+        return Response(GroupWalletReadSerializer(updated).data)
+
+    @action(detail=True, methods=['post'], url_path='allocate')
+    def allocate(self, request, pk=None):
+        group_wallet = self.get_object()
+        serializer = AllocateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        try:
+            _owner_row, member_row = GroupWalletService.allocate_to_member(AllocateToMemberRequest(
+                group_wallet_id=group_wallet.id,
+                owner=request.user,
+                recipient_user_id=data['recipient_user_id'],
+                amount=data['amount'],
+                note=data.get('note', ''),
+            ))
+        except PermissionDenied as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_403_FORBIDDEN)
+        except ValidationError as exc:
+            return _validation_response(exc)
+        except User.DoesNotExist:
+            return Response({"detail": "Recipient not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        group_wallet.refresh_from_db()
+        recipient = (
+            User.objects.select_related("wallet", "refill_override")
+            .get(pk=data['recipient_user_id'])
+        )
+        return Response({
+            "groupWallet": GroupWalletReadSerializer(group_wallet).data,
+            "transaction": TransactionSerializer(member_row).data,
+            "recipient": MemberRowSerializer(recipient).data,
+        })
+
+    @action(
+        detail=True,
+        methods=['post'],
+        url_path='fund',
+        permission_classes=[IsAuthenticated, IsSuperAdmin],
+    )
+    def fund(self, request, pk=None):
+        group_wallet = self.get_object()
+        serializer = FundBudgetSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        try:
+            updated = GroupWalletService.fund_group_budget(FundGroupBudgetRequest(
+                group_wallet_id=group_wallet.id,
+                actor=request.user,
+                amount=data['amount'],
+                note=data.get('note', ''),
+            ))
+        except PermissionDenied as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_403_FORBIDDEN)
+        except ValidationError as exc:
+            return _validation_response(exc)
+        return Response(GroupWalletReadSerializer(updated).data)
+
+    # --- Per-member override (owner or admin) ------------------------------
+
+    @action(
+        detail=True,
+        methods=['put', 'delete'],
+        url_path=r'members/(?P<user_id>[^/.]+)/override',
+    )
+    def member_override(self, request, pk=None, user_id=None):
+        group_wallet = self.get_object()
+        try:
+            target = User.objects.get(pk=user_id)
+        except User.DoesNotExist:
+            return Response({"detail": "Member not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if target.access_code_group_id != group_wallet.group_id:
+            return Response(
+                {"detail": "User is not a member of this group."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if request.method.lower() == 'delete':
+            try:
+                GroupWalletService.remove_user_override(request.user, target.id)
+            except PermissionDenied as exc:
+                return Response({"detail": str(exc)}, status=status.HTTP_403_FORBIDDEN)
+            return Response(status=status.HTTP_204_NO_CONTENT)
+
+        serializer = UpsertUserOverrideSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        try:
+            override = GroupWalletService.upsert_user_override(UpsertUserOverrideRequest(
+                owner_or_admin=request.user,
+                target_user_id=target.id,
+                refill_amount=data.get('refill_amount'),
+                refill_period_days=data.get('refill_period_days'),
+                reason=data.get('reason', ''),
+                clear_amount=data.get('clear_amount', False),
+                clear_period=data.get('clear_period', False),
+            ))
+        except PermissionDenied as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_403_FORBIDDEN)
+        except ValidationError as exc:
+            return _validation_response(exc)
+
+        target.refresh_from_db()
+        return Response({
+            "override": UserRefillOverrideSerializer(override).data if override else None,
+            "member": MemberRowSerializer(target).data,
+        })
