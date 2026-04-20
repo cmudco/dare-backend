@@ -7,6 +7,7 @@ from django.contrib.auth import get_user_model, authenticate
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
+from billing.constants import TransactionSourceChoice
 from billing.models import Wallet
 from billing.services import WalletService
 from prompts.api.serializers import PromptSerializer
@@ -255,7 +256,13 @@ class CustomRegisterSerializer(RegisterSerializer):
 
             # Credit exactly the intended amount (wallet starts at $0)
             if initial_amount > Decimal('0.00'):
-                WalletService.add_topup(user, amount=initial_amount, message=message)
+                WalletService.add_topup(
+                    user,
+                    amount=initial_amount,
+                    message=message,
+                    source=TransactionSourceChoice.REGISTRATION,
+                    related_group=code_group,
+                )
         except Exception:
             # Do not block registration if crediting fails
             logger.exception(f"Failed to apply initial wallet credit for user {user.id}")
