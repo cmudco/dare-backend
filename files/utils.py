@@ -5,7 +5,6 @@ from django.core.files.base import ContentFile
 from django.db import transaction
 from django.db.models import Q, QuerySet
 
-from core.storage.constants import StorageBackendChoice
 from files.models import File
 from users.models import User
 
@@ -41,8 +40,3 @@ def migrate_file_to_target_storage(file_instance: File, target_backend: int) -> 
         file_instance.file.save(filename, ContentFile(file_content), save=True)
 
     return filename
-
-
-def get_storage_backend_name(backend: int) -> str:
-    """Return a human-readable storage backend label."""
-    return "SyftBox" if backend == StorageBackendChoice.SYFTBOX else "Local"
