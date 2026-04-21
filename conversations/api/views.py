@@ -7,7 +7,7 @@ import markdown
 import weasyprint
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Count
+from django.db.models import Count, OuterRef, Subquery
 from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404
 from django.template.loader import render_to_string
@@ -53,6 +53,22 @@ class ConversationViewSet(ConversationSharingMixin, viewsets.ModelViewSet):
     permission_classes = [AllowAny]  # Allow both authenticated and anonymous access
     lookup_field = 'conversation_id'
 
+    @staticmethod
+    def _annotate_fallback_llm(queryset):
+        """Annotate `_fallback_llm_id` from the latest message's llm.
+
+        The conversation's own `selected_model` was historically not
+        updated when users sent messages, so older conversations read
+        back as null and the UI re-prompts for a model. Every Message
+        still records the llm it used, so we surface the most recent
+        non-null one as a per-row fallback the serializer can use.
+        """
+        latest_llm = Message.active_objects.filter(
+            conversation=OuterRef('pk'),
+            llm__isnull=False,
+        ).order_by('-created_at').values('llm_id')[:1]
+        return queryset.annotate(_fallback_llm_id=Subquery(latest_llm))
+
     def get_queryset(self):
         platform_source = detect_platform_from_request(self.request)
 
@@ -69,7 +85,9 @@ class ConversationViewSet(ConversationSharingMixin, viewsets.ModelViewSet):
                     is_published=True,
                     source=platform_source
                 )
-            return queryset.select_related('selected_model', 'prompt', 'user').order_by('-published_at')
+            return self._annotate_fallback_llm(
+                queryset.select_related('selected_model', 'prompt', 'user')
+            ).order_by('-published_at')
 
         anonymous_session_id = self.request.query_params.get('anonymous_session_id', None)
 
@@ -91,7 +109,9 @@ class ConversationViewSet(ConversationSharingMixin, viewsets.ModelViewSet):
         if bot_id is not None:
             queryset = queryset.filter(bot_id=bot_id)
 
-        return queryset.select_related('selected_model', 'prompt').order_by('sort_order', '-created_at')
+        return self._annotate_fallback_llm(
+            queryset.select_related('selected_model', 'prompt')
+        ).order_by('sort_order', '-created_at')
 
     def perform_create(self, serializer):
         platform_source = detect_platform_from_request(self.request)
@@ -225,9 +245,10 @@ class ConversationViewSet(ConversationSharingMixin, viewsets.ModelViewSet):
         except (Http404, NotFound):
             # Fallback: allow published or directly shared conversations
             conversation_id = kwargs.get('conversation_id') or self.kwargs.get('conversation_id')
-            instance = Conversation.active_objects.filter(
-                conversation_id=conversation_id,
-            ).select_related('selected_model', 'prompt', 'user').first()
+            instance = self._annotate_fallback_llm(
+                Conversation.active_objects.filter(conversation_id=conversation_id)
+                .select_related('selected_model', 'prompt', 'user')
+            ).first()
             if not instance:
                 raise NotFound("Conversation not found")
             if not instance.is_published and not SharingService.can_access(
@@ -236,8 +257,30 @@ class ConversationViewSet(ConversationSharingMixin, viewsets.ModelViewSet):
                 conversation_id,
             ):
                 raise NotFound("Conversation not found")
+        self._heal_selected_model_if_owner(instance, request.user)
         serializer = self.get_serializer(instance)
         return Response(serializer.data)
+
+    @staticmethod
+    def _heal_selected_model_if_owner(conversation: Conversation, user) -> None:
+        """Align `selected_model` with the latest message's llm for the owner.
+
+        Serialization already uses the annotated `_fallback_llm_id`, so the UI
+        works without this. But internal code paths (e.g.
+        `get_conversation_default_llm`) still read `selected_model` directly —
+        they'd pick `LLM.objects.first()` for null rows or the stale value
+        when the user switched models mid-conversation. One-time write per
+        conversation whose stored value drifted; non-owners never mutate the row.
+        """
+        fallback_llm_id = getattr(conversation, '_fallback_llm_id', None)
+        if not fallback_llm_id:
+            return
+        if conversation.selected_model_id == fallback_llm_id:
+            return
+        if not (user and user.is_authenticated and conversation.user_id == user.id):
+            return
+        conversation.selected_model_id = fallback_llm_id
+        conversation.save(update_fields=['selected_model'])
 
 
     @action(detail=True, methods=['post'], url_path='publish')

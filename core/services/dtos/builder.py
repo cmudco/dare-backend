@@ -13,6 +13,20 @@ from .socratic_dto import SocraticConfig
 # This is a hotfix - the proper solution is to make this configurable per bot
 SOCRATIC_MIN_MAX_TOKENS = 8000
 
+# Artifact-creating DARE tools require large output budgets because the entire
+# artifact payload (docx blocks, mermaid code, React component, etc.) is
+# serialized into the tool-call input. A 2048-token cap truncates the tool call
+# and silently drops the artifact.
+ARTIFACT_TOOL_SLUGS = frozenset({
+    'create_diagram',
+    'create_chart',
+    'create_docx',
+    'create_react_component',
+    'update_artifact',
+    'update_artifact_inline',
+})
+ARTIFACT_MIN_MAX_TOKENS = 8000
+
 
 class LLMQueryRequestBuilder:
     """Builder pattern for constructing LLMQueryRequest from dictionaries.
@@ -82,6 +96,16 @@ class LLMQueryRequestBuilder:
         # which is too low for detailed tutoring responses
         if is_socratic_bots and max_tokens < SOCRATIC_MIN_MAX_TOKENS:
             max_tokens = SOCRATIC_MIN_MAX_TOKENS
+
+        # Enforce minimum max_tokens when artifact-creating tools are loaded.
+        # The artifact payload travels as the tool-call input, so a low cap
+        # truncates the tool call mid-stream and the artifact is silently dropped.
+        requested_slugs = message_data.get("dare_tool_slugs") or []
+        if (
+            any(slug in ARTIFACT_TOOL_SLUGS for slug in requested_slugs)
+            and max_tokens < ARTIFACT_MIN_MAX_TOKENS
+        ):
+            max_tokens = ARTIFACT_MIN_MAX_TOKENS
 
         # Build generation config
         generation = GenerationConfig(
