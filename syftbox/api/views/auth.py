@@ -1,4 +1,6 @@
+from django.db import transaction
 from django.utils.translation import gettext_lazy as _
+from django_rq import enqueue
 from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
@@ -6,6 +8,7 @@ from rest_framework.response import Response
 from rest_framework.viewsets import ViewSet
 
 from core.storage.constants import StorageBackendChoice
+from files.tasks import migrate_user_files_to_syftbox
 from syftbox.api.serializers.auth import VerifyOtpSerializer
 from syftbox.errors import SyftBoxErrorCode, SyftBoxException
 from syftbox.services.syftbox_auth_service import SyftBoxAuthService
@@ -54,20 +57,23 @@ class SyftboxAuthView(ViewSet):
 
         try:
             tokens = auth_service.verify_otp(email=email, code=code)
-            request.user.syftbox_access_token = tokens.access_token
-            request.user.syftbox_refresh_token = tokens.refresh_token
-            request.user.storage_backend = StorageBackendChoice.SYFTBOX
-            request.user.save(
-                update_fields=[
-                    "syftbox_access_token",
-                    "syftbox_refresh_token",
-                    "storage_backend",
-                ]
-            )
+            with transaction.atomic():
+                request.user.syftbox_access_token = tokens.access_token
+                request.user.syftbox_refresh_token = tokens.refresh_token
+                request.user.storage_backend = StorageBackendChoice.SYFTBOX
+                request.user.save(
+                    update_fields=[
+                        "syftbox_access_token",
+                        "syftbox_refresh_token",
+                        "storage_backend",
+                    ]
+                )
+            migration_job = enqueue(migrate_user_files_to_syftbox, request.user.id)
             return Response(
                 {
                     "detail": _("OTP verified successfully"),
                     "storage_backend": request.user.storage_backend,
+                    "migration_job_id": getattr(migration_job, "id", None),
                 },
                 status=status.HTTP_200_OK,
             )
