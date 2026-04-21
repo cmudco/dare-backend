@@ -8,10 +8,10 @@ from django_rq import job
 from core.storage.constants import StorageBackendChoice
 from core.services.document_processor import DocumentProcessor
 from core.services.vector_service import get_vector_service
-from files.management.commands.migrate_storage import Command as StorageMigrationCommand
 from users.constants import VectorDBChoice
 from .constants import FileStatus
 from .models import File
+from .utils import migrate_file_to_target_storage
 
 logger = logging.getLogger(__name__)
 
@@ -183,12 +183,11 @@ def migrate_user_files_to_syftbox(user_id: int) -> dict:
     migrated = 0
     failed = 0
     failures: list[dict] = []
-    migration_command = StorageMigrationCommand()
 
     for file_instance in files_to_migrate.iterator():
         file_label = file_instance.name or file_instance.file.name
         try:
-            migration_command._migrate_file(
+            migrate_file_to_target_storage(
                 file_instance=file_instance,
                 target_backend=StorageBackendChoice.SYFTBOX,
             )
