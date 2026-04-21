@@ -21,7 +21,6 @@ from django.core.management.base import BaseCommand, CommandError
 from core.storage.constants import StorageBackendChoice
 from files.models import File
 from files.utils import (
-    get_storage_backend_name,
     get_users_from_identifiers,
     migrate_file_to_target_storage,
 )
@@ -180,7 +179,7 @@ class Command(BaseCommand):
 
         if total_files == 0:
             self.stdout.write(
-                self.style.SUCCESS(f'  No files to migrate (all already on {get_storage_backend_name(target_backend)})')
+                self.style.SUCCESS(f'  No files to migrate (all already on {self._get_backend_name(target_backend)})')
             )
             return 0, 0
 
@@ -196,7 +195,7 @@ class Command(BaseCommand):
                         file_instance, target_backend
                     )
                     logger.info(
-                        f'Migrated file {file_instance.id} ({filename}) to {get_storage_backend_name(target_backend)}'
+                        f'Migrated file {file_instance.id} ({filename}) to {self._get_backend_name(target_backend)}'
                     )
 
                 files_migrated += 1
@@ -215,8 +214,12 @@ class Command(BaseCommand):
             user.storage_backend = target_backend
             user.save(update_fields=['storage_backend'])
             self.stdout.write(
-                self.style.SUCCESS(f'  Updated user storage preference to: {get_storage_backend_name(target_backend)}')
+                self.style.SUCCESS(f'  Updated user storage preference to: {self._get_backend_name(target_backend)}')
             )
 
         return files_migrated, files_failed
+
+    def _get_backend_name(self, backend: int) -> str:
+        """Get human-readable backend name."""
+        return 'SyftBox' if backend == StorageBackendChoice.SYFTBOX else 'Local'
 
