@@ -165,6 +165,19 @@ class ConversationSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['created_at', 'user', 'prompt', 'selected_agent_name', 'is_favorite', 'is_owner', 'is_forked', 'can_share', 'owner_email', 'owner_user_id', 'file_owner_id']
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # `_fallback_llm_id` is annotated by ConversationViewSet and holds the
+        # most recent `Message.llm_id`. When a user picks a different model
+        # mid-conversation, we only persist it on the message (not on
+        # `conversation.selected_model`), so the stored value goes stale.
+        # Prefer the latest-message llm whenever one exists; fall back to the
+        # stored `selected_model` only for conversations with no messages yet.
+        fallback_llm_id = getattr(instance, '_fallback_llm_id', None)
+        if fallback_llm_id:
+            data['selected_model'] = fallback_llm_id
+        return data
+
 
 class ConversationSummarySerializer(serializers.ModelSerializer):
     conversation_id = serializers.CharField(
