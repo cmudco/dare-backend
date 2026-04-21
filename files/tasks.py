@@ -1,14 +1,19 @@
 import time
 from datetime import datetime
+import logging
 
 from django.contrib.auth import get_user_model
 from django_rq import job
 
+from core.storage.constants import StorageBackendChoice
 from core.services.document_processor import DocumentProcessor
 from core.services.vector_service import get_vector_service
+from files.management.commands.migrate_storage import Command as StorageMigrationCommand
 from users.constants import VectorDBChoice
 from .constants import FileStatus
 from .models import File
+
+logger = logging.getLogger(__name__)
 
 @job
 def process_file_embeddings(file_id, chunk_size=None, overlap_size=None):
@@ -160,3 +165,52 @@ def delete_file_vectors(file_id, user_id):
 #
 #     except Exception as e:
 #         return False
+
+
+@job
+def migrate_user_files_to_syftbox(user_id: int) -> dict:
+    """
+    Migrate a user's active local files to SyftBox.
+
+    Reads each local file, moves it to SyftBox, and returns migration stats.
+    """
+    files_to_migrate = File.active_objects.filter(
+        user_id=user_id,
+        storage_backend=StorageBackendChoice.LOCAL,
+    )
+
+    total = files_to_migrate.count()
+    migrated = 0
+    failed = 0
+    failures: list[dict] = []
+    migration_command = StorageMigrationCommand()
+
+    for file_instance in files_to_migrate.iterator():
+        file_label = file_instance.name or file_instance.file.name
+        try:
+            migration_command._migrate_file(
+                file_instance=file_instance,
+                target_backend=StorageBackendChoice.SYFTBOX,
+            )
+            migrated += 1
+        except Exception as error:
+            failed += 1
+            failures.append(
+                {
+                    "file_id": file_instance.id,
+                    "file_name": file_label,
+                    "error": str(error),
+                }
+            )
+            logger.exception(
+                "Failed migrating file %s for user %s to SyftBox",
+                file_instance.id,
+                user_id,
+            )
+    return {
+        "user_id": user_id,
+        "total_files": total,
+        "migrated_files": migrated,
+        "failed_files": failed,
+        "failures": failures,
+    }
