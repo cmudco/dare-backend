@@ -238,7 +238,7 @@ class UserAdmin(DjangoUserAdmin):
             {
                 "fields": ("syftbox_access_token", "syftbox_refresh_token"),
                 "classes": ("collapse",),
-                "description": _("OAuth tokens for Syftbox storage (shown read-only)."),
+                "description": _("OAuth tokens for Syftbox storage."),
             },
         ),
         (_("Platform Settings (Legacy)"), {
@@ -314,13 +314,5 @@ class UserAdmin(DjangoUserAdmin):
         """Disable user accounts that haven't been active"""
         count = queryset.filter(is_active=True).update(is_active=False)
         self.message_user(request, f"Disabled {count} user account(s).", level=messages.SUCCESS)
-
-    def get_readonly_fields(self, request, obj=None):
-        return (
-            *super().get_readonly_fields(request, obj),
-            "syftbox_access_token",
-            "syftbox_refresh_token",
-        )
-
 
 admin.site.register(User, UserAdmin)
