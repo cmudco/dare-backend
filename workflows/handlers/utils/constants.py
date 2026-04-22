@@ -6,7 +6,6 @@ constants used across workflow handlers, following the pattern established
 in the LLM provider utilities.
 """
 import re
-from typing import Dict, Any
 
 
 # ==================== Node Types ====================
@@ -64,6 +63,25 @@ class XMLTag:
         if match:
             return match.group(1).strip()
         return ""
+
+
+# ==================== Workflow Context XML Tags ====================
+
+class WorkflowContextTag:
+    """
+    XML tag names used when rendering a step's upstream context into the
+    LLM prompt. See workflows.handlers.utils.step_context.ContextRenderer.
+    """
+    BLOCK = "workflow_context"
+    UPSTREAM = "upstream_node"
+    OUTPUT = "output"
+    INSTRUCTIONS = "instructions"
+    TASK = "task"
+
+
+class ContextDefaults:
+    """Fallback values used by the step message renderer."""
+    DEFAULT_TASK_MESSAGE = "Please complete the task described."
 
 
 # ==================== LLM Configuration Defaults ====================
@@ -262,6 +280,8 @@ __all__ = [
     "NodeType",
     "EdgeHandle",
     "XMLTag",
+    "WorkflowContextTag",
+    "ContextDefaults",
     "LLMDefaults",
     "WorkflowStatus",
     "StepStatus",

@@ -18,7 +18,6 @@ from workflows.handlers.base import ExecutionNode, NodeExecutionContext, NodeExe
 from workflows.handlers.event_emitter import EventEmitter
 from workflows.handlers.execution_base import BaseExecutionHandler
 from workflows.handlers.utils import (
-    ErrorResultBuilder,
     LLMDefaults,
     NodeDataValidator,
     NodeType,
@@ -117,6 +116,7 @@ class StepNodeHandler(BaseExecutionHandler):
             return {
                 'prompt_content': prompt.content if prompt else "",
                 'text_input': step_data.text_input or "",
+                'include_context': step_data.use_previous_context,
             }
 
         inputs = await database_sync_to_async(_get_message_inputs)()
@@ -125,6 +125,7 @@ class StepNodeHandler(BaseExecutionHandler):
             prompt_content=inputs['prompt_content'],
             text_input=inputs['text_input'],
             previous_results=context.previous_results,
+            include_context=inputs['include_context'],
         )
 
     async def _call_llm(
