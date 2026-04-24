@@ -25,6 +25,8 @@ from .constants import (
     NodeType,
     EdgeHandle,
     XMLTag,
+    WorkflowContextTag,
+    ContextDefaults,
     LLMDefaults,
     WorkflowStatus,
     StepStatus,
@@ -59,9 +61,15 @@ from .validation_helpers import (
 )
 from .execution_validator import ExecutionValidator
 
+# ==================== Step Context ====================
+from .step_context import (
+    StepContextEntry,
+    StepContextBuilder,
+    ContextRenderer,
+)
+
 # ==================== Message Preparers ====================
 from .message_preparers import (
-    MessagePreparer,
     StepMessagePreparer,
     StructuredOutputMessagePreparer,
     FileContextPreparer,
@@ -90,6 +98,8 @@ __all__ = [
     "NodeType",
     "EdgeHandle",
     "XMLTag",
+    "WorkflowContextTag",
+    "ContextDefaults",
     "LLMDefaults",
     "WorkflowStatus",
     "StepStatus",
@@ -116,8 +126,11 @@ __all__ = [
     "LLMConfigValidator",
     "RouteValidator",
     "ExecutionValidator",
+    # Step Context
+    "StepContextEntry",
+    "StepContextBuilder",
+    "ContextRenderer",
     # Message Preparers
-    "MessagePreparer",
     "StepMessagePreparer",
     "StructuredOutputMessagePreparer",
     "FileContextPreparer",

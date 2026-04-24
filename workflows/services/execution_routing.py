@@ -9,6 +9,7 @@ import logging
 from typing import Dict
 
 from workflows.handlers.base import ExecutionNode, NodeExecutionResult
+from workflows.handlers.utils.constants import NodeType
 from workflows.services.workflow_graph import WorkflowGraph
 
 logger = logging.getLogger(__name__)
@@ -112,19 +113,23 @@ def get_dep_results(
                 'node_type': graph.type_map.get(dep_id)
             }
 
-    # Handle chatOutput nodes (copy from source step)
+    # Bridge through chatOutput: downstream steps see the *original* producer,
+    # not the pass-through node. Preserves provenance (source_id + node_type)
+    # so renderers and chain-aware logic can reason about the real source.
     for dep_id in dep_ids:
-        if graph.type_map.get(dep_id) == 'chatOutput' and dep_id not in results:
-            src = next(
-                (e.source for e in graph.edge_map_by_target.get(dep_id, [])),
-                None
-            )
-            if src and src in node_results:
-                r = node_results[src]
-                results[dep_id] = {
-                    'output': r.output,
-                    'metadata': r.metadata or {},
-                    'node_type': 'chatOutput'
-                }
+        if graph.type_map.get(dep_id) != NodeType.CHAT_OUTPUT:
+            continue
+        src = next(
+            (e.source for e in graph.edge_map_by_target.get(dep_id, [])),
+            None
+        )
+        if not src or src not in node_results or src in results:
+            continue
+        r = node_results[src]
+        results[src] = {
+            'output': r.output,
+            'metadata': r.metadata or {},
+            'node_type': graph.type_map.get(src),
+        }
 
     return results
