@@ -1,28 +1,21 @@
 import logging
 
 from django.contrib.contenttypes.models import ContentType
+from djangorestframework_camel_case.util import underscoreize
 from rest_framework import serializers
 
 from conversations.models import LLM
-from files.api.serializers import FileSerializer
 from prompts.models import Prompt
 from workflows.constants import WorkflowRunStepStatus
 from workflows.handlers.utils import MetadataKey
 from workflows.handlers.utils.constants import NodeType
-from workflows.models import (
-    Workflow, WorkflowRun, WorkflowRunStep,
-    # Graph-driven models
-    StepNodeData, StartNodeData, ChatOutputNodeData, StructuredOutputNodeData,
-    NotesNodeData, FileNodeData, WorkflowNode, WorkflowEdge,
-    PrefetchedNodeFileRelations, build_prefetched_node_file_relations,
-)
+from workflows.models import (ChatOutputNodeData,  # Graph-driven models
+                              FileNodeData, NotesNodeData,
+                              PrefetchedNodeFileRelations, StartNodeData,
+                              StepNodeData, StructuredOutputNodeData, Workflow,
+                              WorkflowEdge, WorkflowNode, WorkflowRun,
+                              build_prefetched_node_file_relations)
 from workflows.services import NodeExecutionStateBuilder
-from workflows.services.citation_serialization import (
-    WorkflowStepSnippetSerializer,
-    WorkflowStepWebSearchSourceSerializer,
-)
-from djangorestframework_camel_case.util import underscoreize
-
 
 logger = logging.getLogger(__name__)
 
@@ -157,8 +150,8 @@ class StepNodeDataSerializer(serializers.ModelSerializer):
             'label', 'agent', 'prompt', 'content_files', 'embedding_files', 'tags', 'llm',
             'max_tokens', 'temperature', 'max_context_snippets',
             'document_similarity_threshold', 'use_previous_step_files',
-            'use_previous_step_embeddings', 'text_input',
-            'enable_web_search'
+            'use_previous_step_embeddings', 'use_previous_context',
+            'text_input', 'enable_web_search'
         ]
 
 

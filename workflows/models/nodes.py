@@ -179,6 +179,13 @@ class StepNodeData(BaseNodeData):
         default=False,
         help_text="Inherit embeddings from previous step"
     )
+    use_previous_context = models.BooleanField(
+        default=True,
+        help_text=(
+            "Include upstream step outputs in this step's prompt as a "
+            "structured <workflow_context> block."
+        )
+    )
     text_input = models.TextField(
         blank=True,
         default='',
@@ -216,6 +223,7 @@ class StepNodeData(BaseNodeData):
             'documentSimilarityThreshold': self.document_similarity_threshold,
             'usePreviousStepFiles': self.use_previous_step_files,
             'usePreviousStepEmbeddings': self.use_previous_step_embeddings,
+            'usePreviousContext': self.use_previous_context,
             'textInput': self.text_input,
             'enableWebSearch': self.enable_web_search,
         }
