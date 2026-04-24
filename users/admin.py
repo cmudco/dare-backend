@@ -8,6 +8,9 @@ from datetime import timedelta
 
 from users.models import User, AccessCodeGroup
 from billing.services import WalletService
+from billing.admin import GroupWalletInline, UserRefillOverrideInline
+from billing.constants import TransactionSourceChoice, TransactionTypeChoice
+from billing.models import GroupWallet, Transaction
 from django import forms
 from decimal import Decimal
 from users.constants import VectorDBChoice, AuthSourceChoice, RoleChoice
@@ -34,12 +37,13 @@ class UserInline(admin.TabularInline):
 
 @admin.register(AccessCodeGroup)
 class AccessCodeGroupAdmin(admin.ModelAdmin):
-    list_display = ('access_code', 'default_role', 'model_group', 'initial_wallet_credit', 'usage_display', 'expiration_status', 'is_active', 'user_count', 'created_at')
+    list_display = ('access_code', 'default_role', 'group_owner', 'model_group', 'initial_wallet_credit', 'usage_display', 'expiration_status', 'is_active', 'user_count', 'created_at')
     list_filter = ('is_active', 'default_role', 'created_at', 'model_group')
-    search_fields = ('access_code',)
+    search_fields = ('access_code', 'group_owner__email')
     readonly_fields = ('current_usage', 'created_at', 'updated_at')
     list_editable = ('is_active',)
-    inlines = [UserInline]
+    raw_id_fields = ('group_owner',)
+    inlines = [GroupWalletInline, UserInline]
     
     class GroupCreditActionForm(ActionForm):
         amount = forms.DecimalField(
@@ -81,6 +85,13 @@ class AccessCodeGroupAdmin(admin.ModelAdmin):
     fieldsets = (
         (None, {
             'fields': ('access_code', 'max_capacity', 'is_active', 'expires_at', 'notes')
+        }),
+        (_('Group Owner'), {
+            'fields': ('group_owner',),
+            'description': _(
+                'User who manages this group\'s wallet and refill policy. '
+                'Owners see a dedicated UI on the frontend for their group only.'
+            ),
         }),
         (_('Role Assignment'), {
             'fields': ('default_role',),
@@ -163,6 +174,55 @@ class AccessCodeGroupAdmin(admin.ModelAdmin):
         return super().has_delete_permission(request, obj)
     
     actions = ["credit_groups_users"]
+
+    def save_formset(self, request, form, formset, change):
+        """Audit budget_balance changes made via the inline GroupWallet form."""
+        if formset.model is not GroupWallet:
+            return super().save_formset(request, form, formset, change)
+
+        old_balances = {}
+        for f in formset.initial_forms:
+            if f.instance.pk:
+                old_balances[f.instance.pk] = (
+                    GroupWallet.objects.filter(pk=f.instance.pk)
+                    .values_list('budget_balance', flat=True)
+                    .first()
+                    or Decimal('0')
+                )
+
+        super().save_formset(request, form, formset, change)
+
+        for instance in formset.new_objects:
+            new_balance = instance.budget_balance or Decimal('0')
+            if new_balance > 0:
+                Transaction.objects.create(
+                    user=request.user,
+                    amount=Decimal('0'),
+                    type=TransactionTypeChoice.CREDIT,
+                    source=TransactionSourceChoice.GROUP_BUDGET_TOPUP,
+                    related_group=instance.group,
+                    message=(
+                        f"Admin set initial budget on {instance.group.access_code}: "
+                        f"${new_balance}"
+                    ),
+                )
+        for instance, _changed_fields in formset.changed_objects:
+            old = old_balances.get(instance.pk, Decimal('0'))
+            new = instance.budget_balance or Decimal('0')
+            delta = new - old
+            if delta != 0:
+                sign = '+' if delta > 0 else ''
+                Transaction.objects.create(
+                    user=request.user,
+                    amount=Decimal('0'),
+                    type=TransactionTypeChoice.CREDIT,
+                    source=TransactionSourceChoice.GROUP_BUDGET_TOPUP,
+                    related_group=instance.group,
+                    message=(
+                        f"Admin direct-edit on {instance.group.access_code}: "
+                        f"budget ${old} → ${new} ({sign}{delta})"
+                    ),
+                )
 
 
 class UserAdmin(DjangoUserAdmin):
@@ -257,6 +317,7 @@ class UserAdmin(DjangoUserAdmin):
             },
         ),
     )
+    inlines = [UserRefillOverrideInline]
     list_display = ("email", "last_login_display", "date_joined", "activity_status", "is_active", "is_staff", "platform_role", "onboarding_status", "access_code_group", "vector_db", "storage_backend")
     list_filter = ("is_staff", "is_superuser", "is_active", "platform_role", LastLoginFilter, "vector_db", "storage_backend", "access_code_group", "auth_source")
     search_fields = ("email", "first_name", "last_name")
