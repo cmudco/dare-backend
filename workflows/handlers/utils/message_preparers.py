@@ -1,231 +1,121 @@
 """
 Message preparation utilities for workflow handlers.
 
-This module extracts message building logic from handlers into reusable,
-testable components following the pattern from LLM provider message formatters.
+Builds the final text payload sent to the LLM for each node type. Step nodes
+emit a provider-agnostic, XML-tagged structure so upstream context, the
+step's task, and the step's system instruction are never merged into raw
+concatenated text.
 """
+
 import logging
-import string
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional
 
-from channels.db import database_sync_to_async
-
-from .constants import ErrorMessage, PromptTemplate
-from .validation_helpers import MetadataValidator
-
+from .constants import ContextDefaults, PromptTemplate, WorkflowContextTag
+from .step_context import ContextRenderer, StepContextBuilder
 
 logger = logging.getLogger(__name__)
 
 
-# ==================== Message Preparer Base ====================
+# ============================================================================
+# Step Message Preparer
+# ============================================================================
 
-class MessagePreparer:
+
+class StepMessagePreparer:
     """
-    Base message preparer for workflow LLM interactions.
+    Assemble a step's LLM prompt from its static configuration and the
+    upstream dependency payload.
 
-    Handles combination of prompts, previous results, and user inputs
-    into properly formatted messages for LLM processing.
+    The rendered prompt contains up to three XML-tagged sections, in the
+    order Anthropic recommends (role/instructions → data → final task)::
+
+        <instructions> ... </instructions>           (role + task instructions)
+        <workflow_context> ... </workflow_context>   (upstream outputs)
+        <task> ... </task>                           (per-run imperative)
+
+    Any section whose source field is empty is omitted. When all three are
+    empty the renderer falls back to ``DEFAULT_TASK_MESSAGE``.
     """
-
-    @staticmethod
-    def combine_prompt_and_input(
-        prompt_content: str,
-        input_text: str,
-        input_label: str = "Previous step result"
-    ) -> str:
-        """
-        Combine prompt content with input text.
-
-        Args:
-            prompt_content: Base prompt text
-            input_text: Input to combine
-            input_label: Label for the input section
-
-        Returns:
-            Combined text with proper formatting
-        """
-        if prompt_content:
-            return f"{prompt_content}\n\n{input_label}:\n{input_text}"
-        return input_text
-
-    @staticmethod
-    def add_additional_input(base: str, text_input: str) -> str:
-        """
-        Add additional text input to base message.
-
-        Args:
-            base: Base message
-            text_input: Additional text input
-
-        Returns:
-            Message with additional input if present, otherwise original base
-        """
-        if text_input and text_input.strip():
-            return f"{base}\n\nAdditional input:\n{text_input.strip()}"
-        return base
-
-    @staticmethod
-    def is_valid_result(result_data: Dict) -> bool:
-        """
-        Check if result data is valid and not skipped.
-
-        Args:
-            result_data: Result data dictionary from previous node
-
-        Returns:
-            True if result is valid and not skipped, False otherwise
-        """
-        if not result_data or not isinstance(result_data, dict):
-            return False
-
-        if not result_data.get('output'):
-            return False
-
-        metadata = result_data.get('metadata')
-        return not MetadataValidator.is_skipped(metadata)
-
-    @staticmethod
-    def collect_previous_outputs(
-        previous_results: Dict[str, Dict],
-        include_node_ids: bool = True
-    ) -> List[str]:
-        """
-        Collect valid outputs from previous node results.
-
-        When multiple results are present and include_node_ids is True,
-        labels are anonymized as Response A, Response B, etc. instead of
-        exposing raw node IDs. Single results keep the original format.
-
-        Args:
-            previous_results: Dictionary of previous node results
-            include_node_ids: Whether to include labels in output
-
-        Returns:
-            List of formatted output strings from previous nodes
-        """
-        outputs = []
-
-        if not previous_results:
-            return outputs
-
-        has_multiple = len(previous_results) > 1
-        label_index = 0
-
-        for node_id, result_data in previous_results.items():
-            if MessagePreparer.is_valid_result(result_data):
-                output_text = result_data['output']
-                if include_node_ids:
-                    if has_multiple:
-                        label = string.ascii_uppercase[label_index]
-                        outputs.append(f"Response {label}:\n{output_text}")
-                    else:
-                        outputs.append(f"Result from {node_id}:\n{output_text}")
-                else:
-                    outputs.append(output_text)
-                label_index += 1
-
-        return outputs
-
-
-# ==================== Step Message Preparer ====================
-
-class StepMessagePreparer(MessagePreparer):
-    """
-    Message preparer specifically for step nodes.
-
-    Handles the complex logic of combining prompts, previous results,
-    and text inputs for step node LLM calls.
-    """
-
-    DEFAULT_TASK_MESSAGE = "Please complete the task described."
 
     @staticmethod
     async def prepare_message(
         prompt_content: str,
         text_input: str,
-        previous_results: Dict[str, Dict]
-        # REMOVED: current_input parameter
+        previous_results: Dict[str, Dict],
+        include_context: bool = True,
     ) -> str:
         """
-        Prepare the message for LLM based on step configuration and context.
-
-        This method combines:
-        - Step's prompt content
-        - Previous step results (from direct dependencies via edges)
-        - Text input from step configuration
+        Build the structured prompt for a step node.
 
         Args:
-            prompt_content: The prompt content from the step configuration
-            text_input: Additional text input from step configuration
-            previous_results: Dictionary of previous node results (edge-filtered)
+            prompt_content: Step's ``prompt`` field — rendered first as
+                ``<instructions>`` because it typically carries the role,
+                persona, and primary task instructions for the step.
+            text_input: Step's ``text_input`` field — rendered last as
+                ``<task>`` since it is the per-run imperative variable.
+            previous_results: Dependency payload from
+                ``execution_routing.get_dep_results`` — keyed by the producer
+                node id with ``{output, metadata, node_type, ...}`` values.
+            include_context: When False, skip the ``<workflow_context>`` block
+                even if upstream results are present. Wired to the per-node
+                ``use_previous_context`` toggle in Phase 2.
 
         Returns:
-            Formatted message ready for LLM processing
+            The final prompt string sent to the LLM.
         """
-        # Collect previous outputs from direct dependencies
-        previous_outputs = StepMessagePreparer.collect_previous_outputs(
-            previous_results,
-            include_node_ids=True
-        )
+        sections: List[str] = []
 
-        # Build message based on available inputs
-        if previous_outputs:
-            if len(previous_outputs) == 1:
-                # Single input - use traditional format
-                # Extract just the output without the "Result from X:" prefix
-                first_node_id = list(previous_results.keys())[0]
-                combined_input = previous_outputs[0].replace(
-                    f"Result from {first_node_id}:\n", ""
-                )
-                base = StepMessagePreparer.combine_prompt_and_input(
-                    prompt_content,
-                    combined_input,
-                    "Previous step result"
-                )
-            else:
-                # Multiple inputs - combine all results with IDs
-                combined_input = "\n\n".join(previous_outputs)
-                base = StepMessagePreparer.combine_prompt_and_input(
-                    prompt_content,
-                    combined_input,
-                    "Results from previous steps"
-                )
+        instructions = (prompt_content or "").strip()
+        if instructions:
+            sections.append(
+                f"<{WorkflowContextTag.INSTRUCTIONS}>\n{instructions}\n"
+                f"</{WorkflowContextTag.INSTRUCTIONS}>"
+            )
 
-            # Add text input if present
-            message = StepMessagePreparer.add_additional_input(base, text_input)
+        if include_context:
+            rendered = ContextRenderer.render_xml(
+                StepContextBuilder.build(previous_results)
+            )
+            if rendered:
+                sections.append(rendered)
 
-        else:
-            # No previous input - use prompt and text input only
-            base = prompt_content or StepMessagePreparer.DEFAULT_TASK_MESSAGE
-            message = StepMessagePreparer.add_additional_input(base, text_input)
+        task = (text_input or "").strip()
+        if task:
+            sections.append(
+                f"<{WorkflowContextTag.TASK}>\n{task}\n" f"</{WorkflowContextTag.TASK}>"
+            )
 
-        return message
+        if not sections:
+            return ContextDefaults.DEFAULT_TASK_MESSAGE
+
+        return "\n\n".join(sections)
 
 
-# ==================== Structured Output Message Preparer ====================
+# ============================================================================
+# Structured Output Message Preparer
+# ============================================================================
 
-class StructuredOutputMessagePreparer(MessagePreparer):
+
+class StructuredOutputMessagePreparer:
     """
-    Message preparer for structured output instructions.
-
-    Adds routing instructions when LLM doesn't support native structured output.
+    Append routing instructions to a message when the selected LLM provider
+    does not support native structured output.
     """
 
     @staticmethod
     def add_route_instruction_to_message(
         base_message: str,
         available_routes: List[str],
-        default_route: Optional[str] = None
+        default_route: Optional[str] = None,
     ) -> str:
         """
-        Add routing instruction to message for structured output.
-
-        Used when provider doesn't support native structured output.
+        Append an instruction listing the allowed route values.
 
         Args:
-            base_message: The base message to augment
-            available_routes: List of available route values
-            default_route: Default route if LLM uncertain
+            base_message: Message to augment.
+            available_routes: Allowed route values.
+            default_route: Fallback when the LLM is uncertain. Defaults to
+                the first route.
 
         Returns:
             Message with routing instructions appended
@@ -243,43 +133,33 @@ class StructuredOutputMessagePreparer(MessagePreparer):
         return f"{base_message}\n\n{instruction}"
 
 
-# ==================== File Context Preparer ====================
+# ============================================================================
+# File Context Preparer
+# ============================================================================
+
 
 class FileContextPreparer:
     """
-    Preparer for file context in messages.
-
-    Handles file content and embedding context extraction.
+    Placeholder for file-context preparation. Intended to produce retrieval
+    snippets from uploaded files for inclusion in a step's prompt.
     """
 
     @staticmethod
     async def prepare_file_context(
         uploaded_files,
         similarity_threshold: float = 0.7,
-        max_snippets: int = 3
+        max_snippets: int = 3,
     ) -> Optional[str]:
-        """
-        Prepare file context from uploaded files.
-
-        Args:
-            uploaded_files: QuerySet or list of uploaded file objects
-            similarity_threshold: Minimum similarity for context inclusion
-            max_snippets: Maximum number of context snippets
-
-        Returns:
-            Formatted file context string or None if no files
-        """
-        # TODO: Implement file context extraction
-        # This would integrate with file processing service
-        # For now, return None as placeholder
         logger.debug("File context preparation not yet implemented")
         return None
 
 
-# ==================== Export All ====================
+# ============================================================================
+# Public API
+# ============================================================================
+
 
 __all__ = [
-    "MessagePreparer",
     "StepMessagePreparer",
     "StructuredOutputMessagePreparer",
     "FileContextPreparer",
