@@ -19,8 +19,8 @@ from asgiref.sync import sync_to_async
 from config import env
 from conversations.constants import Provider
 from conversations.models import ProviderAPIKey
-from api_keys.models import UserProviderAPIKey
-from api_keys.constants import BillingModeChoice
+from billing.constants import UserWalletPreferenceTypeChoice
+from billing.wallet_router import resolve_active_wallet
 
 logger = logging.getLogger(__name__)
 
@@ -157,61 +157,30 @@ def get_all_configured_providers() -> list:
     return configured
 
 
-# ===== NEW: User-Specific API Key Resolution =====
+# ===== User-Specific API Key Resolution =====
 
 def get_provider_api_key_for_user_sync(provider: str, user) -> Optional[str]:
     """
-    Get API key for a provider based on user's billing mode.
+    Resolve the API key the user's active wallet should authorize this call
+    with (per `billing.wallet_router.resolve_active_wallet`).
 
-    Resolution logic:
-    1. If provider is local (llama/Ollama): No API key needed
-    2. If user.billing_mode == OWN_API: Use user's UserProviderAPIKey
-    3. If user.billing_mode == WALLET: Use admin's ProviderAPIKey (system key)
-    4. Fallback to environment variables
-    5. Raise error if no key found (for cloud providers)
-
-    Args:
-        provider: Provider identifier (e.g., 'openai', 'claude', 'gemini', 'llama')
-        user: User instance
-
-    Returns:
-        API key string, or None for local providers like llama
-
-    Raises:
-        ValueError: If no appropriate API key is found (for cloud providers)
-
-    Example:
-        >>> api_key = get_provider_api_key_for_user_sync(Provider.OPENAI.value, request.user)
-        >>> client = OpenAI(api_key=api_key)
+    - LLaMA / Ollama is local — no key needed.
+    - Active wallet = LITELLM → return the LiteLLM proxy key.
+    - Active wallet = BYO with a matching-provider key on file → return that key.
+    - Active wallet = DARE (or any silent fallback) → return the system key.
     """
-    # LLaMA/Ollama is local - no API key needed regardless of billing mode
     if provider == Provider.LLAMA.value:
         logger.debug(f"Provider '{provider}' is local (Ollama), no API key required")
         return None
 
-    # Check user's billing mode
-    if user.billing_mode == BillingModeChoice.OWN_API:
-        # User wants to use their own API key
-        try:
-            user_key = UserProviderAPIKey.active_objects.get(
-                user=user,
-                provider=provider
-            )
-            if user_key.api_key:
-                logger.info(f"Using user's own API key for provider: {provider} (user: {user.email})")
-                return user_key.api_key
-            else:
-                raise ValueError(
-                    f"User {user.email} is in OWN_API mode but has no API key set for provider '{provider}'. "
-                    f"Please add an API key in settings or switch to WALLET mode."
-                )
-        except UserProviderAPIKey.DoesNotExist:
-            raise ValueError(
-                f"User {user.email} is in OWN_API mode but has no API key record for provider '{provider}'."
-            )
+    wallet = resolve_active_wallet(user, requested_provider=provider)
 
-    # WALLET mode: Use admin's system key (existing logic)
-    logger.info(f"Using system API key for provider: {provider} (user: {user.email} in WALLET mode)")
+    if wallet.type == UserWalletPreferenceTypeChoice.LITELLM:
+        return wallet.credentials["api_key"]
+
+    if wallet.type == UserWalletPreferenceTypeChoice.BYO:
+        return wallet.credentials["api_key"]
+
     return get_provider_api_key_sync(provider)
 
 

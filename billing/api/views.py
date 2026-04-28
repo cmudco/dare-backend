@@ -1,26 +1,39 @@
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db.models import Count, Sum
 from django.utils import timezone
+from django.utils.translation import gettext_lazy as _
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from api_keys.models import UserProviderAPIKey
 from billing.api.serializers import (
+    ActiveWalletRefSerializer,
     AllocateSerializer,
     EffectivePolicySerializer,
+    FeatureFlagsSerializer,
     FundBudgetSerializer,
     GroupWalletReadSerializer,
     GroupWalletWriteSerializer,
+    LiteLLMKeyCreateSerializer,
+    LiteLLMKeyReadSerializer,
+    LiteLLMKeyRenameSerializer,
     MemberRowSerializer,
     OwnedGroupSerializer,
+    SetActiveWalletRequestSerializer,
     SystemRefillPolicySerializer,
     TransactionSerializer,
     UpsertUserOverrideSerializer,
     UserRefillOverrideSerializer,
     WalletSerializer,
+    WalletsListResponseSerializer,
 )
-from billing.constants import TransactionTypeChoice
+from billing.constants import (
+    TransactionTypeChoice,
+    LiteLLMKeySourceChoice,
+    UserWalletPreferenceTypeChoice,
+)
 from billing.group_wallet_service import (
     AllocateToMemberRequest,
     FundGroupBudgetRequest,
@@ -29,10 +42,14 @@ from billing.group_wallet_service import (
     UpsertUserOverrideRequest,
 )
 from billing.models import (
+    BYOKeyFeatureFlag,
     GroupWallet,
+    LiteLLMKey,
     SystemRefillPolicy,
     Transaction,
     UserRefillOverride,
+    UserWalletPreference,
+    Wallet,
 )
 from billing.services import WalletService
 from common.pagination import CustomPageNumberPagination
@@ -303,6 +320,236 @@ class BillingViewSet(viewsets.ViewSet):
     def get_paginated_response(self, data):
         assert hasattr(self, 'paginator')
         return self.paginator.get_paginated_response(data)
+
+    # ===== Multi-wallet endpoints =========================================
+
+    @action(detail=False, methods=['get'], url_path='wallets')
+    def wallets(self, request):
+        """
+        Unified list of every wallet the caller can route through:
+        - DARE Wallet (always present)
+        - BYO keys (gated by BYOKeyFeatureFlag.is_byo_enabled())
+        - LiteLLM keys (user-self-served + admin-issued individual + cohort)
+
+        Response shape uses `kind`/`type` discriminators with type-specific
+        named fields per the data-schema-contract rule (no wire-level unions).
+        """
+        user = request.user
+        pref = UserWalletPreference.get_or_create_for(user)
+        byo_enabled = BYOKeyFeatureFlag.is_byo_enabled()
+
+        wallets_list = []
+
+        # DARE wallet — always present, always default
+        try:
+            dare_wallet = user.wallet
+        except Wallet.DoesNotExist:
+            dare_wallet = None
+
+        wallets_list.append({
+            "type": UserWalletPreferenceTypeChoice.DARE,
+            "ref_id": None,
+            "label": "DARE Wallet",
+            "is_default": True,
+            "is_active": pref.active_wallet_type == UserWalletPreferenceTypeChoice.DARE,
+            "status": {
+                "kind": "BALANCE",
+                "balance": str(dare_wallet.balance) if dare_wallet else "0.00",
+                "last_refill_at": dare_wallet.last_refill_at if dare_wallet else None,
+            },
+        })
+
+        # BYO is a single *collective* wallet: one row per user, regardless of
+        # how many provider keys they've configured. When this wallet is
+        # active, the router picks whichever BYO key matches the requested
+        # provider at dispatch time. The `provider` field becomes a comma-
+        # joined summary of configured providers so the UI can show a chip
+        # like "OpenAI, Claude" without requiring an extra fetch.
+        if byo_enabled:
+            byo_qs = UserProviderAPIKey.active_objects.filter(user=user).exclude(
+                api_key__isnull=True
+            ).exclude(api_key="")
+            configured_providers = list(byo_qs.values_list("provider", flat=True))
+            if configured_providers:
+                wallets_list.append({
+                    "type": UserWalletPreferenceTypeChoice.BYO,
+                    "ref_id": None,
+                    "label": "BYO Wallet",
+                    "provider": ", ".join(sorted(configured_providers)),
+                    "is_default": False,
+                    "is_active": (
+                        pref.active_wallet_type == UserWalletPreferenceTypeChoice.BYO
+                    ),
+                    "status": {"kind": "EXTERNAL"},
+                })
+
+        # LiteLLM keys — visible-for-user already filters expiry + group membership
+        # and select_related's source_group for the cohort name (no N+1).
+        litellm_qs = LiteLLMKey.visible_for_user(user)
+        for key in litellm_qs:
+            group_name = key.source_group.access_code if key.source_group else None
+            wallets_list.append({
+                "type": UserWalletPreferenceTypeChoice.LITELLM,
+                "ref_id": str(key.pk),
+                "label": key.label,
+                "source": key.source,
+                "group_name": group_name,
+                "expires_at": key.expires_at,
+                "base_url": key.base_url,
+                "is_default": False,
+                "is_active": (
+                    pref.active_wallet_type == UserWalletPreferenceTypeChoice.LITELLM
+                    and pref.active_wallet_ref_id == str(key.pk)
+                ),
+                "status": {"kind": "EXTERNAL"},
+            })
+
+        body = {
+            "active_wallet": {
+                "type": pref.active_wallet_type,
+                "ref_id": pref.active_wallet_ref_id,
+            },
+            "byo_enabled": byo_enabled,
+            "wallets": wallets_list,
+        }
+        # Use serializer purely for shape validation / camelCase rendering.
+        return Response(WalletsListResponseSerializer(body).data)
+
+    @action(detail=False, methods=['put'], url_path='wallets/active')
+    def set_active_wallet(self, request):
+        """
+        Body: { "type": "DARE"|"BYO"|"LITELLM", "refId": "..." | null }
+
+        Validates: ref must exist, must belong to the caller, must be
+        non-expired (LiteLLM), and the BYO flag must be on (BYO).
+        UserWalletPreference.full_clean() enforces the same invariants on save.
+        """
+        serializer = SetActiveWalletRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        wallet_type = serializer.validated_data["type"]
+        ref_id = serializer.validated_data.get("ref_id") or None
+
+        pref = UserWalletPreference.get_or_create_for(request.user)
+
+        if wallet_type == UserWalletPreferenceTypeChoice.DARE:
+            pref.active_wallet_type = UserWalletPreferenceTypeChoice.DARE
+            pref.active_wallet_ref_id = None
+        elif wallet_type == UserWalletPreferenceTypeChoice.BYO:
+            if not BYOKeyFeatureFlag.is_byo_enabled():
+                return Response(
+                    {"code": "BYO_DISABLED",
+                     "message": _("BYO wallet type is currently disabled.")},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            # Collective BYO: ref_id None means "use whatever BYO key matches
+            # the requested provider at dispatch time". We just need at least
+            # one populated key on file.
+            if not ref_id:
+                has_any_byo = (
+                    UserProviderAPIKey.active_objects
+                    .filter(user=request.user)
+                    .exclude(api_key__isnull=True)
+                    .exclude(api_key="")
+                    .exists()
+                )
+                if not has_any_byo:
+                    return Response(
+                        {"code": "WALLET_NOT_FOUND",
+                         "message": _("Add at least one BYO provider key before setting BYO active.")},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                pref.active_wallet_type = UserWalletPreferenceTypeChoice.BYO
+                pref.active_wallet_ref_id = None
+            else:
+                if not UserProviderAPIKey.active_objects.filter(
+                    pk=ref_id, user=request.user
+                ).exists():
+                    return Response(
+                        {"code": "WALLET_NOT_FOUND", "message": _("BYO key not found.")},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                pref.active_wallet_type = UserWalletPreferenceTypeChoice.BYO
+                pref.active_wallet_ref_id = ref_id
+        elif wallet_type == UserWalletPreferenceTypeChoice.LITELLM:
+            if not ref_id or not LiteLLMKey.visible_for_user(request.user).filter(pk=ref_id).exists():
+                return Response(
+                    {"code": "WALLET_NOT_FOUND",
+                     "message": _("LiteLLM key not found or no longer accessible.")},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            pref.active_wallet_type = UserWalletPreferenceTypeChoice.LITELLM
+            pref.active_wallet_ref_id = ref_id
+
+        try:
+            pref.save()
+        except ValidationError as exc:
+            return _validation_response(exc)
+
+        return Response({
+            "active_wallet": ActiveWalletRefSerializer({
+                "type": pref.active_wallet_type,
+                "ref_id": pref.active_wallet_ref_id,
+            }).data,
+        })
+
+    @action(detail=False, methods=['get'], url_path='feature-flags')
+    def feature_flags(self, request):
+        """
+        Lightweight endpoint so the FE can hide the "+ BYO Key" button before
+        any add attempt.
+        """
+        return Response(FeatureFlagsSerializer({
+            "byo_enabled": BYOKeyFeatureFlag.is_byo_enabled(),
+        }).data)
+
+
+class LiteLLMKeyViewSet(viewsets.GenericViewSet,
+                        mixins.CreateModelMixin,
+                        mixins.UpdateModelMixin,
+                        mixins.DestroyModelMixin):
+    """
+    User-scoped CRUD on the caller's *self-served* LiteLLM keys.
+
+    Admin-issued individual (`ADMIN_USER`) and cohort (`ADMIN_GROUP`) keys are
+    visible to the user via GET /wallets/ but are not mutable here — those are
+    managed by superadmins via Django admin per spec §5.
+    """
+    permission_classes = [IsAuthenticated]
+    serializer_class = LiteLLMKeyReadSerializer
+
+    def get_queryset(self):
+        # Only the caller's USER-source keys are mutable here.
+        return LiteLLMKey.objects.filter(
+            source=LiteLLMKeySourceChoice.USER,
+            owner_user=self.request.user,
+        )
+
+    def create(self, request, *args, **kwargs):
+        write = LiteLLMKeyCreateSerializer(data=request.data)
+        write.is_valid(raise_exception=True)
+        key = LiteLLMKey.objects.create(
+            label=write.validated_data["label"],
+            base_url=write.validated_data["base_url"],
+            api_key=write.validated_data["api_key"],   # EncryptedCharField encrypts on save
+            source=LiteLLMKeySourceChoice.USER,
+            owner_user=request.user,
+            created_by=request.user,
+        )
+        return Response(LiteLLMKeyReadSerializer(key).data, status=status.HTTP_201_CREATED)
+
+    def partial_update(self, request, *args, **kwargs):
+        instance = self.get_object()
+        write = LiteLLMKeyRenameSerializer(data=request.data, partial=True)
+        write.is_valid(raise_exception=True)
+        instance.label = write.validated_data["label"]
+        instance.save(update_fields=["label", "updated_at"])
+        return Response(LiteLLMKeyReadSerializer(instance).data)
+
+    def destroy(self, request, *args, **kwargs):
+        # `reset_pref_on_litellm_delete` (billing/signals.py) handles the
+        # cascade-reset of UserWalletPreference for any user whose active
+        # wallet pointed at this key.
+        return super().destroy(request, *args, **kwargs)
 
 
 class SystemRefillPolicyViewSet(viewsets.ViewSet):

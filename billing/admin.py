@@ -13,13 +13,19 @@ from billing.group_wallet_service import (
     UpdateGroupPolicyRequest,
 )
 from billing.models import (
+    BYOKeyFeatureFlag,
     GroupWallet,
+    LiteLLMKey,
     SystemRefillPolicy,
     Transaction,
     UserRefillOverride,
+    UserWalletPreference,
     Wallet,
 )
+from billing.constants import LiteLLMKeySourceChoice
 from billing.services import TransactionExportService
+from django.utils import timezone
+from django.utils.translation import gettext_lazy as _
 
 
 class TokenUsageFilter(admin.SimpleListFilter):
@@ -367,3 +373,179 @@ class UserRefillOverrideInline(admin.StackedInline):
                        'created_at', 'updated_at'),
         }),
     )
+
+
+# --- BYO Key Feature Flag (singleton) ------------------------------------
+
+@admin.register(BYOKeyFeatureFlag)
+class BYOKeyFeatureFlagAdmin(admin.ModelAdmin):
+    """
+    Singleton admin for the platform-wide BYO Key gate. Only superadmins
+    may toggle. Mirrors the SystemRefillPolicyAdmin pattern: one row only,
+    no add/delete buttons after initial save.
+    """
+    list_display = ("is_enabled", "updated_by", "updated_at")
+    readonly_fields = ("updated_at", "updated_by")
+
+    def has_add_permission(self, request):
+        # Allow first-row creation only.
+        if not request.user.is_superuser:
+            return False
+        return not BYOKeyFeatureFlag.objects.exists()
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def has_module_permission(self, request):
+        return bool(request.user.is_superuser)
+
+    def has_change_permission(self, request, obj=None):
+        return bool(request.user.is_superuser)
+
+    def save_model(self, request, obj, form, change):
+        obj.updated_by = request.user
+        super().save_model(request, obj, form, change)
+
+
+# --- LiteLLM Key admin ----------------------------------------------------
+
+class IsExpiredFilter(admin.SimpleListFilter):
+    title = _("expired")
+    parameter_name = "expired"
+
+    def lookups(self, request, model_admin):
+        return (("yes", _("Expired")), ("no", _("Active")))
+
+    def queryset(self, request, queryset):
+        now = timezone.now()
+        if self.value() == "yes":
+            return queryset.filter(expires_at__isnull=False, expires_at__lte=now)
+        if self.value() == "no":
+            return queryset.filter(Q(expires_at__isnull=True) | Q(expires_at__gt=now))
+        return queryset
+
+
+@admin.register(LiteLLMKey)
+class LiteLLMKeyAdmin(admin.ModelAdmin):
+    """
+    Admin for LiteLLM credential rows. Superadmins create ADMIN_USER /
+    ADMIN_GROUP keys here; user-self-served (USER) rows are created via
+    POST /api/billing/wallets/litellm/ and are read-mostly here.
+
+    Permission model:
+      - Superadmins: full access.
+      - AccessCodeGroup owners: visible-only for their own group(s); no
+        create/delete from this admin (per spec: cohort key creation
+        happens via the AccessCodeGroupAdmin inline so the parent group
+        context is enforced).
+    """
+    list_display = ("label", "source", "owner_display", "expires_at", "is_expired_flag", "created_by", "created_at")
+    list_filter = ("source", IsExpiredFilter, "source_group")
+    search_fields = ("label", "owner_user__email", "assigned_user__email", "source_group__access_code")
+    readonly_fields = ("created_at", "updated_at")
+    actions = ["revoke_selected"]
+    raw_id_fields = ("owner_user", "assigned_user", "source_group", "created_by")
+
+    fieldsets = (
+        (None, {"fields": ("label", "base_url", "api_key")}),
+        (_("Source"), {"fields": ("source", "owner_user", "assigned_user", "source_group", "expires_at")}),
+        (_("Audit"), {"fields": ("created_by", "created_at", "updated_at"), "classes": ("collapse",)}),
+    )
+
+    def has_module_permission(self, request):
+        if not request.user.is_authenticated:
+            return False
+        if request.user.is_superuser:
+            return True
+        # Group owners can view rows for groups they own.
+        return request.user.owned_access_code_groups.exists()
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request).select_related("owner_user", "assigned_user", "source_group", "created_by")
+        if request.user.is_superuser:
+            return qs
+        return qs.filter(source=LiteLLMKeySourceChoice.ADMIN_GROUP, source_group__group_owner=request.user)
+
+    def has_change_permission(self, request, obj=None):
+        if request.user.is_superuser:
+            return True
+        if obj is None:
+            return request.user.owned_access_code_groups.exists()
+        return obj.source == LiteLLMKeySourceChoice.ADMIN_GROUP and obj.source_group and obj.source_group.group_owner_id == request.user.id
+
+    def has_delete_permission(self, request, obj=None):
+        return self.has_change_permission(request, obj)
+
+    def has_add_permission(self, request):
+        return bool(request.user.is_superuser)
+
+    def get_readonly_fields(self, request, obj=None):
+        ro = list(super().get_readonly_fields(request, obj))
+        if obj is not None:
+            # Source/owner fields are immutable post-create — changing them
+            # would silently re-route a credential. Force delete + recreate.
+            ro += ["source", "owner_user", "assigned_user", "source_group"]
+        return tuple(ro)
+
+    def save_model(self, request, obj, form, change):
+        if not change:
+            obj.created_by = request.user
+        super().save_model(request, obj, form, change)
+
+    def owner_display(self, obj):
+        if obj.source == LiteLLMKeySourceChoice.USER:
+            return f"User: {obj.owner_user}" if obj.owner_user else "User: -"
+        if obj.source == LiteLLMKeySourceChoice.ADMIN_USER:
+            return f"Assigned: {obj.assigned_user}" if obj.assigned_user else "Assigned: -"
+        if obj.source == LiteLLMKeySourceChoice.ADMIN_GROUP:
+            return f"Group: {obj.source_group}" if obj.source_group else "Group: -"
+        return ""
+    owner_display.short_description = _("Owner")
+
+    def is_expired_flag(self, obj):
+        return obj.is_expired
+    is_expired_flag.boolean = True
+    is_expired_flag.short_description = _("Expired")
+
+    @admin.action(description=_("Revoke selected (set expires_at = now)"))
+    def revoke_selected(self, request, queryset):
+        # Hard delete preserves no audit trail; setting expires_at=now does.
+        # This also fires the LiteLLMKey-driven UserWalletPreference reset
+        # implicitly because visible_for_user filters out past-expiry.
+        updated = queryset.update(expires_at=timezone.now())
+        self.message_user(request, f"Revoked {updated} key(s) by setting expires_at=now.", level=messages.INFO)
+
+
+# --- LiteLLM cohort key inline on AccessCodeGroupAdmin --------------------
+#
+# Wired up in users/admin.py to keep AccessCodeGroupAdmin as the single
+# registration site for that model. Importing here would create a circular
+# admin discovery dependency.
+
+
+# --- User wallet preference ----------------------------------------------
+
+@admin.register(UserWalletPreference)
+class UserWalletPreferenceAdmin(admin.ModelAdmin):
+    """
+    Read-mostly view of per-user active wallet selections. Admins should
+    NOT silently override a users selection — instead, revoking the
+    underlying credential triggers a server-side cascade-reset.
+    """
+    list_display = ("user", "active_wallet_type", "active_wallet_ref_id", "updated_at")
+    list_filter = ("active_wallet_type",)
+    search_fields = ("user__email",)
+    readonly_fields = ("user", "active_wallet_type", "active_wallet_ref_id", "created_at", "updated_at")
+
+    def has_module_permission(self, request):
+        return bool(request.user.is_superuser)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
