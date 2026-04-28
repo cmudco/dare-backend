@@ -26,5 +26,19 @@ class PolicySourceChoice(models.TextChoices):
     SYSTEM = "SYSTEM", _("System default")
 
 
+class LiteLLMKeySourceChoice(models.TextChoices):
+    """Where a LiteLLMKey row originated from."""
+    USER = "USER", _("User self-served")
+    ADMIN_USER = "ADMIN_USER", _("Admin issued to user")
+    ADMIN_GROUP = "ADMIN_GROUP", _("Admin issued to group")
+
+
+class UserWalletPreferenceTypeChoice(models.TextChoices):
+    """Active wallet type a user has selected for routing LLM calls."""
+    DARE = "DARE", _("DARE Wallet")
+    BYO = "BYO", _("BYO Key")
+    LITELLM = "LITELLM", _("LiteLLM Key")
+
+
 DEFAULT_REFILL_AMOUNT = "5.00"
 DEFAULT_REFILL_PERIOD_DAYS = 30

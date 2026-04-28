@@ -275,16 +275,41 @@ class WalletService:
         return last + timedelta(days=policy.period_days)
 
     @staticmethod
-    def debit_wallet(user, amount, message="", llm=None, input_tokens=0, output_tokens=0):
-        """Debit amount from user's wallet."""
+    def debit_wallet(
+        user,
+        amount,
+        message="",
+        llm=None,
+        input_tokens=0,
+        output_tokens=0,
+        billing_mode=None,
+        related_group=None,
+    ):
+        """
+        Record a usage transaction for ``user``.
+
+        For ``billing_mode == WALLET`` (default) this debits the user's DARE
+        wallet — existing behaviour preserved.
+
+        For ``billing_mode == OWN_API`` (BYO) or ``LITELLM`` the transaction is
+        recorded for analytics but the DARE wallet balance is not touched
+        (external billing). The mode is propagated through ``Transaction.save``
+        which skips the wallet mutation in those cases.
+        """
+        kwargs = dict(
+            user=user,
+            amount=amount,
+            type=TransactionTypeChoice.DEBIT,
+            message=message,
+            llm=llm,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            source=TransactionSourceChoice.USAGE,
+        )
+        if billing_mode is not None:
+            kwargs["billing_mode"] = billing_mode
+        if related_group is not None:
+            kwargs["related_group"] = related_group
+
         with transaction.atomic():
-            return Transaction.objects.create(
-                user=user,
-                amount=amount,
-                type=TransactionTypeChoice.DEBIT,
-                message=message,
-                llm=llm,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-                source=TransactionSourceChoice.USAGE,
-            )
+            return Transaction.objects.create(**kwargs)

@@ -1,8 +1,13 @@
 from rest_framework import serializers
 
-from billing.constants import PolicySourceChoice
+from billing.constants import (
+    PolicySourceChoice,
+    LiteLLMKeySourceChoice,
+    UserWalletPreferenceTypeChoice,
+)
 from billing.models import (
     GroupWallet,
+    LiteLLMKey,
     SystemRefillPolicy,
     Transaction,
     UserRefillOverride,
@@ -185,3 +190,98 @@ class OwnedGroupSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+
+
+# === Multi-wallet selection / list ========================================
+
+class ActiveWalletRefSerializer(serializers.Serializer):
+    """Pointer to the currently-active wallet in the unified list."""
+    type = serializers.ChoiceField(choices=UserWalletPreferenceTypeChoice.choices)
+    ref_id = serializers.CharField(allow_null=True)
+
+
+class WalletStatusSerializer(serializers.Serializer):
+    """
+    Discriminated wallet status. `kind` selects which named fields apply
+    (per the data-schema-contract rule: no wire-level unions; type-tagged
+    variants only).
+    """
+    kind = serializers.CharField()  # "BALANCE" or "EXTERNAL"
+    balance = serializers.CharField(required=False, allow_null=True)        # BALANCE only
+    last_refill_at = serializers.DateTimeField(required=False, allow_null=True)  # BALANCE only
+
+
+class UnifiedWalletSerializer(serializers.Serializer):
+    """
+    Single row in the wallet picker (popover + Billing page). Type-specific
+    fields are individually optional rather than a union — FE narrows by
+    `type`, then by `status.kind`.
+    """
+    type = serializers.ChoiceField(choices=UserWalletPreferenceTypeChoice.choices)
+    ref_id = serializers.CharField(allow_null=True)
+    label = serializers.CharField()
+    is_default = serializers.BooleanField()
+    is_active = serializers.BooleanField()
+    status = WalletStatusSerializer()
+    # Type-specific named fields:
+    provider = serializers.CharField(required=False, allow_null=True)            # BYO only
+    source = serializers.ChoiceField(                                            # LITELLM only
+        choices=LiteLLMKeySourceChoice.choices, required=False, allow_null=True
+    )
+    group_name = serializers.CharField(required=False, allow_null=True)          # LITELLM ADMIN_GROUP only
+    expires_at = serializers.DateTimeField(required=False, allow_null=True)      # LITELLM only
+    base_url = serializers.CharField(required=False, allow_null=True)            # LITELLM only (display)
+
+
+class WalletsListResponseSerializer(serializers.Serializer):
+    """Envelope for GET /api/billing/wallets/."""
+    active_wallet = ActiveWalletRefSerializer()
+    byo_enabled = serializers.BooleanField()
+    wallets = UnifiedWalletSerializer(many=True)
+
+
+class SetActiveWalletRequestSerializer(serializers.Serializer):
+    """Body for PUT /api/billing/wallets/active/."""
+    type = serializers.ChoiceField(choices=UserWalletPreferenceTypeChoice.choices)
+    ref_id = serializers.CharField(allow_null=True, required=False)
+
+
+class FeatureFlagsSerializer(serializers.Serializer):
+    """Body for GET /api/billing/feature-flags/."""
+    byo_enabled = serializers.BooleanField()
+
+
+# === LiteLLM key CRUD =====================================================
+
+class LiteLLMKeyCreateSerializer(serializers.Serializer):
+    """Body for POST /api/billing/wallets/litellm/. Creates a USER-source key."""
+    label = serializers.CharField(max_length=128)
+    base_url = serializers.URLField()
+    api_key = serializers.CharField(max_length=500, write_only=True)
+
+
+class LiteLLMKeyRenameSerializer(serializers.Serializer):
+    """Body for PATCH /api/billing/wallets/litellm/{id}/. Label change only."""
+    label = serializers.CharField(max_length=128)
+
+
+class LiteLLMKeyReadSerializer(serializers.ModelSerializer):
+    """
+    Display shape for a LiteLLM key. Never emits the api_key field; the EncryptedCharField
+    decrypts internally only for routing, never for serialization.
+    """
+    group_name = serializers.CharField(source="source_group.access_code", read_only=True, default=None)
+
+    class Meta:
+        model = LiteLLMKey
+        fields = [
+            "id",
+            "label",
+            "base_url",
+            "source",
+            "group_name",
+            "expires_at",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
