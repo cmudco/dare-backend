@@ -17,13 +17,14 @@ class FileAdmin(admin.ModelAdmin):
         "user",
         "file_type",
         "size",
+        "syftbox_etag",
         "display_tags",
         "storage_backend",
         "source_file",
         "created_at",
         "vector_db_source",
     )
-    search_fields = ("name", "user__email", "file_type")
+    search_fields = ("name", "user__email", "file_type", "syftbox_etag")
     list_filter = ("file_type", "created_at", "vector_db_source", "storage_backend")
     ordering = ("-created_at",)
     raw_id_fields = ("source_file",)
