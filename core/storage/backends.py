@@ -50,6 +50,7 @@ class SyftBoxStorage(Storage):
         """
         self._user_email = user_email
         self._app_name = settings.SYFTBOX.get("APP_NAME", "dare")
+        self.last_upload_etag: Optional[str] = None
 
     def get_access_token(self) -> str:
         """SyftBox access token (refreshes via ``User.access_token`` when expired)."""
@@ -152,12 +153,16 @@ class SyftBoxStorage(Storage):
         return File(io.BytesIO(data))
 
     def _save(self, name: str, content) -> str:
+        """Persist file content and return the saved relative name."""
         data = self._read_file_content_as_bytes(content)
+        self.last_upload_etag = None
 
         if data:
             token, acl_path, pattern = self.build_permission_context(name)
             file_path = self._build_file_path(name)
-            SyftBoxFileService().upload(token, file_path, data)
+            upload_result = SyftBoxFileService().upload(token, file_path, data)
+            if isinstance(upload_result, dict):
+                self.last_upload_etag = upload_result.get("etag")
             SyftBoxApiPermissionService(owner_email=self._user_email).set_read_permissions(
                 access_token=token,
                 acl_path=acl_path,

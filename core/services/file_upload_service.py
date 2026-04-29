@@ -72,6 +72,51 @@ class FileUploadService:
         return True, None
 
     @staticmethod
+    def validate_file_metadata(
+        *,
+        size: int | None,
+        content_type: str | None,
+    ) -> tuple[bool, Optional[str]]:
+        """Validate file metadata when no uploaded file object exists."""
+        if not size or size == 0:
+            return False, "Empty file not allowed"
+
+        if content_type and content_type.split("/")[-1] not in ALLOWED_FILES:
+            return False, f"File type {content_type} not allowed"
+
+        return True, None
+
+    @staticmethod
+    def create_file_record(
+        *,
+        user,
+        name: str | None,
+        size: int | None,
+        file_type: str | None,
+        storage_backend: int,
+        is_valid: bool,
+        is_media: bool,
+        media_type: str | None,
+    ) -> File:
+        """Create a File row from computed metadata/status flags."""
+        file_status = (
+            FileStatus.FAILED
+            if not is_valid
+            else (FileStatus.PROCESSED if is_media else FileStatus.PROCESSING)
+        )
+        return File.active_objects.create(
+            user=user,
+            name=name,
+            size=size,
+            file_type=file_type,
+            storage_backend=storage_backend,
+            status=file_status,
+            vector_db_source=user.vector_db if (is_valid and not is_media) else None,
+            is_media=is_media,
+            media_type=media_type,
+        )
+
+    @staticmethod
     def create_file_instance(uploaded_file, file_name: str, user, tag_ids: List[int] = None, *, chunk_size: int | None = None, overlap_size: int | None = None) -> File:
         """
         Create a file instance in the database.
@@ -90,24 +135,19 @@ class FileUploadService:
         # Detect if this is a media file (image/video)
         is_media, media_type = FileUploadService.detect_media_type(uploaded_file.content_type)
 
-        # Media files should be marked as PROCESSED immediately (no vectorization needed)
-        # Document files go through PROCESSING status and background job
-        file_status = FileStatus.FAILED if not is_valid else (FileStatus.PROCESSED if is_media else FileStatus.PROCESSING)
-
         # Get storage backend based on user preference
         storage_backend = getattr(user, 'storage_backend', StorageBackendChoice.LOCAL)
 
-        # Create File instance (without saving file yet)
-        file_instance = File(
-            name=file_name,
-            file_type=uploaded_file.content_type,
-            size=uploaded_file.size,
+        # Create File instance (without saving uploaded bytes yet)
+        file_instance = FileUploadService.create_file_record(
             user=user,
-            status=file_status,
-            vector_db_source=user.vector_db if not is_media else None,  # No vector DB for media files
+            name=file_name,
+            size=uploaded_file.size,
+            file_type=uploaded_file.content_type,
+            storage_backend=storage_backend,
+            is_valid=is_valid,
             is_media=is_media,
             media_type=media_type,
-            storage_backend=storage_backend,
         )
 
         file_instance.file.save(file_name, uploaded_file, save=False)
