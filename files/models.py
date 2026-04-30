@@ -166,6 +166,13 @@ class File(BaseModel):
         verbose_name=_("Storage Backend"),
         help_text=_("Storage backend for this file (local or SyftBox)"),
     )
+    syftbox_etag = models.CharField(
+        max_length=128,
+        blank=True,
+        null=True,
+        verbose_name=_("SyftBox ETag"),
+        help_text=_("Last known SyftBox ETag used to detect remote content changes"),
+    )
 
     # Lineage tracking
     source_file = models.ForeignKey(

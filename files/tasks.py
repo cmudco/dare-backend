@@ -67,6 +67,18 @@ def process_file_embeddings(file_id, chunk_size=None, overlap_size=None):
         except Exception as update_error:
             pass
 
+
+@job
+def refresh_file_embeddings(file_id, user_id, chunk_size=None, overlap_size=None):
+    """Replace previous vectors and regenerate embeddings for a file."""
+    try:
+        delete_file_vectors(file_id, user_id)
+    except Exception:
+        # Proceed with regeneration even if cleanup fails.
+        pass
+    process_file_embeddings(file_id, chunk_size, overlap_size)
+
+
 @job
 def delete_file_vectors(file_id, user_id):
     """Delete file vectors from the correct vector DB."""
