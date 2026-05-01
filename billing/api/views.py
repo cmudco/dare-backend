@@ -19,6 +19,7 @@ from billing.api.serializers import (
     LiteLLMKeyCreateSerializer,
     LiteLLMKeyReadSerializer,
     LiteLLMKeyRenameSerializer,
+    LiteLLMTestRequestSerializer,
     MemberRowSerializer,
     OwnedGroupSerializer,
     SetActiveWalletRequestSerializer,
@@ -29,11 +30,14 @@ from billing.api.serializers import (
     WalletSerializer,
     WalletsListResponseSerializer,
 )
+from billing.litellm_probe import probe_litellm_connection
+from api_keys.constants import BillingModeChoice
 from billing.constants import (
     TransactionTypeChoice,
     LiteLLMKeySourceChoice,
     UserWalletPreferenceTypeChoice,
 )
+from users.constants import AuthSourceChoice
 from billing.group_wallet_service import (
     AllocateToMemberRequest,
     FundGroupBudgetRequest,
@@ -90,24 +94,52 @@ class BillingViewSet(viewsets.ViewSet):
     @action(detail=False, methods=['get'])
     def transactions(self, request):
         """
-        List all transactions for the authenticated user filtered by platform.
+        List the authenticated user's transactions, paginated and filtered.
 
-        Each platform (DARE or SocraticBots) only sees its own transactions.
+        Query params (all optional):
+            platform:     "ALL" | "DARE" | "SocraticBots"
+                          When omitted, defaults to the platform detected from
+                          the auth scope (preserves the SocraticBots backend's
+                          behavior when it calls without the param).
+            billing_mode: "wallet" | "own_api"
+                          Filter results to a single billing mode.
+
+        The response wraps DRF's standard paginated payload and adds a
+        `summary` object with counts per billing mode under the current
+        platform filter, so tab badges in the UI can display accurate totals
+        across all pages rather than just the current page.
         """
-        platform = detect_platform_from_request(request)
+        platform_param = request.query_params.get("platform")
+        billing_mode_param = request.query_params.get("billing_mode")
 
-        queryset = Transaction.objects.filter(
-            user=request.user,
-            platform=platform
-        ).order_by('-created_at')
+        base_qs = Transaction.objects.filter(user=request.user)
+
+        if platform_param == "ALL":
+            pass
+        elif platform_param in AuthSourceChoice.values:
+            base_qs = base_qs.filter(platform=platform_param)
+        else:
+            base_qs = base_qs.filter(platform=detect_platform_from_request(request))
+
+        summary = {
+            "all": base_qs.count(),
+            "wallet": base_qs.filter(billing_mode=BillingModeChoice.WALLET).count(),
+            "ownApi": base_qs.filter(billing_mode=BillingModeChoice.OWN_API).count(),
+        }
+
+        queryset = base_qs.order_by("-created_at")
+        if billing_mode_param in BillingModeChoice.values:
+            queryset = queryset.filter(billing_mode=billing_mode_param)
 
         page = self.paginate_queryset(queryset)
         if page is not None:
             serializer = TransactionSerializer(page, many=True)
-            return self.get_paginated_response(serializer.data)
+            response = self.get_paginated_response(serializer.data)
+            response.data["summary"] = summary
+            return response
 
         serializer = TransactionSerializer(queryset, many=True)
-        return Response(serializer.data)
+        return Response({"results": serializer.data, "summary": summary})
 
     @action(detail=False, methods=['get'])
     def model_stats(self, request):
@@ -550,6 +582,31 @@ class LiteLLMKeyViewSet(viewsets.GenericViewSet,
         # cascade-reset of UserWalletPreference for any user whose active
         # wallet pointed at this key.
         return super().destroy(request, *args, **kwargs)
+
+    @action(detail=False, methods=['post'], url_path='test')
+    def test_unsaved(self, request):
+        """Probe an unsaved {base_url, api_key} pair so the modal can verify
+        the LiteLLM proxy is reachable before persisting the row. Always 200;
+        a failed probe is communicated via the `ok` field in the body."""
+        s = LiteLLMTestRequestSerializer(data=request.data)
+        s.is_valid(raise_exception=True)
+        result = probe_litellm_connection(
+            s.validated_data["base_url"],
+            s.validated_data["api_key"],
+        )
+        return Response(
+            {"ok": result.ok, "models": result.models, "error": result.error}
+        )
+
+    @action(detail=True, methods=['post'], url_path='test')
+    def test_saved(self, request, pk=None):
+        """Probe a stored key. Restricted to keys the user owns (USER source)
+        per the viewset's queryset filter."""
+        key = self.get_object()
+        result = probe_litellm_connection(key.base_url, key.api_key)
+        return Response(
+            {"ok": result.ok, "models": result.models, "error": result.error}
+        )
 
 
 class SystemRefillPolicyViewSet(viewsets.ViewSet):
