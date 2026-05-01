@@ -265,6 +265,12 @@ class LiteLLMKeyRenameSerializer(serializers.Serializer):
     label = serializers.CharField(max_length=128)
 
 
+class LiteLLMTestRequestSerializer(serializers.Serializer):
+    """Body for POST /api/billing/wallets/litellm/test/ — pre-save probe."""
+    base_url = serializers.URLField()
+    api_key = serializers.CharField(max_length=500, write_only=True)
+
+
 class LiteLLMKeyReadSerializer(serializers.ModelSerializer):
     """
     Display shape for a LiteLLM key. Never emits the api_key field; the EncryptedCharField
