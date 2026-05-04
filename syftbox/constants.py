@@ -10,5 +10,7 @@ BLOB_UPLOAD = f"{BASE_URL}/api/v1/blob/upload"
 BLOB_UPLOAD_ACL = f"{BASE_URL}/api/v1/blob/upload/acl"
 BLOB_DOWNLOAD = f"{BASE_URL}/api/v1/blob/download"
 BLOB_DELETE = f"{BASE_URL}/api/v1/blob/delete"
+DATASITE_VIEW = f"{BASE_URL}/api/v1/datasite/view"
+DATASITE_SYNC_FOLDER = "app_data/dare/files/"
 
 REQUEST_TIMEOUT = 15
