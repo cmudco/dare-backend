@@ -9,7 +9,7 @@ from core.services.file_upload_service import FileUploadService
 from core.storage.constants import StorageBackendChoice
 from files.models import File
 from files.tasks import process_file_embeddings, refresh_file_embeddings
-from syftbox.dtos import RemoteFileDTO, SyncResultDTO
+from syftbox.dtos import RemoteSyftBoxFile, SyftBoxSyncResult
 from syftbox.enums import SyftBoxSyncAction
 from syftbox.utils import (
     has_remote_etag_change,
@@ -36,8 +36,8 @@ class SyftBoxSyncService:
         self,
         *,
         user: User,
-        remote_files: list[RemoteFileDTO],
-    ) -> SyncResultDTO:
+        remote_files: list[RemoteSyftBoxFile],
+    ) -> SyftBoxSyncResult:
         """Sync SyftBox file list into DB."""
 
         existing_db_files = File.active_objects.filter(
@@ -52,7 +52,7 @@ class SyftBoxSyncService:
 
         remote_paths = self._collect_remote_paths(remote_files)
 
-        result = SyncResultDTO(
+        result = SyftBoxSyncResult(
             total_remote=len(remote_files),
             kept=0,
         )
@@ -76,9 +76,9 @@ class SyftBoxSyncService:
         self,
         *,
         user: User,
-        remote_files: list[RemoteFileDTO],
+        remote_files: list[RemoteSyftBoxFile],
         existing_files_by_path: dict[str, File],
-        result: SyncResultDTO,
+        result: SyftBoxSyncResult,
     ) -> None:
         """Create missing files and refresh embeddings for changed files."""
 
@@ -150,7 +150,7 @@ class SyftBoxSyncService:
         *,
         existing_files_by_path: dict[str, File],
         remote_paths: set[str],
-        result: SyncResultDTO,
+        result: SyftBoxSyncResult,
     ) -> None:
         """Delete DB records that no longer exist in the remote snapshot."""
 
@@ -177,7 +177,7 @@ class SyftBoxSyncService:
 
     def _collect_remote_paths(
         self,
-        remote_files: list[RemoteFileDTO],
+        remote_files: list[RemoteSyftBoxFile],
     ) -> set[str]:
         """Return normalized non-ACL remote file paths for fast lookup."""
 
@@ -195,7 +195,7 @@ class SyftBoxSyncService:
         self,
         *,
         user: User,
-        remote_file: RemoteFileDTO,
+        remote_file: RemoteSyftBoxFile,
         normalized_path: str,
     ) -> File:
         """
@@ -248,7 +248,7 @@ class SyftBoxSyncService:
         self,
         *,
         db_file: File,
-        remote_file: RemoteFileDTO,
+        remote_file: RemoteSyftBoxFile,
     ) -> None:
         """Persist updated metadata and re-run embeddings for changed files."""
 
@@ -270,7 +270,7 @@ class SyftBoxSyncService:
         self,
         *,
         db_file: File,
-        remote_file: RemoteFileDTO,
+        remote_file: RemoteSyftBoxFile,
     ) -> None:
         """Backfill etag/size metadata for unchanged files."""
 
@@ -283,7 +283,7 @@ class SyftBoxSyncService:
         self,
         *,
         db_file: File,
-        remote_file: RemoteFileDTO,
+        remote_file: RemoteSyftBoxFile,
     ) -> None:
         """Update DB file metadata using current remote descriptor values."""
 

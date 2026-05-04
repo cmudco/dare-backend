@@ -10,11 +10,11 @@ class AuthTokens:
 
 
 @dataclass(frozen=True)
-class RemoteFileDTO:
+class RemoteSyftBoxFile:
     """
-    Normalized SyftBox file descriptor used by sync coordinator.
+    One file entry from SyftBox (datasite listing or equivalent).
 
-    Carries metadata required for sync create/update/delete decisions.
+    Used by sync to decide create, update, delete, and embedding refresh.
     """
 
     path: str
@@ -25,8 +25,8 @@ class RemoteFileDTO:
 
 
 @dataclass
-class SyncResultDTO:
-    """Summary counters returned by a sync execution."""
+class SyftBoxSyncResult:
+    """Counters and errors from one SyftBox sync run."""
 
     total_remote: int = 0
     created: int = 0
