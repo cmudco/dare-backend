@@ -1,0 +1,498 @@
+/* ════════════════════════════════════════════════════════════════════
+   Usage Dashboard — shadcn-flavored Django admin override.
+   All values stay scoped under #dash so the rest of the admin is untouched.
+   ════════════════════════════════════════════════════════════════════ */
+
+#dash {
+  /* surfaces */
+  --bg:        #f8fafc;
+  --card:      #ffffff;
+  --card-2:    #f1f5f9;
+  --border:    rgba(15, 23, 42, 0.08);
+  --row-hover: #f8fafc;
+
+  /* text scale */
+  --t1: #0f172a;  /* primary */
+  --t2: #334155;  /* body */
+  --t3: #64748b;  /* meta */
+  --t4: #94a3b8;  /* faint */
+
+  /* shadows — subtle, shadcn-like */
+  --shadow:    0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-md: 0 2px 8px rgba(15, 23, 42, 0.06);
+
+  /* accents */
+  --blue:   #3b82f6;  --blue-bg:   rgba(59, 130, 246, 0.10);
+  --green:  #10b981;  --green-bg:  rgba(16, 185, 129, 0.10);
+  --amber:  #f59e0b;  --amber-bg:  rgba(245, 158, 11, 0.10);
+  --purple: #8b5cf6;  --purple-bg: rgba(139, 92, 246, 0.10);
+  --rose:   #f43f5e;  --rose-bg:   rgba(244, 63, 94, 0.10);
+  --teal:   #14b8a6;  --teal-bg:   rgba(20, 184, 166, 0.10);
+  --indigo: #6366f1;  --indigo-bg: rgba(99, 102, 241, 0.10);
+
+  /* chart-specific */
+  --ch-text: #64748b;
+  --ch-grid: rgba(15, 23, 42, 0.06);
+}
+
+/* Dark mode — neutral grays tuned to pair with Django admin's own
+   #121212 body / #212121 darkened-bg / #353535 border palette. Avoid
+   blue-tinted slate so the cards don't fight Django's #264b5d header. */
+html[data-theme="dark"] #dash {
+  --bg:        #121212;
+  --card:      #1e1e1e;
+  --card-2:    #262626;
+  --border:    #353535;
+  --row-hover: rgba(255, 255, 255, 0.04);
+  --t1: #f5f5f5;  --t2: #d4d4d4;  --t3: #a3a3a3;  --t4: #737373;
+  --shadow:    0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.4);
+  --blue-bg:   rgba(59, 130, 246, 0.18);
+  --green-bg:  rgba(16, 185, 129, 0.18);
+  --amber-bg:  rgba(245, 158, 11, 0.18);
+  --purple-bg: rgba(139, 92, 246, 0.18);
+  --rose-bg:   rgba(244, 63, 94, 0.18);
+  --teal-bg:   rgba(20, 184, 166, 0.18);
+  --indigo-bg: rgba(99, 102, 241, 0.18);
+  --ch-text: #a3a3a3;
+  --ch-grid: rgba(255, 255, 255, 0.07);
+}
+
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme="light"]) #dash {
+    --bg:        #121212;
+    --card:      #1e1e1e;
+    --card-2:    #262626;
+    --border:    #353535;
+    --row-hover: rgba(255, 255, 255, 0.04);
+    --t1: #f5f5f5;  --t2: #d4d4d4;  --t3: #a3a3a3;  --t4: #737373;
+    --shadow:    0 1px 2px rgba(0, 0, 0, 0.5);
+    --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.4);
+    --blue-bg:   rgba(59, 130, 246, 0.18);
+    --green-bg:  rgba(16, 185, 129, 0.18);
+    --amber-bg:  rgba(245, 158, 11, 0.18);
+    --purple-bg: rgba(139, 92, 246, 0.18);
+    --rose-bg:   rgba(244, 63, 94, 0.18);
+    --teal-bg:   rgba(20, 184, 166, 0.18);
+    --indigo-bg: rgba(99, 102, 241, 0.18);
+    --ch-text: #a3a3a3;
+    --ch-grid: rgba(255, 255, 255, 0.07);
+  }
+}
+
+/* ── Shell ──────────────────────────────────────────────────────── */
+#dash {
+  padding: 24px 20px 48px;
+  margin: -20px -20px 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", Roboto, sans-serif;
+  color: var(--t2);
+  min-height: 80vh;
+  box-sizing: border-box;
+}
+#dash * { box-sizing: border-box; }
+
+/* ── Sticky header / period tabs ───────────────────────────────── */
+.db-top {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin: 0 -20px 24px;
+  padding: 16px 20px;
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--border);
+}
+.db-title-block h1 {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--t1);
+  margin: 0 0 2px;
+  letter-spacing: -0.3px;
+}
+.db-title-block p {
+  font-size: 12.5px;
+  color: var(--t3);
+  margin: 0;
+}
+
+.period-tabs {
+  display: inline-flex;
+  gap: 2px;
+  background: var(--card-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 3px;
+}
+.period-tabs a {
+  padding: 5px 14px;
+  border-radius: 6px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--t3);
+  text-decoration: none;
+  transition: background 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+.period-tabs a:hover {
+  background: var(--card);
+  color: var(--t1);
+  text-decoration: none;
+}
+.period-tabs a.on {
+  background: var(--card);
+  color: var(--t1);
+  box-shadow: var(--shadow);
+}
+
+/* ── Section heading ───────────────────────────────────────────── */
+.sh {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 32px 0 12px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--t3);
+}
+.sh em {
+  font-style: normal;
+  font-size: 10.5px;
+  font-weight: 500;
+  color: var(--t4);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.sh::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+.sh svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  stroke-width: 2;
+  fill: none;
+  flex-shrink: 0;
+}
+
+/* ── KPI grid ──────────────────────────────────────────────────── */
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+}
+.kpi {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 16px;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  transition: box-shadow 0.18s, transform 0.18s;
+}
+.kpi:hover {
+  box-shadow: var(--shadow-md);
+}
+.kpi-lbl-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.kpi-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--kc, var(--blue));
+  flex-shrink: 0;
+}
+.kpi-lbl {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  color: var(--t3);
+}
+.kpi-val {
+  font-size: 26px;
+  font-weight: 700;
+  color: var(--t1);
+  line-height: 1;
+  margin-bottom: 4px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.4px;
+}
+.kpi-sub {
+  font-size: 11.5px;
+  color: var(--t4);
+  line-height: 1.4;
+}
+.kpi-delta {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 11px;
+  font-weight: 600;
+  margin-top: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  width: fit-content;
+}
+.kpi-delta.d-up { background: var(--green-bg); color: var(--green); }
+.kpi-delta.d-dn { background: var(--rose-bg);  color: var(--rose);  }
+.kpi-fixed { opacity: 0.92; }
+
+/* ── Card ──────────────────────────────────────────────────────── */
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 18px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.card-hd {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--t1);
+  margin: 0 0 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.card-hd em {
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--t4);
+  margin-left: auto;
+}
+
+/* Two-col grid — minmax(0,1fr) keeps Chart.js canvases from overflowing */
+.g2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+@media (max-width: 1080px) {
+  .g2 { grid-template-columns: 1fr; }
+}
+
+/* Provider donut + table side-by-side */
+.split-2-3 {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  gap: 12px;
+  margin-bottom: 12px;
+}
+@media (max-width: 980px) {
+  .split-2-3 { grid-template-columns: 1fr; }
+}
+
+.ch-wrap {
+  position: relative;
+  width: 100%;
+  height: 240px;
+  overflow: hidden;
+}
+.ch-wrap.tall { height: 280px; }
+.ch-wrap canvas {
+  display: block;
+  max-width: 100% !important;
+  max-height: 100% !important;
+}
+
+.ch-legend {
+  display: flex;
+  gap: 14px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+.ch-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  color: var(--t3);
+}
+.ch-legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* Tabbed dataset toggle inside a card */
+.toggle-tabs {
+  display: inline-flex;
+  gap: 0;
+  margin-left: auto;
+  background: var(--card-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px;
+}
+.toggle-tabs button {
+  padding: 4px 10px;
+  font-size: 11.5px;
+  font-weight: 500;
+  border: 0;
+  background: transparent;
+  color: var(--t3);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.toggle-tabs button:hover { color: var(--t1); }
+.toggle-tabs button.on {
+  background: var(--card);
+  color: var(--t1);
+  box-shadow: var(--shadow);
+}
+
+/* ── Tables ────────────────────────────────────────────────────── */
+.dt {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  color: var(--t2);
+}
+.dt thead th {
+  background: var(--card-2);
+  padding: 9px 12px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--t3);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  text-align: left;
+}
+.dt tbody td {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--t2);
+  vertical-align: middle;
+}
+.dt tbody tr:last-child td { border-bottom: none; }
+.dt tbody tr:hover td      { background: var(--row-hover); }
+/* Numeric columns shrink-wrap to content so they sit close to their headers
+   instead of getting padded out by the table's auto-layout. The first text
+   column inherits the leftover space. */
+.dt thead th.nr,
+.dt tbody td.nr {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  width: 1%;
+  white-space: nowrap;
+  padding-left: 24px;
+}
+.mn { font-family: ui-monospace, SFMono-Regular, "Fira Code", monospace; font-size: 12px; color: var(--t2); }
+.ts { font-size: 11.5px; color: var(--t3); }
+.rk { font-size: 11px; font-weight: 700; color: var(--t4); text-align: center; width: 30px; }
+
+/* ── Badges ────────────────────────────────────────────────────── */
+.bx {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.bx-dare   { background: var(--green-bg);  color: var(--green); }
+.bx-sb     { background: var(--blue-bg);   color: var(--blue);  }
+.bx-wallet { background: var(--amber-bg);  color: var(--amber); }
+.bx-own    { background: var(--purple-bg); color: var(--purple); }
+.bx-power  { background: var(--indigo-bg); color: var(--indigo); margin-left: 6px; }
+.bx-tier-premium  { background: var(--purple-bg); color: var(--purple); }
+.bx-tier-advanced { background: var(--blue-bg);   color: var(--blue);  }
+.bx-tier-flash    { background: var(--teal-bg);   color: var(--teal);  }
+
+.provider-swatch {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+
+/* ── Health divider ───────────────────────────────────────────── */
+.health-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 32px 0 18px;
+  padding: 14px 18px;
+  background: var(--card-2);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.health-divider svg {
+  width: 18px;
+  height: 18px;
+  stroke: var(--t2);
+  stroke-width: 2;
+  fill: none;
+  flex-shrink: 0;
+}
+.health-divider-text strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--t1);
+  display: block;
+  margin-bottom: 1px;
+}
+.health-divider-text span {
+  font-size: 11.5px;
+  color: var(--t3);
+}
+
+.dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 6px;
+}
+.dot-warn { background: var(--amber); }
+.dot-err  { background: var(--rose); }
+.sig-hd {
+  display: flex;
+  align-items: center;
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0 0 4px;
+}
+.sig-sub {
+  font-size: 11.5px;
+  color: var(--t3);
+  margin: 0 0 14px;
+}
+
+/* ── Empty state ──────────────────────────────────────────────── */
+.emp {
+  text-align: center;
+  padding: 28px 16px;
+  color: var(--t4);
+  font-size: 13px;
+}
+
+/* ── Hide the unused changelist sidebar/result list ───────────── */
+#dash + #changelist,
+#dash + .module {
+  display: none;
+}

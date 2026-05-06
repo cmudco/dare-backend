@@ -97,7 +97,14 @@ class DynamicStorageFieldFile(FieldFile):
         """Save the file using the appropriate storage backend."""
         storage = self._get_storage()
         name = storage.save(name, content, max_length=self.field.max_length)
+        syftbox_upload_etag = (
+            getattr(storage, "last_upload_etag", None)
+            if isinstance(storage, SyftBoxStorage)
+            else None
+        )
         setattr(self.instance, self.field.attname, name)
+        if syftbox_upload_etag and hasattr(self.instance, "syftbox_etag"):
+            self.instance.syftbox_etag = syftbox_upload_etag
         self._committed = True
 
         if save:
