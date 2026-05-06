@@ -1,7 +1,7 @@
 import uuid
 from decimal import Decimal
 from django.db import models, transaction as db_transaction
-from django.db.models import Q
+from django.db.models import F, Q
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.utils import timezone
@@ -332,6 +332,32 @@ class Transaction(TimeStampMixin):
         help_text=("Platform where this transaction originated: DARE or SocraticBots"),
     )
 
+    # Bot attribution (only populated for bot-driven transactions; SocraticBooks
+    # owns the Bot table so we keep these as plain ints, not FKs across DBs).
+    bot_id = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        db_index=True,
+        verbose_name=_("Bot ID"),
+        help_text=_("Socratic Bot ID (SocraticBooks-owned), set when the call was made through a deployed bot."),
+    )
+    bot_owner = models.ForeignKey(
+        User,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="bot_owned_transactions",
+        verbose_name=_("Bot Owner"),
+        help_text=_("DARE user who owns the Socratic Bot this call was attributed to. Used by the owner usage dashboard."),
+    )
+    fallback_reason = models.CharField(
+        max_length=64,
+        null=True,
+        blank=True,
+        verbose_name=_("Fallback Reason"),
+        help_text=_("When the wallet router couldn't honor the user's preferred wallet (e.g. BYO_PROVIDER_MISSING, LITELLM_EXPIRED), this records why DARE billed instead."),
+    )
+
     # Energy/environmental impact tracking
     energy_wh = models.DecimalField(
         max_digits=10,
@@ -379,53 +405,76 @@ class Transaction(TimeStampMixin):
 
     def save(self, *args, **kwargs):
         """
-        Override save method to handle balance deduction for debit transactions.
+        Override save to debit/credit the wallet atomically alongside the row insert.
 
         Platform-specific behavior:
         - DARE transactions: Deduct from/add to user's wallet balance
         - SocraticBots transactions: Record only (no wallet impact)
 
         Wallet-mode-specific behavior:
-        - WALLET: debit/credit the user's DARE wallet (existing behaviour).
+        - WALLET: debit/credit the user's DARE wallet
         - OWN_API (BYO) or LITELLM: record the transaction for analytics only;
           the cost is paid externally so the DARE wallet balance is untouched.
+
+        Concurrency: the wallet mutation is wrapped in `transaction.atomic()` with
+        `select_for_update()` on the Wallet row and an F() expression for the
+        balance change so two concurrent debits cannot both pass the balance
+        check and overspend.
         """
         is_new = self.pk is None
 
-        if is_new:
-            if self.llm and not self.llm_name:
-                self.llm_name = self.llm.name
+        if not is_new:
+            super().save(*args, **kwargs)
+            return
 
-            external_billing = self.billing_mode in (
-                BillingModeChoice.OWN_API,
-                BillingModeChoice.LITELLM,
-            )
+        if self.llm and not self.llm_name:
+            self.llm_name = self.llm.name
 
-            # Only modify wallet balance for DARE platform transactions paid
-            # from the user's DARE wallet (i.e. NOT external-billing modes).
-            if self.platform == AuthSourceChoice.DARE and not external_billing:
-                try:
-                    wallet = self.user.wallet
-                except self.user.wallet.RelatedObjectDoesNotExist:
-                    wallet = Wallet.objects.create(user=self.user, balance=Decimal('5.00'))
+        external_billing = self.billing_mode in (
+            BillingModeChoice.OWN_API,
+            BillingModeChoice.LITELLM,
+        )
 
-                if self.type == TransactionTypeChoice.DEBIT:
-                    if wallet.balance < self.amount:
-                        raise ValidationError({
-                            'error': ['insufficient_balance'],
-                            'message': ['Insufficient wallet balance'],
-                            'current_balance': [str(wallet.balance)],
-                            'required_amount': [str(self.amount)]
-                        })
-                    wallet.balance -= self.amount
-                elif self.type == TransactionTypeChoice.CREDIT:
-                    wallet.balance += self.amount
+        wallet_affecting = (
+            self.platform == AuthSourceChoice.DARE and not external_billing
+        )
 
-                wallet.save(update_fields=['balance'])
+        if not wallet_affecting:
             # SocraticBots / external-billing transactions are recorded but
             # don't affect the DARE wallet balance.
+            super().save(*args, **kwargs)
+            return
 
-        super().save(*args, **kwargs)
+        with db_transaction.atomic():
+            wallet = (
+                Wallet.objects
+                .select_for_update()
+                .filter(user=self.user)
+                .first()
+            )
+            if wallet is None:
+                # First-call lazy creation; immediately re-lock so subsequent
+                # mutations within this transaction operate on the locked row.
+                Wallet.objects.create(user=self.user, balance=Decimal('5.00'))
+                wallet = Wallet.objects.select_for_update().get(user=self.user)
+
+            if self.type == TransactionTypeChoice.DEBIT:
+                if wallet.balance < self.amount:
+                    raise ValidationError({
+                        'error': ['insufficient_balance'],
+                        'message': ['Insufficient wallet balance'],
+                        'current_balance': [str(wallet.balance)],
+                        'required_amount': [str(self.amount)],
+                    })
+                Wallet.objects.filter(pk=wallet.pk).update(
+                    balance=F('balance') - self.amount
+                )
+            elif self.type == TransactionTypeChoice.CREDIT:
+                Wallet.objects.filter(pk=wallet.pk).update(
+                    balance=F('balance') + self.amount
+                )
+
+            super().save(*args, **kwargs)
 
     def __str__(self):
         """

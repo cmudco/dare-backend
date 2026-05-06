@@ -11,6 +11,7 @@ from billing.models import (
 from billing.constants import (
     UserWalletPreferenceTypeChoice,
 )
+from billing.litellm_models_service import invalidate as invalidate_litellm_probe
 from api_keys.constants import BillingModeChoice
 from api_keys.models import UserProviderAPIKey
 
@@ -162,9 +163,16 @@ def reset_pref_on_litellm_delete(sender, instance, **kwargs):
     reset their preference. For ADMIN_GROUP keys this can affect every member
     of the cohort.
     """
+    invalidate_litellm_probe(instance.pk)
     qs = UserWalletPreference.objects.filter(
         active_wallet_type=UserWalletPreferenceTypeChoice.LITELLM,
         active_wallet_ref_id=str(instance.pk),
     )
     for pref in qs:
         pref.reset_to_dare()
+
+
+@receiver(post_save, sender=LiteLLMKey)
+def invalidate_litellm_probe_on_save(sender, instance, **kwargs):
+    """Drop the cached probe when the key's URL or secret changes."""
+    invalidate_litellm_probe(instance.pk)

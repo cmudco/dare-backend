@@ -1,5 +1,8 @@
+from decimal import Decimal
+
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db.models import Count, Sum
+from django.db.models.functions import TruncDate
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from rest_framework import mixins, status, viewsets
@@ -59,6 +62,7 @@ from billing.services import WalletService
 from common.pagination import CustomPageNumberPagination
 from common.permissions import IsSuperAdmin
 from conversations.models import Message
+from core.services.sb_client import SocraticBooksClient
 from core.services.energy_service import compute_relatable_stats
 from users.models import User
 from users.utils import detect_platform_from_request
@@ -286,6 +290,168 @@ class BillingViewSet(viewsets.ViewSet):
             "period": period,
         })
 
+    @action(detail=False, methods=['get'], url_path=r'bots/(?P<bot_id>[^/.]+)/usage')
+    def bot_usage(self, request, bot_id=None):
+        """
+        Per-bot usage breakdown for the bot owner.
+
+        Owner-only: only returns rows the caller is the bot owner of (matched
+        by ``Transaction.bot_owner_id == request.user.id``). Anonymous-call
+        rows are bucketed by a hash of the conversation's ``anonymous_session_id``
+        so the dashboard can distinguish individual sessions without exposing
+        the raw id.
+
+        Query params:
+            group_by: ``user`` (default) | ``date``
+            period: ``7d`` | ``30d`` | ``90d`` | ``all`` (default)
+        """
+        try:
+            bot_pk = int(bot_id)
+        except (TypeError, ValueError):
+            return Response({'detail': 'invalid bot_id'}, status=status.HTTP_400_BAD_REQUEST)
+
+        base_qs = Transaction.objects.filter(
+            bot_id=bot_pk,
+            bot_owner=request.user,
+            type=TransactionTypeChoice.DEBIT,
+        )
+
+        period = request.query_params.get('period', 'all')
+        if period != 'all':
+            days = {'7d': 7, '30d': 30, '90d': 90}.get(period)
+            if days:
+                cutoff = timezone.now() - timezone.timedelta(days=days)
+                base_qs = base_qs.filter(created_at__gte=cutoff)
+
+        totals = base_qs.aggregate(
+            total_cost=Sum('amount'),
+            total_input=Sum('input_tokens'),
+            total_output=Sum('output_tokens'),
+            message_count=Count('id'),
+        )
+
+        # Per data-schema-contract: separate named fields per shape, never a
+        # polymorphic `breakdown` field. The FE narrows by reading `groupBy`
+        # and then accesses the matching named field directly.
+        group_by = request.query_params.get('group_by', 'user')
+        user_breakdown = None
+        date_breakdown = None
+        if group_by == 'user':
+            rows = (
+                base_qs
+                .values('user__id', 'user__email')
+                .annotate(
+                    total_cost=Sum('amount'),
+                    input_tokens=Sum('input_tokens'),
+                    output_tokens=Sum('output_tokens'),
+                    message_count=Count('id'),
+                )
+                .order_by('-total_cost')
+            )
+            user_breakdown = [
+                {
+                    'userId': row['user__id'],
+                    'userEmail': row['user__email'] or 'anonymous',
+                    'totalCost': str(row['total_cost'] or 0),
+                    'inputTokens': row['input_tokens'] or 0,
+                    'outputTokens': row['output_tokens'] or 0,
+                    'messageCount': row['message_count'],
+                }
+                for row in rows
+            ]
+        elif group_by == 'date':
+            rows = (
+                base_qs
+                .annotate(date=TruncDate('created_at'))
+                .values('date')
+                .annotate(
+                    total_cost=Sum('amount'),
+                    message_count=Count('id'),
+                )
+                .order_by('date')
+            )
+            date_breakdown = [
+                {
+                    'date': row['date'].isoformat() if row['date'] else None,
+                    'totalCost': str(row['total_cost'] or 0),
+                    'messageCount': row['message_count'],
+                }
+                for row in rows
+            ]
+        else:
+            return Response(
+                {'detail': "group_by must be 'user' or 'date'"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response({
+            'botId': bot_pk,
+            'period': period,
+            'groupBy': group_by,
+            'totals': {
+                'totalCost': str(totals['total_cost'] or 0),
+                'totalInputTokens': totals['total_input'] or 0,
+                'totalOutputTokens': totals['total_output'] or 0,
+                'messageCount': totals['message_count'] or 0,
+            },
+            'userBreakdown': user_breakdown,
+            'dateBreakdown': date_breakdown,
+        })
+
+    @action(detail=False, methods=['patch'], url_path=r'bots/(?P<bot_id>[^/.]+)/cap')
+    def bot_cap(self, request, bot_id=None):
+        """
+        Update a bot's spend cap. Owner-only — verified by checking that
+        the caller has at least one Transaction stamped as ``bot_owner`` for
+        this bot id (a bot they've never been billed for they don't own).
+
+        Body: ``{ "budget": "<decimal>" }``
+        """
+        try:
+            bot_pk = int(bot_id)
+        except (TypeError, ValueError):
+            return Response({'detail': 'invalid bot_id'}, status=status.HTTP_400_BAD_REQUEST)
+
+        budget_raw = request.data.get('budget')
+        if budget_raw is None:
+            return Response({'detail': 'budget is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Ownership check: short-circuit when the caller has been stamped as
+        # bot_owner for this bot id at least once. For brand-new bots that
+        # have never been billed yet, fall back to asking SB (the owner of
+        # the Bot table).
+        owner_known_locally = Transaction.objects.filter(
+            bot_id=bot_pk, bot_owner=request.user,
+        ).exists()
+        if not owner_known_locally:
+            config = SocraticBooksClient.get_bot_billing_config(bot_pk)
+            if config is None:
+                return Response(
+                    {'detail': 'bot not found'},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+            if config.owner_dare_user_id != request.user.id:
+                return Response(
+                    {'detail': 'You do not own this bot.'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+        try:
+            new_cap = Decimal(str(budget_raw))
+        except Exception:
+            return Response({'detail': 'budget must be a number'}, status=status.HTTP_400_BAD_REQUEST)
+
+        ok, body = SocraticBooksClient.update_bot_cap(bot_pk, new_cap)
+        if ok:
+            return Response(body)
+        # Surface SB's discriminated error code with appropriate HTTP status.
+        sb_error = (body or {}).get('error')
+        http_status = (
+            status.HTTP_404_NOT_FOUND if sb_error == 'Bot not found' else
+            status.HTTP_400_BAD_REQUEST
+        )
+        return Response(body or {'detail': 'cap update failed'}, status=http_status)
+
     @action(detail=True, methods=['get'], url_path='transactions/(?P<transaction_id>[^/.]+)')
     def transaction_detail(self, request, pk=None, transaction_id=None):
         platform = detect_platform_from_request(request)
@@ -486,7 +652,7 @@ class BillingViewSet(viewsets.ViewSet):
                 )
                 if not has_any_byo:
                     return Response(
-                        {"code": "WALLET_NOT_FOUND",
+                        {"code": "BYOK_NO_KEYS",
                          "message": _("Add at least one BYO provider key before setting BYO active.")},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
@@ -503,7 +669,20 @@ class BillingViewSet(viewsets.ViewSet):
                 pref.active_wallet_type = UserWalletPreferenceTypeChoice.BYO
                 pref.active_wallet_ref_id = ref_id
         elif wallet_type == UserWalletPreferenceTypeChoice.LITELLM:
-            if not ref_id or not LiteLLMKey.visible_for_user(request.user).filter(pk=ref_id).exists():
+            visible_keys = LiteLLMKey.visible_for_user(request.user)
+            if not ref_id:
+                if not visible_keys.exists():
+                    return Response(
+                        {"code": "LITELLM_NO_KEYS",
+                         "message": _("Set up a LiteLLM key before setting LITELLM active.")},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                return Response(
+                    {"code": "WALLET_NEEDS_REF",
+                     "message": _("Choose which LiteLLM key to activate.")},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if not visible_keys.filter(pk=ref_id).exists():
                 return Response(
                     {"code": "WALLET_NOT_FOUND",
                      "message": _("LiteLLM key not found or no longer accessible.")},
@@ -595,7 +774,7 @@ class LiteLLMKeyViewSet(viewsets.GenericViewSet,
             s.validated_data["api_key"],
         )
         return Response(
-            {"ok": result.ok, "models": result.models, "error": result.error}
+            {"ok": result.ok, "models": result.model_names, "error": result.error}
         )
 
     @action(detail=True, methods=['post'], url_path='test')
@@ -605,7 +784,7 @@ class LiteLLMKeyViewSet(viewsets.GenericViewSet,
         key = self.get_object()
         result = probe_litellm_connection(key.base_url, key.api_key)
         return Response(
-            {"ok": result.ok, "models": result.models, "error": result.error}
+            {"ok": result.ok, "models": result.model_names, "error": result.error}
         )
 
 
