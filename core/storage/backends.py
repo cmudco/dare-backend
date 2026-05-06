@@ -179,16 +179,26 @@ class SyftBoxStorage(Storage):
         Args:
             name: File name/path
         """
-        full_path = self._full_path(name)
-        if full_path.exists():
-            try:
-                permission_service = SyftBoxPermissionService()
-                permission_service.remove_file_permissions(full_path)
-            except Exception as e:
-                logger.warning(f"Failed to clean up SyftBox permissions: {e}")
+        token = self.get_access_token()
+        if not token:
+            raise SyftBoxException(
+                SyftBoxErrorCode.INVALID_CREDENTIALS,
+                "SyftBox access token is missing for this user.",
+            )
 
+        file_path = self._build_file_path(name)
+        SyftBoxFileService().delete(token, [file_path])
+
+        full_path = self._full_path(name)
+        try:
+            permission_service = SyftBoxPermissionService()
+            permission_service.remove_file_permissions(full_path)
+        except Exception as e:
+            logger.warning(f"Failed to clean up SyftBox permissions: {e}")
+
+        if full_path.exists():
             full_path.unlink()
-            logger.debug(f"Deleted file from SyftBox: {full_path}")
+            logger.debug(f"Deleted local SyftBox mirror file: {full_path}")
 
     def exists(self, name: str) -> bool:
         """
