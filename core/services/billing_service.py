@@ -1,10 +1,21 @@
 from decimal import Decimal
 from typing import Dict
+from django.conf import settings
 from django.db import transaction as db_transaction
+from django.db.models import F
 from django.core.exceptions import ValidationError
 from channels.db import database_sync_to_async
-from billing.constants import TransactionTypeChoice
-from billing.models import Transaction, Wallet
+from billing.constants import TransactionSourceChoice, TransactionTypeChoice
+from billing.exceptions import PaymentRequiredError
+from billing.models import GroupWallet, Transaction, Wallet
+from billing.wallet_router import (
+    BOT_WALLET_BYO,
+    BOT_WALLET_DARE,
+    BOT_WALLET_GROUP,
+    BOT_WALLET_LITELLM,
+    ResolvedBotWallet,
+    resolve_active_wallet_for_bot,
+)
 from conversations.models import LLM, Message
 from core.services.energy_service import compute_impact
 from workflows.models import Workflow, WorkflowRun, WorkflowNode
@@ -145,6 +156,7 @@ class BillingService:
                             message=transaction_message,
                             amount=amount_to_deduct,
                             type=TransactionTypeChoice.DEBIT,
+                            source=TransactionSourceChoice.USAGE,
                             input_tokens=input_tokens,
                             output_tokens=output_tokens,
                             billing_mode=user.billing_mode,
@@ -172,14 +184,134 @@ class BillingService:
             logger.exception(f"Error checking streaming credits for user: {user.id}: {str(e)}")
             return False, {"error": "credit_check_error", "message": "Error checking credits"}
 
+    # ------------------------------------------------------------------
+    # Bot-aware finalization (Phase 3 of the wallet refactor)
+    # ------------------------------------------------------------------
+
+    def _debit_group_wallet_atomic(self, group_wallet: GroupWallet, amount: Decimal) -> None:
+        """Atomically debit a GroupWallet, raising PaymentRequiredError on
+        insufficient pool. Mirrors the lock+F() shape used inside
+        Transaction.save() for the per-user wallet path.
+        """
+        with db_transaction.atomic():
+            locked = GroupWallet.objects.select_for_update().get(pk=group_wallet.pk)
+            if not locked.is_active:
+                raise PaymentRequiredError(
+                    'Group wallet is inactive',
+                    code='GROUP_WALLET_EMPTY',
+                    details={'group_wallet_id': locked.pk},
+                )
+            if locked.budget_balance < amount:
+                raise PaymentRequiredError(
+                    'Group wallet has insufficient balance',
+                    code='GROUP_WALLET_EMPTY',
+                    details={
+                        'group_wallet_id': locked.pk,
+                        'current_balance': str(locked.budget_balance),
+                        'required_amount': str(amount),
+                    },
+                )
+            GroupWallet.objects.filter(pk=locked.pk).update(
+                budget_balance=F('budget_balance') - amount
+            )
+
+    def _finalize_via_bot_router(
+        self,
+        message_obj: Message,
+        cost: Decimal,
+        llm: LLM,
+        energy_data: dict,
+        resolved: ResolvedBotWallet,
+    ) -> None:
+        """Create the Transaction (and possibly debit a GroupWallet) for a
+        bot-attributed call, given the wallet the router resolved to.
+        """
+        conversation = message_obj.conversation
+        platform = conversation.source
+        common_kwargs = dict(
+            llm=llm,
+            type=TransactionTypeChoice.DEBIT,
+            source=TransactionSourceChoice.USAGE,
+            input_tokens=message_obj.input_tokens,
+            output_tokens=message_obj.output_tokens,
+            platform=platform,
+            bot_id=conversation.bot_id,
+            bot_owner=resolved.bot_owner,
+            fallback_reason=resolved.fallback_reason,
+            **energy_data,
+        )
+        message_text = f"Message {message_obj.id}: {message_obj.message[:100]}"
+
+        if resolved.type == BOT_WALLET_BYO:
+            # External billing — record at $0 with billing_mode=OWN_API. The
+            # call has already been dispatched against the user's BYO key.
+            Transaction.objects.create(
+                user=resolved.payer_user,
+                amount=Decimal('0.00'),
+                message=f"{message_text} (BYO key — Cost: ${cost})",
+                billing_mode=BillingModeChoice.OWN_API,
+                **common_kwargs,
+            )
+            return
+
+        if resolved.type == BOT_WALLET_LITELLM:
+            Transaction.objects.create(
+                user=resolved.payer_user,
+                amount=Decimal('0.00'),
+                message=f"{message_text} (LiteLLM key — Cost: ${cost})",
+                billing_mode=BillingModeChoice.LITELLM,
+                **common_kwargs,
+            )
+            return
+
+        if resolved.type == BOT_WALLET_GROUP:
+            # Cohort-funded: debit the GroupWallet pool, attribute on the bot
+            # owner. Transaction.platform stays SocraticBooks; billing_mode
+            # is WALLET (real money moved) but Transaction.save() will skip
+            # the per-user Wallet mutation because platform != DARE.
+            self._debit_group_wallet_atomic(resolved.group_wallet, cost)
+            Transaction.objects.create(
+                user=resolved.bot_owner,
+                amount=cost,
+                message=f"{message_text} (group {resolved.group_wallet.group.access_code})",
+                billing_mode=BillingModeChoice.WALLET,
+                related_group=resolved.group_wallet.group,
+                **common_kwargs,
+            )
+            return
+
+        # BOT_WALLET_DARE — debit a real DARE wallet (owner's, or calling
+        # user's for USER_WALLET source). We force platform=DARE on the
+        # Transaction so Transaction.save() runs the atomic select_for_update
+        # / F() debit against payer_user.wallet — same hardened path Phase 0
+        # added for non-bot calls.
+        common_kwargs['platform'] = AuthSourceChoice.DARE
+        Transaction.objects.create(
+            user=resolved.payer_user,
+            amount=cost,
+            message=message_text,
+            billing_mode=BillingModeChoice.WALLET,
+            **common_kwargs,
+        )
+
+    # ------------------------------------------------------------------
+
     def finalize_ai_message(self, message_obj: Message, ai_response: str, token_usage: Dict) -> Message:
         """
-        Finalize AI message and handle billing based on user's billing mode.
+        Finalize AI message and handle billing.
 
-        Platform is automatically determined from the conversation's source field.
+        Routing strategy:
+            - When the conversation has a ``bot_id`` AND
+              ``BOT_WALLET_ENFORCEMENT_ENABLED`` is True, dispatch through
+              ``wallet_router.resolve_active_wallet_for_bot`` so the bot's
+              configured ``billing_source`` (OWNER / GROUP / USER / LITELLM)
+              decides whose wallet pays. The Transaction is stamped with
+              ``bot_id`` + ``bot_owner`` for per-(user, bot) attribution.
+            - Otherwise (non-bot calls, or feature flag off), use the legacy
+              path keyed off ``user.billing_mode``.
 
-        For OWN_API mode: Creates tracking transaction with $0.00 amount
-        For WALLET mode: Deducts from user's wallet
+        Platform is determined from the conversation's source field for the
+        legacy path; the bot path stamps based on the resolved wallet type.
 
         Args:
             message_obj: Message object to finalize
@@ -214,13 +346,37 @@ class BillingService:
                         message_obj.water_ml = energy_data["water_ml"]
 
                     if cost > Decimal('0.00'):
-                        user = message_obj.conversation.user
+                        conversation = message_obj.conversation
+
+                        # Bot-aware routing path. Used only when the feature
+                        # flag is on and the conversation actually came from a
+                        # bot (anonymous public-bot calls have user=None,
+                        # which the legacy path can't handle anyway).
+                        bot_routing_enabled = (
+                            getattr(settings, 'BOT_WALLET_ENFORCEMENT_ENABLED', False)
+                            and conversation.bot_id is not None
+                        )
+                        if bot_routing_enabled:
+                            resolved = resolve_active_wallet_for_bot(
+                                bot_id=conversation.bot_id,
+                                calling_user=conversation.user,
+                                conversation=conversation,
+                            )
+                            if resolved is not None:
+                                self._finalize_via_bot_router(
+                                    message_obj, cost, llm, energy_data, resolved
+                                )
+                                message_obj.save()
+                                return message_obj
+                            # SB unreachable — fall through to legacy path.
+
+                        user = conversation.user
 
                         # Determine platform from conversation's authoritative source field
-                        transaction_platform = message_obj.conversation.source
+                        transaction_platform = conversation.source
 
                         # Check user's billing mode
-                        if user.billing_mode == BillingModeChoice.OWN_API:
+                        if user is not None and user.billing_mode == BillingModeChoice.OWN_API:
                             # User is using their own API key - create tracking transaction with $0
                             logger.info(f"User {user.id} in OWN_API mode - creating tracking transaction")
                             with db_transaction.atomic():
@@ -234,6 +390,7 @@ class BillingService:
                                     amount=Decimal('0.00'),
                                     llm=llm,
                                     type=TransactionTypeChoice.DEBIT,
+                                    source=TransactionSourceChoice.USAGE,
                                     message=transaction_message,
                                     input_tokens=message_obj.input_tokens,
                                     output_tokens=message_obj.output_tokens,
@@ -268,6 +425,7 @@ class BillingService:
                                     amount=cost,
                                     llm=llm,
                                     type=TransactionTypeChoice.DEBIT,
+                                    source=TransactionSourceChoice.USAGE,
                                     message=transaction_message,
                                     input_tokens=message_obj.input_tokens,
                                     output_tokens=message_obj.output_tokens,
@@ -348,6 +506,14 @@ class BillingService:
         Process billing for a workflow step or routing node.
 
         Note: Workflows are DARE-only feature, so platform is always DARE.
+
+        Raises:
+            PaymentRequiredError: when the user's wallet has insufficient
+                balance to cover the full computed cost. Callers MUST handle
+                this and decide whether to halt the workflow — no partial
+                debits are recorded, and the LLM call (which has already
+                happened by the time this runs) is left as an unrecoverable
+                gap that the caller should log loudly.
         """
         try:
             cost = self._calculate_cost(llm, input_tokens, output_tokens)
@@ -358,7 +524,11 @@ class BillingService:
             wallet = getattr(user, 'wallet', None)
             if not wallet:
                 logger.error(f"Wallet not found for user: {user.id}")
-                return False
+                raise PaymentRequiredError(
+                    'No wallet on file for user',
+                    code='WALLET_NOT_FOUND',
+                    details={'user_id': user.id},
+                )
 
             if step_node_id:
                 step_node = WorkflowNode.objects.get(id=step_node_id)
@@ -378,40 +548,41 @@ class BillingService:
             else:
                 transaction_message = f"Workflow {workflow_id} : Title - {workflow_title} | Routing Node "
 
-            if wallet.balance < cost:
-                amount_to_deduct = wallet.balance
-                if amount_to_deduct > Decimal('0'):
-                    with db_transaction.atomic():
-                        Transaction.objects.create(
-                            user=user,
-                            message=transaction_message + " (insufficient balance)",
-                            llm=llm,
-                            amount=amount_to_deduct,
-                            type=TransactionTypeChoice.DEBIT,
-                            input_tokens=input_tokens,
-                            output_tokens=output_tokens,
-                            billing_mode=user.billing_mode,
-                            platform=AuthSourceChoice.DARE
-                        )
-                        wallet.balance = Decimal('0')
-                        wallet.save()
-                return False
-            else:
-                with db_transaction.atomic():
-                    Transaction.objects.create(
-                        user=user,
-                        message=transaction_message,
-                        amount=cost,
-                        llm=llm,
-                        type=TransactionTypeChoice.DEBIT,
-                        input_tokens=input_tokens,
-                        output_tokens=output_tokens,
-                        billing_mode=user.billing_mode,
-                        platform=AuthSourceChoice.DARE
+            # Always attempt the full debit; Transaction.save() does the atomic
+            # balance check + F() update under select_for_update. A failure
+            # here means the caller has to decide what to do — no silent
+            # partial debit, no misleading audit row.
+            try:
+                Transaction.objects.create(
+                    user=user,
+                    message=transaction_message,
+                    amount=cost,
+                    llm=llm,
+                    type=TransactionTypeChoice.DEBIT,
+                    source=TransactionSourceChoice.USAGE,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    billing_mode=user.billing_mode,
+                    platform=AuthSourceChoice.DARE,
+                )
+            except ValidationError as ve:
+                msg_dict = getattr(ve, 'message_dict', None) or {}
+                if msg_dict.get('error') == ['insufficient_balance']:
+                    raise PaymentRequiredError(
+                        'Insufficient wallet balance for workflow step',
+                        code='INSUFFICIENT_BALANCE',
+                        details={
+                            'current_balance': msg_dict.get('current_balance', [None])[0],
+                            'required_amount': msg_dict.get('required_amount', [None])[0],
+                            'workflow_id': workflow_id,
+                        },
                     )
-                    wallet.refresh_from_db()
-                return True
+                raise
 
+            return True
+
+        except PaymentRequiredError:
+            raise
         except Exception as e:
             logger.exception(f"Error processing workflow billing: {str(e)}")
             raise ValidationError({"error": "billing_error", "message": "Failed to process billing"})
@@ -511,6 +682,7 @@ class BillingService:
                         amount=Decimal('0.00'),
                         llm=llm,
                         type=TransactionTypeChoice.DEBIT,
+                        source=TransactionSourceChoice.USAGE,
                         message=f"Artifact generation: {message_obj.message[:100]} (Own API Key)",
                         input_tokens=input_tokens,
                         output_tokens=output_tokens,
@@ -537,6 +709,7 @@ class BillingService:
                         amount=cost,
                         llm=llm,
                         type=TransactionTypeChoice.DEBIT,
+                        source=TransactionSourceChoice.USAGE,
                         message=f"Artifact generation: {message_obj.message[:100]}",
                         input_tokens=input_tokens,
                         output_tokens=output_tokens,
@@ -632,6 +805,7 @@ class BillingService:
                     message=description,
                     amount=amount,
                     type=TransactionTypeChoice.DEBIT,
+                    source=TransactionSourceChoice.USAGE,
                     billing_mode=user.billing_mode,
                     platform=platform
                 )

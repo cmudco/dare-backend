@@ -362,6 +362,18 @@ class Conversation(BaseModel):
         blank=True,
         help_text="Associated Socratic Bot ID (only populated for SocraticBots source)."
     )
+    access_code = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text=(
+            "Access code redeemed by the user when starting this conversation, "
+            "denormalized at create time so the billing finalizer can resolve "
+            "the matching AccessCodeGroup (and its GroupWallet) without a "
+            "callback to SocraticBooks."
+        ),
+    )
     anonymous_session_id = models.CharField(
         max_length=255,
         null=True,
