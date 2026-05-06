@@ -19,10 +19,16 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from conversations.services.llm_filter_service import (
+    filter_for_active_wallet,
+    filter_for_bot,
+    parse_scope,
+)
 from conversations.api.mixins import ConversationSharingMixin
 from conversations.constants import ArtifactStatus, SharingErrorCode, SharingErrorMessage
 from conversations.exceptions import SharingAPIException
 from conversations.models import Artifact, Conversation, ConversationSummary, Feedback, LLM, Message, ModelCardData, Snippet
+from core.services.sb_client import SocraticBooksClient
 from conversations.services.conversation_preference_service import (
     ConversationPreferenceError,
     ConversationPreferenceService,
@@ -778,6 +784,33 @@ class LLMViewSet(viewsets.ModelViewSet):
 
         # Restrict to allowed models from the access code group's model group
         return acg.model_group.allowed_models.all().order_by('tier', 'name')
+
+    def list(self, request, *args, **kwargs):
+        """
+        Standard list returns the access-code-group filtered catalog.
+
+        When `?wallet_scope=active` or `?wallet_scope=bot:<id>` is supplied,
+        the response is wrapped as `{models: [...], wallet: {...}}` filtered
+        by the wallet that will pay (per the wallet router). Legacy callers
+        omitting the param get the historical flat list shape unchanged.
+        """
+        scope = parse_scope(request.query_params.get("wallet_scope"))
+        if scope is None:
+            return super().list(request, *args, **kwargs)
+
+        base_qs = self.get_queryset()
+        if scope.kind == "active":
+            models, meta = filter_for_active_wallet(request.user, base_qs)
+        else:  # scope.kind == "bot"
+            config = SocraticBooksClient.get_bot_billing_config(scope.bot_id)
+            if config is None or config.owner_dare_user_id != getattr(request.user, "id", None):
+                return Response(
+                    {"detail": "Not authorized for this bot."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            models, meta = filter_for_bot(scope.bot_id, request.user, base_qs)
+
+        return Response({"models": models, "wallet": meta.to_dict()})
 
     @action(detail=False, methods=['get'])
     def all_models(self, request):

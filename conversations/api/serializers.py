@@ -46,6 +46,17 @@ class ConversationSerializer(serializers.ModelSerializer):
         allow_blank=True,
         help_text="Session ID for anonymous public bot conversations."
     )
+    access_code = serializers.CharField(
+        required=False,
+        allow_null=True,
+        allow_blank=True,
+        help_text=(
+            "Access code redeemed by the user when starting a bot conversation. "
+            "Persisted on the Conversation so the billing finalizer can resolve "
+            "the matching AccessCodeGroup and its GroupWallet for institutional "
+            "(GROUP_WALLET) bots without round-tripping back to SocraticBooks."
+        ),
+    )
     selected_mcp_server_ids = serializers.PrimaryKeyRelatedField(
         queryset=MCPServer.active_objects.all(),
         source='selected_mcp_servers',
@@ -128,6 +139,7 @@ class ConversationSerializer(serializers.ModelSerializer):
             'source',
             'bot_id',
             'anonymous_session_id',
+            'access_code',
             'created_at',
             'user',
             'max_context_snippets',
