@@ -12,56 +12,52 @@ This coordinator encapsulates the core business logic that was previously
 duplicated across ChatConsumer and PublicBotConsumer.
 """
 
-import logging
-import json
 import asyncio
-from typing import Optional, Dict, Any, Callable, List
+import json
+import logging
 from decimal import Decimal
+from typing import Any, Callable, Dict, List, Optional
+
 from channels.db import database_sync_to_async
 from djangorestframework_camel_case.util import camelize
 
 from conversations.api.serializers import ArtifactListSerializer
-from conversations.models import Conversation, Message, LLM, Artifact
 from conversations.constants import (
-    SenderType,
     DEFAULT_AI_SENDER_NAME,
     DEFAULT_CONVERSATION_TITLE,
+    ArtifactStatus,
     ErrorCode,
     ErrorMessage,
-    ArtifactStatus,
+    SenderType,
 )
-from core.services.conversation_service import ConversationService
-from core.services.llm_service import LLMService
-from core.services.billing_service import BillingService
-from core.services.learning_progress_service import LearningProgressService
-from core.services.file_upload_service import FileUploadService
-from core.services.dtos import LLMQueryRequestBuilder
-from conversations.services.websocket_response_service import WebSocketResponseService
-from conversations.services.message_validation_service import MessageValidationService
+from conversations.models import LLM, Artifact, Conversation, Message
 from conversations.services.image_generation_service import ImageGenerationService
-from conversations.services.web_search_source_service import WebSearchSourceService
-from users.utils import should_run_learning_progress
-from conversations.services.message_helpers import (
-    build_transcription_data,
+from conversations.services.message_helpers import (  # Database helpers; Learning progress helpers; Billing helpers; Finalization helpers; Regeneration helpers
     build_generated_image_data,
-    # Database helpers
-    get_ai_message_by_id,
-    fetch_llm_by_id,
-    get_conversation_default_llm,
+    build_transcription_data,
     fetch_preceding_user_message,
-    should_generate_title,
-    # Learning progress helpers
-    run_learning_progress_stream,
-    # Billing helpers
-    update_public_bot_budget,
-    handle_insufficient_balance,
-    # Finalization helpers
     finalize_message,
-    # Regeneration helpers
+    get_ai_message_by_id,
+    get_conversation_default_descriptor,
+    handle_insufficient_balance,
+    parse_model_id,
     prepare_regeneration_data,
+    run_learning_progress_stream,
+    should_generate_title,
+    update_public_bot_budget,
 )
-from mcp.services import mcp_tool_handler
+from conversations.services.message_validation_service import MessageValidationService
+from conversations.services.web_search_source_service import WebSearchSourceService
+from conversations.services.websocket_response_service import WebSocketResponseService
+from core.services.billing_service import BillingService
+from core.services.conversation_service import ConversationService
+from core.services.dtos import LLMDescriptor, LLMQueryRequestBuilder
+from core.services.file_upload_service import FileUploadService
+from core.services.learning_progress_service import LearningProgressService
+from core.services.llm_service import LLMService
 from dare_tools.services import dare_tool_handler
+from mcp.services import mcp_tool_handler
+from users.utils import should_run_learning_progress
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +95,6 @@ class MessageCoordinator:
         # Track active artifact generation tasks for cancellation
         self._artifact_tasks: Dict[str, asyncio.Task] = {}
 
-
     async def send(self, data: Dict[str, Any]):
         """Send data through WebSocket if callback is available."""
         if self.send_callback:
@@ -107,82 +102,83 @@ class MessageCoordinator:
                 await self.send_callback(json.dumps(camelize(data)))
             except Exception as e:
                 # Log but don't raise - client may have disconnected
-                logger.debug(f"Failed to send WebSocket message (client may have disconnected): {type(e).__name__}")
+                logger.debug(
+                    f"Failed to send WebSocket message (client may have disconnected): {type(e).__name__}"
+                )
 
-    async def send_error(self, error_code: str, error_message: str, details: Optional[Dict] = None):
+    async def send_error(
+        self, error_code: str, error_message: str, details: Optional[Dict] = None
+    ):
         """Send error response through WebSocket."""
-        error_payload = WebSocketResponseService.format_error(error_code, error_message, details)
+        error_payload = WebSocketResponseService.format_error(
+            error_code, error_message, details
+        )
         await self.send(error_payload)
 
     async def _save_attached_images(self, images: List[Dict]) -> List[int]:
         """
         Save base64 images as File objects and return their IDs.
-        
+
         Args:
             images: List of base64 image dicts from frontend
-            
+
         Returns:
             List of saved File IDs
         """
         if not images:
             return []
-        
-        saved_files = await database_sync_to_async(FileUploadService.save_base64_images)(
-            images=images,
-            user=self.user,
-            is_public=(self.user is None)
-        )
+
+        saved_files = await database_sync_to_async(
+            FileUploadService.save_base64_images
+        )(images=images, user=self.user, is_public=(self.user is None))
         file_ids = [f.id for f in saved_files]
         if file_ids:
             logger.info(f"Saved {len(file_ids)} attached images for message")
         return file_ids
 
     async def _handle_generated_image(
-        self,
-        usage: Dict,
-        message_data: Dict,
-        message_obj: 'Message'
+        self, usage: Dict, message_data: Dict, message_obj: "Message"
     ) -> Optional[Dict]:
         """
         Handle generated image from DALL-E: save file and build response data.
-        
+
         Args:
             usage: Usage dict containing image_bytes and metadata
             message_data: Original message data with prompt
             message_obj: Message to attach the image to
-            
+
         Returns:
             Dict with image data for frontend, or None if no image
         """
         if not usage.get("image_bytes"):
             return None
-        
-        generated_file = await database_sync_to_async(ImageGenerationService.save_generated_image)(
+
+        generated_file = await database_sync_to_async(
+            ImageGenerationService.save_generated_image
+        )(
             image_bytes=usage["image_bytes"],
             prompt=message_data["message"],
             metadata=ImageGenerationService.extract_image_metadata(usage),
             user=self.user,
             is_public=(self.user is None),
         )
-        
+
         if not generated_file:
             return None
-        
-        await database_sync_to_async(message_obj.files.add)(generated_file)
-        
-        # Build and return the image data dict using helper function
-        return build_generated_image_data(generated_file, message_data["message"], usage)
 
+        await database_sync_to_async(message_obj.files.add)(generated_file)
+
+        # Build and return the image data dict using helper function
+        return build_generated_image_data(
+            generated_file, message_data["message"], usage
+        )
 
     async def _save_web_search_sources(
-        self,
-        message_obj: 'Message',
-        token_usage: Optional[Dict],
-        regenerate: bool
+        self, message_obj: "Message", token_usage: Optional[Dict], regenerate: bool
     ) -> None:
         """
         Save web search sources if present in token usage.
-        
+
         Args:
             message_obj: Message to attach sources to
             token_usage: Usage dict possibly containing web_search_sources
@@ -190,10 +186,10 @@ class MessageCoordinator:
         """
         if not token_usage or not token_usage.get("web_search_sources"):
             return
-        
+
         if regenerate:
             await WebSearchSourceService.delete_sources_for_message(message_obj)
-        
+
         await WebSearchSourceService.save_sources(
             message=message_obj,
             sources=token_usage["web_search_sources"],
@@ -201,7 +197,7 @@ class MessageCoordinator:
 
     async def _save_memory_context(
         self,
-        message_obj: 'Message',
+        message_obj: "Message",
         token_usage: Optional[Dict],
     ) -> None:
         """
@@ -215,27 +211,26 @@ class MessageCoordinator:
             return
 
         message_obj.memory_context_data = token_usage["memory_context"]
-        await database_sync_to_async(message_obj.save)(update_fields=['memory_context_data'])
+        await database_sync_to_async(message_obj.save)(
+            update_fields=["memory_context_data"]
+        )
 
-    async def _mark_as_regenerated(self, message: 'Message') -> None:
+    async def _mark_as_regenerated(self, message: "Message") -> None:
         """Mark a message as regenerated if applicable."""
         message.is_regenerated = True
-        await database_sync_to_async(message.save)(update_fields=['is_regenerated'])
+        await database_sync_to_async(message.save)(update_fields=["is_regenerated"])
 
     async def _update_public_bot_budget(
-        self,
-        cost: Decimal,
-        message_obj: 'Message'
+        self, cost: Decimal, message_obj: "Message"
     ) -> None:
         """Update bot budget for public bot conversations."""
         return await update_public_bot_budget(self.conversation, cost, message_obj)
-
 
     async def handle_new_message(
         self,
         message_data: Dict[str, Any],
         sender_name: str = None,
-        llm_id: Optional[str] = None,
+        model_id: Optional[str] = None,
     ) -> Optional[Message]:
         """
         Handle creation of a new user message and generate AI response.
@@ -243,30 +238,46 @@ class MessageCoordinator:
         Args:
             message_data: Validated message data dictionary
             sender_name: Name of the sender (user email or "Anonymous User")
-            llm_id: Optional LLM ID override
+            model_id: Optional opaque dispatch id override (string). The FE
+                hands back the same id the picker endpoint emitted; the BE
+                inverts the encoding in ``parse_model_id``.
 
         Returns:
             The AI message object if successful, None otherwise
         """
         try:
-            # Get LLM
-            llm = await self._get_llm(llm_id or message_data.get("llm_id"))
-            if not llm:
-                await self.send_error(ErrorCode.VALIDATION_ERROR, "Selected AI model not found")
+            descriptor = await self._get_descriptor(
+                model_id or message_data.get("model_id")
+            )
+            if descriptor is None:
+                await self.send_error(
+                    ErrorCode.VALIDATION_ERROR, "Selected AI model not found"
+                )
                 return None
+            dispatch_handle = descriptor.to_dispatch_handle()
 
-            # Check billing if user exists
+            # Check billing if user exists. Synthetic dispatches debit zero
+            # from the DARE wallet (the stub LLM carries zero rates), so the
+            # estimate is $0 and the check trivially passes — kept for
+            # uniformity with real-LLM messages.
             if self.user:
                 has_credits = await self.billing_service.check_sufficient_credits(
-                    self.user, llm
+                    self.user, dispatch_handle
                 )
                 if not has_credits:
-                    await self.send_error(ErrorCode.INSUFFICIENT_CREDITS, ErrorMessage.INSUFFICIENT_CREDITS)
+                    await self.send_error(
+                        ErrorCode.INSUFFICIENT_CREDITS,
+                        ErrorMessage.INSUFFICIENT_CREDITS,
+                    )
                     return None
 
             # Save attached images and combine with existing file_ids
-            attached_image_ids = await self._save_attached_images(message_data.get("images", []))
-            all_file_ids = list(set((message_data.get("file_ids") or []) + attached_image_ids))
+            attached_image_ids = await self._save_attached_images(
+                message_data.get("images", [])
+            )
+            all_file_ids = list(
+                set((message_data.get("file_ids") or []) + attached_image_ids)
+            )
 
             # Create user message
             user_message = await self.conversation_service.create_message(
@@ -277,13 +288,12 @@ class MessageCoordinator:
                 file_ids=all_file_ids,
                 tag_ids=message_data.get("tag_ids"),
                 embedding_ids=message_data.get("embedding_ids"),
-                llm=llm,
+                descriptor=descriptor,
             )
 
             # Send user message to client
             user_message_payload = await WebSocketResponseService.format_message(
-                message=user_message,
-                is_sender=True
+                message=user_message, is_sender=True
             )
             await self.send(user_message_payload)
 
@@ -293,7 +303,7 @@ class MessageCoordinator:
                 sender_type=SenderType.AI_ASSISTANT,
                 message_content="",
                 sender=DEFAULT_AI_SENDER_NAME,
-                llm=llm,
+                descriptor=descriptor,
             )
 
             # Send empty AI message with streaming=True to show placeholder on frontend
@@ -302,7 +312,7 @@ class MessageCoordinator:
                 message_type="message",
                 is_sender=False,
                 streaming=True,
-                regenerate=False
+                regenerate=False,
             )
             await self.send(placeholder_payload)
 
@@ -314,7 +324,7 @@ class MessageCoordinator:
             await self.stream_ai_response(
                 message_data=message_data,
                 message_obj=ai_message,
-                llm=llm,
+                llm=dispatch_handle,
                 regenerate=False,
             )
 
@@ -322,20 +332,23 @@ class MessageCoordinator:
 
         except Exception as e:
             logger.exception(f"Error handling new message: {str(e)}")
-            await self.send_error(ErrorCode.PROCESSING_ERROR, ErrorMessage.PROCESSING_ERROR)
+            await self.send_error(
+                ErrorCode.PROCESSING_ERROR, ErrorMessage.PROCESSING_ERROR
+            )
             return None
 
     async def handle_regenerate_response(
         self,
         message_data: Dict[str, Any],
-        llm_id: Optional[str] = None,
+        model_id: Optional[str] = None,
     ) -> Optional[Message]:
         """
         Handle regeneration of an existing AI message.
 
         Args:
             message_data: Validated message data dictionary (must include message_id)
-            llm_id: Optional LLM ID override
+            model_id: Optional opaque dispatch id override (see
+                ``handle_new_message`` for the encoding).
 
         Returns:
             The regenerated AI message object if successful, None otherwise
@@ -344,48 +357,64 @@ class MessageCoordinator:
             # Get message_id from message_data
             message_id = message_data.get("message_id")
             if not message_id:
-                await self.send_error(ErrorCode.MISSING_DATA, ErrorMessage.MISSING_MESSAGE_ID)
+                await self.send_error(
+                    ErrorCode.MISSING_DATA, ErrorMessage.MISSING_MESSAGE_ID
+                )
                 return None
 
             # Get the existing AI message to regenerate
             ai_message = await get_ai_message_by_id(message_id)
 
             if not ai_message:
-                await self.send_error(ErrorCode.INVALID_MESSAGE, ErrorMessage.INVALID_MESSAGE)
+                await self.send_error(
+                    ErrorCode.INVALID_MESSAGE, ErrorMessage.INVALID_MESSAGE
+                )
                 return None
 
             # Get the preceding user message
             preceding_user_message = await self._get_preceding_user_message()
             if not preceding_user_message:
-                await self.send_error(ErrorCode.NO_USER_MESSAGE, ErrorMessage.NO_USER_MESSAGE)
+                await self.send_error(
+                    ErrorCode.NO_USER_MESSAGE, ErrorMessage.NO_USER_MESSAGE
+                )
                 return None
 
-            # Get LLM (use provided or fallback to existing message's LLM)
-            llm = await self._get_llm(
-                llm_id or message_data.get("llm_id"),
-                default=ai_message.llm
+            # Get descriptor: explicit override → existing message's recorded
+            # model (real or LiteLLM-routed). For LITELLM messages the previous
+            # dispatch is reconstructed from `litellm_key` + `litellm_model_name`.
+            descriptor = await self._get_descriptor(
+                model_id or message_data.get("model_id"),
+                default=LLMDescriptor.from_message(ai_message),
             )
-            if not llm:
-                await self.send_error(ErrorCode.VALIDATION_ERROR, "Selected AI model not found")
+            if descriptor is None:
+                await self.send_error(
+                    ErrorCode.VALIDATION_ERROR, "Selected AI model not found"
+                )
                 return None
+            dispatch_handle = descriptor.to_dispatch_handle()
 
             # Handle special model regeneration (image generator, audio transcriber)
-            llm, regeneration_message_data = await self._prepare_regeneration_data(
-                ai_message=ai_message,
-                llm=llm,
-                message_data=message_data,
-                preceding_user_message=preceding_user_message,
+            dispatch_handle, regeneration_message_data = (
+                await self._prepare_regeneration_data(
+                    ai_message=ai_message,
+                    llm=dispatch_handle,
+                    message_data=message_data,
+                    preceding_user_message=preceding_user_message,
+                )
             )
-            if llm is None:
+            if dispatch_handle is None:
                 return None  # Error already sent
 
-            # Check billing if user exists
+            # Check billing if user exists (synthetic descriptors estimate $0).
             if self.user:
                 has_credits = await self.billing_service.check_sufficient_credits(
-                    self.user, llm
+                    self.user, dispatch_handle
                 )
                 if not has_credits:
-                    await self.send_error(ErrorCode.INSUFFICIENT_CREDITS, ErrorMessage.INSUFFICIENT_CREDITS)
+                    await self.send_error(
+                        ErrorCode.INSUFFICIENT_CREDITS,
+                        ErrorMessage.INSUFFICIENT_CREDITS,
+                    )
                     return None
 
             # Send streaming placeholder to show loading animation
@@ -395,7 +424,7 @@ class MessageCoordinator:
             await self.stream_ai_response(
                 message_data=regeneration_message_data,
                 message_obj=ai_message,
-                llm=llm,
+                llm=dispatch_handle,
                 regenerate=True,
             )
 
@@ -403,7 +432,9 @@ class MessageCoordinator:
 
         except Exception as e:
             logger.exception(f"Error regenerating response: {str(e)}")
-            await self.send_error(ErrorCode.REGENERATE_ERROR, ErrorMessage.REGENERATE_ERROR)
+            await self.send_error(
+                ErrorCode.REGENERATE_ERROR, ErrorMessage.REGENERATE_ERROR
+            )
             return None
 
     async def _prepare_regeneration_data(
@@ -430,7 +461,7 @@ class MessageCoordinator:
             message_type="message",
             is_sender=False,
             streaming=True,
-            regenerate=True
+            regenerate=True,
         )
         await self.send(placeholder_payload)
 
@@ -495,7 +526,7 @@ class MessageCoordinator:
                             send_callback=self.send,
                         )
                         mcp_tool_results.extend(tool_results)
-                        
+
                         # Handle DARE tool calls (internal tools like diagrams, charts)
                         dare_results = await dare_tool_handler.handle_tool_calls(
                             tool_calls=usage["tool_calls"],
@@ -518,12 +549,17 @@ class MessageCoordinator:
 
                     # Check billing during streaming (only for authenticated users)
                     if self.user:
-                        can_continue, error_response = await self.billing_service.check_streaming_credit_usage(
-                            self.user, llm, token_usage
+                        can_continue, error_response = (
+                            await self.billing_service.check_streaming_credit_usage(
+                                self.user, llm, token_usage
+                            )
                         )
                         if not can_continue:
                             await self._handle_insufficient_balance(
-                                message_obj, ai_response_accumulator, token_usage, error_response
+                                message_obj,
+                                ai_response_accumulator,
+                                token_usage,
+                                error_response,
                             )
                             return
 
@@ -540,7 +576,7 @@ class MessageCoordinator:
                             "streaming": True,
                             "regenerate": regenerate,
                             "createdAt": message_obj.created_at.isoformat(),
-                        }
+                        },
                     )
                     await self.send(payload)
 
@@ -553,35 +589,46 @@ class MessageCoordinator:
                 )
                 try:
                     # The follow-up response REPLACES any partial text from before tool calls
-                    ai_response_accumulator = await mcp_tool_handler.stream_tool_result_response(
-                        tool_results=mcp_tool_results,
-                        message_data=message_data,
-                        message_obj=message_obj,
-                        llm=llm,
-                        conversation=self.conversation,
-                        user=self.user,
-                        platform=self.platform,
-                        send_callback=self.send,
-                        llm_service=self.llm_service,
-                        regenerate=regenerate,
+                    ai_response_accumulator = (
+                        await mcp_tool_handler.stream_tool_result_response(
+                            tool_results=mcp_tool_results,
+                            message_data=message_data,
+                            message_obj=message_obj,
+                            llm=llm,
+                            conversation=self.conversation,
+                            user=self.user,
+                            platform=self.platform,
+                            send_callback=self.send,
+                            llm_service=self.llm_service,
+                            regenerate=regenerate,
+                        )
                     )
                 except Exception as e:
                     # If follow-up call fails, generate a fallback error message
-                    logger.exception(f"[MessageCoordinator] Follow-up LLM call failed: {e}")
+                    logger.exception(
+                        f"[MessageCoordinator] Follow-up LLM call failed: {e}"
+                    )
                     # Build fallback response from tool results
                     error_parts = []
                     for tr in mcp_tool_results:
                         if tr.get("result", "").startswith("Error:"):
-                            error_parts.append(f"Tool `{tr['tool_name']}`: {tr['result']}")
+                            error_parts.append(
+                                f"Tool `{tr['tool_name']}`: {tr['result']}"
+                            )
                     if error_parts:
-                        ai_response_accumulator = "I encountered some issues while executing the requested tools:\n\n" + "\n".join(error_parts)
+                        ai_response_accumulator = (
+                            "I encountered some issues while executing the requested tools:\n\n"
+                            + "\n".join(error_parts)
+                        )
                     else:
                         ai_response_accumulator = "I was unable to complete the tool execution. Please try again."
 
             # Ensure we always finalize the message
             if ai_response_accumulator.strip():
                 # Save web search sources if present (before finalization)
-                await self._save_web_search_sources(message_obj, token_usage, regenerate)
+                await self._save_web_search_sources(
+                    message_obj, token_usage, regenerate
+                )
 
                 # Save memory context if present (before finalization)
                 await self._save_memory_context(message_obj, token_usage)
@@ -596,8 +643,12 @@ class MessageCoordinator:
                 )
 
                 # Run learning progress assessment (Socratic only, sequential after AI response)
-                if not regenerate and should_run_learning_progress(self.platform, message_data.get("enable_progress")):
-                    await self._run_learning_progress_stream(message_data, message_obj, llm)
+                if not regenerate and should_run_learning_progress(
+                    self.platform, message_data.get("enable_progress")
+                ):
+                    await self._run_learning_progress_stream(
+                        message_data, message_obj, llm
+                    )
             elif mcp_tool_results:
                 # Edge case: tool results exist but no response was generated
                 # This shouldn't happen after the fix above, but handle defensively
@@ -660,6 +711,18 @@ class MessageCoordinator:
             send_error_callback=self.send_error,
         )
 
+    async def _fetch_progress_llm(self, llm_id) -> Optional[LLM]:
+        """Resolve the Socratic progress-assessment LLM by numeric id.
+
+        Progress LLMs are configured per-bot in SocraticBooks and are always
+        DB-backed (never LiteLLM-routed), so we stringify the bare id to
+        feed the opaque-id parser.
+        """
+        if llm_id is None:
+            return None
+        descriptor = await self._get_descriptor(str(llm_id))
+        return descriptor.llm if descriptor and not descriptor.is_synthetic else None
+
     async def _run_learning_progress_stream(
         self,
         message_data: Dict[str, Any],
@@ -677,7 +740,7 @@ class MessageCoordinator:
             billing_service=self.billing_service,
             user=self.user,
             send_callback=self.send,
-            get_llm_callback=self._get_llm,
+            get_llm_callback=self._fetch_progress_llm,
         )
 
     async def _generate_conversation_title(self):
@@ -695,40 +758,48 @@ class MessageCoordinator:
             if not user_message:
                 return
 
-            # Generate title
-            title = await self.conversation_service.generate_title(user_message.message)
+            # Generate title — pass `user` so the title call honors the
+            # user's active wallet (DARE/BYO/LITELLM) just like the main chat.
+            title = await self.conversation_service.generate_title(
+                user_message.message,
+                user=self.user,
+            )
 
             # Update conversation
-            await self.conversation_service.update_conversation_title(self.conversation, title)
+            await self.conversation_service.update_conversation_title(
+                self.conversation, title
+            )
 
             # Send title to client
-            payload = {
-                "type": "conversation_title",
-                "title": title
-            }
+            payload = {"type": "conversation_title", "title": title}
             await self.send(payload)
 
         except Exception as e:
             logger.exception(f"Error generating conversation title: {str(e)}")
             # Non-fatal error
 
-    async def _get_llm(self, llm_id: Optional[str], default: Optional[LLM] = None) -> Optional[LLM]:
-        """
-        Get LLM by ID with fallback.
+    async def _get_descriptor(
+        self,
+        model_id: Optional[str],
+        default: Optional[LLMDescriptor] = None,
+    ) -> Optional[LLMDescriptor]:
+        """Resolve an opaque ``model_id`` from the FE to a runtime descriptor.
 
         Args:
-            llm_id: LLM ID to fetch
-            default: Default LLM if ID not provided
+            model_id: Opaque identifier from the FE — either ``"<int>"`` (a
+                DB-backed LLM PK) or ``"litellm:<key_pk>:<model>"``. Decoded
+                in ``parse_model_id``.
+            default: Descriptor to return when ``model_id`` is empty.
 
         Returns:
-            LLM instance or None
+            ``LLMDescriptor`` for the chosen model, or ``None`` when neither
+            the id nor the conversation default resolves.
         """
-        if llm_id:
-            return await fetch_llm_by_id(llm_id)
-        elif default:
+        if model_id:
+            return await parse_model_id(model_id)
+        if default is not None:
             return default
-        else:
-            return await get_conversation_default_llm(self.conversation)
+        return await get_conversation_default_descriptor(self.conversation)
 
     async def _get_preceding_user_message(self) -> Optional[Message]:
         """Get the most recent user message in the conversation."""
@@ -759,11 +830,14 @@ class MessageCoordinator:
 
     async def _fetch_conversation_artifacts(self):
         """Fetch all artifacts for the current conversation."""
+
         def _get_artifacts():
 
-            artifacts = Artifact.active_objects.filter(
-                conversation=self.conversation
-            ).select_related('conversation', 'artifact_group', 'parent_artifact').order_by('-created_at')
+            artifacts = (
+                Artifact.active_objects.filter(conversation=self.conversation)
+                .select_related("conversation", "artifact_group", "parent_artifact")
+                .order_by("-created_at")
+            )
             serializer = ArtifactListSerializer(artifacts, many=True)
             return serializer.data
 
@@ -780,7 +854,7 @@ class MessageCoordinator:
             payload = {
                 "type": "latest_progress",
                 "conversationId": str(self.conversation.id),
-                "assessment": latest  # None or dict
+                "assessment": latest,  # None or dict
             }
             await self.send(payload)
 
@@ -790,7 +864,6 @@ class MessageCoordinator:
             payload = {
                 "type": "latest_progress",
                 "conversationId": str(self.conversation.id),
-                "assessment": None
+                "assessment": None,
             }
             await self.send(payload)
-

@@ -31,9 +31,12 @@ class LLMQueryRequest:
         message_obj: Message model instance for tracking
         workflow_run_step_obj: Workflow step for execution tracking
     """
+
     # Required fields
     message: str
-    user: Optional[Any] = None  # User model - using Any to avoid circular imports (can be None for public bots)
+    user: Optional[Any] = (
+        None  # User model - using Any to avoid circular imports (can be None for public bots)
+    )
 
     # Semi-required (can be None for workflow execution)
     conversation: Optional[Any] = None  # Conversation model
@@ -46,13 +49,17 @@ class LLMQueryRequest:
     socratic: SocraticConfig = field(default_factory=SocraticConfig)
     message_obj: Optional[Any] = None  # Message model
     workflow_run_step_obj: Optional[Any] = None  # WorkflowRunStep model
-    
+
     # MCP tool integration
-    mcp_server_ids: tuple[int, ...] = field(default_factory=tuple)  # Selected MCP server IDs
-    
+    mcp_server_ids: tuple[int, ...] = field(
+        default_factory=tuple
+    )  # Selected MCP server IDs
+
     # DARE native tools integration
-    dare_tool_slugs: tuple[str, ...] = field(default_factory=tuple)  # Selected DARE tool slugs
-    
+    dare_tool_slugs: tuple[str, ...] = field(
+        default_factory=tuple
+    )  # Selected DARE tool slugs
+
     # Tool results for follow-up calls
     tool_results: list = field(default_factory=list)  # Results from previous tool calls
 
@@ -62,7 +69,12 @@ class LLMQueryRequest:
             raise ValueError("Message cannot be empty")
         # User can be None for public bot conversations
         # Validation: user is required UNLESS conversation has no user (public bot)
-        if not self.user and self.conversation and hasattr(self.conversation, 'user') and self.conversation.user is not None:
+        if (
+            not self.user
+            and self.conversation
+            and hasattr(self.conversation, "user")
+            and self.conversation.user is not None
+        ):
             raise ValueError("User is required for authenticated conversations")
 
     def is_socratic_mode(self) -> bool:
@@ -88,20 +100,20 @@ class LLMQueryRequest:
     def requires_artifact_generation(self) -> bool:
         """Check if artifact generation is enabled."""
         return self.generation.artifacts_enabled
-    
+
     def requires_mcp_tools(self) -> bool:
         """Check if MCP tools should be loaded."""
         return len(self.mcp_server_ids) > 0
-    
+
     def requires_dare_tools(self) -> bool:
         """Check if DARE tools should be loaded."""
         return len(self.dare_tool_slugs) > 0
-    
+
     def has_tool_results(self) -> bool:
         """Check if there are tool results from a previous call."""
         return len(self.tool_results) > 0
 
-    def with_conversation_defaults(self, conversation: Any) -> 'LLMQueryRequest':
+    def with_conversation_defaults(self, conversation: Any) -> "LLMQueryRequest":
         """Apply conversation-level defaults for generation settings.
 
         Note: This method now simply returns self unchanged because message-level
@@ -131,6 +143,7 @@ class LLMQueryChunk:
         chunk: Text content of the chunk
         usage: Token usage statistics (input_tokens, output_tokens, cost)
     """
+
     chunk: str
     usage: Optional[dict] = None
 
@@ -148,5 +161,7 @@ class LLMQueryChunk:
 
     def get_cost(self) -> float:
         """Get cost in dollars."""
-        cost = self.usage.get("cost", Decimal("0.00")) if self.usage else Decimal("0.00")
+        cost = (
+            self.usage.get("cost", Decimal("0.00")) if self.usage else Decimal("0.00")
+        )
         return float(cost) if isinstance(cost, Decimal) else cost

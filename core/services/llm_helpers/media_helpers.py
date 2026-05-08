@@ -7,23 +7,27 @@ for LLM context enrichment.
 
 import logging
 from datetime import datetime
-from typing import List, Dict, Optional, Tuple, AsyncGenerator
+from typing import AsyncGenerator, Dict, List, Optional, Tuple
 
 from conversations.constants import Provider
 from conversations.services.audio_transcription_service import AudioTranscriptionService
-from core.services.api_key_service import get_provider_api_key, get_provider_api_key_for_user
+from core.services.api_key_service import (
+    get_dispatch_credentials_for_user,
+    get_provider_api_key,
+)
 from core.services.whisper_service import WhisperService
-from .context_helpers import build_transcription_context, insert_context_before_last_user_message
-from .db_helpers import get_audio_or_video_files
 
+from .context_helpers import (
+    build_transcription_context,
+    insert_context_before_last_user_message,
+)
+from .db_helpers import get_audio_or_video_files
 
 logger = logging.getLogger(__name__)
 
 
 async def add_video_transcriptions_to_messages(
-    media_items: List[Dict],
-    messages: List[Dict],
-    user=None
+    media_items: List[Dict], messages: List[Dict], user=None
 ) -> List[Dict]:
     """
     Add video transcriptions to message context for LLMs.
@@ -39,7 +43,7 @@ async def add_video_transcriptions_to_messages(
     Returns:
         Updated messages list with video transcriptions added
     """
-    videos = [item for item in media_items if item.get('type', '').startswith('video/')]
+    videos = [item for item in media_items if item.get("type", "").startswith("video/")]
 
     if not videos:
         return messages
@@ -64,9 +68,16 @@ async def add_video_transcriptions_to_messages(
 
 
 async def _get_openai_api_key(user=None) -> str:
-    """Get OpenAI API key based on user context."""
+    """Get OpenAI API key for transcription. Whisper has no LiteLLM-proxied
+    equivalent today, so even when the user's wallet is LITELLM we route
+    transcription through the system OpenAI key (whisper-1 only); the picker
+    forces ``is_audio_transcriber=False`` on synthetic entries to keep
+    LITELLM users from selecting transcription models in the first place.
+    """
     if user:
-        return await get_provider_api_key_for_user(Provider.OPENAI.value, user)
+        creds = await get_dispatch_credentials_for_user(Provider.OPENAI.value, user)
+        if creds.api_key:
+            return creds.api_key
     return await get_provider_api_key(Provider.OPENAI.value)
 
 
@@ -121,10 +132,10 @@ async def execute_audio_transcription(
                     if chunk_result.get("final_transcription"):
                         final_transcription = chunk_result["final_transcription"]
             else:
-                final_transcription = await AudioTranscriptionService.transcribe_audio_file(
-                    file_obj=media_file,
-                    language=language,
-                    model=llm_identifier
+                final_transcription = (
+                    await AudioTranscriptionService.transcribe_audio_file(
+                        file_obj=media_file, language=language, model=llm_identifier
+                    )
                 )
 
         except Exception as e:
@@ -133,12 +144,16 @@ async def execute_audio_transcription(
             return
 
     if final_transcription:
-        result_text = AudioTranscriptionService.format_transcription_for_display(final_transcription)
+        result_text = AudioTranscriptionService.format_transcription_for_display(
+            final_transcription
+        )
         usage_data = final_transcription.copy()
         usage_data["transcription_result"] = final_transcription
         yield result_text, usage_data
     else:
-        file_names = ", ".join([f.name for f in media_files]) if media_files else "unknown"
+        file_names = (
+            ", ".join([f.name for f in media_files]) if media_files else "unknown"
+        )
         yield f"Error: Transcription failed for {file_names}. Please check the server logs for more details.", None
 
 
@@ -161,14 +176,15 @@ async def _transcribe_file_streaming(
     accumulated_text = ""
 
     async for chunk_data in AudioTranscriptionService.transcribe_audio_file_streaming(
-        file_obj=media_file,
-        language=language,
-        model=model
+        file_obj=media_file, language=language, model=model
     ):
         if chunk_data.get("error"):
             error_msg = chunk_data.get("error_message", "Unknown transcription error")
             logger.error(f"Transcription error for {file_name}: {error_msg}")
-            yield {"error": True, "error_message": f"Error transcribing {file_name}: {error_msg}"}
+            yield {
+                "error": True,
+                "error_message": f"Error transcribing {file_name}: {error_msg}",
+            }
             return
 
         chunk_text = chunk_data["text"]
@@ -185,13 +201,13 @@ async def _transcribe_file_streaming(
         yield {
             "accumulated_text": accumulated_text,
             "final_transcription": {
-                'text': " ".join(chunk_texts),
-                'language': language or 'auto',
-                'model': model,
-                'file_id': media_file.id,
-                'file_name': media_file.name,
-                'file_size': media_file.size,
-                'media_type': media_file.media_type,
-                'transcribed_at': datetime.now().isoformat(),
-            }
+                "text": " ".join(chunk_texts),
+                "language": language or "auto",
+                "model": model,
+                "file_id": media_file.id,
+                "file_name": media_file.name,
+                "file_size": media_file.size,
+                "media_type": media_file.media_type,
+                "transcribed_at": datetime.now().isoformat(),
+            },
         }

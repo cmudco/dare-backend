@@ -9,7 +9,7 @@ import base64
 import json
 import logging
 from decimal import Decimal
-from typing import AsyncGenerator, List, Dict, Tuple, Optional
+from typing import AsyncGenerator, Dict, List, Optional, Tuple
 
 from openai import AsyncOpenAI
 
@@ -17,14 +17,14 @@ from config import env
 from conversations.models import LLM
 from core.services.api_key_service import get_provider_api_key
 from core.services.llm_utils import (
-    OpenAIMessageFormatter,
-    OpenAIVisionHandler,
     OpenAIErrorHandler,
+    OpenAIMessageFormatter,
     OpenAIStreamProcessor,
+    OpenAIVisionHandler,
     OpenAIWebSearchTools,
-    WebSearchTools,
-    StreamAggregator,
     SchemaTransformer,
+    StreamAggregator,
+    WebSearchTools,
 )
 
 logger = logging.getLogger(__name__)
@@ -33,19 +33,28 @@ logger = logging.getLogger(__name__)
 class OpenAIService:
     """Service for interacting with OpenAI's GPT models."""
 
-    def __init__(self, llm: LLM, api_key: Optional[str] = None):
+    def __init__(
+        self,
+        llm: LLM,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+    ):
         """
         Initialize OpenAI service.
 
         Args:
             llm: LLM model instance with configuration
             api_key: Optional API key override. If not provided, uses provider key resolution
+            base_url: Optional override for the API endpoint. Set when routing
+                through a LiteLLM proxy (or any other OpenAI-compatible
+                gateway); leave ``None`` for direct calls to api.openai.com.
         """
         # Use provided key or fetch from provider key service
         if api_key is None:
             api_key = get_provider_api_key(llm.provider)
 
         self.api_key = api_key
+        self.base_url = base_url
         self._client = None
         self.model = llm.identifier
         self.is_reasoning = llm.is_reasoning
@@ -59,7 +68,10 @@ class OpenAIService:
         by creating the client on first use rather than during __init__.
         """
         if self._client is None:
-            self._client = AsyncOpenAI(api_key=self.api_key)
+            client_kwargs = {"api_key": self.api_key}
+            if self.base_url:
+                client_kwargs["base_url"] = self.base_url
+            self._client = AsyncOpenAI(**client_kwargs)
         return self._client
 
     def _uses_max_completion_tokens(self) -> bool:
@@ -78,7 +90,7 @@ class OpenAIService:
         max_tokens: int = 1024,
         temperature: float = 0.7,
         images: List[Dict] = None,
-        tools: Optional[List[Dict]] = None
+        tools: Optional[List[Dict]] = None,
     ) -> AsyncGenerator[Tuple[str, Dict], None]:
         """
         Stream chat completions from OpenAI's GPT model.
@@ -108,12 +120,14 @@ class OpenAIService:
                 processor = OpenAIStreamProcessor.process_responses_api_stream
             else:
                 # Filter out web_search tools before passing to chat completions
-                non_web_tools = [t for t in (tools or []) if t.get("type") != "web_search"]
+                non_web_tools = [
+                    t for t in (tools or []) if t.get("type") != "web_search"
+                ]
                 response = await self._stream_chat_completions(
                     prepared_messages,
                     max_tokens,
                     temperature,
-                    non_web_tools if non_web_tools else None
+                    non_web_tools if non_web_tools else None,
                 )
                 processor = OpenAIStreamProcessor.process_chat_completion_stream
 
@@ -148,10 +162,7 @@ class OpenAIService:
             Complete generated response text
         """
         if structured_spec:
-            return await self._get_structured_completion(
-                messages,
-                structured_spec
-            )
+            return await self._get_structured_completion(messages, structured_spec)
 
         # Default: use streaming and aggregate
         stream = self.stream_chat_completion(messages, max_tokens, temperature)
@@ -182,15 +193,17 @@ class OpenAIService:
         Raises:
             ValueError: If schema validation fails or no response returned
         """
-        logger.info(f"[OpenAI] generate_structured_output with schema: {list(response_schema.get('properties', {}).keys())}")
+        logger.info(
+            f"[OpenAI] generate_structured_output with schema: {list(response_schema.get('properties', {}).keys())}"
+        )
 
         response_format = {
             "type": "json_schema",
             "json_schema": {
                 "name": "structured_response",
                 "schema": response_schema,
-                "strict": True
-            }
+                "strict": True,
+            },
         }
 
         params = {
@@ -221,9 +234,7 @@ class OpenAIService:
     # ==================== Private Methods ====================
 
     def _prepare_messages(
-        self,
-        messages: List[Dict],
-        images: Optional[List[Dict]]
+        self, messages: List[Dict], images: Optional[List[Dict]]
     ) -> List[Dict]:
         """
         Prepare messages by adding vision content if needed.
@@ -256,7 +267,7 @@ class OpenAIService:
             model=self.model,
             input=input_data,
             tools=[{"type": "web_search"}],
-            stream=True
+            stream=True,
         )
 
     async def _stream_chat_completions(
@@ -264,7 +275,7 @@ class OpenAIService:
         messages: List[Dict[str, str]],
         max_tokens: int,
         temperature: float,
-        tools: Optional[List[Dict]] = None
+        tools: Optional[List[Dict]] = None,
     ):
         """
         Stream using Chat Completions API.
@@ -279,10 +290,7 @@ class OpenAIService:
             OpenAI Chat Completions stream
         """
         kwargs = self._build_chat_completion_params(
-            messages,
-            max_tokens,
-            temperature,
-            tools
+            messages, max_tokens, temperature, tools
         )
 
         return await self.client.chat.completions.create(**kwargs)
@@ -292,7 +300,7 @@ class OpenAIService:
         messages: List[Dict],
         max_tokens: int,
         temperature: float,
-        tools: Optional[List[Dict]] = None
+        tools: Optional[List[Dict]] = None,
     ) -> Dict:
         """
         Build parameters for chat completion API call.
@@ -329,9 +337,7 @@ class OpenAIService:
         return params
 
     async def _get_structured_completion(
-        self,
-        messages: List[Dict],
-        structured_spec: Dict
+        self, messages: List[Dict], structured_spec: Dict
     ) -> str:
         """
         Get structured output using OpenAI response format.
@@ -353,17 +359,22 @@ class OpenAIService:
 
         if not response_format:
             # Fallback to regular completion
-            logger.warning("[OpenAI] No response_format generated, falling back to streaming")
+            logger.warning(
+                "[OpenAI] No response_format generated, falling back to streaming"
+            )
             stream = self.stream_chat_completion(messages)
             return await StreamAggregator.aggregate_stream(stream)
 
         try:
-            logger.info("[OpenAI] Calling native structured output API with response_format")
-            response = await self._generate_with_chat_completions_structure(
-                messages,
-                response_format
+            logger.info(
+                "[OpenAI] Calling native structured output API with response_format"
             )
-            logger.info(f"[OpenAI] Native API response received: {str(response)[:200]}...")
+            response = await self._generate_with_chat_completions_structure(
+                messages, response_format
+            )
+            logger.info(
+                f"[OpenAI] Native API response received: {str(response)[:200]}..."
+            )
 
             extracted_value = self._extract_field_value(response, structured_spec)
             logger.info(f"[OpenAI] Extracted field value: {extracted_value}")
@@ -374,13 +385,11 @@ class OpenAIService:
             return f"Error: {error_message}"
 
     async def _generate_with_chat_completions_structure(
-        self,
-        messages: List[Dict],
-        response_format: Dict
+        self, messages: List[Dict], response_format: Dict
     ):
         """
         Generate completion with response format using chat.completions API.
-        
+
         Note: Structured outputs must use chat.completions.create(), not responses.create()
         The responses API doesn't support the response_format parameter.
 
@@ -396,13 +405,13 @@ class OpenAIService:
             "messages": messages,
             "response_format": response_format,
         }
-        
+
         if self._uses_max_completion_tokens():
             params["max_completion_tokens"] = 1024
         else:
             params["max_tokens"] = 1024
-            params["temperature"] = 0.0 
-        
+            params["temperature"] = 0.0
+
         return await self.client.chat.completions.create(**params)
 
     def _extract_field_value(self, response, structured_spec: Dict) -> str:
@@ -428,16 +437,16 @@ class OpenAIService:
         if not text_out:
             return ""
 
-        schema_type = structured_spec.get('type')
+        schema_type = structured_spec.get("type")
 
         # For object schemas, return the full JSON (includes explanation)
-        if schema_type == 'object':
+        if schema_type == "object":
             return text_out
 
         # For legacy enum schemas, extract just the field value
         try:
             data = json.loads(text_out)
-            field_name = structured_spec.get('field', 'route')
+            field_name = structured_spec.get("field", "route")
             value = data.get(field_name)
             return str(value) if value is not None else text_out
         except Exception:
@@ -449,7 +458,7 @@ class OpenAIService:
         model: str = "dall-e-3",
         size: str = "1024x1024",
         quality: str = "standard",
-        style: str = "vivid"
+        style: str = "vivid",
     ) -> AsyncGenerator[Tuple[str, Dict], None]:
         """
         Generate an image using DALL-E and stream the result like chat completions.
@@ -490,7 +499,7 @@ class OpenAIService:
 
             # Extract response data
             image_data = response.data[0]
-            revised_prompt = getattr(image_data, 'revised_prompt', prompt)
+            revised_prompt = getattr(image_data, "revised_prompt", prompt)
             image_bytes = base64.b64decode(image_data.b64_json)
 
             # Calculate cost
@@ -536,7 +545,9 @@ class OpenAIService:
             size_pricing = model_pricing.get(size, model_pricing["1024x1024"])
 
             if isinstance(size_pricing, dict):
-                return size_pricing.get(quality, size_pricing.get("standard", Decimal("0.040")))
+                return size_pricing.get(
+                    quality, size_pricing.get("standard", Decimal("0.040"))
+                )
             return size_pricing
         except Exception:
             return Decimal("0.040")

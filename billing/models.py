@@ -1,18 +1,26 @@
+import uuid
 from decimal import Decimal
 from django.db import models, transaction as db_transaction
+from django.db.models import F, Q
+from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from billing.constants import (
     TransactionTypeChoice,
     TransactionSourceChoice,
+    LiteLLMKeySourceChoice,
+    UserWalletPreferenceTypeChoice,
     DEFAULT_REFILL_AMOUNT,
     DEFAULT_REFILL_PERIOD_DAYS,
 )
 from common.models import TimeStampMixin
 from conversations.models import LLM
+from core.fields import EncryptedCharField
 from users.models import User, AccessCodeGroup
 from users.constants import AuthSourceChoice
 from api_keys.constants import BillingModeChoice
+from api_keys.models import UserProviderAPIKey
 
 
 class SystemRefillPolicy(TimeStampMixin):
@@ -324,6 +332,32 @@ class Transaction(TimeStampMixin):
         help_text=("Platform where this transaction originated: DARE or SocraticBots"),
     )
 
+    # Bot attribution (only populated for bot-driven transactions; SocraticBooks
+    # owns the Bot table so we keep these as plain ints, not FKs across DBs).
+    bot_id = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        db_index=True,
+        verbose_name=_("Bot ID"),
+        help_text=_("Socratic Bot ID (SocraticBooks-owned), set when the call was made through a deployed bot."),
+    )
+    bot_owner = models.ForeignKey(
+        User,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="bot_owned_transactions",
+        verbose_name=_("Bot Owner"),
+        help_text=_("DARE user who owns the Socratic Bot this call was attributed to. Used by the owner usage dashboard."),
+    )
+    fallback_reason = models.CharField(
+        max_length=64,
+        null=True,
+        blank=True,
+        verbose_name=_("Fallback Reason"),
+        help_text=_("When the wallet router couldn't honor the user's preferred wallet (e.g. BYO_PROVIDER_MISSING, LITELLM_EXPIRED), this records why DARE billed instead."),
+    )
+
     # Energy/environmental impact tracking
     energy_wh = models.DecimalField(
         max_digits=10,
@@ -371,41 +405,76 @@ class Transaction(TimeStampMixin):
 
     def save(self, *args, **kwargs):
         """
-        Override save method to handle balance deduction for debit transactions.
+        Override save to debit/credit the wallet atomically alongside the row insert.
 
         Platform-specific behavior:
         - DARE transactions: Deduct from/add to user's wallet balance
         - SocraticBots transactions: Record only (no wallet impact)
+
+        Wallet-mode-specific behavior:
+        - WALLET: debit/credit the user's DARE wallet
+        - OWN_API (BYO) or LITELLM: record the transaction for analytics only;
+          the cost is paid externally so the DARE wallet balance is untouched.
+
+        Concurrency: the wallet mutation is wrapped in `transaction.atomic()` with
+        `select_for_update()` on the Wallet row and an F() expression for the
+        balance change so two concurrent debits cannot both pass the balance
+        check and overspend.
         """
         is_new = self.pk is None
 
-        if is_new:
-            if self.llm and not self.llm_name:
-                self.llm_name = self.llm.name
-            try:
-                wallet = self.user.wallet
-            except self.user.wallet.RelatedObjectDoesNotExist:
-                wallet = Wallet.objects.create(user=self.user, balance=Decimal('5.00'))
+        if not is_new:
+            super().save(*args, **kwargs)
+            return
 
-            # Only modify wallet balance for DARE platform transactions
-            if self.platform == AuthSourceChoice.DARE:
-                current_balance = wallet.balance
-                if self.type == TransactionTypeChoice.DEBIT:
-                    if wallet.balance < self.amount:
-                        raise ValidationError({
-                            'error': ['insufficient_balance'],
-                            'message': ['Insufficient wallet balance'],
-                            'current_balance': [str(wallet.balance)],
-                            'required_amount': [str(self.amount)]
-                        })
-                    wallet.balance -= self.amount
-                elif self.type == TransactionTypeChoice.CREDIT:
-                    wallet.balance += self.amount
+        if self.llm and not self.llm_name:
+            self.llm_name = self.llm.name
 
-                wallet.save(update_fields=['balance'])
-            # SocraticBots transactions are recorded but don't affect wallet balance
+        external_billing = self.billing_mode in (
+            BillingModeChoice.OWN_API,
+            BillingModeChoice.LITELLM,
+        )
 
-        super().save(*args, **kwargs)
+        wallet_affecting = (
+            self.platform == AuthSourceChoice.DARE and not external_billing
+        )
+
+        if not wallet_affecting:
+            # SocraticBots / external-billing transactions are recorded but
+            # don't affect the DARE wallet balance.
+            super().save(*args, **kwargs)
+            return
+
+        with db_transaction.atomic():
+            wallet = (
+                Wallet.objects
+                .select_for_update()
+                .filter(user=self.user)
+                .first()
+            )
+            if wallet is None:
+                # First-call lazy creation; immediately re-lock so subsequent
+                # mutations within this transaction operate on the locked row.
+                Wallet.objects.create(user=self.user, balance=Decimal('5.00'))
+                wallet = Wallet.objects.select_for_update().get(user=self.user)
+
+            if self.type == TransactionTypeChoice.DEBIT:
+                if wallet.balance < self.amount:
+                    raise ValidationError({
+                        'error': ['insufficient_balance'],
+                        'message': ['Insufficient wallet balance'],
+                        'current_balance': [str(wallet.balance)],
+                        'required_amount': [str(self.amount)],
+                    })
+                Wallet.objects.filter(pk=wallet.pk).update(
+                    balance=F('balance') - self.amount
+                )
+            elif self.type == TransactionTypeChoice.CREDIT:
+                Wallet.objects.filter(pk=wallet.pk).update(
+                    balance=F('balance') + self.amount
+                )
+
+            super().save(*args, **kwargs)
 
     def __str__(self):
         """
@@ -414,3 +483,321 @@ class Transaction(TimeStampMixin):
         token_info = f", {self.input_tokens} input, {self.output_tokens} output tokens" if self.input_tokens is not None and self.output_tokens is not None else ""
         model_info = f" ({self.llm_name})" if self.llm_name else ""
         return f"{self.user.email}: {self.get_type_display()} - {self.display_amount}{model_info}{token_info}"
+
+
+class BYOKeyFeatureFlag(models.Model):
+    """
+    Singleton flag gating the BYO Key wallet type globally. Edited by Django
+    superadmin only; mirrors the SystemRefillPolicy singleton pattern.
+    """
+    SINGLETON_PK = 1
+
+    is_enabled = models.BooleanField(
+        default=False,
+        verbose_name=_("BYO Key Enabled"),
+        help_text=_("When enabled, users may add and select their own provider API keys (BYO) as the active wallet."),
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="+",
+        verbose_name=_("Updated By"),
+        help_text=_("Last admin to toggle this flag."),
+    )
+
+    class Meta:
+        verbose_name = _("BYO Key Feature Flag")
+        verbose_name_plural = _("BYO Key Feature Flag")
+
+    def save(self, *args, **kwargs):
+        self.pk = self.SINGLETON_PK
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def is_byo_enabled(cls) -> bool:
+        row = cls.objects.filter(pk=cls.SINGLETON_PK).first()
+        return bool(row and row.is_enabled)
+
+    @classmethod
+    def load(cls):
+        obj, _created = cls.objects.get_or_create(pk=cls.SINGLETON_PK)
+        return obj
+
+    def __str__(self):
+        return f"BYO Key Feature Flag: {'ENABLED' if self.is_enabled else 'DISABLED'}"
+
+
+class LiteLLMKey(TimeStampMixin):
+    """
+    Credential row representing a LiteLLM proxy key the user can route LLM
+    calls through. Sourced either by the user themselves (`USER`) or issued
+    by an admin to a single user (`ADMIN_USER`) or to an entire AccessCodeGroup
+    (`ADMIN_GROUP`). Group keys are gated by AccessCodeGroup membership at
+    query time — leaving the group hides the key implicitly.
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    label = models.CharField(
+        max_length=128,
+        verbose_name=_("Label"),
+        help_text=_("Human-readable name to disambiguate keys (e.g. 'Personal' or 'PHIL 101 - Spring 2026')."),
+    )
+    base_url = models.URLField(
+        verbose_name=_("Base URL"),
+        help_text=_("LiteLLM proxy URL — e.g. https://litellm-proxy.example.com."),
+    )
+    api_key = EncryptedCharField(
+        max_length=500,
+        verbose_name=_("API Key"),
+        help_text=_("LiteLLM proxy API key (stored encrypted using AES-256)."),
+    )
+    source = models.CharField(
+        max_length=16,
+        choices=LiteLLMKeySourceChoice.choices,
+        verbose_name=_("Source"),
+        help_text=_("Where the key originated — user self-served, admin-issued to a user, or admin-issued to a group."),
+    )
+    owner_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="litellm_keys_owned",
+        verbose_name=_("Owner User"),
+        help_text=_("Set when source=USER. The user who self-served this key."),
+    )
+    assigned_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="litellm_keys_assigned",
+        verbose_name=_("Assigned User"),
+        help_text=_("Set when source=ADMIN_USER. The user the admin assigned this key to."),
+    )
+    source_group = models.ForeignKey(
+        AccessCodeGroup,
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="litellm_keys",
+        verbose_name=_("Source Group"),
+        help_text=_("Set when source=ADMIN_GROUP. The cohort whose members all have access to this key."),
+    )
+    expires_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name=_("Expires At"),
+        help_text=_("Optional hard expiry. Past expiry hides the key from the user's wallet list."),
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="+",
+        verbose_name=_("Created By"),
+        help_text=_("User who created this record (admin or self)."),
+    )
+
+    class Meta:
+        verbose_name = _("LiteLLM Key")
+        verbose_name_plural = _("LiteLLM Keys")
+        constraints = [
+            models.CheckConstraint(
+                name="litellm_source_owner_consistency",
+                condition=(
+                    (Q(source=LiteLLMKeySourceChoice.USER)
+                        & Q(owner_user__isnull=False)
+                        & Q(assigned_user__isnull=True)
+                        & Q(source_group__isnull=True))
+                    | (Q(source=LiteLLMKeySourceChoice.ADMIN_USER)
+                        & Q(assigned_user__isnull=False)
+                        & Q(owner_user__isnull=True)
+                        & Q(source_group__isnull=True))
+                    | (Q(source=LiteLLMKeySourceChoice.ADMIN_GROUP)
+                        & Q(source_group__isnull=False)
+                        & Q(owner_user__isnull=True)
+                        & Q(assigned_user__isnull=True))
+                ),
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["owner_user"]),
+            models.Index(fields=["assigned_user"]),
+            models.Index(fields=["source_group"]),
+        ]
+
+    @property
+    def is_expired(self) -> bool:
+        return self.expires_at is not None and self.expires_at <= timezone.now()
+
+    @staticmethod
+    def normalize_base_url(raw: str) -> str:
+        """Canonicalize ``base_url`` to the OpenAI-SDK API root.
+
+        LiteLLM proxies are OpenAI-compatible at ``<host>/v1/...``. Both the
+        probe (``GET /v1/models``) and the dispatcher (``AsyncOpenAI(...)``,
+        which appends ``/chat/completions`` to ``base_url``) expect the URL
+        to end in ``/v1``. We normalize once at storage so every consumer
+        reads the same canonical form — single source of truth.
+        """
+        cleaned = (raw or "").strip().rstrip("/")
+        if not cleaned:
+            return cleaned
+        if cleaned.endswith("/v1"):
+            return cleaned
+        return cleaned + "/v1"
+
+    def save(self, *args, **kwargs):
+        self.base_url = self.normalize_base_url(self.base_url)
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def visible_for_user(cls, user):
+        """
+        Queryset of non-expired keys the given user has access to:
+        their own self-served keys, admin-assigned individual keys, and
+        ADMIN_GROUP keys whose source_group matches the user's current
+        access_code_group (FK on User; not an M2M).
+        """
+        now = timezone.now()
+        not_expired = Q(expires_at__isnull=True) | Q(expires_at__gt=now)
+        user_group_id = getattr(user, "access_code_group_id", None)
+
+        owned_or_assigned = (
+            Q(source=LiteLLMKeySourceChoice.USER, owner_user=user)
+            | Q(source=LiteLLMKeySourceChoice.ADMIN_USER, assigned_user=user)
+        )
+        if user_group_id:
+            owned_or_assigned = owned_or_assigned | Q(
+                source=LiteLLMKeySourceChoice.ADMIN_GROUP,
+                source_group_id=user_group_id,
+            )
+
+        return cls.objects.filter(not_expired).filter(owned_or_assigned).select_related("source_group").distinct()
+
+    def __str__(self):
+        return f"LiteLLMKey<{self.label} / {self.get_source_display()}>"
+
+
+class UserWalletPreference(TimeStampMixin):
+    """
+    Per-user pointer to the active wallet for routing LLM calls. Created lazily
+    on first read with default DARE so existing users keep the current behaviour
+    with no data migration. The router (`billing.wallet_router`) consults this
+    on every call; admin-side changes self-heal here on the next request.
+    """
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="wallet_preference",
+        verbose_name=_("User"),
+    )
+    active_wallet_type = models.CharField(
+        max_length=16,
+        choices=UserWalletPreferenceTypeChoice.choices,
+        default=UserWalletPreferenceTypeChoice.DARE,
+        verbose_name=_("Active Wallet Type"),
+    )
+    active_wallet_ref_id = models.CharField(
+        max_length=64,
+        null=True,
+        blank=True,
+        verbose_name=_("Active Wallet Reference"),
+        help_text=_(
+            "Identifier of the active wallet within its type table — "
+            "UserProviderAPIKey.id (BYO) or LiteLLMKey.id (LITELLM). "
+            "Null for DARE."
+        ),
+    )
+
+    class Meta:
+        verbose_name = _("User Wallet Preference")
+        verbose_name_plural = _("User Wallet Preferences")
+
+    def clean(self):
+        wallet_type = self.active_wallet_type
+        ref_id = self.active_wallet_ref_id
+
+        if wallet_type == UserWalletPreferenceTypeChoice.DARE:
+            if ref_id not in (None, ""):
+                raise ValidationError({
+                    "active_wallet_ref_id": _("DARE wallet must not have a ref_id."),
+                })
+            return
+
+        if wallet_type == UserWalletPreferenceTypeChoice.BYO:
+            if not BYOKeyFeatureFlag.is_byo_enabled():
+                raise ValidationError({
+                    "active_wallet_type": _("BYO wallet type is currently disabled platform-wide."),
+                })
+
+            # Collective BYO: ref_id is None ⇒ "use whichever BYO key matches
+            # the requested provider at dispatch time." Validate that the user
+            # has at least one populated BYO key configured.
+            if not ref_id:
+                has_any_byo = (
+                    UserProviderAPIKey.active_objects
+                    .filter(user=self.user)
+                    .exclude(api_key__isnull=True)
+                    .exclude(api_key="")
+                    .exists()
+                )
+                if not has_any_byo:
+                    raise ValidationError({
+                        "active_wallet_ref_id": _(
+                            "Add at least one BYO provider key before setting BYO active."
+                        ),
+                    })
+                return
+
+            # Legacy specific-key BYO mode.
+            try:
+                ref_pk = int(ref_id)
+            except (TypeError, ValueError):
+                raise ValidationError({"active_wallet_ref_id": _("BYO ref_id must be an integer pk.")})
+            byo_qs = UserProviderAPIKey.active_objects.filter(pk=ref_pk, user=self.user)
+            byo_row = byo_qs.first()
+            if byo_row is None:
+                raise ValidationError({
+                    "active_wallet_ref_id": _("BYO key not found for this user."),
+                })
+            if not byo_row.has_key:
+                raise ValidationError({
+                    "active_wallet_ref_id": _("BYO key is empty — add a key value before setting it active."),
+                })
+            return
+
+        if wallet_type == UserWalletPreferenceTypeChoice.LITELLM:
+            if not ref_id:
+                raise ValidationError({"active_wallet_ref_id": _("LiteLLM wallet requires a ref_id.")})
+            if not LiteLLMKey.visible_for_user(self.user).filter(pk=ref_id).exists():
+                raise ValidationError({
+                    "active_wallet_ref_id": _("LiteLLM key not visible to this user (expired, missing, or unauthorized)."),
+                })
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+    @classmethod
+    def get_or_create_for(cls, user):
+        pref, _created = cls.objects.get_or_create(
+            user=user,
+            defaults={
+                "active_wallet_type": UserWalletPreferenceTypeChoice.DARE,
+                "active_wallet_ref_id": None,
+            },
+        )
+        return pref
+
+    def reset_to_dare(self, save: bool = True):
+        self.active_wallet_type = UserWalletPreferenceTypeChoice.DARE
+        self.active_wallet_ref_id = None
+        if save:
+            self.save(update_fields=["active_wallet_type", "active_wallet_ref_id", "updated_at"])
+
+    def __str__(self):
+        ref = f":{self.active_wallet_ref_id}" if self.active_wallet_ref_id else ""
+        return f"WalletPref<{self.user.email} -> {self.active_wallet_type}{ref}>"

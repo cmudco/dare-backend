@@ -15,6 +15,7 @@ class SocraticConfig:
         advanced_mode: Use advanced prompt construction
         bot_meta: Bot metadata (subject, topic, learning_goals, chat_prompt, title)
     """
+
     enabled: bool = False
     advanced_mode: bool = False
     bot_meta: Dict[str, Any] = field(default_factory=dict)
@@ -33,8 +34,12 @@ class SocraticConfig:
 
     def get_learning_goals(self) -> str:
         """Get the learning goals from bot metadata."""
-        return self.bot_meta.get("learning_goals", "No specific learning goals defined.")
+        return self.bot_meta.get(
+            "learning_goals", "No specific learning goals defined."
+        )
 
     def get_chat_prompt(self) -> str:
         """Get the chat prompt from bot metadata."""
-        return self.bot_meta.get("chat_prompt", "Provide a helpful, educational response.")
+        return self.bot_meta.get(
+            "chat_prompt", "Provide a helpful, educational response."
+        )

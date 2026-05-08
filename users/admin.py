@@ -9,8 +9,12 @@ from datetime import timedelta
 from users.models import User, AccessCodeGroup
 from billing.services import WalletService
 from billing.admin import GroupWalletInline, UserRefillOverrideInline
-from billing.constants import TransactionSourceChoice, TransactionTypeChoice
-from billing.models import GroupWallet, Transaction
+from billing.constants import (
+    LiteLLMKeySourceChoice,
+    TransactionSourceChoice,
+    TransactionTypeChoice,
+)
+from billing.models import GroupWallet, LiteLLMKey, Transaction
 from django import forms
 from decimal import Decimal
 from users.constants import VectorDBChoice, AuthSourceChoice, RoleChoice
@@ -35,6 +39,38 @@ class UserInline(admin.TabularInline):
         return False
 
 
+class LiteLLMCohortKeyInline(admin.TabularInline):
+    """
+    Inline for managing ADMIN_GROUP LiteLLM keys on the parent AccessCodeGroup.
+    Stamps `source=ADMIN_GROUP` and `created_by=request.user` server-side via a
+    formset closure so the source-consistency CheckConstraint is satisfied
+    without rendering those fields on the form.
+    """
+    model = LiteLLMKey
+    fk_name = "source_group"
+    extra = 0
+    fields = ("label", "base_url", "api_key", "expires_at")
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).filter(source=LiteLLMKeySourceChoice.ADMIN_GROUP)
+
+    def get_formset(self, request, obj=None, **kwargs):
+        formset_cls = super().get_formset(request, obj, **kwargs)
+        request_user = request.user
+
+        class _StampedFormSet(formset_cls):
+            def save_new(self, form, commit=True):
+                instance = super().save_new(form, commit=False)
+                instance.source = LiteLLMKeySourceChoice.ADMIN_GROUP
+                if not getattr(instance, "created_by_id", None):
+                    instance.created_by = request_user
+                if commit:
+                    instance.save()
+                return instance
+
+        return _StampedFormSet
+
+
 @admin.register(AccessCodeGroup)
 class AccessCodeGroupAdmin(admin.ModelAdmin):
     list_display = ('access_code', 'default_role', 'group_owner', 'model_group', 'initial_wallet_credit', 'usage_display', 'expiration_status', 'is_active', 'user_count', 'created_at')
@@ -43,7 +79,7 @@ class AccessCodeGroupAdmin(admin.ModelAdmin):
     readonly_fields = ('current_usage', 'created_at', 'updated_at')
     list_editable = ('is_active',)
     raw_id_fields = ('group_owner',)
-    inlines = [GroupWalletInline, UserInline]
+    inlines = [GroupWalletInline, UserInline, LiteLLMCohortKeyInline]
     
     class GroupCreditActionForm(ActionForm):
         amount = forms.DecimalField(

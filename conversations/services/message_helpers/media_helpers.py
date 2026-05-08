@@ -9,18 +9,16 @@ from typing import Dict, Any
 
 
 def build_generated_image_data(
-    generated_file,
-    prompt: str,
-    usage: Dict[str, Any]
+    generated_file, prompt: str, usage: Dict[str, Any]
 ) -> Dict[str, Any]:
     """
     Build generated image response data for frontend.
-    
+
     Args:
         generated_file: Saved File instance with image data
         prompt: Original generation prompt
         usage: Usage dict with image metadata
-        
+
     Returns:
         Dict with image data for frontend
     """
