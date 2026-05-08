@@ -9,6 +9,7 @@ from typing import Dict, Optional
 from channels.db import database_sync_to_async
 from django.utils import timezone
 
+from billing.exceptions import PaymentRequiredError
 from conversations.models import LLM
 from core.services.billing_service import BillingService
 from workflows.constants import WorkflowRunStepStatus
@@ -168,7 +169,7 @@ class BaseExecutionHandler(BaseNodeHandler):
 
         try:
             billing_service = BillingService()
-            billing_success = await database_sync_to_async(
+            await database_sync_to_async(
                 billing_service.process_workflow_billing
             )(
                 user=user,
@@ -177,13 +178,19 @@ class BaseExecutionHandler(BaseNodeHandler):
                 output_tokens=token_usage['output_tokens'],
                 step_node_id=step_node_id,
             )
-
-            if not billing_success:
-                logger.warning(f"Billing failed for step_node_id={step_node_id}")
-                return False
-
             return True
 
+        except PaymentRequiredError as billing_error:
+            # Wallet didn't cover the workflow step. The LLM has already run
+            # (we have token counts), so the cost is unrecoverable — log
+            # loudly so audits can spot it. The step itself is reported as
+            # billing-failed; the workflow caller decides whether to halt.
+            logger.error(
+                "Workflow billing failed (unrecoverable): step_node_id=%s "
+                "code=%s details=%s",
+                step_node_id, billing_error.code, billing_error.details,
+            )
+            return False
         except Exception as billing_error:
             logger.error(
                 f"Billing error for step_node_id={step_node_id}: {billing_error}",

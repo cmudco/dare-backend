@@ -12,6 +12,7 @@ import requests
 from decimal import Decimal
 from typing import Optional
 from asgiref.sync import sync_to_async
+from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,14 @@ class BotBudgetService:
         Returns:
             True if update successful, False otherwise
         """
+        internal_key = getattr(settings, 'DARE_INTERNAL_KEY', '')
+        if not internal_key:
+            logger.error(
+                "DARE_INTERNAL_KEY not configured; refusing to call SocraticBooks "
+                "update-budget for bot %s", bot_id,
+            )
+            return False
+
         try:
             # Build API URL
             url = f"{cls.SOCRATIC_BACKEND_URL}/api/bots/internal/update-budget/"
@@ -81,11 +90,34 @@ class BotBudgetService:
             if metadata:
                 data['metadata'] = metadata
 
-            # Make HTTP POST request
-            response = requests.post(url, json=data, timeout=cls.REQUEST_TIMEOUT)
+            # Make HTTP POST request with shared service-to-service key.
+            response = requests.post(
+                url,
+                json=data,
+                headers={'X-Internal-Key': internal_key},
+                timeout=cls.REQUEST_TIMEOUT,
+            )
 
             if response.status_code == 200:
                 logger.info(f"Updated budget for bot {bot_id}: +${cost}")
+                # Surface the SB-reported cap-status so audits can see when
+                # a bot crossed 80% / 100%. Notification dispatch (paging the
+                # owner) is intentionally out of scope here — the marker is
+                # in the log and would be picked up by a notifications
+                # consumer in a follow-up ticket.
+                try:
+                    body = response.json()
+                    cap_status = body.get('cap_status') or body.get('capStatus')
+                    if cap_status in ('APPROACHING_CAP', 'CAP_REACHED'):
+                        logger.warning(
+                            "bot %s cap_status=%s after debit (used=%s of %s)",
+                            bot_id,
+                            cap_status,
+                            body.get('budget_used') or body.get('budgetUsed'),
+                            body.get('budget'),
+                        )
+                except (ValueError, AttributeError):
+                    pass
                 return True
             else:
                 logger.error(

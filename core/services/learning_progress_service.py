@@ -1,11 +1,12 @@
-from typing import AsyncGenerator, Tuple, Dict, Optional
-from channels.db import database_sync_to_async
-from conversations.models import Conversation, Message, LearningProgressAssessment, LLM
-from core.services.llm_service import LLMService, AIService
 import logging
+from typing import AsyncGenerator, Dict, Optional, Tuple
+
+from channels.db import database_sync_to_async
 
 # Correctly map sender roles using the shared enum
 from conversations.constants import SenderType
+from conversations.models import LLM, Conversation, LearningProgressAssessment, Message
+from core.services.llm_service import AIService, LLMService
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,7 @@ class LearningProgressService:
         conversation_history_limit: int = 80,
         # New: include bot metadata for subject/topic/title
         bot_meta: Optional[Dict] = None,
+        user: Optional[object] = None,
     ) -> AsyncGenerator[Tuple[str, Dict], None]:
         """
         Stream a comprehensive learning progress assessment including:
@@ -35,7 +37,7 @@ class LearningProgressService:
         - Previous assessment context for progression tracking
         - Learning goals and tracking instructions
         - Bot metadata (subject/topic/title)
-        
+
         Uses system + user message format for better AI comprehension.
         """
         try:
@@ -89,7 +91,7 @@ If there is no current status, follow the system prompt to make a new status rep
                 {"role": "user", "content": user_message},
             ]
 
-            ai_service = await self._get_ai_service(llm)
+            ai_service = await self._get_ai_service(llm, user=user)
             async for chunk, usage in ai_service.stream_chat_completion(
                 messages=messages,
                 max_tokens=max_tokens,
@@ -119,9 +121,16 @@ If there is no current status, follow the system prompt to make a new status rep
             metadata=metadata or {},
         )
 
-    async def _get_ai_service(self, llm: LLM) -> AIService:
-        """Return the provider-specific AI service for the given LLM."""
-        return await self.llm_service._get_ai_service(llm)
+    async def _get_ai_service(
+        self, llm: LLM, user: Optional[object] = None
+    ) -> AIService:
+        """Return the provider-specific AI service for the given LLM.
+
+        Forwards ``user`` so the user's active wallet (DARE / BYO / LITELLM)
+        decides which key pays for the assessment call — pre-wallet-refactor
+        this always billed the system DARE wallet.
+        """
+        return await self.llm_service._get_ai_service(llm, user=user)
 
     @database_sync_to_async
     def _get_default_progress_llm(self) -> LLM:
@@ -138,31 +147,39 @@ If there is no current status, follow the system prompt to make a new status rep
         raise ValueError("No LLM models configured for progress tracking")
 
     @database_sync_to_async
-    def _get_conversation_history(self, conversation: Conversation, limit: int = 20) -> str:
+    def _get_conversation_history(
+        self, conversation: Conversation, limit: int = 20
+    ) -> str:
         """Get formatted conversation history as readable transcript."""
         # Get messages in reverse chronological order (newest first)
-        messages = Message.active_objects.filter(conversation=conversation).order_by('-created_at')
-        
+        messages = Message.active_objects.filter(conversation=conversation).order_by(
+            "-created_at"
+        )
+
         if limit > 0:
             messages = messages[:limit]  # Take most recent N messages
         conversation_history = ""
         if messages.exists():
             # Reverse to get chronological order (oldest to newest) for the transcript
             for msg in reversed(messages):
-                role_name = "User" if msg.sender_type == SenderType.PLAYER else "Assistant"
+                role_name = (
+                    "User" if msg.sender_type == SenderType.PLAYER else "Assistant"
+                )
                 conversation_history += f"{role_name}: {msg.message}\n\n"
         else:
             conversation_history = "No previous messages in this conversation.\n\n"
-            
+
         return conversation_history.strip()
 
     @database_sync_to_async
     def _get_previous_assessment(self, conversation: Conversation) -> str:
         """Get the latest previous assessment content for the conversation."""
-        latest_assessment = LearningProgressAssessment.active_objects.filter(
-            conversation=conversation
-        ).order_by('-created_at').first()
-        
+        latest_assessment = (
+            LearningProgressAssessment.active_objects.filter(conversation=conversation)
+            .order_by("-created_at")
+            .first()
+        )
+
         if latest_assessment:
             return latest_assessment.content
         else:
@@ -171,9 +188,11 @@ If there is no current status, follow the system prompt to make a new status rep
     @database_sync_to_async
     def get_latest_assessment(self, conversation: Conversation) -> Optional[Dict]:
         """Return the latest assessment as a serializable dict (or None)."""
-        assessment = LearningProgressAssessment.active_objects.filter(
-            conversation=conversation
-        ).order_by('-created_at').first()
+        assessment = (
+            LearningProgressAssessment.active_objects.filter(conversation=conversation)
+            .order_by("-created_at")
+            .first()
+        )
         if not assessment:
             return None
         # Normalize metadata keys and camelCase fields for FE convenience
@@ -188,7 +207,8 @@ If there is no current status, follow the system prompt to make a new status rep
                 "totalTokens": usage.get("total_tokens") or usage.get("totalTokens"),
             },
             "platform": meta.get("platform"),
-            "trackingPromptUsed": meta.get("tracking_prompt_used") or meta.get("trackingPromptUsed"),
+            "trackingPromptUsed": meta.get("tracking_prompt_used")
+            or meta.get("trackingPromptUsed"),
         }
         return {
             "id": str(assessment.id),

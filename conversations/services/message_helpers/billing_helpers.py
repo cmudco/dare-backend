@@ -38,18 +38,18 @@ async def update_public_bot_budget(
         cost: Cost to deduct from bot budget
         message_obj: Message for metadata (tokens, IDs)
     """
-    if cost <= Decimal('0') or not conversation.bot_id:
+    if cost <= Decimal("0") or not conversation.bot_id:
         return
 
     await BotBudgetService.update_bot_budget(
         bot_id=conversation.bot_id,
         cost=cost,
         metadata={
-            'conversation_id': str(conversation.conversation_id),
-            'message_id': str(message_obj.id),
-            'input_tokens': message_obj.input_tokens,
-            'output_tokens': message_obj.output_tokens,
-        }
+            "conversation_id": str(conversation.conversation_id),
+            "message_id": str(message_obj.id),
+            "input_tokens": message_obj.input_tokens,
+            "output_tokens": message_obj.output_tokens,
+        },
     )
 
 
@@ -81,9 +81,9 @@ async def handle_insufficient_balance(
     """
     try:
         # Finalize partial message (platform auto-detected from conversation)
-        await database_sync_to_async(
-            billing_service.finalize_ai_message
-        )(message_obj, ai_response, token_usage)
+        await database_sync_to_async(billing_service.finalize_ai_message)(
+            message_obj, ai_response, token_usage
+        )
 
         # Send partial message to client
         partial_payload = await WebSocketResponseService.format_message(
@@ -91,7 +91,7 @@ async def handle_insufficient_balance(
             message_type="message",
             is_sender=False,
             streaming=False,
-            regenerate=False
+            regenerate=False,
         )
         await send_callback(partial_payload)
 
@@ -99,7 +99,7 @@ async def handle_insufficient_balance(
         await send_error_callback(
             error_response.get("error", "insufficient_balance"),
             error_response.get("message", "Insufficient balance to continue"),
-            error_response
+            error_response,
         )
 
     except Exception as e:
