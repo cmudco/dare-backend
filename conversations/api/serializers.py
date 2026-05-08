@@ -376,7 +376,6 @@ class MessageSerializer(serializers.ModelSerializer):
             "is_regenerated",
             "original_message",
             "llm",
-            "litellm_key",
             "litellm_model_name",
             "input_tokens",
             "output_tokens",

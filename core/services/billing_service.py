@@ -349,6 +349,14 @@ class BillingService:
         been stamped on ``message_obj`` by the caller.
         """
         conversation = message_obj.conversation
+        # Audit attribution lives on Message.litellm_key (the FK). The
+        # human-facing transaction string carries only the key *label* (the
+        # name the user gave the proxy, e.g. "testing server") — never the
+        # internal UUID, which is meaningless to the user and would be a
+        # surface for a key-id leak if scraped from the FE.
+        key_label = (
+            getattr(message_obj.litellm_key, "label", None) or "LiteLLM proxy"
+        )
         Transaction.objects.create(
             user=conversation.user,
             amount=Decimal("0.00"),
@@ -358,7 +366,7 @@ class BillingService:
             source=TransactionSourceChoice.USAGE,
             message=(
                 f"Message {message_obj.id}: {message_obj.message[:80]} | "
-                f"via LiteLLM key {message_obj.litellm_key_id} | "
+                f"via {key_label} | "
                 f"model={message_obj.litellm_model_name}"
             ),
             input_tokens=message_obj.input_tokens,

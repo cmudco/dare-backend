@@ -56,6 +56,9 @@ class ConversationService:
                 "sender_type": msg["sender_type"],
                 "created_at": msg["created_at"],
                 "llm": msg["llm"],
+                # LiteLLM provenance — populated when the message was
+                # dispatched through a proxy (llm is null in that case).
+                "litellmModelName": msg.get("litellm_model_name"),
                 "files": msg.get("files", []),
                 "tags": msg.get("tags", []),
                 "snippets": msg.get("snippets", []),
