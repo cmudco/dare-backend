@@ -31,7 +31,6 @@ from billing.models import LiteLLMKey
 from billing.wallet_router import (
     BOT_WALLET_BYO,
     BOT_WALLET_DARE,
-    BOT_WALLET_GROUP,
     BOT_WALLET_LITELLM,
     ResolvedBotWallet,
     ResolvedWallet,

@@ -2,16 +2,14 @@ from decimal import Decimal
 from typing import Dict
 from django.conf import settings
 from django.db import transaction as db_transaction
-from django.db.models import F
 from django.core.exceptions import ValidationError
 from channels.db import database_sync_to_async
 from billing.constants import TransactionSourceChoice, TransactionTypeChoice
 from billing.exceptions import PaymentRequiredError
-from billing.models import GroupWallet, Transaction, Wallet
+from billing.models import Transaction, Wallet
 from billing.wallet_router import (
     BOT_WALLET_BYO,
     BOT_WALLET_DARE,
-    BOT_WALLET_GROUP,
     BOT_WALLET_LITELLM,
     ResolvedBotWallet,
     resolve_active_wallet_for_bot,
@@ -223,35 +221,6 @@ class BillingService:
     # Bot-aware finalization (Phase 3 of the wallet refactor)
     # ------------------------------------------------------------------
 
-    def _debit_group_wallet_atomic(
-        self, group_wallet: GroupWallet, amount: Decimal
-    ) -> None:
-        """Atomically debit a GroupWallet, raising PaymentRequiredError on
-        insufficient pool. Mirrors the lock+F() shape used inside
-        Transaction.save() for the per-user wallet path.
-        """
-        with db_transaction.atomic():
-            locked = GroupWallet.objects.select_for_update().get(pk=group_wallet.pk)
-            if not locked.is_active:
-                raise PaymentRequiredError(
-                    "Group wallet is inactive",
-                    code="GROUP_WALLET_EMPTY",
-                    details={"group_wallet_id": locked.pk},
-                )
-            if locked.budget_balance < amount:
-                raise PaymentRequiredError(
-                    "Group wallet has insufficient balance",
-                    code="GROUP_WALLET_EMPTY",
-                    details={
-                        "group_wallet_id": locked.pk,
-                        "current_balance": str(locked.budget_balance),
-                        "required_amount": str(amount),
-                    },
-                )
-            GroupWallet.objects.filter(pk=locked.pk).update(
-                budget_balance=F("budget_balance") - amount
-            )
-
     def _finalize_via_bot_router(
         self,
         message_obj: Message,
@@ -260,9 +229,8 @@ class BillingService:
         energy_data: dict,
         resolved: ResolvedBotWallet,
     ) -> None:
-        """Create the Transaction (and possibly debit a GroupWallet) for a
-        bot-attributed call, given the wallet the router resolved to.
-        """
+        """Create the Transaction for a bot-attributed call, given the
+        wallet the router resolved to."""
         conversation = message_obj.conversation
         platform = conversation.source
         common_kwargs = dict(
@@ -301,27 +269,10 @@ class BillingService:
             )
             return
 
-        if resolved.type == BOT_WALLET_GROUP:
-            # Cohort-funded: debit the GroupWallet pool, attribute on the bot
-            # owner. Transaction.platform stays SocraticBooks; billing_mode
-            # is WALLET (real money moved) but Transaction.save() will skip
-            # the per-user Wallet mutation because platform != DARE.
-            self._debit_group_wallet_atomic(resolved.group_wallet, cost)
-            Transaction.objects.create(
-                user=resolved.bot_owner,
-                amount=cost,
-                message=f"{message_text} (group {resolved.group_wallet.group.access_code})",
-                billing_mode=BillingModeChoice.WALLET,
-                related_group=resolved.group_wallet.group,
-                **common_kwargs,
-            )
-            return
-
-        # BOT_WALLET_DARE — debit a real DARE wallet (owner's, or calling
-        # user's for USER_WALLET source). We force platform=DARE on the
-        # Transaction so Transaction.save() runs the atomic select_for_update
-        # / F() debit against payer_user.wallet — same hardened path Phase 0
-        # added for non-bot calls.
+        # BOT_WALLET_DARE — debit a real DARE wallet (the chatter's, or the
+        # bot owner's for anonymous public-bot traffic). Force platform=DARE
+        # on the Transaction so Transaction.save() runs the atomic
+        # select_for_update / F() debit against payer_user.wallet.
         common_kwargs["platform"] = AuthSourceChoice.DARE
         Transaction.objects.create(
             user=resolved.payer_user,
@@ -384,10 +335,11 @@ class BillingService:
         Routing strategy:
             - When the conversation has a ``bot_id`` AND
               ``BOT_WALLET_ENFORCEMENT_ENABLED`` is True, dispatch through
-              ``wallet_router.resolve_active_wallet_for_bot`` so the bot's
-              configured ``billing_source`` (OWNER / GROUP / USER / LITELLM)
-              decides whose wallet pays. The Transaction is stamped with
-              ``bot_id`` + ``bot_owner`` for per-(user, bot) attribution.
+              ``wallet_router.resolve_active_wallet_for_bot``. The chatter
+              pays from their active wallet; for anonymous public-bot
+              traffic the bot owner's active wallet pays. The Transaction is
+              stamped with ``bot_id`` + ``bot_owner`` for per-(user, bot)
+              attribution.
             - Otherwise (non-bot calls, or feature flag off), use the legacy
               path keyed off ``user.billing_mode``.
 

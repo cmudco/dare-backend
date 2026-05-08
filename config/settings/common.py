@@ -28,11 +28,10 @@ ALLOWED_HOSTS = env.ALLOWED_HOSTS
 # Internal API key for inter-service communication (SB backend -> DARE backend)
 DARE_INTERNAL_KEY = env.DARE_INTERNAL_KEY
 
-# Bot wallet routing & cap enforcement is rolled out behind this flag. When
-# False, finalize_ai_message uses the legacy path (User.billing_mode lookup
-# only); bot-attribution columns are still written, but Bot.billing_source is
-# not consulted and cap pre-flight is not enforced. Flip to True after
-# verifying Phase 3 wiring in staging.
+# Bot wallet routing is rolled out behind this flag. When False,
+# finalize_ai_message uses the legacy path (User.billing_mode lookup only);
+# bot-attribution columns are still written. When True, the bot router
+# applies the chatter-pays / anonymous-falls-back-to-owner rule.
 BOT_WALLET_ENFORCEMENT_ENABLED = bool(int(os.environ.get(
     'BOT_WALLET_ENFORCEMENT_ENABLED', '0',
 ) or '0'))

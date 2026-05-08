@@ -1,5 +1,3 @@
-from decimal import Decimal
-
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db.models import Count, Sum
 from django.db.models.functions import TruncDate
@@ -61,7 +59,6 @@ from billing.services import WalletService
 from common.pagination import CustomPageNumberPagination
 from common.permissions import IsSuperAdmin
 from conversations.models import Message
-from core.services.sb_client import SocraticBooksClient
 from core.services.energy_service import compute_relatable_stats
 from users.models import User
 from users.utils import detect_platform_from_request
@@ -410,69 +407,6 @@ class BillingViewSet(viewsets.ViewSet):
                 "dateBreakdown": date_breakdown,
             }
         )
-
-    @action(detail=False, methods=["patch"], url_path=r"bots/(?P<bot_id>[^/.]+)/cap")
-    def bot_cap(self, request, bot_id=None):
-        """
-        Update a bot's spend cap. Owner-only — verified by checking that
-        the caller has at least one Transaction stamped as ``bot_owner`` for
-        this bot id (a bot they've never been billed for they don't own).
-
-        Body: ``{ "budget": "<decimal>" }``
-        """
-        try:
-            bot_pk = int(bot_id)
-        except (TypeError, ValueError):
-            return Response(
-                {"detail": "invalid bot_id"}, status=status.HTTP_400_BAD_REQUEST
-            )
-
-        budget_raw = request.data.get("budget")
-        if budget_raw is None:
-            return Response(
-                {"detail": "budget is required"}, status=status.HTTP_400_BAD_REQUEST
-            )
-
-        # Ownership check: short-circuit when the caller has been stamped as
-        # bot_owner for this bot id at least once. For brand-new bots that
-        # have never been billed yet, fall back to asking SB (the owner of
-        # the Bot table).
-        owner_known_locally = Transaction.objects.filter(
-            bot_id=bot_pk,
-            bot_owner=request.user,
-        ).exists()
-        if not owner_known_locally:
-            config = SocraticBooksClient.get_bot_billing_config(bot_pk)
-            if config is None:
-                return Response(
-                    {"detail": "bot not found"},
-                    status=status.HTTP_404_NOT_FOUND,
-                )
-            if config.owner_dare_user_id != request.user.id:
-                return Response(
-                    {"detail": "You do not own this bot."},
-                    status=status.HTTP_403_FORBIDDEN,
-                )
-
-        try:
-            new_cap = Decimal(str(budget_raw))
-        except Exception:
-            return Response(
-                {"detail": "budget must be a number"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        ok, body = SocraticBooksClient.update_bot_cap(bot_pk, new_cap)
-        if ok:
-            return Response(body)
-        # Surface SB's discriminated error code with appropriate HTTP status.
-        sb_error = (body or {}).get("error")
-        http_status = (
-            status.HTTP_404_NOT_FOUND
-            if sb_error == "Bot not found"
-            else status.HTTP_400_BAD_REQUEST
-        )
-        return Response(body or {"detail": "cap update failed"}, status=http_status)
 
     @action(
         detail=True, methods=["get"], url_path="transactions/(?P<transaction_id>[^/.]+)"
