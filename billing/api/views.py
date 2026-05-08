@@ -15,7 +15,6 @@ from billing.api.serializers import (
     ActiveWalletRefSerializer,
     AllocateSerializer,
     EffectivePolicySerializer,
-    FeatureFlagsSerializer,
     FundBudgetSerializer,
     GroupWalletReadSerializer,
     GroupWalletWriteSerializer,
@@ -49,7 +48,6 @@ from billing.group_wallet_service import (
     UpsertUserOverrideRequest,
 )
 from billing.models import (
-    BYOKeyFeatureFlag,
     GroupWallet,
     LiteLLMKey,
     SystemRefillPolicy,
@@ -58,6 +56,7 @@ from billing.models import (
     UserWalletPreference,
     Wallet,
 )
+from feature_flags.services import is_flag_enabled_for_user
 from billing.services import WalletService
 from common.pagination import CustomPageNumberPagination
 from common.permissions import IsSuperAdmin
@@ -552,7 +551,7 @@ class BillingViewSet(viewsets.ViewSet):
         """
         Unified list of every wallet the caller can route through:
         - DARE Wallet (always present)
-        - BYO keys (gated by BYOKeyFeatureFlag.is_byo_enabled())
+        - BYO keys (gated by the unified ``enable_byok`` feature flag)
         - LiteLLM keys (user-self-served + admin-issued individual + cohort)
 
         Response shape uses `kind`/`type` discriminators with type-specific
@@ -560,7 +559,8 @@ class BillingViewSet(viewsets.ViewSet):
         """
         user = request.user
         pref = UserWalletPreference.get_or_create_for(user)
-        byo_enabled = BYOKeyFeatureFlag.is_byo_enabled()
+        byo_enabled = is_flag_enabled_for_user(user, "enable_byok")
+        litellm_enabled = is_flag_enabled_for_user(user, "enable_litellm_wallet")
 
         wallets_list = []
 
@@ -618,8 +618,10 @@ class BillingViewSet(viewsets.ViewSet):
                 )
 
         # LiteLLM keys — visible-for-user already filters expiry + group membership
-        # and select_related's source_group for the cohort name (no N+1).
-        litellm_qs = LiteLLMKey.visible_for_user(user)
+        # and select_related's source_group for the cohort name (no N+1). The
+        # enable_litellm_wallet flag suppresses the entire bucket — admins can
+        # turn off this wallet type per group/user without revoking the keys.
+        litellm_qs = LiteLLMKey.visible_for_user(user) if litellm_enabled else LiteLLMKey.objects.none()
         for key in litellm_qs:
             group_name = key.source_group.access_code if key.source_group else None
             wallets_list.append(
@@ -646,7 +648,6 @@ class BillingViewSet(viewsets.ViewSet):
                 "type": pref.active_wallet_type,
                 "ref_id": pref.active_wallet_ref_id,
             },
-            "byo_enabled": byo_enabled,
             "wallets": wallets_list,
         }
         # Use serializer purely for shape validation / camelCase rendering.
@@ -672,7 +673,7 @@ class BillingViewSet(viewsets.ViewSet):
             pref.active_wallet_type = UserWalletPreferenceTypeChoice.DARE
             pref.active_wallet_ref_id = None
         elif wallet_type == UserWalletPreferenceTypeChoice.BYO:
-            if not BYOKeyFeatureFlag.is_byo_enabled():
+            if not is_flag_enabled_for_user(request.user, "enable_byok"):
                 return Response(
                     {
                         "code": "BYO_DISABLED",
@@ -716,6 +717,14 @@ class BillingViewSet(viewsets.ViewSet):
                 pref.active_wallet_type = UserWalletPreferenceTypeChoice.BYO
                 pref.active_wallet_ref_id = ref_id
         elif wallet_type == UserWalletPreferenceTypeChoice.LITELLM:
+            if not is_flag_enabled_for_user(request.user, "enable_litellm_wallet"):
+                return Response(
+                    {
+                        "code": "LITELLM_DISABLED",
+                        "message": _("LiteLLM wallet type is currently disabled."),
+                    },
+                    status=status.HTTP_403_FORBIDDEN,
+                )
             visible_keys = LiteLLMKey.visible_for_user(request.user)
             if not ref_id:
                 if not visible_keys.exists():
@@ -761,21 +770,6 @@ class BillingViewSet(viewsets.ViewSet):
                 ).data,
             }
         )
-
-    @action(detail=False, methods=["get"], url_path="feature-flags")
-    def feature_flags(self, request):
-        """
-        Lightweight endpoint so the FE can hide the "+ BYO Key" button before
-        any add attempt.
-        """
-        return Response(
-            FeatureFlagsSerializer(
-                {
-                    "byo_enabled": BYOKeyFeatureFlag.is_byo_enabled(),
-                }
-            ).data
-        )
-
 
 class LiteLLMKeyViewSet(
     viewsets.GenericViewSet,

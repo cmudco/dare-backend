@@ -236,7 +236,6 @@ class UnifiedWalletSerializer(serializers.Serializer):
 class WalletsListResponseSerializer(serializers.Serializer):
     """Envelope for GET /api/billing/wallets/."""
     active_wallet = ActiveWalletRefSerializer()
-    byo_enabled = serializers.BooleanField()
     wallets = UnifiedWalletSerializer(many=True)
 
 
@@ -244,11 +243,6 @@ class SetActiveWalletRequestSerializer(serializers.Serializer):
     """Body for PUT /api/billing/wallets/active/."""
     type = serializers.ChoiceField(choices=UserWalletPreferenceTypeChoice.choices)
     ref_id = serializers.CharField(allow_null=True, required=False)
-
-
-class FeatureFlagsSerializer(serializers.Serializer):
-    """Body for GET /api/billing/feature-flags/."""
-    byo_enabled = serializers.BooleanField()
 
 
 # === LiteLLM key CRUD =====================================================
