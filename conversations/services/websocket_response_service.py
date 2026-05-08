@@ -89,12 +89,11 @@ class WebSocketResponseService:
         llm_id = await database_sync_to_async(
             lambda: getattr(message.llm, "id", None)
         )()
-        # Per-message LiteLLM audit fields. ``llm_id`` is populated for real
-        # DB-backed LLMs; the litellm pair is populated when the dispatch
-        # went through a LiteLLM proxy. Exactly one is set on any AI message.
-        litellm_key_id = await database_sync_to_async(
-            lambda: getattr(message.litellm_key, "id", None)
-        )()
+        # Per-message LiteLLM provenance — only the model *name* is wire-
+        # exposed (for the chat metadata panel). The LiteLLMKey FK lives on
+        # the Message row itself for BE audit/regeneration; the key UUID
+        # never leaves the BE, since the FE has no use for it and exposing
+        # it would surface an internal identifier in DOM/Redux state.
         litellm_model_name = await database_sync_to_async(
             lambda: message.litellm_model_name
         )()
@@ -136,7 +135,6 @@ class WebSocketResponseService:
             "regenerate": regenerate,
             "createdAt": message.created_at.isoformat(),
             "llm": llm_id,
-            "litellmKey": str(litellm_key_id) if litellm_key_id else None,
             "litellmModelName": litellm_model_name,
             "files": serialized_data.get("files", []),
             "tags": serialized_data.get("tags", []),
