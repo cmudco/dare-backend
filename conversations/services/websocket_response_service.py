@@ -25,8 +25,8 @@ class WebSocketResponseService:
     @staticmethod
     def _to_camel_case(snake_str: str) -> str:
         """Convert snake_case to camelCase."""
-        components = snake_str.split('_')
-        return components[0] + ''.join(x.title() for x in components[1:])
+        components = snake_str.split("_")
+        return components[0] + "".join(x.title() for x in components[1:])
 
     @classmethod
     def _dict_to_camel_case(cls, data: Dict[str, Any]) -> Dict[str, Any]:
@@ -57,7 +57,7 @@ class WebSocketResponseService:
         streaming: bool = False,
         regenerate: bool = False,
         generated_image: Optional[Dict] = None,
-        generated_transcription: Optional[Dict] = None
+        generated_transcription: Optional[Dict] = None,
     ) -> Dict[str, Any]:
         """
         Format a Message object for WebSocket transmission.
@@ -74,22 +74,36 @@ class WebSocketResponseService:
         Returns:
             Dictionary with camelCase keys ready for JSON serialization
         """
+
         # Use MessageSerializer for proper formatting
         @database_sync_to_async
         def serialize_message():
             msg = Message.active_objects.prefetch_related(
-                'files', 'tags', 'snippets__file', 'web_search_sources'
+                "files", "tags", "snippets__file", "web_search_sources"
             ).get(id=message.id)
             return MessageSerializer(msg).data
 
         serialized_data = await serialize_message()
 
         # Get additional fields
-        llm_id = await database_sync_to_async(lambda: getattr(message.llm, 'id', None))()
+        llm_id = await database_sync_to_async(
+            lambda: getattr(message.llm, "id", None)
+        )()
+        # Per-message LiteLLM audit fields. ``llm_id`` is populated for real
+        # DB-backed LLMs; the litellm pair is populated when the dispatch
+        # went through a LiteLLM proxy. Exactly one is set on any AI message.
+        litellm_key_id = await database_sync_to_async(
+            lambda: getattr(message.litellm_key, "id", None)
+        )()
+        litellm_model_name = await database_sync_to_async(
+            lambda: message.litellm_model_name
+        )()
         cost = await database_sync_to_async(lambda: message.cost)()
         input_tokens = await database_sync_to_async(lambda: message.input_tokens)()
         output_tokens = await database_sync_to_async(lambda: message.output_tokens)()
-        learning_progress_data = await database_sync_to_async(lambda: message.learning_progress_data)()
+        learning_progress_data = await database_sync_to_async(
+            lambda: message.learning_progress_data
+        )()
 
         # Get linked artifact ID if exists
         # Use fresh DB query to avoid stale cached relation
@@ -102,9 +116,13 @@ class WebSocketResponseService:
 
         # Debug log to trace artifact ID resolution
         if artifact_id:
-            logger.info(f"format_message: message_id={message.id}, resolved artifact_id={artifact_id}")
+            logger.info(
+                f"format_message: message_id={message.id}, resolved artifact_id={artifact_id}"
+            )
         else:
-            logger.warning(f"format_message: message_id={message.id}, NO artifact found in DB")
+            logger.warning(
+                f"format_message: message_id={message.id}, NO artifact found in DB"
+            )
 
         # Build response — field names match MessageSerializer (camelCase via DRF)
         response = {
@@ -118,6 +136,8 @@ class WebSocketResponseService:
             "regenerate": regenerate,
             "createdAt": message.created_at.isoformat(),
             "llm": llm_id,
+            "litellmKey": str(litellm_key_id) if litellm_key_id else None,
+            "litellmModelName": litellm_model_name,
             "files": serialized_data.get("files", []),
             "tags": serialized_data.get("tags", []),
             "snippets": serialized_data.get("snippets", []),
@@ -148,7 +168,7 @@ class WebSocketResponseService:
         message_id: int,
         chunk: str,
         is_complete: bool = False,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Format an AI streaming chunk for WebSocket transmission.
@@ -177,10 +197,7 @@ class WebSocketResponseService:
 
     @classmethod
     def format_progress_chunk(
-        cls,
-        conversation_id: str,
-        message_id: str,
-        chunk: str
+        cls, conversation_id: str, message_id: str, chunk: str
     ) -> Dict[str, Any]:
         """
         Format a learning progress streaming chunk for WebSocket transmission.
@@ -209,7 +226,7 @@ class WebSocketResponseService:
         conversation_id: str,
         message_id: str,
         input_tokens: Optional[int] = None,
-        output_tokens: Optional[int] = None
+        output_tokens: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Format a learning progress completion message.
@@ -244,7 +261,7 @@ class WebSocketResponseService:
         cls,
         error_code: str,
         error_message: str,
-        details: Optional[Dict[str, Any]] = None
+        details: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Format an error response for WebSocket transmission.
@@ -269,10 +286,7 @@ class WebSocketResponseService:
         return cls._dict_to_camel_case(payload)
 
     @classmethod
-    def format_conversation_title(
-        cls,
-        title: str
-    ) -> Dict[str, Any]:
+    def format_conversation_title(cls, title: str) -> Dict[str, Any]:
         """
         Format conversation title for WebSocket transmission.
 
@@ -292,10 +306,7 @@ class WebSocketResponseService:
         return cls._dict_to_camel_case(payload)
 
     @classmethod
-    def format_progress_error(
-        cls,
-        message: str
-    ) -> Dict[str, Any]:
+    def format_progress_error(cls, message: str) -> Dict[str, Any]:
         """
         Format progress error for WebSocket transmission.
 
@@ -315,8 +326,7 @@ class WebSocketResponseService:
 
     @classmethod
     def format_conversation_history(
-        cls,
-        conversation_history: List[Dict[str, Any]]
+        cls, conversation_history: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
         """
         Format conversation history for WebSocket transmission.
@@ -337,9 +347,7 @@ class WebSocketResponseService:
 
     @classmethod
     def format_latest_progress(
-        cls,
-        conversation_id: str,
-        assessment: Optional[Dict[str, Any]]
+        cls, conversation_id: str, assessment: Optional[Dict[str, Any]]
     ) -> Dict[str, Any]:
         """
         Format latest learning progress data for WebSocket transmission.
@@ -365,11 +373,7 @@ class WebSocketResponseService:
 
     @classmethod
     def format_artifact_init(
-        cls,
-        artifact_id: str,
-        title: str,
-        outline: str,
-        estimated_sections: int
+        cls, artifact_id: str, title: str, outline: str, estimated_sections: int
     ) -> Dict[str, Any]:
         """
         Format artifact initialization message for WebSocket transmission.
@@ -395,11 +399,7 @@ class WebSocketResponseService:
 
     @classmethod
     def format_artifact_stream(
-        cls,
-        artifact_id: str,
-        chunk: str,
-        section: int,
-        progress: float
+        cls, artifact_id: str, chunk: str, section: int, progress: float
     ) -> Dict[str, Any]:
         """
         Format artifact content streaming chunk for WebSocket transmission.
@@ -425,10 +425,7 @@ class WebSocketResponseService:
 
     @classmethod
     def format_artifact_pause(
-        cls,
-        artifact_id: str,
-        current_section: int,
-        sections_remaining: int
+        cls, artifact_id: str, current_section: int, sections_remaining: int
     ) -> Dict[str, Any]:
         """
         Format artifact pause message for WebSocket transmission.
@@ -452,10 +449,7 @@ class WebSocketResponseService:
 
     @classmethod
     def format_artifact_complete(
-        cls,
-        artifact_id: str,
-        total_words: int,
-        estimated_sections: int = 0
+        cls, artifact_id: str, total_words: int, estimated_sections: int = 0
     ) -> Dict[str, Any]:
         """
         Format artifact completion message for WebSocket transmission.
@@ -486,7 +480,7 @@ class WebSocketResponseService:
         label: Optional[str],
         node_type: str = "step",
         started_at: Optional[datetime] = None,
-        workflow_run_id: Optional[int] = None
+        workflow_run_id: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Format workflow step started message for WebSocket transmission.
@@ -519,7 +513,7 @@ class WebSocketResponseService:
         node_id: str,
         chunk: str,
         accumulated_tokens: Optional[int] = None,
-        workflow_run_id: Optional[int] = None
+        workflow_run_id: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Format workflow step streaming chunk for WebSocket transmission.
@@ -553,7 +547,7 @@ class WebSocketResponseService:
         status: str,
         tokens: Optional[Dict[str, int]] = None,
         metadata: Optional[Dict[str, Any]] = None,
-        workflow_run_id: Optional[int] = None
+        workflow_run_id: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Format workflow step completion message for WebSocket transmission.
@@ -591,7 +585,7 @@ class WebSocketResponseService:
         status: str,
         total_cost: Optional[float] = None,
         total_tokens: Optional[Dict[str, int]] = None,
-        ended_at: Optional[str] = None
+        ended_at: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Format workflow execution complete message for WebSocket transmission.
@@ -627,7 +621,7 @@ class WebSocketResponseService:
         node_id: Optional[str],
         error: str,
         error_type: Optional[str] = None,
-        workflow_run_id: Optional[int] = None
+        workflow_run_id: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Format workflow error message for WebSocket transmission.
@@ -661,7 +655,7 @@ class WebSocketResponseService:
         routes: List[Dict[str, Any]],
         context: Optional[Dict[str, Any]] = None,
         ai_recommendation: Optional[str] = None,
-        workflow_run_id: Optional[int] = None
+        workflow_run_id: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Format human validation required message for WebSocket transmission.
@@ -694,10 +688,7 @@ class WebSocketResponseService:
 
     @classmethod
     def format_batch_started(
-        cls,
-        batch_id: int,
-        total_files: int,
-        workflow_id: int
+        cls, batch_id: int, total_files: int, workflow_id: int
     ) -> Dict[str, Any]:
         """
         Format batch started message for WebSocket transmission.
@@ -726,7 +717,7 @@ class WebSocketResponseService:
         file_id: int,
         file_name: str,
         status: str,
-        workflow_run_id: Optional[int] = None
+        workflow_run_id: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Format batch progress message for WebSocket transmission.
@@ -758,11 +749,7 @@ class WebSocketResponseService:
 
     @classmethod
     def format_batch_complete(
-        cls,
-        batch_id: int,
-        completed_count: int,
-        failed_count: int,
-        total_files: int
+        cls, batch_id: int, completed_count: int, failed_count: int, total_files: int
     ) -> Dict[str, Any]:
         """
         Format batch completed message for WebSocket transmission.

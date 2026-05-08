@@ -12,12 +12,16 @@ These functions handle the complete learning progress streaming flow:
 """
 
 import logging
-from typing import Dict, Any, Optional, Callable, Awaitable
+from typing import Any, Awaitable, Callable, Dict, Optional
 
-from conversations.models import Conversation, Message, LLM
+from conversations.models import LLM, Conversation, Message
+from conversations.services.message_helpers.db_helpers import (
+    update_message_learning_progress,
+)
+from conversations.services.message_helpers.response_builders import (
+    build_usage_with_totals,
+)
 from conversations.services.websocket_response_service import WebSocketResponseService
-from conversations.services.message_helpers.response_builders import build_usage_with_totals
-from conversations.services.message_helpers.db_helpers import update_message_learning_progress
 
 logger = logging.getLogger(__name__)
 
@@ -84,14 +88,17 @@ async def run_learning_progress_stream(
             temperature=0.7,
             conversation_history_limit=80,
             bot_meta=bot_meta,
+            user=user,
         ):
             # Track usage for billing (authenticated users only)
             if usage:
                 last_usage = usage
                 # Skip billing check for public bots (user is None)
                 if user:
-                    can_continue, _ = await billing_service.check_streaming_credit_usage(
-                        user, progress_llm, usage
+                    can_continue, _ = (
+                        await billing_service.check_streaming_credit_usage(
+                            user, progress_llm, usage
+                        )
                     )
                     if not can_continue:
                         error_payload = WebSocketResponseService.format_progress_error(
@@ -115,7 +122,9 @@ async def run_learning_progress_stream(
                 "llm_model": getattr(progress_llm, "identifier", None),
                 "usage": build_usage_with_totals(last_usage),
                 "platform": platform or "DARE",
-                "tracking_prompt_used": tracking_prompt[:100] if tracking_prompt else "",
+                "tracking_prompt_used": (
+                    tracking_prompt[:100] if tracking_prompt else ""
+                ),
             }
 
             # Save assessment to database
@@ -129,7 +138,12 @@ async def run_learning_progress_stream(
 
             # Update message with learning progress data
             await update_message_learning_progress(
-                message_obj, assessment, learning_goals, tracking_prompt, progress_llm, last_usage
+                message_obj,
+                assessment,
+                learning_goals,
+                tracking_prompt,
+                progress_llm,
+                last_usage,
             )
 
             # Send completion notification

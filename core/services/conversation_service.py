@@ -1,36 +1,44 @@
 import json
 from decimal import Decimal
 from typing import Dict, Optional
-from django.db import models
-from django.core.exceptions import ValidationError
+
 from channels.db import database_sync_to_async
+from django.core.exceptions import ValidationError
+from django.db import models
 from django.db.models import Prefetch
-from conversations.models import LLM, Message, Conversation, Artifact
-from core.services.openai_service import OpenAIService
-from core.services.api_key_service import get_provider_api_key
-from conversations.constants import SenderType
-from conversations.api.serializers import MessageSerializer
 from djangorestframework_camel_case.util import camelize
-from files.models import File, Tag
+
+from conversations.api.serializers import MessageSerializer
+from conversations.constants import SenderType
+from conversations.models import LLM, Artifact, Conversation, Message
 from core.services.billing_service import BillingService
+from core.services.dtos import LLMDescriptor
+from files.models import File, Tag
 from users.models import User
+
 
 class ConversationService:
     """Handles conversation metadata and message management."""
 
-    async def fetch_chat_history_from_db(self, conversation: Conversation, limit: int = 50):
+    async def fetch_chat_history_from_db(
+        self, conversation: Conversation, limit: int = 50
+    ):
         """Fetches recent chat history for AI context."""
 
         messages = await database_sync_to_async(
             lambda: list(
                 Message.active_objects.filter(conversation=conversation)
-                .select_related('llm')
+                .select_related("llm")
                 .prefetch_related(
-                    'snippets', 'files', 'tags', 'web_search_sources', 'mcp_tool_calls',
+                    "snippets",
+                    "files",
+                    "tags",
+                    "web_search_sources",
+                    "mcp_tool_calls",
                     # Only prefetch active artifacts to match what serializer expects
-                    Prefetch('artifacts', queryset=Artifact.active_objects.all())
+                    Prefetch("artifacts", queryset=Artifact.active_objects.all()),
                 )
-                .order_by('-created_at')[:limit]
+                .order_by("-created_at")[:limit]
             )
         )()
 
@@ -78,13 +86,13 @@ class ConversationService:
     def _build_tool_call_payload(self, tc: dict) -> dict:
         """
         Build a properly typed tool call payload for FE.
-        
+
         Separates DARE results from MCP results into different fields
         for clean, zero-confusion typing on FE side.
         """
         server_slug = tc["server_slug"]
         parsed_result = self._parse_tool_result(tc.get("result"))
-        
+
         payload = {
             "id": tc["tool_call_id"],
             "toolName": tc["tool_name"],
@@ -92,13 +100,13 @@ class ConversationService:
             "status": tc["status"],
             "error": tc.get("error"),
         }
-        
+
         # Route to correct field based on server
         if server_slug == "dare":
             payload["dareResult"] = parsed_result
         else:
             payload["mcpResult"] = parsed_result
-            
+
         return payload
 
     def _parse_tool_result(self, result: str):
@@ -119,22 +127,51 @@ class ConversationService:
 
     async def get_user_email(self, conversation: Conversation) -> str:
         """Fetch user email associated with the conversation."""
-        return await database_sync_to_async(lambda: getattr(conversation.user, 'email', ''))()
+        return await database_sync_to_async(
+            lambda: getattr(conversation.user, "email", "")
+        )()
 
     async def create_message(
-        self, conversation: Conversation, sender_type: str, message_content: str,
-        sender: str = None, file_ids: list = None, tag_ids: list = None, 
-        embedding_ids: list = None, llm: LLM = None
+        self,
+        conversation: Conversation,
+        sender_type: str,
+        message_content: str,
+        sender: str = None,
+        file_ids: list = None,
+        tag_ids: list = None,
+        embedding_ids: list = None,
+        descriptor: Optional[LLMDescriptor] = None,
     ) -> Message:
-        """Create a new message with file attachments and tags."""
+        """Create a new message with file attachments and tags.
+
+        Persists the dispatch target via three discriminated fields (rules.md
+        §11): real-LLM messages set ``llm``; LiteLLM-routed messages leave
+        ``llm`` NULL and set ``litellm_key`` + ``litellm_model_name``. User
+        messages typically pass no descriptor (all three NULL).
+        """
+        if descriptor is not None and descriptor.is_synthetic:
+            llm_fk = None
+            litellm_key = descriptor.litellm_key
+            litellm_model_name = descriptor.litellm_model_name
+        elif descriptor is not None:
+            llm_fk = descriptor.llm
+            litellm_key = None
+            litellm_model_name = None
+        else:
+            llm_fk = None
+            litellm_key = None
+            litellm_model_name = None
+
         message = await database_sync_to_async(
             lambda: Message.active_objects.create(
                 conversation=conversation,
                 sender_type=sender_type,
                 message=message_content,
                 sender=sender,
-                llm=llm,
-                cost=Decimal('0.000000') if sender_type == SenderType.PLAYER else None
+                llm=llm_fk,
+                litellm_key=litellm_key,
+                litellm_model_name=litellm_model_name,
+                cost=Decimal("0.000000") if sender_type == SenderType.PLAYER else None,
             )
         )()
 
@@ -146,10 +183,12 @@ class ConversationService:
                 allowed_user_ids = [conversation.user_id]
                 if conversation.file_owner_id:
                     allowed_user_ids.append(conversation.file_owner_id)
-                return list(File.active_objects.filter(
-                    pk__in=all_file_ids,
-                    user_id__in=allowed_user_ids
-                ))
+                return list(
+                    File.active_objects.filter(
+                        pk__in=all_file_ids, user_id__in=allowed_user_ids
+                    )
+                )
+
             files = await database_sync_to_async(_get_accessible_files)()
             if files:
                 await database_sync_to_async(lambda: message.files.add(*files))()
@@ -163,16 +202,24 @@ class ConversationService:
 
         return message
 
-    async def get_conversation(self, conversation_id: str, user: 'User') -> Optional[Conversation]:
+    async def get_conversation(
+        self, conversation_id: str, user: "User"
+    ) -> Optional[Conversation]:
         """Retrieve a conversation by ID for the given user."""
         return await database_sync_to_async(
-            lambda: Conversation.active_objects.filter(conversation_id=conversation_id, user=user).first()
+            lambda: Conversation.active_objects.filter(
+                conversation_id=conversation_id, user=user
+            ).first()
         )()
 
-    async def get_conversation_by_id(self, conversation_id: str) -> Optional[Conversation]:
+    async def get_conversation_by_id(
+        self, conversation_id: str
+    ) -> Optional[Conversation]:
         """Retrieve a conversation by ID (no user filter, for public bots)."""
         return await database_sync_to_async(
-            lambda: Conversation.active_objects.filter(conversation_id=conversation_id).first()
+            lambda: Conversation.active_objects.filter(
+                conversation_id=conversation_id
+            ).first()
         )()
 
     async def is_first_message(self, conversation: Conversation) -> bool:
@@ -185,46 +232,76 @@ class ConversationService:
     async def update_conversation_title(self, conversation: Conversation, title: str):
         """Update the conversation title."""
         await database_sync_to_async(
-            lambda: Conversation.active_objects.filter(id=conversation.id).update(title=title)
+            lambda: Conversation.active_objects.filter(id=conversation.id).update(
+                title=title
+            )
         )()
 
-    async def generate_title(self, user_message: str, ai_response: str = "") -> str:
-        """Generate a concise conversation title."""
+    async def generate_title(
+        self,
+        user_message: str,
+        ai_response: str = "",
+        user: Optional[User] = None,
+    ) -> str:
+        """Generate a concise conversation title.
+
+        Routes through ``LLMService._get_ai_service`` so the user's active
+        wallet (DARE / BYO / LITELLM) decides which key pays for the title
+        call, just like the main chat path. Pre-wallet-refactor this used a
+        direct ``OpenAIService(...)`` instantiation that always billed DARE.
+        """
+        from core.services.llm_service import LLMService  # avoid module-load cycle
+
         messages = [
             {
                 "role": "system",
-                "content": "Generate a short, descriptive conversation title (max 6 words)."
+                "content": "Generate a short, descriptive conversation title (max 6 words).",
             },
             {
                 "role": "user",
-                "content": f"Title for: User: {user_message}\nAI: {ai_response}"
-            }
+                "content": f"Title for: User: {user_message}\nAI: {ai_response}",
+            },
         ]
 
         llm = await self.get_gpt_35_turbo_model()
-        api_key = await get_provider_api_key(llm.provider)
-        ai_service = OpenAIService(llm=llm, api_key=api_key)
+        if not llm:
+            return "New Chat"
+
         try:
+            ai_service = await LLMService()._get_ai_service(llm, user=user)
             return await ai_service.get_chat_completion(messages)
-        except Exception as e:
+        except Exception:
             return "New Chat"
 
     async def get_gpt_35_turbo_model(self) -> LLM:
         """Fetch the gpt-3.5-turbo LLM."""
         llm = await database_sync_to_async(
-            lambda: LLM.objects.filter(identifier="gpt-3.5-turbo", provider="openai").first()
+            lambda: LLM.objects.filter(
+                identifier="gpt-3.5-turbo", provider="openai"
+            ).first()
         )()
-        return llm or await database_sync_to_async(lambda: LLM.objects.filter(provider="openai").first())()
+        return (
+            llm
+            or await database_sync_to_async(
+                lambda: LLM.objects.filter(provider="openai").first()
+            )()
+        )
 
-    async def get_latest_user_message(self, conversation: Conversation) -> Optional[Message]:
+    async def get_latest_user_message(
+        self, conversation: Conversation
+    ) -> Optional[Message]:
         """Retrieve the latest user message."""
         return await database_sync_to_async(
             lambda: Message.active_objects.filter(
                 conversation=conversation, sender_type=SenderType.PLAYER
-            ).order_by('-created_at').first()
+            )
+            .order_by("-created_at")
+            .first()
         )()
 
-    async def edit_message(self, message_id: str, new_content: str, conversation: Conversation) -> Message:
+    async def edit_message(
+        self, message_id: str, new_content: str, conversation: Conversation
+    ) -> Message:
         """Edit the latest user message."""
         message = await database_sync_to_async(
             lambda: Message.active_objects.get(id=message_id)
@@ -240,7 +317,11 @@ class ConversationService:
         await database_sync_to_async(message.save)()
         return message
 
-    def finalize_ai_message_with_billing(self, message_obj: Message, ai_response: str, token_usage: Dict) -> Message:
+    def finalize_ai_message_with_billing(
+        self, message_obj: Message, ai_response: str, token_usage: Dict
+    ) -> Message:
         """Finalize AI message with billing (delegated to BillingService)."""
         billing_service = BillingService()
-        return billing_service.finalize_ai_message(message_obj, ai_response, token_usage)
+        return billing_service.finalize_ai_message(
+            message_obj, ai_response, token_usage
+        )

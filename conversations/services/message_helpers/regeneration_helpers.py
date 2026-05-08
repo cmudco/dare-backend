@@ -56,15 +56,15 @@ async def prepare_regeneration_data(
         regeneration_message_data["image_generation_enabled"] = True
 
     elif original_llm and original_llm.is_audio_transcriber and llm == original_llm:
-        media_file_ids = message_data.get("media_ids") or await get_message_media_file_ids(
-            preceding_user_message
-        )
+        media_file_ids = message_data.get(
+            "media_ids"
+        ) or await get_message_media_file_ids(preceding_user_message)
 
         if not media_file_ids:
             await send_error_callback(
                 ErrorCode.VALIDATION_ERROR,
                 "Cannot regenerate transcription: No audio/video files found.",
-                None
+                None,
             )
             return None, {}
 

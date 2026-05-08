@@ -21,9 +21,7 @@ class MessageValidationService:
 
     @classmethod
     def validate_and_parse(
-        cls,
-        data: Dict[str, Any],
-        default_message: Optional[str] = None
+        cls, data: Dict[str, Any], default_message: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Validate and extract message data from WebSocket payload.
@@ -40,29 +38,39 @@ class MessageValidationService:
             "message": (data.get("message", default_message or "").strip()),
             "sender_type": data.get("sender_type", SenderType.PLAYER),
             "message_id": data.get("message_id"),  # For regeneration
-
             # Context and files
             "file_ids": cls._get_list(data, "file_ids"),
             "embedding_ids": cls._get_list(data, "embedding_ids"),
             "media_ids": cls._get_list(data, "media_ids"),
             "tag_ids": cls._get_list(data, "tag_ids"),
             "folder_ids": cls._get_list(data, "folder_ids"),
-            "referenced_conversation_ids": cls._get_list(data, "referenced_conversation_ids"),
-            "referenced_conversation_history_limit": data.get("referenced_conversation_history_limit", 10),
+            "referenced_conversation_ids": cls._get_list(
+                data, "referenced_conversation_ids"
+            ),
+            "referenced_conversation_history_limit": data.get(
+                "referenced_conversation_history_limit", 10
+            ),
             "referenced_summary_ids": cls._get_list(data, "referenced_summary_ids"),
-
-            # LLM configuration
-            "llm_id": data.get("llm_id"),
-            "file_owner_id": data.get("file_owner_id"),  # Bot creator's ID for shared access
+            # LLM dispatch reference — discriminated by ``kind``:
+            #   {"kind": "llm",     "id": <int>}
+            #   {"kind": "litellm", "key_id": "<uuid>", "model_name": "<str>"}
+            # Each shape carries its native types — no encoded composite id.
+            "llm_ref": data.get("llm_ref"),
+            "file_owner_id": data.get(
+                "file_owner_id"
+            ),  # Bot creator's ID for shared access
             "prompt_id": data.get("prompt_id"),
             "temperature": data.get("temperature", cls.DEFAULT_TEMPERATURE),
             "max_tokens": data.get("max_tokens", cls.DEFAULT_MAX_TOKENS),
-
             # Document retrieval settings
-            "max_context_snippets": data.get("max_context_snippets", cls.DEFAULT_MAX_CONTEXT_SNIPPETS),
-            "document_similarity_threshold": data.get("document_similarity_threshold", cls.DEFAULT_DOCUMENT_SIMILARITY_THRESHOLD),
+            "max_context_snippets": data.get(
+                "max_context_snippets", cls.DEFAULT_MAX_CONTEXT_SNIPPETS
+            ),
+            "document_similarity_threshold": data.get(
+                "document_similarity_threshold",
+                cls.DEFAULT_DOCUMENT_SIMILARITY_THRESHOLD,
+            ),
             "history_limit": data.get("history_limit", cls.DEFAULT_HISTORY_LIMIT),
-
             # Feature flags
             "web_search_enabled": data.get("web_search_enabled"),
             "image_generation_enabled": data.get("image_generation_enabled"),
@@ -71,31 +79,30 @@ class MessageValidationService:
             "audio_transcription_settings": data.get("audio_transcription_settings"),
             "artifacts_enabled": data.get("artifacts_enabled", False),
             "artifact_id": data.get("artifact_id"),  # For continuing existing artifact
-
             # Artifact modification fields
-            "artifact_action": data.get("artifact_action", "auto"),  # "auto" | "create" | "modify"
-            "active_artifact_id": data.get("active_artifact_id"),    # Currently open artifact (for auto-detection)
-            "target_artifact_id": data.get("target_artifact_id"),    # Explicit target override
-
+            "artifact_action": data.get(
+                "artifact_action", "auto"
+            ),  # "auto" | "create" | "modify"
+            "active_artifact_id": data.get(
+                "active_artifact_id"
+            ),  # Currently open artifact (for auto-detection)
+            "target_artifact_id": data.get(
+                "target_artifact_id"
+            ),  # Explicit target override
             # Vision support (base64 encoded images)
             "images": cls._get_list(data, "images"),
-
             # Socratic learning features
             "enable_progress": data.get("enable_progress"),
             "tracking_prompt": data.get("tracking_prompt", ""),
             "learning_goals": data.get("learning_goals", ""),
             "progress_llm_id": data.get("progress_llm_id"),
             "bot_meta": data.get("bot_meta", {}),
-
             # Advanced mode (support both snake_case and camelCase)
             "is_advanced": data.get("is_advanced", data.get("isAdvanced")),
-
             # MCP servers for tool calls
             "mcp_server_ids": cls._get_list(data, "mcp_server_ids"),
-
             # DARE tools for internal tool calls
             "dare_tool_slugs": cls._get_list(data, "dare_tool_slugs"),
-
             # Whether to search user's memory store for context
             "use_memory": bool(data.get("use_memory", False)),
         }
@@ -117,9 +124,7 @@ class MessageValidationService:
 
     @classmethod
     def validate_required_fields(
-        cls,
-        data: Dict[str, Any],
-        required_fields: List[str]
+        cls, data: Dict[str, Any], required_fields: List[str]
     ) -> tuple[bool, Optional[str]]:
         """
         Validate that required fields are present and non-empty.
@@ -151,8 +156,13 @@ class MessageValidationService:
         return {
             "temperature": data.get("temperature", cls.DEFAULT_TEMPERATURE),
             "max_tokens": data.get("max_tokens", cls.DEFAULT_MAX_TOKENS),
-            "max_context_snippets": data.get("max_context_snippets", cls.DEFAULT_MAX_CONTEXT_SNIPPETS),
-            "document_similarity_threshold": data.get("document_similarity_threshold", cls.DEFAULT_DOCUMENT_SIMILARITY_THRESHOLD),
+            "max_context_snippets": data.get(
+                "max_context_snippets", cls.DEFAULT_MAX_CONTEXT_SNIPPETS
+            ),
+            "document_similarity_threshold": data.get(
+                "document_similarity_threshold",
+                cls.DEFAULT_DOCUMENT_SIMILARITY_THRESHOLD,
+            ),
             "history_limit": data.get("history_limit", cls.DEFAULT_HISTORY_LIMIT),
             "web_search_enabled": data.get("web_search_enabled"),
             "image_generation_enabled": data.get("image_generation_enabled"),
