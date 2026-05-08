@@ -15,6 +15,7 @@ same component, distinguishing on `isSynthetic`.
 `parse_scope(raw)` parses the `?wallet_scope=` query param the LLMViewSet
 forwards from `LLMViewSet.list`.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -36,7 +37,6 @@ from billing.wallet_router import (
 )
 from conversations.models import LLM
 
-
 # === Wallet metadata wire shape ============================================
 #
 # Mirrors the FE WalletMeta type. `emptyReason` is null on the happy path.
@@ -49,11 +49,26 @@ EMPTY_TARGET_KEY_DELETED = "TARGET_KEY_DELETED"
 
 @dataclass(frozen=True)
 class WalletMeta:
+    """Wire shape for the model-picker's wallet block.
+
+    Capability flags (``supports_*``) tell the FE which chat toggles to
+    surface for the active wallet — LiteLLM proxies don't transparently
+    forward web-search / structured-output / DALL-E / Whisper requests, so
+    the picker disables those toggles when ``type == LITELLM``. Tools/MCP
+    are forwarded by LiteLLM in the standard OpenAI tool-call format and
+    stay enabled. Discriminated boolean flags rather than a polymorphic
+    blob, per rules.md §11 (separate fields for separate concerns).
+    """
+
     type: str
     providers: List[str] = field(default_factory=list)
     is_empty: bool = False
     empty_reason: Optional[str] = None
     stale_probe: bool = False
+    supports_web_search: bool = True
+    supports_image_generation: bool = True
+    supports_audio_transcription: bool = True
+    supports_structured_output: bool = True
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -62,51 +77,58 @@ class WalletMeta:
             "is_empty": self.is_empty,
             "empty_reason": self.empty_reason,
             "stale_probe": self.stale_probe,
+            "supports_web_search": self.supports_web_search,
+            "supports_image_generation": self.supports_image_generation,
+            "supports_audio_transcription": self.supports_audio_transcription,
+            "supports_structured_output": self.supports_structured_output,
         }
 
 
 # === Active-scope filter ====================================================
 
 
-def _serialize_llm(model: LLM) -> Dict[str, Any]:
-    """Match LLMSerializer.fields exactly so the FE renders both kinds the same."""
+def _llm_entry(model: LLM) -> Dict[str, Any]:
+    """Picker entry for a DB-backed LLM. ``kind="llm"`` discriminator with
+    the native LLM payload nested under ``llm`` — the id stays an integer
+    pk, no encoding tricks (rules.md §11)."""
     return {
-        "id": model.pk,
-        "name": model.name,
-        "identifier": model.identifier,
-        "provider": model.provider,
-        "description": model.description,
-        "is_reasoning": model.is_reasoning,
-        "is_image_generator": model.is_image_generator,
-        "is_audio_transcriber": model.is_audio_transcriber,
-        "input_token_rate_per_million": model.input_token_rate_per_million,
-        "output_token_rate_per_million": model.output_token_rate_per_million,
-        "tier": model.tier,
-        "is_synthetic": False,
+        "kind": "llm",
+        "llm": {
+            "id": model.pk,
+            "name": model.name,
+            "identifier": model.identifier,
+            "provider": model.provider,
+            "description": model.description,
+            "is_reasoning": model.is_reasoning,
+            "is_image_generator": model.is_image_generator,
+            "is_audio_transcriber": model.is_audio_transcriber,
+            "input_token_rate_per_million": model.input_token_rate_per_million,
+            "output_token_rate_per_million": model.output_token_rate_per_million,
+            "tier": model.tier,
+        },
     }
 
 
-def _synthetic_entry(key_id: str, probed) -> Dict[str, Any]:
+def _litellm_entry(litellm_key, probed) -> Dict[str, Any]:
+    """Picker entry for a LiteLLM-routed model. ``kind="litellm"``
+    discriminator carrying the native dispatch reference fields
+    (``key_id`` + ``model_name``) plus display metadata. Each field has its
+    natural type — no encoded composite id."""
     return {
-        "id": f"litellm:{key_id}:{probed.name}",
-        "name": probed.name,
-        "identifier": probed.name,
-        "provider": probed.provider or "custom",
-        "description": None,
-        "is_reasoning": False,
-        "is_image_generator": False,
-        "is_audio_transcriber": False,
-        "input_token_rate_per_million": None,
-        "output_token_rate_per_million": None,
-        "tier": None,
-        "is_synthetic": True,
+        "kind": "litellm",
+        "litellm": {
+            "key_id": str(litellm_key.pk),
+            "key_label": getattr(litellm_key, "label", None),
+            "model_name": probed.name,
+            "provider": probed.provider or "custom",
+            "name": probed.name,
+        },
     }
 
 
 def _filter_for_byo(user, base_qs) -> Tuple[List[Dict[str, Any]], WalletMeta]:
     providers = list(
-        UserProviderAPIKey.active_objects
-        .filter(user=user)
+        UserProviderAPIKey.active_objects.filter(user=user)
         .exclude(api_key__isnull=True)
         .exclude(api_key="")
         .values_list("provider", flat=True)
@@ -120,48 +142,64 @@ def _filter_for_byo(user, base_qs) -> Tuple[List[Dict[str, Any]], WalletMeta]:
             empty_reason=EMPTY_NO_KEYS,
         )
     qs = base_qs.filter(provider__in=providers)
-    models = [_serialize_llm(m) for m in qs]
-    return models, WalletMeta(
+    entries = [_llm_entry(m) for m in qs]
+    return entries, WalletMeta(
         type=UserWalletPreferenceTypeChoice.BYO,
         providers=sorted(set(providers)),
-        is_empty=not models,
-        empty_reason=EMPTY_NO_KEYS if not models else None,
+        is_empty=not entries,
+        empty_reason=EMPTY_NO_KEYS if not entries else None,
     )
 
 
 def _filter_for_litellm(litellm_key) -> Tuple[List[Dict[str, Any]], WalletMeta]:
     if litellm_key is None:
-        return [], WalletMeta(
-            type=UserWalletPreferenceTypeChoice.LITELLM,
-            is_empty=True,
-            empty_reason=EMPTY_TARGET_KEY_DELETED,
-        )
+        return [], _litellm_meta(is_empty=True, empty_reason=EMPTY_TARGET_KEY_DELETED)
     cached = litellm_models_service.list_models(litellm_key)
     if not cached.models:
-        return [], WalletMeta(
-            type=UserWalletPreferenceTypeChoice.LITELLM,
-            is_empty=True,
-            empty_reason=EMPTY_PROBE_FAILED,
-            stale_probe=False,
-        )
-    key_id = str(litellm_key.pk)
-    models = [_synthetic_entry(key_id, m) for m in cached.models]
-    providers = sorted({m["provider"] for m in models})
-    return models, WalletMeta(
-        type=UserWalletPreferenceTypeChoice.LITELLM,
+        return [], _litellm_meta(is_empty=True, empty_reason=EMPTY_PROBE_FAILED)
+    entries = [_litellm_entry(litellm_key, m) for m in cached.models]
+    providers = sorted({e["litellm"]["provider"] for e in entries})
+    return entries, _litellm_meta(
         providers=providers,
         is_empty=False,
         stale_probe=cached.is_stale,
     )
 
 
+def _litellm_meta(
+    providers: Optional[List[str]] = None,
+    is_empty: bool = False,
+    empty_reason: Optional[str] = None,
+    stale_probe: bool = False,
+) -> WalletMeta:
+    """LITELLM-scoped WalletMeta with provider-native features disabled.
+
+    Web search, image generation, audio transcription, and structured output
+    all rely on provider-native API surfaces (OpenAI Responses API, native
+    Anthropic tools, DALL-E, Whisper) that the LiteLLM proxy doesn't
+    transparently forward. The FE reads these flags to hide the
+    corresponding chat toggles when the active wallet is LITELLM.
+    """
+    return WalletMeta(
+        type=UserWalletPreferenceTypeChoice.LITELLM,
+        providers=providers or [],
+        is_empty=is_empty,
+        empty_reason=empty_reason,
+        stale_probe=stale_probe,
+        supports_web_search=False,
+        supports_image_generation=False,
+        supports_audio_transcription=False,
+        supports_structured_output=False,
+    )
+
+
 def _filter_for_dare(base_qs) -> Tuple[List[Dict[str, Any]], WalletMeta]:
-    models = [_serialize_llm(m) for m in base_qs]
-    providers = sorted({m["provider"] for m in models})
-    return models, WalletMeta(
+    entries = [_llm_entry(m) for m in base_qs]
+    providers = sorted({e["llm"]["provider"] for e in entries})
+    return entries, WalletMeta(
         type=UserWalletPreferenceTypeChoice.DARE,
         providers=providers,
-        is_empty=not models,
+        is_empty=not entries,
     )
 
 
