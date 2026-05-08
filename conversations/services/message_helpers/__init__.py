@@ -9,11 +9,11 @@ These functions are stateless and easily testable.
 
 from .billing_helpers import handle_insufficient_balance, update_public_bot_budget
 from .db_helpers import (
-    fetch_llm_descriptor,
     fetch_preceding_user_message,
     get_ai_message_by_id,
     get_conversation_default_descriptor,
     get_message_media_file_ids,
+    parse_model_id,
     should_generate_title,
     update_message_learning_progress,
 )
@@ -32,7 +32,7 @@ __all__ = [
     # Database helpers
     "get_ai_message_by_id",
     "get_message_media_file_ids",
-    "fetch_llm_descriptor",
+    "parse_model_id",
     "get_conversation_default_descriptor",
     "fetch_preceding_user_message",
     "should_generate_title",

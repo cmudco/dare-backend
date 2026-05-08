@@ -35,12 +35,12 @@ from conversations.services.image_generation_service import ImageGenerationServi
 from conversations.services.message_helpers import (  # Database helpers; Learning progress helpers; Billing helpers; Finalization helpers; Regeneration helpers
     build_generated_image_data,
     build_transcription_data,
-    fetch_llm_descriptor,
     fetch_preceding_user_message,
     finalize_message,
     get_ai_message_by_id,
     get_conversation_default_descriptor,
     handle_insufficient_balance,
+    parse_model_id,
     prepare_regeneration_data,
     run_learning_progress_stream,
     should_generate_title,
@@ -230,7 +230,7 @@ class MessageCoordinator:
         self,
         message_data: Dict[str, Any],
         sender_name: str = None,
-        llm_ref: Optional[Dict[str, Any]] = None,
+        model_id: Optional[str] = None,
     ) -> Optional[Message]:
         """
         Handle creation of a new user message and generate AI response.
@@ -238,19 +238,16 @@ class MessageCoordinator:
         Args:
             message_data: Validated message data dictionary
             sender_name: Name of the sender (user email or "Anonymous User")
-            llm_ref: Optional discriminated dispatch reference override
-                ({"kind": "llm", "id": <int>} or
-                 {"kind": "litellm", "key_id": "<uuid>", "model_name": "<str>"}).
+            model_id: Optional opaque dispatch id override (string). The FE
+                hands back the same id the picker endpoint emitted; the BE
+                inverts the encoding in ``parse_model_id``.
 
         Returns:
             The AI message object if successful, None otherwise
         """
         try:
-            # Resolve the model — either a DB LLM row or a LiteLLM-routed
-            # dispatch reference, picked apart by the discriminator on
-            # ``llm_ref``. No string encoding tricks (rules.md §11).
             descriptor = await self._get_descriptor(
-                llm_ref or message_data.get("llm_ref")
+                model_id or message_data.get("model_id")
             )
             if descriptor is None:
                 await self.send_error(
@@ -343,15 +340,15 @@ class MessageCoordinator:
     async def handle_regenerate_response(
         self,
         message_data: Dict[str, Any],
-        llm_ref: Optional[Dict[str, Any]] = None,
+        model_id: Optional[str] = None,
     ) -> Optional[Message]:
         """
         Handle regeneration of an existing AI message.
 
         Args:
             message_data: Validated message data dictionary (must include message_id)
-            llm_ref: Optional discriminated dispatch reference override
-                (see ``handle_new_message`` for the wire shape).
+            model_id: Optional opaque dispatch id override (see
+                ``handle_new_message`` for the encoding).
 
         Returns:
             The regenerated AI message object if successful, None otherwise
@@ -386,7 +383,7 @@ class MessageCoordinator:
             # model (real or LiteLLM-routed). For LITELLM messages the previous
             # dispatch is reconstructed from `litellm_key` + `litellm_model_name`.
             descriptor = await self._get_descriptor(
-                llm_ref or message_data.get("llm_ref"),
+                model_id or message_data.get("model_id"),
                 default=LLMDescriptor.from_message(ai_message),
             )
             if descriptor is None:
@@ -718,12 +715,12 @@ class MessageCoordinator:
         """Resolve the Socratic progress-assessment LLM by numeric id.
 
         Progress LLMs are configured per-bot in SocraticBooks and are always
-        DB-backed (never LiteLLM-routed), so we wrap the bare id in a
-        ``kind="llm"`` ref to feed the descriptor parser.
+        DB-backed (never LiteLLM-routed), so we stringify the bare id to
+        feed the opaque-id parser.
         """
         if llm_id is None:
             return None
-        descriptor = await self._get_descriptor({"kind": "llm", "id": llm_id})
+        descriptor = await self._get_descriptor(str(llm_id))
         return descriptor.llm if descriptor and not descriptor.is_synthetic else None
 
     async def _run_learning_progress_stream(
@@ -783,23 +780,23 @@ class MessageCoordinator:
 
     async def _get_descriptor(
         self,
-        llm_ref: Optional[Dict[str, Any]],
+        model_id: Optional[str],
         default: Optional[LLMDescriptor] = None,
     ) -> Optional[LLMDescriptor]:
-        """Resolve a discriminated ``llm_ref`` to a runtime descriptor.
+        """Resolve an opaque ``model_id`` from the FE to a runtime descriptor.
 
         Args:
-            llm_ref: Discriminated dispatch reference from the FE. Either
-                ``{"kind": "llm", "id": <int>}`` or
-                ``{"kind": "litellm", "key_id": "<uuid>", "model_name": "<str>"}``.
-            default: Descriptor to return when no ``llm_ref`` is provided.
+            model_id: Opaque identifier from the FE — either ``"<int>"`` (a
+                DB-backed LLM PK) or ``"litellm:<key_pk>:<model>"``. Decoded
+                in ``parse_model_id``.
+            default: Descriptor to return when ``model_id`` is empty.
 
         Returns:
             ``LLMDescriptor`` for the chosen model, or ``None`` when neither
-            the ref nor the conversation default resolves.
+            the id nor the conversation default resolves.
         """
-        if llm_ref:
-            return await fetch_llm_descriptor(llm_ref)
+        if model_id:
+            return await parse_model_id(model_id)
         if default is not None:
             return default
         return await get_conversation_default_descriptor(self.conversation)

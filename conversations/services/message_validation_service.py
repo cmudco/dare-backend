@@ -51,11 +51,9 @@ class MessageValidationService:
                 "referenced_conversation_history_limit", 10
             ),
             "referenced_summary_ids": cls._get_list(data, "referenced_summary_ids"),
-            # LLM dispatch reference — discriminated by ``kind``:
-            #   {"kind": "llm",     "id": <int>}
-            #   {"kind": "litellm", "key_id": "<uuid>", "model_name": "<str>"}
-            # Each shape carries its native types — no encoded composite id.
-            "llm_ref": data.get("llm_ref"),
+            # Opaque dispatch id from the FE — either a stringified LLM PK or
+            # ``litellm:<key_pk>:<model_name>``. Inverted via ``parse_model_id``.
+            "model_id": data.get("model_id"),
             "file_owner_id": data.get(
                 "file_owner_id"
             ),  # Bot creator's ID for shared access

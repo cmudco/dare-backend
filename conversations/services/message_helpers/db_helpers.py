@@ -85,35 +85,41 @@ def _resolve_litellm_ref(key_id: str, model_name: str) -> Optional[LLMDescriptor
     )
 
 
+LITELLM_ID_PREFIX = "litellm:"
+
+
 @database_sync_to_async
-def fetch_llm_descriptor(llm_ref) -> Optional[LLMDescriptor]:
-    """Resolve a discriminated ``llm_ref`` to an ``LLMDescriptor``.
+def parse_model_id(model_id) -> Optional[LLMDescriptor]:
+    """Resolve an opaque ``model_id`` string to an ``LLMDescriptor``.
 
-    Wire shape — camelCase keys, identical to the FE state. The FE sends the
-    Redux ``selectedModel`` object as-is; no parsing/rename layer in between
-    (rules.md §11: single source of truth, one shape end-to-end):
+    The FE treats ``model_id`` as opaque — it just hands back whatever the
+    picker endpoint gave it. Two encodings:
 
-      ``{"kind": "llm",     "id": <int>}``                            real DB-backed LLM
-      ``{"kind": "litellm", "keyId": "<uuid>", "modelName": "<str>"}`` LiteLLM-routed
+      ``"<int>"``                       → DB-backed LLM (PK)
+      ``"litellm:<key_pk>:<model>"``    → LiteLLM-routed dispatch
 
     Returns ``None`` for an unknown id, deleted/expired LiteLLM key, or
-    malformed payload — caller falls back to the conversation default.
+    malformed string — caller falls back to the conversation default.
     """
-    if not isinstance(llm_ref, dict):
+    if not isinstance(model_id, str) or not model_id:
         return None
-    kind = llm_ref.get("kind")
-    if kind == "llm":
-        llm = LLM.objects.filter(id=llm_ref.get("id")).first()
-        return LLMDescriptor.from_llm(llm) if llm else None
-    if kind == "litellm":
-        key_id = llm_ref.get("keyId")
-        model_name = llm_ref.get("modelName")
+    if model_id.startswith(LITELLM_ID_PREFIX):
+        try:
+            _, key_id, model_name = model_id.split(":", 2)
+        except ValueError:
+            logger.warning("Malformed LiteLLM model_id: %r", model_id)
+            return None
         if not key_id or not model_name:
-            logger.warning("Malformed LiteLLM llm_ref: %r", llm_ref)
+            logger.warning("Malformed LiteLLM model_id: %r", model_id)
             return None
         return _resolve_litellm_ref(key_id, model_name)
-    logger.warning("Unknown llm_ref kind: %r", llm_ref)
-    return None
+    try:
+        pk = int(model_id)
+    except ValueError:
+        logger.warning("Unparseable model_id: %r", model_id)
+        return None
+    llm = LLM.objects.filter(id=pk).first()
+    return LLMDescriptor.from_llm(llm) if llm else None
 
 
 @database_sync_to_async

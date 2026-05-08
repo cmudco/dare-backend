@@ -8,9 +8,12 @@ the FE empty-state UX.
 
 DARE wallets keep returning the existing access-code-group filtered catalog.
 BYO wallets are filtered to the providers the user has populated keys for.
-LITELLM wallets return *synthetic* model entries from the proxy probe — they
-share the LLMSerializer field shape so the FE renders both kinds with the
-same component, distinguishing on `isSynthetic`.
+LITELLM wallets return synthetic entries from the proxy probe.
+
+Every entry — DB-backed or LiteLLM-routed — has the same flat shape with
+a string ``id``. For real LLMs the id is the stringified PK; for LiteLLM
+it's ``litellm:<key_pk>:<model_name>``. The FE treats the id as opaque;
+the BE inverts the encoding via ``parse_model_id`` on dispatch.
 
 `parse_scope(raw)` parses the `?wallet_scope=` query param the LLMViewSet
 forwards from `LLMViewSet.list`.
@@ -87,42 +90,45 @@ class WalletMeta:
 # === Active-scope filter ====================================================
 
 
+LITELLM_ID_PREFIX = "litellm:"
+
+
 def _llm_entry(model: LLM) -> Dict[str, Any]:
-    """Picker entry for a DB-backed LLM. ``kind="llm"`` discriminator with
-    the native LLM payload nested under ``llm`` — the id stays an integer
-    pk, no encoding tricks (rules.md §11)."""
+    """Flat picker entry for a DB-backed LLM. ``id`` is the stringified PK."""
     return {
-        "kind": "llm",
-        "llm": {
-            "id": model.pk,
-            "name": model.name,
-            "identifier": model.identifier,
-            "provider": model.provider,
-            "description": model.description,
-            "is_reasoning": model.is_reasoning,
-            "is_image_generator": model.is_image_generator,
-            "is_audio_transcriber": model.is_audio_transcriber,
-            "input_token_rate_per_million": model.input_token_rate_per_million,
-            "output_token_rate_per_million": model.output_token_rate_per_million,
-            "tier": model.tier,
-        },
+        "id": str(model.pk),
+        "name": model.name,
+        "identifier": model.identifier,
+        "provider": model.provider,
+        "description": model.description,
+        "is_reasoning": model.is_reasoning,
+        "is_image_generator": model.is_image_generator,
+        "is_audio_transcriber": model.is_audio_transcriber,
+        "input_token_rate_per_million": model.input_token_rate_per_million,
+        "output_token_rate_per_million": model.output_token_rate_per_million,
+        "tier": model.tier,
     }
 
 
 def _litellm_entry(litellm_key, probed) -> Dict[str, Any]:
-    """Picker entry for a LiteLLM-routed model. ``kind="litellm"``
-    discriminator carrying the native dispatch reference fields
-    (``key_id`` + ``model_name``) plus display metadata. Each field has its
-    natural type — no encoded composite id."""
+    """Flat picker entry for a LiteLLM-routed model. ``id`` is opaque to the
+    FE: ``litellm:<key_pk>:<model_name>``. ``parse_model_id`` on the BE
+    inverts it on dispatch. Capability flags are forced false because the
+    proxy doesn't transparently forward provider-native endpoints (DALL-E,
+    Whisper, reasoning-mode); zero rates because billing happens externally.
+    """
     return {
-        "kind": "litellm",
-        "litellm": {
-            "key_id": str(litellm_key.pk),
-            "key_label": getattr(litellm_key, "label", None),
-            "model_name": probed.name,
-            "provider": probed.provider or "custom",
-            "name": probed.name,
-        },
+        "id": f"{LITELLM_ID_PREFIX}{litellm_key.pk}:{probed.name}",
+        "name": probed.name,
+        "identifier": probed.name,
+        "provider": probed.provider or "custom",
+        "description": None,
+        "is_reasoning": False,
+        "is_image_generator": False,
+        "is_audio_transcriber": False,
+        "input_token_rate_per_million": 0,
+        "output_token_rate_per_million": 0,
+        "tier": None,
     }
 
 
@@ -158,7 +164,7 @@ def _filter_for_litellm(litellm_key) -> Tuple[List[Dict[str, Any]], WalletMeta]:
     if not cached.models:
         return [], _litellm_meta(is_empty=True, empty_reason=EMPTY_PROBE_FAILED)
     entries = [_litellm_entry(litellm_key, m) for m in cached.models]
-    providers = sorted({e["litellm"]["provider"] for e in entries})
+    providers = sorted({e["provider"] for e in entries})
     return entries, _litellm_meta(
         providers=providers,
         is_empty=False,
@@ -195,7 +201,7 @@ def _litellm_meta(
 
 def _filter_for_dare(base_qs) -> Tuple[List[Dict[str, Any]], WalletMeta]:
     entries = [_llm_entry(m) for m in base_qs]
-    providers = sorted({e["llm"]["provider"] for e in entries})
+    providers = sorted({e["provider"] for e in entries})
     return entries, WalletMeta(
         type=UserWalletPreferenceTypeChoice.DARE,
         providers=providers,
