@@ -6,13 +6,12 @@ Extracted from MessageCoordinator to improve modularity.
 
 These functions handle:
 - Saving original message content for regenerations
-- Billing finalization (authenticated users vs public bots)
+- Billing finalization
 - Sending final message payload to client
 """
 
 import logging
 from typing import Dict, Optional, Callable, Awaitable
-from decimal import Decimal
 
 from channels.db import database_sync_to_async
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -20,9 +19,6 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from conversations.models import Message
 from conversations.constants import ErrorCode, ErrorMessage
 from conversations.services.websocket_response_service import WebSocketResponseService
-from conversations.services.message_helpers.billing_helpers import (
-    update_public_bot_budget,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -42,14 +38,12 @@ async def finalize_message(
     mark_as_regenerated_callback: Callable[[Message], Awaitable[None]],
 ) -> None:
     """
-    Finalize AI message with billing or budget update.
+    Finalize AI message with billing.
 
-    This function handles the complete finalization flow:
-    1. Saves original message content on first regeneration
-    2. Finalizes with appropriate billing strategy (authenticated vs public)
-    3. Marks message as regenerated if applicable
-    4. Updates bot budget for public bots
-    5. Sends final message payload to client
+    For both authenticated users and anonymous public-bot users,
+    ``billing_service.finalize_ai_message`` is invoked. The bot router resolves
+    the chatter's wallet when authenticated, or the bot owner's wallet for
+    anonymous public-bot traffic.
 
     Args:
         message_obj: Message object to finalize
@@ -58,13 +52,16 @@ async def finalize_message(
         regenerate: Whether this is a regeneration
         generated_image_data: Optional image generation data
         generated_transcription_data: Optional audio transcription data
-        user: User instance (None for public bots)
-        conversation: Conversation instance
+        user: User instance (None for anonymous public-bot calls). Currently
+            unused — preserved for call-site compatibility.
+        conversation: Conversation instance (currently unused, kept for
+            call-site compatibility)
         billing_service: BillingService instance
         send_callback: Async callback for sending WebSocket messages
         send_error_callback: Async callback for sending error messages
         mark_as_regenerated_callback: Async callback for marking message as regenerated
     """
+    del user, conversation  # bot router pulls owner/payer from the conversation directly
     try:
         # Save original message content on first regeneration
         if regenerate and not message_obj.original_message:
@@ -73,28 +70,12 @@ async def finalize_message(
                 update_fields=["original_message"]
             )
 
-        # Finalize with appropriate billing strategy
-        if user:
-            # Authenticated user - use wallet billing (platform auto-detected from conversation)
-            finalized_message = await database_sync_to_async(
-                billing_service.finalize_ai_message
-            )(message_obj, ai_response, token_usage or {})
+        finalized_message = await database_sync_to_async(
+            billing_service.finalize_ai_message
+        )(message_obj, ai_response, token_usage or {})
 
-            # Mark as regenerated if applicable
-            if regenerate:
-                await mark_as_regenerated_callback(finalized_message)
-        else:
-            # Public bot - no billing, just calculate cost
-            finalized_message, cost = await database_sync_to_async(
-                billing_service.finalize_ai_message_no_billing
-            )(message_obj, ai_response, token_usage or {})
-
-            # Mark as regenerated if applicable
-            if regenerate:
-                await mark_as_regenerated_callback(finalized_message)
-
-            # Update bot budget if applicable
-            await update_public_bot_budget(conversation, cost, message_obj)
+        if regenerate:
+            await mark_as_regenerated_callback(finalized_message)
 
         # Send final message to client
         final_payload = await WebSocketResponseService.format_message(

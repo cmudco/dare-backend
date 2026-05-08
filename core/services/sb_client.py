@@ -1,30 +1,16 @@
 """
-Typed client for the small set of internal SocraticBooks endpoints DARE
-consumes during the bot-billing flow.
-
-Reasoning for living in ``core/services/`` rather than next to the conversation
-helpers:
-- ``BotBudgetService`` (next to conversations) is one specific call. As Phase 3
-  adds two more (billing-config GET, update-cap POST) the calls cluster into a
-  cohesive client.
-- The cohort of endpoints shares an authentication scheme (``X-Internal-Key``),
-  base URL, timeout, and cache strategy — encapsulating those once avoids
-  drift.
-- Future bot-billing follow-ups (refund, allocate-from-bot, voice-team budget,
-  etc.) drop in here without each becoming a one-off ``requests.post``.
+Typed client for the internal SocraticBooks billing-config endpoint.
 
 Caching: ``get_bot_billing_config`` is hot — every LLM call into a bot
-conversation runs through the wallet router which needs the bot's billing
-source/target. We cache for 60s using Django's default cache. Invalidation is
-explicit via ``invalidate_bot_billing_config`` after a cap or billing-source
-update propagates back from owner-facing endpoints (Phase 5).
+conversation runs through the wallet router. We cache for 60s using Django's
+default cache. Invalidate via ``invalidate_bot_billing_config`` when the SB
+side mutates a bot's owner / publish state.
 """
 from __future__ import annotations
 
 import logging
 import os
 from dataclasses import dataclass
-from decimal import Decimal
 from typing import Optional
 
 import requests
@@ -36,27 +22,23 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class BotBillingConfig:
-    """Snapshot of a bot's billing config as DARE sees it.
+    """Snapshot of a SocraticBooks bot's billing config as DARE sees it.
 
-    Mirrors the SB internal endpoint response. Decimal fields are kept as
-    Decimal here (not str) so the wallet router can compare without parsing
-    on the hot path.
+    Per the new SB rule, billing always follows: chatter pays if
+    authenticated; otherwise (anonymous public-bot traffic) the bot owner
+    pays. There is no per-bot cap or billing-source enum any more.
     """
     bot_id: int
-    billing_source: str
-    billing_target_id: Optional[str]
     owner_dare_user_id: Optional[int]
-    budget: Optional[Decimal]
-    budget_used: Decimal
     is_publicly_deployed: bool
     is_active: bool
 
 
 class SocraticBooksClient:
-    """Internal SocraticBooks calls invoked from DARE during billing/cap flows."""
+    """Internal SocraticBooks calls invoked from DARE during billing flows."""
 
     REQUEST_TIMEOUT = 5  # seconds
-    BILLING_CONFIG_TTL = 60  # seconds; matches the plan's cache window
+    BILLING_CONFIG_TTL = 60  # seconds
 
     @classmethod
     def _base_url(cls) -> str:
@@ -69,8 +51,6 @@ class SocraticBooksClient:
             return None
         return {'X-Internal-Key': key}
 
-    # --- Billing config ----------------------------------------------------
-
     @classmethod
     def _billing_config_cache_key(cls, bot_id: int) -> str:
         return f'sb:bot:billing-config:{bot_id}'
@@ -80,8 +60,8 @@ class SocraticBooksClient:
         """Fetch and cache the bot's billing config.
 
         Returns ``None`` when the bot does not exist or the call fails — the
-        caller (wallet router) treats absence as "fall back to legacy
-        behavior" so a transient SB outage cannot block billing entirely.
+        wallet router treats absence as "fall back to legacy behavior" so a
+        transient SB outage cannot block billing entirely.
         """
         cache_key = cls._billing_config_cache_key(bot_id)
         cached = cache.get(cache_key)
@@ -117,11 +97,7 @@ class SocraticBooksClient:
         try:
             config = BotBillingConfig(
                 bot_id=int(body['botId']),
-                billing_source=body['billingSource'],
-                billing_target_id=body.get('billingTargetId'),
                 owner_dare_user_id=body.get('ownerDareUserId'),
-                budget=Decimal(body['budget']) if body.get('budget') is not None else None,
-                budget_used=Decimal(body.get('budgetUsed') or '0'),
                 is_publicly_deployed=bool(body.get('isPubliclyDeployed', False)),
                 is_active=bool(body.get('isActive', True)),
             )
@@ -134,45 +110,5 @@ class SocraticBooksClient:
 
     @classmethod
     def invalidate_bot_billing_config(cls, bot_id: int) -> None:
-        """Drop the cached config so the next call sees fresh data.
-
-        Called by owner-facing endpoints after a cap or billing-source update.
-        """
+        """Drop the cached config so the next call sees fresh data."""
         cache.delete(cls._billing_config_cache_key(bot_id))
-
-    # --- Cap update --------------------------------------------------------
-
-    @classmethod
-    def update_bot_cap(cls, bot_id: int, new_cap: Decimal) -> tuple[bool, Optional[dict]]:
-        """Push a new cap to SB. Returns ``(ok, body)`` — body has shape
-        ``{success, budget, budget_used}`` on 200 or ``{error, message, ...}``
-        on 4xx. The caller (owner endpoint) surfaces SB's error to the user
-        verbatim so e.g. ``cap_below_used`` translates to a clean 400 response.
-        """
-        base = cls._base_url()
-        headers = cls._headers()
-        if not base or not headers:
-            return False, {'error': 'unconfigured', 'message': 'SocraticBooks backend not configured'}
-
-        url = f'{base}/api/bots/internal/{bot_id}/update-cap/'
-        try:
-            response = requests.post(
-                url,
-                headers=headers,
-                json={'budget': str(new_cap)},
-                timeout=cls.REQUEST_TIMEOUT,
-            )
-        except requests.RequestException as exc:
-            logger.error('update-cap request failed for bot %s: %s', bot_id, exc)
-            return False, {'error': 'sb_unreachable', 'message': str(exc)}
-
-        body = None
-        try:
-            body = response.json()
-        except ValueError:
-            body = {'error': 'malformed_response'}
-
-        if 200 <= response.status_code < 300:
-            cls.invalidate_bot_billing_config(bot_id)
-            return True, body
-        return False, body

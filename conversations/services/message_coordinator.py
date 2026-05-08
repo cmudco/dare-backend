@@ -15,7 +15,6 @@ duplicated across ChatConsumer and PublicBotConsumer.
 import asyncio
 import json
 import logging
-from decimal import Decimal
 from typing import Any, Callable, Dict, List, Optional
 
 from channels.db import database_sync_to_async
@@ -44,7 +43,6 @@ from conversations.services.message_helpers import (  # Database helpers; Learni
     prepare_regeneration_data,
     run_learning_progress_stream,
     should_generate_title,
-    update_public_bot_budget,
 )
 from conversations.services.message_validation_service import MessageValidationService
 from conversations.services.web_search_source_service import WebSearchSourceService
@@ -219,12 +217,6 @@ class MessageCoordinator:
         """Mark a message as regenerated if applicable."""
         message.is_regenerated = True
         await database_sync_to_async(message.save)(update_fields=["is_regenerated"])
-
-    async def _update_public_bot_budget(
-        self, cost: Decimal, message_obj: "Message"
-    ) -> None:
-        """Update bot budget for public bot conversations."""
-        return await update_public_bot_budget(self.conversation, cost, message_obj)
 
     async def handle_new_message(
         self,

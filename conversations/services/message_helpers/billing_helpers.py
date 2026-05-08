@@ -5,52 +5,18 @@ Functions for handling billing operations during message streaming.
 Extracted from MessageCoordinator to improve modularity.
 
 These functions handle:
-- Public bot budget updates
 - Mid-stream insufficient balance handling
 """
 
 import logging
-from decimal import Decimal
 from typing import Dict, Optional, Callable, Awaitable
 
 from channels.db import database_sync_to_async
 
-from conversations.models import Conversation, Message
+from conversations.models import Message
 from conversations.services.websocket_response_service import WebSocketResponseService
-from conversations.services.bot_budget_service import BotBudgetService
 
 logger = logging.getLogger(__name__)
-
-
-async def update_public_bot_budget(
-    conversation: Conversation,
-    cost: Decimal,
-    message_obj: Message,
-) -> None:
-    """
-    Update bot budget for public bot conversations.
-
-    Deducts the specified cost from the bot's budget and records
-    metadata about the transaction for auditing purposes.
-
-    Args:
-        conversation: Conversation instance (must have bot_id for public bots)
-        cost: Cost to deduct from bot budget
-        message_obj: Message for metadata (tokens, IDs)
-    """
-    if cost <= Decimal("0") or not conversation.bot_id:
-        return
-
-    await BotBudgetService.update_bot_budget(
-        bot_id=conversation.bot_id,
-        cost=cost,
-        metadata={
-            "conversation_id": str(conversation.conversation_id),
-            "message_id": str(message_obj.id),
-            "input_tokens": message_obj.input_tokens,
-            "output_tokens": message_obj.output_tokens,
-        },
-    )
 
 
 async def handle_insufficient_balance(

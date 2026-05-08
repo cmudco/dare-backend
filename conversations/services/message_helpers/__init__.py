@@ -7,7 +7,7 @@ for data transformation, media processing, and response building.
 These functions are stateless and easily testable.
 """
 
-from .billing_helpers import handle_insufficient_balance, update_public_bot_budget
+from .billing_helpers import handle_insufficient_balance
 from .db_helpers import (
     fetch_preceding_user_message,
     get_ai_message_by_id,
@@ -40,7 +40,6 @@ __all__ = [
     # Learning progress helpers
     "run_learning_progress_stream",
     # Billing helpers
-    "update_public_bot_budget",
     "handle_insufficient_balance",
     # Finalization helpers
     "finalize_message",
