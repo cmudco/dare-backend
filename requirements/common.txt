@@ -24,6 +24,9 @@ django-cors-headers~=3.13.0
 # error monitoring
 sentry-sdk~= 2.26.1
 
+# jinja2 is required in prod, because sentry requires it
+Jinja2~=3.1.6
+
 # DRF
 djangorestframework-camel-case~=1.4.2
 drf-spectacular~=0.28.0

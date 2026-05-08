@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Virtual environments
+.venv*/
+venv*/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+
+# Docker
+docker-compose.yml
+Dockerfile
+
+# Database (local dev)
+db.sqlite3
+
+# Environment (use docker-compose env instead)
+.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data directories (mounted as volumes)
+data/
+media/
+static/
+
+# Logs
+*.log
+
+# Node (MCP servers have their own Dockerfiles)
+node_modules/
