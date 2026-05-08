@@ -654,55 +654,12 @@ class UserWalletPreferenceAdmin(admin.ModelAdmin):
 
 
 # ============================================================================
-# Usage Dashboard — module-level helpers
+# Usage Dashboard — module-level helpers (extracted to billing/admin_helpers.py)
 # ============================================================================
 
-_VALID_PERIODS = frozenset({"all", "7d", "30d", "90d"})
-
-_PERIOD_DAYS: dict = {"7d": 7, "30d": 30, "90d": 90}
-
-_PERIOD_LABELS: dict = {
-    "all": "all time",
-    "7d": "last 7 days",
-    "30d": "last 30 days",
-    "90d": "last 90 days",
-}
-
-
-def _period_cutoff(period: str) -> tuple:
-    """
-    Returns (cutoff, prev_cutoff) for the period.
-    Both None for 'all' — callers apply no date filter.
-    prev_cutoff is the start of the equivalent prior window (used for deltas).
-    """
-    if period == "all":
-        return None, None
-    days = _PERIOD_DAYS[period]
-    cutoff = timezone.now() - timedelta(days=days)
-    return cutoff, cutoff - timedelta(days=days)
-
-
-def _pct_delta(
-    current: int | float | Decimal, previous: int | float | Decimal
-) -> float | None:
-    """Percentage change from previous to current. None when prior is zero/None."""
-    try:
-        c, p = float(current), float(previous)
-    except (TypeError, ValueError):
-        return None
-    if not p:
-        return None
-    return round((c - p) / p * 100, 1)
-
-
-def _make_delta(delta: float | None) -> dict | None:
-    """Wraps a raw delta into a template-ready dict, or None when unavailable."""
-    if delta is None:
-        return None
-    return {
-        "value": f"+{delta:.1f}%" if delta >= 0 else f"{delta:.1f}%",
-        "up": delta >= 0,
-    }
+from billing.admin_helpers import (_make_delta, _normalize_period,
+                                   _PERIOD_DAYS, _PERIOD_LABELS, _pct_delta,
+                                   _period_cutoff, _VALID_PERIODS)
 
 
 # ============================================================================
@@ -1246,5 +1203,335 @@ class UsageDashboardAdmin(admin.ModelAdmin):
                     "calls": row["llm_calls"],
                 }
                 for row in breakdown
+            ]
+        )
+
+
+# ============================================================================
+# Usage Breakdown — per-user / per-group cost & token tables
+# ============================================================================
+
+
+class UsageBreakdown(Transaction):
+    """Proxy model used solely as an admin entry-point for the per-user / per-group
+    breakdown page. Sibling to UsageDashboard — separate admin URL, separate view."""
+
+    class Meta:
+        proxy = True
+        verbose_name = "Usage Breakdown"
+        verbose_name_plural = "Usage Breakdown"
+
+
+class _UsageBreakdownChangeList(ChangeList):
+    """Drops dashboard-only GET params before Django's ChangeList interprets
+    them as field lookups."""
+
+    _IGNORED_PARAMS = ("period", "scope", "id")
+
+    def get_filters_params(self, params=None):
+        filters = super().get_filters_params(params)
+        for key in self._IGNORED_PARAMS:
+            filters.pop(key, None)
+        return filters
+
+
+_VALID_SCOPES = frozenset({"user", "group"})
+
+
+@admin.register(UsageBreakdown)
+class UsageBreakdownAdmin(admin.ModelAdmin):
+    """Read-only per-user and per-group cost tracking page.
+
+    Two scopes via `?scope=user|group`. Optional `?id=<pk>` drills into a
+    detail view for that user or group.
+    """
+
+    change_list_template = "admin/billing/usagebreakdown/change_list.html"
+
+    def get_changelist(self, request, **kwargs):
+        return _UsageBreakdownChangeList
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+    def changelist_view(self, request, extra_context=None):
+        period = _normalize_period(request.GET.get("period", "all"))
+        scope = request.GET.get("scope", "user")
+        if scope not in _VALID_SCOPES:
+            scope = "user"
+
+        focus_id = request.GET.get("id")
+        try:
+            focus_id = int(focus_id) if focus_id else None
+        except (TypeError, ValueError):
+            focus_id = None
+
+        if focus_id is not None:
+            self.change_list_template = (
+                "admin/billing/usagebreakdown/detail.html"
+            )
+            ctx = self._get_detail_context(scope, focus_id, period)
+        else:
+            self.change_list_template = (
+                "admin/billing/usagebreakdown/change_list.html"
+            )
+            ctx = self._get_list_context(scope, period)
+
+        extra_context = extra_context or {}
+        extra_context.update(
+            {
+                "period": period,
+                "period_label": _PERIOD_LABELS[period],
+                "scope": scope,
+                "focus_id": focus_id,
+                **ctx,
+            }
+        )
+        return super().changelist_view(request, extra_context=extra_context)
+
+    # ------------------------------------------------------------------
+    # List view
+    # ------------------------------------------------------------------
+
+    def _get_list_context(self, scope: str, period: str) -> dict:
+        cutoff, _prev = _period_cutoff(period)
+        fin_base = Transaction.objects.filter(type=TransactionTypeChoice.DEBIT)
+        if cutoff:
+            fin_base = fin_base.filter(created_at__gte=cutoff)
+        # LiteLLM rows are $0.00 — they'd surface at the bottom anyway, but
+        # excluding them keeps the table about real spend signals.
+        fin_base = fin_base.exclude(billing_mode="litellm")
+
+        if scope == "group":
+            return {"rows": self._list_groups(fin_base), "summary": self._list_summary(fin_base, scope)}
+        return {"rows": self._list_users(fin_base), "summary": self._list_summary(fin_base, scope)}
+
+    def _list_users(self, fin_qs) -> list:
+        rows = list(
+            fin_qs.values(
+                "user_id",
+                "user__email",
+                "user__access_code_group_id",
+                "user__access_code_group__access_code",
+            )
+            .annotate(
+                total_cost=Sum("amount"),
+                input_tokens=Sum("input_tokens"),
+                output_tokens=Sum("output_tokens"),
+                calls=Count("id"),
+                last_active=Max("created_at"),
+            )
+            .order_by("-total_cost")[:100]
+        )
+        for r in rows:
+            r["total_tokens"] = (r.get("input_tokens") or 0) + (r.get("output_tokens") or 0)
+        return rows
+
+    def _list_groups(self, fin_qs) -> list:
+        rows = list(
+            fin_qs.filter(user__access_code_group__isnull=False)
+            .values(
+                "user__access_code_group_id",
+                "user__access_code_group__access_code",
+                "user__access_code_group__group_owner__email",
+            )
+            .annotate(
+                total_cost=Sum("amount"),
+                input_tokens=Sum("input_tokens"),
+                output_tokens=Sum("output_tokens"),
+                calls=Count("id"),
+                active_users=Count("user_id", distinct=True),
+                last_active=Max("created_at"),
+            )
+            .order_by("-total_cost")[:100]
+        )
+
+        # Member counts — one query, merged in Python.
+        from users.models import AccessCodeGroup
+
+        group_ids = [r["user__access_code_group_id"] for r in rows]
+        member_counts = {
+            row["id"]: row["members"]
+            for row in AccessCodeGroup.objects.filter(id__in=group_ids)
+            .values("id")
+            .annotate(members=Count("users"))
+        }
+        for r in rows:
+            r["member_count"] = member_counts.get(r["user__access_code_group_id"], 0)
+            r["total_tokens"] = (r.get("input_tokens") or 0) + (r.get("output_tokens") or 0)
+        return rows
+
+    def _list_summary(self, fin_qs, scope: str) -> dict:
+        agg = fin_qs.aggregate(
+            total_cost=Sum("amount"),
+            total_input=Sum("input_tokens"),
+            total_output=Sum("output_tokens"),
+            total_calls=Count("id"),
+        )
+        if scope == "group":
+            distinct_count = (
+                fin_qs.filter(user__access_code_group__isnull=False)
+                .values("user__access_code_group_id")
+                .distinct()
+                .count()
+            )
+        else:
+            distinct_count = fin_qs.values("user_id").distinct().count()
+        return {
+            "total_cost": agg["total_cost"] or Decimal("0"),
+            "total_tokens": (agg["total_input"] or 0) + (agg["total_output"] or 0),
+            "total_calls": agg["total_calls"] or 0,
+            "distinct_count": distinct_count,
+        }
+
+    # ------------------------------------------------------------------
+    # Detail view
+    # ------------------------------------------------------------------
+
+    def _get_detail_context(self, scope: str, focus_id: int, period: str) -> dict:
+        cutoff, _prev = _period_cutoff(period)
+        if scope == "group":
+            return self._group_detail(focus_id, period, cutoff)
+        return self._user_detail(focus_id, period, cutoff)
+
+    def _scope_filtered_qs(self, scope: str, focus_id: int, cutoff):
+        """Returns a `Transaction` DEBIT queryset scoped to the user or group."""
+        qs = Transaction.objects.filter(type=TransactionTypeChoice.DEBIT).exclude(
+            billing_mode="litellm"
+        )
+        if scope == "group":
+            qs = qs.filter(user__access_code_group_id=focus_id)
+        else:
+            qs = qs.filter(user_id=focus_id)
+        if cutoff:
+            qs = qs.filter(created_at__gte=cutoff)
+        return qs
+
+    def _user_detail(self, user_id: int, period: str, cutoff) -> dict:
+        target = User.objects.filter(id=user_id).select_related("access_code_group").first()
+        if target is None:
+            return {"target": None, "kpis": {}, "model_breakdown": [], "daily_trend_json": "[]"}
+
+        qs = self._scope_filtered_qs("user", user_id, cutoff)
+        kpis = self._build_kpis(qs)
+        model_breakdown = self._model_breakdown(qs)
+        daily_trend_json = self._daily_trend_json(qs)
+
+        return {
+            "target": {
+                "type": "user",
+                "label": target.email,
+                "id": target.id,
+                "group_id": target.access_code_group_id,
+                "group_label": getattr(target.access_code_group, "access_code", None),
+                "joined": target.date_joined,
+            },
+            "kpis": kpis,
+            "model_breakdown": model_breakdown,
+            "daily_trend_json": daily_trend_json,
+        }
+
+    def _group_detail(self, group_id: int, period: str, cutoff) -> dict:
+        from users.models import AccessCodeGroup
+
+        target = (
+            AccessCodeGroup.objects.filter(id=group_id)
+            .select_related("group_owner")
+            .first()
+        )
+        if target is None:
+            return {"target": None, "kpis": {}, "model_breakdown": [], "members": [], "daily_trend_json": "[]"}
+
+        qs = self._scope_filtered_qs("group", group_id, cutoff)
+        kpis = self._build_kpis(qs)
+        kpis["member_count"] = target.users.count()
+        model_breakdown = self._model_breakdown(qs)
+        members = self._group_members(qs)
+        daily_trend_json = self._daily_trend_json(qs)
+
+        return {
+            "target": {
+                "type": "group",
+                "label": target.access_code,
+                "id": target.id,
+                "owner_email": getattr(target.group_owner, "email", None),
+            },
+            "kpis": kpis,
+            "model_breakdown": model_breakdown,
+            "members": members,
+            "daily_trend_json": daily_trend_json,
+        }
+
+    def _build_kpis(self, qs) -> dict:
+        agg = qs.aggregate(
+            total_cost=Sum("amount"),
+            total_input=Sum("input_tokens"),
+            total_output=Sum("output_tokens"),
+            total_calls=Count("id"),
+        )
+        active_users = qs.values("user_id").distinct().count()
+        return {
+            "total_cost": agg["total_cost"] or Decimal("0"),
+            "total_input": agg["total_input"] or 0,
+            "total_output": agg["total_output"] or 0,
+            "total_tokens": (agg["total_input"] or 0) + (agg["total_output"] or 0),
+            "total_calls": agg["total_calls"] or 0,
+            "active_users": active_users,
+        }
+
+    def _model_breakdown(self, qs) -> list:
+        rows = list(
+            qs.values("llm_name")
+            .annotate(
+                total_cost=Sum("amount"),
+                input_tokens=Sum("input_tokens"),
+                output_tokens=Sum("output_tokens"),
+                calls=Count("id"),
+            )
+            .order_by("-total_cost")
+        )
+        for r in rows:
+            r["total_tokens"] = (r.get("input_tokens") or 0) + (r.get("output_tokens") or 0)
+            r["llm_name"] = r["llm_name"] or "—"
+        return rows
+
+    def _group_members(self, qs) -> list:
+        rows = list(
+            qs.values("user_id", "user__email")
+            .annotate(
+                total_cost=Sum("amount"),
+                input_tokens=Sum("input_tokens"),
+                output_tokens=Sum("output_tokens"),
+                calls=Count("id"),
+                last_active=Max("created_at"),
+            )
+            .order_by("-total_cost")
+        )
+        for r in rows:
+            r["total_tokens"] = (r.get("input_tokens") or 0) + (r.get("output_tokens") or 0)
+        return rows
+
+    def _daily_trend_json(self, qs) -> str:
+        rows = (
+            qs.annotate(d=TruncDate("created_at"))
+            .values("d")
+            .annotate(cost=Sum("amount"), calls=Count("id"))
+            .order_by("d")
+        )
+        return json.dumps(
+            [
+                {
+                    "date": row["d"].isoformat() if row["d"] else None,
+                    "cost": float(row["cost"] or 0),
+                    "calls": row["calls"] or 0,
+                }
+                for row in rows
+                if row["d"] is not None
             ]
         )
