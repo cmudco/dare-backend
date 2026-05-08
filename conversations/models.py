@@ -674,7 +674,21 @@ class Message(BaseModel):
         null=True,
         blank=True,
         related_name="messages",
-        help_text="The LLM used to generate this message (null for user messages)."
+        help_text="The LLM used to generate this message (null for user messages or LiteLLM-routed dispatches)."
+    )
+    litellm_key = models.ForeignKey(
+        'billing.LiteLLMKey',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="messages",
+        help_text="LiteLLM key used to dispatch this message. Populated only when wallet=LITELLM; null otherwise."
+    )
+    litellm_model_name = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        help_text="Model identifier sent to the LiteLLM proxy (e.g. 'gpt-4o'). Populated only when llm is null and a LiteLLM key was used."
     )
 
     files = models.ManyToManyField(
