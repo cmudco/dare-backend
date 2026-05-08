@@ -33,7 +33,14 @@ class LiteLLMProbeResult:
 def probe_litellm_connection(
     base_url: str, api_key: str, *, timeout: float = 10.0
 ) -> LiteLLMProbeResult:
-    url = urljoin(base_url.rstrip("/") + "/", "v1/models")
+    # OpenAI-SDK convention: `base_url` is the API root (typically ending in
+    # `/v1`), and endpoint paths are appended directly. We mirror that here
+    # so the probe URL matches what the dispatcher will hit. If the caller
+    # didn't include `/v1`, we add it once — never double-append.
+    root = base_url.rstrip("/")
+    if not root.rstrip("/").endswith("/v1"):
+        root = root + "/v1"
+    url = root + "/models"
     headers = {"Authorization": f"Bearer {api_key}"}
     try:
         response = httpx.get(url, headers=headers, timeout=timeout)

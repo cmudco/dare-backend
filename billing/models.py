@@ -632,6 +632,27 @@ class LiteLLMKey(TimeStampMixin):
     def is_expired(self) -> bool:
         return self.expires_at is not None and self.expires_at <= timezone.now()
 
+    @staticmethod
+    def normalize_base_url(raw: str) -> str:
+        """Canonicalize ``base_url`` to the OpenAI-SDK API root.
+
+        LiteLLM proxies are OpenAI-compatible at ``<host>/v1/...``. Both the
+        probe (``GET /v1/models``) and the dispatcher (``AsyncOpenAI(...)``,
+        which appends ``/chat/completions`` to ``base_url``) expect the URL
+        to end in ``/v1``. We normalize once at storage so every consumer
+        reads the same canonical form — single source of truth.
+        """
+        cleaned = (raw or "").strip().rstrip("/")
+        if not cleaned:
+            return cleaned
+        if cleaned.endswith("/v1"):
+            return cleaned
+        return cleaned + "/v1"
+
+    def save(self, *args, **kwargs):
+        self.base_url = self.normalize_base_url(self.base_url)
+        super().save(*args, **kwargs)
+
     @classmethod
     def visible_for_user(cls, user):
         """
