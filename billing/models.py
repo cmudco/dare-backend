@@ -485,51 +485,6 @@ class Transaction(TimeStampMixin):
         return f"{self.user.email}: {self.get_type_display()} - {self.display_amount}{model_info}{token_info}"
 
 
-class BYOKeyFeatureFlag(models.Model):
-    """
-    Singleton flag gating the BYO Key wallet type globally. Edited by Django
-    superadmin only; mirrors the SystemRefillPolicy singleton pattern.
-    """
-    SINGLETON_PK = 1
-
-    is_enabled = models.BooleanField(
-        default=False,
-        verbose_name=_("BYO Key Enabled"),
-        help_text=_("When enabled, users may add and select their own provider API keys (BYO) as the active wallet."),
-    )
-    updated_at = models.DateTimeField(auto_now=True)
-    updated_by = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        null=True,
-        blank=True,
-        on_delete=models.SET_NULL,
-        related_name="+",
-        verbose_name=_("Updated By"),
-        help_text=_("Last admin to toggle this flag."),
-    )
-
-    class Meta:
-        verbose_name = _("BYO Key Feature Flag")
-        verbose_name_plural = _("BYO Key Feature Flag")
-
-    def save(self, *args, **kwargs):
-        self.pk = self.SINGLETON_PK
-        super().save(*args, **kwargs)
-
-    @classmethod
-    def is_byo_enabled(cls) -> bool:
-        row = cls.objects.filter(pk=cls.SINGLETON_PK).first()
-        return bool(row and row.is_enabled)
-
-    @classmethod
-    def load(cls):
-        obj, _created = cls.objects.get_or_create(pk=cls.SINGLETON_PK)
-        return obj
-
-    def __str__(self):
-        return f"BYO Key Feature Flag: {'ENABLED' if self.is_enabled else 'DISABLED'}"
-
-
 class LiteLLMKey(TimeStampMixin):
     """
     Credential row representing a LiteLLM proxy key the user can route LLM
@@ -728,7 +683,10 @@ class UserWalletPreference(TimeStampMixin):
             return
 
         if wallet_type == UserWalletPreferenceTypeChoice.BYO:
-            if not BYOKeyFeatureFlag.is_byo_enabled():
+            # Local import — feature_flags imports billing models indirectly via
+            # users.AccessCodeGroup, so a top-level import would risk an app-load cycle.
+            from feature_flags.services import is_flag_enabled_for_user
+            if not is_flag_enabled_for_user(self.user, "enable_byok"):
                 raise ValidationError({
                     "active_wallet_type": _("BYO wallet type is currently disabled platform-wide."),
                 })
@@ -770,6 +728,11 @@ class UserWalletPreference(TimeStampMixin):
             return
 
         if wallet_type == UserWalletPreferenceTypeChoice.LITELLM:
+            from feature_flags.services import is_flag_enabled_for_user
+            if not is_flag_enabled_for_user(self.user, "enable_litellm_wallet"):
+                raise ValidationError({
+                    "active_wallet_type": _("LiteLLM wallet type is currently disabled."),
+                })
             if not ref_id:
                 raise ValidationError({"active_wallet_ref_id": _("LiteLLM wallet requires a ref_id.")})
             if not LiteLLMKey.visible_for_user(self.user).filter(pk=ref_id).exists():
