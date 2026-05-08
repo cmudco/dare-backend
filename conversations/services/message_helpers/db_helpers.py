@@ -8,91 +8,152 @@ All functions are stateless - they receive the required models (conversation,
 message, etc.) as parameters instead of accessing class instance state.
 """
 
-from typing import Optional, List, Dict
+import logging
+from typing import Dict, List, Optional
+
 from channels.db import database_sync_to_async
 
-from conversations.models import Conversation, Message, LLM
+from billing import litellm_models_service
+from billing.models import LiteLLMKey
 from conversations.constants import SenderType
+from conversations.models import LLM, Conversation, Message
+from core.services.dtos import LLMDescriptor
+
+logger = logging.getLogger(__name__)
 
 
 @database_sync_to_async
 def get_ai_message_by_id(message_id: int) -> Optional[Message]:
-    """Fetch an AI message by ID with LLM relation loaded.
-    
+    """Fetch an AI message by ID with dispatch relations loaded.
+
+    Eager-loads ``llm`` and ``litellm_key`` so the regeneration path can
+    rebuild an ``LLMDescriptor`` from the persisted message without a second
+    DB hit.
+
     Args:
         message_id: ID of the AI message to fetch
-        
+
     Returns:
         Message instance or None if not found
     """
-    return Message.active_objects.select_related('llm').filter(
-        id=message_id, sender_type=SenderType.AI_ASSISTANT
-    ).first()
+    return (
+        Message.active_objects.select_related("llm", "litellm_key")
+        .filter(id=message_id, sender_type=SenderType.AI_ASSISTANT)
+        .first()
+    )
 
 
 @database_sync_to_async
 def get_message_media_file_ids(message: Message) -> List[int]:
     """Get audio/video file IDs attached to a message.
-    
+
     Args:
         message: Message instance to get media files from
-        
+
     Returns:
         List of file IDs for audio/video files
     """
-    return list(message.files.filter(
-        media_type__in=['audio', 'video']
-    ).values_list('id', flat=True))
+    return list(
+        message.files.filter(media_type__in=["audio", "video"]).values_list(
+            "id", flat=True
+        )
+    )
+
+
+def _resolve_litellm_ref(key_id: str, model_name: str) -> Optional[LLMDescriptor]:
+    """Look up a LiteLLM dispatch reference and build the descriptor.
+
+    Uses the cached probe (`billing.litellm_models_service.list_models`) to
+    discover the provider the proxy reports for ``model_name``; falls back
+    to ``"custom"`` if the probe is unavailable so dispatch can still run.
+    """
+    key = LiteLLMKey.objects.filter(pk=key_id).first()
+    if key is None:
+        logger.info("LiteLLM ref references missing LiteLLMKey id=%s", key_id)
+        return None
+    if getattr(key, "is_expired", False):
+        logger.info("LiteLLM ref references expired LiteLLMKey id=%s", key_id)
+        return None
+
+    cached = litellm_models_service.list_models(key)
+    provider = next(
+        (m.provider for m in cached.models if m.name == model_name and m.provider),
+        "custom",
+    )
+    return LLMDescriptor.from_litellm(
+        litellm_key=key, model_name=model_name, provider=provider
+    )
 
 
 @database_sync_to_async
-def fetch_llm_by_id(llm_id: str) -> Optional[LLM]:
-    """Fetch LLM by ID from database.
-    
-    Args:
-        llm_id: UUID of the LLM to fetch
-        
-    Returns:
-        LLM instance or None if not found
+def fetch_llm_descriptor(llm_ref) -> Optional[LLMDescriptor]:
+    """Resolve a discriminated ``llm_ref`` to an ``LLMDescriptor``.
+
+    Wire shape — camelCase keys, identical to the FE state. The FE sends the
+    Redux ``selectedModel`` object as-is; no parsing/rename layer in between
+    (rules.md §11: single source of truth, one shape end-to-end):
+
+      ``{"kind": "llm",     "id": <int>}``                            real DB-backed LLM
+      ``{"kind": "litellm", "keyId": "<uuid>", "modelName": "<str>"}`` LiteLLM-routed
+
+    Returns ``None`` for an unknown id, deleted/expired LiteLLM key, or
+    malformed payload — caller falls back to the conversation default.
     """
-    return LLM.objects.filter(id=llm_id).first()
+    if not isinstance(llm_ref, dict):
+        return None
+    kind = llm_ref.get("kind")
+    if kind == "llm":
+        llm = LLM.objects.filter(id=llm_ref.get("id")).first()
+        return LLMDescriptor.from_llm(llm) if llm else None
+    if kind == "litellm":
+        key_id = llm_ref.get("keyId")
+        model_name = llm_ref.get("modelName")
+        if not key_id or not model_name:
+            logger.warning("Malformed LiteLLM llm_ref: %r", llm_ref)
+            return None
+        return _resolve_litellm_ref(key_id, model_name)
+    logger.warning("Unknown llm_ref kind: %r", llm_ref)
+    return None
 
 
 @database_sync_to_async
-def get_conversation_default_llm(conversation: Conversation) -> Optional[LLM]:
-    """Get conversation's selected model or first available LLM.
-    
-    Args:
-        conversation: Conversation instance
-        
-    Returns:
-        LLM instance (selected or first available)
+def get_conversation_default_descriptor(
+    conversation: Conversation,
+) -> Optional[LLMDescriptor]:
+    """Get the descriptor for the conversation's default LLM (or first available).
+
+    The conversation-level default is always a real DB-backed LLM — synthetic
+    LiteLLM models are picked per-message and never persisted on
+    ``Conversation.selected_model``.
     """
-    return conversation.selected_model or LLM.objects.first()
+    llm = conversation.selected_model or LLM.objects.first()
+    return LLMDescriptor.from_llm(llm) if llm else None
 
 
 @database_sync_to_async
 def fetch_preceding_user_message(conversation: Conversation) -> Optional[Message]:
     """Get the most recent user message in the conversation.
-    
+
     Args:
         conversation: Conversation instance
-        
+
     Returns:
         Most recent user message or None
     """
-    return conversation.messages.filter(
-        sender_type=SenderType.PLAYER
-    ).order_by('-created_at').first()
+    return (
+        conversation.messages.filter(sender_type=SenderType.PLAYER)
+        .order_by("-created_at")
+        .first()
+    )
 
 
 @database_sync_to_async
 def should_generate_title(conversation: Conversation) -> bool:
     """Check if we should generate a conversation title (first message pair).
-    
+
     Args:
         conversation: Conversation instance
-        
+
     Returns:
         True if this is the first user+AI message pair
     """
@@ -101,15 +162,15 @@ def should_generate_title(conversation: Conversation) -> bool:
 
 @database_sync_to_async
 def update_message_learning_progress(
-    message_obj: 'Message',
+    message_obj: "Message",
     assessment,
     learning_goals: str,
     tracking_prompt: str,
     progress_llm,
-    last_usage: Optional[Dict]
-) -> 'Message':
+    last_usage: Optional[Dict],
+) -> "Message":
     """Update message with learning progress data.
-    
+
     Args:
         message_obj: Message to update
         assessment: Saved progress assessment
@@ -117,7 +178,7 @@ def update_message_learning_progress(
         tracking_prompt: Tracking prompt text
         progress_llm: LLM used for assessment
         last_usage: Final usage data
-        
+
     Returns:
         Updated message instance
     """

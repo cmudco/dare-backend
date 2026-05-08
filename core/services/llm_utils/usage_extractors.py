@@ -12,7 +12,9 @@ class UsageExtractor:
     """Base usage extraction utilities."""
 
     @staticmethod
-    def build_usage_dict(input_tokens: Optional[int], output_tokens: Optional[int]) -> Optional[Dict]:
+    def build_usage_dict(
+        input_tokens: Optional[int], output_tokens: Optional[int]
+    ) -> Optional[Dict]:
         """
         Build standardized usage dictionary.
 
@@ -29,7 +31,7 @@ class UsageExtractor:
         return {
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
-            "total_tokens": input_tokens + output_tokens
+            "total_tokens": input_tokens + output_tokens,
         }
 
 
@@ -47,12 +49,12 @@ class OpenAIUsageExtractor:
         Returns:
             Usage dictionary or None
         """
-        if not hasattr(chunk, 'usage') or chunk.usage is None:
+        if not hasattr(chunk, "usage") or chunk.usage is None:
             return None
 
         return UsageExtractor.build_usage_dict(
             input_tokens=chunk.usage.prompt_tokens,
-            output_tokens=chunk.usage.completion_tokens
+            output_tokens=chunk.usage.completion_tokens,
         )
 
     @staticmethod
@@ -66,16 +68,16 @@ class OpenAIUsageExtractor:
         Returns:
             Usage dictionary or None
         """
-        if not hasattr(chunk, 'response'):
+        if not hasattr(chunk, "response"):
             return None
 
         response = chunk.response
-        if not hasattr(response, 'usage') or response.usage is None:
+        if not hasattr(response, "usage") or response.usage is None:
             return None
 
         usage_obj = response.usage
-        input_tokens = getattr(usage_obj, 'input_tokens', None)
-        output_tokens = getattr(usage_obj, 'output_tokens', None)
+        input_tokens = getattr(usage_obj, "input_tokens", None)
+        output_tokens = getattr(usage_obj, "output_tokens", None)
 
         return UsageExtractor.build_usage_dict(input_tokens, output_tokens)
 
@@ -94,7 +96,7 @@ class ClaudeUsageExtractor:
         Args:
             event: Message start event
         """
-        if hasattr(event, 'message') and hasattr(event.message, 'usage'):
+        if hasattr(event, "message") and hasattr(event.message, "usage"):
             self.input_tokens = event.message.usage.input_tokens
 
     def extract_from_message_delta(self, event) -> Optional[Dict]:
@@ -107,7 +109,7 @@ class ClaudeUsageExtractor:
         Returns:
             Usage dictionary or None
         """
-        if not hasattr(event, 'usage'):
+        if not hasattr(event, "usage"):
             return None
 
         output_tokens = event.usage.output_tokens
@@ -136,15 +138,15 @@ class GeminiUsageExtractor:
         Args:
             chunk: Gemini response chunk
         """
-        if not hasattr(chunk, 'usage_metadata') or chunk.usage_metadata is None:
+        if not hasattr(chunk, "usage_metadata") or chunk.usage_metadata is None:
             return
 
         usage = chunk.usage_metadata
 
-        if hasattr(usage, 'prompt_token_count'):
+        if hasattr(usage, "prompt_token_count"):
             self.input_tokens = usage.prompt_token_count
 
-        if hasattr(usage, 'candidates_token_count'):
+        if hasattr(usage, "candidates_token_count"):
             self.output_tokens = usage.candidates_token_count
 
     def get_final_usage(self) -> Optional[Dict]:

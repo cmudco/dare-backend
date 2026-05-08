@@ -5,7 +5,7 @@ from typing import Optional
 from asgiref.sync import async_to_sync
 
 from conversations.constants import SenderType
-from conversations.models import Conversation, LLM, Message
+from conversations.models import LLM, Conversation, Message
 from core.services.llm_service import LLMService
 
 logger = logging.getLogger(__name__)
@@ -31,7 +31,13 @@ def generate_conversation_summary(
     conversation: Conversation,
     completed_message_count: int,
 ) -> ConversationSummaryResult:
-    """Generate a rolling summary for a conversation up to the given threshold."""
+    """Generate a rolling summary for a conversation up to the given threshold.
+
+    Routed through ``LLMService._get_ai_service`` with the conversation owner
+    so the call honors their active wallet (DARE / BYO / LITELLM) — pre-
+    wallet-refactor this always billed the system DARE wallet regardless of
+    the user's preference.
+    """
     transcripts = _build_transcript(conversation, completed_message_count)
     if not transcripts.strip():
         logger.warning("No transcript content available for conversation summary")
@@ -54,7 +60,9 @@ def generate_conversation_summary(
     ]
 
     try:
-        summary = async_to_sync(_generate_summary_text)(llm, messages)
+        summary = async_to_sync(_generate_summary_text)(
+            llm, messages, conversation.user
+        )
     except Exception:
         logger.exception(
             "Conversation summary generation failed for conversation %s",
@@ -110,10 +118,14 @@ def _get_cutoff_message_id(
     return ai_message_rows[-1]
 
 
-async def _generate_summary_text(llm: LLM, messages: list[dict[str, str]]) -> str:
+async def _generate_summary_text(
+    llm: LLM,
+    messages: list[dict[str, str]],
+    user: Optional[object] = None,
+) -> str:
     """Run a non-streaming LLM call for grouped conversation summaries."""
     llm_service = LLMService()
-    ai_service = await llm_service._get_ai_service(llm)
+    ai_service = await llm_service._get_ai_service(llm, user=user)
     return await ai_service.get_chat_completion(
         messages=messages,
         max_tokens=SUMMARY_MAX_TOKENS,

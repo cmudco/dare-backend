@@ -19,6 +19,7 @@ class BillingCheckResult:
         current_balance: User's current wallet balance (if applicable)
         required_amount: Amount required for the operation (if applicable)
     """
+
     can_continue: bool
     error_code: Optional[str] = None
     error_message: Optional[str] = None
@@ -38,9 +39,9 @@ class BillingCheckResult:
 
         details = {}
         if self.current_balance is not None:
-            details['current_balance'] = str(self.current_balance)
+            details["current_balance"] = str(self.current_balance)
         if self.required_amount is not None:
-            details['required_amount'] = str(self.required_amount)
+            details["required_amount"] = str(self.required_amount)
 
         return details if details else None
 
@@ -57,6 +58,7 @@ class MessageFinalizationResult:
         output_tokens: Number of output tokens used
         error_message: Error message if finalization failed
     """
+
     success: bool
     message_id: str
     total_cost: Decimal
@@ -68,7 +70,7 @@ class MessageFinalizationResult:
     def billing_metadata(self) -> Dict[str, Any]:
         """Get billing metadata as a dictionary."""
         return {
-            'total_cost': str(self.total_cost),
-            'input_tokens': self.input_tokens,
-            'output_tokens': self.output_tokens,
+            "total_cost": str(self.total_cost),
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
         }
