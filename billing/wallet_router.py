@@ -36,11 +36,11 @@ from typing import Optional, Any, Dict
 from api_keys.models import UserProviderAPIKey
 from billing.constants import UserWalletPreferenceTypeChoice
 from billing.models import (
-    BYOKeyFeatureFlag,
     GroupWallet,
     LiteLLMKey,
     UserWalletPreference,
 )
+from feature_flags.services import is_flag_enabled_for_user
 from users.models import AccessCodeGroup, User
 
 logger = logging.getLogger(__name__)
@@ -62,7 +62,7 @@ def _resolve_byo(pref: UserWalletPreference, user, requested_provider: Optional[
     request only — the BYO preference is preserved so other providers still
     route through their BYO keys.
     """
-    if not BYOKeyFeatureFlag.is_byo_enabled():
+    if not is_flag_enabled_for_user(user, "enable_byok"):
         pref.reset_to_dare()
         return ResolvedWallet(type=UserWalletPreferenceTypeChoice.DARE)
 
@@ -98,6 +98,12 @@ def _resolve_byo(pref: UserWalletPreference, user, requested_provider: Optional[
 
 
 def _resolve_litellm(pref: UserWalletPreference, user) -> ResolvedWallet:
+    if not is_flag_enabled_for_user(user, "enable_litellm_wallet"):
+        # Mirror the BYO disabled path: reset preference and fall back to DARE
+        # so a flipped-off flag doesn't leave users stuck with a wallet they
+        # can no longer route through.
+        pref.reset_to_dare()
+        return ResolvedWallet(type=UserWalletPreferenceTypeChoice.DARE)
     key = LiteLLMKey.visible_for_user(user).filter(pk=pref.active_wallet_ref_id).first()
     if key is None:
         pref.reset_to_dare()

@@ -18,7 +18,7 @@ from billing.constants import (LiteLLMKeySourceChoice, TransactionSourceChoice,
 from billing.group_wallet_service import (FundGroupBudgetRequest,
                                           GroupWalletService,
                                           UpdateGroupPolicyRequest)
-from billing.models import (BYOKeyFeatureFlag, GroupWallet, LiteLLMKey,
+from billing.models import (GroupWallet, LiteLLMKey,
                             SystemRefillPolicy, Transaction,
                             UserRefillOverride, UserWalletPreference, Wallet)
 from billing.services import TransactionExportService
@@ -449,38 +449,6 @@ class UserRefillOverrideInline(admin.StackedInline):
     )
 
 
-# --- BYO Key Feature Flag (singleton) ------------------------------------
-
-
-@admin.register(BYOKeyFeatureFlag)
-class BYOKeyFeatureFlagAdmin(admin.ModelAdmin):
-    """
-    Singleton admin for the platform-wide BYO Key gate. Only superadmins
-    may toggle. Mirrors the SystemRefillPolicyAdmin pattern: one row only,
-    no add/delete buttons after initial save.
-    """
-
-    list_display = ("is_enabled", "updated_by", "updated_at")
-    readonly_fields = ("updated_at", "updated_by")
-
-    def has_add_permission(self, request):
-        # Allow first-row creation only.
-        if not request.user.is_superuser:
-            return False
-        return not BYOKeyFeatureFlag.objects.exists()
-
-    def has_delete_permission(self, request, obj=None):
-        return False
-
-    def has_module_permission(self, request):
-        return bool(request.user.is_superuser)
-
-    def has_change_permission(self, request, obj=None):
-        return bool(request.user.is_superuser)
-
-    def save_model(self, request, obj, form, change):
-        obj.updated_by = request.user
-        super().save_model(request, obj, form, change)
 
 
 # --- LiteLLM Key admin ----------------------------------------------------

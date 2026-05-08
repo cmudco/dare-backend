@@ -65,6 +65,7 @@ LOCAL_APPS = [
     "dare_tools",
     "memory",
     "sharing",
+    "feature_flags",
 ]
 
 THIRD_PARTY_APPS = [
