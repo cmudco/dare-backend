@@ -25,6 +25,7 @@ class ContextConfig:
         history_limit: Number of conversation messages to include
         use_memory: Whether to search user's memory store using the message
     """
+
     file_ids: List[str] = field(default_factory=list)
     embedding_ids: List[str] = field(default_factory=list)
     file_owner_id: Optional[int] = None  # Bot creator's ID for shared access

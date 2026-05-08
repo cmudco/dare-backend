@@ -20,7 +20,9 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from conversations.models import Message
 from conversations.constants import ErrorCode, ErrorMessage
 from conversations.services.websocket_response_service import WebSocketResponseService
-from conversations.services.message_helpers.billing_helpers import update_public_bot_budget
+from conversations.services.message_helpers.billing_helpers import (
+    update_public_bot_budget,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +69,9 @@ async def finalize_message(
         # Save original message content on first regeneration
         if regenerate and not message_obj.original_message:
             message_obj.original_message = message_obj.message
-            await database_sync_to_async(message_obj.save)(update_fields=['original_message'])
+            await database_sync_to_async(message_obj.save)(
+                update_fields=["original_message"]
+            )
 
         # Finalize with appropriate billing strategy
         if user:
@@ -100,7 +104,7 @@ async def finalize_message(
             streaming=False,
             regenerate=regenerate,
             generated_image=generated_image_data,
-            generated_transcription=generated_transcription_data
+            generated_transcription=generated_transcription_data,
         )
 
         await send_callback(final_payload)
@@ -110,4 +114,6 @@ async def finalize_message(
         await send_error_callback(ErrorCode.VALIDATION_ERROR, str(e), None)
     except Exception as e:
         logger.exception(f"Error finalizing message: {str(e)}")
-        await send_error_callback(ErrorCode.FINALIZE_ERROR, ErrorMessage.FINALIZE_ERROR, None)
+        await send_error_callback(
+            ErrorCode.FINALIZE_ERROR, ErrorMessage.FINALIZE_ERROR, None
+        )
