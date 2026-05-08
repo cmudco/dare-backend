@@ -876,7 +876,7 @@ class LLMViewSet(viewsets.ModelViewSet):
 
         base_qs = self.get_queryset()
         if scope.kind == "active":
-            entries, meta = filter_for_active_wallet(request.user, base_qs)
+            models, meta = filter_for_active_wallet(request.user, base_qs)
         else:  # scope.kind == "bot"
             config = SocraticBooksClient.get_bot_billing_config(scope.bot_id)
             if config is None or config.owner_dare_user_id != getattr(
@@ -886,12 +886,12 @@ class LLMViewSet(viewsets.ModelViewSet):
                     {"detail": "Not authorized for this bot."},
                     status=status.HTTP_403_FORBIDDEN,
                 )
-            entries, meta = filter_for_bot(scope.bot_id, request.user, base_qs)
+            models, meta = filter_for_bot(scope.bot_id, request.user, base_qs)
 
-        # `entries` is a list of discriminated objects ({kind: "llm" | "litellm"}),
-        # not a flat LLMSerializer-shaped list. Each entry's id/dispatch fields
-        # carry their native types — no encoding (rules.md §11).
-        return Response({"entries": entries, "wallet": meta.to_dict()})
+        # Uniform flat shape — every entry has a string ``id`` (DB-PK or
+        # ``litellm:<key>:<model>``) opaque to the FE; the BE inverts it on
+        # dispatch via ``parse_model_id``. The FE just renders & echoes back.
+        return Response({"models": models, "wallet": meta.to_dict()})
 
     @action(detail=False, methods=["get"])
     def all_models(self, request):
