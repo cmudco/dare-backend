@@ -18,6 +18,7 @@ admin_paths = [
 
 app_paths = [
     path('django-rq/', include('django_rq.urls')),
+    path("", include("common.urls")),
     path("users/", include("users.urls"), name="users"),
     path("account/", include("allauth.account.urls")),
     path("", include("files.urls", namespace="files")),

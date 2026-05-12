@@ -9,7 +9,7 @@ Script: `dare-backend/devops/deploy.sh`
 1. SSH into production server
 2. Pull latest code from git
 3. Activate virtual environment
-4. Install new dependencies: `pip install -r requirements/production.txt`
+4. Install new dependencies: `pip install -r requirements/prod.txt`
 5. Run migrations: `python manage.py migrate`
 6. Collect static files: `python manage.py collectstatic --noinput`
 7. Restart systemd service: `sudo systemctl restart dare`
@@ -27,8 +27,8 @@ Script: `dare-frontend/devops/deploy.sh`
 Uses Docker Compose for deployment:
 
 ```bash
-docker-compose up -d --build
-docker-compose exec web python /app/backend/manage.py migrate
+docker compose up -d --build
+docker compose exec web python /app/backend/manage.py migrate
 ```
 
 ## Deployment Order
