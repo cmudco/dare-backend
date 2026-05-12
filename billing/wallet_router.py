@@ -19,7 +19,7 @@ Bot resolution: `resolve_active_wallet_for_bot(...)` is the bot-aware wrapper.
 It pulls the bot's billing config from SocraticBooks (cached) and applies a
 single rule: the chatter pays from their active wallet; if the chatter is
 anonymous (public bot, no authenticated user) the bot owner's active wallet
-pays. There is no per-bot cap or billing-source enum.
+pays. Anonymous public traffic is also guarded by the bot's deployment cap.
 """
 import logging
 from dataclasses import dataclass
@@ -27,6 +27,7 @@ from typing import Optional, Any, Dict
 
 from api_keys.models import UserProviderAPIKey
 from billing.constants import UserWalletPreferenceTypeChoice
+from billing.exceptions import PaymentRequiredError
 from billing.models import (
     LiteLLMKey,
     UserWalletPreference,
@@ -230,9 +231,8 @@ def resolve_active_wallet_for_bot(
         requested_provider: Forwarded to the BYO branch of the per-user router.
 
     Returns ``None`` only when the bot's billing config can't be fetched at
-    all (SB unreachable, bot deleted). The caller is expected to fall back to
-    pre-bot-billing behavior in that case (legacy code path under the feature
-    flag).
+    all (SB unreachable, bot deleted). Bot callers should fail clearly instead
+    of falling back to non-bot billing.
     """
     del conversation  # unused since per-bot billing-source/access-code routing was removed
     # Local import — sb_client lives in core/services so importing at module
@@ -254,5 +254,23 @@ def resolve_active_wallet_for_bot(
         )
 
     is_authed = bool(calling_user) and getattr(calling_user, 'is_authenticated', False)
+    if not is_authed and config.is_publicly_deployed:
+        if config.budget is None or config.budget <= 0:
+            raise PaymentRequiredError(
+                'Public bot is missing a deployment budget cap',
+                code='BOT_CAP_REACHED',
+                details={'bot_id': bot_id},
+            )
+        if config.budget_used >= config.budget:
+            raise PaymentRequiredError(
+                'Public bot has reached its deployment budget cap',
+                code='BOT_CAP_REACHED',
+                details={
+                    'bot_id': bot_id,
+                    'budget': str(config.budget),
+                    'budget_used': str(config.budget_used),
+                },
+            )
+
     payer = calling_user if is_authed else owner
     return _resolve_payer(payer, owner, requested_provider=requested_provider)

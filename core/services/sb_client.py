@@ -4,13 +4,14 @@ Typed client for the internal SocraticBooks billing-config endpoint.
 Caching: ``get_bot_billing_config`` is hot — every LLM call into a bot
 conversation runs through the wallet router. We cache for 60s using Django's
 default cache. Invalidate via ``invalidate_bot_billing_config`` when the SB
-side mutates a bot's owner / publish state.
+side mutates a bot's owner / publish state or public deployment budget.
 """
 from __future__ import annotations
 
 import logging
 import os
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Optional
 
 import requests
@@ -26,10 +27,12 @@ class BotBillingConfig:
 
     Per the new SB rule, billing always follows: chatter pays if
     authenticated; otherwise (anonymous public-bot traffic) the bot owner
-    pays. There is no per-bot cap or billing-source enum any more.
+    pays. Public deployment caps remain as a separate safety guard.
     """
     bot_id: int
     owner_dare_user_id: Optional[int]
+    budget: Optional[Decimal]
+    budget_used: Decimal
     is_publicly_deployed: bool
     is_active: bool
 
@@ -98,6 +101,8 @@ class SocraticBooksClient:
             config = BotBillingConfig(
                 bot_id=int(body['botId']),
                 owner_dare_user_id=body.get('ownerDareUserId'),
+                budget=Decimal(body['budget']) if body.get('budget') is not None else None,
+                budget_used=Decimal(body.get('budgetUsed') or '0'),
                 is_publicly_deployed=bool(body.get('isPubliclyDeployed', False)),
                 is_active=bool(body.get('isActive', True)),
             )
@@ -112,3 +117,53 @@ class SocraticBooksClient:
     def invalidate_bot_billing_config(cls, bot_id: int) -> None:
         """Drop the cached config so the next call sees fresh data."""
         cache.delete(cls._billing_config_cache_key(bot_id))
+
+    @classmethod
+    def update_bot_budget(cls, bot_id: int, cost: Decimal) -> bool:
+        """Increment SocraticBooks public deployment budget usage."""
+        if cost is None or cost <= 0:
+            return True
+
+        base = cls._base_url()
+        headers = cls._headers()
+        if not base or not headers:
+            logger.error(
+                'SocraticBooksClient unconfigured for budget update: base=%r headers_present=%s',
+                base, headers is not None,
+            )
+            return False
+
+        url = f'{base}/api/bots/internal/update-budget/'
+        try:
+            response = requests.post(
+                url,
+                headers=headers,
+                json={'bot_id': bot_id, 'cost': str(cost)},
+                timeout=cls.REQUEST_TIMEOUT,
+            )
+        except requests.RequestException as exc:
+            logger.error('update-budget request failed for bot %s: %s', bot_id, exc)
+            return False
+
+        if response.status_code != 200:
+            logger.error(
+                'update-budget returned %s for bot %s: %s',
+                response.status_code, bot_id, response.text[:200],
+            )
+            return False
+
+        cls.invalidate_bot_billing_config(bot_id)
+        try:
+            body = response.json()
+            cap_status = body.get('cap_status') or body.get('capStatus')
+            if cap_status in ('APPROACHING_CAP', 'CAP_REACHED'):
+                logger.warning(
+                    'bot %s cap_status=%s after debit (used=%s of %s)',
+                    bot_id,
+                    cap_status,
+                    body.get('budget_used') or body.get('budgetUsed'),
+                    body.get('budget'),
+                )
+        except (ValueError, AttributeError):
+            pass
+        return True

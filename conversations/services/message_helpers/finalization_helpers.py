@@ -16,9 +16,11 @@ from typing import Dict, Optional, Callable, Awaitable
 from channels.db import database_sync_to_async
 from django.core.exceptions import ValidationError as DjangoValidationError
 
+from billing.exceptions import PaymentRequiredError
 from conversations.models import Message
 from conversations.constants import ErrorCode, ErrorMessage
 from conversations.services.websocket_response_service import WebSocketResponseService
+from core.services.sb_client import SocraticBooksClient
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +63,6 @@ async def finalize_message(
         send_error_callback: Async callback for sending error messages
         mark_as_regenerated_callback: Async callback for marking message as regenerated
     """
-    del user, conversation  # bot router pulls owner/payer from the conversation directly
     try:
         # Save original message content on first regeneration
         if regenerate and not message_obj.original_message:
@@ -73,6 +74,13 @@ async def finalize_message(
         finalized_message = await database_sync_to_async(
             billing_service.finalize_ai_message
         )(message_obj, ai_response, token_usage or {})
+
+        cost = getattr(finalized_message, "cost", None) or 0
+        if conversation and conversation.bot_id and getattr(conversation, "user_id", None) is None and cost > 0:
+            await database_sync_to_async(SocraticBooksClient.update_bot_budget)(
+                conversation.bot_id,
+                cost,
+            )
 
         if regenerate:
             await mark_as_regenerated_callback(finalized_message)
@@ -93,6 +101,9 @@ async def finalize_message(
     except DjangoValidationError as e:
         logger.error(f"Validation error finalizing message: {str(e)}")
         await send_error_callback(ErrorCode.VALIDATION_ERROR, str(e), None)
+    except PaymentRequiredError as e:
+        logger.error("Payment required finalizing message: %s", str(e))
+        await send_error_callback(e.code, str(e), e.details)
     except Exception as e:
         logger.exception(f"Error finalizing message: {str(e)}")
         await send_error_callback(
