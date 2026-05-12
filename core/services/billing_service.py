@@ -1,6 +1,5 @@
 from decimal import Decimal
 from typing import Dict
-from django.conf import settings
 from django.db import transaction as db_transaction
 from django.core.exceptions import ValidationError
 from channels.db import database_sync_to_async
@@ -333,18 +332,16 @@ class BillingService:
         Finalize AI message and handle billing.
 
         Routing strategy:
-            - When the conversation has a ``bot_id`` AND
-              ``BOT_WALLET_ENFORCEMENT_ENABLED`` is True, dispatch through
-              ``wallet_router.resolve_active_wallet_for_bot``. The chatter
-              pays from their active wallet; for anonymous public-bot
-              traffic the bot owner's active wallet pays. The Transaction is
-              stamped with ``bot_id`` + ``bot_owner`` for per-(user, bot)
-              attribution.
-            - Otherwise (non-bot calls, or feature flag off), use the legacy
-              path keyed off ``user.billing_mode``.
+            - When the conversation has a ``bot_id``, always dispatch through
+              ``wallet_router.resolve_active_wallet_for_bot``. The chatter pays
+              from their active wallet; for anonymous public-bot traffic the
+              bot owner's active wallet pays. The Transaction is stamped with
+              ``bot_id`` + ``bot_owner`` for per-(user, bot) attribution.
+            - Non-bot DARE conversations continue through the standard user
+              billing path keyed off ``user.billing_mode``.
 
         Platform is determined from the conversation's source field for the
-        legacy path; the bot path stamps based on the resolved wallet type.
+        non-bot path; the bot path stamps based on the resolved wallet type.
 
         Args:
             message_obj: Message object to finalize
@@ -397,15 +394,10 @@ class BillingService:
                     if cost > Decimal("0.00"):
                         conversation = message_obj.conversation
 
-                        # Bot-aware routing path. Used only when the feature
-                        # flag is on and the conversation actually came from a
-                        # bot (anonymous public-bot calls have user=None,
-                        # which the legacy path can't handle anyway).
-                        bot_routing_enabled = (
-                            getattr(settings, "BOT_WALLET_ENFORCEMENT_ENABLED", False)
-                            and conversation.bot_id is not None
-                        )
-                        if bot_routing_enabled:
+                        # SocraticBooks bot conversations always use the
+                        # wallet router. The legacy user-wallet branch is only
+                        # for non-bot DARE conversations.
+                        if conversation.bot_id is not None:
                             resolved = resolve_active_wallet_for_bot(
                                 bot_id=conversation.bot_id,
                                 calling_user=conversation.user,
@@ -417,7 +409,11 @@ class BillingService:
                                 )
                                 message_obj.save()
                                 return message_obj
-                            # SB unreachable — fall through to legacy path.
+                            raise PaymentRequiredError(
+                                "Unable to resolve SocraticBooks bot wallet",
+                                code="BOT_CONFIG_UNAVAILABLE",
+                                details={"bot_id": conversation.bot_id},
+                            )
 
                         user = conversation.user
 
@@ -502,6 +498,8 @@ class BillingService:
                                 wallet.refresh_from_db()
             message_obj.save()
             return message_obj
+        except PaymentRequiredError:
+            raise
         except ValidationError as e:
             logger.error(f"Validation error finalizing message: {str(e)}")
             raise

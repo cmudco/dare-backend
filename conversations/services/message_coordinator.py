@@ -53,6 +53,7 @@ from core.services.dtos import LLMDescriptor, LLMQueryRequestBuilder
 from core.services.file_upload_service import FileUploadService
 from core.services.learning_progress_service import LearningProgressService
 from core.services.llm_service import LLMService
+from core.services.sb_client import SocraticBooksClient
 from dare_tools.services import dare_tool_handler
 from mcp.services import mcp_tool_handler
 from users.utils import should_run_learning_progress
@@ -260,6 +261,17 @@ class MessageCoordinator:
                     await self.send_error(
                         ErrorCode.INSUFFICIENT_CREDITS,
                         ErrorMessage.INSUFFICIENT_CREDITS,
+                    )
+                    return None
+            elif self.conversation.bot_id:
+                cap_error = await database_sync_to_async(self._public_bot_cap_error)(
+                    self.conversation.bot_id
+                )
+                if cap_error:
+                    await self.send_error(
+                        cap_error["code"],
+                        cap_error["message"],
+                        cap_error.get("details"),
                     )
                     return None
 
@@ -684,6 +696,35 @@ class MessageCoordinator:
             send_error_callback=self.send_error,
             mark_as_regenerated_callback=self._mark_as_regenerated,
         )
+
+    @staticmethod
+    def _public_bot_cap_error(bot_id: int) -> Optional[Dict[str, Any]]:
+        config = SocraticBooksClient.get_bot_billing_config(bot_id)
+        if config is None:
+            return {
+                "code": "bot_config_unavailable",
+                "message": "Unable to verify this public bot's deployment budget.",
+            }
+        if not config.is_active or not config.is_publicly_deployed:
+            return {
+                "code": "bot_unavailable",
+                "message": "This bot is not currently available for public use.",
+            }
+        if config.budget is None or config.budget <= 0:
+            return {
+                "code": "bot_cap_reached",
+                "message": "This bot is missing a public deployment budget cap.",
+            }
+        if config.budget_used >= config.budget:
+            return {
+                "code": "bot_cap_reached",
+                "message": "This bot has reached its public deployment budget cap.",
+                "details": {
+                    "budget": str(config.budget),
+                    "budgetUsed": str(config.budget_used),
+                },
+            }
+        return None
 
     async def _handle_insufficient_balance(
         self,
