@@ -1,0 +1,458 @@
+{% extends "admin/change_list.html" %}
+{% load i18n static %}
+
+{% block content_title %}{% endblock %}
+
+{% block extrahead %}
+{{ block.super }}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<link rel="stylesheet" href="{% static 'admin/billing/usagedashboard/dashboard.css' %}">
+{% endblock %}
+
+{% block sidebar %}{% endblock %}
+
+{% block content %}
+<div id="dash">
+
+  <!-- ══ Sticky header / period tabs ═══════════════════════════════ -->
+  <div class="db-top">
+    <div class="db-title-block">
+      <h1>Usage Dashboard</h1>
+      <p>Platform-wide cost, usage &amp; activity — showing <strong>{{ period_label }}</strong></p>
+    </div>
+    <div class="period-tabs">
+      <a href="?period=all" class="{% if period == 'all' %}on{% endif %}">All Time</a>
+      <a href="?period=90d" class="{% if period == '90d' %}on{% endif %}">90 days</a>
+      <a href="?period=30d" class="{% if period == '30d' %}on{% endif %}">30 days</a>
+      <a href="?period=7d"  class="{% if period == '7d'  %}on{% endif %}">7 days</a>
+    </div>
+  </div>
+
+  <!-- ══ Period-aware KPIs ═════════════════════════════════════════ -->
+  <div class="sh">
+    <svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="m7 14 4-4 4 4 6-6"/></svg>
+    Activity — {{ period_label }}{% if period != 'all' %} <em>vs prior {{ period }}</em>{% endif %}
+  </div>
+  <div class="kpi-grid">
+
+    <div class="kpi" style="--kc:var(--blue)">
+      <div class="kpi-lbl-row"><span class="kpi-dot"></span><span class="kpi-lbl">Wallet Spend</span></div>
+      <div class="kpi-val">${{ overview.total_spend|floatformat:2 }}</div>
+      <div class="kpi-sub">actual wallet debits</div>
+      {% if overview.spend_delta %}<div class="kpi-delta {% if overview.spend_delta.up %}d-up{% else %}d-dn{% endif %}">{{ overview.spend_delta.value }}</div>{% endif %}
+    </div>
+
+    <div class="kpi" style="--kc:var(--purple)">
+      <div class="kpi-lbl-row"><span class="kpi-dot"></span><span class="kpi-lbl">Total Tokens</span></div>
+      <div class="kpi-val" data-compact>{{ overview.total_tokens|default:"0" }}</div>
+      <div class="kpi-sub">{{ overview.total_input_tokens }} in &middot; {{ overview.total_output_tokens }} out</div>
+      {% if overview.tokens_delta %}<div class="kpi-delta {% if overview.tokens_delta.up %}d-up{% else %}d-dn{% endif %}">{{ overview.tokens_delta.value }}</div>{% endif %}
+    </div>
+
+    <div class="kpi" style="--kc:var(--teal)">
+      <div class="kpi-lbl-row"><span class="kpi-dot"></span><span class="kpi-lbl">LLM Calls</span></div>
+      <div class="kpi-val" data-compact>{{ overview.llm_calls }}</div>
+      <div class="kpi-sub">messages processed</div>
+      {% if overview.calls_delta %}<div class="kpi-delta {% if overview.calls_delta.up %}d-up{% else %}d-dn{% endif %}">{{ overview.calls_delta.value }}</div>{% endif %}
+    </div>
+
+    <div class="kpi" style="--kc:var(--green)">
+      <div class="kpi-lbl-row"><span class="kpi-dot"></span><span class="kpi-lbl">Active Users</span></div>
+      <div class="kpi-val">{{ overview.active_users }}</div>
+      <div class="kpi-sub">distinct users with LLM calls</div>
+      {% if overview.active_delta %}<div class="kpi-delta {% if overview.active_delta.up %}d-up{% else %}d-dn{% endif %}">{{ overview.active_delta.value }}</div>{% endif %}
+    </div>
+
+    <div class="kpi" style="--kc:var(--rose)">
+      <div class="kpi-lbl-row"><span class="kpi-dot"></span><span class="kpi-lbl">Zero-spend Active</span></div>
+      <div class="kpi-val">{{ overview.zero_spend_active }}</div>
+      <div class="kpi-sub">active, no wallet debit</div>
+    </div>
+
+    <div class="kpi" style="--kc:var(--amber)">
+      <div class="kpi-lbl-row"><span class="kpi-dot"></span><span class="kpi-lbl">New Users</span></div>
+      <div class="kpi-val">{{ overview.new_users_this_month }}</div>
+      <div class="kpi-sub">registrations this month</div>
+    </div>
+
+  </div>
+
+  <!-- ── Always-current platform snapshot ──────────────────────── -->
+  <div class="sh">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+    Platform Snapshot <em>always current · not period-filtered</em>
+  </div>
+  <div class="kpi-grid">
+
+    <div class="kpi kpi-fixed" style="--kc:var(--green)">
+      <div class="kpi-lbl-row"><span class="kpi-dot"></span><span class="kpi-lbl">Wallet Pool</span></div>
+      <div class="kpi-val">${{ overview.wallet_pool|floatformat:2 }}</div>
+      <div class="kpi-sub">combined live balances</div>
+    </div>
+
+    <div class="kpi kpi-fixed" style="--kc:var(--indigo)">
+      <div class="kpi-lbl-row"><span class="kpi-dot"></span><span class="kpi-lbl">MAU</span></div>
+      <div class="kpi-val">{{ overview.mau }}</div>
+      <div class="kpi-sub">active last 30 days</div>
+    </div>
+
+    <div class="kpi kpi-fixed" style="--kc:var(--teal)">
+      <div class="kpi-lbl-row"><span class="kpi-dot"></span><span class="kpi-lbl">DAU</span></div>
+      <div class="kpi-val">{{ overview.dau }}</div>
+      <div class="kpi-sub">active today</div>
+    </div>
+
+    <div class="kpi kpi-fixed" style="--kc:var(--blue)">
+      <div class="kpi-lbl-row"><span class="kpi-dot"></span><span class="kpi-lbl">Avg Spend / Active</span></div>
+      <div class="kpi-val">${{ overview.avg_spend_per_active|floatformat:4 }}</div>
+      <div class="kpi-sub">{{ period_label }}, per active user</div>
+    </div>
+
+  </div>
+
+  <!-- ══ Cost by Provider ══════════════════════════════════════════ -->
+  <div class="sh">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3v9l6 6"/></svg>
+    Cost by Provider <em>{{ period_label }}</em>
+  </div>
+  <div class="split-2-3">
+
+    <div class="card">
+      <p class="card-hd">Spend Share</p>
+      <div class="ch-wrap tall"><canvas id="providerChart"></canvas></div>
+    </div>
+
+    <div class="card">
+      <p class="card-hd">Provider Breakdown</p>
+      <table class="dt">
+        <thead><tr>
+          <th>Provider</th>
+          <th class="nr">Cost</th>
+          <th class="nr">Share</th>
+          <th class="nr">Calls</th>
+          <th class="nr">Tokens</th>
+          <th class="nr">Users</th>
+        </tr></thead>
+        <tbody>
+          {% for row in provider_split %}
+          <tr>
+            <td>
+              <span class="provider-swatch" data-provider-swatch="{{ row.label }}"></span>
+              {{ row.label }}
+            </td>
+            <td class="nr">${{ row.total_cost|default:"0"|floatformat:4 }}</td>
+            <td class="nr">{{ row.share_pct|floatformat:1 }}%</td>
+            <td class="nr">{{ row.llm_calls }}</td>
+            <td class="nr">{{ row.total_tokens }}</td>
+            <td class="nr">{{ row.user_count }}</td>
+          </tr>
+          {% empty %}<tr><td colspan="6" class="emp">No provider data in this period.</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+  </div>
+
+  <!-- ══ Cost by Tier ══════════════════════════════════════════════ -->
+  <div class="sh">
+    <svg viewBox="0 0 24 24"><path d="M12 2 4 7v10l8 5 8-5V7z"/><path d="M12 22V12"/><path d="M4 7l8 5 8-5"/></svg>
+    Cost by Tier <em>{{ period_label }}</em>
+  </div>
+  <div class="g2">
+
+    <div class="card">
+      <p class="card-hd">Tier Spend</p>
+      <div class="ch-wrap"><canvas id="tierChart"></canvas></div>
+    </div>
+
+    <div class="card">
+      <p class="card-hd">Tier Breakdown</p>
+      <table class="dt">
+        <thead><tr>
+          <th>Tier</th>
+          <th class="nr">Cost</th>
+          <th class="nr">Share</th>
+          <th class="nr">Calls</th>
+          <th class="nr">Users</th>
+        </tr></thead>
+        <tbody>
+          {% for row in tier_split %}
+          <tr>
+            <td><span class="bx bx-tier-{{ row.tier|default:'unknown' }}">{{ row.label }}</span></td>
+            <td class="nr">${{ row.total_cost|default:"0"|floatformat:4 }}</td>
+            <td class="nr">{{ row.share_pct|floatformat:1 }}%</td>
+            <td class="nr">{{ row.llm_calls }}</td>
+            <td class="nr">{{ row.user_count }}</td>
+          </tr>
+          {% empty %}<tr><td colspan="5" class="emp">No tier data in this period.</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+  </div>
+
+  <!-- ══ Trend & Model Mix ═════════════════════════════════════════ -->
+  <div class="sh">
+    <svg viewBox="0 0 24 24"><path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/></svg>
+    Trends <em>{{ period_label }}</em>
+  </div>
+  <div class="g2">
+
+    <div class="card">
+      <p class="card-hd">
+        Daily Activity <em>{{ period_label }}</em>
+      </p>
+      <div class="ch-legend">
+        <div class="ch-legend-item"><div class="ch-legend-dot" id="leg-spend"></div>Wallet Spend ($)</div>
+        <div class="ch-legend-item"><div class="ch-legend-dot" id="leg-calls"></div>LLM Calls</div>
+      </div>
+      <div class="ch-wrap"><canvas id="trendChart"></canvas></div>
+    </div>
+
+    <div class="card">
+      <p class="card-hd">
+        Cost by Model <em>{{ period_label }}</em>
+        <span class="toggle-tabs">
+          <button type="button" class="on" data-toggle-model="calls">Calls</button>
+          <button type="button" data-toggle-model="cost">Cost</button>
+          <button type="button" data-toggle-model="tokens">Tokens</button>
+        </span>
+      </p>
+      <div class="ch-wrap"><canvas id="modelChart"></canvas></div>
+    </div>
+
+  </div>
+
+  <!-- ══ Model breakdown table ═════════════════════════════════════ -->
+  <div class="sh">
+    <svg viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+    Usage Breakdown <em>{{ period_label }}</em>
+  </div>
+  <div class="card" style="margin-bottom:12px;">
+    <table class="dt">
+      <thead><tr>
+        <th>Model</th>
+        <th class="nr">Est. Cost</th>
+        <th class="nr">LLM Calls</th>
+        <th class="nr">Input Tokens</th>
+        <th class="nr">Output Tokens</th>
+        <th class="nr">Total Tokens</th>
+        <th class="nr">Avg / Call</th>
+        <th class="nr">Users</th>
+      </tr></thead>
+      <tbody>
+        {% for row in model_breakdown %}
+        <tr>
+          <td><span class="mn">{{ row.llm_name }}</span></td>
+          <td class="nr">${{ row.total_cost|floatformat:4 }}</td>
+          <td class="nr">{{ row.llm_calls }}</td>
+          <td class="nr">{{ row.total_input|default:"0" }}</td>
+          <td class="nr">{{ row.total_output|default:"0" }}</td>
+          <td class="nr">{{ row.total_tokens }}</td>
+          <td class="nr">${{ row.avg_cost_per_call|floatformat:6 }}</td>
+          <td class="nr">{{ row.user_count }}</td>
+        </tr>
+        {% empty %}<tr><td colspan="8" class="emp">No LLM calls in this period.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ══ Platform & Billing Mode ═══════════════════════════════════ -->
+  <div class="sh">
+    <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18"/></svg>
+    Platform &amp; Billing Mode <em>{{ period_label }}</em>
+  </div>
+  <div class="g2">
+
+    <div class="card">
+      <p class="card-hd">By Platform</p>
+      <table class="dt">
+        <thead><tr>
+          <th>Platform</th><th class="nr">Est. Cost</th>
+          <th class="nr">LLM Calls</th><th class="nr">Users</th>
+        </tr></thead>
+        <tbody>
+          {% for row in platform_split %}
+          <tr>
+            <td>{% if row.conversation__source == "DARE" %}<span class="bx bx-dare">DARE</span>{% else %}<span class="bx bx-sb">SocraticBots</span>{% endif %}</td>
+            <td class="nr">${{ row.total_cost|floatformat:4 }}</td>
+            <td class="nr">{{ row.llm_calls }}</td>
+            <td class="nr">{{ row.user_count }}</td>
+          </tr>
+          {% empty %}<tr><td colspan="4" class="emp">No data.</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <p class="card-hd">By Billing Mode</p>
+      <table class="dt">
+        <thead><tr>
+          <th>Mode</th><th class="nr">Actual Spend</th>
+          <th class="nr">Transactions</th><th class="nr">Users</th>
+        </tr></thead>
+        <tbody>
+          {% for row in billing_mode_split %}
+          <tr>
+            <td>{% if row.billing_mode == "wallet" %}<span class="bx bx-wallet">Wallet Credits</span>{% else %}<span class="bx bx-own">Own API Keys</span>{% endif %}</td>
+            <td class="nr">${{ row.total_cost|floatformat:4 }}</td>
+            <td class="nr">{{ row.transaction_count }}</td>
+            <td class="nr">{{ row.user_count }}</td>
+          </tr>
+          {% empty %}<tr><td colspan="4" class="emp">No data.</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+  </div>
+
+  <!-- ══ Top Users ═════════════════════════════════════════════════ -->
+  <div class="sh">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a8 8 0 0 1 16 0v1"/></svg>
+    Top Users <em>{{ period_label }} · ranked by tokens</em>
+  </div>
+  <div class="card" style="margin-bottom:12px;">
+    <table class="dt">
+      <thead><tr>
+        <th class="rk">#</th>
+        <th>User</th>
+        <th class="nr">Tokens</th>
+        <th class="nr">LLM Calls</th>
+        <th class="nr">Convos</th>
+        <th class="nr">Files</th>
+        <th class="nr">Workflows</th>
+        <th class="nr">Agents</th>
+        <th class="nr">Wallet Spend</th>
+        <th>Last Active</th>
+      </tr></thead>
+      <tbody>
+        {% for row in top_spenders %}
+        <tr>
+          <td class="rk">{{ forloop.counter }}</td>
+          <td>
+            <span class="mn">{{ row.user__email }}</span>
+            {% if row.is_power_user %}<span class="bx bx-power" title="Top decile by tokens this period">power</span>{% endif %}
+          </td>
+          <td class="nr">{{ row.total_tokens }}</td>
+          <td class="nr">{{ row.llm_calls }}</td>
+          <td class="nr">{{ row.conversations }}</td>
+          <td class="nr">{{ row.files }}</td>
+          <td class="nr">{{ row.workflow_runs }}</td>
+          <td class="nr">{{ row.agents }}</td>
+          <td class="nr">${{ row.total_spend|floatformat:4 }}</td>
+          <td class="ts">{% if row.last_active %}{{ row.last_active|date:"Y-m-d H:i" }}{% else %}—{% endif %}</td>
+        </tr>
+        {% empty %}<tr><td colspan="10" class="emp">No activity in this period.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ══ Sustainability ════════════════════════════════════════════ -->
+  <div class="sh">
+    <svg viewBox="0 0 24 24"><path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.48 19 2c1 2 2 4.18 2 8 0 5.5-4.78 10-10 10Z"/><path d="M2 22c0-3 1.25-5 3.5-7"/></svg>
+    Sustainability <em>{{ period_label }}</em>
+  </div>
+  <div class="kpi-grid" style="margin-bottom:12px;">
+
+    <div class="kpi" style="--kc:var(--green)">
+      <div class="kpi-lbl-row"><span class="kpi-dot"></span><span class="kpi-lbl">Energy</span></div>
+      <div class="kpi-val">{{ sustainability.energy_wh|floatformat:2 }} <span style="font-size:14px;color:var(--t3);font-weight:500;">Wh</span></div>
+      <div class="kpi-sub">total estimated energy</div>
+    </div>
+
+    <div class="kpi" style="--kc:var(--rose)">
+      <div class="kpi-lbl-row"><span class="kpi-dot"></span><span class="kpi-lbl">Carbon</span></div>
+      <div class="kpi-val">{{ sustainability.carbon_g|floatformat:2 }} <span style="font-size:14px;color:var(--t3);font-weight:500;">g CO₂e</span></div>
+      <div class="kpi-sub">estimated emissions</div>
+    </div>
+
+    <div class="kpi" style="--kc:var(--blue)">
+      <div class="kpi-lbl-row"><span class="kpi-dot"></span><span class="kpi-lbl">Water</span></div>
+      <div class="kpi-val">{{ sustainability.water_ml|floatformat:2 }} <span style="font-size:14px;color:var(--t3);font-weight:500;">mL</span></div>
+      <div class="kpi-sub">estimated water usage</div>
+    </div>
+
+  </div>
+  <div class="card" style="margin-bottom:12px;">
+    <p class="card-hd">By Provider</p>
+    <table class="dt">
+      <thead><tr>
+        <th>Provider</th>
+        <th class="nr">Energy (Wh)</th>
+        <th class="nr">Carbon (g)</th>
+        <th class="nr">Water (mL)</th>
+        <th class="nr">Calls</th>
+      </tr></thead>
+      <tbody>
+        {% for row in sustainability.by_provider %}
+        <tr>
+          <td>
+            <span class="provider-swatch" data-provider-swatch="{{ row.label }}"></span>
+            {{ row.label }}
+          </td>
+          <td class="nr">{{ row.energy_wh|default:"0"|floatformat:4 }}</td>
+          <td class="nr">{{ row.carbon_g|default:"0"|floatformat:4 }}</td>
+          <td class="nr">{{ row.water_ml|default:"0"|floatformat:4 }}</td>
+          <td class="nr">{{ row.llm_calls }}</td>
+        </tr>
+        {% empty %}<tr><td colspan="5" class="emp">No environmental data captured.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ══ Platform Health ══════════════════════════════════════════ -->
+  <div class="health-divider">
+    <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+    <div class="health-divider-text">
+      <strong>Platform Health</strong>
+      <span>Always current — these signals reflect real-time state and ignore the period selector above.</span>
+    </div>
+  </div>
+
+  <div class="g2" style="margin-bottom:24px;">
+
+    <div class="card">
+      <p class="sig-hd" style="color:var(--amber)"><span class="dot dot-warn"></span>Churn Risk</p>
+      <p class="sig-sub">Wallet balance &gt; $0 but no LLM activity in the last 14 days</p>
+      <table class="dt">
+        <thead><tr><th>User</th><th class="nr">Balance</th><th>Last Active</th></tr></thead>
+        <tbody>
+          {% for wallet in churn_signals %}
+          <tr>
+            <td><span class="mn">{{ wallet.user.email }}</span></td>
+            <td class="nr">${{ wallet.balance|floatformat:2 }}</td>
+            <td class="ts">{% if wallet.last_active %}{{ wallet.last_active|date:"Y-m-d" }}{% else %}Never{% endif %}</td>
+          </tr>
+          {% empty %}<tr><td colspan="3" class="emp">No churn risk — great retention!</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <p class="sig-hd" style="color:var(--rose)"><span class="dot dot-err"></span>Orphaned Wallets</p>
+      <p class="sig-sub">Balance &gt; $0 but never sent a message (activation failure)</p>
+      <table class="dt">
+        <thead><tr><th>User</th><th class="nr">Balance</th><th>Joined</th></tr></thead>
+        <tbody>
+          {% for wallet in orphaned_wallets %}
+          <tr>
+            <td><span class="mn">{{ wallet.user.email }}</span></td>
+            <td class="nr">${{ wallet.balance|floatformat:2 }}</td>
+            <td class="ts">{{ wallet.user.date_joined|date:"Y-m-d" }}</td>
+          </tr>
+          {% empty %}<tr><td colspan="3" class="emp">No orphaned wallets.</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+  </div>
+
+</div>{# /dash #}
+
+{# Chart payloads — read by dashboard.js. Keep in <script type=application/json> so the browser doesn't try to execute them. #}
+<script id="dash-trend-json"    type="application/json">{{ daily_trend_json|safe }}</script>
+<script id="dash-model-json"    type="application/json">{{ model_chart_json|safe }}</script>
+<script id="dash-provider-json" type="application/json">{{ provider_chart_json|safe }}</script>
+<script id="dash-tier-json"     type="application/json">{{ tier_chart_json|safe }}</script>
+<script src="{% static 'admin/billing/usagedashboard/dashboard.js' %}" defer></script>
+{% endblock %}

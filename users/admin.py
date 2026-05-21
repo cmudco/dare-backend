@@ -8,6 +8,13 @@ from datetime import timedelta
 
 from users.models import User, AccessCodeGroup
 from billing.services import WalletService
+from billing.admin import GroupWalletInline, UserRefillOverrideInline
+from billing.constants import (
+    LiteLLMKeySourceChoice,
+    TransactionSourceChoice,
+    TransactionTypeChoice,
+)
+from billing.models import GroupWallet, LiteLLMKey, Transaction
 from django import forms
 from decimal import Decimal
 from users.constants import VectorDBChoice, AuthSourceChoice, RoleChoice
@@ -32,14 +39,47 @@ class UserInline(admin.TabularInline):
         return False
 
 
+class LiteLLMCohortKeyInline(admin.TabularInline):
+    """
+    Inline for managing ADMIN_GROUP LiteLLM keys on the parent AccessCodeGroup.
+    Stamps `source=ADMIN_GROUP` and `created_by=request.user` server-side via a
+    formset closure so the source-consistency CheckConstraint is satisfied
+    without rendering those fields on the form.
+    """
+    model = LiteLLMKey
+    fk_name = "source_group"
+    extra = 0
+    fields = ("label", "base_url", "api_key", "expires_at")
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).filter(source=LiteLLMKeySourceChoice.ADMIN_GROUP)
+
+    def get_formset(self, request, obj=None, **kwargs):
+        formset_cls = super().get_formset(request, obj, **kwargs)
+        request_user = request.user
+
+        class _StampedFormSet(formset_cls):
+            def save_new(self, form, commit=True):
+                instance = super().save_new(form, commit=False)
+                instance.source = LiteLLMKeySourceChoice.ADMIN_GROUP
+                if not getattr(instance, "created_by_id", None):
+                    instance.created_by = request_user
+                if commit:
+                    instance.save()
+                return instance
+
+        return _StampedFormSet
+
+
 @admin.register(AccessCodeGroup)
 class AccessCodeGroupAdmin(admin.ModelAdmin):
-    list_display = ('access_code', 'default_role', 'model_group', 'initial_wallet_credit', 'usage_display', 'expiration_status', 'is_active', 'user_count', 'created_at')
+    list_display = ('access_code', 'default_role', 'group_owner', 'model_group', 'initial_wallet_credit', 'usage_display', 'expiration_status', 'is_active', 'user_count', 'created_at')
     list_filter = ('is_active', 'default_role', 'created_at', 'model_group')
-    search_fields = ('access_code',)
+    search_fields = ('access_code', 'group_owner__email')
     readonly_fields = ('current_usage', 'created_at', 'updated_at')
     list_editable = ('is_active',)
-    inlines = [UserInline]
+    raw_id_fields = ('group_owner',)
+    inlines = [GroupWalletInline, UserInline, LiteLLMCohortKeyInline]
     
     class GroupCreditActionForm(ActionForm):
         amount = forms.DecimalField(
@@ -81,6 +121,13 @@ class AccessCodeGroupAdmin(admin.ModelAdmin):
     fieldsets = (
         (None, {
             'fields': ('access_code', 'max_capacity', 'is_active', 'expires_at', 'notes')
+        }),
+        (_('Group Owner'), {
+            'fields': ('group_owner',),
+            'description': _(
+                'User who manages this group\'s wallet and refill policy. '
+                'Owners see a dedicated UI on the frontend for their group only.'
+            ),
         }),
         (_('Role Assignment'), {
             'fields': ('default_role',),
@@ -164,6 +211,55 @@ class AccessCodeGroupAdmin(admin.ModelAdmin):
     
     actions = ["credit_groups_users"]
 
+    def save_formset(self, request, form, formset, change):
+        """Audit budget_balance changes made via the inline GroupWallet form."""
+        if formset.model is not GroupWallet:
+            return super().save_formset(request, form, formset, change)
+
+        old_balances = {}
+        for f in formset.initial_forms:
+            if f.instance.pk:
+                old_balances[f.instance.pk] = (
+                    GroupWallet.objects.filter(pk=f.instance.pk)
+                    .values_list('budget_balance', flat=True)
+                    .first()
+                    or Decimal('0')
+                )
+
+        super().save_formset(request, form, formset, change)
+
+        for instance in formset.new_objects:
+            new_balance = instance.budget_balance or Decimal('0')
+            if new_balance > 0:
+                Transaction.objects.create(
+                    user=request.user,
+                    amount=Decimal('0'),
+                    type=TransactionTypeChoice.CREDIT,
+                    source=TransactionSourceChoice.GROUP_BUDGET_TOPUP,
+                    related_group=instance.group,
+                    message=(
+                        f"Admin set initial budget on {instance.group.access_code}: "
+                        f"${new_balance}"
+                    ),
+                )
+        for instance, _changed_fields in formset.changed_objects:
+            old = old_balances.get(instance.pk, Decimal('0'))
+            new = instance.budget_balance or Decimal('0')
+            delta = new - old
+            if delta != 0:
+                sign = '+' if delta > 0 else ''
+                Transaction.objects.create(
+                    user=request.user,
+                    amount=Decimal('0'),
+                    type=TransactionTypeChoice.CREDIT,
+                    source=TransactionSourceChoice.GROUP_BUDGET_TOPUP,
+                    related_group=instance.group,
+                    message=(
+                        f"Admin direct-edit on {instance.group.access_code}: "
+                        f"budget ${old} → ${new} ({sign}{delta})"
+                    ),
+                )
+
 
 class UserAdmin(DjangoUserAdmin):
     class CreditActionForm(ActionForm):
@@ -238,7 +334,7 @@ class UserAdmin(DjangoUserAdmin):
             {
                 "fields": ("syftbox_access_token", "syftbox_refresh_token"),
                 "classes": ("collapse",),
-                "description": _("OAuth tokens for Syftbox storage (shown read-only)."),
+                "description": _("OAuth tokens for Syftbox storage."),
             },
         ),
         (_("Platform Settings (Legacy)"), {
@@ -257,6 +353,7 @@ class UserAdmin(DjangoUserAdmin):
             },
         ),
     )
+    inlines = [UserRefillOverrideInline]
     list_display = ("email", "last_login_display", "date_joined", "activity_status", "is_active", "is_staff", "platform_role", "onboarding_status", "access_code_group", "vector_db", "storage_backend")
     list_filter = ("is_staff", "is_superuser", "is_active", "platform_role", LastLoginFilter, "vector_db", "storage_backend", "access_code_group", "auth_source")
     search_fields = ("email", "first_name", "last_name")
@@ -314,13 +411,5 @@ class UserAdmin(DjangoUserAdmin):
         """Disable user accounts that haven't been active"""
         count = queryset.filter(is_active=True).update(is_active=False)
         self.message_user(request, f"Disabled {count} user account(s).", level=messages.SUCCESS)
-
-    def get_readonly_fields(self, request, obj=None):
-        return (
-            *super().get_readonly_fields(request, obj),
-            "syftbox_access_token",
-            "syftbox_refresh_token",
-        )
-
 
 admin.site.register(User, UserAdmin)

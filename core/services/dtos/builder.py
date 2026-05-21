@@ -13,6 +13,22 @@ from .socratic_dto import SocraticConfig
 # This is a hotfix - the proper solution is to make this configurable per bot
 SOCRATIC_MIN_MAX_TOKENS = 8000
 
+# Artifact-creating DARE tools require large output budgets because the entire
+# artifact payload (docx blocks, mermaid code, React component, etc.) is
+# serialized into the tool-call input. A 2048-token cap truncates the tool call
+# and silently drops the artifact.
+ARTIFACT_TOOL_SLUGS = frozenset(
+    {
+        "create_diagram",
+        "create_chart",
+        "create_docx",
+        "create_react_component",
+        "update_artifact",
+        "update_artifact_inline",
+    }
+)
+ARTIFACT_MIN_MAX_TOKENS = 8000
+
 
 class LLMQueryRequestBuilder:
     """Builder pattern for constructing LLMQueryRequest from dictionaries.
@@ -49,7 +65,11 @@ class LLMQueryRequestBuilder:
         # Determine file_owner_id: prioritize message_data, fall back to conversation
         # This handles forked conversations where file_owner_id is set on the conversation
         file_owner_id = message_data.get("file_owner_id")
-        if not file_owner_id and conversation and hasattr(conversation, 'file_owner_id'):
+        if (
+            not file_owner_id
+            and conversation
+            and hasattr(conversation, "file_owner_id")
+        ):
             file_owner_id = conversation.file_owner_id
 
         # Build context config
@@ -60,16 +80,25 @@ class LLMQueryRequestBuilder:
             media_ids=message_data.get("media_ids", []),
             tag_ids=message_data.get("tag_ids", []),
             folder_ids=message_data.get("folder_ids", []),
-            referenced_conversation_ids=message_data.get("referenced_conversation_ids", []),
-            referenced_conversation_history_limit=message_data.get("referenced_conversation_history_limit", 10),
+            referenced_conversation_ids=message_data.get(
+                "referenced_conversation_ids", []
+            ),
+            referenced_conversation_history_limit=message_data.get(
+                "referenced_conversation_history_limit", 10
+            ),
             referenced_summary_ids=message_data.get("referenced_summary_ids", []),
             max_context_snippets=message_data.get("max_context_snippets", 4),
-            document_similarity_threshold=message_data.get("document_similarity_threshold", 0.5),
+            document_similarity_threshold=message_data.get(
+                "document_similarity_threshold", 0.5
+            ),
             history_limit=message_data.get("history_limit", 20),
+            use_memory=bool(message_data.get("use_memory", False)),
         )
 
         # Detect Socratic bots platform BEFORE building generation config
-        is_socratic_bots = platform == AuthSourceChoice.SOCRATIC_BOTS if platform else False
+        is_socratic_bots = (
+            platform == AuthSourceChoice.SOCRATIC_BOTS if platform else False
+        )
         bot_meta = message_data.get("bot_meta", {})
         socratic_enabled = is_socratic_bots and not message_data.get("prompt_id")
 
@@ -82,16 +111,32 @@ class LLMQueryRequestBuilder:
         if is_socratic_bots and max_tokens < SOCRATIC_MIN_MAX_TOKENS:
             max_tokens = SOCRATIC_MIN_MAX_TOKENS
 
+        # Enforce minimum max_tokens when artifact-creating tools are loaded.
+        # The artifact payload travels as the tool-call input, so a low cap
+        # truncates the tool call mid-stream and the artifact is silently dropped.
+        requested_slugs = message_data.get("dare_tool_slugs") or []
+        if (
+            any(slug in ARTIFACT_TOOL_SLUGS for slug in requested_slugs)
+            and max_tokens < ARTIFACT_MIN_MAX_TOKENS
+        ):
+            max_tokens = ARTIFACT_MIN_MAX_TOKENS
+
         # Build generation config
         generation = GenerationConfig(
             temperature=message_data.get("temperature", 0.7),
             max_tokens=max_tokens,
             prompt_id=message_data.get("prompt_id"),
             web_search_enabled=message_data.get("web_search_enabled", False),
-            image_generation_enabled=message_data.get("image_generation_enabled", False),
+            image_generation_enabled=message_data.get(
+                "image_generation_enabled", False
+            ),
             image_generation_settings=message_data.get("image_generation_settings"),
-            audio_transcription_enabled=message_data.get("audio_transcription_enabled", False),
-            audio_transcription_settings=message_data.get("audio_transcription_settings"),
+            audio_transcription_enabled=message_data.get(
+                "audio_transcription_enabled", False
+            ),
+            audio_transcription_settings=message_data.get(
+                "audio_transcription_settings"
+            ),
             structured_spec=message_data.get("structured_spec"),
             artifacts_enabled=message_data.get("artifacts_enabled", False),
         )
@@ -111,7 +156,7 @@ class LLMQueryRequestBuilder:
 
         # Extract MCP server IDs from frontend payload
         mcp_server_ids = tuple(message_data.get("mcp_server_ids") or [])
-        
+
         # Extract DARE tool slugs from frontend payload
         dare_tool_slugs = tuple(message_data.get("dare_tool_slugs") or [])
 

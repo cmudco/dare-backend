@@ -6,7 +6,7 @@ from django.db import migrations
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("users", "0027_alter_accesscodegroup_default_role_and_more"),
+        ("users", "0028_alter_accesscodegroup_default_role_and_more"),
         ("users", "0029_user_syftbox_access_token_user_syftbox_refresh_token"),
     ]
 

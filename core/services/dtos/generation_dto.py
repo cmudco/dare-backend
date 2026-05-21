@@ -23,6 +23,7 @@ class GenerationConfig:
         structured_spec: JSON schema for structured output
         artifacts_enabled: Enable artifact generation for long-form content
     """
+
     temperature: float = 0.7
     max_tokens: int = 8000
     prompt_id: Optional[str] = None
@@ -37,7 +38,9 @@ class GenerationConfig:
     def __post_init__(self):
         """Validate generation parameters."""
         if not 0.0 <= self.temperature <= 2.0:
-            raise ValueError(f"Temperature must be between 0.0 and 2.0, got {self.temperature}")
+            raise ValueError(
+                f"Temperature must be between 0.0 and 2.0, got {self.temperature}"
+            )
         if self.max_tokens <= 0:
             raise ValueError(f"max_tokens must be positive, got {self.max_tokens}")
 

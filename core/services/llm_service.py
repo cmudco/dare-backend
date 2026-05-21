@@ -1,45 +1,65 @@
 import logging
 from abc import ABC, abstractmethod
-from typing import AsyncGenerator, Dict, Tuple, Optional, Any, List
+from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
 from conversations.constants import Provider, SenderType
 from conversations.models import LLM, Conversation, Message
 from core.integrations import ToolFetcher
-from core.services.document_processor import DocumentProcessor
-from core.services.openai_service import OpenAIService
+from core.services.api_key_service import (
+    get_dispatch_credentials_for_user,
+    get_provider_api_key,
+)
 from core.services.claude_service import ClaudeService
+from core.services.custom_llm_service import CustomLLMService
+from core.services.document_processor import DocumentProcessor
+from core.services.dtos import (
+    LLMDescriptor,
+    LLMQueryChunk,
+    LLMQueryRequest,
+    ResolvedDispatchCredentials,
+)
+from core.services.file_processor import FileProcessor
 from core.services.gemini_service import GeminiService
 from core.services.llama_service import LlamaService
-from core.services.custom_llm_service import CustomLLMService
-from core.services.file_processor import FileProcessor
-from core.services.api_key_service import get_provider_api_key, get_provider_api_key_for_user
-from core.services.dtos import LLMQueryRequest, LLMQueryChunk
-from files.models import File, Folder
-
-from core.services.llm_helpers import (
-    # Database helpers
-    get_media_files_as_images,
-    # Socratic message builders
-    build_classic_socratic_messages,
-    build_advanced_socratic_messages,
-    # Media helpers
+from core.services.llm_helpers import (  # Database helpers; Socratic message builders; Media helpers; Standard message builders
     add_video_transcriptions_to_messages,
-    execute_audio_transcription,
-    # Standard message builders
+    build_advanced_socratic_messages,
+    build_classic_socratic_messages,
     build_standard_messages,
+    execute_audio_transcription,
+    get_media_files_as_images,
 )
+from core.services.openai_service import OpenAIService
+from files.models import File, Folder
 
 logger = logging.getLogger(__name__)
 
+
 class AIService(ABC):
     """Abstract base class for AI services."""
+
     @abstractmethod
-    async def stream_chat_completion(self, messages: list, max_tokens: int, temperature: float, images: list = None, tools: list = None) -> AsyncGenerator[Tuple[str, Dict], None]:
+    async def stream_chat_completion(
+        self,
+        messages: list,
+        max_tokens: int,
+        temperature: float,
+        images: list = None,
+        tools: list = None,
+    ) -> AsyncGenerator[Tuple[str, Dict], None]:
         pass
+
     @abstractmethod
-    async def get_chat_completion(self, messages: list, max_tokens: int, temperature: float, structured_spec: Optional[Dict[str, Any]] = None) -> str:
+    async def get_chat_completion(
+        self,
+        messages: list,
+        max_tokens: int,
+        temperature: float,
+        structured_spec: Optional[Dict[str, Any]] = None,
+    ) -> str:
         """Non-streaming chat completion, optionally honoring structured outputs spec."""
         pass
+
 
 class LLMService:
     """Service for handling AI message generation with document context."""
@@ -67,22 +87,38 @@ class LLMService:
         """
         try:
             llm = await self._resolve_llm(request)
+            self._pending_memory_context = []
             messages = await self._build_messages_for_request(request, llm)
             all_images = await self._process_media_files(request)
 
             # Collect all tools (MCP + DARE + any passed externally) via ToolFetcher
             all_tools = await self.tool_fetcher.get_all_tools(request, llm, tools)
 
+            # Capture memory context to attach to final usage
+            memory_context = self._pending_memory_context
+
             if request.requires_audio_transcription():
-                async for chunk, usage in self._execute_audio_transcription(request, llm):
+                async for chunk, usage in self._execute_audio_transcription(
+                    request, llm
+                ):
+                    if usage and memory_context:
+                        usage["memory_context"] = memory_context
                     yield chunk, usage
             elif request.requires_image_generation():
                 async for chunk, usage in self._execute_image_generation(request, llm):
+                    if usage and memory_context:
+                        usage["memory_context"] = memory_context
                     yield chunk, usage
             else:
                 async for chunk, usage in self._execute_llm_completion(
-                    request, llm, messages, all_images, tools=all_tools if all_tools else None
+                    request,
+                    llm,
+                    messages,
+                    all_images,
+                    tools=all_tools if all_tools else None,
                 ):
+                    if usage and memory_context:
+                        usage["memory_context"] = memory_context
                     yield chunk, usage
 
         except Exception as e:
@@ -108,9 +144,7 @@ class LLMService:
         return llm
 
     async def _build_messages_for_request(
-        self,
-        request: LLMQueryRequest,
-        llm: LLM
+        self, request: LLMQueryRequest, llm: LLM
     ) -> List[Dict[str, str]]:
         """Build messages array based on request type (Socratic vs Standard).
 
@@ -135,8 +169,7 @@ class LLMService:
             return await self._build_standard_messages(request)
 
     async def _build_socratic_mode_messages(
-        self,
-        request: LLMQueryRequest
+        self, request: LLMQueryRequest
     ) -> List[Dict[str, str]]:
         """Build messages for Socratic teaching mode.
 
@@ -147,13 +180,24 @@ class LLMService:
             List of message dictionaries
         """
         if request.is_advanced_mode():
-            return await build_advanced_socratic_messages(request, self.document_processor)
+            return await build_advanced_socratic_messages(
+                request, self.document_processor
+            )
         else:
-            return await build_classic_socratic_messages(request, self.document_processor)
+            return await build_classic_socratic_messages(
+                request, self.document_processor
+            )
 
-    async def _build_standard_messages(self, request: LLMQueryRequest) -> List[Dict[str, str]]:
+    async def _build_standard_messages(
+        self, request: LLMQueryRequest
+    ) -> List[Dict[str, str]]:
         """Build messages for standard (non-Socratic) mode."""
-        return await build_standard_messages(request, self.document_processor, self.file_processor)
+        result = await build_standard_messages(
+            request, self.document_processor, self.file_processor
+        )
+        # Store memory context for inclusion in final usage data
+        self._pending_memory_context = result.memory_context
+        return result.messages
 
     async def _process_media_files(self, request: LLMQueryRequest) -> List[Dict]:
         """Process and combine all media files (images and videos).
@@ -175,17 +219,14 @@ class LLMService:
             user_id = request.user.id if request.user else None
             if user_id:
                 media_images = await get_media_files_as_images(
-                    request.media.media_ids,
-                    user_id
+                    request.media.media_ids, user_id
                 )
                 all_images = all_images + media_images
 
         return all_images
 
     async def _execute_image_generation(
-        self,
-        request: LLMQueryRequest,
-        llm: LLM
+        self, request: LLMQueryRequest, llm: LLM
     ) -> AsyncGenerator[Tuple[str, Dict], None]:
         """Execute image generation request.
 
@@ -199,7 +240,9 @@ class LLMService:
         ai_service = await self._get_ai_service(llm, request.user)
 
         # Extract DALL-E model from LLM identifier
-        model = llm.identifier if llm.identifier in ["dall-e-3", "dall-e-2"] else "dall-e-3"
+        model = (
+            llm.identifier if llm.identifier in ["dall-e-3", "dall-e-2"] else "dall-e-3"
+        )
 
         settings = request.generation.image_generation_settings or {}
         size = settings.get("size")
@@ -207,15 +250,13 @@ class LLMService:
         style = settings.get("style")
 
         async for chunk, usage in ai_service.generate_image(
-            prompt=request.message,
-            model=model,
-            size=size,
-            quality=quality,
-            style=style
+            prompt=request.message, model=model, size=size, quality=quality, style=style
         ):
             yield chunk, usage
 
-    async def _execute_audio_transcription(self, request: LLMQueryRequest, llm: LLM) -> AsyncGenerator[Tuple[str, Dict], None]:
+    async def _execute_audio_transcription(
+        self, request: LLMQueryRequest, llm: LLM
+    ) -> AsyncGenerator[Tuple[str, Dict], None]:
         """Execute audio transcription with streaming support."""
         async for chunk, usage in execute_audio_transcription(
             request.context.media_ids,
@@ -245,13 +286,11 @@ class LLMService:
         """
         if all_images:
             messages = await self.add_video_transcriptions_to_context(
-                all_images,
-                messages,
-                request.user
+                all_images, messages, request.user
             )
 
         ai_service = await self._get_ai_service(llm, request.user)
-        
+
         # Use provided tools, or web search tools if enabled
         llm_tools = tools
         if not llm_tools and request.requires_web_search():
@@ -267,9 +306,11 @@ class LLMService:
                 messages,
                 request.generation.max_tokens,
                 request.generation.temperature,
-                structured_spec=request.generation.structured_spec
+                structured_spec=request.generation.structured_spec,
             )
-            logger.info(f"[LLMService] Structured output response received: {text[:200]}...")
+            logger.info(
+                f"[LLMService] Structured output response received: {text[:200]}..."
+            )
             yield text, None
         else:
             # Standard streaming completion
@@ -278,33 +319,56 @@ class LLMService:
                 request.generation.max_tokens,
                 request.generation.temperature,
                 images=all_images,
-                tools=llm_tools
+                tools=llm_tools,
             ):
                 yield chunk, usage
 
     # ========== End Query Orchestration Methods ==========
 
-    async def add_video_transcriptions_to_context(self, media_items: List[Dict], messages: List[Dict], user=None) -> List[Dict]:
+    async def add_video_transcriptions_to_context(
+        self, media_items: List[Dict], messages: List[Dict], user=None
+    ) -> List[Dict]:
         """Add video transcriptions to message context for LLMs."""
         return await add_video_transcriptions_to_messages(media_items, messages, user)
 
-
     async def _get_ai_service(self, llm: LLM, user=None) -> AIService:
-        """
-        Get the appropriate AI service for the given LLM.
-        Fetches API key asynchronously based on user's billing mode.
+        """Build the AI service that will dispatch this call.
+
+        Resolution path:
+          - With ``user``: read the wallet-aware ``ResolvedDispatchCredentials``
+            from ``api_key_service``. When the user's active wallet is LITELLM,
+            ``creds.use_litellm_proxy`` is True and we route every provider
+            through ``OpenAIService`` configured with the proxy ``base_url`` —
+            LiteLLM is OpenAI-compatible at ``<base>/v1/...``, so a single
+            client suffices regardless of the underlying model's nominal
+            provider. Provider-native paths (Anthropic, Gemini, Llama) only
+            run on DARE / BYO wallets.
+          - Without ``user``: legacy system-key path (DARE only).
 
         Args:
-            llm: The LLM model to use
-            user: Optional user instance. If provided, uses user-specific key resolution
-                  based on billing_mode. If None, falls back to system keys.
+            llm: The LLM model to use. May be a real DB row or an unsaved stub
+                materialized from a synthetic LiteLLM descriptor.
+            user: Optional user instance for wallet-aware credential resolution.
         """
-        # Use user-aware key resolution if user is provided
         if user:
-            api_key = await get_provider_api_key_for_user(llm.provider, user)
+            creds = await get_dispatch_credentials_for_user(llm.provider, user)
         else:
-            api_key = await get_provider_api_key(llm.provider)
+            creds = ResolvedDispatchCredentials(
+                api_key=await get_provider_api_key(llm.provider),
+            )
 
+        # LITELLM short-circuit: route every provider through the OpenAI-
+        # compatible proxy regardless of llm.provider. Provider-native quirks
+        # (Anthropic tool format, Gemini's safety filters, etc.) get translated
+        # by the proxy itself.
+        if creds.use_litellm_proxy:
+            return OpenAIService(
+                llm=llm,
+                api_key=creds.api_key,
+                base_url=creds.base_url,
+            )
+
+        api_key = creds.api_key
         if llm.provider == Provider.OPENAI.value:
             return OpenAIService(llm=llm, api_key=api_key)
         elif llm.provider == Provider.CLAUDE.value:

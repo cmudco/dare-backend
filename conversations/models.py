@@ -362,6 +362,18 @@ class Conversation(BaseModel):
         blank=True,
         help_text="Associated Socratic Bot ID (only populated for SocraticBots source)."
     )
+    access_code = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text=(
+            "Access code redeemed by the user when starting this conversation, "
+            "denormalized at create time so the billing finalizer can resolve "
+            "the matching AccessCodeGroup (and its GroupWallet) without a "
+            "callback to SocraticBooks."
+        ),
+    )
     anonymous_session_id = models.CharField(
         max_length=255,
         null=True,
@@ -662,7 +674,21 @@ class Message(BaseModel):
         null=True,
         blank=True,
         related_name="messages",
-        help_text="The LLM used to generate this message (null for user messages)."
+        help_text="The LLM used to generate this message (null for user messages or LiteLLM-routed dispatches)."
+    )
+    litellm_key = models.ForeignKey(
+        'billing.LiteLLMKey',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="messages",
+        help_text="LiteLLM key used to dispatch this message. Populated only when wallet=LITELLM; null otherwise."
+    )
+    litellm_model_name = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        help_text="Model identifier sent to the LiteLLM proxy (e.g. 'gpt-4o'). Populated only when llm is null and a LiteLLM key was used."
     )
 
     files = models.ManyToManyField(
@@ -764,6 +790,11 @@ class Message(BaseModel):
         default=dict,
         blank=True,
         help_text="Learning progress data associated with this message, such as assessment triggers and educational metadata."
+    )
+    memory_context_data = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Memory items used as context for this message. List of {content, memory_type, categories}."
     )
 
     # Content type for specialized rendering (diagrams, charts, etc.)

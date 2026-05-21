@@ -1,0 +1,161 @@
+{% extends "admin/change_list.html" %}
+{% load i18n static %}
+
+{% block content_title %}{% endblock %}
+
+{% block extrahead %}
+{{ block.super }}
+<link rel="stylesheet" href="{% static 'admin/billing/usagedashboard/dashboard.css' %}">
+<style>
+  #dash .row-link          { cursor: pointer; }
+  #dash .row-link:hover td { background: var(--row-hover); }
+  #dash .back-link         { font-size: 12px; color: var(--t3) !important; text-decoration: none !important; font-weight: 500; }
+  #dash .back-link:hover   { color: var(--t1) !important; }
+</style>
+{% endblock %}
+
+{% block sidebar %}{% endblock %}
+
+{% block content %}
+<div id="dash">
+
+  <!-- ══ Header / period tabs ═══════════════════════════════════════ -->
+  <div class="db-top">
+    <div class="db-title-block">
+      <h1>Usage Breakdown</h1>
+      <p>
+        {% if scope == 'group' %}Per-group{% else %}Per-user{% endif %}
+        cost &amp; tokens — showing <strong>{{ period_label }}</strong>
+      </p>
+    </div>
+    <div class="period-tabs">
+      <a href="?scope={{ scope }}&amp;period=all" class="{% if period == 'all' %}on{% endif %}">All Time</a>
+      <a href="?scope={{ scope }}&amp;period=90d" class="{% if period == '90d' %}on{% endif %}">90 days</a>
+      <a href="?scope={{ scope }}&amp;period=30d" class="{% if period == '30d' %}on{% endif %}">30 days</a>
+      <a href="?scope={{ scope }}&amp;period=7d"  class="{% if period == '7d'  %}on{% endif %}">7 days</a>
+    </div>
+  </div>
+
+  <!-- ══ Scope tabs — fully inline-styled to dodge admin's link CSS ═ -->
+  <div style="display:inline-flex; gap:2px; background:var(--card-2); border:1px solid var(--border); border-radius:8px; padding:3px; margin-bottom:18px;">
+    {% if scope == 'user' %}
+      <a href="?scope=user&amp;period={{ period }}"  style="padding:5px 14px !important; border-radius:6px !important; font-size:12.5px !important; font-weight:500 !important; color:var(--t1) !important; text-decoration:none !important; background:var(--card) !important; box-shadow:var(--shadow) !important; white-space:nowrap;">By User</a>
+    {% else %}
+      <a href="?scope=user&amp;period={{ period }}"  style="padding:5px 14px !important; border-radius:6px !important; font-size:12.5px !important; font-weight:500 !important; color:var(--t3) !important; text-decoration:none !important; background:transparent !important; white-space:nowrap;">By User</a>
+    {% endif %}
+    {% if scope == 'group' %}
+      <a href="?scope=group&amp;period={{ period }}" style="padding:5px 14px !important; border-radius:6px !important; font-size:12.5px !important; font-weight:500 !important; color:var(--t1) !important; text-decoration:none !important; background:var(--card) !important; box-shadow:var(--shadow) !important; white-space:nowrap;">By Group</a>
+    {% else %}
+      <a href="?scope=group&amp;period={{ period }}" style="padding:5px 14px !important; border-radius:6px !important; font-size:12.5px !important; font-weight:500 !important; color:var(--t3) !important; text-decoration:none !important; background:transparent !important; white-space:nowrap;">By Group</a>
+    {% endif %}
+  </div>
+
+  <!-- ══ Summary KPIs ═══════════════════════════════════════════════ -->
+  <div class="kpi-grid">
+
+    <div class="kpi" style="--kc:var(--blue)">
+      <div class="kpi-lbl-row"><span class="kpi-dot"></span><span class="kpi-lbl">Total Spend</span></div>
+      <div class="kpi-val">${{ summary.total_cost|floatformat:2 }}</div>
+      <div class="kpi-sub">wallet debits — period</div>
+    </div>
+
+    <div class="kpi" style="--kc:var(--purple)">
+      <div class="kpi-lbl-row"><span class="kpi-dot"></span><span class="kpi-lbl">Total Tokens</span></div>
+      <div class="kpi-val" data-compact>{{ summary.total_tokens }}</div>
+      <div class="kpi-sub">input + output</div>
+    </div>
+
+    <div class="kpi" style="--kc:var(--teal)">
+      <div class="kpi-lbl-row"><span class="kpi-dot"></span><span class="kpi-lbl">LLM Calls</span></div>
+      <div class="kpi-val" data-compact>{{ summary.total_calls }}</div>
+      <div class="kpi-sub">debit transactions</div>
+    </div>
+
+    <div class="kpi" style="--kc:var(--green)">
+      <div class="kpi-lbl-row"><span class="kpi-dot"></span><span class="kpi-lbl">
+        {% if scope == 'group' %}Active Groups{% else %}Active Users{% endif %}
+      </span></div>
+      <div class="kpi-val">{{ summary.distinct_count }}</div>
+      <div class="kpi-sub">distinct in period</div>
+    </div>
+
+  </div>
+
+  <!-- ══ Table ══════════════════════════════════════════════════════ -->
+  <div class="sh">
+    <svg viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+    {% if scope == 'group' %}Groups{% else %}Users{% endif %} <em>top 100 by spend · {{ period_label }}</em>
+  </div>
+
+  <div class="card" style="margin-bottom:24px;">
+    {% if scope == 'group' %}
+    <table class="dt">
+      <thead><tr>
+        <th class="rk">#</th>
+        <th>Access Code</th>
+        <th>Owner</th>
+        <th class="nr">Members</th>
+        <th class="nr">Active</th>
+        <th class="nr">Spend</th>
+        <th class="nr">Input Tokens</th>
+        <th class="nr">Output Tokens</th>
+        <th class="nr">Calls</th>
+        <th>Last Active</th>
+      </tr></thead>
+      <tbody>
+        {% for row in rows %}
+        <tr class="row-link" data-href="?scope=group&amp;period={{ period }}&amp;id={{ row.user__access_code_group_id }}">
+          <td class="rk">{{ forloop.counter }}</td>
+          <td><span class="mn">{{ row.user__access_code_group__access_code }}</span></td>
+          <td><span class="mn">{{ row.user__access_code_group__group_owner__email|default:"—" }}</span></td>
+          <td class="nr">{{ row.member_count }}</td>
+          <td class="nr">{{ row.active_users }}</td>
+          <td class="nr">${{ row.total_cost|default:"0"|floatformat:4 }}</td>
+          <td class="nr">{{ row.input_tokens|default:"0" }}</td>
+          <td class="nr">{{ row.output_tokens|default:"0" }}</td>
+          <td class="nr">{{ row.calls }}</td>
+          <td class="ts">{% if row.last_active %}{{ row.last_active|date:"Y-m-d H:i" }}{% else %}—{% endif %}</td>
+        </tr>
+        {% empty %}<tr><td colspan="10" class="emp">No group spend in this period.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <table class="dt">
+      <thead><tr>
+        <th class="rk">#</th>
+        <th>User</th>
+        <th>Group</th>
+        <th class="nr">Spend</th>
+        <th class="nr">Input Tokens</th>
+        <th class="nr">Output Tokens</th>
+        <th class="nr">Total Tokens</th>
+        <th class="nr">Calls</th>
+        <th>Last Active</th>
+      </tr></thead>
+      <tbody>
+        {% for row in rows %}
+        <tr class="row-link" data-href="?scope=user&amp;period={{ period }}&amp;id={{ row.user_id }}">
+          <td class="rk">{{ forloop.counter }}</td>
+          <td><span class="mn">{{ row.user__email }}</span></td>
+          <td>
+            {% if row.user__access_code_group__access_code %}
+              <span class="mn">{{ row.user__access_code_group__access_code }}</span>
+            {% else %}<span class="ts">—</span>{% endif %}
+          </td>
+          <td class="nr">${{ row.total_cost|default:"0"|floatformat:4 }}</td>
+          <td class="nr">{{ row.input_tokens|default:"0" }}</td>
+          <td class="nr">{{ row.output_tokens|default:"0" }}</td>
+          <td class="nr">{{ row.total_tokens }}</td>
+          <td class="nr">{{ row.calls }}</td>
+          <td class="ts">{% if row.last_active %}{{ row.last_active|date:"Y-m-d H:i" }}{% else %}—{% endif %}</td>
+        </tr>
+        {% empty %}<tr><td colspan="9" class="emp">No user spend in this period.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+    {% endif %}
+  </div>
+
+</div>{# /dash #}
+
+<script src="{% static 'admin/billing/usagebreakdown/breakdown.js' %}" defer></script>
+{% endblock %}

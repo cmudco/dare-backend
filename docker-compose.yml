@@ -1,51 +1,151 @@
-version: '3.4'
 services:
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dare-web
+    command: web
+    ports:
+      - "${WEB_PORT:-8000}:8000"
+    env_file:
+      - .env
+    environment:
+      DJANGO_SETTINGS_MODULE: ${DOCKER_DJANGO_SETTINGS_MODULE:-config.settings.production}
+      DJANGO_DEBUG: ${DOCKER_DJANGO_DEBUG:-False}
+      ENVIRONMENT: ${DOCKER_ENVIRONMENT:-production}
+      DB_HOST: ${DOCKER_DB_HOST:-postgres}
+      DB_PORT: ${DB_PORT:-5432}
+      REDIS_HOST: ${DOCKER_REDIS_HOST:-redis}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      WEAVIATE_HOST: ${DOCKER_WEAVIATE_HOST:-weaviate}
+      WEAVIATE_PORT: ${WEAVIATE_PORT:-8080}
+      OLLAMA_HOST: ${DOCKER_OLLAMA_HOST:-http://ollama:11434}
+    volumes:
+      - static_data:/app/static
+      - media_data:/app/media
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      weaviate:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/health/"]
+      interval: ${WEB_HEALTHCHECK_INTERVAL:-30s}
+      timeout: ${WEB_HEALTHCHECK_TIMEOUT:-10s}
+      retries: ${WEB_HEALTHCHECK_RETRIES:-5}
+      start_period: ${WEB_HEALTHCHECK_START_PERIOD:-60s}
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dare-worker
+    command: worker
+    env_file:
+      - .env
+    environment:
+      DJANGO_SETTINGS_MODULE: ${DOCKER_DJANGO_SETTINGS_MODULE:-config.settings.production}
+      DJANGO_DEBUG: ${DOCKER_DJANGO_DEBUG:-False}
+      ENVIRONMENT: ${DOCKER_ENVIRONMENT:-production}
+      DB_HOST: ${DOCKER_DB_HOST:-postgres}
+      DB_PORT: ${DB_PORT:-5432}
+      REDIS_HOST: ${DOCKER_REDIS_HOST:-redis}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      WEAVIATE_HOST: ${DOCKER_WEAVIATE_HOST:-weaviate}
+      WEAVIATE_PORT: ${WEAVIATE_PORT:-8080}
+      OLLAMA_HOST: ${DOCKER_OLLAMA_HOST:-http://ollama:11434}
+    volumes:
+      - media_data:/app/media
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      weaviate:
+        condition: service_started
+    restart: unless-stopped
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: dare-postgres
+    environment:
+      POSTGRES_DB: ${DB_NAME:-dare_dev}
+      POSTGRES_USER: ${DB_USER:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-dare_dev}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: dare-redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
 
   weaviate:
     image: cr.weaviate.io/semitechnologies/weaviate:1.26.1
+    container_name: dare-weaviate
     ports:
-      - 8080:8080
-      - "50051:50051"
+      - "${WEAVIATE_PORT:-8080}:8080"
+      - "${WEAVIATE_GRPC_PORT:-50051}:50051"
     environment:
-      QUERY_DEFAULTS_LIMIT: 25
-      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'true'
-      PERSISTENCE_DATA_PATH: './data'
+      QUERY_DEFAULTS_LIMIT: ${WEAVIATE_QUERY_DEFAULTS_LIMIT:-25}
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: ${WEAVIATE_AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED:-true}
+      PERSISTENCE_DATA_PATH: '/var/lib/weaviate'
       DEFAULT_VECTORIZER_MODULE: 'none'
       ENABLE_MODULES: ''
-      CLUSTER_HOSTNAME: 'node1'
+      CLUSTER_HOSTNAME: ${WEAVIATE_CLUSTER_HOSTNAME:-node1}
     volumes:
-      - ./data:/data
+      - weaviate_data:/var/lib/weaviate
+    restart: unless-stopped
 
   weaviate-console:
     image: semitechnologies/weaviate-console:latest
+    container_name: dare-weaviate-console
     ports:
-      - "8081:80"
+      - "${WEAVIATE_CONSOLE_PORT:-8081}:80"
     environment:
-      WEAVIATE_URL: 'http://weaviate:8080'
+      WEAVIATE_URL: ${WEAVIATE_CONSOLE_URL:-http://weaviate:8080}
     restart: on-failure:0
+    profiles:
+      - debug
 
-  # Ollama for local LLaMA models
   ollama:
     image: ollama/ollama:latest
     container_name: dare-ollama
     ports:
-      - "11434:11434"
+      - "${OLLAMA_PORT:-11434}:11434"
     volumes:
       - ollama_data:/root/.ollama
     environment:
-      # Number of parallel requests (adjust based on RAM)
-      - OLLAMA_NUM_PARALLEL=2
-      # Keep model in memory for 10 minutes (default is 5m)
-      - OLLAMA_KEEP_ALIVE=10m
-      # Max loaded models (set to 2 if RAM is limited)
-      - OLLAMA_MAX_LOADED_MODELS=2
-    # Resource limits (adjust based on your server)
+      OLLAMA_NUM_PARALLEL: ${OLLAMA_NUM_PARALLEL:-2}
+      OLLAMA_KEEP_ALIVE: ${OLLAMA_KEEP_ALIVE:-10m}
+      OLLAMA_MAX_LOADED_MODELS: ${OLLAMA_MAX_LOADED_MODELS:-2}
     deploy:
       resources:
         limits:
-          memory: 16G  # Max RAM container can use
+          memory: ${OLLAMA_MEMORY_LIMIT:-16G}
         reservations:
-          memory: 8G   # Guaranteed RAM
+          memory: ${OLLAMA_MEMORY_RESERVATION:-8G}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
@@ -53,7 +153,19 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
+    profiles:
+      - llama
 
 volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  weaviate_data:
+    driver: local
+  static_data:
+    driver: local
+  media_data:
+    driver: local
   ollama_data:
     driver: local

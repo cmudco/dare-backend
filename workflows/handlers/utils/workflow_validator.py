@@ -42,6 +42,7 @@ class WorkflowValidator:
             - At least one start node exists
             - At least one step node exists
             - All nodes are reachable from a start node
+            - Graph is acyclic
             - Start nodes have title and description
             - Step nodes have prompt and llm
             - Routing nodes have prompt, llm, and 2+ routes
@@ -77,6 +78,10 @@ class WorkflowValidator:
                 start_nodes, step_nodes, edges_by_source
             )
             errors.extend(connectivity_errors)
+
+        # 3b. Reject cycles — the execution engine assumes a DAG.
+        cycle_errors = WorkflowValidator._detect_cycles(nodes, edges_by_source)
+        errors.extend(cycle_errors)
 
         # 4. Validate step nodes (execution mode)
         step_errors = WorkflowValidator._validate_step_nodes(
@@ -367,3 +372,90 @@ class WorkflowValidator:
                 )
 
         return errors
+
+    @staticmethod
+    def _detect_cycles(nodes, edges_by_source) -> List[str]:
+        """
+        Reject workflows whose graph contains a cycle.
+
+        Execution topologically sorts the graph and the context renderer resolves
+        each step's direct parents; both assume a DAG. A cycle would either stall
+        execution or cause infinite context re-entry.
+
+        Uses iterative DFS with WHITE/GRAY/BLACK coloring. On hitting a GRAY
+        neighbor we walk the current DFS stack to recover the cycle path, then
+        report each distinct cycle once using node labels where available.
+
+        Args:
+            nodes: All workflow nodes.
+            edges_by_source: Adjacency lookup (source_id -> [edge objects]).
+
+        Returns:
+            One error message per distinct cycle.
+        """
+        WHITE, GRAY, BLACK = 0, 1, 2
+        color: Dict[str, int] = {n.node_id: WHITE for n in nodes}
+        label_lookup: Dict[str, str] = {
+            n.node_id: (getattr(n.typed_data, 'label', None) or n.node_id)
+            for n in nodes
+        }
+
+        reported: Set[Tuple[str, ...]] = set()
+        errors: List[str] = []
+
+        for start_id in list(color.keys()):
+            if color[start_id] != WHITE:
+                continue
+
+            color[start_id] = GRAY
+            stack: List[Tuple[str, object]] = [
+                (start_id, iter(edges_by_source.get(start_id, [])))
+            ]
+
+            while stack:
+                node_id, neighbor_iter = stack[-1]
+                next_edge = next(neighbor_iter, None)
+                if next_edge is None:
+                    color[node_id] = BLACK
+                    stack.pop()
+                    continue
+
+                neighbor = next_edge.target
+                if neighbor not in color or color[neighbor] == BLACK:
+                    continue
+
+                if color[neighbor] == GRAY:
+                    cycle_path = WorkflowValidator._extract_cycle_path(stack, neighbor)
+                    key = WorkflowValidator._normalize_cycle(cycle_path)
+                    if key in reported:
+                        continue
+                    reported.add(key)
+                    labels = " -> ".join(label_lookup.get(nid, nid) for nid in cycle_path)
+                    errors.append(
+                        f"Workflow contains a cycle: {labels}. Remove the loop before running."
+                    )
+                    continue
+
+                color[neighbor] = GRAY
+                stack.append((neighbor, iter(edges_by_source.get(neighbor, []))))
+
+        return errors
+
+    @staticmethod
+    def _extract_cycle_path(stack, back_edge_target: str) -> List[str]:
+        """Recover the node-id path of the cycle closed by a back-edge."""
+        path: List[str] = []
+        for frame_node_id, _ in stack:
+            if path or frame_node_id == back_edge_target:
+                path.append(frame_node_id)
+        path.append(back_edge_target)
+        return path
+
+    @staticmethod
+    def _normalize_cycle(path: List[str]) -> Tuple[str, ...]:
+        """Canonicalize a cycle so rotations collapse to one key."""
+        if len(path) < 2:
+            return tuple(path)
+        ring = path[:-1]
+        min_index = min(range(len(ring)), key=lambda i: ring[i])
+        return tuple(ring[min_index:] + ring[:min_index])

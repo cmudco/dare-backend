@@ -162,6 +162,7 @@ class WorkflowCloningService:
                 document_similarity_threshold=data_object.document_similarity_threshold,
                 use_previous_step_files=data_object.use_previous_step_files,
                 use_previous_step_embeddings=data_object.use_previous_step_embeddings,
+                use_previous_context=data_object.use_previous_context,
                 text_input=data_object.text_input,
                 enable_web_search=data_object.enable_web_search
             )

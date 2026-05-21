@@ -24,8 +24,12 @@ django-cors-headers~=3.13.0
 # error monitoring
 sentry-sdk~= 2.26.1
 
+# jinja2 is required in prod, because sentry requires it
+Jinja2~=3.1.6
+
 # DRF
 djangorestframework-camel-case~=1.4.2
+drf-spectacular~=0.28.0
 djangorestframework_simplejwt~=5.5.0
 
 requests~=2.32.3
@@ -83,6 +87,8 @@ ffmpeg-python~=0.2.0
 # Cross-conversation memory layer (requires Python 3.13+)
 # Pinned to 1.2.x — v1.3.0 has a SQLAlchemy bug (duplicate 'url' column on resources table)
 memu-py~=1.2.0
+# Python pgvector client required by memu-py for Postgres vector support
+pgvector~=0.3.6
 # memu-py with PostgreSQL uses postgresql+psycopg:// (requires psycopg3, not psycopg2)
 psycopg[binary]~=3.2.0
 

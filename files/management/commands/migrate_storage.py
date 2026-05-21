@@ -15,15 +15,15 @@ Usage:
     python manage.py migrate_storage --user user1@example.com --user user2@example.com --to local
 """
 import logging
-from pathlib import Path
-from typing import List
 
-from django.core.files.base import ContentFile
 from django.core.management.base import BaseCommand, CommandError
-from django.db import transaction
 
 from core.storage.constants import StorageBackendChoice
 from files.models import File
+from files.utils import (
+    get_users_from_identifiers,
+    migrate_file_to_target_storage,
+)
 from users.models import User
 
 logger = logging.getLogger(__name__)
@@ -93,7 +93,7 @@ class Command(BaseCommand):
                 self.style.WARNING(f'Migrating ALL users to {target_backend_str} storage')
             )
         else:
-            user_objects = self._get_users_from_identifiers(users)
+            user_objects = get_users_from_identifiers(users)
 
         if not user_objects.exists():
             raise CommandError('No users found to migrate')
@@ -151,21 +151,6 @@ class Command(BaseCommand):
                 self.style.SUCCESS('\nMigration completed!')
             )
 
-    def _get_users_from_identifiers(self, identifiers: List[str]):
-        """Get User queryset from list of IDs or emails."""
-        from django.db.models import Q
-
-        user_queries = Q()
-        for identifier in identifiers:
-            # Try as ID first
-            if identifier.isdigit():
-                user_queries |= Q(id=int(identifier))
-            else:
-                # Treat as email
-                user_queries |= Q(email=identifier)
-
-        return User.objects.filter(user_queries)
-
     def _migrate_user(
         self,
         user: User,
@@ -206,7 +191,12 @@ class Command(BaseCommand):
         for file_instance in files_to_migrate:
             try:
                 if not dry_run:
-                    self._migrate_file(file_instance, target_backend)
+                    filename = migrate_file_to_target_storage(
+                        file_instance, target_backend
+                    )
+                    logger.info(
+                        f'Migrated file {file_instance.id} ({filename}) to {self._get_backend_name(target_backend)}'
+                    )
 
                 files_migrated += 1
                 self.stdout.write(
@@ -229,36 +219,7 @@ class Command(BaseCommand):
 
         return files_migrated, files_failed
 
-    def _migrate_file(self, file_instance: File, target_backend: int):
-        """
-        Migrate a single file to the target storage backend.
-
-        This involves:
-        1. Reading the file from current storage
-        2. Deleting from old storage (while backend still points to source)
-        3. Switching storage_backend to the target
-        4. Saving to new storage
-        """
-        # Read file content from current storage
-        file_instance.file.open('rb')
-        file_content = file_instance.file.read()
-        file_instance.file.close()
-
-        # Get the filename
-        filename = Path(file_instance.file.name).name
-
-        with transaction.atomic():
-            file_instance.file.delete(save=False)
-
-            file_instance.storage_backend = target_backend
-            file_instance.save(update_fields=['storage_backend'])
-
-            file_instance.file.save(filename, ContentFile(file_content), save=True)
-
-        logger.info(
-            f'Migrated file {file_instance.id} ({filename}) to {self._get_backend_name(target_backend)}'
-        )
-
     def _get_backend_name(self, backend: int) -> str:
         """Get human-readable backend name."""
         return 'SyftBox' if backend == StorageBackendChoice.SYFTBOX else 'Local'
+

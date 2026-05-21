@@ -28,6 +28,14 @@ ALLOWED_HOSTS = env.ALLOWED_HOSTS
 # Internal API key for inter-service communication (SB backend -> DARE backend)
 DARE_INTERNAL_KEY = env.DARE_INTERNAL_KEY
 
+# Bot wallet routing is rolled out behind this flag. When False,
+# finalize_ai_message uses the legacy path (User.billing_mode lookup only);
+# bot-attribution columns are still written. When True, the bot router
+# applies the chatter-pays / anonymous-falls-back-to-owner rule.
+BOT_WALLET_ENFORCEMENT_ENABLED = bool(int(os.environ.get(
+    'BOT_WALLET_ENFORCEMENT_ENABLED', '0',
+) or '0'))
+
 DJANGO_APPS = [
     "django.contrib.admin",
     "django.contrib.auth",
@@ -56,6 +64,7 @@ LOCAL_APPS = [
     "dare_tools",
     "memory",
     "sharing",
+    "feature_flags",
 ]
 
 THIRD_PARTY_APPS = [
@@ -68,7 +77,8 @@ THIRD_PARTY_APPS = [
     "dj_rest_auth",
     "dj_rest_auth.registration",
     "channels",
-    'django_rq'
+    "django_rq",
+    "drf_spectacular",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + LOCAL_APPS + THIRD_PARTY_APPS
@@ -150,12 +160,31 @@ REST_FRAMEWORK = {
     ],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 500, # TODO: temporarily increasing page size, until we add pagination on FE
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "JSON_UNDERSCOREIZE": {
         "ignore_keys": ("password1", "password2", "new_password1", "new_password2", "old_password"),
         # Preserve dict keys under these fields from camelCase conversion.
         # nodeStates is a dict keyed by user-generated node IDs (e.g. '-ybkjiGpAUdvp01WwZodV_9')
         # that contain underscores — camelize() would mangle them without this.
         "ignore_fields": ("nodeStates",),
+    },
+}
+
+SPECTACULAR_SETTINGS = {
+    "TITLE": "DARE Platform API",
+    "DESCRIPTION": "AI-powered research and conversation platform with multi-LLM support, real-time streaming, workflow automation, and file management.",
+    "VERSION": "1.0.0",
+    "SERVE_INCLUDE_SCHEMA": False,
+    "CAMELIZE_NAMES": True,
+    "POSTPROCESSING_HOOKS": [
+        "drf_spectacular.hooks.postprocess_schema_enums",
+    ],
+    "COMPONENT_SPLIT_REQUEST": True,
+    "SCHEMA_PATH_PREFIX": r"/api/",
+    "SWAGGER_UI_SETTINGS": {
+        "deepLinking": True,
+        "persistAuthorization": True,
+        "displayOperationId": True,
     },
 }
 

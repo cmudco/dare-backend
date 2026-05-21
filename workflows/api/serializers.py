@@ -1,28 +1,29 @@
 import logging
 
 from django.contrib.contenttypes.models import ContentType
+from djangorestframework_camel_case.util import underscoreize
 from rest_framework import serializers
 
 from conversations.models import LLM
-from files.api.serializers import FileSerializer
 from prompts.models import Prompt
 from workflows.constants import WorkflowRunStepStatus
 from workflows.handlers.utils import MetadataKey
 from workflows.handlers.utils.constants import NodeType
 from workflows.models import (
-    Workflow, WorkflowRun, WorkflowRunStep,
-    # Graph-driven models
-    StepNodeData, StartNodeData, ChatOutputNodeData, StructuredOutputNodeData,
-    NotesNodeData, FileNodeData, WorkflowNode, WorkflowEdge,
-    PrefetchedNodeFileRelations, build_prefetched_node_file_relations,
+    ChatOutputNodeData,  # Graph-driven models
+    FileNodeData,
+    NotesNodeData,
+    PrefetchedNodeFileRelations,
+    StartNodeData,
+    StepNodeData,
+    StructuredOutputNodeData,
+    Workflow,
+    WorkflowEdge,
+    WorkflowNode,
+    WorkflowRun,
+    build_prefetched_node_file_relations,
 )
 from workflows.services import NodeExecutionStateBuilder
-from workflows.services.citation_serialization import (
-    WorkflowStepSnippetSerializer,
-    WorkflowStepWebSearchSourceSerializer,
-)
-from djangorestframework_camel_case.util import underscoreize
-
 
 logger = logging.getLogger(__name__)
 
@@ -31,9 +32,11 @@ logger = logging.getLogger(__name__)
 # SHARED HELPER FUNCTIONS
 # ==========================================
 
+
 def _get_workflow_title(obj):
     """Get workflow title from related workflow."""
     return obj.workflow.title if obj.workflow else None
+
 
 def _get_workflow_description(obj):
     """Get workflow description from related workflow."""
@@ -42,7 +45,8 @@ def _get_workflow_description(obj):
 
 class WorkflowSerializer(serializers.ModelSerializer):
     """Clean graph-driven workflow serializer - no legacy support."""
-    user = serializers.ReadOnlyField(source='user.email')
+
+    user = serializers.ReadOnlyField(source="user.email")
     nodes = serializers.SerializerMethodField()
     edges = serializers.SerializerMethodField()
     latest_run = serializers.SerializerMethodField()
@@ -59,22 +63,49 @@ class WorkflowSerializer(serializers.ModelSerializer):
     class Meta:
         model = Workflow
         fields = [
-            'id', 'user', 'version', 'parent', 'created_at',
-            'viewport_x', 'viewport_y', 'viewport_zoom',
-            'manual_mode_enabled', 'output_display_mode', 'display_order',
-            'is_published', 'published_at', 'is_forked', 'can_share', 'owner_username',
-            'nodes', 'edges', 'latest_run',
-            'title', 'description', 'mode', 'viewport'
+            "id",
+            "user",
+            "version",
+            "parent",
+            "created_at",
+            "viewport_x",
+            "viewport_y",
+            "viewport_zoom",
+            "manual_mode_enabled",
+            "output_display_mode",
+            "display_order",
+            "is_published",
+            "published_at",
+            "is_forked",
+            "can_share",
+            "owner_username",
+            "nodes",
+            "edges",
+            "latest_run",
+            "title",
+            "description",
+            "mode",
+            "viewport",
         ]
         read_only_fields = [
-            'id', 'created_at', 'user', 'nodes', 'edges',
-            'title', 'description', 'mode', 'viewport',
-            'published_at', 'is_forked', 'can_share', 'owner_username',
+            "id",
+            "created_at",
+            "user",
+            "nodes",
+            "edges",
+            "title",
+            "description",
+            "mode",
+            "viewport",
+            "published_at",
+            "is_forked",
+            "can_share",
+            "owner_username",
         ]
 
     def get_owner_username(self, obj: Workflow) -> str:
         """Get the display name of the workflow owner for library views."""
-        if hasattr(obj, 'user') and obj.user:
+        if hasattr(obj, "user") and obj.user:
             return obj.user.get_full_name() or obj.user.email
         return ""
 
@@ -84,10 +115,7 @@ class WorkflowSerializer(serializers.ModelSerializer):
 
     def get_can_share(self, obj: Workflow) -> bool:
         """Return True when the workflow is not a cross-user fork."""
-        return not (
-            obj.parent is not None
-            and obj.parent.user_id != obj.user_id
-        )
+        return not (obj.parent is not None and obj.parent.user_id != obj.user_id)
 
     def get_latest_run(self, obj):
         """Get the latest workflow run with nodeStates for O(1) node access.
@@ -95,11 +123,15 @@ class WorkflowSerializer(serializers.ModelSerializer):
         Uses prefetched '_prefetched_runs' from viewset queryset to avoid N+1.
         Falls back to a direct query if prefetch is missing (e.g. after create).
         """
-        prefetched_runs = getattr(obj, '_prefetched_runs', None)
+        prefetched_runs = getattr(obj, "_prefetched_runs", None)
         if prefetched_runs is not None:
             latest_run = prefetched_runs[0] if prefetched_runs else None
         else:
-            latest_run = WorkflowRun.active_objects.filter(workflow=obj).order_by('-created_at').first()
+            latest_run = (
+                WorkflowRun.active_objects.filter(workflow=obj)
+                .order_by("-created_at")
+                .first()
+            )
 
         if latest_run:
             return WorkflowRunV2Serializer(latest_run).data
@@ -114,7 +146,7 @@ class WorkflowSerializer(serializers.ModelSerializer):
             many=True,
             context={
                 **self.context,
-                'node_file_relations': node_file_relations,
+                "node_file_relations": node_file_relations,
             },
         ).data
 
@@ -138,66 +170,79 @@ class WorkflowSerializer(serializers.ModelSerializer):
 # NEW GRAPH-DRIVEN ARCHITECTURE SERIALIZERS
 # ==========================================
 
+
 class StepNodeDataSerializer(serializers.ModelSerializer):
     # Make fields explicitly optional for save operations
     prompt = serializers.PrimaryKeyRelatedField(
-        queryset=Prompt.active_objects.all(),
-        required=False,
-        allow_null=True
+        queryset=Prompt.active_objects.all(), required=False, allow_null=True
     )
     llm = serializers.PrimaryKeyRelatedField(
         queryset=LLM.objects.all(),
         required=False,
-        allow_null=True
+        allow_null=True,
     )
 
     class Meta:
         model = StepNodeData
         fields = [
-            'label', 'agent', 'prompt', 'content_files', 'embedding_files', 'tags', 'llm',
-            'max_tokens', 'temperature', 'max_context_snippets',
-            'document_similarity_threshold', 'use_previous_step_files',
-            'use_previous_step_embeddings', 'text_input',
-            'enable_web_search'
+            "label",
+            "agent",
+            "prompt",
+            "content_files",
+            "embedding_files",
+            "tags",
+            "llm",
+            "max_tokens",
+            "temperature",
+            "max_context_snippets",
+            "document_similarity_threshold",
+            "use_previous_step_files",
+            "use_previous_step_embeddings",
+            "use_previous_context",
+            "text_input",
+            "enable_web_search",
         ]
 
 
 class StartNodeDataSerializer(serializers.ModelSerializer):
     class Meta:
         model = StartNodeData
-        fields = ['title', 'description', 'mode']
+        fields = ["title", "description", "mode"]
 
 
 class ChatOutputNodeDataSerializer(serializers.ModelSerializer):
     class Meta:
         model = ChatOutputNodeData
-        fields = ['label', 'status', 'response', 'error']
-
-
+        fields = ["label", "status", "response", "error"]
 
 
 class StructuredOutputNodeDataSerializer(serializers.ModelSerializer):
     routes = serializers.JSONField(required=False, allow_null=True)
     prompt = serializers.PrimaryKeyRelatedField(
-        queryset=Prompt.active_objects.all(),
-        required=False,
-        allow_null=True
+        queryset=Prompt.active_objects.all(), required=False, allow_null=True
     )
     llm = serializers.PrimaryKeyRelatedField(
         queryset=LLM.objects.all(),
         required=False,
-        allow_null=True
+        allow_null=True,
     )
 
     class Meta:
         model = StructuredOutputNodeData
-        fields = ['label', 'prompt', 'llm', 'routes', 'require_human_validation', 'text_input']
+        fields = [
+            "label",
+            "prompt",
+            "llm",
+            "routes",
+            "require_human_validation",
+            "text_input",
+        ]
 
     def to_representation(self, instance):
         """Include computed routes via get_routes() method."""
         data = super().to_representation(instance)
         # Always include the computed routes
-        data['routes'] = instance.get_routes()
+        data["routes"] = instance.get_routes()
         return data
 
 
@@ -206,7 +251,7 @@ class NotesNodeDataSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = NotesNodeData
-        fields = ['content']
+        fields = ["content"]
 
 
 class FileNodeDataSerializer(serializers.ModelSerializer):
@@ -215,8 +260,14 @@ class FileNodeDataSerializer(serializers.ModelSerializer):
     class Meta:
         model = FileNodeData
         fields = [
-            'label', 'files', 'retrieval_mode', 'similarity_threshold', 'max_results',
-            'query_source', 'text_input', 'include_metadata'
+            "label",
+            "files",
+            "retrieval_mode",
+            "similarity_threshold",
+            "max_results",
+            "query_source",
+            "text_input",
+            "include_metadata",
         ]
 
 
@@ -224,11 +275,26 @@ class WorkflowEdgeSerializer(serializers.ModelSerializer):
     class Meta:
         model = WorkflowEdge
         fields = [
-            'workflow',
-            'edge_id', 'edge_type', 'source', 'target', 'source_handle', 'target_handle',
-            'data', 'selected', 'animated', 'hidden', 'deletable', 'selectable',
-            'z_index', 'label', 'style', 'class_name', 'marker_start', 'marker_end',
-            'path_options'
+            "workflow",
+            "edge_id",
+            "edge_type",
+            "source",
+            "target",
+            "source_handle",
+            "target_handle",
+            "data",
+            "selected",
+            "animated",
+            "hidden",
+            "deletable",
+            "selectable",
+            "z_index",
+            "label",
+            "style",
+            "class_name",
+            "marker_start",
+            "marker_end",
+            "path_options",
         ]
 
     def validate(self, data):
@@ -240,12 +306,12 @@ class WorkflowEdgeSerializer(serializers.ModelSerializer):
         - Start Node → Start Node connections (unusual but allowed)
         """
         # Get workflow to access nodes
-        workflow = data.get('workflow')
+        workflow = data.get("workflow")
         if not workflow:
             return data
 
-        source_id = data.get('source')
-        target_id = data.get('target')
+        source_id = data.get("source")
+        target_id = data.get("target")
 
         if not source_id or not target_id:
             return data
@@ -259,14 +325,20 @@ class WorkflowEdgeSerializer(serializers.ModelSerializer):
             return data
 
         # Check for Chat Output → Start Node (chaining)
-        if source_node.node_type == NodeType.CHAT_OUTPUT and target_node.node_type == NodeType.START:
+        if (
+            source_node.node_type == NodeType.CHAT_OUTPUT
+            and target_node.node_type == NodeType.START
+        ):
             logger.info(
                 f"Workflow chain connection detected: {source_id} (chatOutput) → "
                 f"{target_id} (start). This will enable start node chaining."
             )
 
         # Check for Start → Start (unusual but allowed)
-        if source_node.node_type == NodeType.START and target_node.node_type == NodeType.START:
+        if (
+            source_node.node_type == NodeType.START
+            and target_node.node_type == NodeType.START
+        ):
             logger.warning(
                 f"Start node to start node connection: {source_id} → {target_id}. "
                 f"Ensure this is intentional for workflow chaining."
@@ -278,31 +350,31 @@ class WorkflowEdgeSerializer(serializers.ModelSerializer):
         # Accept both snake_case and React Flow camelCase
         mapped = dict(data)
         # IDs/types
-        if 'id' in mapped and 'edge_id' not in mapped:
-            mapped['edge_id'] = mapped.get('id')
-        if 'type' in mapped and 'edge_type' not in mapped:
-            mapped['edge_type'] = mapped.get('type')
+        if "id" in mapped and "edge_id" not in mapped:
+            mapped["edge_id"] = mapped.get("id")
+        if "type" in mapped and "edge_type" not in mapped:
+            mapped["edge_type"] = mapped.get("type")
         # CamelCase to snake_case
         cc = {
-            'sourceHandle': 'source_handle',
-            'targetHandle': 'target_handle',
-            'zIndex': 'z_index',
-            'className': 'class_name',
-            'markerStart': 'marker_start',
-            'markerEnd': 'marker_end',
-            'pathOptions': 'path_options',
+            "sourceHandle": "source_handle",
+            "targetHandle": "target_handle",
+            "zIndex": "z_index",
+            "className": "class_name",
+            "markerStart": "marker_start",
+            "markerEnd": "marker_end",
+            "pathOptions": "path_options",
         }
         for ck, sk in cc.items():
             if ck in mapped and sk not in mapped:
                 mapped[sk] = mapped.pop(ck)
         # Coerce class_name None -> '' because model CharField doesn't allow null
-        if mapped.get('class_name', None) is None:
-            mapped['class_name'] = ''
+        if mapped.get("class_name", None) is None:
+            mapped["class_name"] = ""
         # Coerce label None -> '' because TextField doesn't allow null by default
-        if mapped.get('label', None) is None:
-            mapped['label'] = ''
+        if mapped.get("label", None) is None:
+            mapped["label"] = ""
         # Coerce JSON-like fields None -> {}
-        for jf in ['marker_start', 'marker_end', 'path_options', 'style', 'data']:
+        for jf in ["marker_start", "marker_end", "path_options", "style", "data"]:
             if jf in mapped and mapped[jf] is None:
                 mapped[jf] = {}
         return super().to_internal_value(mapped)
@@ -310,25 +382,25 @@ class WorkflowEdgeSerializer(serializers.ModelSerializer):
     def to_representation(self, instance):
         """Convert to React Flow Edge format."""
         return {
-            'id': instance.edge_id,
-            'type': instance.edge_type,
-            'source': instance.source,
-            'target': instance.target,
-            'sourceHandle': instance.source_handle or None,
-            'targetHandle': instance.target_handle or None,
-            'data': instance.data,
-            'selected': instance.selected,
-            'animated': instance.animated,
-            'hidden': instance.hidden,
-            'deletable': instance.deletable,
-            'selectable': instance.selectable,
-            'zIndex': instance.z_index,
-            'label': instance.label or None,
-            'style': instance.style,
-            'className': instance.class_name or None,
-            'markerStart': instance.marker_start if instance.marker_start else None,
-            'markerEnd': instance.marker_end if instance.marker_end else None,
-            'pathOptions': instance.path_options if instance.path_options else None,
+            "id": instance.edge_id,
+            "type": instance.edge_type,
+            "source": instance.source,
+            "target": instance.target,
+            "sourceHandle": instance.source_handle or None,
+            "targetHandle": instance.target_handle or None,
+            "data": instance.data,
+            "selected": instance.selected,
+            "animated": instance.animated,
+            "hidden": instance.hidden,
+            "deletable": instance.deletable,
+            "selectable": instance.selectable,
+            "zIndex": instance.z_index,
+            "label": instance.label or None,
+            "style": instance.style,
+            "className": instance.class_name or None,
+            "markerStart": instance.marker_start if instance.marker_start else None,
+            "markerEnd": instance.marker_end if instance.marker_end else None,
+            "pathOptions": instance.path_options if instance.path_options else None,
         }
 
 
@@ -339,87 +411,104 @@ class WorkflowNodeSerializer(serializers.ModelSerializer):
     class Meta:
         model = WorkflowNode
         fields = [
-            'workflow',
-            'node_id', 'node_type', 'position_x', 'position_y', 'width', 'height',
-            'selected', 'dragging', 'draggable', 'selectable', 'connectable',
-            'deletable', 'hidden', 'source_position', 'target_position', 'parent_id',
-            'z_index', 'drag_handle', 'style', 'class_name', 'data'
+            "workflow",
+            "node_id",
+            "node_type",
+            "position_x",
+            "position_y",
+            "width",
+            "height",
+            "selected",
+            "dragging",
+            "draggable",
+            "selectable",
+            "connectable",
+            "deletable",
+            "hidden",
+            "source_position",
+            "target_position",
+            "parent_id",
+            "z_index",
+            "drag_handle",
+            "style",
+            "class_name",
+            "data",
         ]
 
     def to_internal_value(self, data):
         # Accept both snake_case and React Flow camelCase for node fields
         mapped = dict(data)
 
-        if 'id' in mapped and 'node_id' not in mapped:
-            mapped['node_id'] = mapped.get('id')
-        if 'type' in mapped and 'node_type' not in mapped:
-            mapped['node_type'] = mapped.get('type')
+        if "id" in mapped and "node_id" not in mapped:
+            mapped["node_id"] = mapped.get("id")
+        if "type" in mapped and "node_type" not in mapped:
+            mapped["node_type"] = mapped.get("type")
 
         # Position
-        if 'position' in mapped:
-            pos = mapped.get('position') or {}
-            mapped.setdefault('position_x', pos.get('x'))
-            mapped.setdefault('position_y', pos.get('y'))
+        if "position" in mapped:
+            pos = mapped.get("position") or {}
+            mapped.setdefault("position_x", pos.get("x"))
+            mapped.setdefault("position_y", pos.get("y"))
 
         # CamelCase to snake_case
         cc = {
-            'sourcePosition': 'source_position',
-            'targetPosition': 'target_position',
-            'parentId': 'parent_id',
-            'zIndex': 'z_index',
-            'dragHandle': 'drag_handle',
-            'className': 'class_name',
+            "sourcePosition": "source_position",
+            "targetPosition": "target_position",
+            "parentId": "parent_id",
+            "zIndex": "z_index",
+            "dragHandle": "drag_handle",
+            "className": "class_name",
         }
         for ck, sk in cc.items():
             if ck in mapped and sk not in mapped:
                 mapped[sk] = mapped.pop(ck)
         # Coerce nullable-like CharFields to empty strings
-        for k in ['source_position', 'target_position', 'drag_handle', 'class_name']:
+        for k in ["source_position", "target_position", "drag_handle", "class_name"]:
             if mapped.get(k, None) is None:
-                mapped[k] = ''
+                mapped[k] = ""
 
         # Label lives inside data, not on WorkflowNode. If frontend sends it at the
         # root level (backwards compat), move it into the data dict.
-        if 'label' in mapped:
-            data = mapped.get('data') or {}
-            data.setdefault('label', mapped.pop('label'))
-            mapped['data'] = data
+        if "label" in mapped:
+            data = mapped.get("data") or {}
+            data.setdefault("label", mapped.pop("label"))
+            mapped["data"] = data
 
         return super().to_internal_value(mapped)
 
     def to_representation(self, instance):
         """Convert to React Flow Node format."""
         node_file_relations = self.context.get(
-            'node_file_relations',
+            "node_file_relations",
             PrefetchedNodeFileRelations(),
         )
         return {
-            'id': instance.node_id,
-            'type': instance.node_type,
-            'position': {'x': instance.position_x, 'y': instance.position_y},
-            'data': instance.serialize_data(node_file_relations),
-            'selected': instance.selected,
-            'dragging': instance.dragging,
-            'draggable': instance.draggable,
-            'selectable': instance.selectable,
-            'connectable': instance.connectable,
-            'deletable': instance.deletable,
-            'hidden': instance.hidden,
-            'sourcePosition': instance.source_position or None,
-            'targetPosition': instance.target_position or None,
-            'parentId': instance.parent_id or None,
-            'zIndex': instance.z_index,
-            'dragHandle': instance.drag_handle or None,
-            'width': instance.width,
-            'height': instance.height,
-            'style': instance.style,
-            'className': instance.class_name or None,
+            "id": instance.node_id,
+            "type": instance.node_type,
+            "position": {"x": instance.position_x, "y": instance.position_y},
+            "data": instance.serialize_data(node_file_relations),
+            "selected": instance.selected,
+            "dragging": instance.dragging,
+            "draggable": instance.draggable,
+            "selectable": instance.selectable,
+            "connectable": instance.connectable,
+            "deletable": instance.deletable,
+            "hidden": instance.hidden,
+            "sourcePosition": instance.source_position or None,
+            "targetPosition": instance.target_position or None,
+            "parentId": instance.parent_id or None,
+            "zIndex": instance.z_index,
+            "dragHandle": instance.drag_handle or None,
+            "width": instance.width,
+            "height": instance.height,
+            "style": instance.style,
+            "className": instance.class_name or None,
         }
 
     def create(self, validated_data):
         # Handle creation with typed data based on node_type
-        node_type = validated_data['node_type']
-        data_dict = validated_data.pop('data', {})
+        node_type = validated_data["node_type"]
+        data_dict = validated_data.pop("data", {})
 
         # Create appropriate data object based on type
         data_serializer_map = {
@@ -438,22 +527,26 @@ class WorkflowNodeSerializer(serializers.ModelSerializer):
             snake_case_data = underscoreize(data_dict or {})
 
             # Filter incoming data to only allowed fields for the target serializer
-            allowed_fields = set(getattr(serializer_class.Meta, 'fields', []))
-            filtered_data = {k: v for k, v in snake_case_data.items() if k in allowed_fields}
+            allowed_fields = set(getattr(serializer_class.Meta, "fields", []))
+            filtered_data = {
+                k: v for k, v in snake_case_data.items() if k in allowed_fields
+            }
 
             data_serializer = serializer_class(data=filtered_data)
             if data_serializer.is_valid(raise_exception=True):
                 data_object = data_serializer.save()
 
                 # Set content type for generic foreign key
-                validated_data['data_content_type'] = ContentType.objects.get_for_model(data_object)
-                validated_data['data_object_id'] = data_object.id
+                validated_data["data_content_type"] = ContentType.objects.get_for_model(
+                    data_object
+                )
+                validated_data["data_object_id"] = data_object.id
 
         return WorkflowNode.objects.create(**validated_data)
 
     def update(self, instance, validated_data):
         # Update typed data if provided
-        data_dict = validated_data.pop('data', None)
+        data_dict = validated_data.pop("data", None)
 
         if data_dict and instance.data_object:
             # Update appropriate data object based on type
@@ -473,10 +566,14 @@ class WorkflowNodeSerializer(serializers.ModelSerializer):
 
                 # Filter incoming data to only allowed fields for the target serializer
                 allowed_fields = set(serializer_class().get_fields().keys())
-                filtered_data = {k: v for k, v in snake_case_data.items() if k in allowed_fields}
+                filtered_data = {
+                    k: v for k, v in snake_case_data.items() if k in allowed_fields
+                }
 
                 # Update the existing data object
-                data_serializer = serializer_class(instance.data_object, data=filtered_data, partial=True)
+                data_serializer = serializer_class(
+                    instance.data_object, data=filtered_data, partial=True
+                )
                 if data_serializer.is_valid(raise_exception=True):
                     data_serializer.save()
 
@@ -487,10 +584,10 @@ class WorkflowNodeSerializer(serializers.ModelSerializer):
         return instance
 
 
-
 # ==========================================
 # V2 API SERIALIZERS (GRAPH-BASED)
 # ==========================================
+
 
 class WorkflowRunV2Serializer(serializers.ModelSerializer):
     """
@@ -536,13 +633,28 @@ class WorkflowRunV2Serializer(serializers.ModelSerializer):
     class Meta:
         model = WorkflowRun
         fields = [
-            'id', 'workflow', 'user', 'started_at', 'ended_at', 'status',
-            'nodeStates', 'pendingValidation',
-            'workflow_title', 'workflow_description', 'is_partial'
+            "id",
+            "workflow",
+            "user",
+            "started_at",
+            "ended_at",
+            "status",
+            "nodeStates",
+            "pendingValidation",
+            "workflow_title",
+            "workflow_description",
+            "is_partial",
         ]
         read_only_fields = [
-            'id', 'started_at', 'ended_at', 'status', 'nodeStates', 'pendingValidation',
-            'workflow_title', 'workflow_description', 'is_partial'
+            "id",
+            "started_at",
+            "ended_at",
+            "status",
+            "nodeStates",
+            "pendingValidation",
+            "workflow_title",
+            "workflow_description",
+            "is_partial",
         ]
 
     def get_nodeStates(self, obj):
@@ -576,39 +688,43 @@ class WorkflowRunV2Serializer(serializers.ModelSerializer):
             } | null
         """
         # Find the first step waiting for human validation
-        pending_step = obj.steps.filter(
-            status=WorkflowRunStepStatus.PENDING_HUMAN_INPUT
-        ).select_related('step_node').first()
+        pending_step = (
+            obj.steps.filter(status=WorkflowRunStepStatus.PENDING_HUMAN_INPUT)
+            .select_related("step_node")
+            .first()
+        )
 
         if not pending_step:
             return None
 
-        step_data = pending_step.step_node.data_object if pending_step.step_node else None
+        step_data = (
+            pending_step.step_node.data_object if pending_step.step_node else None
+        )
         metadata = pending_step.metadata or {}
 
         # Handle StructuredOutputNodeData (routing node)
         if step_data and isinstance(step_data, StructuredOutputNodeData):
             routes = step_data.get_routes()
-            ai_recommendation = metadata.get('ai_recommendation')
-            ai_analysis = metadata.get('explanation') or metadata.get(MetadataKey.ANALYSIS)
+            ai_recommendation = metadata.get("ai_recommendation")
+            ai_analysis = metadata.get("explanation") or metadata.get(
+                MetadataKey.ANALYSIS
+            )
 
             return {
-                'nodeId': pending_step.step_node.node_id,
-                'routes': routes,
-                'aiRecommendation': ai_recommendation,
-                'context': {
-                    'aiAnalysis': ai_analysis
-                }
+                "nodeId": pending_step.step_node.node_id,
+                "routes": routes,
+                "aiRecommendation": ai_recommendation,
+                "context": {"aiAnalysis": ai_analysis},
             }
 
         # Fallback for other node types that might need validation
         return {
-            'nodeId': pending_step.step_node.node_id if pending_step.step_node else None,
-            'routes': [],
-            'aiRecommendation': None,
-            'context': {
-                'aiAnalysis': None
-            }
+            "nodeId": (
+                pending_step.step_node.node_id if pending_step.step_node else None
+            ),
+            "routes": [],
+            "aiRecommendation": None,
+            "context": {"aiAnalysis": None},
         }
 
     def get_workflow_title(self, obj):

@@ -88,6 +88,17 @@ class AccessCodeGroup(TimeStampMixin):
                     "CREATOR: No DARE access + SocraticBooks creator (can create/manage books). "
                     "SB_USER: No DARE access + SocraticBooks student/consumer only.")
     )
+    # Owner of this group — typically the professor/lab lead who manages its wallet and refill policy.
+    # Group owners see a dedicated UI for their own group only.
+    group_owner = models.ForeignKey(
+        "users.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="owned_access_code_groups",
+        verbose_name=_("Group Owner"),
+        help_text=_("User who manages this group's wallet and refill policy (e.g. the professor or lab lead).")
+    )
 
     class Meta:
         verbose_name = "Access Code Group"

@@ -12,6 +12,7 @@ class MediaConfig:
         images: Temporary images for vision (list of dicts with 'preview', 'name', 'type')
         media_ids: Persistent media file IDs from database
     """
+
     images: List[Dict[str, Any]] = field(default_factory=list)
     media_ids: List[str] = field(default_factory=list)
 

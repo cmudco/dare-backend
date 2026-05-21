@@ -1,0 +1,26 @@
+# Copy this file to docker-compose.override.yml for local development.
+# Docker Compose loads docker-compose.override.yml automatically.
+
+services:
+  web:
+    environment:
+      DJANGO_DEBUG: "True"
+      ENVIRONMENT: local
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - .:/app
+    command: web
+
+  worker:
+    environment:
+      DJANGO_DEBUG: "True"
+      ENVIRONMENT: local
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - .:/app
+
+  # Optional: expose a Python debugger port after adding debugpy to the image
+  # and wrapping the web command with debugpy.
+  # web:
+  #   ports:
+  #     - "${WEB_DEBUG_PORT:-5678}:5678"

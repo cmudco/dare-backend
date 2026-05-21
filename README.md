@@ -1,223 +1,101 @@
-# DARE
+# DARE Backend
 
-Backend for DARE
+Django REST + Socket.IO backend for the **DARE (Distributed AI Research Engine)** platform — a multi-LLM research and conversation platform with file processing, vector RAG, workflow automation, and real-time streaming.
 
-## Initial Setup
+## Purpose
 
-Please do the following to get this project up and running locally:
+DARE provides a unified backend for working with multiple large language models (OpenAI, Anthropic Claude, Google Gemini, and self-hosted LLaMA via Ollama). It handles:
 
-Clone the repo
+- Real-time streaming chat across providers
+- Document upload, processing, and RAG over vector stores (Pinecone, Weaviate)
+- Multi-step AI workflow execution via a visual DAG builder
+- Token usage tracking and per-user billing
+- Access-code based registration for institutional deployments
+- Inter-service authentication for partner platforms
 
-```
-git clone https://github.com/cmudco/dare-backend.git
-```
-
-Make virtual environment (with python 3.11) in .venv in the project directory and activate it
-
-```
-python3 -m venv .venv
-source .venv/bin/activate
-```
-
-Install the dev requirements
+## Architecture Overview
 
 ```
+┌──────────────────────────────────────────────────────────┐
+│  Clients (DARE Frontend, Partner Frontends, Mobile)      │
+└─────────────────┬───────────────────────┬────────────────┘
+                  │ REST / Socket.IO      │
+┌─────────────────▼───────────────────────▼────────────────┐
+│                    DARE Backend (Django)                  │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐ │
+│  │ Auth /   │  │ Convers. │  │ Files /  │  │ Workflow │ │
+│  │ Users    │  │ + Chat   │  │ RAG      │  │ Engine   │ │
+│  └──────────┘  └──────────┘  └──────────┘  └──────────┘ │
+│  ┌──────────────────────────────────────────────────────┐│
+│  │       Service Layer (LLM, Vector, MCP, Email)        ││
+│  └──────────────────────────────────────────────────────┘│
+└──┬──────────┬──────────┬──────────┬──────────┬──────────┘
+   │          │          │          │          │
+┌──▼───┐  ┌───▼───┐  ┌───▼───┐  ┌──▼───┐  ┌───▼────┐
+│ Post │  │ Redis │  │ Vector│  │ LLM  │  │ Ollama │
+│ gres │  │ + RQ  │  │ Stores│  │ APIs │  │ (local)│
+└──────┘  └───────┘  └───────┘  └──────┘  └────────┘
+```
+
+See [docs/architecture.md](docs/architecture.md) for the full diagram and [docs/architecture/overview.md](docs/architecture/overview.md) for component-level detail.
+
+## Quick Start (Docker)
+
+```bash
+# 1. Clone
+git clone <repo-url> dare-backend && cd dare-backend
+
+# 2. Configure
+cp .example.env .env
+# Edit .env — at minimum, set OPENAI_API_KEY (or another provider)
+
+# 3. Start dependencies (Weaviate + Ollama)
+docker-compose up -d
+
+# 4. Install Python deps and run migrations
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements/local.txt
-```
-
-Create `.env` next to `.example.env` and set the env variables.
-For dev/local setup, these can be the values of the following env variables:
-
-```
-DJANGO_SETTINGS_MODULE=config.settings.local
-DJANGO_DEBUG=True
-```
-
-**Note:**
-For local development, we are using SQLite as the database, so you don't need to set up PostgreSQL or configure any database credentials.
-For production, create postgreSQL database locally and set the DB env variables in `.env` you just created.
-
-Run migrations
-
-```
 python manage.py migrate
-```
 
-Run the project
+# 5. Run the API server
+uvicorn dare.asgi:application --host 0.0.0.0 --port 8000 --reload
 
-```bash
-python manage.py runserver
-```
-
-## Background Tasks
-
-This project utilizes **Django RQ** to manage background tasks and **Redis** as a message broker.
-
-### Creating New Tasks
-
-To create new tasks, proceed with the following steps:
-
-1. In your application, create a `tasks.py` file (if it doesn't exist already).
-2. Apply the **Django RQ** `@job` decorator to the functions you wish to run as background tasks.
-3. This system uses the **default queue** for most tasks, so specify the queue when adding the job decorator.
-
-#### Example:
-
-```python
-from django_rq import job
-
-@job('default')
-def my_func():
-    pass
-```
-
-### Running Django RQ Locally
-
-To run **Django RQ** locally, ensure the following requirements are met:
-
--   **Redis** is installed, operational, and running.
--   Redis environment variables (e.g., `REDIS_HOST`, `REDIS_PORT`) are correctly set in your `.env` file if they differ from defaults (`localhost:6379`).
-
-Then, use the following commands in separate terminal windows (ensure your virtual environment is activated):
-
-#### Start Redis Server:
-
-```bash
-redis-server
-```
-
-Alternatively, start Redis via a **Docker** container if preferred.
-
-Verify Redis is running:
-
-```bash
-redis-cli ping
-```
-
-This should return `PONG`.
-
-#### Run the RQ Worker (for the default queue):
-
-```bash
+# 6. In a second terminal, run the background worker
 OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES python -Wd manage.py rqworker default -v 3
 ```
 
--   `OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES` is included to avoid fork safety issues on **macOS**.
--   `-Wd` enables Python warnings.
--   `-v 3` sets verbosity to the highest level for detailed logging.
+The API will be available at `http://localhost:8000/`. Interactive Swagger docs are at `http://localhost:8000/api/docs/`.
 
-#### Run the Application Server (using Uvicorn):
+> **Note:** Docker Compose currently provisions Weaviate and Ollama only. Postgres and Redis run on the host (see [INSTALL.md](INSTALL.md) for full containerization).
 
-```bash
-uvicorn dare.asgi:application --port 8000 --reload --log-level debug
-```
+## Quick Start (Bare Metal)
 
--   `--port 8000`: Runs the server on port **8000**.
--   `--reload`: Enables auto-reloading for development.
--   `--log-level debug`: Sets detailed logging.
+See [INSTALL.md](INSTALL.md) for the full bare-metal deployment guide, including Postgres and Redis setup.
 
-## Development Workflow
+## Documentation
 
-1. **Feature Branch Creation**:
+| Doc | What's in it |
+|---|---|
+| [INSTALL.md](INSTALL.md) | Full deployment guide — Docker and bare metal |
+| [docs/configuration.md](docs/configuration.md) | Every environment variable, with type, default, and description |
+| [docs/architecture.md](docs/architecture.md) | Component diagram and request flows |
+| [docs/admin-guide.md](docs/admin-guide.md) | User/role management, access codes, analytics |
+| [docs/contributing.md](docs/contributing.md) | Issues, pull requests, coding standards |
+| [CHANGELOG.md](CHANGELOG.md) | Release notes |
+| [SECURITY.md](SECURITY.md) | Vulnerability disclosure process |
+| [docs/architecture/socketio-events.md](docs/architecture/socketio-events.md) | Socket.IO event reference |
+| [docs/api/dare-backend.md](docs/api/dare-backend.md) | REST API reference |
+| [docs/code-standards.md](docs/code-standards.md) | Coding conventions |
 
-    - When working on a feature, fix, refactor, or any other task, create a new feature branch.
-    - Naming convention: `[YourName]/[Feature/Fix/Refactor]/[Description]`.
-    - Once completed, merge your feature branch into the `dev` branch.
+## Tech Stack
 
-2. **Commit Messages**:
+- **Python 3.11**, Django 4.x, Django REST Framework
+- **Django Channels** + python-socketio for real-time streaming
+- **Django RQ** + Redis for background jobs
+- **PostgreSQL** (production) / SQLite (local dev)
+- **Weaviate** and **Pinecone** for vector storage
+- **Ollama** for self-hosted LLaMA models
 
-    - Ensure your commit messages are descriptive and explanatory.
-    - These messages will be used to generate release notes.
+## License
 
-3. **Pull Request (PR) Creation**:
-    - Link your issue ticket in the development section of the PR.
-    - Attach screenshots of your work, if available.
-    - Describe what the PR does, how it can be manually tested, and request a review from another developer.
-    - Once approved and merged into `dev`, the associated issue ticket will automatically move to the "in progress done" column on the board.
-
-## Best Practices:
-
--   Always wrap user-facing strings with the translation function.
--   Preferably, source all strings from a constants file.
--   Do **NOT** translate any exceptions or errors that are logged.
-
-## Sending Emails From App
-
-To send emails from your local setup then set the following env variables in your `.env` file:
-
-```
-EMAIL_HOST='********'
-EMAIL_HOST_USER='********'
-EMAIL_HOST_PASSWORD='*************'
-EMAIL_FROM='*******'
-```
-
-## Formatting and Imports Sorting
-
-Currently, we are using [black](https://pypi.org/project/black/) for formatting and [isort](https://pypi.org/project/isort/) for import sorting.
-
-**(Make sure your environment is activated before you run these commands.)**
-
-To check files formatting etc, run
-
-```
-black --check --verbose .
-```
-
-To fix files formatting, run
-
-```
-black .
-```
-
-To check imports sorting, run
-
-```
-isort . -c
-```
-
-To fix imports sorting, run
-
-```
-isort .
-```
-
-## Configurable Allowed Hosts
-
-Allowed hosts are now configurable via an environment variable. By default, the application allows `dare`. Additional domains can be added as a comma-separated string in the `ALLOWED_HOSTS` environment variable.
-
-Format:
-
-```
-ALLOWED_HOSTS='domain1.com,domain2.com'
-```
-
-Refer to the `example.env` file for an example configuration.
-
-## Adding a New Variable to the .env File
-
-To add a new variable to the `.env` file and make it accessible throughout the project, follow these steps:
-
-1. Add the new variable to the `example.env` file:
-
-    - Use uppercase letters for the variable name and replace spaces with underscores.
-    - Follow the standard format for `.env` files (e.g., `NEW_VARIABLE_NAME=value`).
-
-2. Add the new variable to your `.env` file in your local development environment.
-
-3. Open the `config/env.py` file and add the following line to declare your new variable:
-   NEW_VARIABLE_NAME = os.getenv("NEW_VARIABLE_NAME", default_value)
-   Replace `NEW_VARIABLE_NAME` with the name of your new variable and `default_value` with the default value you want to assign (if any).
-
-4. The new variable will now be sourced from the `.env` file and available throughout the entire project using `env.NEW_VARIABLE_NAME`.
-
-5. To use the new variable in a Python file, you can import the `env` object from `config/env.py` and access the variable like this:
-   from config.env import env
-
-    # Use the new variable
-
-    print(env.NEW_VARIABLE_NAME)
-
-    Make sure to replace `NEW_VARIABLE_NAME` with the actual name of your new variable.
-
-That's it! You can now use the new variable in your project.
+See [LICENSE](LICENSE) if present, or contact the maintainers.

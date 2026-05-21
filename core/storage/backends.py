@@ -50,6 +50,7 @@ class SyftBoxStorage(Storage):
         """
         self._user_email = user_email
         self._app_name = settings.SYFTBOX.get("APP_NAME", "dare")
+        self.last_upload_etag: Optional[str] = None
 
     def get_access_token(self) -> str:
         """SyftBox access token (refreshes via ``User.access_token`` when expired)."""
@@ -152,12 +153,16 @@ class SyftBoxStorage(Storage):
         return File(io.BytesIO(data))
 
     def _save(self, name: str, content) -> str:
+        """Persist file content and return the saved relative name."""
         data = self._read_file_content_as_bytes(content)
+        self.last_upload_etag = None
 
         if data:
             token, acl_path, pattern = self.build_permission_context(name)
             file_path = self._build_file_path(name)
-            SyftBoxFileService().upload(token, file_path, data)
+            upload_result = SyftBoxFileService().upload(token, file_path, data)
+            if isinstance(upload_result, dict):
+                self.last_upload_etag = upload_result.get("etag")
             SyftBoxApiPermissionService(owner_email=self._user_email).set_read_permissions(
                 access_token=token,
                 acl_path=acl_path,
@@ -174,16 +179,26 @@ class SyftBoxStorage(Storage):
         Args:
             name: File name/path
         """
-        full_path = self._full_path(name)
-        if full_path.exists():
-            try:
-                permission_service = SyftBoxPermissionService()
-                permission_service.remove_file_permissions(full_path)
-            except Exception as e:
-                logger.warning(f"Failed to clean up SyftBox permissions: {e}")
+        token = self.get_access_token()
+        if not token:
+            raise SyftBoxException(
+                SyftBoxErrorCode.INVALID_CREDENTIALS,
+                "SyftBox access token is missing for this user.",
+            )
 
+        file_path = self._build_file_path(name)
+        SyftBoxFileService().delete(token, [file_path])
+
+        full_path = self._full_path(name)
+        try:
+            permission_service = SyftBoxPermissionService()
+            permission_service.remove_file_permissions(full_path)
+        except Exception as e:
+            logger.warning(f"Failed to clean up SyftBox permissions: {e}")
+
+        if full_path.exists():
             full_path.unlink()
-            logger.debug(f"Deleted file from SyftBox: {full_path}")
+            logger.debug(f"Deleted local SyftBox mirror file: {full_path}")
 
     def exists(self, name: str) -> bool:
         """
