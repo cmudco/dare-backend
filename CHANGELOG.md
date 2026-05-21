@@ -18,7 +18,7 @@ First public release of the DARE backend. Establishes the platform for multi-LLM
 ### Added
 
 #### Core platform
-- Django 4.x REST API scaffold with layered settings (`local`, `staging`, `production`).
+- Django 5.1 REST API scaffold with layered settings (`local`, `staging`, `production`).
 - Custom `User` model with email-based authentication via `dj-rest-auth` and JWT.
 - Soft-delete and active-objects model mixins via `BaseModel`.
 - Sentry integration (optional via `SENTRY_DSN`).
@@ -66,11 +66,10 @@ First public release of the DARE backend. Establishes the platform for multi-LLM
 - Optional SyftBox integration for federated data sharing.
 
 #### Operations
-- Docker Compose for Weaviate, Weaviate console, and Ollama.
+- Docker Compose for the API server, worker, Postgres + pgvector, Redis, Weaviate, Weaviate console, and Ollama.
 - Example Nginx and systemd configurations in `INSTALL.md`.
-- Drf-spectacular auto-generated OpenAPI schema at `/api/docs/`.
+- Drf-spectacular auto-generated OpenAPI schema at `/api/schema/`, with Swagger UI at `/api/docs/`.
 
 ### Known limitations
-- Postgres and Redis are not currently provisioned by Docker Compose; they run on the host.
 - Production Docker images are not yet published.
 - Test coverage is partial; integration tests for Socket.IO consumers are minimal.

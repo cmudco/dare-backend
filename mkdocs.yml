@@ -34,7 +34,12 @@ nav:
     - Socket.IO Events: architecture/socketio-events.md
     - Data Flows: architecture/data-flows.md
   - API Reference: api/dare-backend.md
+  - Configuration: configuration.md
+  - Admin Guide: admin-guide.md
+  - Integration:
+    - SocraticBooks Proxy: integration/socraticbooks-dare-proxy.md
   - Development:
+    - Contributing: contributing.md
     - Code Standards: code-standards.md
     - Serialization Contract: serialization.md
   - Deployment:

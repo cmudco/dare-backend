@@ -6,7 +6,8 @@ Primary backend for the DARE platform. Handles AI/LLM services, real-time chat a
 
 - [Getting Started](getting-started.md) — Set up and run the full platform locally
 - [Architecture Overview](architecture/overview.md) — System diagrams and component descriptions
-- [API Docs](http://localhost:8000/api/docs/) — Interactive Swagger UI (requires running server)
+- [OpenAPI Schema](http://localhost:8000/api/schema/) — Raw API schema (requires running server)
+- [Swagger UI](http://localhost:8000/api/docs/) — Interactive API explorer when CDN assets are reachable
 
 ## Contents
 
