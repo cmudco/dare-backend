@@ -21,6 +21,7 @@ from typing import Dict, Any, Optional, Set
 from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from core.utils.db import db_reconnect_on_stale
 import socketio
 
 from conversations.socket_server import sio
@@ -655,9 +656,9 @@ class ChatNamespace(socketio.AsyncNamespace):
     
     @sync_to_async
     def _get_user(self, user_id: int):
-        """Fetch user from database."""
+        """Fetch user by ID; reconnects once if the thread-local connection is stale."""
         try:
-            return User.objects.get(id=user_id)
+            return db_reconnect_on_stale(User.objects.get, id=user_id)
         except User.DoesNotExist:
             return None
 

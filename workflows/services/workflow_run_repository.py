@@ -13,6 +13,7 @@ from typing import Optional
 from datetime import timedelta
 
 from asgiref.sync import sync_to_async
+from core.utils.db import db_reconnect_on_stale
 from django.utils import timezone
 from django.contrib.auth import get_user_model
 
@@ -42,11 +43,12 @@ class WorkflowRunRepository:
     @staticmethod
     @sync_to_async
     def get_user(user_id: int) -> Optional[User]:
-        """Fetch user from database by ID."""
+        """Fetch user by ID; reconnects once if the thread-local connection is stale."""
         try:
-            return User.objects.get(id=user_id)
+            return db_reconnect_on_stale(User.objects.get, id=user_id)
         except User.DoesNotExist:
             return None
+
 
     @staticmethod
     @sync_to_async
