@@ -409,7 +409,13 @@ class ConversationViewSet(ConversationSharingMixin, viewsets.ModelViewSet):
         messages = (
             Message.active_objects.filter(conversation=conversation)
             .select_related("llm")
-            .prefetch_related("files", "tags", "snippets__file", "web_search_sources")
+            .prefetch_related(
+                "files",
+                "tags",
+                "snippets__file",
+                "web_search_sources",
+                "mcp_tool_calls",
+            )
             .order_by("created_at")
         )
 

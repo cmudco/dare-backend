@@ -87,7 +87,8 @@ class CustomLLMService:
             response = await self._stream_chat_completions(
                 prepared_messages,
                 max_tokens,
-                temperature
+                temperature,
+                tools,
             )
 
             # Process and yield stream chunks
@@ -154,7 +155,8 @@ class CustomLLMService:
         self,
         messages: List[Dict[str, str]],
         max_tokens: int,
-        temperature: float
+        temperature: float,
+        tools: Optional[List[Dict]] = None,
     ):
         """
         Stream using Chat Completions API.
@@ -170,7 +172,8 @@ class CustomLLMService:
         kwargs = self._build_chat_completion_params(
             messages,
             max_tokens,
-            temperature
+            temperature,
+            tools,
         )
 
         return await self.client.chat.completions.create(**kwargs)
@@ -179,7 +182,8 @@ class CustomLLMService:
         self,
         messages: List[Dict],
         max_tokens: int,
-        temperature: float
+        temperature: float,
+        tools: Optional[List[Dict]] = None,
     ) -> Dict:
         """
         Build parameters for chat completion API call.
@@ -205,6 +209,10 @@ class CustomLLMService:
         else:
             params["max_tokens"] = max_tokens
             params["temperature"] = temperature
+
+        if tools:
+            params["tools"] = tools
+            params["tool_choice"] = "auto"
 
         return params
 

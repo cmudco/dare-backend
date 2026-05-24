@@ -7,14 +7,16 @@ for use within chat conversations.
 """
 
 import logging
+import time
 from typing import Optional
 
 from asgiref.sync import sync_to_async
 
 from mcp.models import MCPServer, UserMCPConnection, MCPToolExecution
-from mcp.constants import ExecutionStatus
+from mcp.constants import ExecutionStatus, MCPAuthType
 from mcp.services.mcp_manager import mcp_manager, MCPManagerError
 from mcp.services.credential_service import MCPCredentialService
+from mcp.services.oauth_service import mcp_oauth_service, MCPOAuthError
 
 logger = logging.getLogger(__name__)
 
@@ -164,15 +166,12 @@ class MCPToolExecutor:
             raise MCPToolExecutorError(f"MCP server not found: {server_slug}")
 
         connection = await self._get_user_connection(user, server)
-        if not connection or not connection.encrypted_credentials:
+        if not connection or not self._connection_has_auth(connection):
             raise MCPToolExecutorError(
                 f"No active connection to {server.name}. User must connect first."
             )
 
-        # Decrypt credentials
-        credentials = MCPCredentialService.decrypt_credentials(
-            connection.encrypted_credentials
-        )
+        credentials = await self._get_connection_credentials(connection)
 
         logger.info(
             f"[MCPToolExecutor] Executing {tool_name} on {server_slug} "
@@ -273,10 +272,11 @@ class MCPToolExecutor:
     @sync_to_async
     def _get_user_connection(self, user, server) -> Optional[UserMCPConnection]:
         """Get user's connection to an MCP server."""
-        return UserMCPConnection.active_objects.filter(
-            user=user,
-            server=server
-        ).first()
+        return (
+            UserMCPConnection.active_objects.select_related("server")
+            .filter(user=user, server=server)
+            .first()
+        )
 
     async def _get_tools_for_server(self, user, server) -> list[dict]:
         """
@@ -290,16 +290,13 @@ class MCPToolExecutor:
             List of OpenAI-format tool definitions
         """
         connection = await self._get_user_connection(user, server)
-        if not connection or not connection.encrypted_credentials:
+        if not connection or not self._connection_has_auth(connection):
             logger.debug(
                 f"[MCPToolExecutor] User {user.email} has no connection to {server.slug}"
             )
             return []
 
-        # Decrypt credentials
-        credentials = MCPCredentialService.decrypt_credentials(
-            connection.encrypted_credentials
-        )
+        credentials = await self._get_connection_credentials(connection)
 
         # Get tools from cache or subprocess
         try:
@@ -318,6 +315,57 @@ class MCPToolExecutor:
             f"[MCPToolExecutor] Got {len(openai_tools)} tools from {server.slug}"
         )
         return openai_tools
+
+    def _connection_has_auth(self, connection: UserMCPConnection) -> bool:
+        if connection.server.auth_type == MCPAuthType.NONE:
+            return True
+        return bool(connection.encrypted_credentials)
+
+    async def _get_connection_credentials(self, connection: UserMCPConnection) -> dict:
+        credentials = MCPCredentialService.decrypt_credentials(
+            connection.encrypted_credentials
+        )
+        if connection.server.auth_type != MCPAuthType.OAUTH2:
+            return credentials
+
+        expires_at = connection.auth_metadata.get("expires_at")
+        refresh_token = MCPCredentialService.get_refresh_token(credentials)
+        if not expires_at or not refresh_token or expires_at > int(time.time()) + 60:
+            return credentials
+
+        try:
+            token = await mcp_oauth_service.refresh_access_token(
+                connection.server,
+                refresh_token,
+            )
+        except MCPOAuthError as error:
+            logger.warning(
+                f"[MCPToolExecutor] Failed to refresh OAuth token for {connection.server.slug}: {error}"
+            )
+            return credentials
+
+        encrypted_credentials = MCPCredentialService.encrypt_credentials(
+            token.to_credentials()
+        )
+        auth_metadata = token.to_metadata()
+        await self._update_connection_auth(
+            connection.id,
+            encrypted_credentials,
+            auth_metadata,
+        )
+        return token.to_credentials()
+
+    @sync_to_async
+    def _update_connection_auth(
+        self,
+        connection_id: int,
+        encrypted_credentials: dict,
+        auth_metadata: dict,
+    ):
+        UserMCPConnection.all_objects.filter(id=connection_id).update(
+            encrypted_credentials=encrypted_credentials,
+            auth_metadata=auth_metadata,
+        )
 
     @sync_to_async
     def _update_execution_context(
