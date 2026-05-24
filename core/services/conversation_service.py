@@ -77,7 +77,9 @@ class ConversationService:
                 "energyStats": msg.get("energy_stats", None),
                 "artifactId": msg.get("artifactId", None),
                 "memoryContextData": msg.get("memory_context_data") or [],
-                "toolCalls": [
+                # Keep socket fallback history aligned with the REST message
+                # serializer; the client camelizes this to `mcpToolCalls`.
+                "mcp_tool_calls": [
                     self._build_tool_call_payload(tc)
                     for tc in msg.get("mcp_tool_calls", [])
                 ],

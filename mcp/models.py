@@ -11,7 +11,7 @@ from django.db import models
 from django.conf import settings
 from common.models import BaseModel
 from common.managers import ActiveObjectsManager
-from mcp.constants import ExecutionStatus
+from mcp.constants import ExecutionStatus, MCPAuthType, MCPTransport
 
 
 class MCPServer(BaseModel):
@@ -39,6 +39,20 @@ class MCPServer(BaseModel):
         help_text="Icon identifier for frontend (e.g., 'slack', 'github')"
     )
 
+    transport = models.CharField(
+        max_length=32,
+        choices=MCPTransport.choices(),
+        default=MCPTransport.STDIO,
+        help_text="How DARE connects to this MCP server"
+    )
+
+    auth_type = models.CharField(
+        max_length=32,
+        choices=MCPAuthType.choices(),
+        default=MCPAuthType.CREDENTIALS,
+        help_text="How users authenticate to this MCP server"
+    )
+
     # Docker configuration (used when MCP_USE_DOCKER=True)
     docker_image = models.CharField(
         max_length=255,
@@ -54,6 +68,39 @@ class MCPServer(BaseModel):
     args = models.JSONField(
         default=list,
         help_text="Command arguments as JSON array (e.g., ['-y', '@modelcontextprotocol/server-slack'])"
+    )
+
+    remote_url = models.URLField(
+        blank=True,
+        help_text="Remote MCP endpoint for streamable HTTP servers"
+    )
+    remote_headers = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Non-secret headers to send to remote MCP servers"
+    )
+
+    oauth_authorize_url = models.URLField(
+        blank=True,
+        help_text="OAuth authorization endpoint for remote MCP servers"
+    )
+    oauth_token_url = models.URLField(
+        blank=True,
+        help_text="OAuth token and refresh endpoint for remote MCP servers"
+    )
+    oauth_registration_url = models.URLField(
+        blank=True,
+        help_text="OAuth dynamic client registration endpoint, when supported"
+    )
+    oauth_scope = models.CharField(
+        max_length=255,
+        blank=True,
+        help_text="OAuth scopes to request"
+    )
+    oauth_client_id = models.CharField(
+        max_length=255,
+        blank=True,
+        help_text="OAuth client ID if dynamic registration is not used"
     )
 
     # Credential schema - what credentials does this server need?
@@ -143,6 +190,11 @@ class UserMCPConnection(BaseModel):
         null=True,
         blank=True,
         help_text="When tools were last cached"
+    )
+    auth_metadata = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Non-secret connection metadata such as OAuth expiry and account identity"
     )
 
     all_objects = models.Manager()  # Default manager for get_or_create, etc.

@@ -87,5 +87,65 @@
             "created_at": "2026-04-03T00:00:00Z",
             "updated_at": "2026-04-03T00:00:00Z"
         }
+    },
+    {
+        "model": "mcp.mcpserver",
+        "pk": 4,
+        "fields": {
+            "name": "Consensus",
+            "slug": "consensus",
+            "description": "Search peer-reviewed research papers with filters for study type, publication year, human studies, sample size, and medical mode.",
+            "icon": "consensus",
+            "transport": "streamable_http",
+            "auth_type": "oauth2",
+            "docker_image": "",
+            "command": "true",
+            "args": [],
+            "remote_url": "https://mcp.consensus.app/mcp",
+            "remote_headers": {},
+            "oauth_authorize_url": "https://consensus.app/oauth/authorize",
+            "oauth_token_url": "https://consensus.app/oauth/token",
+            "oauth_registration_url": "https://consensus.app/oauth/register/",
+            "oauth_scope": "search",
+            "oauth_client_id": "",
+            "required_credentials": [],
+            "credentials_help_url": "https://docs.consensus.app/docs/mcp",
+            "extra_env_vars": {},
+            "setup_guide": "## Consensus MCP\n\nConsensus exposes a hosted Streamable HTTP MCP server at `https://mcp.consensus.app/mcp`.\n\nConsensus requires OAuth for the live MCP endpoint. DARE will dynamically register an OAuth client when the first user connects, then each user signs in with their own Consensus account.",
+            "is_active": true,
+            "is_deleted": false,
+            "created_at": "2026-05-24T00:00:00Z",
+            "updated_at": "2026-05-24T00:00:00Z"
+        }
+    },
+    {
+        "model": "mcp.mcpserver",
+        "pk": 5,
+        "fields": {
+            "name": "Scite",
+            "slug": "scite",
+            "description": "Search scientific literature and inspect citation context, including supporting, mentioning, and contrasting Smart Citation signals.",
+            "icon": "scite",
+            "transport": "streamable_http",
+            "auth_type": "oauth2",
+            "docker_image": "",
+            "command": "true",
+            "args": [],
+            "remote_url": "https://api.scite.ai/mcp",
+            "remote_headers": {},
+            "oauth_authorize_url": "https://api.scite.ai/mcp/oauth/authorize",
+            "oauth_token_url": "https://api.scite.ai/mcp/oauth/token",
+            "oauth_registration_url": "https://api.scite.ai/mcp/oauth/register",
+            "oauth_scope": "mcp",
+            "oauth_client_id": "",
+            "required_credentials": [],
+            "credentials_help_url": "https://scite.ai/mcp",
+            "extra_env_vars": {},
+            "setup_guide": "## Scite MCP\n\nScite exposes a hosted Streamable HTTP MCP server at `https://api.scite.ai/mcp` and requires a Scite subscription for MCP access.\n\nBefore users can connect through DARE, register DARE as an OAuth client with Scite or add a client ID issued by Scite in the admin panel.",
+            "is_active": true,
+            "is_deleted": false,
+            "created_at": "2026-05-24T00:00:00Z",
+            "updated_at": "2026-05-24T00:00:00Z"
+        }
     }
 ]

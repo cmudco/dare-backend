@@ -1,3 +1,6 @@
+import json
+
+from djangorestframework_camel_case.util import camelize
 from rest_framework import serializers
 from conversations.models import (
     LLM,
@@ -326,19 +329,48 @@ class WebSearchSourceSerializer(serializers.ModelSerializer):
 
 
 class MessageToolCallSerializer(serializers.ModelSerializer):
-    """Serializer for MCP tool calls within messages."""
+    """Serializer for persisted tool calls shown when messages are reloaded."""
+
+    id = serializers.CharField(source="tool_call_id", read_only=True)
+    mcp_result = serializers.SerializerMethodField()
+    dare_result = serializers.SerializerMethodField()
 
     class Meta:
         model = MessageToolCall
         fields = [
+            "id",
             "tool_call_id",
             "tool_name",
             "server_slug",
             "status",
             "result",
             "error",
+            "mcp_result",
+            "dare_result",
         ]
         read_only_fields = fields
+
+    def get_mcp_result(self, obj):
+        # The frontend stores external MCP payloads separately from DARE-native
+        # tool results so each renderer can consume a typed result field.
+        if obj.server_slug == "dare":
+            return None
+        return self._parse_result(obj.result)
+
+    def get_dare_result(self, obj):
+        # DARE tools use the same persistence table as MCP tools, but their
+        # result payloads drive richer artifact/chart renderers in the UI.
+        if obj.server_slug != "dare":
+            return None
+        return self._parse_result(obj.result)
+
+    def _parse_result(self, result: str):
+        if not result:
+            return None
+        try:
+            return camelize(json.loads(result))
+        except (json.JSONDecodeError, TypeError):
+            return result
 
 
 class MessageSerializer(serializers.ModelSerializer):

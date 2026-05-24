@@ -3,6 +3,7 @@ Serializers for MCP API.
 """
 
 from rest_framework import serializers
+from mcp.constants import MCPAuthType
 from mcp.models import MCPServer, UserMCPConnection, MCPToolExecution
 from mcp.services.credential_service import MCPCredentialService
 
@@ -18,6 +19,9 @@ class MCPServerSerializer(serializers.ModelSerializer):
             'slug',
             'description',
             'icon',
+            'transport',
+            'auth_type',
+            'remote_url',
             'required_credentials',
             'credentials_help_url',
             'setup_guide',
@@ -51,6 +55,7 @@ class UserMCPConnectionSerializer(serializers.ModelSerializer):
             'server_slug',
             'masked_credentials',
             'has_credentials',
+            'auth_metadata',
             'is_active',
             'last_used_at',
             'created_at',
@@ -58,7 +63,7 @@ class UserMCPConnectionSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             'id', 'server', 'masked_credentials', 'has_credentials',
-            'last_used_at', 'created_at', 'updated_at'
+            'auth_metadata', 'last_used_at', 'created_at', 'updated_at'
         ]
 
     def get_masked_credentials(self, obj):
@@ -72,6 +77,8 @@ class UserMCPConnectionSerializer(serializers.ModelSerializer):
 
     def get_has_credentials(self, obj):
         """Check if credentials are set."""
+        if obj.server.auth_type == MCPAuthType.NONE:
+            return True
         return bool(obj.encrypted_credentials)
 
 
@@ -93,6 +100,14 @@ class UserMCPConnectionCreateSerializer(serializers.Serializer):
         """Validate required credentials are provided."""
         server = attrs['server']
         credentials = attrs['credentials']
+
+        if server.auth_type == MCPAuthType.NONE:
+            return attrs
+
+        if server.auth_type == MCPAuthType.OAUTH2:
+            raise serializers.ValidationError({
+                'credentials': 'OAuth MCP servers must be connected through the OAuth flow.'
+            })
 
         is_valid, missing = MCPCredentialService.validate_credentials_schema(
             credentials,
@@ -119,16 +134,37 @@ class UserMCPConnectionCreateSerializer(serializers.Serializer):
         connection, created = UserMCPConnection.all_objects.get_or_create(
             user=user,
             server=server,
-            defaults={'encrypted_credentials': encrypted}
+            defaults={
+                'encrypted_credentials': encrypted,
+                'auth_metadata': {
+                    "auth_type": server.auth_type,
+                },
+            }
         )
 
         if not created:
             connection.encrypted_credentials = encrypted
+            connection.auth_metadata = {
+                "auth_type": server.auth_type,
+            }
             connection.is_active = True
             connection.is_deleted = False
-            connection.save(update_fields=['encrypted_credentials', 'is_active', 'is_deleted', 'updated_at'])
+            connection.save(update_fields=[
+                'encrypted_credentials',
+                'auth_metadata',
+                'is_active',
+                'is_deleted',
+                'updated_at',
+            ])
 
         return connection
+
+
+class OAuthStartSerializer(serializers.Serializer):
+    """OAuth authorization URL returned for remote MCP login."""
+
+    authorization_url = serializers.URLField()
+    state = serializers.CharField()
 
 
 class MCPToolExecutionSerializer(serializers.ModelSerializer):
