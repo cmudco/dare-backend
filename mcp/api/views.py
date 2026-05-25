@@ -5,10 +5,11 @@ ViewSets for MCP API.
 import time
 
 from rest_framework import viewsets, status
+from rest_framework import mixins
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from django.contrib.auth import get_user_model
 from django.shortcuts import redirect
 from django.utils import timezone
@@ -17,6 +18,7 @@ from asgiref.sync import async_to_sync
 from mcp.constants import MCPAuthType
 from mcp.models import MCPServer, UserMCPConnection, MCPToolExecution
 from mcp.api.serializers import (
+    MCPServerCreateSerializer,
     MCPServerSerializer,
     UserMCPConnectionSerializer,
     UserMCPConnectionCreateSerializer,
@@ -31,7 +33,12 @@ from mcp.services.mcp_manager import mcp_manager, MCPManagerError
 from mcp.services.oauth_service import mcp_oauth_service, MCPOAuthError
 
 
-class MCPServerViewSet(viewsets.ReadOnlyModelViewSet):
+class MCPServerViewSet(
+    mixins.CreateModelMixin,
+    mixins.ListModelMixin,
+    mixins.RetrieveModelMixin,
+    viewsets.GenericViewSet,
+):
     """
     ViewSet for listing available MCP servers.
     
@@ -43,6 +50,16 @@ class MCPServerViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = MCPServerSerializer
     permission_classes = [IsAuthenticated]
     lookup_field = 'slug'
+
+    def get_permissions(self):
+        if self.action == 'create':
+            return [IsAdminUser()]
+        return [permission() for permission in self.permission_classes]
+
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return MCPServerCreateSerializer
+        return MCPServerSerializer
 
     def get_queryset(self):
         return MCPServer.active_objects.all()
