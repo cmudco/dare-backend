@@ -139,3 +139,49 @@ class GeminiWebSearchTools:
             Gemini Tool object with Google Search
         """
         return types.Tool(google_search=types.GoogleSearch())
+
+
+class GeminiUrlContextTools:
+    """Gemini-specific URL context tool."""
+
+    @staticmethod
+    def get_tool_definition() -> Dict:
+        """
+        Get the native URL Context tool definition for Gemini API.
+
+        Returns:
+            URL Context tool dictionary
+        """
+        return {"url_context": {}}
+
+    @staticmethod
+    def has_url_context(tools: Optional[List[Dict]]) -> bool:
+        """
+        Check if tools list contains Gemini URL Context.
+
+        Args:
+            tools: List of tool dictionaries or native Tool objects
+
+        Returns:
+            True if url_context is present
+        """
+        if not tools:
+            return False
+
+        for tool in tools:
+            if hasattr(tool, "url_context") and tool.url_context is not None:
+                return True
+            if isinstance(tool, dict) and "url_context" in tool:
+                return True
+
+        return False
+
+    @staticmethod
+    def build_url_context_tool():
+        """
+        Build Gemini URL Context tool object.
+
+        Returns:
+            Gemini Tool object with URL Context
+        """
+        return types.Tool(url_context=types.UrlContext())

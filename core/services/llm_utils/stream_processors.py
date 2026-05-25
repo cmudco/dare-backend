@@ -100,6 +100,66 @@ def _merge_provider_tool_calls(tool_calls: List[Dict], results: List[Dict]) -> L
     return merged
 
 
+def _extract_gemini_url_metadata(candidate) -> List[Dict]:
+    """Extract URL Context metadata from a Gemini candidate."""
+    metadata = _safe_get(candidate, "url_context_metadata") or _safe_get(
+        candidate, "urlContextMetadata"
+    )
+    if not metadata:
+        return []
+
+    metadata_dict = _safe_to_dict(metadata)
+    url_items = _safe_get(metadata_dict, "url_metadata") or _safe_get(
+        metadata_dict, "urlMetadata", []
+    )
+
+    results = []
+    for item in url_items or []:
+        item_dict = _safe_to_dict(item)
+        retrieved_url = _safe_get(item_dict, "retrieved_url") or _safe_get(
+            item_dict, "retrievedUrl"
+        )
+        retrieval_status = _safe_get(
+            item_dict, "url_retrieval_status"
+        ) or _safe_get(item_dict, "urlRetrievalStatus")
+        retrieval_status = getattr(retrieval_status, "value", retrieval_status)
+        if not retrieved_url and not retrieval_status:
+            continue
+
+        results.append(
+            {
+                "url": retrieved_url,
+                "retrieval_status": retrieval_status,
+                "content_type": "url_context_result",
+                "type": "url_context_result",
+            }
+        )
+
+    return results
+
+
+def _build_gemini_url_context_tool_calls(results: List[Dict]) -> List[Dict]:
+    """Convert Gemini URL metadata into persisted provider tool calls."""
+    tool_calls = []
+    for index, result in enumerate(results):
+        status = result.get("retrieval_status")
+        is_success = status == "URL_RETRIEVAL_STATUS_SUCCESS"
+        tool_calls.append(
+            {
+                "id": f"gemini-url-context-{index + 1}",
+                "name": "url_context",
+                "arguments": json.dumps({"url": result.get("url")}),
+                "provider": "gemini",
+                "result": {
+                    **result,
+                    "error_code": None if is_success else status,
+                },
+                "status": "completed" if is_success else "failed",
+            }
+        )
+    return tool_calls
+
+
 class OpenAIStreamProcessor:
     """OpenAI-specific stream processing."""
 
@@ -338,6 +398,7 @@ class GeminiStreamProcessor:
         usage_extractor = GeminiUsageExtractor()
         web_search_extractor = GeminiWebSearchExtractor()
         tool_calls = []
+        url_context_results = {}
 
         # Use async for to properly iterate over async stream
         async for chunk in response:
@@ -369,6 +430,10 @@ class GeminiStreamProcessor:
                                     "arguments": json.dumps(dict(fc.args)) if fc.args else "{}"
                                 })
 
+                    for result in _extract_gemini_url_metadata(candidate):
+                        key = result.get("url") or json.dumps(result, sort_keys=True)
+                        url_context_results[key] = result
+
             # Extract web search sources from grounding metadata (usually in final chunk)
             web_search_extractor.process_chunk(chunk)
 
@@ -379,6 +444,10 @@ class GeminiStreamProcessor:
         usage = usage_extractor.get_final_usage() or {}
         if tool_calls:
             usage["tool_calls"] = tool_calls
+        if url_context_results:
+            usage["provider_tool_calls"] = _build_gemini_url_context_tool_calls(
+                list(url_context_results.values())
+            )
 
         # Include web search sources in usage data
         sources = web_search_extractor.get_sources()

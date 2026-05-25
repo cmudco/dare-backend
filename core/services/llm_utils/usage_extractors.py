@@ -130,6 +130,7 @@ class GeminiUsageExtractor:
         """Initialize with state to track tokens across chunks."""
         self.input_tokens: Optional[int] = None
         self.output_tokens: Optional[int] = None
+        self.tool_input_tokens: Optional[int] = None
 
     def update_from_chunk(self, chunk) -> None:
         """
@@ -149,6 +150,9 @@ class GeminiUsageExtractor:
         if hasattr(usage, "candidates_token_count"):
             self.output_tokens = usage.candidates_token_count
 
+        if hasattr(usage, "tool_use_prompt_token_count"):
+            self.tool_input_tokens = usage.tool_use_prompt_token_count
+
     def get_final_usage(self) -> Optional[Dict]:
         """
         Get final usage dictionary.
@@ -156,9 +160,17 @@ class GeminiUsageExtractor:
         Returns:
             Usage dictionary or None
         """
-        return UsageExtractor.build_usage_dict(self.input_tokens, self.output_tokens)
+        if self.input_tokens is None or self.output_tokens is None:
+            return None
+
+        billable_input_tokens = self.input_tokens + (self.tool_input_tokens or 0)
+        return UsageExtractor.build_usage_dict(
+            billable_input_tokens,
+            self.output_tokens,
+        )
 
     def reset(self):
         """Reset the state."""
         self.input_tokens = None
         self.output_tokens = None
+        self.tool_input_tokens = None
