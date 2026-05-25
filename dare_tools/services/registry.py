@@ -8,11 +8,14 @@ definitions and executors.
 import logging
 from typing import Dict, List, Optional, Any, Callable
 
-from core.services.llm_utils.diagram_tool import (
-    get_diagram_tool_openai,
-    get_diagram_tool_claude,
-    json_to_mermaid,
-)
+from core.services.llm_utils.diagram_tool import (get_diagram_tool_claude,
+                                                  get_diagram_tool_openai,
+                                                  json_to_mermaid)
+from dare_tools.services.pptx_tool import (execute_create_pptx,
+                                           get_create_pptx_tool_claude,
+                                           get_create_pptx_tool_openai)
+
+# fmt: on
 
 logger = logging.getLogger(__name__)
 
@@ -389,7 +392,9 @@ def get_update_artifact_tool_openai() -> Dict:
                 "For React components, provide the full code. "
                 "For diagrams, provide the complete Mermaid code. "
                 "For docx documents, provide the complete JSON document spec "
-                "with title and blocks array (same format as create_docx)."
+                "with title and blocks array (same format as create_docx). "
+                "For pptx presentations, provide the complete JSON presentation "
+                "spec with title, theme, and slides array (same format as create_pptx)."
             ),
             "parameters": {
                 "type": "object",
@@ -682,6 +687,16 @@ class DareToolRegistry:
             "get_openai_schema": get_create_docx_tool_openai,
             "get_claude_schema": get_create_docx_tool_claude,
             "executor": execute_create_docx,
+        },
+        "create_pptx": {
+            "name": "Create PPTX",
+            "slug": "create_pptx",
+            "description": "Create styled PowerPoint presentations with structured slide layouts.",
+            "icon": "presentation",
+            "category": "visualization",
+            "get_openai_schema": get_create_pptx_tool_openai,
+            "get_claude_schema": get_create_pptx_tool_claude,
+            "executor": execute_create_pptx,
         },
         "update_artifact": {
             "name": "Update Artifact",
