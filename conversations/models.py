@@ -10,7 +10,16 @@ from django.utils import timezone
 from common.managers import ActiveObjectsManager
 from common.models import BaseModel, TimeStampMixin
 from core.fields import EncryptedCharField
-from .constants import Provider, SenderType, FeedbackType, ConversationSource, ArtifactType, ArtifactStatus, ModelTier
+from .constants import (
+    Provider,
+    SenderType,
+    FeedbackType,
+    ConversationSource,
+    ArtifactType,
+    ArtifactStatus,
+    ModelTier,
+    ToolCallOrigin,
+)
 
 
 class LLM(models.Model):
@@ -846,10 +855,10 @@ class Message(BaseModel):
 
 class MessageToolCall(BaseModel):
     """
-    Tracks MCP tool calls within a message.
-    
-    When an LLM decides to call an MCP tool, we store the request here.
-    After execution, we update with the result. This enables:
+    Tracks tool calls within a message.
+
+    Tool calls can originate from DARE tools, external MCP servers, or
+    provider-native server tools. This enables:
     - Multi-turn tool use (feeding results back to LLM)
     - User confirmation for write operations
     - Audit trail of all tool executions
@@ -869,7 +878,13 @@ class MessageToolCall(BaseModel):
     )
     server_slug = models.CharField(
         max_length=100,
-        help_text="MCP server slug (e.g., 'slack')."
+        help_text="Concrete tool server/provider slug (e.g., 'slack', 'dare', 'anthropic')."
+    )
+    origin = models.CharField(
+        max_length=20,
+        choices=ToolCallOrigin.choices,
+        default=ToolCallOrigin.MCP,
+        help_text="Execution origin: DARE internal, MCP external, or provider-native."
     )
     tool_name = models.CharField(
         max_length=200,

@@ -17,7 +17,11 @@ from channels.db import database_sync_to_async
 from djangorestframework_camel_case.util import camelize
 from django.utils import timezone
 
-from conversations.constants import SenderType, DEFAULT_AI_SENDER_NAME
+from conversations.constants import (
+    SenderType,
+    DEFAULT_AI_SENDER_NAME,
+    ToolCallOrigin,
+)
 from conversations.models import MessageToolCall
 from conversations.services.websocket_response_service import WebSocketResponseService
 from core.services.dtos.builder import LLMQueryRequestBuilder
@@ -306,7 +310,8 @@ class DareToolHandler:
                 "id": tool_call_id,
                 "tool_name": tool_name,
                 "tool_slug": tool_name,  # For DARE tools, name == slug
-                "server_slug": "dare",  # Special slug for DARE tools
+                "server_slug": "dare",
+                "origin": ToolCallOrigin.DARE,
                 "status": status,
                 "arguments": arguments or {},
             }
@@ -371,7 +376,7 @@ class DareToolHandler:
         """
         Save MessageToolCall record so it appears in conversation history.
         
-        Uses server_slug='dare' to distinguish from MCP tool calls.
+        Uses origin='dare' to distinguish from MCP/provider tool calls.
         """
 
         
@@ -384,7 +389,8 @@ class DareToolHandler:
             MessageToolCall.objects.create(
                 message=message,
                 tool_call_id=tool_call_id,
-                server_slug="dare",  # Distinguish from MCP tools
+                server_slug="dare",
+                origin=ToolCallOrigin.DARE,
                 tool_name=tool_name,
                 arguments=arguments,
                 status=status,

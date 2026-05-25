@@ -29,6 +29,7 @@ from conversations.constants import (
     ErrorCode,
     ErrorMessage,
     SenderType,
+    ToolCallOrigin,
     ToolCallStatus,
 )
 from conversations.models import LLM, Artifact, Conversation, Message, MessageToolCall
@@ -215,6 +216,7 @@ class MessageCoordinator:
             if regenerate:
                 MessageToolCall.objects.filter(
                     message=message_obj,
+                    origin=ToolCallOrigin.PROVIDER,
                     server_slug="anthropic",
                 ).delete()
 
@@ -237,6 +239,7 @@ class MessageCoordinator:
                     message=message_obj,
                     tool_call_id=tool_call.get("id", ""),
                     server_slug=tool_call.get("provider", "anthropic"),
+                    origin=ToolCallOrigin.PROVIDER,
                     tool_name=tool_call.get("name", "provider_tool"),
                     arguments=arguments,
                     status=status,
@@ -275,22 +278,24 @@ class MessageCoordinator:
 
             await self.send(
                 {
-                    "type": "mcp_tool_call",
+                    "type": "tool_call",
                     "messageId": bot_message_id,
                     "toolCallId": tool_call_id,
                     "toolName": tool_name,
                     "serverSlug": server_slug,
+                    "origin": ToolCallOrigin.PROVIDER,
                     "status": ToolCallStatus.EXECUTING,
                 }
             )
 
             await self.send(
                 {
-                    "type": "mcp_tool_result",
+                    "type": "tool_result",
                     "messageId": bot_message_id,
                     "toolCallId": tool_call_id,
                     "toolName": tool_name,
                     "serverSlug": server_slug,
+                    "origin": ToolCallOrigin.PROVIDER,
                     "status": "error"
                     if status == ToolCallStatus.FAILED
                     else "success",
@@ -618,17 +623,15 @@ class MessageCoordinator:
                 platform=self.platform,
             )
 
-            # Track tool results for multi-turn tool use
-            mcp_tool_results = []
+            # Track DARE/MCP tool results that need a follow-up model response.
+            executed_tool_results = []
 
             # Stream from LLM service (MCP tools fetched internally if mcp_server_ids present)
             async for chunk, usage in self.llm_service.query(request):
                 if usage:
                     token_usage = usage
 
-                    # Handle MCP tool calls if present
                     if usage.get("tool_calls"):
-                        # Handle MCP tool calls
                         tool_results = await mcp_tool_handler.handle_tool_calls(
                             tool_calls=usage["tool_calls"],
                             message=message_obj,
@@ -636,9 +639,8 @@ class MessageCoordinator:
                             conversation=self.conversation,
                             send_callback=self.send,
                         )
-                        mcp_tool_results.extend(tool_results)
+                        executed_tool_results.extend(tool_results)
 
-                        # Handle DARE tool calls (internal tools like diagrams, charts)
                         dare_results = await dare_tool_handler.handle_tool_calls(
                             tool_calls=usage["tool_calls"],
                             message=message_obj,
@@ -646,7 +648,7 @@ class MessageCoordinator:
                             conversation=self.conversation,
                             send_callback=self.send,
                         )
-                        mcp_tool_results.extend(dare_results)
+                        executed_tool_results.extend(dare_results)
 
                     # Handle generated image
                     if usage.get("image_bytes"):
@@ -698,18 +700,18 @@ class MessageCoordinator:
                     )
                     await self.send(payload)
 
-            # If we have MCP tool results, ALWAYS make a follow-up LLM call
+            # If we executed local tools, ALWAYS make a follow-up LLM call
             # Even if there's text, it's just the LLM "thinking" before calling tools
             # The LLM needs to see the tool results to generate the final response
-            if mcp_tool_results:
+            if executed_tool_results:
                 logger.info(
-                    f"[MessageCoordinator] Making follow-up LLM call with {len(mcp_tool_results)} tool results"
+                    f"[MessageCoordinator] Making follow-up LLM call with {len(executed_tool_results)} tool results"
                 )
                 try:
                     # The follow-up response REPLACES any partial text from before tool calls
                     ai_response_accumulator = (
                         await mcp_tool_handler.stream_tool_result_response(
-                            tool_results=mcp_tool_results,
+                            tool_results=executed_tool_results,
                             message_data=message_data,
                             message_obj=message_obj,
                             llm=llm,
@@ -728,7 +730,7 @@ class MessageCoordinator:
                     )
                     # Build fallback response from tool results
                     error_parts = []
-                    for tr in mcp_tool_results:
+                    for tr in executed_tool_results:
                         if tr.get("result", "").startswith("Error:"):
                             error_parts.append(
                                 f"Tool `{tr['tool_name']}`: {tr['result']}"
@@ -772,7 +774,7 @@ class MessageCoordinator:
                     await self._run_learning_progress_stream(
                         message_data, message_obj, llm
                     )
-            elif mcp_tool_results:
+            elif executed_tool_results:
                 # Edge case: tool results exist but no response was generated
                 # This shouldn't happen after the fix above, but handle defensively
                 logger.warning(
