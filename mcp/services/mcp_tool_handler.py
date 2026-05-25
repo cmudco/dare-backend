@@ -16,7 +16,11 @@ from typing import Any, Callable, Dict, List
 from asgiref.sync import sync_to_async
 from django.utils import timezone
 
-from conversations.constants import SenderType, DEFAULT_AI_SENDER_NAME
+from conversations.constants import (
+    SenderType,
+    DEFAULT_AI_SENDER_NAME,
+    ToolCallOrigin,
+)
 from conversations.models import Conversation, Message, MessageToolCall
 from conversations.services.websocket_response_service import WebSocketResponseService
 from core.services.dtos.builder import LLMQueryRequestBuilder
@@ -117,6 +121,7 @@ class MCPToolHandler:
                     "toolCallId": tool_call_id,
                     "toolName": actual_tool_name,
                     "serverSlug": server_slug,
+                    "origin": ToolCallOrigin.MCP,
                     "status": "executing",
                 }
                 await send_callback(tool_start_payload)
@@ -141,6 +146,7 @@ class MCPToolHandler:
                     "toolCallId": tool_call_id,
                     "toolName": actual_tool_name,
                     "serverSlug": server_slug,
+                    "origin": ToolCallOrigin.MCP,
                     "status": "success",
                     "result": result,
                 }
@@ -340,6 +346,7 @@ class MCPToolHandler:
             "toolCallId": tool_call_id,
             "toolName": actual_tool_name,  # Use actual tool name, not prefixed
             "serverSlug": server_slug,  # Include serverSlug for frontend matching
+            "origin": ToolCallOrigin.MCP,
             "status": "error",
             "error": str(error),
         }
@@ -393,6 +400,7 @@ class MCPToolHandler:
                 message=message,
                 tool_call_id=tool_call_id,
                 server_slug=server_slug,
+                origin=ToolCallOrigin.MCP,
                 tool_name=tool_name,
                 arguments=arguments,
                 status=status,

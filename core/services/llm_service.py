@@ -295,6 +295,8 @@ class LLMService:
         llm_tools = tools
         if not llm_tools and request.requires_web_search():
             llm_tools = self._get_web_search_tools(llm)
+        if request.requires_web_fetch():
+            llm_tools = (llm_tools or []) + self._get_web_fetch_tools(llm)
 
         if request.generation.structured_spec:
             # Structured output (non-streaming)
@@ -394,3 +396,9 @@ class LLMService:
 
         tool_func = provider_tools.get(llm.provider)
         return [tool_func()] if tool_func else []
+
+    def _get_web_fetch_tools(self, llm: LLM) -> list:
+        """Get provider-native web fetch tools based on the LLM provider."""
+        if llm.provider != Provider.CLAUDE.value:
+            return []
+        return [ClaudeService.get_web_fetch_tool()]

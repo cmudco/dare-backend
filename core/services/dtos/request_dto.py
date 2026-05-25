@@ -89,6 +89,10 @@ class LLMQueryRequest:
         """Check if web search is enabled."""
         return self.generation.web_search_enabled
 
+    def requires_web_fetch(self) -> bool:
+        """Check if Claude web fetch is enabled."""
+        return self.generation.web_fetch_enabled
+
     def requires_image_generation(self) -> bool:
         """Check if image generation is enabled."""
         return self.generation.image_generation_enabled

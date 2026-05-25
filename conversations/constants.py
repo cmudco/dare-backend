@@ -87,13 +87,20 @@ class ArtifactAction(models.TextChoices):
 
 
 class ToolCallStatus(models.TextChoices):
-    """Status of MCP tool call execution."""
+    """Status of a tool call execution."""
     PENDING = 'pending', 'Pending'
     AWAITING_CONFIRMATION = 'awaiting_confirmation', 'Awaiting Confirmation'
     EXECUTING = 'executing', 'Executing'
     COMPLETED = 'completed', 'Completed'
     FAILED = 'failed', 'Failed'
     CANCELLED = 'cancelled', 'Cancelled'
+
+
+class ToolCallOrigin(models.TextChoices):
+    """Execution origin for a tool call."""
+    DARE = 'dare', 'DARE'
+    MCP = 'mcp', 'MCP'
+    PROVIDER = 'provider', 'Provider'
 
 # Default message sender names
 DEFAULT_AI_SENDER_NAME = "AI Assistant"

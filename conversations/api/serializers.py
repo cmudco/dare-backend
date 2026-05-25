@@ -25,6 +25,7 @@ from users.constants import VectorDBChoice
 from mcp.models import MCPServer
 from dare_tools.models import DareTool
 from agents.models import Agent
+from conversations.constants import ToolCallOrigin
 
 
 class LLMSerializer(serializers.ModelSerializer):
@@ -187,6 +188,7 @@ class ConversationSerializer(serializers.ModelSerializer):
             "max_tokens",
             "history_limit",
             "web_search_enabled",
+            "web_fetch_enabled",
             "image_generation_enabled",
             "audio_transcription_enabled",
             "artifacts_enabled",
@@ -334,6 +336,7 @@ class MessageToolCallSerializer(serializers.ModelSerializer):
     id = serializers.CharField(source="tool_call_id", read_only=True)
     mcp_result = serializers.SerializerMethodField()
     dare_result = serializers.SerializerMethodField()
+    provider_result = serializers.SerializerMethodField()
 
     class Meta:
         model = MessageToolCall
@@ -342,25 +345,28 @@ class MessageToolCallSerializer(serializers.ModelSerializer):
             "tool_call_id",
             "tool_name",
             "server_slug",
+            "origin",
             "status",
             "result",
             "error",
             "mcp_result",
             "dare_result",
+            "provider_result",
         ]
         read_only_fields = fields
 
     def get_mcp_result(self, obj):
-        # The frontend stores external MCP payloads separately from DARE-native
-        # tool results so each renderer can consume a typed result field.
-        if obj.server_slug == "dare":
+        if obj.origin != ToolCallOrigin.MCP:
             return None
         return self._parse_result(obj.result)
 
     def get_dare_result(self, obj):
-        # DARE tools use the same persistence table as MCP tools, but their
-        # result payloads drive richer artifact/chart renderers in the UI.
-        if obj.server_slug != "dare":
+        if obj.origin != ToolCallOrigin.DARE:
+            return None
+        return self._parse_result(obj.result)
+
+    def get_provider_result(self, obj):
+        if obj.origin != ToolCallOrigin.PROVIDER:
             return None
         return self._parse_result(obj.result)
 

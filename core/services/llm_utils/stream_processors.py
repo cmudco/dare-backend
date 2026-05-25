@@ -19,6 +19,86 @@ from .web_search_extractors import (
     GeminiWebSearchExtractor,
 )
 
+WEB_FETCH_PREVIEW_CHARS = 4000
+
+
+def _safe_get(obj, attr: str, default=None):
+    if isinstance(obj, dict):
+        return obj.get(attr, default)
+    return getattr(obj, attr, default)
+
+
+def _safe_to_dict(obj):
+    if isinstance(obj, dict):
+        return obj
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump()
+    if hasattr(obj, "dict"):
+        return obj.dict()
+    return obj
+
+
+def _sanitize_web_fetch_result(block) -> Dict:
+    """Build a compact, persistence-safe result for Anthropic web fetch."""
+    content = _safe_get(block, "content")
+    content_type = _safe_get(content, "type")
+    result = {
+        "type": _safe_get(block, "type"),
+        "url": _safe_get(content, "url"),
+        "title": _safe_get(_safe_get(content, "content"), "title"),
+        "retrieved_at": _safe_get(content, "retrieved_at"),
+        "error_code": _safe_get(content, "error_code"),
+        "result_content_type": _safe_get(_safe_get(content, "content"), "type"),
+    }
+
+    if content_type != "web_fetch_result":
+        result["content_type"] = content_type
+        return {key: value for key, value in result.items() if value is not None}
+
+    document = _safe_get(content, "content")
+    source = _safe_get(document, "source")
+    source_data = _safe_get(source, "data")
+
+    result.update(
+        {
+            "content_type": content_type,
+            "source_type": _safe_get(source, "type"),
+            "media_type": _safe_get(source, "media_type"),
+        }
+    )
+
+    if isinstance(source_data, str):
+        result["content_size"] = len(source_data)
+        if _safe_get(source, "type") == "base64":
+            result["content_preview"] = "[base64 content omitted]"
+            result["truncated"] = True
+        else:
+            result["content_preview"] = source_data[:WEB_FETCH_PREVIEW_CHARS]
+            result["truncated"] = len(source_data) > WEB_FETCH_PREVIEW_CHARS
+
+    return {key: value for key, value in result.items() if value is not None}
+
+
+def _merge_provider_tool_calls(tool_calls: List[Dict], results: List[Dict]) -> List[Dict]:
+    results_by_id = {
+        result.get("tool_call_id"): result
+        for result in results
+        if result.get("tool_call_id")
+    }
+    merged = []
+    for tool_call in tool_calls:
+        result = results_by_id.get(tool_call.get("id"))
+        merged.append(
+            {
+                **tool_call,
+                "result": result.get("result") if result else None,
+                "status": "failed"
+                if result and result.get("result", {}).get("error_code")
+                else "completed",
+            }
+        )
+    return merged
+
 
 class OpenAIStreamProcessor:
     """OpenAI-specific stream processing."""
@@ -132,8 +212,12 @@ class ClaudeStreamProcessor:
         usage_extractor = ClaudeUsageExtractor()
         web_search_extractor = ClaudeWebSearchExtractor()
         tool_calls = []
+        provider_tool_calls = []
+        provider_tool_results = []
         current_tool_call = None
+        current_provider_tool_call = None
         tool_calls_yielded = False
+        provider_tool_calls_yielded = False
 
         async for event in response:
             # Handle content block start (for tool use and web search results)
@@ -146,6 +230,24 @@ class ClaudeStreamProcessor:
                             "name": block.name,
                             "arguments": ""
                         }
+                    elif block.type == "server_tool_use":
+                        current_provider_tool_call = {
+                            "id": block.id,
+                            "name": block.name,
+                            "arguments": json.dumps(
+                                _safe_to_dict(_safe_get(block, "input", {}))
+                            )
+                            if _safe_get(block, "input", None)
+                            else "",
+                            "provider": "anthropic",
+                        }
+                    elif block.type == "web_fetch_tool_result":
+                        provider_tool_results.append(
+                            {
+                                "tool_call_id": _safe_get(block, "tool_use_id"),
+                                "result": _sanitize_web_fetch_result(block),
+                            }
+                        )
                     # Extract web search sources from tool result blocks
                     web_search_extractor.process_event(event)
 
@@ -157,12 +259,17 @@ class ClaudeStreamProcessor:
                 elif hasattr(event.delta, 'partial_json'):
                     if current_tool_call:
                         current_tool_call["arguments"] += event.delta.partial_json
+                    elif current_provider_tool_call:
+                        current_provider_tool_call["arguments"] += event.delta.partial_json
 
             # Handle content block stop (finalize tool call)
             elif event.type == "content_block_stop":
                 if current_tool_call:
                     tool_calls.append(current_tool_call)
                     current_tool_call = None
+                if current_provider_tool_call:
+                    provider_tool_calls.append(current_provider_tool_call)
+                    current_provider_tool_call = None
 
             # Extract input tokens from message start
             elif event.type == "message_start":
@@ -176,6 +283,12 @@ class ClaudeStreamProcessor:
                 if tool_calls:
                     usage["tool_calls"] = tool_calls
                     tool_calls_yielded = True
+                if provider_tool_calls:
+                    usage["provider_tool_calls"] = _merge_provider_tool_calls(
+                        provider_tool_calls,
+                        provider_tool_results,
+                    )
+                    provider_tool_calls_yielded = True
 
                 # Include web search sources in usage data
                 sources = web_search_extractor.get_sources()
@@ -186,8 +299,18 @@ class ClaudeStreamProcessor:
                     yield "", usage
 
         # Always yield tool calls at end if we have them and haven't yielded yet
-        if tool_calls and not tool_calls_yielded:
-            final_data = {"tool_calls": tool_calls}
+        if (
+            (tool_calls and not tool_calls_yielded)
+            or (provider_tool_calls and not provider_tool_calls_yielded)
+        ):
+            final_data = {}
+            if tool_calls and not tool_calls_yielded:
+                final_data["tool_calls"] = tool_calls
+            if provider_tool_calls and not provider_tool_calls_yielded:
+                final_data["provider_tool_calls"] = _merge_provider_tool_calls(
+                    provider_tool_calls,
+                    provider_tool_results,
+                )
             sources = web_search_extractor.get_sources()
             if sources:
                 final_data["web_search_sources"] = sources
