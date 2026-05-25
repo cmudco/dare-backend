@@ -9,12 +9,13 @@ from rest_framework import mixins
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from django.contrib.auth import get_user_model
 from django.shortcuts import redirect
 from django.utils import timezone
 from asgiref.sync import async_to_sync
 
+from common.permissions import IsResearcherOrAbove
 from mcp.constants import MCPAuthType
 from mcp.models import MCPServer, UserMCPConnection, MCPToolExecution
 from mcp.api.serializers import (
@@ -53,7 +54,7 @@ class MCPServerViewSet(
 
     def get_permissions(self):
         if self.action == 'create':
-            return [IsAdminUser()]
+            return [IsResearcherOrAbove()]
         return [permission() for permission in self.permission_classes]
 
     def get_serializer_class(self):
