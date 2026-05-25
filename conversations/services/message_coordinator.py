@@ -201,7 +201,8 @@ class MessageCoordinator:
         self, message_obj: "Message", token_usage: Optional[Dict], regenerate: bool
     ) -> None:
         """
-        Save provider-native server tool calls, such as Anthropic web fetch.
+        Save provider-native server tool calls, such as Anthropic web fetch or
+        Gemini URL Context.
 
         These are not executed by DARE or MCP; the provider executes them and
         returns the result in the same model response. Persisting them in
@@ -217,7 +218,6 @@ class MessageCoordinator:
                 MessageToolCall.objects.filter(
                     message=message_obj,
                     origin=ToolCallOrigin.PROVIDER,
-                    server_slug="anthropic",
                 ).delete()
 
             for tool_call in token_usage["provider_tool_calls"]:
@@ -259,8 +259,8 @@ class MessageCoordinator:
         """
         Stream provider-native server tool calls to the frontend.
 
-        Anthropic executes web_fetch internally, so there is no DARE/MCP handler
-        involved. Emitting the existing MCP-shaped events keeps live rendering
+        Providers execute these tools internally, so there is no DARE/MCP
+        handler involved. Emitting the generic tool events keeps live rendering
         aligned with the persisted history renderer.
         """
         if not token_usage or not token_usage.get("provider_tool_calls"):

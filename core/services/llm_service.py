@@ -399,6 +399,10 @@ class LLMService:
 
     def _get_web_fetch_tools(self, llm: LLM) -> list:
         """Get provider-native web fetch tools based on the LLM provider."""
-        if llm.provider != Provider.CLAUDE.value:
-            return []
-        return [ClaudeService.get_web_fetch_tool()]
+        provider_tools = {
+            Provider.CLAUDE.value: ClaudeService.get_web_fetch_tool,
+            Provider.GEMINI.value: GeminiService.get_web_fetch_tool,
+        }
+
+        tool_func = provider_tools.get(llm.provider)
+        return [tool_func()] if tool_func else []

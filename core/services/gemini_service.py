@@ -22,6 +22,7 @@ from core.services.llm_utils import (
     GeminiVisionHandler,
     GeminiErrorHandler,
     GeminiStreamProcessor,
+    GeminiUrlContextTools,
     GeminiWebSearchTools,
     StreamAggregator,
     SchemaTransformer,
@@ -286,8 +287,14 @@ class GeminiService:
             max_output_tokens=max_tokens + self.TOKEN_BUFFER,
         )
 
-        if GeminiWebSearchTools.has_google_search(tools):
-            config.tools = [GeminiWebSearchTools.build_google_search_tool()]
+        native_tools = self._build_native_tools(tools)
+        if native_tools:
+            config.tools = native_tools
+            if self._has_function_tools(tools):
+                logger.warning(
+                    "[Gemini] Native tools cannot be combined with function "
+                    "calling; using native Gemini tools only"
+                )
         elif tools:
             # Handle tools - could be native Gemini types.Tool or OpenAI format dicts
             gemini_tools = []
@@ -345,6 +352,35 @@ class GeminiService:
         if function_declarations:
             return [types.Tool(function_declarations=function_declarations)]
         return []
+
+    def _build_native_tools(self, tools: Optional[List[Dict]]) -> List[types.Tool]:
+        """
+        Build Gemini-native tool objects from provider tool indicators.
+
+        URL Context and Google Search are provider-native tools. They are not
+        converted into function declarations, so they must bypass the generic
+        function-calling branch.
+        """
+        if not tools:
+            return []
+
+        native_tools = []
+        if GeminiWebSearchTools.has_google_search(tools):
+            native_tools.append(GeminiWebSearchTools.build_google_search_tool())
+        if GeminiUrlContextTools.has_url_context(tools):
+            native_tools.append(GeminiUrlContextTools.build_url_context_tool())
+
+        return native_tools
+
+    @staticmethod
+    def _has_function_tools(tools: Optional[List[Dict]]) -> bool:
+        """Return whether an OpenAI-format function tool is present."""
+        if not tools:
+            return False
+        return any(
+            isinstance(tool, dict) and tool.get("type") == "function"
+            for tool in tools
+        )
 
     async def _get_structured_completion(
         self,
@@ -485,3 +521,14 @@ class GeminiService:
             Web search tool dictionary
         """
         return GeminiWebSearchTools.get_tool_definition()
+
+    @staticmethod
+    def get_web_fetch_tool() -> Dict:
+        """
+        Get the native URL Context tool definition for Gemini API.
+
+        DARE exposes this behind the same Web Fetch toggle as Claude because
+        the user-facing intent is identical: fetch explicit URLs/PDFs supplied
+        in the prompt.
+        """
+        return GeminiUrlContextTools.get_tool_definition()
