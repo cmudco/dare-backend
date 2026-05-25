@@ -1,6 +1,6 @@
 # Brand Usage Policy
 
-"DARE" (Distributed AI Research Engine) and "SocraticBots" are trademarks of
+"DARE" (Dietrich Analysis Research Education Platform) and "SocraticBots" are trademarks of
 Carnegie Mellon University (CMU).
 
 ## What you MAY do
