@@ -10,6 +10,8 @@ import json
 import logging
 from typing import Optional
 
+from mcp.services.base_client import BaseMCPClient
+
 logger = logging.getLogger(__name__)
 
 
@@ -33,7 +35,7 @@ class MCPProtocolError(MCPClientError):
     pass
 
 
-class MCPClient:
+class MCPClient(BaseMCPClient):
     """
     JSON-RPC client for MCP server communication.
     

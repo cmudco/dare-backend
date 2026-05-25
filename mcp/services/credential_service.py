@@ -129,3 +129,21 @@ class MCPCredentialService:
                 missing.append(cred_schema.get('label', key))
 
         return (len(missing) == 0, missing)
+
+    @staticmethod
+    def get_access_token(credentials: dict) -> str:
+        """Resolve the access token key used by bearer and OAuth connections."""
+        return (
+            credentials.get("access_token")
+            or credentials.get("ACCESS_TOKEN")
+            or credentials.get("bearer_token")
+            or credentials.get("BEARER_TOKEN")
+            or credentials.get("api_key")
+            or credentials.get("API_KEY")
+            or ""
+        )
+
+    @staticmethod
+    def get_refresh_token(credentials: dict) -> str:
+        """Resolve the refresh token key used by OAuth connections."""
+        return credentials.get("refresh_token") or credentials.get("REFRESH_TOKEN") or ""

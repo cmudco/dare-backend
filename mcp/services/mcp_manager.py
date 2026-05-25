@@ -6,6 +6,7 @@ and tool execution with audit logging.
 """
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -22,11 +23,17 @@ from mcp.constants import (
     TOOL_CACHE_KEY_PREFIX,
     TOOL_CACHE_TTL,
     MCP_SUBPROCESS_TIMEOUT,
+    MCP_REMOTE_REQUEST_TIMEOUT,
+    MCP_REMOTE_TOOL_CALL_TIMEOUT,
     ExecutionStatus,
     MCP_USE_DOCKER,
+    MCPTransport,
 )
 from mcp.models import MCPToolExecution, UserMCPConnection
+from mcp.services.client_dtos import MCPConnectionConfig
+from mcp.services.credential_service import MCPCredentialService
 from mcp.services.mcp_client import MCPClient, MCPClientError
+from mcp.services.streamable_http_client import StreamableHTTPMCPClient
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +89,7 @@ class MCPManager:
         Returns:
             List of tool definitions
         """
-        cache_key = f"{TOOL_CACHE_KEY_PREFIX}{server.slug}"
+        cache_key = self._tools_cache_key(server, credentials)
 
         # Check Redis cache first
         try:
@@ -135,10 +142,7 @@ class MCPManager:
         error_message = ""
 
         try:
-            # Spawn subprocess and execute tool
-            process = await self._spawn_subprocess(server, credentials)
-            client = MCPClient(process, timeout=MCP_SUBPROCESS_TIMEOUT)
-
+            client = await self._build_client(server, credentials)
             try:
                 result = await client.call_tool(tool_name, arguments)
                 status = ExecutionStatus.SUCCESS
@@ -206,8 +210,7 @@ class MCPManager:
             Tuple of (success, message)
         """
         try:
-            process = await self._spawn_subprocess(server, credentials)
-            client = MCPClient(process, timeout=MCP_SUBPROCESS_TIMEOUT)
+            client = await self._build_client(server, credentials)
 
             try:
                 await client.initialize()
@@ -225,14 +228,48 @@ class MCPManager:
         """
         Discover tools by spawning subprocess and calling tools/list.
         """
-        process = await self._spawn_subprocess(server, credentials)
-        client = MCPClient(process, timeout=MCP_SUBPROCESS_TIMEOUT)
+        client = await self._build_client(server, credentials)
 
         try:
             tools = await client.list_tools()
             return tools
         finally:
             await client.close()
+
+    async def _build_client(self, server, credentials: dict):
+        """Build a transport-specific MCP client for this server."""
+        if server.transport == MCPTransport.STREAMABLE_HTTP:
+            if not server.remote_url:
+                raise MCPManagerError(f"No remote URL configured for {server.slug}")
+            remote_headers = (
+                server.remote_headers if isinstance(server.remote_headers, dict) else {}
+            )
+            config = MCPConnectionConfig(
+                timeout=MCP_REMOTE_REQUEST_TIMEOUT,
+                tool_call_timeout=MCP_REMOTE_TOOL_CALL_TIMEOUT,
+                access_token=MCPCredentialService.get_access_token(credentials),
+                remote_headers={
+                    str(key): str(value)
+                    for key, value in remote_headers.items()
+                    if value is not None
+                },
+            )
+            return StreamableHTTPMCPClient(server.remote_url, config)
+
+        process = await self._spawn_subprocess(server, credentials)
+        return MCPClient(process, timeout=MCP_SUBPROCESS_TIMEOUT)
+
+    def _tools_cache_key(self, server, credentials: dict) -> str:
+        if server.transport != MCPTransport.STREAMABLE_HTTP:
+            return f"{TOOL_CACHE_KEY_PREFIX}{server.slug}"
+
+        access_token = MCPCredentialService.get_access_token(credentials)
+        token_hash = (
+            hashlib.sha256(access_token.encode("utf-8")).hexdigest()[:16]
+            if access_token
+            else "anonymous"
+        )
+        return f"{TOOL_CACHE_KEY_PREFIX}{server.slug}:{token_hash}"
 
     async def _spawn_subprocess(self, server, credentials: dict) -> asyncio.subprocess.Process:
         """
