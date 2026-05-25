@@ -147,5 +147,35 @@
             "created_at": "2026-05-24T00:00:00Z",
             "updated_at": "2026-05-24T00:00:00Z"
         }
+    },
+    {
+        "model": "mcp.mcpserver",
+        "pk": 6,
+        "fields": {
+            "name": "Google Scholar",
+            "slug": "google-scholar",
+            "description": "Experimental low-volume Google Scholar discovery via a self-hosted Streamable HTTP MCP wrapper. Returns Scholar snippets, publication URLs, years, and citation counts when available.",
+            "icon": "google-scholar",
+            "transport": "streamable_http",
+            "auth_type": "none",
+            "docker_image": "",
+            "command": "true",
+            "args": [],
+            "remote_url": "http://google-scholar-mcp:3015/mcp",
+            "remote_headers": {},
+            "oauth_authorize_url": "",
+            "oauth_token_url": "",
+            "oauth_registration_url": "",
+            "oauth_scope": "",
+            "oauth_client_id": "",
+            "required_credentials": [],
+            "credentials_help_url": "https://scholar.google.com/",
+            "extra_env_vars": {},
+            "setup_guide": "## Google Scholar MCP\n\nThis is a DARE-hosted experimental Streamable HTTP MCP wrapper for Google Scholar discovery. It uses low-volume Scholar HTML search and does not require user credentials.\n\n**Important:** Google Scholar may block, rate-limit, or CAPTCHA automated requests. Treat results as best-effort discovery, not a guaranteed production-grade scholarly index.\n\nThe Docker Compose service is `google-scholar-mcp`, and DARE connects to `http://google-scholar-mcp:3015/mcp`.",
+            "is_active": true,
+            "is_deleted": false,
+            "created_at": "2026-05-25T00:00:00Z",
+            "updated_at": "2026-05-25T00:00:00Z"
+        }
     }
 ]

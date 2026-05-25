@@ -31,6 +31,8 @@ services:
         condition: service_healthy
       weaviate:
         condition: service_started
+      google-scholar-mcp:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/health/"]
       interval: ${WEB_HEALTHCHECK_INTERVAL:-30s}
@@ -67,6 +69,28 @@ services:
         condition: service_healthy
       weaviate:
         condition: service_started
+      google-scholar-mcp:
+        condition: service_healthy
+    restart: unless-stopped
+
+  google-scholar-mcp:
+    build:
+      context: ./docker/mcp-servers/google-scholar
+      dockerfile: Dockerfile
+    container_name: dare-google-scholar-mcp
+    ports:
+      - "${GOOGLE_SCHOLAR_MCP_PORT:-3015}:3015"
+    environment:
+      PORT: 3015
+      MIN_REQUEST_INTERVAL_MS: ${GOOGLE_SCHOLAR_MIN_REQUEST_INTERVAL_MS:-1500}
+      SCHOLAR_TIMEOUT_MS: ${GOOGLE_SCHOLAR_TIMEOUT_MS:-15000}
+      SCHOLAR_USER_AGENT: ${GOOGLE_SCHOLAR_USER_AGENT:-}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3015/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
     restart: unless-stopped
 
   postgres:

@@ -1,0 +1,16 @@
+{
+  "name": "dare-google-scholar-mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "DARE-owned Streamable HTTP MCP wrapper for low-volume Google Scholar discovery.",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.11.4",
+    "axios": "^1.13.2",
+    "cheerio": "^1.0.0",
+    "express": "^5.1.0"
+  }
+}
