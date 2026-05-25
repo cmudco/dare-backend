@@ -390,6 +390,10 @@ class Conversation(BaseModel):
         default=False,
         help_text="Enable real-time web search for up-to-date information."
     )
+    web_fetch_enabled = models.BooleanField(
+        default=False,
+        help_text="Enable Claude web fetch for user-provided URLs and PDFs."
+    )
     image_generation_enabled = models.BooleanField(
         default=False,
         help_text="Enable AI image generation for this conversation."
@@ -563,6 +567,7 @@ class Conversation(BaseModel):
                 max_tokens=self.max_tokens,
                 history_limit=self.history_limit,
                 web_search_enabled=self.web_search_enabled,
+                web_fetch_enabled=self.web_fetch_enabled,
                 image_generation_enabled=self.image_generation_enabled,
                 artifacts_enabled=self.artifacts_enabled,
                 selected_model=self.selected_model,

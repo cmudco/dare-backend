@@ -187,6 +187,7 @@ class ConversationSerializer(serializers.ModelSerializer):
             "max_tokens",
             "history_limit",
             "web_search_enabled",
+            "web_fetch_enabled",
             "image_generation_enabled",
             "audio_transcription_enabled",
             "artifacts_enabled",
@@ -334,6 +335,7 @@ class MessageToolCallSerializer(serializers.ModelSerializer):
     id = serializers.CharField(source="tool_call_id", read_only=True)
     mcp_result = serializers.SerializerMethodField()
     dare_result = serializers.SerializerMethodField()
+    provider_result = serializers.SerializerMethodField()
 
     class Meta:
         model = MessageToolCall
@@ -347,13 +349,14 @@ class MessageToolCallSerializer(serializers.ModelSerializer):
             "error",
             "mcp_result",
             "dare_result",
+            "provider_result",
         ]
         read_only_fields = fields
 
     def get_mcp_result(self, obj):
         # The frontend stores external MCP payloads separately from DARE-native
         # tool results so each renderer can consume a typed result field.
-        if obj.server_slug == "dare":
+        if obj.server_slug in {"dare", "anthropic"}:
             return None
         return self._parse_result(obj.result)
 
@@ -361,6 +364,11 @@ class MessageToolCallSerializer(serializers.ModelSerializer):
         # DARE tools use the same persistence table as MCP tools, but their
         # result payloads drive richer artifact/chart renderers in the UI.
         if obj.server_slug != "dare":
+            return None
+        return self._parse_result(obj.result)
+
+    def get_provider_result(self, obj):
+        if obj.server_slug != "anthropic":
             return None
         return self._parse_result(obj.result)
 

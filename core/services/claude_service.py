@@ -10,15 +10,17 @@ import logging
 from typing import AsyncGenerator, Dict, List, Tuple, Optional
 
 from anthropic import AsyncAnthropic
+from django.core.exceptions import SynchronousOnlyOperation
 
 from config import env
 from conversations.models import LLM
-from core.services.api_key_service import get_provider_api_key
+from core.services.api_key_service import get_provider_api_key_sync
 from core.services.llm_utils import (
     MessageFormatter,
     ClaudeVisionHandler,
     ClaudeErrorHandler,
     ClaudeStreamProcessor,
+    ClaudeWebFetchTools,
     ClaudeWebSearchTools,
     StreamAggregator,
     SchemaTransformer,
@@ -40,7 +42,10 @@ class ClaudeService:
         """
         # Use provided key or fetch from provider key service
         if api_key is None:
-            api_key = get_provider_api_key(llm.provider)
+            try:
+                api_key = get_provider_api_key_sync(llm.provider)
+            except SynchronousOnlyOperation:
+                api_key = getattr(env, "CLAUDE_API_KEY", None)
 
         self.api_key = api_key
         self._client = None
@@ -304,6 +309,10 @@ class ClaudeService:
         if tools:
             claude_tools = self._convert_tools_to_claude_format(tools)
             params["tools"] = claude_tools
+            if ClaudeWebFetchTools.has_web_fetch(claude_tools):
+                params["extra_headers"] = {
+                    "anthropic-beta": ClaudeWebFetchTools.BETA_HEADER
+                }
             logger.debug(f"[Claude] Converted {len(tools)} tools to Claude format: {[t.get('name') for t in claude_tools]}")
             # Let LLM decide when to use tools (auto is default, so no need to set explicitly)
 
@@ -352,6 +361,8 @@ class ClaudeService:
                     "input_schema": func.get("parameters", {"type": "object", "properties": {}})
                 }
                 claude_tools.append(claude_tool)
+            elif "type" in tool and "name" in tool:
+                claude_tools.append(tool)
             else:
                 # Unknown format, try to pass through
                 logger.warning(f"Unknown tool format, passing through: {tool}")
@@ -413,3 +424,13 @@ class ClaudeService:
             Web search tool dictionary
         """
         return ClaudeWebSearchTools.get_tool_definition()
+
+    @staticmethod
+    def get_web_fetch_tool() -> Dict:
+        """
+        Get the native web fetch tool definition for Claude API.
+
+        Returns:
+            Web fetch tool dictionary
+        """
+        return ClaudeWebFetchTools.get_tool_definition()

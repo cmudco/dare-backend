@@ -71,6 +71,7 @@ class MessageValidationService:
             "history_limit": data.get("history_limit", cls.DEFAULT_HISTORY_LIMIT),
             # Feature flags
             "web_search_enabled": data.get("web_search_enabled"),
+            "web_fetch_enabled": data.get("web_fetch_enabled"),
             "image_generation_enabled": data.get("image_generation_enabled"),
             "image_generation_settings": data.get("image_generation_settings"),
             "audio_transcription_enabled": data.get("audio_transcription_enabled"),
@@ -163,6 +164,7 @@ class MessageValidationService:
             ),
             "history_limit": data.get("history_limit", cls.DEFAULT_HISTORY_LIMIT),
             "web_search_enabled": data.get("web_search_enabled"),
+            "web_fetch_enabled": data.get("web_fetch_enabled"),
             "image_generation_enabled": data.get("image_generation_enabled"),
             "image_generation_settings": data.get("image_generation_settings"),
             "audio_transcription_enabled": data.get("audio_transcription_enabled"),

@@ -109,6 +109,8 @@ class ConversationService:
         # Route to correct field based on server
         if server_slug == "dare":
             payload["dareResult"] = parsed_result
+        elif server_slug == "anthropic":
+            payload["providerResult"] = parsed_result
         else:
             payload["mcpResult"] = parsed_result
 

@@ -64,6 +64,35 @@ class ClaudeWebSearchTools:
         }
 
 
+class ClaudeWebFetchTools:
+    """Claude-specific web fetch tool."""
+
+    BETA_HEADER = "web-fetch-2025-09-10"
+    TOOL_TYPE = "web_fetch_20250910"
+
+    @classmethod
+    def get_tool_definition(cls) -> Dict:
+        """
+        Get the native web fetch tool definition for Claude API.
+
+        Returns:
+            Web fetch tool dictionary
+        """
+        return {
+            "type": cls.TOOL_TYPE,
+            "name": "web_fetch",
+            "max_uses": 3,
+            "citations": {"enabled": True},
+            "max_content_tokens": 50000,
+        }
+
+    @classmethod
+    def has_web_fetch(cls, tools: Optional[List[Dict]]) -> bool:
+        if not tools:
+            return False
+        return any(str(t.get("type", "")).startswith("web_fetch_") for t in tools)
+
+
 class GeminiWebSearchTools:
     """Gemini-specific web search tools."""
 

@@ -50,6 +50,7 @@ from .web_search_tools import (
     WebSearchTools,
     OpenAIWebSearchTools,
     ClaudeWebSearchTools,
+    ClaudeWebFetchTools,
     GeminiWebSearchTools,
 )
 
@@ -96,6 +97,7 @@ __all__ = [
     "WebSearchTools",
     "OpenAIWebSearchTools",
     "ClaudeWebSearchTools",
+    "ClaudeWebFetchTools",
     "GeminiWebSearchTools",
     # Web search source extractors
     "WebSearchSource",
