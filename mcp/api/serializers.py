@@ -3,7 +3,7 @@ Serializers for MCP API.
 """
 
 from rest_framework import serializers
-from mcp.constants import MCPAuthType
+from mcp.constants import MCPAuthType, MCPTransport
 from mcp.models import MCPServer, UserMCPConnection, MCPToolExecution
 from mcp.services.credential_service import MCPCredentialService
 
@@ -29,6 +29,81 @@ class MCPServerSerializer(serializers.ModelSerializer):
             'created_at',
         ]
         read_only_fields = fields
+
+
+class MCPServerCreateSerializer(serializers.ModelSerializer):
+    """Staff-only serializer for adding hosted remote MCP servers."""
+
+    class Meta:
+        model = MCPServer
+        fields = [
+            'id',
+            'name',
+            'slug',
+            'description',
+            'icon',
+            'transport',
+            'auth_type',
+            'remote_url',
+            'remote_headers',
+            'oauth_authorize_url',
+            'oauth_token_url',
+            'oauth_registration_url',
+            'oauth_scope',
+            'oauth_client_id',
+            'required_credentials',
+            'credentials_help_url',
+            'setup_guide',
+            'is_active',
+            'created_at',
+        ]
+        read_only_fields = ['id', 'created_at']
+
+    def validate(self, attrs):
+        transport = attrs.get('transport', MCPTransport.STREAMABLE_HTTP)
+        auth_type = attrs.get('auth_type', MCPAuthType.NONE)
+        remote_url = attrs.get('remote_url', '')
+
+        if transport != MCPTransport.STREAMABLE_HTTP:
+            raise serializers.ValidationError({
+                'transport': 'In-app MCP server creation only supports hosted Streamable HTTP MCP servers.'
+            })
+
+        if not remote_url:
+            raise serializers.ValidationError({
+                'remote_url': 'Remote MCP URL is required.'
+            })
+
+        if not remote_url.startswith('https://'):
+            raise serializers.ValidationError({
+                'remote_url': 'Remote MCP URL must use HTTPS.'
+            })
+
+        if auth_type == MCPAuthType.OAUTH2:
+            registration_url = attrs.get('oauth_registration_url', '')
+            client_id = attrs.get('oauth_client_id', '')
+            authorize_url = attrs.get('oauth_authorize_url', '')
+            token_url = attrs.get('oauth_token_url', '')
+
+            if not registration_url and not client_id:
+                raise serializers.ValidationError({
+                    'oauth_registration_url': 'OAuth MCP servers need dynamic registration or a client ID.'
+                })
+            if client_id and (not authorize_url or not token_url):
+                raise serializers.ValidationError({
+                    'oauth_authorize_url': 'Static OAuth client configuration requires authorize and token URLs.'
+                })
+
+        return attrs
+
+    def create(self, validated_data):
+        validated_data['transport'] = MCPTransport.STREAMABLE_HTTP
+        validated_data.setdefault('command', '')
+        validated_data.setdefault('args', [])
+        validated_data.setdefault('docker_image', '')
+        validated_data.setdefault('remote_headers', {})
+        validated_data.setdefault('required_credentials', [])
+        return super().create(validated_data)
 
 
 class UserMCPConnectionSerializer(serializers.ModelSerializer):
