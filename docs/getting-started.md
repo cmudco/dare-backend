@@ -13,18 +13,16 @@ This guide walks you through setting up the full local workspace from scratch: t
 
 ## Architecture Overview
 
-```
-┌─────────────────┐     REST + Socket.IO     ┌──────────────────┐
-│  dare-frontend   │ ◄──────────────────────► │  dare-backend     │
-│  (port 5173)     │                          │  (port 8000)      │
-└─────────────────┘                          └──────────────────┘
-                                                      ▲
-                                              X-Internal-Key + JWT
-                                                      │
-┌─────────────────┐         REST              ┌──────────────────┐
-│ socraticbooks-   │ ◄──────────────────────► │ socraticbooks-    │
-│ react            │                          │ backend (8001)    │
-└─────────────────┘                          └──────────────────┘
+```mermaid
+flowchart LR
+    dareFrontend["dare-frontend\nport 5173"]
+    dareBackend["dare-backend\nport 8000"]
+    sbFrontend["socraticbooks-react"]
+    sbBackend["socraticbooks-backend\nport 8001"]
+
+    dareFrontend <-->|REST + Socket.IO| dareBackend
+    sbFrontend <-->|REST| sbBackend
+    sbBackend -->|"X-Internal-Key + JWT"| dareBackend
 ```
 
 **Startup order matters:** Redis → dare-backend → dare-frontend → socraticbooks-backend → socraticbooks-react

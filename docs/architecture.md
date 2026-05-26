@@ -4,53 +4,39 @@ This document is the entry point for understanding how the backend is structured
 
 ## Component Diagram
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│                          External Clients                             │
-│                                                                       │
-│   ┌──────────────┐   ┌──────────────────┐   ┌──────────────────┐     │
-│   │ DARE         │   │ Partner          │   │ Programmatic     │     │
-│   │ Frontend     │   │ Frontends / SDKs │   │ API Consumers    │     │
-│   └──────┬───────┘   └────────┬─────────┘   └────────┬─────────┘     │
-└──────────┼────────────────────┼──────────────────────┼───────────────┘
-           │ HTTPS / WSS        │                      │
-┌──────────▼────────────────────▼──────────────────────▼───────────────┐
-│                      Reverse Proxy (Nginx / ALB)                      │
-└──────────┬───────────────────────────────────────────────────────────┘
-           │
-┌──────────▼───────────────────────────────────────────────────────────┐
-│                     DARE Backend (Django ASGI)                        │
-│                                                                       │
-│  ┌──────────────────────────────────────────────────────────────┐    │
-│  │   REST API (DRF)              Socket.IO (python-socketio)    │    │
-│  │   • /users      • /files     • /chat namespace               │    │
-│  │   • /conversations • /agents • /workflow namespace           │    │
-│  │   • /billing    • /api_keys                                  │    │
-│  └──────────────────────────────────────────────────────────────┘    │
-│                                                                       │
-│  ┌──────────────────────────────────────────────────────────────┐    │
-│  │                       Service Layer                          │    │
-│  │   AIService (OpenAI / Claude / Gemini / Ollama)              │    │
-│  │   VectorService (Pinecone / Weaviate)                        │    │
-│  │   DocumentProcessor (chunking, embedding)                    │    │
-│  │   WorkflowEngine (DAG execution)                             │    │
-│  │   MCPService (Model Context Protocol bridge)                 │    │
-│  └──────────────────────────────────────────────────────────────┘    │
-│                                                                       │
-│  ┌──────────────────────────────────────────────────────────────┐    │
-│  │       Background Workers (Django RQ)                         │    │
-│  │   • File ingestion + embedding                               │    │
-│  │   • Email delivery                                           │    │
-│  │   • Long-running workflow steps                              │    │
-│  └──────────────────────────────────────────────────────────────┘    │
-└────┬──────────┬──────────┬──────────┬──────────┬─────────────────────┘
-     │          │          │          │          │
-┌────▼──┐  ┌────▼───┐  ┌───▼────┐  ┌──▼────┐  ┌─▼──────────┐
-│Postgres│  │ Redis  │  │Pinecone│  │OpenAI/│  │ Ollama     │
-│        │  │ (RQ +  │  │  /     │  │Claude/│  │ (self-     │
-│        │  │ Channels│ │Weaviate│  │Gemini │  │ hosted)    │
-│        │  │ pub/sub)│  │        │  │ APIs │  │            │
-└────────┘  └────────┘  └────────┘  └───────┘  └────────────┘
+```mermaid
+flowchart TB
+    frontend["DARE Frontend"]
+    partners["Partner frontends / SDKs"]
+    consumers["Programmatic API consumers"]
+    proxy["Reverse Proxy\nNginx / ALB"]
+
+    subgraph backend["DARE Backend (Django ASGI)"]
+        api["REST API (DRF)\nusers, files, conversations, agents, billing, API keys"]
+        socket["Socket.IO\n/chat and /workflow namespaces"]
+        services["Service Layer\nAIService, VectorService, DocumentProcessor, WorkflowEngine, MCPService"]
+        workers["Background Workers (Django RQ)\nfile ingestion, email delivery, workflow steps"]
+    end
+
+    postgres["Postgres"]
+    redis["Redis\nRQ + pub/sub"]
+    vectors["Pinecone / Weaviate"]
+    providers["OpenAI / Claude / Gemini APIs"]
+    ollama["Ollama\nself-hosted"]
+
+    frontend --> proxy
+    partners --> proxy
+    consumers --> proxy
+    proxy --> api
+    proxy --> socket
+    api --> services
+    socket --> services
+    services --> workers
+    services --> postgres
+    workers --> redis
+    services --> vectors
+    services --> providers
+    services --> ollama
 ```
 
 ## Key Components

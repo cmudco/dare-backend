@@ -2,7 +2,7 @@
 
 [![License: GPL v2](https://img.shields.io/badge/License-GPL_v2-blue.svg)](LICENSE)
 
-Django REST + Socket.IO backend for the **DARE (Distributed AI Research Engine)** platform — a multi-LLM research and conversation platform with file processing, vector RAG, workflow automation, and real-time streaming.
+Django REST + Socket.IO backend for the **DARE (Dietrich Analysis Research Education Platform)** — a multi-LLM research and conversation platform with file processing, vector RAG, workflow automation, and real-time streaming.
 
 ## Purpose
 
@@ -17,26 +17,34 @@ DARE provides a unified backend for working with multiple large language models 
 
 ## Architecture Overview
 
-```
-┌──────────────────────────────────────────────────────────┐
-│  Clients (DARE Frontend, Partner Frontends, Mobile)      │
-└─────────────────┬───────────────────────┬────────────────┘
-                  │ REST / Socket.IO      │
-┌─────────────────▼───────────────────────▼────────────────┐
-│                    DARE Backend (Django)                  │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐ │
-│  │ Auth /   │  │ Convers. │  │ Files /  │  │ Workflow │ │
-│  │ Users    │  │ + Chat   │  │ RAG      │  │ Engine   │ │
-│  └──────────┘  └──────────┘  └──────────┘  └──────────┘ │
-│  ┌──────────────────────────────────────────────────────┐│
-│  │       Service Layer (LLM, Vector, MCP, Email)        ││
-│  └──────────────────────────────────────────────────────┘│
-└──┬──────────┬──────────┬──────────┬──────────┬──────────┘
-   │          │          │          │          │
-┌──▼───┐  ┌───▼───┐  ┌───▼───┐  ┌──▼───┐  ┌───▼────┐
-│ Post │  │ Redis │  │ Vector│  │ LLM  │  │ Ollama │
-│ gres │  │ + RQ  │  │ Stores│  │ APIs │  │ (local)│
-└──────┘  └───────┘  └───────┘  └──────┘  └────────┘
+```mermaid
+flowchart TB
+    clients["Clients\nDARE Frontend, partner frontends, mobile"]
+
+    subgraph backend["DARE Backend (Django ASGI)"]
+        auth["Auth / Users"]
+        chat["Conversations + Chat"]
+        files["Files / RAG"]
+        workflows["Workflow Engine"]
+        services["Service Layer\nLLM, vector, MCP, email"]
+    end
+
+    postgres["Postgres"]
+    redis["Redis + RQ"]
+    vectors["Vector Stores\nPinecone / Weaviate"]
+    llms["LLM APIs\nOpenAI, Claude, Gemini"]
+    ollama["Ollama\nself-hosted models"]
+
+    clients <-->|REST + Socket.IO| backend
+    auth --> postgres
+    chat --> services
+    files --> services
+    workflows --> services
+    services --> postgres
+    services --> redis
+    services --> vectors
+    services --> llms
+    services --> ollama
 ```
 
 See [docs/architecture.md](docs/architecture.md) for the full diagram and [docs/architecture/overview.md](docs/architecture/overview.md) for component-level detail.
