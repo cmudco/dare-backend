@@ -10,8 +10,8 @@ from mcp.models import MCPServer, UserMCPConnection, MCPToolExecution
 class MCPServerAdmin(admin.ModelAdmin):
     """Admin interface for managing MCP servers."""
 
-    list_display = ['name', 'slug', 'command', 'is_active', 'created_at']
-    list_filter = ['is_active', 'created_at']
+    list_display = ['name', 'slug', 'transport', 'auth_type', 'command', 'is_active', 'created_at']
+    list_filter = ['transport', 'auth_type', 'is_active', 'created_at']
     search_fields = ['name', 'slug', 'description']
     readonly_fields = ['created_at', 'updated_at']
     prepopulated_fields = {'slug': ('name',)}
@@ -20,8 +20,22 @@ class MCPServerAdmin(admin.ModelAdmin):
         ('Basic Information', {
             'fields': ('name', 'slug', 'description', 'icon')
         }),
+        ('Remote MCP', {
+            'fields': (
+                'transport',
+                'auth_type',
+                'remote_url',
+                'remote_headers',
+                'oauth_authorize_url',
+                'oauth_token_url',
+                'oauth_registration_url',
+                'oauth_scope',
+                'oauth_client_id',
+            ),
+            'description': 'Configure hosted Streamable HTTP MCP servers and OAuth settings.'
+        }),
         ('Runtime Configuration', {
-            'fields': ('command', 'args'),
+            'fields': ('command', 'args', 'docker_image'),
             'description': 'Command and arguments to spawn the MCP server subprocess.'
         }),
         ('Credentials Schema', {
@@ -57,7 +71,7 @@ class UserMCPConnectionAdmin(admin.ModelAdmin):
             'description': '⚠️ SECURITY: Credentials are encrypted. Values shown are ciphertext.'
         }),
         ('Cache', {
-            'fields': ('cached_tools', 'tools_cached_at'),
+            'fields': ('cached_tools', 'tools_cached_at', 'auth_metadata'),
             'classes': ('collapse',)
         }),
         ('Status', {

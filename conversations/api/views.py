@@ -1,7 +1,10 @@
+# fmt: off
+import json
 import logging
 import os
 import tempfile
 from decimal import Decimal
+from urllib.parse import quote
 
 import markdown
 import weasyprint
@@ -19,52 +22,37 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from conversations.services.llm_filter_service import (
-    filter_for_active_wallet,
-    filter_for_bot,
-    parse_scope,
-)
+from conversations.api.content_negotiation import \
+    ArtifactDownloadContentNegotiation
 from conversations.api.mixins import ConversationSharingMixin
-from conversations.constants import (
-    ArtifactStatus,
-    SharingErrorCode,
-    SharingErrorMessage,
-)
+from conversations.constants import (ArtifactStatus, ArtifactType,
+                                     SharingErrorCode, SharingErrorMessage)
 from conversations.exceptions import SharingAPIException
-from conversations.models import (
-    Artifact,
-    Conversation,
-    ConversationSummary,
-    Feedback,
-    LLM,
-    Message,
-    ModelCardData,
-    Snippet,
-)
-from core.services.sb_client import SocraticBooksClient
+from conversations.models import (LLM, Artifact, Conversation,
+                                  ConversationSummary, Feedback, Message,
+                                  ModelCardData, Snippet)
 from conversations.services.conversation_preference_service import (
-    ConversationPreferenceError,
-    ConversationPreferenceService,
-)
-from conversations.services.sharing_service import (
-    ConversationSharingService,
-    SharingValidationError,
-)
-from conversations.services.socratic_dependency_service import SocraticDependencyService
+    ConversationPreferenceError, ConversationPreferenceService)
+from conversations.services.llm_filter_service import (
+    filter_for_active_wallet, filter_for_bot, parse_scope)
+from conversations.services.sharing_service import (ConversationSharingService,
+                                                    SharingValidationError)
+from conversations.services.socratic_dependency_service import \
+    SocraticDependencyService
+from core.services.sb_client import SocraticBooksClient
+from dare_tools.services.artifact_pdf_generator import (
+    generate_docx_pdf_bytes, generate_pptx_pdf_bytes)
+from dare_tools.services.pptx_generator import generate_pptx_bytes
 from sharing.services.sharing_service import SharingService
 from users.utils import detect_platform_from_request
-from .serializers import (
-    MessageSerializer,
-    ConversationSerializer,
-    LLMSerializer,
-    ArtifactSerializer,
-    ArtifactListSerializer,
-    ArtifactCheckpointSerializer,
-    FeedbackSerializer,
-    ModelCardDataSerializer,
-    ModelCardDataListSerializer,
-    ConversationSummarySerializer,
-)
+
+from .serializers import (ArtifactCheckpointSerializer, ArtifactListSerializer,
+                          ArtifactSerializer, ConversationSerializer,
+                          ConversationSummarySerializer, FeedbackSerializer,
+                          LLMSerializer, MessageSerializer,
+                          ModelCardDataListSerializer, ModelCardDataSerializer)
+
+# fmt: on
 
 logger = logging.getLogger(__name__)
 
@@ -409,7 +397,13 @@ class ConversationViewSet(ConversationSharingMixin, viewsets.ModelViewSet):
         messages = (
             Message.active_objects.filter(conversation=conversation)
             .select_related("llm")
-            .prefetch_related("files", "tags", "snippets__file", "web_search_sources")
+            .prefetch_related(
+                "files",
+                "tags",
+                "snippets__file",
+                "web_search_sources",
+                "mcp_tool_calls",
+            )
             .order_by("created_at")
         )
 
@@ -464,6 +458,26 @@ class ConversationViewSet(ConversationSharingMixin, viewsets.ModelViewSet):
 
         serializer = ArtifactSerializer(artifact)
         return Response(serializer.data)
+
+    @action(
+        detail=True,
+        methods=["get"],
+        url_path="artifacts/(?P<artifact_id>[^/.]+)/download",
+        content_negotiation_class=ArtifactDownloadContentNegotiation,
+    )
+    def artifact_download(self, request, conversation_id=None, artifact_id=None):
+        """Download a generated file for a specific artifact."""
+        conversation = self.get_object()
+
+        artifact = Artifact._base_manager.filter(
+            id=artifact_id, conversation=conversation
+        ).first()
+        if not artifact or not artifact.is_active or artifact.is_deleted:
+            return Response(
+                {"error": "Artifact not found"}, status=status.HTTP_404_NOT_FOUND
+            )
+
+        return _build_artifact_download_response(request, artifact, artifact_id)
 
     @action(
         detail=True,
@@ -828,6 +842,111 @@ class ArtifactContentView(APIView):
         # Return the new artifact using the serializer
         serializer = ArtifactSerializer(new_artifact)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+def _artifact_download_filename(artifact, extension: str) -> str:
+    base = artifact.filename or artifact.title or "artifact"
+    if "." in base:
+        base = base.rsplit(".", 1)[0]
+    safe_base = "".join(
+        char for char in base if char.isalnum() or char in (" ", "-", "_")
+    ).strip()
+    return f"{safe_base or 'artifact'}.{extension}"
+
+
+def _attachment_disposition(filename: str) -> str:
+    ascii_filename = "".join(
+        char if ord(char) < 128 and char not in {'"', "\\"} else "_"
+        for char in filename
+    )
+    encoded_filename = quote(filename)
+    return (
+        f'attachment; filename="{ascii_filename}"; '
+        f"filename*=UTF-8''{encoded_filename}"
+    )
+
+
+def _build_artifact_download_response(request, artifact, artifact_id):
+    requested_format = (request.query_params.get("format") or "").lower().strip()
+
+    if artifact.conversation.user != request.user:
+        return Response(
+            {"error": "You do not have permission to download this artifact"},
+            status=status.HTTP_403_FORBIDDEN,
+        )
+
+    if not requested_format:
+        requested_format = (
+            "pptx" if artifact.artifact_type == ArtifactType.PPTX else "pdf"
+        )
+
+    supported_formats = {
+        ArtifactType.PPTX: {"pptx", "pdf"},
+        ArtifactType.DOCX: {"pdf"},
+    }
+    allowed_formats = supported_formats.get(artifact.artifact_type, set())
+    if requested_format not in allowed_formats:
+        return Response(
+            {
+                "error": (
+                    f"{requested_format or 'download'} download is not "
+                    f"supported for {artifact.artifact_type}"
+                )
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        config = json.loads(artifact.content)
+        if artifact.artifact_type == ArtifactType.PPTX and requested_format == "pptx":
+            download_content = generate_pptx_bytes(config)
+            content_type = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        elif artifact.artifact_type == ArtifactType.PPTX:
+            download_content = generate_pptx_pdf_bytes(config)
+            content_type = "application/pdf"
+        else:
+            download_content = generate_docx_pdf_bytes(config)
+            content_type = "application/pdf"
+    except Exception as e:
+        logger.exception(
+            f"Error generating {requested_format} artifact {artifact_id}: {e}"
+        )
+        return Response(
+            {"error": f"Failed to generate {requested_format}: {str(e)}"},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    filename = _artifact_download_filename(artifact, requested_format)
+    response = HttpResponse(download_content, content_type=content_type)
+    response["Content-Disposition"] = _attachment_disposition(filename)
+    response["Content-Length"] = len(download_content)
+    return response
+
+
+class ArtifactDownloadView(APIView):
+    """Download generated binary files for artifact-backed formats."""
+
+    content_negotiation_class = ArtifactDownloadContentNegotiation
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, artifact_id):
+        artifact = Artifact._base_manager.filter(id=artifact_id).first()
+
+        if not artifact:
+            logger.warning(
+                f"Artifact download requested for missing artifact id={artifact_id}"
+            )
+            raise Http404
+
+        if not artifact.is_active or artifact.is_deleted:
+            logger.warning(
+                "Artifact download requested for inactive/deleted artifact "
+                f"id={artifact_id}, is_active={artifact.is_active}, "
+                f"is_deleted={artifact.is_deleted}"
+            )
+            raise Http404
+
+        return _build_artifact_download_response(request, artifact, artifact_id)
 
 
 class LLMViewSet(viewsets.ModelViewSet):

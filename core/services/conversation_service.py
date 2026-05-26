@@ -9,7 +9,7 @@ from django.db.models import Prefetch
 from djangorestframework_camel_case.util import camelize
 
 from conversations.api.serializers import MessageSerializer
-from conversations.constants import SenderType
+from conversations.constants import SenderType, ToolCallOrigin
 from conversations.models import LLM, Artifact, Conversation, Message
 from core.services.billing_service import BillingService
 from core.services.dtos import LLMDescriptor
@@ -77,7 +77,9 @@ class ConversationService:
                 "energyStats": msg.get("energy_stats", None),
                 "artifactId": msg.get("artifactId", None),
                 "memoryContextData": msg.get("memory_context_data") or [],
-                "toolCalls": [
+                # Keep socket fallback history aligned with the REST message
+                # serializer; the client camelizes this to `mcpToolCalls`.
+                "mcp_tool_calls": [
                     self._build_tool_call_payload(tc)
                     for tc in msg.get("mcp_tool_calls", [])
                 ],
@@ -93,20 +95,22 @@ class ConversationService:
         Separates DARE results from MCP results into different fields
         for clean, zero-confusion typing on FE side.
         """
-        server_slug = tc["server_slug"]
+        origin = tc.get("origin") or ToolCallOrigin.MCP
         parsed_result = self._parse_tool_result(tc.get("result"))
 
         payload = {
             "id": tc["tool_call_id"],
             "toolName": tc["tool_name"],
-            "serverSlug": server_slug,
+            "serverSlug": tc["server_slug"],
+            "origin": origin,
             "status": tc["status"],
             "error": tc.get("error"),
         }
 
-        # Route to correct field based on server
-        if server_slug == "dare":
+        if origin == ToolCallOrigin.DARE:
             payload["dareResult"] = parsed_result
+        elif origin == ToolCallOrigin.PROVIDER:
+            payload["providerResult"] = parsed_result
         else:
             payload["mcpResult"] = parsed_result
 

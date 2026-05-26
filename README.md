@@ -1,6 +1,8 @@
 # DARE Backend
 
-Django REST + Socket.IO backend for the **DARE (Distributed AI Research Engine)** platform — a multi-LLM research and conversation platform with file processing, vector RAG, workflow automation, and real-time streaming.
+[![License: GPL v2](https://img.shields.io/badge/License-GPL_v2-blue.svg)](LICENSE)
+
+Django REST + Socket.IO backend for the **DARE (Dietrich Analysis Research Education Platform)** — a multi-LLM research and conversation platform with file processing, vector RAG, workflow automation, and real-time streaming.
 
 ## Purpose
 
@@ -15,26 +17,34 @@ DARE provides a unified backend for working with multiple large language models 
 
 ## Architecture Overview
 
-```
-┌──────────────────────────────────────────────────────────┐
-│  Clients (DARE Frontend, Partner Frontends, Mobile)      │
-└─────────────────┬───────────────────────┬────────────────┘
-                  │ REST / Socket.IO      │
-┌─────────────────▼───────────────────────▼────────────────┐
-│                    DARE Backend (Django)                  │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐ │
-│  │ Auth /   │  │ Convers. │  │ Files /  │  │ Workflow │ │
-│  │ Users    │  │ + Chat   │  │ RAG      │  │ Engine   │ │
-│  └──────────┘  └──────────┘  └──────────┘  └──────────┘ │
-│  ┌──────────────────────────────────────────────────────┐│
-│  │       Service Layer (LLM, Vector, MCP, Email)        ││
-│  └──────────────────────────────────────────────────────┘│
-└──┬──────────┬──────────┬──────────┬──────────┬──────────┘
-   │          │          │          │          │
-┌──▼───┐  ┌───▼───┐  ┌───▼───┐  ┌──▼───┐  ┌───▼────┐
-│ Post │  │ Redis │  │ Vector│  │ LLM  │  │ Ollama │
-│ gres │  │ + RQ  │  │ Stores│  │ APIs │  │ (local)│
-└──────┘  └───────┘  └───────┘  └──────┘  └────────┘
+```mermaid
+flowchart TB
+    clients["Clients\nDARE Frontend, partner frontends, mobile"]
+
+    subgraph backend["DARE Backend (Django ASGI)"]
+        auth["Auth / Users"]
+        chat["Conversations + Chat"]
+        files["Files / RAG"]
+        workflows["Workflow Engine"]
+        services["Service Layer\nLLM, vector, MCP, email"]
+    end
+
+    postgres["Postgres"]
+    redis["Redis + RQ"]
+    vectors["Vector Stores\nPinecone / Weaviate"]
+    llms["LLM APIs\nOpenAI, Claude, Gemini"]
+    ollama["Ollama\nself-hosted models"]
+
+    clients <-->|REST + Socket.IO| backend
+    auth --> postgres
+    chat --> services
+    files --> services
+    workflows --> services
+    services --> postgres
+    services --> redis
+    services --> vectors
+    services --> llms
+    services --> ollama
 ```
 
 See [docs/architecture.md](docs/architecture.md) for the full diagram and [docs/architecture/overview.md](docs/architecture/overview.md) for component-level detail.
@@ -47,30 +57,46 @@ git clone <repo-url> dare-backend && cd dare-backend
 
 # 2. Configure
 cp .example.env .env
-# Edit .env — at minimum, set OPENAI_API_KEY (or another provider)
+# Edit .env. At minimum, set DJANGO_SECRET_KEY and one provider key
+# such as OPENAI_API_KEY, CLAUDE_API_KEY, or GEMINI_API_KEY.
 
-# 3. Start dependencies (Weaviate + Ollama)
-docker-compose up -d
+# 3. Build and start the backend stack
+docker compose up --build -d
 
-# 4. Install Python deps and run migrations
-python3 -m venv .venv && source .venv/bin/activate
+# 4. Create an admin user
+docker compose exec web python manage.py createsuperuser
+
+# 5. Check health
+docker compose ps
+curl http://localhost:8000/api/health/
+curl http://localhost:8000/api/ready/
+```
+
+The API will be available at `http://localhost:8000/`. The OpenAPI schema is served at `http://localhost:8000/api/schema/`. Swagger UI is routed at `http://localhost:8000/api/docs/`, but it loads Swagger assets from a CDN, so use the raw schema if the UI does not render in an offline or restricted network.
+
+Docker Compose starts the API server, RQ worker, Postgres + pgvector, Redis, and Weaviate. Optional Ollama and Weaviate console services are available through Compose profiles. See [INSTALL.md](INSTALL.md) for details.
+
+## Quick Start (Local Python)
+
+Use this path when you want the Django process running directly on your machine.
+
+```bash
+cp .example.env .env
+python3.13 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements/local.txt
 python manage.py migrate
-
-# 5. Run the API server
 uvicorn dare.asgi:application --host 0.0.0.0 --port 8000 --reload
+```
 
-# 6. In a second terminal, run the background worker
+In a second terminal, start a worker:
+
+```bash
+source .venv/bin/activate
 OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES python -Wd manage.py rqworker default -v 3
 ```
 
-The API will be available at `http://localhost:8000/`. Interactive Swagger docs are at `http://localhost:8000/api/docs/`.
-
-> **Note:** Docker Compose currently provisions Weaviate and Ollama only. Postgres and Redis run on the host (see [INSTALL.md](INSTALL.md) for full containerization).
-
-## Quick Start (Bare Metal)
-
-See [INSTALL.md](INSTALL.md) for the full bare-metal deployment guide, including Postgres and Redis setup.
+Redis must be running for Socket.IO pub/sub and background jobs. See [INSTALL.md](INSTALL.md) for complete Docker, local, and production guidance.
 
 ## Documentation
 
@@ -83,13 +109,14 @@ See [INSTALL.md](INSTALL.md) for the full bare-metal deployment guide, including
 | [docs/contributing.md](docs/contributing.md) | Issues, pull requests, coding standards |
 | [CHANGELOG.md](CHANGELOG.md) | Release notes |
 | [SECURITY.md](SECURITY.md) | Vulnerability disclosure process |
+| [docs/integration/socraticbooks-dare-proxy.md](docs/integration/socraticbooks-dare-proxy.md) | DARE/SocraticBooks integration contract and update rules |
 | [docs/architecture/socketio-events.md](docs/architecture/socketio-events.md) | Socket.IO event reference |
 | [docs/api/dare-backend.md](docs/api/dare-backend.md) | REST API reference |
 | [docs/code-standards.md](docs/code-standards.md) | Coding conventions |
 
 ## Tech Stack
 
-- **Python 3.11**, Django 4.x, Django REST Framework
+- **Python 3.13**, Django 5.1, Django REST Framework
 - **Django Channels** + python-socketio for real-time streaming
 - **Django RQ** + Redis for background jobs
 - **PostgreSQL** (production) / SQLite (local dev)
@@ -98,4 +125,4 @@ See [INSTALL.md](INSTALL.md) for the full bare-metal deployment guide, including
 
 ## License
 
-See [LICENSE](LICENSE) if present, or contact the maintainers.
+No open-source license has been selected in this repository yet. Add a `LICENSE` file before public release.

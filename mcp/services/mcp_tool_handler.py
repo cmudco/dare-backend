@@ -11,17 +11,21 @@ which should only coordinate message flow.
 
 import json
 import logging
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List
 
 from asgiref.sync import sync_to_async
 from django.utils import timezone
 
-from conversations.constants import SenderType, DEFAULT_AI_SENDER_NAME
+from conversations.constants import (
+    SenderType,
+    DEFAULT_AI_SENDER_NAME,
+    ToolCallOrigin,
+)
 from conversations.models import Conversation, Message, MessageToolCall
 from conversations.services.websocket_response_service import WebSocketResponseService
-from core.services.dtos import LLMQueryRequest
 from core.services.dtos.builder import LLMQueryRequestBuilder
 from mcp.services.mcp_tool_executor import mcp_tool_executor, MCPToolExecutorError
+from mcp.services.tool_result_context import tool_result_context_builder
 
 logger = logging.getLogger(__name__)
 
@@ -117,6 +121,7 @@ class MCPToolHandler:
                     "toolCallId": tool_call_id,
                     "toolName": actual_tool_name,
                     "serverSlug": server_slug,
+                    "origin": ToolCallOrigin.MCP,
                     "status": "executing",
                 }
                 await send_callback(tool_start_payload)
@@ -141,6 +146,7 @@ class MCPToolHandler:
                     "toolCallId": tool_call_id,
                     "toolName": actual_tool_name,
                     "serverSlug": server_slug,
+                    "origin": ToolCallOrigin.MCP,
                     "status": "success",
                     "result": result,
                 }
@@ -257,18 +263,23 @@ class MCPToolHandler:
         """
         bot_message_id = message_obj.id
 
-        # Build tool results context
-        tool_context = "Here are the results from the tools I just used:\n\n"
-        for tr in tool_results:
-            tool_context += f"**{tr['tool_name']}** result:\n```\n{tr['result'][:2000]}\n```\n\n"
-        tool_context += "Please summarize these results in a helpful way for the user."
+        tool_context = tool_result_context_builder.build(tool_results)
+
+        synthesis_message_data = {
+            **message_data,
+            # Follow-up synthesis should consume tool results, not start a new
+            # tool-use round. Some models otherwise try a second MCP call here.
+            "mcp_server_ids": [],
+            "dare_tool_slugs": [],
+            "web_search_enabled": False,
+        }
 
         # Build a new request with tool results as the message
         request = LLMQueryRequestBuilder.from_message_data(
             message=tool_context,
             conversation=conversation,
             user=user,
-            message_data=message_data,
+            message_data=synthesis_message_data,
             llm=llm,
             message_obj=message_obj,
             platform=platform,
@@ -335,6 +346,7 @@ class MCPToolHandler:
             "toolCallId": tool_call_id,
             "toolName": actual_tool_name,  # Use actual tool name, not prefixed
             "serverSlug": server_slug,  # Include serverSlug for frontend matching
+            "origin": ToolCallOrigin.MCP,
             "status": "error",
             "error": str(error),
         }
@@ -388,6 +400,7 @@ class MCPToolHandler:
                 message=message,
                 tool_call_id=tool_call_id,
                 server_slug=server_slug,
+                origin=ToolCallOrigin.MCP,
                 tool_name=tool_name,
                 arguments=arguments,
                 status=status,

@@ -94,5 +94,21 @@
             "created_at": "2026-01-15T00:00:00Z",
             "updated_at": "2026-01-15T00:00:00Z"
         }
+    },
+    {
+        "model": "dare_tools.daretool",
+        "pk": 7,
+        "fields": {
+            "name": "Create PPTX",
+            "slug": "create_pptx",
+            "description": "Create styled PowerPoint presentations with structured slide layouts.",
+            "icon": "presentation",
+            "category": "visualization",
+            "function_name": "create_pptx",
+            "is_active": true,
+            "is_deleted": false,
+            "created_at": "2026-01-15T00:00:00Z",
+            "updated_at": "2026-01-15T00:00:00Z"
+        }
     }
 ]

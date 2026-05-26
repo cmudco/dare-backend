@@ -18,6 +18,7 @@ import logging
 from typing import Any, Callable, Dict, List, Optional
 
 from channels.db import database_sync_to_async
+from django.utils import timezone
 from djangorestframework_camel_case.util import camelize
 
 from conversations.api.serializers import ArtifactListSerializer
@@ -28,8 +29,10 @@ from conversations.constants import (
     ErrorCode,
     ErrorMessage,
     SenderType,
+    ToolCallOrigin,
+    ToolCallStatus,
 )
-from conversations.models import LLM, Artifact, Conversation, Message
+from conversations.models import LLM, Artifact, Conversation, Message, MessageToolCall
 from conversations.services.image_generation_service import ImageGenerationService
 from conversations.services.message_helpers import (  # Database helpers; Learning progress helpers; Billing helpers; Finalization helpers; Regeneration helpers
     build_generated_image_data,
@@ -193,6 +196,114 @@ class MessageCoordinator:
             message=message_obj,
             sources=token_usage["web_search_sources"],
         )
+
+    async def _save_provider_tool_calls(
+        self, message_obj: "Message", token_usage: Optional[Dict], regenerate: bool
+    ) -> None:
+        """
+        Save provider-native server tool calls, such as Anthropic web fetch or
+        Gemini URL Context.
+
+        These are not executed by DARE or MCP; the provider executes them and
+        returns the result in the same model response. Persisting them in
+        MessageToolCall keeps the frontend display consistent with existing
+        DARE/MCP tool call history.
+        """
+        if not token_usage or not token_usage.get("provider_tool_calls"):
+            return
+
+        @database_sync_to_async
+        def save_tool_calls():
+            if regenerate:
+                MessageToolCall.objects.filter(
+                    message=message_obj,
+                    origin=ToolCallOrigin.PROVIDER,
+                ).delete()
+
+            for tool_call in token_usage["provider_tool_calls"]:
+                arguments = tool_call.get("arguments") or "{}"
+                if isinstance(arguments, str):
+                    try:
+                        arguments = json.loads(arguments)
+                    except json.JSONDecodeError:
+                        arguments = {"raw": arguments}
+
+                status = tool_call.get("status") or ToolCallStatus.COMPLETED
+                result = tool_call.get("result")
+                error = None
+                if isinstance(result, dict) and result.get("error_code"):
+                    error = result["error_code"]
+                    status = ToolCallStatus.FAILED
+
+                MessageToolCall.objects.create(
+                    message=message_obj,
+                    tool_call_id=tool_call.get("id", ""),
+                    server_slug=tool_call.get("provider", "anthropic"),
+                    origin=ToolCallOrigin.PROVIDER,
+                    tool_name=tool_call.get("name", "provider_tool"),
+                    arguments=arguments,
+                    status=status,
+                    result=json.dumps(result or {}),
+                    error=error,
+                    executed_at=timezone.now(),
+                )
+
+        await save_tool_calls()
+
+    async def _send_provider_tool_calls(
+        self,
+        token_usage: Optional[Dict],
+        bot_message_id: int,
+        sent_tool_call_ids: set,
+    ) -> None:
+        """
+        Stream provider-native server tool calls to the frontend.
+
+        Providers execute these tools internally, so there is no DARE/MCP
+        handler involved. Emitting the generic tool events keeps live rendering
+        aligned with the persisted history renderer.
+        """
+        if not token_usage or not token_usage.get("provider_tool_calls"):
+            return
+
+        for tool_call in token_usage["provider_tool_calls"]:
+            tool_call_id = tool_call.get("id")
+            if not tool_call_id or tool_call_id in sent_tool_call_ids:
+                continue
+
+            server_slug = tool_call.get("provider", "anthropic")
+            tool_name = tool_call.get("name", "provider_tool")
+            status = tool_call.get("status") or ToolCallStatus.COMPLETED
+            result = tool_call.get("result")
+
+            await self.send(
+                {
+                    "type": "tool_call",
+                    "messageId": bot_message_id,
+                    "toolCallId": tool_call_id,
+                    "toolName": tool_name,
+                    "serverSlug": server_slug,
+                    "origin": ToolCallOrigin.PROVIDER,
+                    "status": ToolCallStatus.EXECUTING,
+                }
+            )
+
+            await self.send(
+                {
+                    "type": "tool_result",
+                    "messageId": bot_message_id,
+                    "toolCallId": tool_call_id,
+                    "toolName": tool_name,
+                    "serverSlug": server_slug,
+                    "origin": ToolCallOrigin.PROVIDER,
+                    "status": "error"
+                    if status == ToolCallStatus.FAILED
+                    else "success",
+                    "result": camelize(result) if isinstance(result, dict) else result,
+                    "error": tool_call.get("error"),
+                }
+            )
+            sent_tool_call_ids.add(tool_call_id)
 
     async def _save_memory_context(
         self,
@@ -498,6 +609,7 @@ class MessageCoordinator:
             token_usage = None
             generated_image_data = None
             generated_transcription_data = None
+            sent_provider_tool_call_ids = set()
 
             # Build LLM query request using DTO builder
             # Note: mcp_server_ids are automatically extracted in the builder
@@ -511,17 +623,15 @@ class MessageCoordinator:
                 platform=self.platform,
             )
 
-            # Track tool results for multi-turn tool use
-            mcp_tool_results = []
+            # Track DARE/MCP tool results that need a follow-up model response.
+            executed_tool_results = []
 
             # Stream from LLM service (MCP tools fetched internally if mcp_server_ids present)
             async for chunk, usage in self.llm_service.query(request):
                 if usage:
                     token_usage = usage
 
-                    # Handle MCP tool calls if present
                     if usage.get("tool_calls"):
-                        # Handle MCP tool calls
                         tool_results = await mcp_tool_handler.handle_tool_calls(
                             tool_calls=usage["tool_calls"],
                             message=message_obj,
@@ -529,9 +639,8 @@ class MessageCoordinator:
                             conversation=self.conversation,
                             send_callback=self.send,
                         )
-                        mcp_tool_results.extend(tool_results)
+                        executed_tool_results.extend(tool_results)
 
-                        # Handle DARE tool calls (internal tools like diagrams, charts)
                         dare_results = await dare_tool_handler.handle_tool_calls(
                             tool_calls=usage["tool_calls"],
                             message=message_obj,
@@ -539,7 +648,7 @@ class MessageCoordinator:
                             conversation=self.conversation,
                             send_callback=self.send,
                         )
-                        mcp_tool_results.extend(dare_results)
+                        executed_tool_results.extend(dare_results)
 
                     # Handle generated image
                     if usage.get("image_bytes"):
@@ -550,6 +659,13 @@ class MessageCoordinator:
                     # Handle audio transcription (final result)
                     if usage.get("transcription_result"):
                         generated_transcription_data = build_transcription_data(usage)
+
+                    if usage.get("provider_tool_calls"):
+                        await self._send_provider_tool_calls(
+                            token_usage=usage,
+                            bot_message_id=bot_message_id,
+                            sent_tool_call_ids=sent_provider_tool_call_ids,
+                        )
 
                     # Check billing during streaming (only for authenticated users)
                     if self.user:
@@ -584,18 +700,18 @@ class MessageCoordinator:
                     )
                     await self.send(payload)
 
-            # If we have MCP tool results, ALWAYS make a follow-up LLM call
+            # If we executed local tools, ALWAYS make a follow-up LLM call
             # Even if there's text, it's just the LLM "thinking" before calling tools
             # The LLM needs to see the tool results to generate the final response
-            if mcp_tool_results:
+            if executed_tool_results:
                 logger.info(
-                    f"[MessageCoordinator] Making follow-up LLM call with {len(mcp_tool_results)} tool results"
+                    f"[MessageCoordinator] Making follow-up LLM call with {len(executed_tool_results)} tool results"
                 )
                 try:
                     # The follow-up response REPLACES any partial text from before tool calls
                     ai_response_accumulator = (
                         await mcp_tool_handler.stream_tool_result_response(
-                            tool_results=mcp_tool_results,
+                            tool_results=executed_tool_results,
                             message_data=message_data,
                             message_obj=message_obj,
                             llm=llm,
@@ -614,7 +730,7 @@ class MessageCoordinator:
                     )
                     # Build fallback response from tool results
                     error_parts = []
-                    for tr in mcp_tool_results:
+                    for tr in executed_tool_results:
                         if tr.get("result", "").startswith("Error:"):
                             error_parts.append(
                                 f"Tool `{tr['tool_name']}`: {tr['result']}"
@@ -631,6 +747,11 @@ class MessageCoordinator:
             if ai_response_accumulator.strip():
                 # Save web search sources if present (before finalization)
                 await self._save_web_search_sources(
+                    message_obj, token_usage, regenerate
+                )
+
+                # Save provider-native tool calls if present (Anthropic web fetch)
+                await self._save_provider_tool_calls(
                     message_obj, token_usage, regenerate
                 )
 
@@ -653,7 +774,7 @@ class MessageCoordinator:
                     await self._run_learning_progress_stream(
                         message_data, message_obj, llm
                     )
-            elif mcp_tool_results:
+            elif executed_tool_results:
                 # Edge case: tool results exist but no response was generated
                 # This shouldn't happen after the fix above, but handle defensively
                 logger.warning(

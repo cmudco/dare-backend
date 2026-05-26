@@ -22,6 +22,7 @@ ARTIFACT_TOOL_SLUGS = frozenset(
         "create_diagram",
         "create_chart",
         "create_docx",
+        "create_pptx",
         "create_react_component",
         "update_artifact",
         "update_artifact_inline",
@@ -127,6 +128,7 @@ class LLMQueryRequestBuilder:
             max_tokens=max_tokens,
             prompt_id=message_data.get("prompt_id"),
             web_search_enabled=message_data.get("web_search_enabled", False),
+            web_fetch_enabled=message_data.get("web_fetch_enabled", False),
             image_generation_enabled=message_data.get(
                 "image_generation_enabled", False
             ),

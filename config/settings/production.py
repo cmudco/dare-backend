@@ -11,6 +11,8 @@ DATABASES = {
         "PASSWORD": env.DB_PASSWORD,
         "HOST": env.DB_HOST,
         "PORT": env.DB_PORT,
+        # Probe each cached connection before use; reconnects silently if stale.
+        "CONN_HEALTH_CHECKS": True,
     }
 }
 

@@ -65,6 +65,7 @@ class ArtifactType(models.TextChoices):
     CHART = 'chart', 'Chart'
     REACT = 'react', 'React Component'
     DOCX = 'docx', 'Word Document'
+    PPTX = 'pptx', 'PowerPoint Presentation'
 
 
 class ArtifactStatus(models.TextChoices):
@@ -87,13 +88,20 @@ class ArtifactAction(models.TextChoices):
 
 
 class ToolCallStatus(models.TextChoices):
-    """Status of MCP tool call execution."""
+    """Status of a tool call execution."""
     PENDING = 'pending', 'Pending'
     AWAITING_CONFIRMATION = 'awaiting_confirmation', 'Awaiting Confirmation'
     EXECUTING = 'executing', 'Executing'
     COMPLETED = 'completed', 'Completed'
     FAILED = 'failed', 'Failed'
     CANCELLED = 'cancelled', 'Cancelled'
+
+
+class ToolCallOrigin(models.TextChoices):
+    """Execution origin for a tool call."""
+    DARE = 'dare', 'DARE'
+    MCP = 'mcp', 'MCP'
+    PROVIDER = 'provider', 'Provider'
 
 # Default message sender names
 DEFAULT_AI_SENDER_NAME = "AI Assistant"
@@ -223,6 +231,7 @@ ARTIFACT_RENDERERS = {
     '.tsx': 'react',
     '.html': 'iframe',
     '.svg': 'svg',
+    '.pptx': 'pptx',
 }
 
 # Content type mappings for artifacts
@@ -230,6 +239,7 @@ ARTIFACT_CONTENT_TYPES = {
     'chart': 'application/vnd.dare.chart+json',
     'diagram': 'text/mermaid',
     'docx': 'application/vnd.dare.docx+json',
+    'pptx': 'application/vnd.dare.pptx+json',
     'document': 'text/markdown',
     'code': 'text/plain',
     'react': 'application/vnd.dare.react+jsx',

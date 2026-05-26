@@ -16,6 +16,7 @@ class GenerationConfig:
         max_tokens: Maximum tokens in response
         prompt_id: Custom prompt template ID
         web_search_enabled: Enable web search tool
+        web_fetch_enabled: Enable Claude web fetch for explicit URLs/PDFs
         image_generation_enabled: Enable image generation (DALL-E)
         image_generation_settings: DALL-E settings (size, quality, style)
         audio_transcription_enabled: Enable audio transcription (Whisper)
@@ -28,6 +29,7 @@ class GenerationConfig:
     max_tokens: int = 8000
     prompt_id: Optional[str] = None
     web_search_enabled: bool = False
+    web_fetch_enabled: bool = False
     image_generation_enabled: bool = False
     image_generation_settings: Optional[Dict[str, Any]] = None
     audio_transcription_enabled: bool = False

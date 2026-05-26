@@ -8,6 +8,7 @@ from drf_spectacular.views import (
     SpectacularRedocView,
     SpectacularSwaggerView,
 )
+from conversations.api.views import ArtifactDownloadView
 
 def empty_view(request):
     return HttpResponse('')
@@ -17,6 +18,7 @@ admin_paths = [
 ]
 
 app_paths = [
+    path("api/artifacts/<int:artifact_id>/download/", ArtifactDownloadView.as_view(), name="artifact-download"),
     path('django-rq/', include('django_rq.urls')),
     path("", include("common.urls")),
     path("users/", include("users.urls"), name="users"),

@@ -1,6 +1,6 @@
 # Getting Started
 
-This guide walks you through setting up the full DARE platform from scratch: two backends and two frontends.
+This guide walks you through setting up the full local workspace from scratch: two backends and two frontends. If you only need the DARE API, use the shorter Docker or local Python path in the repository [README](../README.md).
 
 ## Prerequisites
 
@@ -13,18 +13,16 @@ This guide walks you through setting up the full DARE platform from scratch: two
 
 ## Architecture Overview
 
-```
-┌─────────────────┐     REST + Socket.IO     ┌──────────────────┐
-│  dare-frontend   │ ◄──────────────────────► │  dare-backend     │
-│  (port 5173)     │                          │  (port 8000)      │
-└─────────────────┘                          └──────────────────┘
-                                                      ▲
-                                              X-Internal-Key + JWT
-                                                      │
-┌─────────────────┐         REST              ┌──────────────────┐
-│ socraticbooks-   │ ◄──────────────────────► │ socraticbooks-    │
-│ react            │                          │ backend (8001)    │
-└─────────────────┘                          └──────────────────┘
+```mermaid
+flowchart LR
+    dareFrontend["dare-frontend\nport 5173"]
+    dareBackend["dare-backend\nport 8000"]
+    sbFrontend["socraticbooks-react"]
+    sbBackend["socraticbooks-backend\nport 8001"]
+
+    dareFrontend <-->|REST + Socket.IO| dareBackend
+    sbFrontend <-->|REST| sbBackend
+    sbBackend -->|"X-Internal-Key + JWT"| dareBackend
 ```
 
 **Startup order matters:** Redis → dare-backend → dare-frontend → socraticbooks-backend → socraticbooks-react
@@ -52,10 +50,10 @@ source .venv/bin/activate
 pip install -r requirements/local.txt
 
 # Set up environment variables
-cp .env.example .env
+cp .example.env .env
 # Edit .env — minimum required:
 #   DJANGO_SETTINGS_MODULE=config.settings.local
-#   SECRET_KEY=<generate-a-secret-key>
+#   DJANGO_SECRET_KEY=<generate-a-secret-key>
 #   DJANGO_DEBUG=True
 #   REDIS_HOST=localhost
 #   REDIS_PORT=6379
@@ -80,10 +78,7 @@ Background workers process file uploads, generate embeddings, and handle async t
 cd dare-backend
 source .venv/bin/activate
 
-# Option A: Use the worker management script
-./manage_workers.sh start    # Starts 3 workers
-
-# Option B: Run a single worker manually
+# Run a single worker manually
 OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES python -Wd manage.py rqworker default -v 3
 ```
 
@@ -92,7 +87,8 @@ The `OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES` flag is required on macOS to preve
 ### Verify dare-backend
 
 - Admin panel: http://localhost:8000/admin/
-- API docs (Swagger): http://localhost:8000/api/docs/
+- OpenAPI schema: http://localhost:8000/api/schema/
+- Swagger UI: http://localhost:8000/api/docs/ (requires CDN assets)
 - API docs (ReDoc): http://localhost:8000/api/redoc/
 - RQ dashboard: http://localhost:8000/django-rq/
 
@@ -125,7 +121,7 @@ npm run dev
 The SocraticBooks backend proxies auth and AI calls to dare-backend, so dare-backend must be running first.
 
 ```bash
-cd socraticbooks-backend/backend
+cd socraticbooks-backend
 
 # Create and activate virtual environment
 python3 -m venv .venv
@@ -135,18 +131,18 @@ source .venv/bin/activate
 pip install -r requirements.txt
 
 # Set up environment variables
-cp .env.example .env
+cp env.example .env
 # Edit .env — minimum required:
 #   DARE_BACKEND_URL=http://localhost:8000
 #   SOCRATIC_BOTS_BACKEND_URL=http://localhost:8001
 #   DARE_INTERNAL_KEY=<must-match-dare-backend>
-#   SECRET_KEY=<generate-a-secret-key>
+#   DJANGO_SECRET_KEY=<must-match-dare-backend-for-local-jwt-decode>
 
 # Run database migrations
-python manage.py migrate
+python backend/manage.py migrate
 
 # Start the server
-python manage.py runserver 0.0.0.0:8001
+python backend/manage.py runserver 0.0.0.0:8001
 ```
 
 ## Step 5: Set Up socraticbooks-react
@@ -160,7 +156,7 @@ npm install
 # Set up environment variables
 cp .env.example .env
 # Edit .env:
-#   VITE_API_BASE_URL=http://localhost:8001
+#   VITE_API_URL=http://localhost:8001/api
 
 # Start dev server
 npm run dev
@@ -223,5 +219,6 @@ Models and access are configured in the admin panel under **Model Groups**.
 
 - [Architecture Overview](architecture/overview.md) — System diagrams and component descriptions
 - [Socket.IO Event Contract](architecture/socketio-events.md) — Real-time event reference
-- [API Documentation](http://localhost:8000/api/docs/) — Interactive Swagger UI (when backend is running)
+- [OpenAPI Schema](http://localhost:8000/api/schema/) — Raw API schema (when backend is running)
+- [Swagger UI](http://localhost:8000/api/docs/) — Interactive API explorer if CDN assets are reachable
 - [Inter-Service Proxy](integration/socraticbooks-dare-proxy.md) — How SocraticBooks communicates with DARE

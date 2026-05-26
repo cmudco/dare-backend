@@ -13,11 +13,7 @@ Security fixes are backported to the most recent minor release on a best-effort 
 
 **Please do not report security vulnerabilities through public GitHub issues, discussions, or pull requests.**
 
-Instead, report them privately by emailing:
-
-> **security@<your-domain>** (replace with the maintainer security contact for your deployment)
-
-Or, if you prefer, use [GitHub's private vulnerability reporting](https://docs.github.com/en/code-security/security-advisories/guidance-on-reporting-and-writing/privately-reporting-a-security-vulnerability) on this repository.
+Instead, use [GitHub's private vulnerability reporting](https://docs.github.com/en/code-security/security-advisories/guidance-on-reporting-and-writing/privately-reporting-a-security-vulnerability) on this repository. If private reporting is not enabled, contact the repository maintainers privately through the organization profile before disclosing publicly.
 
 ### What to include
 

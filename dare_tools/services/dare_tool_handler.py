@@ -8,17 +8,21 @@ and follow-up LLM calls for multi-turn tool use.
 Similar to mcp_tool_handler.py but for internal DARE tools.
 """
 
+from __future__ import annotations
+
+# fmt: off
+# isort: off
 import json
 import logging
 import time
-from typing import List, Dict, Any, Callable, Optional
+from typing import Any, Callable, Dict, List
 
 from channels.db import database_sync_to_async
 from djangorestframework_camel_case.util import camelize
 from django.utils import timezone
 
-from conversations.constants import SenderType, DEFAULT_AI_SENDER_NAME
-from conversations.models import MessageToolCall
+from conversations.constants import DEFAULT_AI_SENDER_NAME, SenderType, ToolCallOrigin
+from conversations.models import LLM, Conversation, Message, MessageToolCall
 from conversations.services.websocket_response_service import WebSocketResponseService
 from core.services.dtos.builder import LLMQueryRequestBuilder
 from dare_tools.constants import ExecutionStatus
@@ -38,14 +42,22 @@ class DareToolHandler:
     2. Emit WebSocket notifications for UI updates
     3. Persist execution records to database
     4. Make follow-up LLM calls with tool results
-    
-    Visual tools (create_chart, create_diagram, create_docx) are routed to ArtifactToolExecutor
+
+    Visual tools (create_chart, create_diagram, create_docx, create_pptx) are routed to ArtifactToolExecutor
     for unified artifact panel rendering.
     """
 
     # Tools that create visual artifacts - routed to ArtifactToolExecutor
-    ARTIFACT_TOOLS = ['create_chart', 'create_diagram', 'create_docx', 'update_artifact', 'update_artifact_inline', 'create_react_component']
-    
+    ARTIFACT_TOOLS = [
+        "create_chart",
+        "create_diagram",
+        "create_docx",
+        "create_pptx",
+        "update_artifact",
+        "update_artifact_inline",
+        "create_react_component",
+    ]
+
     def __init__(self):
         # No LLMService here - it's passed via stream_tool_result_response
         # to match MCP tool handler pattern and avoid potential circular imports
@@ -275,6 +287,13 @@ class DareToolHandler:
                 f"Title: {doc_config.get('title')}, "
                 f"Blocks: {len(doc_config.get('blocks', []))}"
             )
+        elif tool_name == "create_pptx":
+            ppt_config = result.get("ppt_config", {})
+            return (
+                f"PowerPoint created successfully. Artifact ID: {result.get('artifact_id')}. "
+                f"Title: {ppt_config.get('title')}, "
+                f"Slides: {len(ppt_config.get('slides', []))}"
+            )
         elif tool_name == "create_react_component":
             return f"React component created successfully. Artifact ID: {result.get('artifact_id')}, Title: {result.get('message', 'Component')}"
         elif tool_name == "update_artifact_inline":
@@ -306,7 +325,8 @@ class DareToolHandler:
                 "id": tool_call_id,
                 "tool_name": tool_name,
                 "tool_slug": tool_name,  # For DARE tools, name == slug
-                "server_slug": "dare",  # Special slug for DARE tools
+                "server_slug": "dare",
+                "origin": ToolCallOrigin.DARE,
                 "status": status,
                 "arguments": arguments or {},
             }
@@ -371,7 +391,7 @@ class DareToolHandler:
         """
         Save MessageToolCall record so it appears in conversation history.
         
-        Uses server_slug='dare' to distinguish from MCP tool calls.
+        Uses origin='dare' to distinguish from MCP/provider tool calls.
         """
 
         
@@ -384,7 +404,8 @@ class DareToolHandler:
             MessageToolCall.objects.create(
                 message=message,
                 tool_call_id=tool_call_id,
-                server_slug="dare",  # Distinguish from MCP tools
+                server_slug="dare",
+                origin=ToolCallOrigin.DARE,
                 tool_name=tool_name,
                 arguments=arguments,
                 status=status,

@@ -64,6 +64,35 @@ class ClaudeWebSearchTools:
         }
 
 
+class ClaudeWebFetchTools:
+    """Claude-specific web fetch tool."""
+
+    BETA_HEADER = "web-fetch-2025-09-10"
+    TOOL_TYPE = "web_fetch_20250910"
+
+    @classmethod
+    def get_tool_definition(cls) -> Dict:
+        """
+        Get the native web fetch tool definition for Claude API.
+
+        Returns:
+            Web fetch tool dictionary
+        """
+        return {
+            "type": cls.TOOL_TYPE,
+            "name": "web_fetch",
+            "max_uses": 3,
+            "citations": {"enabled": True},
+            "max_content_tokens": 50000,
+        }
+
+    @classmethod
+    def has_web_fetch(cls, tools: Optional[List[Dict]]) -> bool:
+        if not tools:
+            return False
+        return any(str(t.get("type", "")).startswith("web_fetch_") for t in tools)
+
+
 class GeminiWebSearchTools:
     """Gemini-specific web search tools."""
 
@@ -110,3 +139,49 @@ class GeminiWebSearchTools:
             Gemini Tool object with Google Search
         """
         return types.Tool(google_search=types.GoogleSearch())
+
+
+class GeminiUrlContextTools:
+    """Gemini-specific URL context tool."""
+
+    @staticmethod
+    def get_tool_definition() -> Dict:
+        """
+        Get the native URL Context tool definition for Gemini API.
+
+        Returns:
+            URL Context tool dictionary
+        """
+        return {"url_context": {}}
+
+    @staticmethod
+    def has_url_context(tools: Optional[List[Dict]]) -> bool:
+        """
+        Check if tools list contains Gemini URL Context.
+
+        Args:
+            tools: List of tool dictionaries or native Tool objects
+
+        Returns:
+            True if url_context is present
+        """
+        if not tools:
+            return False
+
+        for tool in tools:
+            if hasattr(tool, "url_context") and tool.url_context is not None:
+                return True
+            if isinstance(tool, dict) and "url_context" in tool:
+                return True
+
+        return False
+
+    @staticmethod
+    def build_url_context_tool():
+        """
+        Build Gemini URL Context tool object.
+
+        Returns:
+            Gemini Tool object with URL Context
+        """
+        return types.Tool(url_context=types.UrlContext())

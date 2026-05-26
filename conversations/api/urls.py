@@ -8,6 +8,7 @@ from conversations.api.views import (
     MessageViewSet,
     ArtifactStatusView,
     ArtifactContentView,
+    ArtifactDownloadView,
     FeedbackViewSet,
     ModelCardDataViewSet,
     AnonymousConversationsView,
@@ -37,6 +38,7 @@ urlpatterns = [
     path('conversations/<str:conversation_id>/fork/', ConversationViewSet.as_view({'post': 'fork_conversation'}), name='conversation-fork'),
     path('artifacts/<int:artifact_id>/status/', ArtifactStatusView.as_view(), name='artifact-status'),
     path('artifacts/<int:artifact_id>/content/', ArtifactContentView.as_view(), name='artifact-content'),
+    path('artifacts/<int:artifact_id>/download/', ArtifactDownloadView.as_view(), name='artifact-download'),
     # Anonymous conversations endpoint (JWT authenticated)
     path('anonymous-conversations/', AnonymousConversationsView.as_view(), name='anonymous-conversations'),
     # Internal endpoints for service-to-service communication (SocraticBots -> DARE)
