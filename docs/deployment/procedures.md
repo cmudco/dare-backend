@@ -1,26 +1,32 @@
 # Deployment Procedures
 
-> **TODO**: This page needs to be expanded with detailed step-by-step deployment procedures.
-
 ## dare-backend
 
 Script: `dare-backend/devops/deploy.sh`
 
-1. SSH into production server
-2. Pull latest code from git
-3. Activate virtual environment
-4. Install new dependencies: `pip install -r requirements/prod.txt`
-5. Run migrations: `python manage.py migrate`
-6. Collect static files: `python manage.py collectstatic --noinput`
-7. Restart systemd service: `sudo systemctl restart dare`
+Use this sequence for a standard production update:
+
+1. Announce the deployment window if users may be affected.
+2. Pull the target commit or release tag.
+3. Activate the virtual environment.
+4. Install dependencies: `pip install -r requirements/prod.txt`.
+5. Run checks: `python manage.py check`.
+6. Run migrations: `python manage.py migrate`.
+7. Collect static files: `python manage.py collectstatic --noinput`.
+8. Restart the API and worker services.
+9. Verify health endpoints: `/api/health/` and `/api/ready/`.
+
+If a change includes database migrations, deploy the backend before any frontend that depends on the new API shape.
 
 ## dare-frontend
 
 Script: `dare-frontend/devops/deploy.sh`
 
-1. Build locally: `npm run build`
-2. Upload `dist/` to production server via SSH/SCP
-3. Files served by nginx from `/var/www/dare-frontend/`
+1. Set production `VITE_*` values before building.
+2. Build: `npm run build`.
+3. Upload `dist/` to the static host.
+4. Confirm the static host rewrites SPA routes to `index.html`.
+5. Confirm REST and Socket.IO requests reach the configured backend.
 
 ## socraticbooks-backend
 
@@ -41,3 +47,14 @@ When deploying changes that span multiple projects, deploy in this order:
 4. **socraticbooks-react** (depends on socraticbooks-backend API)
 
 If there are breaking API changes, coordinate backend and frontend deployments to minimize downtime.
+
+## Rollback
+
+For backend-only failures:
+
+1. Revert to the previous known-good commit or release tag.
+2. Reinstall dependencies if the lockset changed.
+3. Restart the API and worker services.
+4. Verify health endpoints and key user flows.
+
+Database rollbacks are migration-specific. Prefer forward-fix migrations unless the migration was explicitly designed to reverse safely.

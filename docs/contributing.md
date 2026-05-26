@@ -6,7 +6,7 @@ Thanks for your interest in contributing. This guide covers issues, pull request
 
 Before opening an issue:
 
-1. Search [existing issues](../../issues) to avoid duplicates.
+1. Search the repository's existing issues to avoid duplicates.
 2. Verify the bug reproduces against the latest `main`.
 3. Gather: environment (OS, Python version), reproduction steps, expected vs. actual behaviour, relevant logs.
 

@@ -6,9 +6,9 @@ The DARE backend API is auto-documented using **drf-spectacular** (OpenAPI 3.0).
 
 When the backend is running locally:
 
-- **Swagger UI**: [http://localhost:8000/api/docs/](http://localhost:8000/api/docs/) — Interactive API explorer with "Try it out" functionality
+- **OpenAPI Schema**: [http://localhost:8000/api/schema/](http://localhost:8000/api/schema/) — Raw JSON/YAML schema for code generation and the most reliable local API reference
+- **Swagger UI**: [http://localhost:8000/api/docs/](http://localhost:8000/api/docs/) — Interactive API explorer. This page loads Swagger UI assets from a CDN, so it may not render on offline or restricted networks.
 - **ReDoc**: [http://localhost:8000/api/redoc/](http://localhost:8000/api/redoc/) — Clean, readable API reference
-- **OpenAPI Schema**: [http://localhost:8000/api/schema/](http://localhost:8000/api/schema/) — Raw JSON/YAML schema for code generation
 
 ## Authentication
 
