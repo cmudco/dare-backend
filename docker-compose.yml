@@ -21,6 +21,7 @@ services:
       WEAVIATE_HOST: ${DOCKER_WEAVIATE_HOST:-weaviate}
       WEAVIATE_PORT: ${WEAVIATE_PORT:-8080}
       OLLAMA_HOST: ${DOCKER_OLLAMA_HOST:-http://ollama:11434}
+      GOOGLE_SCHOLAR_MCP_URL: ${GOOGLE_SCHOLAR_MCP_URL:-http://google-scholar-mcp:3015/mcp}
     volumes:
       - static_data:/app/static
       - media_data:/app/media
@@ -60,6 +61,7 @@ services:
       WEAVIATE_HOST: ${DOCKER_WEAVIATE_HOST:-weaviate}
       WEAVIATE_PORT: ${WEAVIATE_PORT:-8080}
       OLLAMA_HOST: ${DOCKER_OLLAMA_HOST:-http://ollama:11434}
+      GOOGLE_SCHOLAR_MCP_URL: ${GOOGLE_SCHOLAR_MCP_URL:-http://google-scholar-mcp:3015/mcp}
     volumes:
       - media_data:/app/media
     depends_on:
