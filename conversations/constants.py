@@ -65,6 +65,7 @@ class ArtifactType(models.TextChoices):
     CHART = 'chart', 'Chart'
     REACT = 'react', 'React Component'
     DOCX = 'docx', 'Word Document'
+    PPTX = 'pptx', 'PowerPoint Presentation'
 
 
 class ArtifactStatus(models.TextChoices):
@@ -230,6 +231,7 @@ ARTIFACT_RENDERERS = {
     '.tsx': 'react',
     '.html': 'iframe',
     '.svg': 'svg',
+    '.pptx': 'pptx',
 }
 
 # Content type mappings for artifacts
@@ -237,6 +239,7 @@ ARTIFACT_CONTENT_TYPES = {
     'chart': 'application/vnd.dare.chart+json',
     'diagram': 'text/mermaid',
     'docx': 'application/vnd.dare.docx+json',
+    'pptx': 'application/vnd.dare.pptx+json',
     'document': 'text/markdown',
     'code': 'text/plain',
     'react': 'application/vnd.dare.react+jsx',

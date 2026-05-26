@@ -22,6 +22,7 @@ ARTIFACT_TOOL_SLUGS = frozenset(
         "create_diagram",
         "create_chart",
         "create_docx",
+        "create_pptx",
         "create_react_component",
         "update_artifact",
         "update_artifact_inline",
