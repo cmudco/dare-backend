@@ -15,6 +15,9 @@ const MCP_ENDPOINT = "/mcp";
 const SESSION_HEADER = "mcp-session-id";
 const MIN_REQUEST_INTERVAL_MS = Number(process.env.MIN_REQUEST_INTERVAL_MS || 1500);
 const SCHOLAR_TIMEOUT_MS = Number(process.env.SCHOLAR_TIMEOUT_MS || 15000);
+const OPENALEX_TIMEOUT_MS = Number(process.env.OPENALEX_TIMEOUT_MS || 15000);
+const OPENALEX_FALLBACK_ENABLED = process.env.OPENALEX_FALLBACK_ENABLED !== "false";
+const OPENALEX_MAILTO = process.env.OPENALEX_MAILTO || "";
 const USER_AGENT = process.env.SCHOLAR_USER_AGENT ||
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36";
 
@@ -119,6 +122,40 @@ function buildScholarUrl({ query, maxResults, yearFrom, yearTo, author }) {
   return `https://scholar.google.com/scholar?${params.toString()}`;
 }
 
+function buildOpenAlexUrl({ query, maxResults, yearFrom, yearTo, author }) {
+  const params = new URLSearchParams({
+    search: author ? `${query} ${author}` : query,
+    "per-page": String(maxResults),
+    select: [
+      "id",
+      "doi",
+      "display_name",
+      "title",
+      "publication_year",
+      "cited_by_count",
+      "authorships",
+      "primary_location",
+      "abstract_inverted_index",
+    ].join(","),
+  });
+
+  const filters = [];
+  if (yearFrom) {
+    filters.push(`from_publication_date:${yearFrom}-01-01`);
+  }
+  if (yearTo) {
+    filters.push(`to_publication_date:${yearTo}-12-31`);
+  }
+  if (filters.length > 0) {
+    params.set("filter", filters.join(","));
+  }
+  if (OPENALEX_MAILTO) {
+    params.set("mailto", OPENALEX_MAILTO);
+  }
+
+  return `https://api.openalex.org/works?${params.toString()}`;
+}
+
 async function fetchScholarHtml(url) {
   await waitForRateLimitSlot();
 
@@ -145,6 +182,54 @@ async function fetchScholarHtml(url) {
   }
 
   return response.data;
+}
+
+async function fetchOpenAlexWorks(url) {
+  const response = await axios.get(url, {
+    timeout: OPENALEX_TIMEOUT_MS,
+    validateStatus: () => true,
+    headers: {
+      "User-Agent": USER_AGENT,
+      "Accept": "application/json",
+    },
+  });
+
+  if (response.status === 429) {
+    throw new Error("OpenAlex rate-limited the request with HTTP 429");
+  }
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(`OpenAlex request failed with HTTP ${response.status}`);
+  }
+
+  return response.data;
+}
+
+function restoreAbstract(invertedIndex) {
+  if (!invertedIndex || typeof invertedIndex !== "object") {
+    return null;
+  }
+
+  const wordsByPosition = [];
+  for (const [word, positions] of Object.entries(invertedIndex)) {
+    if (!Array.isArray(positions)) {
+      continue;
+    }
+    for (const position of positions) {
+      if (Number.isInteger(position)) {
+        wordsByPosition[position] = word;
+      }
+    }
+  }
+
+  const abstract = wordsByPosition.filter(Boolean).join(" ").trim();
+  return abstract || null;
+}
+
+function normalizeOpenAlexDoi(doi) {
+  if (!doi) {
+    return null;
+  }
+  return String(doi).replace(/^https:\/\/doi\.org\//i, "");
 }
 
 function parseScholarResults(html, maxResults) {
@@ -184,6 +269,34 @@ function parseScholarResults(html, maxResults) {
   return results;
 }
 
+function parseOpenAlexResults(payload, maxResults) {
+  const works = Array.isArray(payload?.results) ? payload.results : [];
+
+  return works.slice(0, maxResults).map((work) => {
+    const primaryLocation = work.primary_location || {};
+    const authorships = Array.isArray(work.authorships) ? work.authorships : [];
+    const authors = authorships
+      .map((authorship) => normalizeWhitespace(authorship?.author?.display_name))
+      .filter(Boolean);
+
+    return {
+      title: normalizeWhitespace(work.display_name || work.title) || "Unknown title",
+      authors_raw: authors.length > 0 ? authors.join(", ") : null,
+      authors,
+      year: work.publication_year || null,
+      citation_count: work.cited_by_count ?? null,
+      abstract: restoreAbstract(work.abstract_inverted_index),
+      snippet: restoreAbstract(work.abstract_inverted_index),
+      url: primaryLocation.landing_page_url || work.doi || work.id || null,
+      doi: normalizeOpenAlexDoi(work.doi),
+      pdf_url: primaryLocation.pdf_url || null,
+      venue: primaryLocation.source?.display_name || primaryLocation.raw_source_name || null,
+      source: "openalex",
+      fetched_at: new Date().toISOString(),
+    };
+  });
+}
+
 function validateSearchArgs(args) {
   const query = normalizeWhitespace(args?.query);
   if (!query) {
@@ -213,26 +326,54 @@ function validateSearchArgs(args) {
 
 async function searchGoogleScholar(args) {
   const normalized = validateSearchArgs(args);
-  const url = buildScholarUrl(normalized);
-  const html = await fetchScholarHtml(url);
-  const results = parseScholarResults(html, normalized.maxResults);
+  try {
+    const url = buildScholarUrl(normalized);
+    const html = await fetchScholarHtml(url);
+    const results = parseScholarResults(html, normalized.maxResults);
 
-  return {
-    query: normalized.query,
-    filters: {
-      author: normalized.author,
-      year_from: normalized.yearFrom,
-      year_to: normalized.yearTo,
-    },
-    total_results: results.length,
-    source: "google_scholar",
-    warnings: [
-      "Experimental Google Scholar HTML search. Results may be incomplete, rate-limited, or blocked.",
-      "Snippet is not guaranteed to be the full abstract.",
-      "DOI and PDF URLs are not reliably available from Scholar search results.",
-    ],
-    results,
-  };
+    return {
+      query: normalized.query,
+      filters: {
+        author: normalized.author,
+        year_from: normalized.yearFrom,
+        year_to: normalized.yearTo,
+      },
+      total_results: results.length,
+      source: "google_scholar",
+      warnings: [
+        "Experimental Google Scholar HTML search. Results may be incomplete, rate-limited, or blocked.",
+        "Snippet is not guaranteed to be the full abstract.",
+        "DOI and PDF URLs are not reliably available from Scholar search results.",
+      ],
+      results,
+    };
+  } catch (error) {
+    if (!OPENALEX_FALLBACK_ENABLED) {
+      throw error;
+    }
+
+    const openAlexUrl = buildOpenAlexUrl(normalized);
+    const payload = await fetchOpenAlexWorks(openAlexUrl);
+    const results = parseOpenAlexResults(payload, normalized.maxResults);
+
+    return {
+      query: normalized.query,
+      filters: {
+        author: normalized.author,
+        year_from: normalized.yearFrom,
+        year_to: normalized.yearTo,
+      },
+      total_results: results.length,
+      source: "openalex_fallback",
+      google_scholar_error: error instanceof Error ? error.message : String(error),
+      warnings: [
+        "Google Scholar blocked or failed the request, so results were returned from OpenAlex instead.",
+        "OpenAlex citation counts and Google Scholar citation counts can differ.",
+        "OpenAlex abstracts are reconstructed from its inverted-index metadata and may be unavailable for some papers.",
+      ],
+      results,
+    };
+  }
 }
 
 class GoogleScholarMCPServer {
