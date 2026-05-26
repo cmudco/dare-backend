@@ -237,7 +237,11 @@ async function searchGoogleScholar(args) {
 
 class GoogleScholarMCPServer {
   constructor() {
-    this.server = new Server(
+    this.sessions = {};
+  }
+
+  createServer() {
+    const server = new Server(
       {
         name: "dare-google-scholar-mcp",
         version: "0.1.0",
@@ -248,16 +252,12 @@ class GoogleScholarMCPServer {
         },
       },
     );
-    this.transports = {};
-    this.setupHandlers();
-  }
 
-  setupHandlers() {
-    this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
+    server.setRequestHandler(ListToolsRequestSchema, async () => ({
       tools: googleScholarTools,
     }));
 
-    this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { name, arguments: args } = request.params;
       if (name !== "search_google_scholar") {
         throw new Error(`Unknown tool: ${name}`);
@@ -293,27 +293,33 @@ class GoogleScholarMCPServer {
         };
       }
     });
+
+    return server;
   }
 
   async handlePostRequest(req, res) {
     const sessionId = req.headers[SESSION_HEADER];
-    let transport;
 
-    if (sessionId && this.transports[sessionId]) {
-      transport = this.transports[sessionId];
-      await transport.handleRequest(req, res, req.body);
+    if (sessionId && this.sessions[sessionId]) {
+      await this.sessions[sessionId].transport.handleRequest(req, res, req.body);
       return;
     }
 
     if (!sessionId && this.isInitializeRequest(req.body)) {
-      transport = new StreamableHTTPServerTransport({
+      const server = this.createServer();
+      const transport = new StreamableHTTPServerTransport({
         sessionIdGenerator: () => randomUUID(),
       });
-      await this.server.connect(transport);
+      transport.onclose = () => {
+        if (transport.sessionId) {
+          delete this.sessions[transport.sessionId];
+        }
+      };
+      await server.connect(transport);
       await transport.handleRequest(req, res, req.body);
 
       if (transport.sessionId) {
-        this.transports[transport.sessionId] = transport;
+        this.sessions[transport.sessionId] = { server, transport };
       }
       return;
     }
@@ -330,7 +336,7 @@ class GoogleScholarMCPServer {
 
   async handleGetRequest(req, res) {
     const sessionId = req.headers[SESSION_HEADER];
-    if (!sessionId || !this.transports[sessionId]) {
+    if (!sessionId || !this.sessions[sessionId]) {
       res.status(400).json({
         jsonrpc: "2.0",
         id: randomUUID(),
@@ -342,7 +348,7 @@ class GoogleScholarMCPServer {
       return;
     }
 
-    await this.transports[sessionId].handleRequest(req, res);
+    await this.sessions[sessionId].transport.handleRequest(req, res);
   }
 
   isInitializeRequest(body) {
@@ -353,7 +359,10 @@ class GoogleScholarMCPServer {
   }
 
   async close() {
-    await this.server.close();
+    await Promise.all(
+      Object.values(this.sessions).map(({ server }) => server.close()),
+    );
+    this.sessions = {};
   }
 }
 
