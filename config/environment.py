@@ -75,14 +75,14 @@ def _get_feature_flags(environment: str) -> FeatureFlags:
 
     elif environment == "dare-production":
         return FeatureFlags(
-            enable_memory_extraction_scheduler=False,  # Disabled in production
-            enable_wallet_topup_scheduler=True,         # Only wallet topup in production
+            enable_memory_extraction_scheduler=True,
+            enable_wallet_topup_scheduler=True,
         )
 
     elif environment == "gt-production":
         return FeatureFlags(
-            enable_memory_extraction_scheduler=False,  # Disabled in GT production
-            enable_wallet_topup_scheduler=True,         # Only wallet topup in GT production
+            enable_memory_extraction_scheduler=True,
+            enable_wallet_topup_scheduler=True,
         )
 
     # Default: conservative
