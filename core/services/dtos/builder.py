@@ -125,6 +125,7 @@ class LLMQueryRequestBuilder:
         # Build generation config
         generation = GenerationConfig(
             temperature=message_data.get("temperature", 0.7),
+            effort=message_data.get("effort"),
             max_tokens=max_tokens,
             prompt_id=message_data.get("prompt_id"),
             web_search_enabled=message_data.get("web_search_enabled", False),
@@ -196,6 +197,7 @@ class LLMQueryRequestBuilder:
         folder_ids: Optional[list] = None,
         prompt_id: Optional[str] = None,
         temperature: float = 0.7,
+        effort: Optional[str] = None,
         max_tokens: int = 8000,
         max_context_snippets: int = 4,
         document_similarity_threshold: float = 0.5,
@@ -216,6 +218,7 @@ class LLMQueryRequestBuilder:
             folder_ids: Folder IDs to fetch files
             prompt_id: Custom prompt template ID
             temperature: Sampling temperature
+            effort: Optional model effort override
             max_tokens: Maximum tokens in response
             max_context_snippets: Max snippets to retrieve
             document_similarity_threshold: Similarity threshold
@@ -241,6 +244,7 @@ class LLMQueryRequestBuilder:
 
         generation = GenerationConfig(
             temperature=temperature,
+            effort=effort,
             max_tokens=max_tokens,
             prompt_id=prompt_id,
             structured_spec=structured_spec,

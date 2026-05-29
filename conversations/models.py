@@ -18,6 +18,7 @@ from .constants import (
     ArtifactType,
     ArtifactStatus,
     ModelTier,
+    ModelEffort,
     ToolCallOrigin,
 )
 
@@ -38,10 +39,36 @@ class LLM(models.Model):
         max_length=500,
         help_text="Custom base URL for the API endpoint (required for CUSTOM provider, e.g., https://litellm-dev.pace.gatech.edu:4000/v1)."
     )
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Whether this model is available for new selections."
+    )
     is_reasoning = models.BooleanField(default=False, help_text="Whether the model supports reasoning.")
     supports_vision = models.BooleanField(
         default=True,
         help_text="Whether the model supports vision/image analysis (e.g., GPT-4V, Claude 3+, Gemini Pro Vision)."
+    )
+    supports_temperature = models.BooleanField(
+        default=True,
+        help_text="Whether this model accepts the temperature sampling parameter."
+    )
+    supports_effort = models.BooleanField(
+        default=False,
+        help_text="Whether this model accepts an effort control parameter."
+    )
+    supports_adaptive_thinking = models.BooleanField(
+        default=False,
+        help_text="Whether this model supports provider-native adaptive thinking."
+    )
+    default_effort = models.CharField(
+        max_length=20,
+        choices=ModelEffort.choices,
+        default=ModelEffort.HIGH,
+        help_text="Default effort level when the conversation has no explicit effort override."
+    )
+    default_adaptive_thinking_enabled = models.BooleanField(
+        default=False,
+        help_text="Whether adaptive thinking should be sent by default for this model."
     )
     is_image_generator = models.BooleanField(
         default=False,
@@ -393,6 +420,13 @@ class Conversation(BaseModel):
     max_context_snippets = models.PositiveIntegerField(default=4, help_text="Maximum number of context snippets to retrieve.")
     document_similarity_threshold = models.FloatField(default=0.2, help_text="Similarity threshold for document retrieval.")
     temperature = models.FloatField(default=0.7, help_text="Temperature setting for the LLM.")
+    effort = models.CharField(
+        max_length=20,
+        choices=ModelEffort.choices,
+        null=True,
+        blank=True,
+        help_text="Optional effort override for models that support effort. Null uses the selected model default."
+    )
     max_tokens = models.PositiveIntegerField(default=2048, help_text="Maximum tokens for LLM responses.")
     history_limit = models.PositiveIntegerField(default=20, help_text="Maximum number of messages to include in conversation history.")
     web_search_enabled = models.BooleanField(
@@ -573,6 +607,7 @@ class Conversation(BaseModel):
                 max_context_snippets=self.max_context_snippets,
                 document_similarity_threshold=self.document_similarity_threshold,
                 temperature=self.temperature,
+                effort=self.effort,
                 max_tokens=self.max_tokens,
                 history_limit=self.history_limit,
                 web_search_enabled=self.web_search_enabled,

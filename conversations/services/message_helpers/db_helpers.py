@@ -132,7 +132,9 @@ def get_conversation_default_descriptor(
     LiteLLM models are picked per-message and never persisted on
     ``Conversation.selected_model``.
     """
-    llm = conversation.selected_model or LLM.objects.first()
+    llm = conversation.selected_model or LLM.objects.filter(is_active=True).first()
+    if llm is None:
+        llm = LLM.objects.first()
     return LLMDescriptor.from_llm(llm) if llm else None
 
 

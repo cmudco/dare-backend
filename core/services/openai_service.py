@@ -26,6 +26,7 @@ from core.services.llm_utils import (
     StreamAggregator,
     WebSearchTools,
 )
+from core.services.model_capabilities import ModelCapabilities
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,7 @@ class OpenAIService:
         self._client = None
         self.model = llm.identifier
         self.is_reasoning = llm.is_reasoning
+        self.capabilities = ModelCapabilities.from_llm(llm)
 
     @property
     def client(self) -> AsyncOpenAI:
@@ -78,17 +80,18 @@ class OpenAIService:
         """
         Determine whether this model expects max_completion_tokens instead of max_tokens.
 
-        Some OpenAI reasoning models (e.g., o1/o3 families) reject max_tokens.
+        OpenAI reasoning families reject max_tokens on Chat Completions.
         """
         if self.is_reasoning:
             return True
-        return self.model.startswith(("o1", "o3"))
+        return self.model.startswith(("gpt-5", "o1", "o3", "o4"))
 
     async def stream_chat_completion(
         self,
         messages: List[Dict[str, str]],
         max_tokens: int = 1024,
         temperature: float = 0.7,
+        effort: Optional[str] = None,
         images: List[Dict] = None,
         tools: Optional[List[Dict]] = None,
     ) -> AsyncGenerator[Tuple[str, Dict], None]:
@@ -127,6 +130,7 @@ class OpenAIService:
                     prepared_messages,
                     max_tokens,
                     temperature,
+                    effort,
                     non_web_tools if non_web_tools else None,
                 )
                 processor = OpenAIStreamProcessor.process_chat_completion_stream
@@ -145,6 +149,7 @@ class OpenAIService:
         messages: List[Dict[str, str]],
         max_tokens: int = 1024,
         temperature: float = 0.7,
+        effort: Optional[str] = None,
         structured_spec: Optional[Dict] = None,
     ) -> str:
         """
@@ -165,7 +170,7 @@ class OpenAIService:
             return await self._get_structured_completion(messages, structured_spec)
 
         # Default: use streaming and aggregate
-        stream = self.stream_chat_completion(messages, max_tokens, temperature)
+        stream = self.stream_chat_completion(messages, max_tokens, temperature, effort)
         return await StreamAggregator.aggregate_stream(stream)
 
     async def generate_structured_output(
@@ -174,6 +179,7 @@ class OpenAIService:
         response_schema: Dict,
         max_tokens: int = 2000,
         temperature: float = 0.7,
+        effort: Optional[str] = None,
     ) -> Dict:
         """
         Generate response matching a JSON schema using native structured outputs.
@@ -216,7 +222,7 @@ class OpenAIService:
             params["max_completion_tokens"] = max_tokens
         else:
             params["max_tokens"] = max_tokens
-            params["temperature"] = temperature
+            self.capabilities.apply_sampling_params(params, temperature, effort)
 
         try:
             response = await self.client.chat.completions.create(**params)
@@ -275,6 +281,7 @@ class OpenAIService:
         messages: List[Dict[str, str]],
         max_tokens: int,
         temperature: float,
+        effort: Optional[str],
         tools: Optional[List[Dict]] = None,
     ):
         """
@@ -290,7 +297,7 @@ class OpenAIService:
             OpenAI Chat Completions stream
         """
         kwargs = self._build_chat_completion_params(
-            messages, max_tokens, temperature, tools
+            messages, max_tokens, temperature, effort, tools
         )
 
         return await self.client.chat.completions.create(**kwargs)
@@ -300,6 +307,7 @@ class OpenAIService:
         messages: List[Dict],
         max_tokens: int,
         temperature: float,
+        effort: Optional[str] = None,
         tools: Optional[List[Dict]] = None,
     ) -> Dict:
         """
@@ -326,7 +334,7 @@ class OpenAIService:
             params["max_completion_tokens"] = max_tokens
         else:
             params["max_tokens"] = max_tokens
-            params["temperature"] = temperature
+            self.capabilities.apply_sampling_params(params, temperature, effort)
 
         # Add tools if provided (for function calling like MCP)
         if tools:
@@ -410,7 +418,7 @@ class OpenAIService:
             params["max_completion_tokens"] = 1024
         else:
             params["max_tokens"] = 1024
-            params["temperature"] = 0.0
+            self.capabilities.apply_sampling_params(params, 0.0)
 
         return await self.client.chat.completions.create(**params)
 
