@@ -23,6 +23,13 @@ class ModelTier(models.TextChoices):
     ADVANCED = 'advanced', 'Advanced'
     FLASH = 'flash', 'Flash'
 
+class ModelEffort(models.TextChoices):
+    LOW = 'low', 'Low'
+    MEDIUM = 'medium', 'Medium'
+    HIGH = 'high', 'High'
+    XHIGH = 'xhigh', 'Extra High'
+    MAX = 'max', 'Max'
+
 class FeedbackType(models.TextChoices):
     LIKE = 'like', 'Like'
     DISLIKE = 'dislike', 'Dislike'

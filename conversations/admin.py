@@ -26,20 +26,48 @@ logger = logging.getLogger(__name__)
 
 @admin.register(LLM)
 class LLMAdmin(admin.ModelAdmin):
-    list_display = ("name", "identifier", "provider", "tier", "base_url_display")
+    list_display = (
+        "name",
+        "identifier",
+        "provider",
+        "tier",
+        "is_active",
+        "supports_temperature",
+        "supports_effort",
+        "supports_adaptive_thinking",
+        "base_url_display",
+    )
     search_fields = ("name", "identifier", "base_url")
-    list_filter = ("provider", "tier")
+    list_filter = (
+        "is_active",
+        "provider",
+        "tier",
+        "supports_temperature",
+        "supports_effort",
+        "supports_adaptive_thinking",
+    )
+    list_editable = ("is_active",)
 
     fieldsets = (
         ("Model Information", {
-            "fields": ("name", "identifier", "description", "provider")
+            "fields": ("name", "identifier", "description", "provider", "is_active")
         }),
         ("Custom Endpoint (for CUSTOM provider)", {
             "fields": ("base_url",),
             "description": "Required when provider is set to 'CUSTOM'. Enter the base URL for OpenAI-compatible endpoints (e.g., https://litellm-dev.pace.gatech.edu:4000/v1)"
         }),
         ("Capabilities", {
-            "fields": ("is_reasoning", "supports_vision", "is_image_generator")
+            "fields": (
+                "is_reasoning",
+                "supports_vision",
+                "supports_temperature",
+                "supports_effort",
+                "supports_adaptive_thinking",
+                "default_effort",
+                "default_adaptive_thinking_enabled",
+                "is_image_generator",
+                "is_audio_transcriber",
+            )
         }),
         ("Classification", {
             "fields": ("tier",),

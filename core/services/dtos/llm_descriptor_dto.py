@@ -13,6 +13,8 @@ cycle; consumers receive the real instances on the optional fields.
 from dataclasses import dataclass
 from typing import Any, Optional
 
+from core.services.model_capabilities import infer_supports_temperature
+
 
 @dataclass(frozen=True)
 class LLMDescriptor:
@@ -37,6 +39,12 @@ class LLMDescriptor:
     identifier: str
     provider: str
     is_reasoning: bool = False
+    is_active: bool = True
+    supports_temperature: bool = True
+    supports_effort: bool = False
+    supports_adaptive_thinking: bool = False
+    default_effort: str = "high"
+    default_adaptive_thinking_enabled: bool = False
     is_image_generator: bool = False
     is_audio_transcriber: bool = False
     llm: Optional[Any] = None  # conversations.models.LLM
@@ -50,6 +58,16 @@ class LLMDescriptor:
             identifier=llm.identifier,
             provider=llm.provider,
             is_reasoning=bool(getattr(llm, "is_reasoning", False)),
+            is_active=bool(getattr(llm, "is_active", True)),
+            supports_temperature=bool(getattr(llm, "supports_temperature", True)),
+            supports_effort=bool(getattr(llm, "supports_effort", False)),
+            supports_adaptive_thinking=bool(
+                getattr(llm, "supports_adaptive_thinking", False)
+            ),
+            default_effort=getattr(llm, "default_effort", "high"),
+            default_adaptive_thinking_enabled=bool(
+                getattr(llm, "default_adaptive_thinking_enabled", False)
+            ),
             is_image_generator=bool(getattr(llm, "is_image_generator", False)),
             is_audio_transcriber=bool(getattr(llm, "is_audio_transcriber", False)),
             llm=llm,
@@ -90,6 +108,13 @@ class LLMDescriptor:
         return cls(
             identifier=model_name,
             provider=provider or "custom",
+            supports_temperature=infer_supports_temperature(
+                model_name, provider or "custom"
+            ),
+            supports_effort=False,
+            supports_adaptive_thinking=False,
+            default_effort="high",
+            default_adaptive_thinking_enabled=False,
             litellm_key=litellm_key,
             litellm_model_name=model_name,
         )
@@ -125,6 +150,12 @@ class LLMDescriptor:
             provider=self.provider,
             name=self.identifier,
             is_reasoning=self.is_reasoning,
+            is_active=self.is_active,
+            supports_temperature=self.supports_temperature,
+            supports_effort=self.supports_effort,
+            supports_adaptive_thinking=self.supports_adaptive_thinking,
+            default_effort=self.default_effort,
+            default_adaptive_thinking_enabled=self.default_adaptive_thinking_enabled,
             is_image_generator=self.is_image_generator,
             is_audio_transcriber=self.is_audio_transcriber,
             input_token_rate_per_million=Decimal("0"),

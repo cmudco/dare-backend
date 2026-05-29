@@ -27,6 +27,7 @@ from core.services.llm_utils import (
     StreamAggregator,
     SchemaTransformer,
 )
+from core.services.model_capabilities import ModelCapabilities
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,7 @@ class GeminiService:
         self._client = None
         self.model_identifier = llm.identifier
         self.is_reasoning = llm.is_reasoning
+        self.capabilities = ModelCapabilities.from_llm(llm)
 
     @property
     def client(self) -> genai.Client:
@@ -81,6 +83,7 @@ class GeminiService:
         messages: List[Dict[str, str]],
         max_tokens: int = 1024,
         temperature: float = 0.7,
+        effort: Optional[str] = None,
         images: List[Dict] = None,
         tools: Optional[List[Dict]] = None
     ) -> AsyncGenerator[Tuple[str, Dict], None]:
@@ -126,6 +129,7 @@ class GeminiService:
         messages: List[Dict[str, str]],
         max_tokens: int = 1024,
         temperature: float = 0.7,
+        effort: Optional[str] = None,
         structured_spec: Optional[Dict] = None,
     ) -> str:
         """
@@ -151,7 +155,7 @@ class GeminiService:
             )
 
         # Default: use streaming and aggregate
-        stream = self.stream_chat_completion(messages, max_tokens, temperature)
+        stream = self.stream_chat_completion(messages, max_tokens, temperature, effort)
         return await StreamAggregator.aggregate_stream(stream)
 
     async def generate_structured_output(
@@ -183,12 +187,14 @@ class GeminiService:
         contents = GeminiMessageFormatter.convert_to_contents(messages)
 
         # IMPORTANT: Add 3000 tokens buffer due to Gemini package bug
-        generation_config = types.GenerateContentConfig(
-            temperature=temperature,
-            max_output_tokens=max_tokens + self.TOKEN_BUFFER,
-            response_mime_type="application/json",
-            response_schema=response_schema,
-        )
+        generation_config_kwargs = {
+            "max_output_tokens": max_tokens + self.TOKEN_BUFFER,
+            "response_mime_type": "application/json",
+            "response_schema": response_schema,
+        }
+        if self.capabilities.supports_temperature:
+            generation_config_kwargs["temperature"] = temperature
+        generation_config = types.GenerateContentConfig(**generation_config_kwargs)
 
         def generate_sync():
             return self.client.models.generate_content(
@@ -282,10 +288,10 @@ class GeminiService:
             Gemini generation config
         """
         # IMPORTANT: Add 3000 tokens buffer due to Gemini package bug
-        config = types.GenerateContentConfig(
-            temperature=temperature,
-            max_output_tokens=max_tokens + self.TOKEN_BUFFER,
-        )
+        config_kwargs = {"max_output_tokens": max_tokens + self.TOKEN_BUFFER}
+        if self.capabilities.supports_temperature:
+            config_kwargs["temperature"] = temperature
+        config = types.GenerateContentConfig(**config_kwargs)
 
         native_tools = self._build_native_tools(tools)
         if native_tools:
@@ -460,12 +466,14 @@ class GeminiService:
         contents = GeminiMessageFormatter.convert_to_contents(messages)
 
         # IMPORTANT: Add 3000 tokens buffer due to Gemini package bug
-        generation_config = types.GenerateContentConfig(
-            temperature=temperature,
-            max_output_tokens=max_tokens + self.TOKEN_BUFFER,
-            response_mime_type=response_mime_type,
-            response_schema=response_schema
-        )
+        generation_config_kwargs = {
+            "max_output_tokens": max_tokens + self.TOKEN_BUFFER,
+            "response_mime_type": response_mime_type,
+            "response_schema": response_schema,
+        }
+        if self.capabilities.supports_temperature:
+            generation_config_kwargs["temperature"] = temperature
+        generation_config = types.GenerateContentConfig(**generation_config_kwargs)
 
         def generate_sync():
             return self.client.models.generate_content(

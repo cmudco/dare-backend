@@ -954,7 +954,7 @@ class LLMViewSet(viewsets.ModelViewSet):
 
     serializer_class = LLMSerializer
     permission_classes = [IsAuthenticated]
-    queryset = LLM.objects.all().order_by("tier", "name")
+    queryset = LLM.objects.filter(is_active=True).order_by("tier", "name")
 
     def get_queryset(self):
         """
@@ -968,17 +968,19 @@ class LLMViewSet(viewsets.ModelViewSet):
 
         # No access code group: all models
         if not getattr(user, "access_code_group", None):
-            return LLM.objects.all().order_by("tier", "name")
+            return LLM.objects.filter(is_active=True).order_by("tier", "name")
 
         acg = user.access_code_group
         # ACG without model group or inactive group: all models
         if not getattr(acg, "model_group", None):
-            return LLM.objects.all().order_by("tier", "name")
+            return LLM.objects.filter(is_active=True).order_by("tier", "name")
         if not acg.model_group.is_active:
-            return LLM.objects.all().order_by("tier", "name")
+            return LLM.objects.filter(is_active=True).order_by("tier", "name")
 
         # Restrict to allowed models from the access code group's model group
-        return acg.model_group.allowed_models.all().order_by("tier", "name")
+        return acg.model_group.allowed_models.filter(is_active=True).order_by(
+            "tier", "name"
+        )
 
     def list(self, request, *args, **kwargs):
         """
