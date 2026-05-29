@@ -20,6 +20,7 @@ from core.services.llm_utils import (
     OpenAIStreamProcessor,
     StreamAggregator,
 )
+from core.services.model_capabilities import ModelCapabilities
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,7 @@ class CustomLLMService:
         self.model = llm.identifier
         self.is_reasoning = llm.is_reasoning
         self.base_url = llm.base_url
+        self.capabilities = ModelCapabilities.from_llm(llm)
 
         logger.info(f"Initialized CustomLLMService for {llm.name} at {llm.base_url}")
 
@@ -63,6 +65,7 @@ class CustomLLMService:
         messages: List[Dict[str, str]],
         max_tokens: int = 1024,
         temperature: float = 0.7,
+        effort: Optional[str] = None,
         images: List[Dict] = None,
         tools: Optional[List[Dict]] = None
     ) -> AsyncGenerator[Tuple[str, Dict], None]:
@@ -88,6 +91,7 @@ class CustomLLMService:
                 prepared_messages,
                 max_tokens,
                 temperature,
+                effort,
                 tools,
             )
 
@@ -106,6 +110,7 @@ class CustomLLMService:
         messages: List[Dict[str, str]],
         max_tokens: int = 1024,
         temperature: float = 0.7,
+        effort: Optional[str] = None,
         structured_spec: Optional[Dict] = None,
     ) -> str:
         """
@@ -124,7 +129,7 @@ class CustomLLMService:
         """
         # Default: use streaming and aggregate
         # Custom endpoints may not support structured outputs
-        stream = self.stream_chat_completion(messages, max_tokens, temperature)
+        stream = self.stream_chat_completion(messages, max_tokens, temperature, effort)
         return await StreamAggregator.aggregate_stream(stream)
 
     # ==================== Private Methods ====================
@@ -156,6 +161,7 @@ class CustomLLMService:
         messages: List[Dict[str, str]],
         max_tokens: int,
         temperature: float,
+        effort: Optional[str],
         tools: Optional[List[Dict]] = None,
     ):
         """
@@ -173,6 +179,7 @@ class CustomLLMService:
             messages,
             max_tokens,
             temperature,
+            effort,
             tools,
         )
 
@@ -183,6 +190,7 @@ class CustomLLMService:
         messages: List[Dict],
         max_tokens: int,
         temperature: float,
+        effort: Optional[str] = None,
         tools: Optional[List[Dict]] = None,
     ) -> Dict:
         """
@@ -208,7 +216,7 @@ class CustomLLMService:
             params["max_completion_tokens"] = max_tokens
         else:
             params["max_tokens"] = max_tokens
-            params["temperature"] = temperature
+            self.capabilities.apply_sampling_params(params, temperature, effort)
 
         if tools:
             params["tools"] = tools

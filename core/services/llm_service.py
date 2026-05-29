@@ -44,6 +44,7 @@ class AIService(ABC):
         messages: list,
         max_tokens: int,
         temperature: float,
+        effort: Optional[str] = None,
         images: list = None,
         tools: list = None,
     ) -> AsyncGenerator[Tuple[str, Dict], None]:
@@ -55,6 +56,7 @@ class AIService(ABC):
         messages: list,
         max_tokens: int,
         temperature: float,
+        effort: Optional[str] = None,
         structured_spec: Optional[Dict[str, Any]] = None,
     ) -> str:
         """Non-streaming chat completion, optionally honoring structured outputs spec."""
@@ -308,6 +310,7 @@ class LLMService:
                 messages,
                 request.generation.max_tokens,
                 request.generation.temperature,
+                request.generation.effort,
                 structured_spec=request.generation.structured_spec,
             )
             logger.info(
@@ -320,6 +323,7 @@ class LLMService:
                 messages,
                 request.generation.max_tokens,
                 request.generation.temperature,
+                effort=request.generation.effort,
                 images=all_images,
                 tools=llm_tools,
             ):

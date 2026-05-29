@@ -59,6 +59,7 @@ class MessageValidationService:
             ),  # Bot creator's ID for shared access
             "prompt_id": data.get("prompt_id"),
             "temperature": data.get("temperature", cls.DEFAULT_TEMPERATURE),
+            "effort": data.get("effort"),
             "max_tokens": data.get("max_tokens", cls.DEFAULT_MAX_TOKENS),
             # Document retrieval settings
             "max_context_snippets": data.get(
@@ -154,6 +155,7 @@ class MessageValidationService:
         """
         return {
             "temperature": data.get("temperature", cls.DEFAULT_TEMPERATURE),
+            "effort": data.get("effort"),
             "max_tokens": data.get("max_tokens", cls.DEFAULT_MAX_TOKENS),
             "max_context_snippets": data.get(
                 "max_context_snippets", cls.DEFAULT_MAX_CONTEXT_SNIPPETS

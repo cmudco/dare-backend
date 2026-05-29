@@ -25,6 +25,7 @@ from core.services.llm_utils import (
     StreamAggregator,
     SchemaTransformer,
 )
+from core.services.model_capabilities import ModelCapabilities
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,7 @@ class ClaudeService:
         self._client = None
         self.model = llm.identifier
         self.is_reasoning = llm.is_reasoning
+        self.capabilities = ModelCapabilities.from_llm(llm)
 
     @property
     def client(self) -> AsyncAnthropic:
@@ -69,6 +71,7 @@ class ClaudeService:
         messages: List[Dict[str, str]],
         max_tokens: int = 1024,
         temperature: float = 0.7,
+        effort: Optional[str] = None,
         images: List[Dict] = None,
         tools: Optional[List[Dict]] = None
     ) -> AsyncGenerator[Tuple[str, Dict], None]:
@@ -97,6 +100,7 @@ class ClaudeService:
                 prepared_messages,
                 max_tokens,
                 temperature,
+                effort,
                 tools
             )
 
@@ -114,6 +118,7 @@ class ClaudeService:
         messages: List[Dict[str, str]],
         max_tokens: int = 1024,
         temperature: float = 0.7,
+        effort: Optional[str] = None,
         structured_spec: Optional[Dict] = None,
     ) -> str:
         """
@@ -135,11 +140,12 @@ class ClaudeService:
                 messages,
                 max_tokens,
                 temperature,
+                effort,
                 structured_spec
             )
 
         # Default: use streaming and aggregate
-        stream = self.stream_chat_completion(messages, max_tokens, temperature)
+        stream = self.stream_chat_completion(messages, max_tokens, temperature, effort)
         return await StreamAggregator.aggregate_stream(stream)
 
     async def generate_structured_output(
@@ -148,6 +154,7 @@ class ClaudeService:
         response_schema: Dict,
         max_tokens: int = 2000,
         temperature: float = 0.7,
+        effort: Optional[str] = None,
     ) -> Dict:
         """
         Generate response matching a JSON schema using Claude's native structured outputs.
@@ -191,13 +198,14 @@ class ClaudeService:
             "model": model_to_use,
             "max_tokens": max_tokens,
             "messages": filtered_messages,
-            "temperature": temperature,
             "betas": ["structured-outputs-2025-11-13"],
             "output_format": {
                 "type": "json_schema",
                 "schema": response_schema,
             }
         }
+        self.capabilities.apply_sampling_params(params, temperature, effort)
+        self._move_output_config_to_extra_body(params)
 
         if system_message:
             params["system"] = system_message
@@ -248,6 +256,7 @@ class ClaudeService:
         messages: List[Dict],
         max_tokens: int,
         temperature: float,
+        effort: Optional[str],
         tools: Optional[List[Dict]]
     ):
         """
@@ -266,6 +275,7 @@ class ClaudeService:
             messages,
             max_tokens,
             temperature,
+            effort,
             tools
         )
 
@@ -276,6 +286,7 @@ class ClaudeService:
         messages: List[Dict],
         max_tokens: int,
         temperature: float,
+        effort: Optional[str],
         tools: Optional[List[Dict]]
     ) -> Dict:
         """
@@ -297,9 +308,10 @@ class ClaudeService:
             "model": self.model,
             "max_tokens": max_tokens,
             "messages": filtered_messages,
-            "temperature": temperature,
             "stream": True
         }
+        self.capabilities.apply_sampling_params(params, temperature, effort)
+        self._move_output_config_to_extra_body(params)
 
         # Add system message if present
         if system_message:
@@ -317,6 +329,22 @@ class ClaudeService:
             # Let LLM decide when to use tools (auto is default, so no need to set explicitly)
 
         return params
+
+    @staticmethod
+    def _move_output_config_to_extra_body(params: Dict) -> None:
+        """
+        Send newer Anthropic fields before the installed SDK exposes typed args.
+
+        The local anthropic SDK accepts ``thinking`` directly, but not
+        ``output_config`` yet. Passing it through ``extra_body`` preserves the
+        wire payload without tripping client-side argument validation.
+        """
+        output_config = params.pop("output_config", None)
+        if not output_config:
+            return
+
+        extra_body = params.setdefault("extra_body", {})
+        extra_body["output_config"] = output_config
 
     def _convert_tools_to_claude_format(self, tools: List[Dict]) -> List[Dict]:
         """
@@ -375,6 +403,7 @@ class ClaudeService:
         messages: List[Dict],
         max_tokens: int,
         temperature: float,
+        effort: Optional[str],
         structured_spec: Dict
     ) -> str:
         """
@@ -398,7 +427,7 @@ class ClaudeService:
 
         if not response_schema:
             logger.warning("[Claude] Could not transform spec to schema, falling back to streaming")
-            stream = self.stream_chat_completion(messages, max_tokens, temperature)
+            stream = self.stream_chat_completion(messages, max_tokens, temperature, effort)
             return await StreamAggregator.aggregate_stream(stream)
 
         # Use native structured output API
@@ -407,7 +436,8 @@ class ClaudeService:
             messages=messages,
             response_schema=response_schema,
             max_tokens=max_tokens,
-            temperature=temperature
+            temperature=temperature,
+            effort=effort
         )
 
         # Return as JSON string (consistent with other providers)

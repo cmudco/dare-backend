@@ -13,6 +13,7 @@ class GenerationConfig:
 
     Attributes:
         temperature: Sampling temperature (0.0 = deterministic, 1.0 = creative)
+        effort: Optional model effort override for effort-capable models
         max_tokens: Maximum tokens in response
         prompt_id: Custom prompt template ID
         web_search_enabled: Enable web search tool
@@ -26,6 +27,7 @@ class GenerationConfig:
     """
 
     temperature: float = 0.7
+    effort: Optional[str] = None
     max_tokens: int = 8000
     prompt_id: Optional[str] = None
     web_search_enabled: bool = False

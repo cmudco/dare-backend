@@ -38,6 +38,9 @@ from billing.wallet_router import (
     resolve_active_wallet_for_bot,
 )
 from conversations.models import LLM
+from core.services.model_capabilities import (
+    infer_supports_temperature,
+)
 
 # === Wallet metadata wire shape ============================================
 #
@@ -100,7 +103,13 @@ def _llm_entry(model: LLM) -> Dict[str, Any]:
         "identifier": model.identifier,
         "provider": model.provider,
         "description": model.description,
+        "is_active": model.is_active,
         "is_reasoning": model.is_reasoning,
+        "supports_temperature": model.supports_temperature,
+        "supports_effort": model.supports_effort,
+        "supports_adaptive_thinking": model.supports_adaptive_thinking,
+        "default_effort": model.default_effort,
+        "default_adaptive_thinking_enabled": model.default_adaptive_thinking_enabled,
         "is_image_generator": model.is_image_generator,
         "is_audio_transcriber": model.is_audio_transcriber,
         "input_token_rate_per_million": model.input_token_rate_per_million,
@@ -116,13 +125,20 @@ def _litellm_entry(litellm_key, probed) -> Dict[str, Any]:
     proxy doesn't transparently forward provider-native endpoints (DALL-E,
     Whisper, reasoning-mode); zero rates because billing happens externally.
     """
+    provider = probed.provider or "custom"
     return {
         "id": f"{LITELLM_ID_PREFIX}{litellm_key.pk}:{probed.name}",
         "name": probed.name,
         "identifier": probed.name,
-        "provider": probed.provider or "custom",
+        "provider": provider,
         "description": None,
+        "is_active": True,
         "is_reasoning": False,
+        "supports_temperature": infer_supports_temperature(probed.name, provider),
+        "supports_effort": False,
+        "supports_adaptive_thinking": False,
+        "default_effort": "high",
+        "default_adaptive_thinking_enabled": False,
         "is_image_generator": False,
         "is_audio_transcriber": False,
         "input_token_rate_per_million": 0,
