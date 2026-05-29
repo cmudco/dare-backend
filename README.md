@@ -1,6 +1,6 @@
 # DARE Backend
 
-[![License: GPL v2](https://img.shields.io/badge/License-GPL_v2-blue.svg)](LICENSE)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 
 Django REST + Socket.IO backend for the **DARE (Dietrich Analysis Research Education Platform)** — a multi-LLM research and conversation platform with file processing, vector RAG, workflow automation, and real-time streaming.
 
@@ -125,4 +125,5 @@ Redis must be running for Socket.IO pub/sub and background jobs. See [INSTALL.md
 
 ## License
 
-No open-source license has been selected in this repository yet. Add a `LICENSE` file before public release.
+This project is licensed under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0-only).
+See the [LICENSE](LICENSE) file for the full license text, or visit <https://www.gnu.org/licenses/agpl-3.0.en.html>.
