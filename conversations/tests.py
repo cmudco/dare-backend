@@ -110,8 +110,8 @@ class ClaudeCapabilityPayloadTests(TestCase):
 class OpenAICapabilityPayloadTests(TestCase):
     def test_gpt_5_family_uses_max_completion_tokens(self):
         llm = LLM(
-            name="GPT-5.5",
-            identifier="gpt-5.5",
+            name="GPT-5.4",
+            identifier="gpt-5.4",
             provider="openai",
             is_reasoning=False,
             supports_temperature=True,
@@ -125,4 +125,22 @@ class OpenAICapabilityPayloadTests(TestCase):
 
         self.assertEqual(params["max_completion_tokens"], 100)
         self.assertNotIn("max_tokens", params)
+        self.assertEqual(params["temperature"], 0.7)
+
+    def test_temperature_is_omitted_for_gpt_5_models_without_sampling(self):
+        llm = LLM(
+            name="GPT-5.5",
+            identifier="gpt-5.5",
+            provider="openai",
+            is_reasoning=True,
+            supports_temperature=False,
+        )
+
+        params = OpenAIService(llm=llm, api_key="test")._build_chat_completion_params(
+            messages=[{"role": "user", "content": "Hello"}],
+            max_tokens=100,
+            temperature=0.7,
+        )
+
+        self.assertEqual(params["max_completion_tokens"], 100)
         self.assertNotIn("temperature", params)

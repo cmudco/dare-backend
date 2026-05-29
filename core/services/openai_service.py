@@ -222,7 +222,8 @@ class OpenAIService:
             params["max_completion_tokens"] = max_tokens
         else:
             params["max_tokens"] = max_tokens
-            self.capabilities.apply_sampling_params(params, temperature, effort)
+
+        self.capabilities.apply_sampling_params(params, temperature, effort)
 
         try:
             response = await self.client.chat.completions.create(**params)
@@ -334,7 +335,8 @@ class OpenAIService:
             params["max_completion_tokens"] = max_tokens
         else:
             params["max_tokens"] = max_tokens
-            self.capabilities.apply_sampling_params(params, temperature, effort)
+
+        self.capabilities.apply_sampling_params(params, temperature, effort)
 
         # Add tools if provided (for function calling like MCP)
         if tools:
@@ -418,7 +420,8 @@ class OpenAIService:
             params["max_completion_tokens"] = 1024
         else:
             params["max_tokens"] = 1024
-            self.capabilities.apply_sampling_params(params, 0.0)
+
+        self.capabilities.apply_sampling_params(params, 0.0)
 
         return await self.client.chat.completions.create(**params)
 

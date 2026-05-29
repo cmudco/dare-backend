@@ -17,7 +17,7 @@ def infer_supports_temperature(
     normalized = (identifier or "").lower()
     if is_reasoning:
         return False
-    if provider == Provider.OPENAI.value and normalized.startswith("gpt-5"):
+    if provider == Provider.OPENAI.value and normalized in {"gpt-5", "gpt-5.5"}:
         return False
     if provider == Provider.CLAUDE.value and (
         "claude-opus-4-7" in normalized or "claude-opus-4-8" in normalized

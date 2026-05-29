@@ -9,6 +9,11 @@ OPENAI_MAX_COMPLETION_TOKEN_MODELS = [
     "gpt-5.4-mini",
 ]
 
+OPENAI_UNSUPPORTED_TEMPERATURE_MODELS = [
+    "gpt-5",
+    "gpt-5.5",
+]
+
 DEPRECATED_GEMINI_IDENTIFIERS = [
     "gemini-3-pro-preview",
     "gemini-3-flash-preview",
@@ -70,7 +75,7 @@ MODERN_LLM_DATA = [
         "provider": "openai",
         "is_reasoning": True,
         "supports_vision": True,
-        "supports_temperature": False,
+        "supports_temperature": True,
         "input_token_rate_per_million": "2.50",
         "output_token_rate_per_million": "15.00",
         "tier": "premium",
@@ -81,7 +86,7 @@ MODERN_LLM_DATA = [
         "provider": "openai",
         "is_reasoning": True,
         "supports_vision": True,
-        "supports_temperature": False,
+        "supports_temperature": True,
         "input_token_rate_per_million": "0.75",
         "output_token_rate_per_million": "4.50",
         "tier": "flash",
@@ -172,6 +177,19 @@ def seed_modern_llm_models(apps, schema_editor):
         identifier__in=OPENAI_MAX_COMPLETION_TOKEN_MODELS,
     ).update(
         is_reasoning=True,
+    )
+
+    LLM.objects.filter(
+        provider="openai",
+        identifier__in=OPENAI_MAX_COMPLETION_TOKEN_MODELS,
+    ).exclude(identifier__in=OPENAI_UNSUPPORTED_TEMPERATURE_MODELS).update(
+        supports_temperature=True,
+    )
+
+    LLM.objects.filter(
+        provider="openai",
+        identifier__in=OPENAI_UNSUPPORTED_TEMPERATURE_MODELS,
+    ).update(
         supports_temperature=False,
     )
 
