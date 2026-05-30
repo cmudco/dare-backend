@@ -7,7 +7,7 @@ Carnegie Mellon University (CMU).
 
 - Reference the project name when describing the software (e.g., "built on DARE")
 - State that your work is based on or compatible with DARE or SocraticBots
-- Fork the repository under a different product name in compliance with GPL-2.0
+- Fork the repository under a different product name in compliance with AGPL-3.0
 
 ## What you may NOT do without written permission from CMU
 
