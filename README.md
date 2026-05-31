@@ -100,19 +100,19 @@ Redis must be running for Socket.IO pub/sub and background jobs. See [INSTALL.md
 
 ## Documentation
 
-| Doc | What's in it |
-|---|---|
-| [INSTALL.md](INSTALL.md) | Full deployment guide — Docker and bare metal |
-| [docs/configuration.md](docs/configuration.md) | Every environment variable, with type, default, and description |
-| [docs/architecture.md](docs/architecture.md) | Component diagram and request flows |
-| [docs/admin-guide.md](docs/admin-guide.md) | User/role management, access codes, analytics |
-| [docs/contributing.md](docs/contributing.md) | Issues, pull requests, coding standards |
-| [CHANGELOG.md](CHANGELOG.md) | Release notes |
-| [SECURITY.md](SECURITY.md) | Vulnerability disclosure process |
-| [docs/integration/socraticbooks-dare-proxy.md](docs/integration/socraticbooks-dare-proxy.md) | DARE/SocraticBooks integration contract and update rules |
-| [docs/architecture/socketio-events.md](docs/architecture/socketio-events.md) | Socket.IO event reference |
-| [docs/api/dare-backend.md](docs/api/dare-backend.md) | REST API reference |
-| [docs/code-standards.md](docs/code-standards.md) | Coding conventions |
+| Doc                                                                                          | What's in it                                                    |
+| -------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| [INSTALL.md](INSTALL.md)                                                                     | Full deployment guide — Docker and bare metal                   |
+| [docs/configuration.md](docs/configuration.md)                                               | Every environment variable, with type, default, and description |
+| [docs/architecture.md](docs/architecture.md)                                                 | Component diagram and request flows                             |
+| [docs/admin-guide.md](docs/admin-guide.md)                                                   | User/role management, access codes, analytics                   |
+| [CONTRIBUTING.md](CONTRIBUTING.md)                                                           | Issues, pull requests, coding standards                         |
+| [CHANGELOG.md](CHANGELOG.md)                                                                 | Release notes                                                   |
+| [SECURITY.md](SECURITY.md)                                                                   | Vulnerability disclosure process                                |
+| [docs/integration/socraticbooks-dare-proxy.md](docs/integration/socraticbooks-dare-proxy.md) | DARE/SocraticBooks integration contract and update rules        |
+| [docs/architecture/socketio-events.md](docs/architecture/socketio-events.md)                 | Socket.IO event reference                                       |
+| [docs/api/dare-backend.md](docs/api/dare-backend.md)                                         | REST API reference                                              |
+| [docs/code-standards.md](docs/code-standards.md)                                             | Coding conventions                                              |
 
 ## Tech Stack
 
