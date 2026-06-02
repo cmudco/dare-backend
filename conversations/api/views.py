@@ -452,6 +452,38 @@ class ConversationViewSet(ConversationSharingMixin, viewsets.ModelViewSet):
                 id=artifact_id, conversation=conversation
             )
         except Artifact.DoesNotExist:
+            # Diagnose *why* the scoped lookup failed so 404s are not opaque.
+            # The UI is handed this id by MessageSerializer.get_artifactId, so a
+            # 404 here means the id exists somewhere the conversation-scoped query
+            # can't reach. Distinguish the cases for debugging.
+            row = Artifact._base_manager.filter(id=artifact_id).first()
+            if row is None:
+                reason = "no artifact row with this id exists"
+            elif row.conversation_id != conversation.id:
+                reason = (
+                    f"artifact belongs to conversation_id={row.conversation_id} "
+                    f"(conversation_code={getattr(row.conversation, 'conversation_id', '?')}), "
+                    f"but was requested under conversation_code={conversation.conversation_id} "
+                    f"(id={conversation.id}); "
+                    f"artifact_group_id={row.artifact_group_id}, version={row.version}, "
+                    f"message_id={row.message_id}, parent_artifact_id={row.parent_artifact_id}"
+                )
+            elif row.is_deleted or not row.is_active:
+                reason = (
+                    f"artifact is filtered out (is_active={row.is_active}, "
+                    f"is_deleted={row.is_deleted})"
+                )
+            else:
+                reason = "unknown (row matches scope but get() raised DoesNotExist)"
+            logger.warning(
+                "artifact_detail 404: artifact_id=%s conversation_code=%s "
+                "conversation_id=%s user_id=%s reason: %s",
+                artifact_id,
+                conversation.conversation_id,
+                conversation.id,
+                getattr(request.user, "id", None),
+                reason,
+            )
             return Response(
                 {"error": "Artifact not found"}, status=status.HTTP_404_NOT_FOUND
             )

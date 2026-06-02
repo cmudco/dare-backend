@@ -532,20 +532,40 @@ class ArtifactToolExecutor:
         
         # Create new version using the model's method
         new_artifact = parent_artifact.create_new_version()
-        
+
         # Update with new content
         new_artifact.content = new_content
         new_artifact.message = message
         new_artifact.status = ArtifactStatus.COMPLETED
         new_artifact.source_tool = 'update_artifact'
-        
+
         if new_title:
             new_artifact.title = new_title
-        
-        new_artifact.save(update_fields=[
+
+        update_fields = [
             'content', 'message', 'status', 'source_tool', 'title', 'updated_at'
-        ])
-        
+        ]
+
+        # create_new_version() copies `conversation` from the parent artifact,
+        # which may belong to a DIFFERENT conversation than the current edit
+        # (e.g. a copied/forked chat, or a stale artifact_id referencing another
+        # conversation). The detail endpoint scopes by conversation, so a version
+        # left in the parent's conversation would be unreachable from the chat
+        # where the edit happened -> 404. Bind the version to the current
+        # message's conversation so it stays reachable where it is shown.
+        if message and message.conversation_id != new_artifact.conversation_id:
+            logger.info(
+                "Rebinding new artifact version %s from conversation %s to %s "
+                "(edit happened in a different conversation than the parent artifact)",
+                new_artifact.id,
+                new_artifact.conversation_id,
+                message.conversation_id,
+            )
+            new_artifact.conversation = message.conversation
+            update_fields.append('conversation')
+
+        new_artifact.save(update_fields=update_fields)
+
         return new_artifact
     
     async def _emit_artifact_updated(

@@ -458,8 +458,16 @@ class MessageSerializer(serializers.ModelSerializer):
         ]
 
     def get_artifactId(self, obj):
-        """Get the ID of the first active artifact linked to this message."""
-        artifact = obj.artifacts.filter(is_active=True).first()
+        """Get the ID of the first active artifact linked to this message.
+
+        Scoped to the message's own conversation: the artifact detail endpoint
+        (artifact_detail) only serves artifacts whose conversation matches the
+        request URL, so advertising an artifact that lives in a different
+        conversation would hand the UI an id that 404s. Stay consistent.
+        """
+        artifact = obj.artifacts.filter(
+            is_active=True, conversation_id=obj.conversation_id
+        ).first()
         return str(artifact.id) if artifact else None
 
     def get_energy_stats(self, obj):
