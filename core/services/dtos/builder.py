@@ -112,14 +112,17 @@ class LLMQueryRequestBuilder:
         if is_socratic_bots and max_tokens < SOCRATIC_MIN_MAX_TOKENS:
             max_tokens = SOCRATIC_MIN_MAX_TOKENS
 
-        # Enforce minimum max_tokens when artifact-creating tools are loaded.
-        # The artifact payload travels as the tool-call input, so a low cap
-        # truncates the tool call mid-stream and the artifact is silently dropped.
+        # The Artifacts toggle injects the full artifact toolkit (see the slug
+        # union below). The artifact token floor must therefore apply whenever the
+        # toggle is on OR an artifact tool was explicitly selected in the drawer:
+        # the artifact payload travels as the tool-call input, and a low cap
+        # truncates it mid-stream so the artifact is silently dropped.
+        artifacts_enabled = message_data.get("artifacts_enabled", False)
         requested_slugs = message_data.get("dare_tool_slugs") or []
-        if (
-            any(slug in ARTIFACT_TOOL_SLUGS for slug in requested_slugs)
-            and max_tokens < ARTIFACT_MIN_MAX_TOKENS
-        ):
+        loads_artifact_tools = artifacts_enabled or any(
+            slug in ARTIFACT_TOOL_SLUGS for slug in requested_slugs
+        )
+        if loads_artifact_tools and max_tokens < ARTIFACT_MIN_MAX_TOKENS:
             max_tokens = ARTIFACT_MIN_MAX_TOKENS
 
         # Build generation config
@@ -141,7 +144,7 @@ class LLMQueryRequestBuilder:
                 "audio_transcription_settings"
             ),
             structured_spec=message_data.get("structured_spec"),
-            artifacts_enabled=message_data.get("artifacts_enabled", False),
+            artifacts_enabled=artifacts_enabled,
         )
 
         # Build media config
@@ -160,8 +163,15 @@ class LLMQueryRequestBuilder:
         # Extract MCP server IDs from frontend payload
         mcp_server_ids = tuple(message_data.get("mcp_server_ids") or [])
 
-        # Extract DARE tool slugs from frontend payload
-        dare_tool_slugs = tuple(message_data.get("dare_tool_slugs") or [])
+        # Extract DARE tool slugs from frontend payload. When the Artifacts toggle
+        # is on, inject the full artifact toolkit regardless of the drawer selection
+        # so the model can CREATE artifacts (create_docx/create_diagram/etc.), not
+        # just fork a new version off an existing one via update_artifact. The
+        # toggle is the source of truth here: it unions over the drawer selection.
+        selected_slugs = set(message_data.get("dare_tool_slugs") or [])
+        if artifacts_enabled:
+            selected_slugs |= ARTIFACT_TOOL_SLUGS
+        dare_tool_slugs = tuple(selected_slugs)
 
         # Build request
         request = LLMQueryRequest(
