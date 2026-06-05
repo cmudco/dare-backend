@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 
 import os
 from datetime import timedelta
+
 from config import env
 from config.sentry import init_sentry
 
@@ -27,6 +28,8 @@ ALLOWED_HOSTS = env.ALLOWED_HOSTS
 
 # Internal API key for inter-service communication (SB backend -> DARE backend)
 DARE_INTERNAL_KEY = env.DARE_INTERNAL_KEY
+HERMES_ADAPTER = env.HERMES_ADAPTER
+HERMES_INTERNAL_KEY = env.HERMES_INTERNAL_KEY
 
 # Bot wallet routing is rolled out behind this flag. When False,
 # finalize_ai_message uses the legacy path (User.billing_mode lookup only);
@@ -65,6 +68,7 @@ LOCAL_APPS = [
     "memory",
     "sharing",
     "feature_flags",
+    "research",
 ]
 
 THIRD_PARTY_APPS = [

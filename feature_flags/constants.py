@@ -59,6 +59,11 @@ DEFAULT_FLAG_DEFINITIONS = [
         "default_enabled": False,
     },
     {
+        "key": "enable_research",
+        "description": "Show and allow access to the Research workspace.",
+        "default_enabled": False,
+    },
+    {
         "key": "enable_sharing",
         "description": "Publish/share prompts, conversations, and workflows.",
         "default_enabled": False,

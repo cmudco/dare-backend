@@ -36,6 +36,7 @@ app_paths = [
     path("", include("memory.urls", namespace="memory")),
     path("", include("sharing.urls", namespace="sharing")),
     path("", include("feature_flags.urls", namespace="feature_flags")),
+    path("", include("research.urls", namespace="research")),
     path("syftbox/", include("syftbox.urls", namespace="syftbox")),
 ]
 

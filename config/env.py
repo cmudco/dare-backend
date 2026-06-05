@@ -78,6 +78,8 @@ MCP_USE_DOCKER = os.getenv("MCP_USE_DOCKER", "False") == "True"
 USE_POSTGRES = os.getenv("USE_POSTGRES", "False").lower() in ("true", "1", "yes")
 # Internal API key for inter-service communication (SB backend -> DARE backend)
 DARE_INTERNAL_KEY = os.getenv("DARE_INTERNAL_KEY", "local-dev-internal-key")
+HERMES_ADAPTER = os.getenv("HERMES_ADAPTER", "unavailable")
+HERMES_INTERNAL_KEY = os.getenv("HERMES_INTERNAL_KEY", DARE_INTERNAL_KEY)
 
 
 # SyftBox Configuration
