@@ -17,6 +17,9 @@ from common.models import BaseModel
 from research.constants import (
     AgentRunStatus,
     AgentToolCallStatus,
+    MemoryProposalStatus,
+    MemoryType,
+    ProjectMemorySource,
     ResearchProjectStatus,
     ResearchSessionMode,
     ResearchSessionStatus,
@@ -366,3 +369,207 @@ class ResearchSource(BaseModel):
 
     def __str__(self):
         return f"{self.name} ({self.project_id})"
+
+
+class SoulFile(BaseModel):
+    """
+    A project's durable, versioned standards document (the "soul file").
+
+    One per project. The content lives in versioned SoulFileVersion rows so that
+    older staging items can keep the version that governed them; editing the soul
+    file writes a new version rather than mutating the old one.
+    """
+
+    project = models.OneToOneField(
+        ResearchProject,
+        on_delete=models.CASCADE,
+        related_name="soul_file",
+        help_text="Project this soul file governs.",
+    )
+    name = models.CharField(
+        max_length=255,
+        default="Research standards",
+        help_text="Display name for the soul file.",
+    )
+
+    objects = models.Manager()
+    active_objects = ActiveObjectsManager()
+
+    class Meta:
+        verbose_name = "Soul File"
+        verbose_name_plural = "Soul Files"
+
+    def __str__(self):
+        return f"Soul file ({self.project_id})"
+
+    def current_version(self):
+        return (
+            SoulFileVersion.active_objects.filter(soul_file=self)
+            .order_by("-version")
+            .first()
+        )
+
+
+class SoulFileVersion(BaseModel):
+    """An immutable version of a soul file's content."""
+
+    soul_file = models.ForeignKey(
+        SoulFile,
+        on_delete=models.CASCADE,
+        related_name="versions",
+        help_text="The soul file this version belongs to.",
+    )
+    version = models.PositiveIntegerField(
+        help_text="Incrementing version number (1, 2, 3, ...).",
+    )
+    content = models.TextField(
+        blank=True,
+        default="",
+        help_text="The full text/markdown of the soul file at this version.",
+    )
+    origin = models.CharField(
+        max_length=64,
+        blank=True,
+        default="",
+        help_text="Where this version came from: template:<key>/upload/empty/edit.",
+    )
+    change_note = models.CharField(
+        max_length=512,
+        blank=True,
+        default="",
+        help_text="Optional note describing the edit.",
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="soul_file_versions",
+        help_text="Who authored this version (null if seeded/agent).",
+    )
+
+    objects = models.Manager()
+    active_objects = ActiveObjectsManager()
+
+    class Meta:
+        verbose_name = "Soul File Version"
+        verbose_name_plural = "Soul File Versions"
+        ordering = ["-version"]
+        unique_together = ("soul_file", "version")
+
+    def __str__(self):
+        return f"v{self.version} ({self.soul_file_id})"
+
+
+class ResearchProjectMemory(BaseModel):
+    """
+    A durable project-memory snapshot (working thesis, open question, a decision)
+    that persists between sessions. DARE-owned: added by the scholar or promoted
+    from an accepted agent proposal.
+    """
+
+    project = models.ForeignKey(
+        ResearchProject,
+        on_delete=models.CASCADE,
+        related_name="memory_snapshots",
+        help_text="Project this memory belongs to.",
+    )
+    added_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="research_memory_snapshots",
+        help_text="Who captured this memory (null if from an agent).",
+    )
+    label = models.CharField(
+        max_length=255,
+        help_text="Short label, e.g. 'Working thesis'.",
+    )
+    detail = models.TextField(
+        blank=True,
+        default="",
+        help_text="The memory content.",
+    )
+    source = models.CharField(
+        max_length=32,
+        blank=True,
+        default=ProjectMemorySource.MANUAL,
+        help_text="Where it came from: manual/proposal/agent (free-form).",
+    )
+
+    objects = models.Manager()
+    active_objects = ActiveObjectsManager()
+
+    class Meta:
+        verbose_name = "Research Project Memory"
+        verbose_name_plural = "Research Project Memory"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.label} ({self.project_id})"
+
+
+class ResearchMemoryProposal(BaseModel):
+    """
+    A memory the agent proposes to keep — separates Hermes suggestions from
+    accepted DARE project memory. Propose-only; the scholar accepts or rejects.
+    """
+
+    project = models.ForeignKey(
+        ResearchProject,
+        on_delete=models.CASCADE,
+        related_name="memory_proposals",
+        help_text="Project this proposal belongs to.",
+    )
+    run = models.ForeignKey(
+        ResearchAgentRun,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="memory_proposals",
+        help_text="Run that produced this proposal, if any.",
+    )
+    proposed_by_role = models.CharField(
+        max_length=64,
+        blank=True,
+        default="",
+        help_text="Agent role slug that proposed it (e.g. 'scout').",
+    )
+    content = models.TextField(
+        blank=True,
+        default="",
+        help_text="The proposed memory text.",
+    )
+    memory_type = models.CharField(
+        max_length=32,
+        blank=True,
+        default=MemoryType.PROJECT_MEMORY,
+        help_text="Scope of the proposed memory (free-form).",
+    )
+    status = models.CharField(
+        max_length=16,
+        choices=MemoryProposalStatus.choices(),
+        default=MemoryProposalStatus.PROPOSED,
+        help_text="Proposal lifecycle (DARE-owned).",
+    )
+    accepted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="research_accepted_memory_proposals",
+        help_text="Scholar who accepted it, if accepted.",
+    )
+    accepted_at = models.DateTimeField(null=True, blank=True)
+
+    objects = models.Manager()
+    active_objects = ActiveObjectsManager()
+
+    class Meta:
+        verbose_name = "Research Memory Proposal"
+        verbose_name_plural = "Research Memory Proposals"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.proposed_by_role or 'agent'} proposal ({self.project_id})"

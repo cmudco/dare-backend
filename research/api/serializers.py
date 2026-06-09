@@ -9,12 +9,20 @@ renderer emits exactly the camelCase shape the frontend expects
 
 from rest_framework import serializers
 
-from research.constants import SourceType
+from research.constants import (
+    MemoryProposalStatus,
+    SourceType,
+    soul_template_content,
+)
 from research.models import (
     ResearchAgentRun,
     ResearchAgentToolCall,
+    ResearchMemoryProposal,
     ResearchProject,
+    ResearchProjectMemory,
     ResearchSource,
+    SoulFile,
+    SoulFileVersion,
 )
 
 
@@ -82,6 +90,17 @@ class ResearchProjectSerializer(serializers.ModelSerializer):
                 size_label=item.get("size_label", ""),
                 source_type=SourceType.UPLOAD,
             )
+        # Every project starts with a versioned soul file (v1) seeded from the
+        # chosen standards template (or empty for a custom/blank start).
+        content, origin = soul_template_content(project.standards_template)
+        soul = SoulFile.objects.create(project=project)
+        SoulFileVersion.objects.create(
+            soul_file=soul,
+            version=1,
+            content=content,
+            origin=origin,
+            created_by=project.user,
+        )
         return project
 
 
@@ -165,6 +184,29 @@ class ResearchAgentRunSerializer(serializers.ModelSerializer):
         return ResearchAgentToolCallSerializer(calls, many=True).data
 
 
+class ResearchProjectMemorySerializer(serializers.ModelSerializer):
+    """A durable project-memory snapshot."""
+
+    captured_at = serializers.DateTimeField(source="created_at", read_only=True)
+
+    class Meta:
+        model = ResearchProjectMemory
+        fields = ["id", "label", "detail", "source", "captured_at"]
+        read_only_fields = fields
+
+
+class ResearchMemoryProposalSerializer(serializers.ModelSerializer):
+    """An agent-proposed memory awaiting the scholar's decision."""
+
+    role = serializers.CharField(source="proposed_by_role", read_only=True)
+    proposed_at = serializers.DateTimeField(source="created_at", read_only=True)
+
+    class Meta:
+        model = ResearchMemoryProposal
+        fields = ["id", "role", "content", "memory_type", "status", "proposed_at"]
+        read_only_fields = fields
+
+
 class ResearchProjectDetailSerializer(ResearchProjectSerializer):
     """
     Single-project payload for the workspace (GET /api/research/projects/{id}/).
@@ -177,9 +219,17 @@ class ResearchProjectDetailSerializer(ResearchProjectSerializer):
 
     runs = serializers.SerializerMethodField()
     sources = serializers.SerializerMethodField()
+    soul_file = serializers.SerializerMethodField()
+    project_memory = serializers.SerializerMethodField()
+    memory_proposals = serializers.SerializerMethodField()
 
     class Meta(ResearchProjectSerializer.Meta):
-        fields = ResearchProjectSerializer.Meta.fields + ["runs"]
+        fields = ResearchProjectSerializer.Meta.fields + [
+            "runs",
+            "soul_file",
+            "project_memory",
+            "memory_proposals",
+        ]
 
     def get_runs(self, obj):
         runs = ResearchAgentRun.active_objects.filter(project=obj).order_by(
@@ -192,3 +242,30 @@ class ResearchProjectDetailSerializer(ResearchProjectSerializer):
             "-created_at"
         )
         return ResearchSourceSerializer(sources, many=True).data
+
+    def get_soul_file(self, obj):
+        soul = SoulFile.active_objects.filter(project=obj).first()
+        if not soul:
+            return None
+        version = soul.current_version()
+        if not version:
+            return None
+        return {
+            "id": soul.id,
+            "version": version.version,
+            "content": version.content,
+            "origin": version.origin,
+            "updatedAt": version.created_at,
+        }
+
+    def get_project_memory(self, obj):
+        memory = ResearchProjectMemory.active_objects.filter(
+            project=obj
+        ).order_by("-created_at")
+        return ResearchProjectMemorySerializer(memory, many=True).data
+
+    def get_memory_proposals(self, obj):
+        proposals = ResearchMemoryProposal.active_objects.filter(
+            project=obj, status=MemoryProposalStatus.PROPOSED
+        ).order_by("-created_at")
+        return ResearchMemoryProposalSerializer(proposals, many=True).data

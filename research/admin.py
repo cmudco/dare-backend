@@ -3,9 +3,13 @@ from django.contrib import admin
 from research.models import (
     ResearchAgentRun,
     ResearchAgentToolCall,
+    ResearchMemoryProposal,
     ResearchProject,
+    ResearchProjectMemory,
     ResearchSession,
     ResearchSource,
+    SoulFile,
+    SoulFileVersion,
 )
 
 
@@ -51,3 +55,37 @@ class ResearchSourceAdmin(admin.ModelAdmin):
     list_filter = ("source_type",)
     search_fields = ("name", "title", "authors")
     raw_id_fields = ("project", "added_by")
+
+
+class SoulFileVersionInline(admin.TabularInline):
+    model = SoulFileVersion
+    extra = 0
+
+
+@admin.register(SoulFile)
+class SoulFileAdmin(admin.ModelAdmin):
+    list_display = ("id", "project", "name", "created_at")
+    raw_id_fields = ("project",)
+    inlines = [SoulFileVersionInline]
+
+
+@admin.register(SoulFileVersion)
+class SoulFileVersionAdmin(admin.ModelAdmin):
+    list_display = ("id", "soul_file", "version", "origin", "created_at")
+    list_filter = ("origin",)
+    raw_id_fields = ("soul_file", "created_by")
+
+
+@admin.register(ResearchProjectMemory)
+class ResearchProjectMemoryAdmin(admin.ModelAdmin):
+    list_display = ("id", "project", "label", "source", "created_at")
+    list_filter = ("source",)
+    search_fields = ("label", "detail")
+    raw_id_fields = ("project", "added_by")
+
+
+@admin.register(ResearchMemoryProposal)
+class ResearchMemoryProposalAdmin(admin.ModelAdmin):
+    list_display = ("id", "project", "proposed_by_role", "status", "created_at")
+    list_filter = ("status", "memory_type")
+    raw_id_fields = ("project", "run", "accepted_by")

@@ -130,3 +130,91 @@ class SourceType:
             (cls.ARTICLE, "Article"),
             (cls.OTHER, "Other"),
         ]
+
+
+class SoulFileOrigin:
+    """Where a soul-file version's content came from (provenance)."""
+
+    TEMPLATE = "template"
+    UPLOAD = "upload"
+    EMPTY = "empty"
+    EDIT = "edit"
+
+
+# Starter soul-file content per standards template. Plain text (one rule per
+# line) so it renders cleanly; the scholar can edit it into richer markdown.
+SOUL_TEMPLATES = {
+    "research-ethics": (
+        "1. Never fabricate — every statistic and citation must be real and "
+        "checkable.\n"
+        "2. Signal uncertainty honestly — separate what the data shows from "
+        "what it merely suggests.\n"
+        "3. Do not overstate sources — a cross-country correlation is not "
+        "proof of cause or transfer.\n"
+        "4. Separate values from evidence — flag normative or ideological "
+        "claims distinctly from empirical findings."
+    ),
+    "empirical-rigor": (
+        "1. Prefer primary sources and pre-registered studies.\n"
+        "2. Always surface the method — sample size, design and effect size.\n"
+        "3. Flag replication status where it is known.\n"
+        "4. Distinguish correlation from causation explicitly."
+    ),
+}
+
+
+def soul_template_content(standards_template):
+    """Return (content, origin) for a project's initial soul-file version."""
+    if standards_template in SOUL_TEMPLATES:
+        return SOUL_TEMPLATES[standards_template], (
+            f"{SoulFileOrigin.TEMPLATE}:{standards_template}"
+        )
+    return "", SoulFileOrigin.EMPTY
+
+
+class MemoryType:
+    """Scope of a memory (free-form; the canonical set for the UI/docs)."""
+
+    PROJECT_MEMORY = "projectMemory"
+    ROLE_MEMORY = "roleMemory"
+    RUN_SCRATCHPAD = "runScratchpad"
+
+    @classmethod
+    def choices(cls):
+        return [
+            (cls.PROJECT_MEMORY, "Project memory"),
+            (cls.ROLE_MEMORY, "Role memory"),
+            (cls.RUN_SCRATCHPAD, "Run scratchpad"),
+        ]
+
+
+class ProjectMemorySource:
+    """Where a project-memory snapshot came from (free-form)."""
+
+    MANUAL = "manual"
+    PROPOSAL = "proposal"
+    AGENT = "agent"
+
+    @classmethod
+    def choices(cls):
+        return [
+            (cls.MANUAL, "Manual"),
+            (cls.PROPOSAL, "Accepted proposal"),
+            (cls.AGENT, "Agent"),
+        ]
+
+
+class MemoryProposalStatus:
+    """Proposal lifecycle (DARE-owned, enforced)."""
+
+    PROPOSED = "proposed"
+    ACCEPTED = "accepted"
+    REJECTED = "rejected"
+
+    @classmethod
+    def choices(cls):
+        return [
+            (cls.PROPOSED, "Proposed"),
+            (cls.ACCEPTED, "Accepted"),
+            (cls.REJECTED, "Rejected"),
+        ]
