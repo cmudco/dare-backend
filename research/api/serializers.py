@@ -162,6 +162,7 @@ class ResearchAgentRunSerializer(serializers.ModelSerializer):
             "mode",
             "task",
             "status",
+            "status_detail",
             "soul_file_version",
             "tools",
             "staged_count",
@@ -178,8 +179,7 @@ class ResearchAgentRunSerializer(serializers.ModelSerializer):
         return obj.started_at or obj.created_at
 
     def get_staged_count(self, obj):
-        # Wired to staging items in a later increment.
-        return 0
+        return ResearchStagingItem.active_objects.filter(run=obj).count()
 
     def get_tool_calls(self, obj):
         calls = ResearchAgentToolCall.active_objects.filter(run=obj).order_by(

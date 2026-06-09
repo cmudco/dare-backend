@@ -6,6 +6,7 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
 from research.api.views import (
+    ResearchAgentRunView,
     ResearchChatView,
     ResearchProjectViewSet,
     ResearchScoutView,
@@ -36,6 +37,11 @@ urlpatterns = [
         "staging-items/<int:item_id>/review/",
         ResearchStagingItemReviewView.as_view(),
         name="research-staging-review",
+    ),
+    path(
+        "agent-runs/<int:run_id>/",
+        ResearchAgentRunView.as_view(),
+        name="research-agent-run",
     ),
     path("", include(router.urls)),
 ]

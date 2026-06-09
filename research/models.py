@@ -218,6 +218,12 @@ class ResearchAgentRun(BaseModel):
         default=AgentRunStatus.STARTED,
         help_text="Run lifecycle (Hermes-produced; free-form).",
     )
+    status_detail = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        help_text="Human-readable live progress line (e.g. 'Searching the web…').",
+    )
     soul_file_version = models.CharField(
         max_length=64,
         blank=True,
