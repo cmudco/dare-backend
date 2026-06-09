@@ -43,7 +43,7 @@ from research.models import (
     SoulFileVersion,
 )
 from research.services import get_hermes_service
-from research.tasks import run_scout_job
+from research.tasks import run_critic_job, run_scout_job
 
 logger = logging.getLogger(__name__)
 
@@ -328,6 +328,47 @@ class ResearchAgentRunView(APIView):
             project__user=request.user,
         )
         return Response(ResearchAgentRunSerializer(run).data)
+
+
+class ResearchStagingItemCriticView(APIView):
+    """
+    POST /api/research/staging-items/{id}/critic/ — enqueue a Critic run that
+    pressure-tests the staged source against the standards. The verdict lands on
+    the item's criticMetadata. Returns {runId}; poll GET /agent-runs/{id}/.
+    """
+
+    permission_classes = [IsAuthenticated, IsResearcherOrAbove]
+
+    def post(self, request, item_id):
+        item = get_object_or_404(
+            ResearchStagingItem.active_objects,
+            id=item_id,
+            project__user=request.user,
+        )
+        project = item.project
+        session = ResearchSession.get_or_create_scout_session(project, request.user)
+        soul = SoulFile.active_objects.filter(project=project).first()
+        version = soul.current_version() if soul else None
+        soul_label = f"v{version.version}" if version else ""
+
+        run = ResearchAgentRun.objects.create(
+            session=session,
+            project=project,
+            user=request.user,
+            role="critic",
+            mode=ResearchSessionMode.SCOUT,
+            task=f"Pressure-test: {item.title}",
+            status=AgentRunStatus.RUNNING,
+            status_detail="Queued…",
+            soul_file_version=soul_label,
+            allowed_tools=["web"],
+            started_at=timezone.now(),
+        )
+        run_critic_job.delay(run.id, item.id)
+        return Response(
+            {"runId": run.id, "status": run.status},
+            status=status.HTTP_202_ACCEPTED,
+        )
 
 
 class ResearchStagingItemReviewView(APIView):

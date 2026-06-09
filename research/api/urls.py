@@ -11,6 +11,7 @@ from research.api.views import (
     ResearchProjectViewSet,
     ResearchScoutView,
     ResearchSoulFileView,
+    ResearchStagingItemCriticView,
     ResearchStagingItemReviewView,
 )
 
@@ -37,6 +38,11 @@ urlpatterns = [
         "staging-items/<int:item_id>/review/",
         ResearchStagingItemReviewView.as_view(),
         name="research-staging-review",
+    ),
+    path(
+        "staging-items/<int:item_id>/critic/",
+        ResearchStagingItemCriticView.as_view(),
+        name="research-staging-critic",
     ),
     path(
         "agent-runs/<int:run_id>/",
