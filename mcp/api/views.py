@@ -9,13 +9,18 @@ from rest_framework import mixins
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.views import APIView
+from rest_framework.parsers import JSONParser
+from rest_framework.renderers import JSONRenderer
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from django.contrib.auth import get_user_model
+from django.http import HttpResponse
 from django.shortcuts import redirect
 from django.utils import timezone
 from asgiref.sync import async_to_sync
 
 from common.permissions import IsResearcherOrAbove
+from mcp.services.mcp_gateway import handle_jsonrpc
 from mcp.constants import MCPAuthType
 from mcp.models import MCPServer, UserMCPConnection, MCPToolExecution
 from mcp.api.serializers import (
@@ -401,3 +406,25 @@ def _get_connection_credentials(connection: UserMCPConnection) -> dict:
         'updated_at',
     ])
     return token.to_credentials()
+
+
+class MCPGatewayView(APIView):
+    """
+    MCP Streamable HTTP gateway — exposes the authenticated user's connected MCP
+    tools to an external agent (Hermes). Plain JSON in/out (no camelCase) to keep
+    the JSON-RPC envelope and tool arguments/results verbatim. Credentials and
+    audit stay in DARE (calls route through the executor).
+
+    POST /mcp/api/gateway/  — one MCP JSON-RPC message.
+    """
+
+    permission_classes = [IsAuthenticated]
+    parser_classes = [JSONParser]
+    renderer_classes = [JSONRenderer]
+
+    def post(self, request):
+        payload = request.data if isinstance(request.data, dict) else {}
+        response = handle_jsonrpc(request.user, payload)
+        if response is None:  # notification — no body
+            return HttpResponse(status=202)
+        return Response(response)
