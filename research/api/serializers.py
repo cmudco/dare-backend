@@ -168,6 +168,7 @@ class ResearchAgentRunSerializer(serializers.ModelSerializer):
             "tools",
             "staged_count",
             "cost",
+            "usage",
             "started_at",
             "completed_at",
             "ran_at",

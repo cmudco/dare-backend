@@ -128,6 +128,21 @@ class HermesService:
         resp.raise_for_status()
         return resp.json()
 
+    def fetch_usage(self, hermes_run_id, timeout=30):
+        """
+        Fetch a finished run's token usage from the run summary. Best-effort
+        audit data — returns {} rather than raising, so a usage hiccup never
+        fails a run that otherwise completed.
+        """
+        try:
+            usage = self.get_run(hermes_run_id, timeout=timeout).get("usage")
+        except (requests.RequestException, ValueError) as exc:
+            logger.warning(
+                "Could not fetch Hermes usage for run %s: %s", hermes_run_id, exc
+            )
+            return {}
+        return usage if isinstance(usage, dict) else {}
+
 
 _hermes_service = None
 

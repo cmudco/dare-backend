@@ -257,6 +257,12 @@ class ResearchAgentRun(BaseModel):
         default=0,
         help_text="Cumulative cost for the run.",
     )
+    usage = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Token usage reported by the agent runtime "
+        "(input_tokens / output_tokens / total_tokens).",
+    )
     error = models.TextField(
         blank=True,
         default="",

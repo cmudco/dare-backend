@@ -182,7 +182,10 @@ def run_scout_job(run_id):
     run.status = AgentRunStatus.COMPLETED
     run.status_detail = f"Staged {staged} finding{plural}."
     run.completed_at = now
-    run.save(update_fields=["status", "status_detail", "completed_at", "updated_at"])
+    run.usage = hermes.fetch_usage(hermes_run_id)
+    run.save(
+        update_fields=["status", "status_detail", "completed_at", "usage", "updated_at"]
+    )
     run.session.last_run_at = now
     run.session.save(update_fields=["last_run_at", "updated_at"])
 
@@ -265,7 +268,10 @@ def run_critic_job(run_id, item_id):
     run.status = AgentRunStatus.COMPLETED
     run.status_detail = detail
     run.completed_at = now
-    run.save(update_fields=["status", "status_detail", "completed_at", "updated_at"])
+    run.usage = hermes.fetch_usage(hermes_run_id)
+    run.save(
+        update_fields=["status", "status_detail", "completed_at", "usage", "updated_at"]
+    )
 
 
 @job("default")
@@ -335,4 +341,7 @@ def run_artifact_job(run_id):
         f"Generated {created} artifact{plural}." if created else "No artifact produced."
     )
     run.completed_at = now
-    run.save(update_fields=["status", "status_detail", "completed_at", "updated_at"])
+    run.usage = hermes.fetch_usage(hermes_run_id)
+    run.save(
+        update_fields=["status", "status_detail", "completed_at", "usage", "updated_at"]
+    )

@@ -249,7 +249,8 @@ class ResearchChatView(APIView):
             )
             run.status = AgentRunStatus.COMPLETED
             run.completed_at = timezone.now()
-            run.save(update_fields=["status", "completed_at", "updated_at"])
+            run.usage = hermes.fetch_usage(hermes_run_id)
+            run.save(update_fields=["status", "completed_at", "usage", "updated_at"])
             session.last_run_at = timezone.now()
             session.save(update_fields=["last_run_at", "updated_at"])
             yield _sse(
