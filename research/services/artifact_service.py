@@ -110,10 +110,11 @@ def build_artifact_instructions(soul_content, artifact_type=""):
         "You are the Presentation Assistant. The scholar describes what they "
         "want in plain language — infer the most fitting structure, content "
         "and emphasis from their words and the project's approved knowledge; "
-        "never require specifications or ask follow-up questions. If the "
-        "request offers nothing to infer even with the project context (e.g. "
-        'just "generate an artifact" with no subject), return '
-        '{"artifacts": []} rather than inventing content. '
+        "never require specifications or ask follow-up questions. Everything "
+        "you produce must be about THIS project (its research question and "
+        "approved knowledge). If the request names no subject and the project "
+        'context gives you nothing concrete, return {"artifacts": []} — never '
+        "invent content unrelated to the project. "
         + want
         + "\n\nReturn ONLY a single JSON object — no prose, no markdown fences — "
         'shaped exactly: {"artifacts": [{"type": "...", "title": "...", '

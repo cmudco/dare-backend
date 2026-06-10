@@ -43,7 +43,12 @@ from research.models import (
     SoulFileVersion,
 )
 from research.services import get_hermes_service
-from research.tasks import run_artifact_job, run_critic_job, run_scout_job
+from research.tasks import (
+    _knowledge_block,
+    run_artifact_job,
+    run_critic_job,
+    run_scout_job,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +111,21 @@ CHAT_BRIEF = (
     "tab, which generates and saves artifacts properly — do not paste large "
     "artifact payloads into the chat."
 )
+
+
+def _chat_instructions(project, soul_content):
+    """Soul + chat framing + the project's context (question, approved record)."""
+    parts = [soul_content] if soul_content else []
+    parts.append(CHAT_BRIEF)
+    context = []
+    if project.question:
+        context.append(f"The project's research question: {project.question}")
+    knowledge = _knowledge_block(project)
+    if knowledge:
+        context.append(f"The scholar's approved project knowledge so far:\n{knowledge}")
+    if context:
+        parts.append("# Project context\n" + "\n\n".join(context))
+    return "\n\n".join(parts)
 
 
 class ResearchChatView(APIView):
@@ -180,9 +200,7 @@ class ResearchChatView(APIView):
         try:
             started = hermes.start_run(
                 input_text=message,
-                instructions=(
-                    f"{soul_content}\n\n{CHAT_BRIEF}" if soul_content else CHAT_BRIEF
-                ),
+                instructions=_chat_instructions(project, soul_content),
                 session_id=session.hermes_session_id,
                 session_key=f"dare-proj{project.id}",
             )

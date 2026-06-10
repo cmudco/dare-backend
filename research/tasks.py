@@ -486,6 +486,8 @@ def run_artifact_job(run_id):
     hermes.provision_soul(soul_content)
 
     artifact_input = run.task
+    if run.project.question:
+        artifact_input += f"\n\nThe project's research question: {run.project.question}"
     knowledge = _knowledge_block(run.project)
     if knowledge:
         artifact_input += (
