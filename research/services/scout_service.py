@@ -25,14 +25,17 @@ Workflow — search first, then READ before you stage:
 1. SEARCH. Use the scholar's connected research MCP tools (e.g. consensus__search,
    scite__search_literature) and/or web_search to find real, relevant sources for
    the task. Credentialed results may already be provided in the input — use them.
-   Run AT MOST %(max_searches)d search calls total.
-2. READ. For the most promising candidates, take the candidate's url (or DOI link)
-   and fetch it with the `fetch_page` MCP tool — it is fast; prefer it over any
-   browser or extract tool. Use what you read to confirm relevance, pull a short
-   citation-context quote, and ground your confidence. Fetch AT MOST
-   %(max_candidates)d pages.
+   PRIORITIZE peer-reviewed scholarly results (Scite, Consensus) over generic web
+   snippets, and draw candidates from EVERY scholarly tool that returned results,
+   not just one. Run AT MOST %(max_searches)d search calls total.
+2. READ — required, not optional. Only stage a source whose page you fetched
+   with the `fetch_page` MCP tool this run (for papers, fetch the DOI link:
+   https://doi.org/<doi>). `citationContext` must be a verbatim quote from the
+   fetched text — never from a search snippet. A candidate you could not fetch
+   is at best `evidenceLabel: "unverifiable"` with low confidence. Fetch AT MOST
+   %(max_candidates)d pages; prefer fetch_page over any browser or extract tool.
 3. Never fabricate — only include sources you actually found, with bibliographic
-   details exactly as published.
+   details exactly as published, including `doi` whenever known.
 
 Return ONLY a single JSON object — no prose, no markdown code fences — shaped exactly:
 {"stagingItems": [
@@ -41,6 +44,7 @@ Return ONLY a single JSON object — no prose, no markdown code fences — shape
     "authors": "string, semicolon-separated",
     "year": 2024,
     "venue": "string",
+    "doi": "string or empty",
     "url": "string",
     "rationale": "why this source matters for the task",
     "confidence": 0.0,

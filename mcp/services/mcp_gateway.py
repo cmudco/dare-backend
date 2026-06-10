@@ -88,6 +88,46 @@ def _result_text(result):
     return str(result)
 
 
+def _compact_scholarly_hits(text):
+    """
+    Compact a scholarly search result (Scite-style JSON with `hits`) into one
+    line per paper — title, authors, year, venue, DOI, citation tallies. The
+    raw JSON buries ~1 paper in bloat per 4k chars; compacted, ten papers (with
+    their DOIs, ready to fetch) fit in the same space. Returns None when the
+    text isn't that shape.
+    """
+    try:
+        data = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    hits = data.get("hits") if isinstance(data, dict) else None
+    if not isinstance(hits, list) or not hits:
+        return None
+    lines = []
+    for hit in hits:
+        if not isinstance(hit, dict):
+            continue
+        authors = hit.get("authors") or []
+        names = "; ".join(
+            a.get("authorName", "") for a in authors[:3] if isinstance(a, dict)
+        )
+        tally = hit.get("tally") or {}
+        cites = (
+            f" | citations: {tally.get('supporting', 0)} supporting / "
+            f"{tally.get('contrasting', 0)} contrasting"
+            if tally
+            else ""
+        )
+        doi = hit.get("doi") or ""
+        lines.append(
+            f"- {hit.get('title', '?')} ({names}, {hit.get('year', '?')}) "
+            f"| {hit.get('journal', '?')}"
+            + (f" | DOI: {doi} -> https://doi.org/{doi}" if doi else "")
+            + cites
+        )
+    return "\n".join(lines) if lines else None
+
+
 # Common names for a tool's free-text search parameter, in preference order.
 _QUERY_PARAM_NAMES = ("query", "term", "q", "search", "keywords", "question")
 
@@ -168,8 +208,14 @@ def gather_tool_results(user, slugs, query, per_tool_chars=4000):
                 {"slug": slug, "tool": tool_name, "text": "", "error": text or "Tool error"}
             )
         elif text:
+            compact = _compact_scholarly_hits(text)
             results.append(
-                {"slug": slug, "tool": tool_name, "text": text[:per_tool_chars], "error": ""}
+                {
+                    "slug": slug,
+                    "tool": tool_name,
+                    "text": (compact or text)[:per_tool_chars],
+                    "error": "",
+                }
             )
     return results
 

@@ -210,7 +210,9 @@ def run_scout_job(run_id):
                 if r["error"]
                 else AgentToolCallStatus.SUCCESS
             ),
-            result_summary=(r["error"] or r["text"])[:500],
+            # Full text (gather already caps it) — the Runs view lets the
+            # scholar expand a call to inspect exactly what came back.
+            result_summary=r["error"] or r["text"],
             error=r["error"],
         )
     mcp_context = "\n\n".join(
