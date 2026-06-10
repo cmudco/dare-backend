@@ -21,6 +21,7 @@ _TYPE_BRIEF = {
     "html": "a self-contained HTML page (content = the full HTML)",
     "excalidraw": 'an Excalidraw scene (content = the scene JSON string, {"type":"excalidraw","version":2,"elements":[…]})',
     "code": "a code snippet (content = the code)",
+    "document": "a written document (content = GitHub-flavored Markdown)",
 }
 
 
@@ -38,7 +39,7 @@ def build_artifact_instructions(soul_content, artifact_type=""):
     else:
         want = (
             'Produce the most fitting renderable artifact; set "type" to one of '
-            "diagram (Mermaid), svg, or html."
+            "diagram (Mermaid), svg, html, or document (Markdown)."
         )
 
     parts.append(
