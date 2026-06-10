@@ -155,17 +155,56 @@ def _query_param(tool):
     return string_props[0] if string_props else None
 
 
+def _search_with_primary_tool(user, conn, query, per_tool_chars):
+    """
+    Run one connection's primary (first cached) tool with the query. Returns a
+    `{"slug", "tool", "text", "raw", "error"}` result — `text` is the prompt
+    injection (compacted for scholarly results, capped), `raw` the complete
+    untrimmed response for the audit record — or None if the connection has no
+    usable search tool. MCP tool failures (`isError`) come back as `error`, not
+    text: an error payload must never be injected as evidence.
+    """
+    slug = conn.server.slug
+    tools = conn.cached_tools or []
+    tool = tools[0] if tools else None
+    tool_name = tool.get("name") if tool else None
+    param = _query_param(tool) if tool_name else None
+    if not param:
+        logger.warning("gather_tool_results: %s has no usable search tool", slug)
+        return None
+
+    def entry(text="", raw="", error=""):
+        return {
+            "slug": slug,
+            "tool": tool_name,
+            "text": text,
+            "raw": raw,
+            "error": error,
+        }
+
+    try:
+        result = async_to_sync(mcp_tool_executor.execute_tool_call)(
+            user, slug, tool_name, {param: query}
+        )
+    except Exception as exc:  # noqa: BLE001 - audit the failure
+        logger.warning("gather_tool_results %s.%s failed: %s", slug, tool_name, exc)
+        return entry(error=str(exc)[:500])
+
+    text = _result_text(result).strip()
+    if isinstance(result, dict) and result.get("isError"):
+        return entry(error=text or "Tool error")
+    if not text:
+        return None
+    compact = _compact_scholarly_hits(text)
+    return entry(text=(compact or text)[:per_tool_chars], raw=text)
+
+
 def gather_tool_results(user, slugs, query, per_tool_chars=4000):
     """
-    Run the primary tool of each of the user's connected servers whose slug is in
-    `slugs`, with {query} — so a delegated run (Scout) can draw on credentialed
-    tools (Consensus, Scite, …) that DARE executes on its behalf. Returns
-    [{"slug", "tool", "text", "raw", "error"}, ...]: `text` is what gets
-    injected into the run (compacted for scholarly results, capped for token
-    control); `raw` is the tool's complete, untrimmed response for the audit
-    record. Failed calls come back with `error` set (and empty text) so callers
-    can audit them honestly instead of treating an error payload as a result.
-    Synchronous (for jobs). Credentials and audit stay in DARE.
+    Run the primary tool of each of the user's connected servers whose slug is
+    in `slugs` with the query — so a delegated run (Scout) can draw on
+    credentialed tools (Consensus, Scite, …) that DARE executes on its behalf.
+    Synchronous (for jobs); credentials and audit stay in DARE.
     """
     wanted = {s.lower() for s in (slugs or [])}
     if not wanted:
@@ -175,57 +214,11 @@ def gather_tool_results(user, slugs, query, per_tool_chars=4000):
     ).select_related("server")
     results = []
     for conn in connections:
-        slug = conn.server.slug
-        if slug.lower() not in wanted:
+        if conn.server.slug.lower() not in wanted:
             continue
-        tools = conn.cached_tools or []
-        tool = tools[0] if tools else None
-        tool_name = tool.get("name") if tool else None
-        if not tool_name:
-            continue
-        param = _query_param(tool)
-        if not param:
-            logger.warning(
-                "gather_tool_results: %s.%s has no string param for a query; skipped",
-                slug,
-                tool_name,
-            )
-            continue
-        try:
-            result = async_to_sync(mcp_tool_executor.execute_tool_call)(
-                user, slug, tool_name, {param: query}
-            )
-        except Exception as exc:  # noqa: BLE001 - audit the failure
-            logger.warning("gather_tool_results %s.%s failed: %s", slug, tool_name, exc)
-            results.append(
-                {"slug": slug, "tool": tool_name, "text": "", "error": str(exc)[:500]}
-            )
-            continue
-        text = _result_text(result).strip()
-        # MCP marks tool failures with isError + an error message as content
-        # (e.g. "API request failed with status 500") — that is an error, not
-        # a result, and must never be injected as evidence.
-        if isinstance(result, dict) and result.get("isError"):
-            results.append(
-                {
-                    "slug": slug,
-                    "tool": tool_name,
-                    "text": "",
-                    "raw": "",
-                    "error": text or "Tool error",
-                }
-            )
-        elif text:
-            compact = _compact_scholarly_hits(text)
-            results.append(
-                {
-                    "slug": slug,
-                    "tool": tool_name,
-                    "text": (compact or text)[:per_tool_chars],
-                    "raw": text,
-                    "error": "",
-                }
-            )
+        entry = _search_with_primary_tool(user, conn, query, per_tool_chars)
+        if entry:
+            results.append(entry)
     return results
 
 
@@ -246,6 +239,37 @@ def _error(rpc_id, code, message):
     return {"jsonrpc": "2.0", "id": rpc_id, "error": {"code": code, "message": message}}
 
 
+def _handle_tool_call(user, rpc_id, params):
+    """Route one tools/call to a gateway builtin or the user's tool executor."""
+    name = params.get("name", "")
+    arguments = params.get("arguments") or {}
+
+    if name in _BUILTIN_HANDLERS:
+        try:
+            text = _BUILTIN_HANDLERS[name](user, arguments)
+        except Exception as exc:  # noqa: BLE001 - surface as a tool error
+            logger.warning("MCP gateway builtin %s failed: %s", name, exc)
+            return _error(rpc_id, -32000, str(exc))
+        return _result(rpc_id, {"content": [{"type": "text", "text": text}]})
+
+    if _SEP not in name:
+        return _error(rpc_id, -32602, f"Unknown tool: {name!r}")
+    server_slug, tool_name = name.split(_SEP, 1)
+    try:
+        result = async_to_sync(mcp_tool_executor.execute_tool_call)(
+            user, server_slug, tool_name, arguments
+        )
+    except Exception as exc:  # noqa: BLE001 - surface as a tool error
+        logger.warning("MCP gateway tool %s failed: %s", name, exc)
+        return _error(rpc_id, -32000, str(exc))
+
+    # The executor returns the tool result; normalise to MCP content.
+    if isinstance(result, dict) and "content" in result:
+        return _result(rpc_id, result)
+    text = result if isinstance(result, str) else json.dumps(result)
+    return _result(rpc_id, {"content": [{"type": "text", "text": text}]})
+
+
 def handle_jsonrpc(user, payload):
     """
     Handle one MCP JSON-RPC message. Returns the response dict, or None for
@@ -263,40 +287,11 @@ def handle_jsonrpc(user, payload):
                 "serverInfo": {"name": "dare-mcp-gateway", "version": "1.0.0"},
             },
         )
-
     # Notifications (no id) — acknowledge with no body.
     if rpc_id is None or method == "notifications/initialized":
         return None
-
     if method == "tools/list":
         return _result(rpc_id, {"tools": list_user_tools(user)})
-
     if method == "tools/call":
-        params = payload.get("params") or {}
-        name = params.get("name", "")
-        arguments = params.get("arguments") or {}
-        if name in _BUILTIN_HANDLERS:
-            try:
-                text = _BUILTIN_HANDLERS[name](user, arguments)
-            except Exception as exc:  # noqa: BLE001 - surface as a tool error
-                logger.warning("MCP gateway builtin %s failed: %s", name, exc)
-                return _error(rpc_id, -32000, str(exc))
-            return _result(rpc_id, {"content": [{"type": "text", "text": text}]})
-        if _SEP not in name:
-            return _error(rpc_id, -32602, f"Unknown tool: {name!r}")
-        server_slug, tool_name = name.split(_SEP, 1)
-        try:
-            result = async_to_sync(mcp_tool_executor.execute_tool_call)(
-                user, server_slug, tool_name, arguments
-            )
-        except Exception as exc:  # noqa: BLE001 - surface as a tool error
-            logger.warning("MCP gateway tool %s failed: %s", name, exc)
-            return _error(rpc_id, -32000, str(exc))
-
-        # The executor returns the tool result; normalise to MCP content.
-        if isinstance(result, dict) and "content" in result:
-            return _result(rpc_id, result)
-        text = result if isinstance(result, str) else json.dumps(result)
-        return _result(rpc_id, {"content": [{"type": "text", "text": text}]})
-
+        return _handle_tool_call(user, rpc_id, payload.get("params") or {})
     return _error(rpc_id, -32601, f"Method not found: {method}")
