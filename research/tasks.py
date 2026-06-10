@@ -95,7 +95,8 @@ def _knowledge_block(project, per_item_chars=300, max_items=12):
 
 # Hard per-run budget: a delegated run that exceeds either bound is stopped,
 # not left to burn tokens. (Hermes-side agent.max_turns caps the loop too.)
-MAX_RUN_TOOL_CALLS = 15
+# Sized to fit a full deep Scout (up to 5 searches + 10 reads) with headroom.
+MAX_RUN_TOOL_CALLS = 18
 MAX_RUN_SECONDS = 480
 
 
@@ -251,7 +252,9 @@ def run_scout_job(run_id):
             input_text=scout_input,
             instructions=build_scout_instructions(
                 soul_content,
-                max_candidates=3 if quick else 6,
+                # Upper bounds, not targets — the brief says stage what the
+                # evidence justifies; 1 great source or 10 are both fine.
+                max_candidates=3 if quick else 10,
                 max_searches=2 if quick else 5,
             ),
             session_id=session_id,
