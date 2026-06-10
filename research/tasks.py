@@ -21,6 +21,7 @@ from research.models import (
     ResearchAgentRun,
     ResearchAgentToolCall,
     ResearchArtifact,
+    ResearchKnowledgeItem,
     ResearchStagingItem,
     SoulFile,
 )
@@ -58,6 +59,37 @@ def _fail(run, detail, exc):
 def _session_key(project):
     """The workspace's stable Hermes memory scope (X-Hermes-Session-Key)."""
     return f"dare-proj{project.id}"
+
+
+def _run_session_id(run):
+    """
+    A fresh Hermes session per delegated run. Delegated runs are standalone
+    tasks: sharing one session made every run replay the mode's whole history
+    (including failed attempts) on every loop turn — the main token inflater.
+    Cross-run recall survives via Hermes's session summaries + search, and
+    long-term memory is scoped by the session KEY, not the session id.
+    """
+    return f"{run.session.hermes_session_id}-r{run.id}"
+
+
+def _knowledge_block(project, per_item_chars=300, max_items=12):
+    """
+    The scholar's approved durable knowledge, compact, for injection into a
+    delegated run — so Scout builds on (not re-finds) the approved record and
+    the Presenter grounds artifacts in it.
+    """
+    items = ResearchKnowledgeItem.active_objects.filter(project=project).select_related(
+        "source_staging_item"
+    )[:max_items]
+    lines = []
+    for k in items:
+        src = k.source_staging_item
+        cite = (
+            f"{src.title} ({src.authors}, {src.year})" if src else "Scholar note"
+        )
+        body = (k.content or k.rationale or "").strip()[:per_item_chars]
+        lines.append(f"- {cite}: {body}")
+    return "\n".join(lines)
 
 
 def _hermes_run_failed(hermes, hermes_run_id, chunks):
@@ -164,7 +196,16 @@ def run_scout_job(run_id):
             f"web_search:\n\n{mcp_context}"
         )
 
+    knowledge = _knowledge_block(project)
+    if knowledge:
+        scout_input += (
+            "\n\nThe scholar's approved project knowledge so far — do NOT "
+            "re-stage these sources; find new or complementary evidence that "
+            f"builds on them:\n{knowledge}"
+        )
+
     _set_status(run, "Starting Scout…")
+    session_id = _run_session_id(run)
     # Quick runs halve the search/read budget — the main token-cost lever
     # (each fetched page adds thousands of input tokens to the run).
     quick = (run.selected_context or {}).get("depth") == "quick"
@@ -176,7 +217,7 @@ def run_scout_job(run_id):
                 max_candidates=2 if quick else 4,
                 max_searches=2 if quick else 4,
             ),
-            session_id=run.session.hermes_session_id,
+            session_id=session_id,
             session_key=_session_key(project),
         )
         hermes_run_id = started["run_id"]
@@ -235,7 +276,7 @@ def run_scout_job(run_id):
         items = parse_staging_items(
             _reask_json(
                 hermes,
-                run.session.hermes_session_id,
+                session_id,
                 'the {"stagingItems": [...]} object from your instructions',
             )
         )
@@ -305,11 +346,12 @@ def run_critic_job(run_id, item_id):
     hermes.provision_soul(soul_content)
 
     _set_status(run, "Reading the source…")
+    session_id = _run_session_id(run)
     try:
         started = hermes.start_run(
             input_text=critic_input(item),
             instructions=build_critic_instructions(soul_content),
-            session_id=run.session.hermes_session_id,
+            session_id=session_id,
             session_key=_session_key(item.project),
         )
         hermes_run_id = started["run_id"]
@@ -362,7 +404,7 @@ def run_critic_job(run_id, item_id):
         verdict = parse_critic_verdict(
             _reask_json(
                 hermes,
-                run.session.hermes_session_id,
+                session_id,
                 'the {"verdict": ..., "reasoning": ..., "concerns": [...]} '
                 "object from your instructions",
             )
@@ -404,12 +446,21 @@ def run_artifact_job(run_id):
     hermes = get_hermes_service()
     hermes.provision_soul(soul_content)
 
+    artifact_input = run.task
+    knowledge = _knowledge_block(project)
+    if knowledge:
+        artifact_input += (
+            "\n\nGround the artifact in the scholar's approved project "
+            f"knowledge:\n{knowledge}"
+        )
+
     _set_status(run, "Generating artifact…")
+    session_id = _run_session_id(run)
     try:
         started = hermes.start_run(
-            input_text=run.task,
+            input_text=artifact_input,
             instructions=build_artifact_instructions(soul_content, artifact_type),
-            session_id=run.session.hermes_session_id,
+            session_id=session_id,
             session_key=_session_key(project),
         )
         hermes_run_id = started["run_id"]
@@ -450,9 +501,7 @@ def run_artifact_job(run_id):
             expectation += ". Fix these specific problems: " + "; ".join(
                 problems[:5]
             )
-        artifacts = parse_artifacts(
-            _reask_json(hermes, run.session.hermes_session_id, expectation)
-        )
+        artifacts = parse_artifacts(_reask_json(hermes, session_id, expectation))
     created = 0
     for art in artifacts:
         try:
