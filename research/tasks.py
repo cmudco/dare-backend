@@ -272,13 +272,17 @@ def run_scout_job(run_id):
     chunks = []
     searches = 0
     last_preview = ""
+    stopped_early = ""
     budget = _RunBudget()
     try:
         for event in hermes.stream_events(hermes_run_id):
             over = budget.exceeded()
             if over:
-                _stop_over_budget(hermes, hermes_run_id, run, over)
-                return
+                # Stop the burn, but salvage: whatever the agent compiled so
+                # far still gets parsed and staged below.
+                stopped_early = over
+                hermes.stop_run(hermes_run_id)
+                break
             etype = event.get("event")
             if etype == "message.delta":
                 chunks.append(event.get("delta", ""))
@@ -318,7 +322,7 @@ def run_scout_job(run_id):
     _set_status(run, "Evaluating findings…")
     output = "".join(chunks)
     items = parse_staging_items(output)
-    if not items and output.strip():
+    if not items and output.strip() and not stopped_early:
         _set_status(run, "Repairing the result format…")
         items = parse_staging_items(
             _reask_json(
@@ -366,7 +370,24 @@ def run_scout_job(run_id):
 
     plural = "s" if staged != 1 else ""
     run.status = AgentRunStatus.COMPLETED
-    run.status_detail = f"Staged {staged} finding{plural}."
+    if stopped_early:
+        run.status_detail = (
+            f"Stopped at the run budget ({stopped_early}) — "
+            f"staged {staged} finding{plural} from what was gathered."
+        )
+        if not staged:
+            run.status = AgentRunStatus.FAILED
+    elif staged == 0:
+        # Surface what the agent actually said — a vague ask ("hello") or a
+        # deliberate no-result should be readable on the run card, not opaque.
+        snippet = " ".join(output.split())[:150]
+        run.status_detail = (
+            f"Staged 0 findings — agent replied: “{snippet}…”"
+            if snippet
+            else "Staged 0 findings."
+        )
+    else:
+        run.status_detail = f"Staged {staged} finding{plural}."
     run.completed_at = now
     run.usage = hermes.fetch_usage(hermes_run_id)
     run.save(

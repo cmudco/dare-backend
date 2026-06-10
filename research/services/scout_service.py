@@ -82,10 +82,36 @@ def build_scout_instructions(
     return "\n\n".join(parts)
 
 
+def find_json_object(text, required_key=None):
+    """
+    Scan for the first complete JSON object in `text` (optionally one that has
+    `required_key`), tolerating prose around it AND trailing garbage after it —
+    models sometimes echo the contract template after the real object, which
+    breaks whole-string parsing and any greedy first-{-to-last-} match.
+    """
+    decoder = json.JSONDecoder()
+    index = text.find("{")
+    fallback = None
+    while index != -1:
+        try:
+            obj, _ = decoder.raw_decode(text, index)
+        except json.JSONDecodeError:
+            index = text.find("{", index + 1)
+            continue
+        if isinstance(obj, dict):
+            if required_key is None or required_key in obj:
+                return obj
+            if fallback is None:
+                fallback = obj
+        index = text.find("{", index + 1)
+    return fallback
+
+
 def parse_staging_items(output):
     """
-    Extract the `stagingItems` array from Scout's output, tolerating stray prose
-    or markdown fences. Returns a list of dicts (empty if nothing parseable).
+    Extract the `stagingItems` array from Scout's output, tolerating stray prose,
+    markdown fences, and trailing junk. Returns a list of dicts (empty if
+    nothing parseable).
     """
     if not output:
         return []
@@ -94,19 +120,9 @@ def parse_staging_items(output):
         text = re.sub(r"^```(?:json)?", "", text).strip()
         text = re.sub(r"```$", "", text).strip()
 
-    data = None
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", text, re.DOTALL)
-        if match:
-            try:
-                data = json.loads(match.group(0))
-            except json.JSONDecodeError:
-                logger.warning("Scout output was not JSON-parseable")
-                return []
-
+    data = find_json_object(text, required_key="stagingItems")
     if not isinstance(data, dict):
+        logger.warning("Scout output was not JSON-parseable")
         return []
     items = data.get("stagingItems", [])
     return [i for i in items if isinstance(i, dict)] if isinstance(items, list) else []

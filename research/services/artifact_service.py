@@ -19,6 +19,8 @@ from dare_tools.services.registry import (
     get_create_docx_tool_openai,
 )
 
+from research.services.scout_service import find_json_object
+
 logger = logging.getLogger(__name__)
 
 # Renderable artifact types the FE registry understands.
@@ -153,9 +155,8 @@ def parse_artifacts(output, errors=None):
         errors = []
     if not output:
         return []
-    try:
-        data = json.loads(_strip_code_fence(output))
-    except json.JSONDecodeError:
+    data = find_json_object(_strip_code_fence(output), required_key="artifacts")
+    if not isinstance(data, dict):
         logger.warning("Artifact output was not valid JSON")
         errors.append("the reply was not a single valid JSON object")
         return []

@@ -11,6 +11,8 @@ import json
 import logging
 import re
 
+from research.services.scout_service import find_json_object
+
 logger = logging.getLogger(__name__)
 
 CRITIC_BRIEF = """You are Critic, working under the scholar's standards above.
@@ -65,19 +67,9 @@ def parse_critic_verdict(output):
         text = re.sub(r"^```(?:json)?", "", text).strip()
         text = re.sub(r"```$", "", text).strip()
 
-    data = None
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", text, re.DOTALL)
-        if match:
-            try:
-                data = json.loads(match.group(0))
-            except json.JSONDecodeError:
-                logger.warning("Critic output was not JSON-parseable")
-                return None
-
+    data = find_json_object(text, required_key="verdict")
     if not isinstance(data, dict):
+        logger.warning("Critic output was not JSON-parseable")
         return None
     verdict = str(data.get("verdict") or "").strip().lower()
     concerns = data.get("concerns")
