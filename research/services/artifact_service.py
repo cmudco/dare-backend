@@ -18,7 +18,6 @@ from dare_tools.services.registry import (
     execute_create_docx,
     get_create_docx_tool_openai,
 )
-
 from research.services.scout_service import find_json_object
 
 logger = logging.getLogger(__name__)

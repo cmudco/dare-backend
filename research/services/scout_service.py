@@ -67,8 +67,7 @@ def build_scout_instructions(
     if soul_content and soul_content.strip():
         parts.append("# Research standards (soul file)\n" + soul_content.strip())
     parts.append(
-        SCOUT_BRIEF
-        % {"max_candidates": max_candidates, "max_searches": max_searches}
+        SCOUT_BRIEF % {"max_candidates": max_candidates, "max_searches": max_searches}
     )
     if allowed_tools:
         # Prompt-level scoping: the gateway still exposes the scholar's whole

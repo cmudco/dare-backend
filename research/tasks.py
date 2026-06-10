@@ -13,11 +13,8 @@ import time
 from django.utils import timezone
 from django_rq import job
 
-from research.constants import (
-    AgentRunStatus,
-    AgentToolCallStatus,
-    StagingItemStatus,
-)
+from mcp.services.mcp_gateway import gather_tool_results
+from research.constants import AgentRunStatus, AgentToolCallStatus, StagingItemStatus
 from research.models import (
     ResearchAgentRun,
     ResearchAgentToolCall,
@@ -36,7 +33,6 @@ from research.services import (
     parse_critic_verdict,
     parse_staging_items,
 )
-from mcp.services.mcp_gateway import gather_tool_results
 
 logger = logging.getLogger(__name__)
 
@@ -85,9 +81,7 @@ def _knowledge_block(project, per_item_chars=300, max_items=12):
     lines = []
     for k in items:
         src = k.source_staging_item
-        cite = (
-            f"{src.title} ({src.authors}, {src.year})" if src else "Scholar note"
-        )
+        cite = f"{src.title} ({src.authors}, {src.year})" if src else "Scholar note"
         body = (k.content or k.rationale or "").strip()[:per_item_chars]
         lines.append(f"- {cite}: {body}")
     return "\n".join(lines)
@@ -209,9 +203,7 @@ def run_scout_job(run_id):
             tool=f"{r['slug']}__{r['tool']}",
             arguments={"query": task},
             status=(
-                AgentToolCallStatus.ERROR
-                if r["error"]
-                else AgentToolCallStatus.SUCCESS
+                AgentToolCallStatus.ERROR if r["error"] else AgentToolCallStatus.SUCCESS
             ),
             # The tool's complete raw response — never trimmed. The Runs view
             # lets the scholar expand a call and audit exactly what came back;
@@ -583,9 +575,7 @@ def run_artifact_job(run_id):
             "object from your instructions"
         )
         if problems:
-            expectation += ". Fix these specific problems: " + "; ".join(
-                problems[:5]
-            )
+            expectation += ". Fix these specific problems: " + "; ".join(problems[:5])
         artifacts = parse_artifacts(_reask_json(hermes, session_id, expectation))
     created = 0
     for art in artifacts:

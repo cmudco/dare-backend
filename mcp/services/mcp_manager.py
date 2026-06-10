@@ -14,19 +14,18 @@ import time
 from typing import Optional
 
 import redis
+from channels.db import database_sync_to_async
 from django.conf import settings
 from django.utils import timezone
 
-from channels.db import database_sync_to_async
-
 from mcp.constants import (
-    TOOL_CACHE_KEY_PREFIX,
-    TOOL_CACHE_TTL,
-    MCP_SUBPROCESS_TIMEOUT,
     MCP_REMOTE_REQUEST_TIMEOUT,
     MCP_REMOTE_TOOL_CALL_TIMEOUT,
-    ExecutionStatus,
+    MCP_SUBPROCESS_TIMEOUT,
     MCP_USE_DOCKER,
+    TOOL_CACHE_KEY_PREFIX,
+    TOOL_CACHE_TTL,
+    ExecutionStatus,
     MCPTransport,
 )
 from mcp.models import MCPToolExecution, UserMCPConnection
@@ -40,19 +39,20 @@ logger = logging.getLogger(__name__)
 
 class MCPManagerError(Exception):
     """Base exception for MCP manager errors."""
+
     pass
 
 
 class MCPManager:
     """
     Manages MCP server subprocesses and tool execution.
-    
+
     Responsibilities:
     - Spawn/manage subprocess lifecycle
-    - Handle JSON-RPC communication (stdin/stdout)  
+    - Handle JSON-RPC communication (stdin/stdout)
     - Discover tools via tools/list with Redis caching
     - Execute tools via tools/call with audit logging
-    
+
     Usage:
         manager = MCPManager()
         tools = await manager.get_available_tools(server, credentials)
@@ -72,20 +72,20 @@ class MCPManager:
                 port=settings.REDIS_PORT,
                 db=settings.REDIS_DB,
                 password=settings.REDIS_PASSWORD or None,
-                decode_responses=True
+                decode_responses=True,
             )
         return self._redis
 
     async def get_available_tools(self, server, credentials: dict) -> list[dict]:
         """
         Get available tools for an MCP server.
-        
+
         Checks Redis cache first, spawns subprocess to discover if cache miss.
-        
+
         Args:
             server: MCPServer instance
             credentials: Decrypted credentials dict for env vars
-        
+
         Returns:
             List of tool definitions
         """
@@ -114,32 +114,28 @@ class MCPManager:
             except redis.RedisError as e:
                 logger.warning(f"Redis error caching tools: {e}")
         else:
-            logger.warning(f"Tool discovery for {server.slug} returned no tools; not caching")
+            logger.warning(
+                f"Tool discovery for {server.slug} returned no tools; not caching"
+            )
 
         return tools
 
     async def call_tool(
-        self,
-        user,
-        server,
-        tool_name: str,
-        arguments: dict,
-        credentials: dict
+        self, user, server, tool_name: str, arguments: dict, credentials: dict
     ) -> dict:
         """
         Execute a tool and log the execution.
-        
+
         Args:
             user: User instance
             server: MCPServer instance
             tool_name: Name of tool to call
             arguments: Tool arguments
             credentials: Decrypted credentials dict
-        
+
         Returns:
             Tool execution result
         """
-
 
         start_time = time.time()
         status = ExecutionStatus.PENDING
@@ -175,7 +171,7 @@ class MCPManager:
                 status=status,
                 result=result,
                 error_message=error_message,
-                execution_time_ms=execution_time_ms
+                execution_time_ms=execution_time_ms,
             )
 
             # Update last_used_at on connection
@@ -193,7 +189,7 @@ class MCPManager:
     async def invalidate_tools_cache(self, server_slug: str):
         """
         Invalidate cached tools for a server.
-        
+
         Called when admin updates MCPServer configuration.
         """
         cache_key = f"{TOOL_CACHE_KEY_PREFIX}{server_slug}"
@@ -206,11 +202,11 @@ class MCPManager:
     async def test_connection(self, server, credentials: dict) -> tuple[bool, str]:
         """
         Test that credentials work by initializing connection.
-        
+
         Args:
             server: MCPServer instance
             credentials: Decrypted credentials dict
-        
+
         Returns:
             Tuple of (success, message)
         """
@@ -288,49 +284,52 @@ class MCPManager:
         )
         return f"{TOOL_CACHE_KEY_PREFIX}{server.slug}:{token_hash}"
 
-    async def _spawn_subprocess(self, server, credentials: dict) -> asyncio.subprocess.Process:
+    async def _spawn_subprocess(
+        self, server, credentials: dict
+    ) -> asyncio.subprocess.Process:
         """
         Spawn MCP server subprocess with credentials as environment variables.
-        
+
         In Docker mode: runs `docker run -i --rm -e CREDS image`
         In dev mode: runs `npx -y package` (existing behavior)
-        
+
         Args:
             server: MCPServer instance with command and args
             credentials: Decrypted credentials to pass as env vars
-        
+
         Returns:
             asyncio subprocess with stdin/stdout pipes
         """
 
-        
         # Get extra env vars from server config
-        extra_vars = server.extra_env_vars if isinstance(server.extra_env_vars, dict) else {}
-        
+        extra_vars = (
+            server.extra_env_vars if isinstance(server.extra_env_vars, dict) else {}
+        )
+
         if MCP_USE_DOCKER:
             # Docker mode: run containerized MCP server
             if not server.docker_image:
                 raise MCPManagerError(f"No Docker image configured for {server.slug}")
             image = server.docker_image
-            
+
             # Build docker run command
             command = "docker"
             args = ["run", "-i", "--rm"]
-            
+
             # Pass credentials as -e flags (uppercase keys)
             for key, value in credentials.items():
                 args.extend(["-e", f"{key.upper()}={value}"])
-            
+
             # Pass extra env vars as -e flags
             for key, value in extra_vars.items():
                 args.extend(["-e", f"{key}={value}"])
-            
+
             # Add the image name
             args.append(image)
-            
+
             # Log without exposing credential values
             logger.debug(f"Spawning Docker MCP: docker run -i --rm [env vars] {image}")
-            
+
             # Docker mode doesn't need env passed to subprocess (uses -e flags)
             env = None
         else:
@@ -339,16 +338,16 @@ class MCPManager:
             env = os.environ.copy()
             for key, value in credentials.items():
                 env[key.upper()] = value
-            
+
             # Add server-configured extra env vars
             env.update(extra_vars)
-            
+
             # Get command and args from server config
             command = server.command
             args = server.args if isinstance(server.args, list) else []
-            
+
             logger.debug(f"Spawning MCP subprocess: {command} {' '.join(args)}")
-        
+
         try:
             process = await asyncio.create_subprocess_exec(
                 command,
@@ -356,7 +355,7 @@ class MCPManager:
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env=env
+                env=env,
             )
             return process
         except FileNotFoundError:
@@ -373,10 +372,9 @@ class MCPManager:
         status: str,
         result: Optional[dict],
         error_message: str,
-        execution_time_ms: int
+        execution_time_ms: int,
     ):
         """Create MCPToolExecution record asynchronously."""
-
 
         @database_sync_to_async
         def create_record():
@@ -388,7 +386,7 @@ class MCPManager:
                 status=status,
                 result=result,
                 error_message=error_message,
-                execution_time_ms=execution_time_ms
+                execution_time_ms=execution_time_ms,
             )
 
         return await create_record()
@@ -396,13 +394,11 @@ class MCPManager:
     async def _update_connection_last_used(self, user, server):
         """Update last_used_at on UserMCPConnection."""
 
-
         @database_sync_to_async
         def update_last_used():
-            UserMCPConnection.all_objects.filter(
-                user=user,
-                server=server
-            ).update(last_used_at=timezone.now())
+            UserMCPConnection.all_objects.filter(user=user, server=server).update(
+                last_used_at=timezone.now()
+            )
 
         await update_last_used()
 

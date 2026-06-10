@@ -112,9 +112,7 @@ def fetch_page(url):
     Given a URL, return clean readable text. Never raises — errors come back
     as a text message so the calling agent can react and move on.
     """
-    if not isinstance(url, str) or not url.lower().startswith(
-        ("http://", "https://")
-    ):
+    if not isinstance(url, str) or not url.lower().startswith(("http://", "https://")):
         return "Error: 'url' must be an http(s) URL."
 
     text = ""
