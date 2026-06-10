@@ -25,6 +25,9 @@ DEBUG = env.DEBUG == "True"
 
 ALLOWED_HOSTS = env.ALLOWED_HOSTS
 
+# Let the frontend read attachment filenames from cross-origin ZIP responses.
+CORS_EXPOSE_HEADERS = ["Content-Disposition"]
+
 # Internal API key for inter-service communication (SB backend -> DARE backend)
 DARE_INTERNAL_KEY = env.DARE_INTERNAL_KEY
 
@@ -63,6 +66,7 @@ LOCAL_APPS = [
     "mcp",
     "dare_tools",
     "memory",
+    "data_exports",
     "sharing",
     "feature_flags",
     "research",

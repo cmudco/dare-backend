@@ -14,14 +14,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.viewsets import ViewSet
 
+from memory.api import serializers as memory_serializers
 from memory.services import get_memu_service
-from memory.api.serializers import (
-    MemoryItemSerializer,
-    MemorySearchRequestSerializer,
-    MemorySearchResponseSerializer,
-    SeedResponseSerializer,
-    ClearResponseSerializer,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +29,7 @@ class MemoryViewSet(ViewSet):
     - Retrieving a single memory item
     - Deleting a memory item
     - Searching memories via vector similarity
+    - Importing memory items from user-provided JSON
     - Clearing all memories
     - Seeding demo data (development only)
     """
@@ -54,8 +49,8 @@ class MemoryViewSet(ViewSet):
         try:
             service = get_memu_service()
             items = async_to_sync(service.list_items)(self.get_user_id())
-            
-            serializer = MemoryItemSerializer(items, many=True)
+
+            serializer = memory_serializers.MemoryItemSerializer(items, many=True)
             return Response(serializer.data, status=status.HTTP_200_OK)
         except Exception as e:
             logger.error(f"Failed to list memory items: {e}")
@@ -80,7 +75,7 @@ class MemoryViewSet(ViewSet):
                     status=status.HTTP_404_NOT_FOUND,
                 )
 
-            serializer = MemoryItemSerializer(item)
+            serializer = memory_serializers.MemoryItemSerializer(item)
             return Response(serializer.data, status=status.HTTP_200_OK)
         except Exception as e:
             logger.error(f"Failed to retrieve memory item {pk}: {e}")
@@ -120,7 +115,7 @@ class MemoryViewSet(ViewSet):
         POST /api/memory/search/
         Body: {"query": "search text"}
         """
-        serializer = MemorySearchRequestSerializer(data=request.data)
+        serializer = memory_serializers.MemorySearchRequestSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(
                 serializer.errors,
@@ -138,13 +133,59 @@ class MemoryViewSet(ViewSet):
                 "items": results.get("items", []),
                 "categories": results.get("categories", []),
             }
-            
-            response_serializer = MemorySearchResponseSerializer(response_data)
+
+            response_serializer = memory_serializers.MemorySearchResponseSerializer(
+                response_data
+            )
             return Response(response_serializer.data, status=status.HTTP_200_OK)
         except Exception as e:
             logger.error(f"Failed to search memories: {e}")
             return Response(
                 {"error": "Failed to search memories"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    @action(detail=False, methods=["post"], url_path="import")
+    def import_memories(self, request):
+        """
+        Import user-provided memory items.
+
+        POST /api/memory/import/
+        Body: {"items": [{"memoryType": "profile", "content": "..."}]}
+        """
+        serializer = memory_serializers.MemoryImportRequestSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                serializer.errors,
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            service = get_memu_service()
+            items_created = 0
+            for item in serializer.validated_data["items"]:
+                memory_type = item.get("memory_type") or "profile"
+                categories = item.get("categories", [])
+                async_to_sync(service.create_item)(
+                    self.get_user_id(),
+                    memory_type,
+                    item["content"],
+                    categories,
+                )
+                items_created += 1
+
+            noun = "memory" if items_created == 1 else "memories"
+            response_serializer = memory_serializers.MemoryImportResponseSerializer(
+                {
+                    "items_created": items_created,
+                    "message": f"Imported {items_created} {noun}",
+                }
+            )
+            return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+        except Exception as e:
+            logger.error(f"Failed to import memories: {e}")
+            return Response(
+                {"error": "Failed to import memories"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
@@ -158,11 +199,13 @@ class MemoryViewSet(ViewSet):
         try:
             service = get_memu_service()
             async_to_sync(service.clear_all)(self.get_user_id())
-            
-            serializer = ClearResponseSerializer({
-                "success": True,
-                "message": "All memories cleared successfully",
-            })
+
+            serializer = memory_serializers.ClearResponseSerializer(
+                {
+                    "success": True,
+                    "message": "All memories cleared successfully",
+                }
+            )
             return Response(serializer.data, status=status.HTTP_200_OK)
         except Exception as e:
             logger.error(f"Failed to clear memories: {e}")
@@ -189,11 +232,13 @@ class MemoryViewSet(ViewSet):
         try:
             service = get_memu_service()
             result = async_to_sync(service.seed_demo_data)(self.get_user_id())
-            
-            serializer = SeedResponseSerializer({
-                "items_created": result["items_created"],
-                "message": f"Successfully created {result['items_created']} demo memories",
-            })
+
+            serializer = memory_serializers.SeedResponseSerializer(
+                {
+                    "items_created": result["items_created"],
+                    "message": f"Successfully created {result['items_created']} demo memories",
+                }
+            )
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         except Exception as e:
             logger.error(f"Failed to seed demo data: {e}")

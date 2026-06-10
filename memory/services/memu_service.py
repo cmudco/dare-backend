@@ -12,16 +12,11 @@ import threading
 import traceback
 from typing import Any, Optional
 
-from pydantic import BaseModel
-from memu.app import (
-    MemoryService,
-    LLMConfig,
-    LLMProfilesConfig,
-    RetrieveConfig,
-)
+import memu.app as memu_app
 from memu.app.settings import UserConfig
+from pydantic import BaseModel
 
-from config.env import USE_POSTGRES, DB_NAME, DB_USER, DB_PASSWORD, DB_HOST, DB_PORT
+from config import env as config_env
 
 logger = logging.getLogger(__name__)
 
@@ -61,9 +56,9 @@ class MemUService:
                 raise ValueError("OPENAI_API_KEY environment variable not set")
 
             # Configure LLM profiles for memory extraction and embeddings
-            llm_profiles = LLMProfilesConfig(
+            llm_profiles = memu_app.LLMProfilesConfig(
                 root={
-                    "default": LLMConfig(
+                    "default": memu_app.LLMConfig(
                         provider="openai",
                         api_key=openai_api_key,
                         chat_model="gpt-4o-mini",
@@ -79,13 +74,17 @@ class MemUService:
             user_config = UserConfig(model=DareUserModel)
 
             # MemU requires PostgreSQL — skip initialization if not configured
-            if not USE_POSTGRES:
+            if not config_env.USE_POSTGRES:
                 raise RuntimeError(
                     "MemU requires PostgreSQL (USE_POSTGRES=True). "
                     "Memory features are disabled."
                 )
 
-            db_url = f"postgresql+psycopg://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+            db_url = (
+                "postgresql+psycopg://"
+                f"{config_env.DB_USER}:{config_env.DB_PASSWORD}@"
+                f"{config_env.DB_HOST}:{config_env.DB_PORT}/{config_env.DB_NAME}"
+            )
             database_config = {
                 "metadata_store": {
                     "provider": "postgres",
@@ -93,15 +92,18 @@ class MemUService:
                     "ddl_mode": "create",
                 },
             }
-            logger.info(f"MemU initialized with PostgreSQL at: {DB_HOST}:{DB_PORT}/{DB_NAME}")
+            logger.info(
+                "MemU initialized with PostgreSQL at: "
+                f"{config_env.DB_HOST}:{config_env.DB_PORT}/{config_env.DB_NAME}"
+            )
 
             # Configure retrieval with RAG method
-            retrieve_config = RetrieveConfig(
+            retrieve_config = memu_app.RetrieveConfig(
                 method="rag",
                 route_intention=False,  # Always retrieve, don't route
             )
 
-            self._service = MemoryService(
+            self._service = memu_app.MemoryService(
                 llm_profiles=llm_profiles,
                 database_config=database_config,
                 retrieve_config=retrieve_config,
@@ -379,7 +381,8 @@ class MemUService:
             Dict with extracted items, categories, and resource reference
         """
         await self._ensure_initialized()
-        
+
+        conv_path = None
         try:
             # Write messages to temp file (memu reads from file/URL)
             with tempfile.NamedTemporaryFile(
@@ -409,6 +412,9 @@ class MemUService:
             logger.error(f"Failed to memorize conversation for user {user_id}: {e}")
             logger.error(traceback.format_exc())
             raise
+        finally:
+            if conv_path and os.path.exists(conv_path):
+                os.unlink(conv_path)
 
     async def seed_demo_data(self, user_id: str) -> dict[str, Any]:
         """
@@ -425,7 +431,6 @@ class MemUService:
         logger.info(f"[SEED DEBUG] Starting seed_demo_data for user {user_id}")
         logger.info(f"[SEED DEBUG] Service instance: {id(self._service)}")
 
-        # Create demo conversations that will be extracted into memories
         demo_conversations = [
             [
                 {"role": "user", "content": "Hi! My name is Alex and I'm a researcher interested in AI applications."},
@@ -446,18 +451,33 @@ class MemUService:
 
         all_items = []
         for i, conv in enumerate(demo_conversations):
-            logger.info(f"[SEED DEBUG] Processing conversation {i + 1}/{len(demo_conversations)}")
+            logger.info(
+                "[SEED DEBUG] Processing conversation %s/%s",
+                i + 1,
+                len(demo_conversations),
+            )
             try:
                 result = await self.memorize_conversation(user_id, conv)
                 logger.info(f"[SEED DEBUG] Conversation {i + 1} result: {result}")
                 if result and result.get("items"):
                     all_items.extend(result["items"])
-                    logger.info(f"[SEED DEBUG] Added {len(result['items'])} items, total: {len(all_items)}")
+                    logger.info(
+                        "[SEED DEBUG] Added %s items, total: %s",
+                        len(result["items"]),
+                        len(all_items),
+                    )
             except Exception as e:
-                logger.warning(f"[SEED DEBUG] Failed to memorize conversation {i + 1}: {e}")
-        
-        logger.info(f"[SEED DEBUG] Seeding complete. Total items created: {len(all_items)}")
-        
+                logger.warning(
+                    "[SEED DEBUG] Failed to memorize conversation %s: %s",
+                    i + 1,
+                    e,
+                )
+
+        logger.info(
+            "[SEED DEBUG] Seeding complete. Total items available: %s",
+            len(all_items),
+        )
+
         # Check what's in the DB after seeding (scoped to this user)
         try:
             check_result = await self._service.list_memory_items(where={"user_id": user_id})

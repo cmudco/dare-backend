@@ -57,6 +57,37 @@ class MemorySearchResponseSerializer(serializers.Serializer):
     )
 
 
+class MemoryImportItemSerializer(serializers.Serializer):
+    """Serializer for one imported memory item."""
+
+    memory_type = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default="profile",
+    )
+    content = serializers.CharField(
+        required=True, allow_blank=False, trim_whitespace=True
+    )
+    categories = serializers.ListField(
+        child=serializers.CharField(allow_blank=False, trim_whitespace=True),
+        required=False,
+        default=list,
+    )
+
+
+class MemoryImportRequestSerializer(serializers.Serializer):
+    """Serializer for memory import input."""
+
+    items = MemoryImportItemSerializer(many=True, allow_empty=False)
+
+
+class MemoryImportResponseSerializer(serializers.Serializer):
+    """Serializer for memory import response."""
+
+    items_created = serializers.IntegerField(read_only=True)
+    message = serializers.CharField(read_only=True)
+
+
 class SeedResponseSerializer(serializers.Serializer):
     """Serializer for seeding response."""
     
