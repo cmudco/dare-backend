@@ -135,6 +135,17 @@ class HermesService:
         resp.raise_for_status()
         return resp.json()
 
+    def stop_run(self, hermes_run_id, timeout=15):
+        """Cancel a running Hermes run (the budget kill-switch)."""
+        try:
+            requests.post(
+                f"{self.base_url}/v1/runs/{hermes_run_id}/stop",
+                headers=self._headers(),
+                timeout=timeout,
+            )
+        except requests.RequestException as exc:
+            logger.warning("Could not stop Hermes run %s: %s", hermes_run_id, exc)
+
     def fetch_usage(self, hermes_run_id, timeout=30):
         """
         Fetch a finished run's token usage from the run summary. Best-effort

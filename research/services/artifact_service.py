@@ -106,7 +106,10 @@ def build_artifact_instructions(soul_content, artifact_type=""):
         )
 
     parts.append(
-        "You are the Presentation Assistant. "
+        "You are the Presentation Assistant. The scholar describes what they "
+        "want in plain language — infer the most fitting structure, content "
+        "and emphasis from their words and the project's approved knowledge; "
+        "never require specifications or ask follow-up questions. "
         + want
         + "\n\nReturn ONLY a single JSON object — no prose, no markdown fences — "
         'shaped exactly: {"artifacts": [{"type": "...", "title": "...", '

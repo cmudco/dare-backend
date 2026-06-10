@@ -8,6 +8,7 @@ The frontend polls the run for status; findings appear in the Review Inbox.
 """
 
 import logging
+import time
 
 from django.utils import timezone
 from django_rq import job
@@ -90,6 +91,36 @@ def _knowledge_block(project, per_item_chars=300, max_items=12):
         body = (k.content or k.rationale or "").strip()[:per_item_chars]
         lines.append(f"- {cite}: {body}")
     return "\n".join(lines)
+
+
+# Hard per-run budget: a delegated run that exceeds either bound is stopped,
+# not left to burn tokens. (Hermes-side agent.max_turns caps the loop too.)
+MAX_RUN_TOOL_CALLS = 15
+MAX_RUN_SECONDS = 480
+
+
+class _RunBudget:
+    """Tracks a delegated run's budget; trips when either bound is exceeded."""
+
+    def __init__(self):
+        self.started = time.monotonic()
+        self.tool_calls = 0
+
+    def exceeded(self):
+        if self.tool_calls > MAX_RUN_TOOL_CALLS:
+            return f"more than {MAX_RUN_TOOL_CALLS} tool calls"
+        if time.monotonic() - self.started > MAX_RUN_SECONDS:
+            return f"more than {MAX_RUN_SECONDS // 60} minutes"
+        return ""
+
+
+def _stop_over_budget(hermes, hermes_run_id, run, reason):
+    hermes.stop_run(hermes_run_id)
+    _fail(
+        run,
+        f"Stopped: the run exceeded its budget ({reason}).",
+        Exception(f"run budget exceeded: {reason}"),
+    )
 
 
 def _hermes_run_failed(hermes, hermes_run_id, chunks):
@@ -231,8 +262,13 @@ def run_scout_job(run_id):
     chunks = []
     searches = 0
     last_preview = ""
+    budget = _RunBudget()
     try:
         for event in hermes.stream_events(hermes_run_id):
+            over = budget.exceeded()
+            if over:
+                _stop_over_budget(hermes, hermes_run_id, run, over)
+                return
             etype = event.get("event")
             if etype == "message.delta":
                 chunks.append(event.get("delta", ""))
@@ -241,6 +277,7 @@ def run_scout_job(run_id):
                 _set_status(run, "Searching the web…")
             elif etype == "tool.completed":
                 searches += 1
+                budget.tool_calls += 1
                 duration = event.get("duration")
                 ResearchAgentToolCall.objects.create(
                     run=run,
@@ -364,8 +401,13 @@ def run_critic_job(run_id, item_id):
 
     chunks = []
     last_preview = ""
+    budget = _RunBudget()
     try:
         for event in hermes.stream_events(hermes_run_id):
+            over = budget.exceeded()
+            if over:
+                _stop_over_budget(hermes, hermes_run_id, run, over)
+                return
             etype = event.get("event")
             if etype == "message.delta":
                 chunks.append(event.get("delta", ""))
@@ -373,6 +415,7 @@ def run_critic_job(run_id, item_id):
                 last_preview = event.get("preview") or ""
                 _set_status(run, "Reading the source…")
             elif etype == "tool.completed":
+                budget.tool_calls += 1
                 duration = event.get("duration")
                 ResearchAgentToolCall.objects.create(
                     run=run,
@@ -472,11 +515,18 @@ def run_artifact_job(run_id):
     run.save(update_fields=["hermes_run_id", "updated_at"])
 
     chunks = []
+    budget = _RunBudget()
     try:
         for event in hermes.stream_events(hermes_run_id):
+            over = budget.exceeded()
+            if over:
+                _stop_over_budget(hermes, hermes_run_id, run, over)
+                return
             etype = event.get("event")
             if etype == "message.delta":
                 chunks.append(event.get("delta", ""))
+            elif etype == "tool.completed":
+                budget.tool_calls += 1
             elif etype == "run.completed":
                 break
     except Exception as exc:  # noqa: BLE001
