@@ -58,7 +58,9 @@ Stage as many genuinely relevant sources as the evidence justifies, up to
 source just to stay short. `confidence` is a number from 0.0 to 1.0."""
 
 
-def build_scout_instructions(soul_content, max_candidates=4, max_searches=4):
+def build_scout_instructions(
+    soul_content, max_candidates=4, max_searches=4, allowed_tools=None
+):
     """Compose the run instructions: the soul file (standards) + the Scout brief."""
     parts = []
     if soul_content and soul_content.strip():
@@ -67,6 +69,16 @@ def build_scout_instructions(soul_content, max_candidates=4, max_searches=4):
         SCOUT_BRIEF
         % {"max_candidates": max_candidates, "max_searches": max_searches}
     )
+    if allowed_tools:
+        # Prompt-level scoping: the gateway still exposes the scholar's whole
+        # toolbox (per-project gateway credentials are the structural fix), so
+        # the run names its permitted slice explicitly.
+        scoped = ", ".join(f"mcp_dare_{t}__*" for t in allowed_tools)
+        parts.append(
+            "TOOLS FOR THIS RUN: web_search, mcp_dare_fetch_page, and these "
+            f"research tools only: {scoped}. Do not call any other mcp_dare_* "
+            "tool — others may be visible but are out of scope for this run."
+        )
     return "\n\n".join(parts)
 
 

@@ -256,6 +256,7 @@ def run_scout_job(run_id):
                 # evidence justifies; 1 great source or 10 are both fine.
                 max_candidates=3 if quick else 10,
                 max_searches=2 if quick else 5,
+                allowed_tools=run_tools,
             ),
             session_id=session_id,
             session_key=_session_key(project),
