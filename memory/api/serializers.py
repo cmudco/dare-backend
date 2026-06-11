@@ -3,12 +3,19 @@ Memory API Serializers
 
 Serializers for memory-related API endpoints.
 """
+
 from rest_framework import serializers
+
+from memory.constants import (DEFAULT_MEMORY_TYPE,
+                              MEMORY_IMPORT_MAX_CATEGORIES,
+                              MEMORY_IMPORT_MAX_CATEGORY_LENGTH,
+                              MEMORY_IMPORT_MAX_CONTENT_LENGTH,
+                              MEMORY_IMPORT_MAX_ITEMS, MemoryType)
 
 
 class MemoryItemSerializer(serializers.Serializer):
     """Serializer for a single memory item."""
-    
+
     id = serializers.CharField(read_only=True)
     memory_type = serializers.CharField(read_only=True)
     content = serializers.CharField(source="summary", read_only=True)
@@ -23,7 +30,7 @@ class MemoryItemSerializer(serializers.Serializer):
 
 class MemorySearchRequestSerializer(serializers.Serializer):
     """Serializer for search request input."""
-    
+
     query = serializers.CharField(
         required=True,
         min_length=1,
@@ -34,7 +41,7 @@ class MemorySearchRequestSerializer(serializers.Serializer):
 
 class MemorySearchResultSerializer(serializers.Serializer):
     """Serializer for individual search result."""
-    
+
     id = serializers.CharField(read_only=True)
     memory_type = serializers.CharField(read_only=True)
     content = serializers.CharField(source="summary", read_only=True)
@@ -47,7 +54,7 @@ class MemorySearchResultSerializer(serializers.Serializer):
 
 class MemorySearchResponseSerializer(serializers.Serializer):
     """Serializer for search response."""
-    
+
     query = serializers.CharField(read_only=True)
     items = MemorySearchResultSerializer(many=True, read_only=True)
     categories = serializers.ListField(
@@ -63,40 +70,64 @@ class MemoryImportItemSerializer(serializers.Serializer):
     memory_type = serializers.CharField(
         required=False,
         allow_blank=True,
-        default="profile",
+        default=DEFAULT_MEMORY_TYPE,
     )
     content = serializers.CharField(
-        required=True, allow_blank=False, trim_whitespace=True
+        required=True,
+        allow_blank=False,
+        trim_whitespace=True,
+        max_length=MEMORY_IMPORT_MAX_CONTENT_LENGTH,
     )
     categories = serializers.ListField(
-        child=serializers.CharField(allow_blank=False, trim_whitespace=True),
+        child=serializers.CharField(
+            allow_blank=False,
+            trim_whitespace=True,
+            max_length=MEMORY_IMPORT_MAX_CATEGORY_LENGTH,
+        ),
         required=False,
         default=list,
+        max_length=MEMORY_IMPORT_MAX_CATEGORIES,
     )
+
+    def validate_memory_type(self, value: str) -> str:
+        """Coerce unknown types to the default instead of rejecting the batch.
+
+        Imported payloads come from other AIs and may use type names outside
+        our taxonomy; a single odd type should not fail the whole import.
+        """
+        normalized = value.strip().lower()
+        if normalized in MemoryType.values:
+            return normalized
+        return DEFAULT_MEMORY_TYPE
 
 
 class MemoryImportRequestSerializer(serializers.Serializer):
     """Serializer for memory import input."""
 
-    items = MemoryImportItemSerializer(many=True, allow_empty=False)
+    items = MemoryImportItemSerializer(
+        many=True,
+        allow_empty=False,
+        max_length=MEMORY_IMPORT_MAX_ITEMS,
+    )
 
 
 class MemoryImportResponseSerializer(serializers.Serializer):
     """Serializer for memory import response."""
 
     items_created = serializers.IntegerField(read_only=True)
+    items_failed = serializers.IntegerField(read_only=True)
     message = serializers.CharField(read_only=True)
 
 
 class SeedResponseSerializer(serializers.Serializer):
     """Serializer for seeding response."""
-    
+
     items_created = serializers.IntegerField(read_only=True)
     message = serializers.CharField(read_only=True)
 
 
 class ClearResponseSerializer(serializers.Serializer):
     """Serializer for clear all response."""
-    
+
     success = serializers.BooleanField(read_only=True)
     message = serializers.CharField(read_only=True)

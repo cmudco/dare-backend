@@ -4,6 +4,7 @@ Memory API Views
 REST API endpoints for cross-conversation memory management.
 Uses synchronous DRF ViewSet with async service calls via async_to_sync.
 """
+
 import logging
 
 from asgiref.sync import async_to_sync
@@ -23,7 +24,7 @@ logger = logging.getLogger(__name__)
 class MemoryViewSet(ViewSet):
     """
     ViewSet for memory management operations.
-    
+
     Provides endpoints for:
     - Listing all memory items for the authenticated user
     - Retrieving a single memory item
@@ -43,7 +44,7 @@ class MemoryViewSet(ViewSet):
     def list(self, request):
         """
         List all memory items for the authenticated user.
-        
+
         GET /api/memory/items/
         """
         try:
@@ -111,7 +112,7 @@ class MemoryViewSet(ViewSet):
     def search(self, request):
         """
         Search memories using vector similarity.
-        
+
         POST /api/memory/search/
         Body: {"query": "search text"}
         """
@@ -127,7 +128,7 @@ class MemoryViewSet(ViewSet):
         try:
             service = get_memu_service()
             results = async_to_sync(service.search)(self.get_user_id(), query)
-            
+
             response_data = {
                 "query": query,
                 "items": results.get("items", []),
@@ -162,38 +163,57 @@ class MemoryViewSet(ViewSet):
 
         try:
             service = get_memu_service()
-            items_created = 0
-            for item in serializer.validated_data["items"]:
-                memory_type = item.get("memory_type") or "profile"
-                categories = item.get("categories", [])
-                async_to_sync(service.create_item)(
-                    self.get_user_id(),
-                    memory_type,
-                    item["content"],
-                    categories,
-                )
-                items_created += 1
-
-            noun = "memory" if items_created == 1 else "memories"
-            response_serializer = memory_serializers.MemoryImportResponseSerializer(
-                {
-                    "items_created": items_created,
-                    "message": f"Imported {items_created} {noun}",
-                }
-            )
-            return Response(response_serializer.data, status=status.HTTP_201_CREATED)
         except Exception as e:
-            logger.error(f"Failed to import memories: {e}")
+            logger.error(f"Memory service unavailable for import: {e}")
             return Response(
                 {"error": "Failed to import memories"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
+        user_id = self.get_user_id()
+        items_created = 0
+        items_failed = 0
+        for item in serializer.validated_data["items"]:
+            # Tolerate per-item failures: imports are user-pasted batches, and
+            # already-created items cannot be rolled back from MemU, so report
+            # accurate counts instead of failing the whole request.
+            try:
+                async_to_sync(service.create_item)(
+                    user_id,
+                    item["memory_type"],
+                    item["content"],
+                    item["categories"],
+                )
+                items_created += 1
+            except Exception as e:
+                items_failed += 1
+                logger.error(f"Failed to import memory item for user {user_id}: {e}")
+
+        if items_created == 0:
+            return Response(
+                {"error": "Failed to import memories"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        noun = "memory" if items_created == 1 else "memories"
+        message = f"Imported {items_created} {noun}"
+        if items_failed:
+            message += f" ({items_failed} failed)"
+
+        response_serializer = memory_serializers.MemoryImportResponseSerializer(
+            {
+                "items_created": items_created,
+                "items_failed": items_failed,
+                "message": message,
+            }
+        )
+        return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+
     @action(detail=False, methods=["delete"], url_path="clear")
     def clear(self, request):
         """
         Clear all memory items for the authenticated user.
-        
+
         DELETE /api/memory/clear/
         """
         try:
@@ -219,7 +239,7 @@ class MemoryViewSet(ViewSet):
         """
         Seed demo memory data for development/testing.
         Only available in DEBUG mode.
-        
+
         POST /api/memory/seed/
         """
         # Only allow in development mode
