@@ -10,6 +10,7 @@ from research.api.views import (
     ResearchAgentRunView,
     ResearchArtifactGenerateView,
     ResearchChatView,
+    ResearchProjectGraphView,
     ResearchProjectViewSet,
     ResearchScoutView,
     ResearchSoulFileView,
@@ -40,6 +41,11 @@ urlpatterns = [
         "projects/<int:project_id>/artifact/",
         ResearchArtifactGenerateView.as_view(),
         name="research-artifact-generate",
+    ),
+    path(
+        "projects/<int:project_id>/graph/",
+        ResearchProjectGraphView.as_view(),
+        name="research-project-graph",
     ),
     path(
         "staging-items/<int:item_id>/review/",

@@ -43,6 +43,7 @@ from research.models import (
     SoulFileVersion,
 )
 from research.services import get_hermes_service
+from research.services.graph_service import build_evidence_graph
 from research.tasks import (
     _knowledge_block,
     run_artifact_job,
@@ -464,6 +465,22 @@ class ResearchArtifactGenerateView(APIView):
             {"runId": run.id, "status": run.status},
             status=status.HTTP_202_ACCEPTED,
         )
+
+
+class ResearchProjectGraphView(APIView):
+    """
+    GET /api/research/projects/{id}/graph/ — the project's evidence graph
+    (nodes/edges), derived deterministically from staged sources, run
+    provenance, and the gateway fetch corpus. See research.services.graph_service.
+    """
+
+    permission_classes = [IsAuthenticated, IsResearcherOrAbove]
+
+    def get(self, request, project_id):
+        project = get_object_or_404(
+            ResearchProject.active_objects, id=project_id, user=request.user
+        )
+        return Response(build_evidence_graph(project), status=status.HTTP_200_OK)
 
 
 class ResearchAgentMemoryView(APIView):
