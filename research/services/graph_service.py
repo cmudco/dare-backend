@@ -35,6 +35,7 @@ def _source_node(item):
         "status": item.status,
         "confidence": item.confidence,
         "evidenceLabel": item.evidence_label,
+        "rationale": item.rationale,
         "sourceTool": provenance.get("tool", ""),
     }
 
