@@ -1,3 +1,4 @@
+import logging
 from typing import Any
 
 import data_exports.services.conversation_export_builder as conv_builder
@@ -7,7 +8,14 @@ from data_exports.services.constants import DataExportScope
 from data_exports.services.dtos import DataExportRequest, DataExportResult
 from data_exports.services.zip_writer import ZipArchiveWriter, ZipEntry
 
+logger = logging.getLogger(__name__)
+
 SCHEMA_VERSION = "dare-export-v1"
+
+MEMORY_UNAVAILABLE_NOTE = (
+    "Memories could not be retrieved because the memory store was unavailable; "
+    "memory.json contains no items."
+)
 
 
 class DataExportService:
@@ -26,12 +34,12 @@ class DataExportService:
         self.zip_writer = zip_writer or ZipArchiveWriter()
 
     def generate_export(self, request: DataExportRequest) -> DataExportResult:
-        memories = self.memory_builder.build(str(request.user.id))
+        memories, memory_note = self._build_memories(request)
         conversations = []
         if request.scope == DataExportScope.FULL:
             conversations = self.conversation_builder.build(request.user)
 
-        manifest = self._build_manifest(request, memories, conversations)
+        manifest = self._build_manifest(request, memories, conversations, memory_note)
         entries = self._build_zip_entries(request, manifest, memories, conversations)
         content = self.zip_writer.write(entries)
 
@@ -39,6 +47,27 @@ class DataExportService:
             filename=self._build_filename(request),
             content=content,
         )
+
+    def _build_memories(
+        self, request: DataExportRequest
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        """Build memory rows, degrading gracefully for full exports.
+
+        A memories-only export is worthless without memories, so the failure
+        propagates. A full export still has value (user profile and
+        conversations), so it proceeds with an explicit note in the manifest.
+        """
+        try:
+            return self.memory_builder.build(str(request.user.id)), None
+        except Exception as exc:
+            if request.scope == DataExportScope.MEMORIES:
+                raise
+            logger.warning(
+                "Memory store unavailable during full export for user %s: %s",
+                request.user.id,
+                exc,
+            )
+            return [], MEMORY_UNAVAILABLE_NOTE
 
     def _build_zip_entries(
         self,
@@ -79,8 +108,16 @@ class DataExportService:
         request: DataExportRequest,
         memories: list[dict[str, Any]],
         conversations: list[dict[str, Any]],
+        memory_note: str | None = None,
     ) -> dict[str, Any]:
         message_count = sum(len(item["chatMessages"]) for item in conversations)
+        excluded_content = [
+            "Uploaded file binaries are not included in this export.",
+            "Secrets, provider API keys, internal keys, and production credentials are not included.",
+            "Deleted or inactive conversations and messages are not included.",
+        ]
+        if memory_note:
+            excluded_content.append(memory_note)
         return {
             "schemaVersion": SCHEMA_VERSION,
             "exportedAt": export_serialization.to_iso(request.generated_at),
@@ -93,11 +130,7 @@ class DataExportService:
                 "conversations": len(conversations),
                 "messages": message_count,
             },
-            "excludedContent": [
-                "Uploaded file binaries are not included in this export.",
-                "Secrets, provider API keys, internal keys, and production credentials are not included.",
-                "Deleted or inactive conversations and messages are not included.",
-            ],
+            "excludedContent": excluded_content,
         }
 
     def _build_user_payload(self, request: DataExportRequest) -> dict[str, Any]:
