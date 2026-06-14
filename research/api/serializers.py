@@ -136,14 +136,28 @@ class ResearchAgentToolCallSerializer(serializers.ModelSerializer):
     """A single tool invocation within a run (audit)."""
 
     query = serializers.SerializerMethodField()
+    url = serializers.SerializerMethodField()
 
     class Meta:
         model = ResearchAgentToolCall
-        fields = ["id", "tool", "query", "status", "duration_ms", "result_summary"]
+        fields = [
+            "id",
+            "tool",
+            "query",
+            "url",
+            "status",
+            "duration_ms",
+            "result_tokens",
+            "result_summary",
+            "error",
+        ]
         read_only_fields = fields
 
     def get_query(self, obj):
         return (obj.arguments or {}).get("query", "")
+
+    def get_url(self, obj):
+        return (obj.arguments or {}).get("url", "")
 
 
 class ResearchAgentRunSerializer(serializers.ModelSerializer):

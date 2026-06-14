@@ -14,6 +14,7 @@ import time
 from django.utils import timezone
 from django_rq import job
 
+from mcp.models import GatewayFetch
 from mcp.services.mcp_gateway import gather_tool_results
 from research.constants import AgentRunStatus, AgentToolCallStatus, StagingItemStatus
 from research.models import (
@@ -122,20 +123,68 @@ def _start_run(hermes, run, input_text, instructions):
     return run.hermes_run_id
 
 
+_GATEWAY_PREFIX = "mcp_dare_"
+_encoder = None
+
+
+def _token_count(text):
+    """Token size of `text` (cl100k_base) — the per-call context contribution.
+    Best-effort: falls back to a chars/4 estimate if the tokenizer is absent."""
+    global _encoder
+    if not text:
+        return 0
+    if _encoder is None:
+        try:
+            import tiktoken
+
+            _encoder = tiktoken.get_encoding("cl100k_base")
+        except Exception:  # noqa: BLE001 - estimate rather than fail the run
+            _encoder = False
+    if _encoder:
+        return len(_encoder.encode(text))
+    return len(text) // 4
+
+
+def _match_gateway_fetch(run, tool):
+    """The GatewayFetch this agent gateway call produced — matched by user and
+    normalised tool name, taking the most recent one in the run's window. The
+    gateway captures the full response (the event stream carries only the tool
+    name), so this is how a `mcp_dare_*` call gets its result and token size.
+    Returns None for native tools (web_search) that never touch the gateway."""
+    if not tool.startswith(_GATEWAY_PREFIX):
+        return None
+    base = tool[len(_GATEWAY_PREFIX) :]
+    return (
+        GatewayFetch.all_objects.filter(
+            user=run.user, tool=base, created_at__gte=run.started_at
+        )
+        .order_by("-created_at")
+        .first()
+    )
+
+
 def _record_tool_call(run, event, arguments):
-    """Persist one streamed tool call for the Runs audit view."""
+    """Persist one streamed tool call for the Runs audit view. For gateway calls
+    the result body lives in the GatewayFetch corpus (the event stream names the
+    tool but omits its result), so link it back here for a complete record."""
     duration = event.get("duration")
+    tool = event.get("tool", "")
+    error = event.get("error") or ""
+    result_summary = ""
+    fetch = _match_gateway_fetch(run, tool)
+    if fetch:
+        result_summary = fetch.content
+        if fetch.url:
+            arguments = {**arguments, "url": fetch.url}
     ResearchAgentToolCall.objects.create(
         run=run,
-        tool=event.get("tool", ""),
+        tool=tool,
         arguments=arguments,
-        status=(
-            AgentToolCallStatus.ERROR
-            if event.get("error")
-            else AgentToolCallStatus.SUCCESS
-        ),
+        status=AgentToolCallStatus.ERROR if error else AgentToolCallStatus.SUCCESS,
+        result_summary=result_summary,
         duration_ms=int(duration * 1000) if duration else None,
-        error=event.get("error") or "",
+        result_tokens=_token_count(result_summary),
+        error=error,
     )
 
 
@@ -261,6 +310,7 @@ def _scout_input(run, task, soul_content):
             # scholar audit exactly what came back; only the prompt injection
             # below is compacted/capped.
             result_summary=r["error"] or r["raw"],
+            result_tokens=_token_count(r["error"] or r["raw"]),
             error=r["error"],
         )
     context = "\n\n".join(

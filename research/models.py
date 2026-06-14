@@ -325,6 +325,12 @@ class ResearchAgentToolCall(BaseModel):
         blank=True,
         help_text="Duration of the call in milliseconds.",
     )
+    result_tokens = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Token size of the result — how much this call added to the "
+        "agent's context (the per-call input-token driver).",
+    )
     error = models.TextField(
         blank=True,
         default="",
