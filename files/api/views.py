@@ -20,6 +20,7 @@ from rest_framework.views import APIView
 from common.permissions import IsOwner
 from conversations.models import Conversation
 from core.models import DareConfig
+from core.config.processing import DEFAULT_SIMILARITY_THRESHOLD, DEFAULT_TOP_K
 from core.services.document_processor import DocumentProcessor
 from core.services.file_processor import FileProcessor
 from core.services.file_upload_service import FileUploadService
@@ -91,6 +92,32 @@ class FileViewSet(viewsets.ModelViewSet):
         except Exception as e:
             return Response(
                 {"error": f"Error uploading files: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    @action(detail=True, methods=["get"], url_path="content")
+    def content(self, request, pk=None):
+        """Return the extracted text content of a file.
+
+        Used by external runtimes (e.g. SyftBox) that delegate file access to
+        Dare. Only the file owner can read content (enforced via get_queryset).
+        """
+        file_obj = self.get_object()
+        try:
+            text = FileProcessor().read_file_content(file_obj)
+            return Response(
+                {
+                    "file_id": file_obj.id,
+                    "name": file_obj.name or file_obj.file.name,
+                    "file_type": file_obj.file_type,
+                    "content": text,
+                },
+                status=status.HTTP_200_OK,
+            )
+        except Exception as e:
+            logger.error(f"Error reading content for file {pk}: {e}")
+            return Response(
+                {"error": f"Failed to read file content: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
@@ -1011,5 +1038,68 @@ class InternalFileUploadView(APIView):
             logger.error(f"Internal file upload error: {str(e)}")
             return Response(
                 {"error": f"Error uploading files: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+
+class RetrievalQueryView(APIView):
+    """Vector-search retrieval delegated from external runtimes (e.g. SyftBox).
+
+    SyftBox never performs embedding/indexing itself; it sends a query plus the
+    file ids it wants searched and Dare returns normalized chunks. Results are
+    scoped to files owned by the authenticated user.
+
+    POST body:
+        query: str (required)
+        file_ids: [int] (required, non-empty)
+        top_k: int (optional)
+        similarity_threshold: float (optional)
+    """
+
+    permission_classes = [IsAuthenticated]
+    parser_classes = (JSONParser,)
+
+    def post(self, request) -> Response:
+        query = request.data.get("query")
+        file_ids = request.data.get("file_ids") or []
+
+        if not query:
+            return Response(
+                {"error": "query is required"}, status=status.HTTP_400_BAD_REQUEST
+            )
+        if not isinstance(file_ids, list) or not file_ids:
+            return Response(
+                {"error": "file_ids (non-empty list) is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        top_k = request.data.get("top_k", DEFAULT_TOP_K)
+        similarity_threshold = request.data.get(
+            "similarity_threshold", DEFAULT_SIMILARITY_THRESHOLD
+        )
+
+        # Restrict to files owned by the caller.
+        owned_ids = list(
+            File.active_objects.filter(
+                user=request.user, id__in=file_ids
+            ).values_list("id", flat=True)
+        )
+        if not owned_ids:
+            return Response({"chunks": []}, status=status.HTTP_200_OK)
+
+        try:
+            processor = DocumentProcessor(user_id=request.user.id)
+            chunks = processor.query_chunks(
+                query_text=query,
+                file_ids=owned_ids,
+                user_id=request.user.id,
+                top_k=int(top_k),
+                similarity_threshold=float(similarity_threshold),
+            )
+            return Response({"chunks": chunks}, status=status.HTTP_200_OK)
+        except Exception as e:
+            logger.error(f"Retrieval query failed: {e}")
+            return Response(
+                {"error": f"Retrieval failed: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )

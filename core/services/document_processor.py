@@ -265,6 +265,52 @@ class DocumentProcessor:
 
         return "\n\n".join(context_parts)
 
+    def query_chunks(
+        self,
+        query_text: str,
+        file_ids: List[int],
+        user_id: int,
+        top_k: int = DEFAULT_TOP_K,
+        similarity_threshold: float = DEFAULT_SIMILARITY_THRESHOLD,
+    ) -> List[Dict]:
+        """Return normalized retrieval chunks for a query without persisting snippets.
+
+        Used by external runtimes (e.g. SyftBox) that delegate retrieval to Dare.
+        Unlike ``search_similar_documents`` this returns structured chunks instead
+        of a concatenated string and does not save Snippet records.
+        """
+        if not file_ids or not query_text:
+            return []
+
+        self.update_vector_service(user_id)
+        self._ensure_vector_service()
+
+        query_embedding = self.openai_client.create_embeddings(query_text)
+        results = self.vector_service.search_documents(
+            vector=query_embedding,
+            user_id=user_id,
+            file_ids=file_ids,
+            top_k=top_k,
+        )
+
+        chunks: List[Dict] = []
+        for match in results:
+            score = match.get("score", 0.0)
+            if score < similarity_threshold:
+                continue
+            metadata = match.get("metadata", {})
+            text = metadata.get("text", "")
+            if not text:
+                continue
+            chunks.append({
+                "text": text,
+                "score": score,
+                "file_id": metadata.get("file_id", ""),
+                "file_name": metadata.get("file_name", "Unknown file"),
+                "chunk_index": metadata.get("chunk_index", 0),
+            })
+        return chunks
+
     def delete_file_vectors(self, file_id: int, user_id: int) -> bool:
         """Delete all vectors related to a specific file"""
         try:

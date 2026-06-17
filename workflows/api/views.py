@@ -26,7 +26,10 @@ from workflows.models import (
 )
 from workflows.handlers.utils.constants import NodeType
 from workflows.constants import SharingErrorCode
-from workflows.services import WorkflowCloningService, WorkflowSharingService, SharingValidationError
+from workflows.services import (
+    WorkflowCloningService, WorkflowSharingService, SharingValidationError,
+    WorkflowExportService,
+)
 from workflows.services.workflow_graph_service import WorkflowGraphService
 
 
@@ -130,6 +133,25 @@ class WorkflowViewSet(viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         serializer.save(user=self.request.user)
+
+    @action(detail=True, methods=['get'], url_path='export')
+    def export_workflow(self, request, pk=None):
+        """Export a workflow as a self-contained execution graph (JSON).
+
+        Intended for external runtimes (e.g. SyftBox) that execute the workflow
+        without access to Dare's database. File content and retrieval are
+        delegated back to Dare APIs at runtime, so only references are included.
+        """
+        workflow = self.get_object()
+        try:
+            data = WorkflowExportService().export(workflow)
+            return Response(data, status=status.HTTP_200_OK)
+        except Exception as e:
+            logger.error(f"Error exporting workflow {pk}: {str(e)}")
+            return Response(
+                {"error": f"Failed to export workflow: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
     @action(detail=True, methods=['post'], url_path='clone')
     def clone_workflow(self, request, pk=None):

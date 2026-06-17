@@ -7,11 +7,13 @@ from .run_status import RunStatusManager
 from .run_ordering import get_workflow_run_order_map
 # NOTE: WorkflowCoordinator imported lazily to avoid circular import with workflow_execution_service
 from .workflow_run_repository import WorkflowRunRepository
+from .workflow_export_service import WorkflowExportService
 
 __all__ = [
     'WorkflowCloningService',
     'WorkflowSharingService',
     'SharingValidationError',
+    'WorkflowExportService',
     # 'WorkflowGraphService' - import directly from .workflow_graph_service to avoid circular import
     'NodeExecutionStateBuilder',
     'WorkflowWebSearchSourceService',
