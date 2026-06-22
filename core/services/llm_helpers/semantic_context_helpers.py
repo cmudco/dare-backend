@@ -6,12 +6,14 @@ to LLM message arrays via vector similarity search.
 """
 
 import logging
-from typing import List, Dict, Set, Optional, Any
+from typing import Any, Dict, List, Optional, Set
+
+from asgiref.sync import sync_to_async
 
 from core.services.document_processor import DocumentProcessor
 from core.services.vector_service import get_vector_service_async
-from .db_helpers import get_files_from_tags, get_files_from_folders
 
+from .db_helpers import get_files_from_folders, get_files_from_tags
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +61,7 @@ async def add_semantic_context_to_messages(
     embedding_ids: Optional[List[int]],
     tag_ids: Optional[List[int]],
     folder_ids: Optional[List[int]],
+    library_ids: Optional[List[int]],
     user_id: Optional[int],
     file_owner_id: Optional[int],
     is_socratic_mode: bool,
@@ -88,34 +91,83 @@ async def add_semantic_context_to_messages(
         message_obj: Optional message for snippet tracking
         workflow_run_step_obj: Optional workflow step for snippet tracking
     """
-    if not (embedding_ids or tag_ids or folder_ids):
+    if not (embedding_ids or tag_ids or folder_ids or library_ids):
         return
-
-    all_embedding_file_ids = await collect_embedding_file_ids(
-        embedding_ids, tag_ids, folder_ids, user_id
-    )
-    if not all_embedding_file_ids:
-        return
-
-    # Use file_owner_id for shared boards/conversations, fallback to current user
-    vector_user_id = file_owner_id or user_id
-
-    # Initialize vector service if user context changed
-    if vector_user_id and vector_user_id != document_processor.user_id:
-        document_processor.user_id = vector_user_id
-        document_processor.vector_service = await get_vector_service_async(vector_user_id)
 
     effective_threshold = 0.05 if is_socratic_mode else similarity_threshold
 
-    context = await document_processor.search_similar_documents(
-        query_text=query,
-        file_ids=list(all_embedding_file_ids),
-        user_id=vector_user_id,
-        top_k=max_context_snippets,
-        similarity_threshold=effective_threshold,
-        message_obj=message_obj,
-        workflow_run_step_obj=workflow_run_step_obj,
+    # --- The user's own documents (embeddings / tags / folders) ---
+    all_embedding_file_ids = await collect_embedding_file_ids(
+        embedding_ids, tag_ids, folder_ids, user_id
     )
+    if all_embedding_file_ids:
+        # Use file_owner_id for shared boards/conversations, fallback to current user
+        vector_user_id = file_owner_id or user_id
 
-    if context and context.strip():
-        messages.append({"role": "user", "content": f"Relevant context from documents:\n{context}"})
+        # Initialize vector service if user context changed
+        if vector_user_id and vector_user_id != document_processor.user_id:
+            document_processor.user_id = vector_user_id
+            document_processor.vector_service = await get_vector_service_async(
+                vector_user_id
+            )
+
+        context = await document_processor.search_similar_documents(
+            query_text=query,
+            file_ids=list(all_embedding_file_ids),
+            user_id=vector_user_id,
+            top_k=max_context_snippets,
+            similarity_threshold=effective_threshold,
+            message_obj=message_obj,
+            workflow_run_step_obj=workflow_run_step_obj,
+        )
+
+        if context and context.strip():
+            messages.append(
+                {
+                    "role": "user",
+                    "content": f"Relevant context from documents:\n{context}",
+                }
+            )
+
+    # --- Shared libraries (dedicated, un-scoped corpora; no user filter) ---
+    if library_ids:
+        library_snippets = await _search_libraries_for_query(
+            document_processor, query, library_ids, max_context_snippets
+        )
+        if library_snippets:
+            joined = "\n\n".join(library_snippets)
+            messages.append(
+                {
+                    "role": "user",
+                    "content": f"Relevant context from shared libraries:\n{joined}",
+                }
+            )
+
+
+def _run_library_search(
+    document_processor: DocumentProcessor,
+    query: str,
+    library_ids: List[int],
+    max_context_snippets: int,
+) -> List[str]:
+    """Embed the query and search the selected libraries (sync; ORM + network)."""
+    from libraries.services.library_search import search_libraries
+
+    query_embedding = document_processor.openai_client.create_embeddings(query)
+    return search_libraries(query_embedding, library_ids, top_k=max_context_snippets)
+
+
+async def _search_libraries_for_query(
+    document_processor: DocumentProcessor,
+    query: str,
+    library_ids: List[int],
+    max_context_snippets: int,
+) -> List[str]:
+    """Async wrapper — library search touches the ORM and opens vector clients."""
+    try:
+        return await sync_to_async(_run_library_search)(
+            document_processor, query, library_ids, max_context_snippets
+        )
+    except Exception as exc:
+        logger.warning("Library context retrieval failed: %s", exc)
+        return []
