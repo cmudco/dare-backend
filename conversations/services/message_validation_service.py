@@ -44,6 +44,7 @@ class MessageValidationService:
             "media_ids": cls._get_list(data, "media_ids"),
             "tag_ids": cls._get_list(data, "tag_ids"),
             "folder_ids": cls._get_list(data, "folder_ids"),
+            "library_ids": cls._get_list(data, "library_ids"),
             "referenced_conversation_ids": cls._get_list(
                 data, "referenced_conversation_ids"
             ),
@@ -191,6 +192,7 @@ class MessageValidationService:
             "media_ids": data.get("media_ids", []),
             "tag_ids": data.get("tag_ids", []),
             "folder_ids": data.get("folder_ids", []),
+            "library_ids": data.get("library_ids", []),
             "referenced_conversation_ids": data.get("referenced_conversation_ids", []),
         }
 

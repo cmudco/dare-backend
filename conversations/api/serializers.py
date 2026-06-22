@@ -206,6 +206,7 @@ class ConversationSerializer(serializers.ModelSerializer):
             "sort_order",
             "selected_embedding_ids",
             "selected_file_ids",
+            "selected_library_ids",
             "feedback_auto_prompt_count",
             "feedback_last_prompt_message_count",
             "feedback_last_prompt_timestamp",
