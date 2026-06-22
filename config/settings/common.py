@@ -66,6 +66,7 @@ LOCAL_APPS = [
     "sharing",
     "feature_flags",
     "research",
+    "libraries",
 ]
 
 THIRD_PARTY_APPS = [
