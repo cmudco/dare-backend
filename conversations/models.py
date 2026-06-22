@@ -10,15 +10,16 @@ from django.utils import timezone
 from common.managers import ActiveObjectsManager
 from common.models import BaseModel, TimeStampMixin
 from core.fields import EncryptedCharField
+
 from .constants import (
+    ArtifactStatus,
+    ArtifactType,
+    ConversationSource,
+    FeedbackType,
+    ModelEffort,
+    ModelTier,
     Provider,
     SenderType,
-    FeedbackType,
-    ConversationSource,
-    ArtifactType,
-    ArtifactStatus,
-    ModelTier,
-    ModelEffort,
     ToolCallOrigin,
 )
 
@@ -735,6 +736,8 @@ class Conversation(BaseModel):
                             cloned_snippet = Snippet(
                                 message=cloned_message,
                                 file=original_snippet.file,
+                                library=original_snippet.library,
+                                source_ref=original_snippet.source_ref,
                                 text=original_snippet.text,
                                 similarity_score=original_snippet.similarity_score,
                                 chunk_index=original_snippet.chunk_index,
@@ -1044,7 +1047,23 @@ class Snippet(BaseModel):
         "files.File",
         on_delete=models.CASCADE,
         related_name="snippets",
-        help_text="The file this snippet belongs to.",
+        null=True,
+        blank=True,
+        help_text="The file this snippet belongs to (null for shared-library snippets).",
+    )
+    library = models.ForeignKey(
+        "libraries.SharedLibrary",
+        on_delete=models.CASCADE,
+        related_name="snippets",
+        null=True,
+        blank=True,
+        help_text="The shared library this snippet belongs to (null for the user's own files).",
+    )
+    source_ref = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        help_text="Human-readable source for library snippets (e.g. 'Fields Paul p.78').",
     )
     text = models.TextField(help_text="The text content of the snippet (chunk).")
     similarity_score = models.FloatField(
@@ -1057,7 +1076,10 @@ class Snippet(BaseModel):
     active_objects = ActiveObjectsManager()
 
     def __str__(self):
-        return f"Snippet for Message {self.message.id} from File {self.file.id} (Score: {self.similarity_score})"
+        source = (
+            f"File {self.file_id}" if self.file_id else f"Library {self.library_id}"
+        )
+        return f"Snippet for Message {self.message_id} from {source} (Score: {self.similarity_score})"
 
 
 class WebSearchSource(BaseModel):
