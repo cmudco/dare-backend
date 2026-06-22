@@ -1,31 +1,35 @@
-"""Import an externally-vectorized corpus into a DARE shared-library namespace.
+"""Import an external corpus into a DARE shared-library container.
 
-Reads objects (with their vectors) from a source Weaviate over the plain REST
-``/v1/objects`` endpoint — no gRPC/GraphQL needed — and upserts them into the
-target vector store under the library's dedicated namespace.
+Reads objects from a source Weaviate over the plain REST ``/v1/objects`` endpoint
+(no gRPC/GraphQL needed) and writes them into the target vector store under the
+library's dedicated container (Weaviate collection or Pinecone namespace).
 
-Design notes:
-  * One-way, idempotent. Vector ids are deterministic (derived from the source
-    object id), so re-runs converge instead of duplicating.
-  * Dimension-validated. Any object whose vector != the library's declared dims
-    is skipped and counted, never silently truncated.
-  * --dry-run reads + validates + reports counts WITHOUT writing, so you can
-    check corpus size against Pinecone limits before committing.
+By default the chunk TEXT is RE-EMBEDDED with DARE's own embedder so the corpus
+shares an embedding space with DARE's query path. The source's supplied vectors
+are IGNORED unless ``--use-source-vectors`` is passed.
+
+Why re-embed by default: a matching "text-embedding-3-large / 3072-dim" label is
+NOT proof of a shared embedding space. Two such vector sets here measured ~0.04
+cosine when re-embedding identical text (the unrelated baseline) — i.e. different
+models behind the same label, which makes cross-querying return noise. Only trust
+source vectors after a re-embed-and-compare cosine check (~0.99 = same space).
+
+  * Idempotent: deterministic vector ids; the store clears then re-writes.
+  * --dry-run reads + counts only (no embedding calls, no writes).
 
 Example:
-  python manage.py import_library \\
-    --library civil-war-pensions --name "Civil War pension records" \\
-    --curator CMU --backend pinecone \\
-    --source-url https://<cmu-host> --source-class CivilWarPensionPage \\
-    --source-api-key $SOURCE_WEAVIATE_API_KEY --dry-run
+  python manage.py import_library --library civil-war-pensions \\
+    --source-url https://<host> --source-class CivilWarPensionPage \\
+    --source-api-key $SOURCE_WEAVIATE_API_KEY
 """
 
 import os
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 import requests
 from django.core.management.base import BaseCommand, CommandError
 
+from core.helpers.openai import OpenAIWrapper
 from libraries.constants import VectorBackend
 from libraries.models import SharedLibrary
 from libraries.services.library_store import LibraryVectorStore
@@ -68,8 +72,8 @@ def build_metadata(library: SharedLibrary, props: Dict, source_id: str) -> Dict:
 
 class Command(BaseCommand):
     help = (
-        "Import an externally-vectorized corpus from a source Weaviate (REST) "
-        "into a DARE shared-library namespace."
+        "Import a source-Weaviate corpus (via REST) into a DARE shared-library "
+        "container, re-embedding the text with DARE's embedder by default."
     )
 
     def add_arguments(self, parser):
@@ -107,103 +111,131 @@ class Command(BaseCommand):
             "--batch-size",
             type=int,
             default=100,
-            help="Objects per page / upsert batch.",
+            help="Objects per page / embedding batch / upsert batch.",
         )
         parser.add_argument(
             "--limit", type=int, default=0, help="Stop after N objects (0 = all)."
         )
         parser.add_argument(
+            "--use-source-vectors",
+            action="store_true",
+            help=(
+                "Trust the source's supplied vectors instead of re-embedding the "
+                "text. Only safe if the source truly shares DARE's embedding space."
+            ),
+        )
+        parser.add_argument(
             "--dry-run",
             action="store_true",
-            help="Read + validate + report only; no writes.",
+            help="Read + count only; no embedding calls, no writes.",
         )
 
     def handle(self, *args, **opts):
-        slug = opts["library"]
         source_url = opts["source_url"].rstrip("/")
         source_class = opts["source_class"]
         api_key = opts["source_api_key"] or os.getenv("SOURCE_WEAVIATE_API_KEY", "")
         batch_size = opts["batch_size"]
         limit = opts["limit"]
         dry_run = opts["dry_run"]
+        use_source_vectors = opts["use_source_vectors"]
 
-        library = self._get_or_create_library(slug, opts)
+        library = self._get_or_create_library(opts["library"], opts)
+        container = (
+            library.weaviate_class
+            if library.backend == VectorBackend.WEAVIATE
+            else library.namespace
+        )
+        mode = "source-vectors" if use_source_vectors else "re-embed(DARE)"
         self.stdout.write(
-            f"Target library: {library.name} "
-            f"[backend={library.backend} namespace={library.namespace} dims={library.dims}]"
+            f"Target: {library.name} [backend={library.backend} "
+            f"container={container} mode={mode}]"
         )
         if dry_run:
-            self.stdout.write(
-                self.style.WARNING("DRY RUN — no vectors will be written.")
-            )
+            self.stdout.write(self.style.WARNING("DRY RUN — no embedding, no writes."))
 
+        embedder = None if (dry_run or use_source_vectors) else OpenAIWrapper()
         store = None
         if not dry_run:
             store = LibraryVectorStore(library)
-            # Static corpus: clear then write so re-imports are a clean replace.
-            store.clear()
+            store.clear()  # static corpus: clean replace on re-import
+
         session = requests.Session()
         if api_key:
             session.headers["Authorization"] = f"Bearer {api_key}"
 
         cursor: Optional[str] = None
-        imported = bad_dims = skipped_empty = 0
-        batch: List[Tuple[str, List[float], Dict]] = []
+        imported = skipped_empty = bad_dims = failed = 0
 
         while True:
             objects = self._fetch_page(
-                session, source_url, source_class, batch_size, cursor
+                session,
+                source_url,
+                source_class,
+                batch_size,
+                cursor,
+                with_vector=use_source_vectors,
             )
             if not objects:
                 break
 
+            ids: List[str] = []
+            texts: List[str] = []
+            metas: List[Dict] = []
+            src_vectors: List[List[float]] = []
             for obj in objects:
                 cursor = obj.get("id", cursor)
-                vector = obj.get("vector")
                 props = obj.get("properties", {}) or {}
-
-                if not vector or len(vector) != library.dims:
-                    bad_dims += 1
-                    continue
-                if not props.get("text"):
+                text = props.get("text")
+                if not text:
                     skipped_empty += 1
                     continue
-
-                vector_id = f"lib_{library.id}_{obj['id']}"
-                metadata = build_metadata(library, props, obj["id"])
-                batch.append((vector_id, vector, metadata))
-                imported += 1
-
-                if not dry_run and len(batch) >= batch_size:
-                    store.upsert(batch)
-                    batch = []
-
-                if limit and imported >= limit:
+                if use_source_vectors:
+                    vec = obj.get("vector")
+                    if not vec or len(vec) != library.dims:
+                        bad_dims += 1
+                        continue
+                    src_vectors.append(vec)
+                ids.append(f"lib_{library.id}_{obj['id']}")
+                texts.append(text)
+                metas.append(build_metadata(library, props, obj["id"]))
+                if limit and (imported + len(ids)) >= limit:
                     break
 
+            if dry_run:
+                imported += len(ids)
+            elif ids:
+                try:
+                    vectors = (
+                        src_vectors
+                        if use_source_vectors
+                        else embedder.create_batch_embeddings(texts)
+                    )
+                    store.upsert(list(zip(ids, vectors, metas)))
+                    imported += len(ids)
+                except Exception as exc:
+                    failed += len(ids)
+                    self.stdout.write(self.style.WARNING(f"  page failed: {exc}"))
+
             self.stdout.write(
-                f"  ...read {imported} (bad-dims {bad_dims}, empty {skipped_empty})"
+                f"  ...processed {imported} "
+                f"(empty {skipped_empty}, bad-dims {bad_dims}, failed {failed})"
             )
             if limit and imported >= limit:
                 break
             if len(objects) < batch_size:
                 break
 
-        if not dry_run and batch:
-            store.upsert(batch)
-
         if store is not None:
             store.close()
-
         if not dry_run:
             library.object_count = imported
             library.save(update_fields=["object_count", "updated_at"])
 
         self.stdout.write(
             self.style.SUCCESS(
-                f"Done. {'Would import' if dry_run else 'Imported'} {imported} vectors "
-                f"into '{library.namespace}'. Skipped: {bad_dims} bad-dims, "
-                f"{skipped_empty} empty-text."
+                f"Done. {'Would import' if dry_run else 'Imported'} {imported} "
+                f"vectors ({mode}) into '{container}'. "
+                f"Skipped {skipped_empty} empty, {bad_dims} bad-dims, {failed} failed."
             )
         )
 
@@ -227,9 +259,12 @@ class Command(BaseCommand):
         source_class: str,
         limit: int,
         cursor: Optional[str],
+        with_vector: bool,
     ) -> List[Dict]:
-        """Fetch one cursor-paginated page of objects (with vectors)."""
-        params = {"class": source_class, "include": "vector", "limit": limit}
+        """Fetch one cursor-paginated page of objects."""
+        params = {"class": source_class, "limit": limit}
+        if with_vector:
+            params["include"] = "vector"
         if cursor:
             params["after"] = cursor
         try:
