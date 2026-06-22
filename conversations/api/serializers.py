@@ -330,6 +330,8 @@ class SnippetSerializer(serializers.ModelSerializer):
             return dict(VectorDBChoice.choices).get(
                 obj.file.vector_db_source, "Unknown"
             )
+        if obj.library_id is not None:
+            return obj.library.get_backend_display()
         return "Unknown"
 
 
