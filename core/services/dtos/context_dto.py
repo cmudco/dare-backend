@@ -32,6 +32,7 @@ class ContextConfig:
     media_ids: List[str] = field(default_factory=list)
     tag_ids: List[str] = field(default_factory=list)
     folder_ids: List[str] = field(default_factory=list)
+    library_ids: List[int] = field(default_factory=list)
     referenced_conversation_ids: List[str] = field(default_factory=list)
     referenced_conversation_history_limit: int = 10
     referenced_summary_ids: List[int] = field(default_factory=list)
@@ -47,6 +48,7 @@ class ContextConfig:
             or self.embedding_ids
             or self.tag_ids
             or self.folder_ids
+            or self.library_ids
             or self.referenced_conversation_ids
             or self.referenced_summary_ids
             or self.use_memory

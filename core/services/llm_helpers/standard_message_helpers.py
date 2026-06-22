@@ -6,21 +6,17 @@ Async functions for building standard (non-Socratic) LLM message arrays.
 
 import logging
 from dataclasses import dataclass, field
-from typing import List, Dict, Any
+from typing import Any, Dict, List
 
 from core.services.document_processor import DocumentProcessor
-from core.services.file_processor import FileProcessor
 from core.services.dtos import LLMQueryRequest
-from .db_helpers import (
-    get_prompt,
-    get_conversation_history,
-    get_full_file_contents,
-    get_referenced_conversations_context,
-    get_referenced_summaries_context,
-)
-from .semantic_context_helpers import add_semantic_context_to_messages
-from .memory_context_helpers import add_memory_context_to_messages
+from core.services.file_processor import FileProcessor
 
+from .db_helpers import (get_conversation_history, get_full_file_contents,
+                         get_prompt, get_referenced_conversations_context,
+                         get_referenced_summaries_context)
+from .memory_context_helpers import add_memory_context_to_messages
+from .semantic_context_helpers import add_semantic_context_to_messages
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +24,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class MessageBuildResult:
     """Result from building LLM messages, including any side-channel data."""
+
     messages: List[Dict[str, str]] = field(default_factory=list)
     memory_context: List[Dict[str, Any]] = field(default_factory=list)
 
@@ -88,7 +85,9 @@ async def build_standard_messages(
 
     # Add full file contents
     if request.context.file_ids:
-        file_contents = await get_full_file_contents(request.context.file_ids, file_processor)
+        file_contents = await get_full_file_contents(
+            request.context.file_ids, file_processor
+        )
         if file_contents:
             for file_content in file_contents:
                 messages.append({"role": "user", "content": file_content})
@@ -101,6 +100,7 @@ async def build_standard_messages(
         embedding_ids=request.context.embedding_ids,
         tag_ids=request.context.tag_ids,
         folder_ids=request.context.folder_ids,
+        library_ids=request.context.library_ids,
         user_id=user_id,
         file_owner_id=request.context.file_owner_id,
         is_socratic_mode=request.is_socratic_mode(),
@@ -119,10 +119,13 @@ async def build_standard_messages(
         )
 
     # Add conversation history
-    conversation_history = await get_conversation_history(
-        request.conversation,
-        limit=request.context.history_limit
-    ) if request.conversation else []
+    conversation_history = (
+        await get_conversation_history(
+            request.conversation, limit=request.context.history_limit
+        )
+        if request.conversation
+        else []
+    )
     messages.extend([msg for msg in conversation_history if msg["content"].strip()])
 
     # Add current user message
