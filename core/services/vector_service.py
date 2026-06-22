@@ -1,11 +1,12 @@
 from abc import ABC, abstractmethod
-from typing import List, Tuple, Dict, Optional, Union
+from typing import Dict, List, Optional, Tuple, Union
+
+from asgiref.sync import sync_to_async
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from asgiref.sync import sync_to_async
 
-from core.config.vector_db import get_user_namespace
 from core.config.processing import VECTOR_DIMENSION
+from core.config.vector_db import get_user_namespace
 from core.helpers.pinecone import PineconeClient
 from core.helpers.weaviate import WeaviateClient
 from users.constants import VectorDBChoice
@@ -15,12 +16,14 @@ User = get_user_model()
 
 def client_operation(func):
     """Decorator for standardized error handling in vector client operations."""
+
     def wrapper(*args, **kwargs):
         try:
             return func(*args, **kwargs)
         except Exception as e:
             operation_name = func.__name__
             raise Exception(f"Error in {operation_name}: {str(e)}")
+
     return wrapper
 
 
@@ -28,12 +31,21 @@ class BaseVectorClient(ABC):
     """Abstract base class for vector database clients."""
 
     @abstractmethod
-    def upsert_vectors(self, vectors: List[Tuple[str, List[float], Dict]], namespace: Optional[str] = None) -> bool:
+    def upsert_vectors(
+        self,
+        vectors: List[Tuple[str, List[float], Dict]],
+        namespace: Optional[str] = None,
+    ) -> bool:
         pass
 
     @abstractmethod
-    def query_vectors(self, vector: List[float], top_k: int = 5,
-                     namespace: Optional[str] = None, filter: Optional[Dict] = None) -> List[Dict]:
+    def query_vectors(
+        self,
+        vector: List[float],
+        top_k: int = 5,
+        namespace: Optional[str] = None,
+        filter: Optional[Dict] = None,
+    ) -> List[Dict]:
         pass
 
     @abstractmethod
@@ -52,7 +64,7 @@ class BaseVectorService(ABC):
     def upsert_vectors(
         self,
         vectors: List[Tuple[str, List[float], Dict]],
-        namespace: Optional[str] = None
+        namespace: Optional[str] = None,
     ) -> bool:
         """Upsert vectors to the vector database."""
         pass
@@ -63,17 +75,13 @@ class BaseVectorService(ABC):
         vector: List[float],
         top_k: int = 5,
         namespace: Optional[str] = None,
-        filter: Optional[Dict] = None
+        filter: Optional[Dict] = None,
     ) -> List[Dict]:
         """Query similar vectors from the vector database."""
         pass
 
     @abstractmethod
-    def delete_vectors(
-        self,
-        ids: List[str],
-        namespace: Optional[str] = None
-    ) -> bool:
+    def delete_vectors(self, ids: List[str], namespace: Optional[str] = None) -> bool:
         """Delete vectors by their IDs."""
         pass
 
@@ -83,11 +91,7 @@ class BaseVectorService(ABC):
         pass
 
     def search_documents(
-        self,
-        vector: List[float],
-        user_id: int,
-        file_ids: List[int],
-        top_k: int = 10
+        self, vector: List[float], user_id: int, file_ids: List[int], top_k: int = 10
     ) -> List[Dict]:
         """
         Search for documents similar to the given vector.
@@ -95,14 +99,14 @@ class BaseVectorService(ABC):
         """
         filter_query = {
             "user_id": str(user_id),
-            "file_id": {"$in": [str(file_id) for file_id in file_ids]}
+            "file_id": {"$in": [str(file_id) for file_id in file_ids]},
         }
 
         return self.query_vectors(
             vector=vector,
             top_k=top_k,
             namespace=get_user_namespace(user_id),
-            filter=filter_query
+            filter=filter_query,
         )
 
     def delete_file_vectors(self, file_id: int, user_id: int) -> bool:
@@ -110,10 +114,7 @@ class BaseVectorService(ABC):
         Delete all vectors related to a specific file.
         This provides a more domain-specific interface for deleting file vectors.
         """
-        filter_query = {
-            "user_id": str(user_id),
-            "file_id": {"$in": [str(file_id)]}
-        }
+        filter_query = {"user_id": str(user_id), "file_id": {"$in": [str(file_id)]}}
 
         dummy_vector = [0] * VECTOR_DIMENSION
 
@@ -121,14 +122,13 @@ class BaseVectorService(ABC):
             vector=dummy_vector,
             top_k=1000,
             namespace=get_user_namespace(user_id),
-            filter=filter_query
+            filter=filter_query,
         )
 
         if results:
-            vector_ids = [match['id'] for match in results]
+            vector_ids = [match["id"] for match in results]
             return self.delete_vectors(
-                ids=vector_ids,
-                namespace=get_user_namespace(user_id)
+                ids=vector_ids, namespace=get_user_namespace(user_id)
             )
 
         return True
@@ -144,7 +144,7 @@ class PineconeVectorService(BaseVectorService):
     def upsert_vectors(
         self,
         vectors: List[Tuple[str, List[float], Dict]],
-        namespace: Optional[str] = None
+        namespace: Optional[str] = None,
     ) -> bool:
         return self.client.upsert_vectors(vectors, namespace)
 
@@ -153,15 +153,11 @@ class PineconeVectorService(BaseVectorService):
         vector: List[float],
         top_k: int = 5,
         namespace: Optional[str] = None,
-        filter: Optional[Dict] = None
+        filter: Optional[Dict] = None,
     ) -> List[Dict]:
         return self.client.query_vectors(vector, top_k, namespace, filter)
 
-    def delete_vectors(
-        self,
-        ids: List[str],
-        namespace: Optional[str] = None
-    ) -> bool:
+    def delete_vectors(self, ids: List[str], namespace: Optional[str] = None) -> bool:
         return self.client.delete_vectors(ids, namespace)
 
     def delete_namespace(self, namespace: str) -> bool:
@@ -178,7 +174,7 @@ class WeaviateVectorService(BaseVectorService):
     def upsert_vectors(
         self,
         vectors: List[Tuple[str, List[float], Dict]],
-        namespace: Optional[str] = None
+        namespace: Optional[str] = None,
     ) -> bool:
         return self.client.upsert_vectors(vectors, namespace)
 
@@ -188,16 +184,12 @@ class WeaviateVectorService(BaseVectorService):
         vector: List[float],
         top_k: int = 5,
         namespace: Optional[str] = None,
-        filter: Optional[Dict] = None
+        filter: Optional[Dict] = None,
     ) -> List[Dict]:
         return self.client.query_vectors(vector, top_k, namespace, filter)
 
     @client_operation
-    def delete_vectors(
-        self,
-        ids: List[str],
-        namespace: Optional[str] = None
-    ) -> bool:
+    def delete_vectors(self, ids: List[str], namespace: Optional[str] = None) -> bool:
         return self.client.delete_vectors(ids, namespace)
 
     @client_operation
