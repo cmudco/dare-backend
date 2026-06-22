@@ -19,6 +19,86 @@ DARE backend ── POST /v1/runs (bearer) ──▶ Hermes gateway (:8642)
 
 ---
 
+## Deployment at a glance (diagrams)
+
+### The invariant — who drives, who writes, who reads
+
+```mermaid
+flowchart LR
+  DARE["DARE backend<br/>driver · sole DB writer"]
+  HERMES["Hermes gateway :8642<br/>no DB · no host exec"]
+  DB[("Postgres + pgvector<br/>staging → approved")]
+  TOOLS["Research tools<br/>Scite · Consensus · fetch_page"]
+
+  DARE -->|"drive · POST /v1/runs (bearer)"| HERMES
+  HERMES -->|"results · SSE"| DARE
+  HERMES -->|"tool reads · via DARE MCP gateway"| DARE
+  DARE -->|"proxied · DARE holds the creds"| TOOLS
+  DARE ==>|"writes · sole writer"| DB
+```
+
+> Hermes drives the work but never touches the record. The only way Hermes
+> reaches a tool is back through DARE's MCP gateway, so credentials and audit
+> stay in DARE.
+
+### The deployment sequence — three phases
+
+Color/grouping = *where* the step happens. Phase 1 is all on the Hermes host,
+phase 2 is the handshake, phase 3 is on the DARE backend.
+
+```mermaid
+flowchart TB
+  subgraph P1["Phase 1 · on the Hermes host"]
+    direction TB
+    S1["1 · Install Hermes + gateway service"]
+    S2["2 · Configure the LLM brain<br/>client-paid API key — not a subscription"]
+    S3["3 · Enable the API server<br/>127.0.0.1:8642 · set API_SERVER_KEY"]
+    S4["4 · Scope the toolset (security)<br/>disable terminal · code · file · browser"]
+    S1 --> S2 --> S3 --> S4
+  end
+  subgraph P2["Phase 2 · connect the two (the handshake)"]
+    direction TB
+    S5["5 · Mint the DARE service token<br/>365-day JWT for the service user"]
+    S6["6 · Register DARE's MCP gateway<br/>hermes mcp add dare → gateway restart"]
+    S5 --> S6
+  end
+  subgraph P3["Phase 3 · on the DARE backend"]
+    direction TB
+    S7["7 · Set DARE backend env<br/>HERMES_* vars"]
+    S8["8 · Run the stack<br/>uvicorn ASGI · Redis · RQ workers"]
+    S9["9 · Smoke test<br/>models → gateway round-trip → end-to-end"]
+    S7 --> S8 --> S9
+  end
+  S4 --> S5
+  S6 --> S7
+```
+
+### Credential wiring — three secrets, three directions
+
+The most common deploy mistake: the same string is `API_SERVER_KEY` on the
+Hermes side and `HERMES_API_KEY` on the DARE side — they must match. The service
+JWT and the LLM key only ever flow *out of* Hermes.
+
+```mermaid
+flowchart LR
+  DARE["DARE backend"]
+  HERMES["Hermes gateway"]
+  GW["DARE MCP gateway<br/>(part of DARE backend)"]
+  LLM["LLM provider"]
+
+  DARE -->|"① API_SERVER_KEY<br/>DARE env: HERMES_API_KEY<br/>on POST /v1/runs"| HERMES
+  HERMES -->|"② service JWT · MCP_DARE_API_KEY<br/>DARE-minted, in Hermes MCP config<br/>on tool reads"| GW
+  HERMES -->|"③ ANTHROPIC_API_KEY<br/>client-paid, in Hermes auth store<br/>on model calls"| LLM
+```
+
+| Secret | Lives in | Presented on | Purpose |
+|---|---|---|---|
+| `API_SERVER_KEY` (= DARE's `HERMES_API_KEY`) | Hermes `.env` | `POST /v1/runs` | DARE → Hermes (drive) |
+| service JWT (`MCP_DARE_API_KEY`) | DARE-minted, stored in Hermes MCP config | gateway tool reads | Hermes → DARE (borrow tools) |
+| `ANTHROPIC_API_KEY` | Hermes auth store | model calls | Hermes → LLM provider |
+
+---
+
 ## 1. Install Hermes on the server
 
 ```bash
@@ -136,6 +216,14 @@ curl -s -X POST http://127.0.0.1:8642/v1/runs \
 # 3. End to end: POST /api/research/projects/<id>/scout/ with a JWT, poll
 #    /api/research/agent-runs/<id>/, expect staged findings in the Review Inbox.
 ```
+
+**Visual check (optional, but the friendliest way to get a feel).** The gateway
+(`:8642`, JSON API) and the dashboard (`:9119`, web UI) are *separate processes* —
+the dashboard isn't needed to run anything, but it's the easiest way to confirm
+things by eye. Start it with `hermes dashboard` and open `http://127.0.0.1:9119`
+to watch served models, live sessions, tool calls, and logs as your smoke-test
+runs land; stop it with `hermes dashboard --stop`. On a headless server, tunnel
+the port rather than exposing it.
 
 ## 8. Cost containment (already enforced in code — knobs for reference)
 
