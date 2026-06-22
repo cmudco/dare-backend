@@ -132,7 +132,7 @@ async def add_semantic_context_to_messages(
     # --- Shared libraries (dedicated, un-scoped corpora; no user filter) ---
     if library_ids:
         library_snippets = await _search_libraries_for_query(
-            document_processor, query, library_ids, max_context_snippets
+            document_processor, query, library_ids, max_context_snippets, message_obj
         )
         if library_snippets:
             joined = "\n\n".join(library_snippets)
@@ -149,12 +149,38 @@ def _run_library_search(
     query: str,
     library_ids: List[int],
     max_context_snippets: int,
+    message_obj: Optional[Any],
 ) -> List[str]:
-    """Embed the query and search the selected libraries (sync; ORM + network)."""
+    """Embed the query, search the selected libraries, persist citation snippets,
+    and return formatted context strings (sync; ORM + network)."""
+    from conversations.models import Snippet
     from libraries.services.library_search import search_libraries
 
     query_embedding = document_processor.openai_client.create_embeddings(query)
-    return search_libraries(query_embedding, library_ids, top_k=max_context_snippets)
+    results = search_libraries(query_embedding, library_ids, top_k=max_context_snippets)
+
+    context_parts: List[str] = []
+    for result in results:
+        library = result["library"]
+        context_parts.append(
+            f"From {library.name} - {result['source_ref']} (shared library):\n"
+            f"{result['text']}"
+        )
+        if message_obj:
+            try:
+                Snippet.active_objects.create(
+                    message=message_obj,
+                    file=None,
+                    library=library,
+                    source_ref=result["source_ref"],
+                    text=result["text"],
+                    similarity_score=result["score"],
+                    chunk_index=result["chunk_index"],
+                )
+            except Exception as exc:
+                logger.warning("Failed to save library snippet: %s", exc)
+
+    return context_parts
 
 
 async def _search_libraries_for_query(
@@ -162,11 +188,12 @@ async def _search_libraries_for_query(
     query: str,
     library_ids: List[int],
     max_context_snippets: int,
+    message_obj: Optional[Any],
 ) -> List[str]:
     """Async wrapper — library search touches the ORM and opens vector clients."""
     try:
         return await sync_to_async(_run_library_search)(
-            document_processor, query, library_ids, max_context_snippets
+            document_processor, query, library_ids, max_context_snippets, message_obj
         )
     except Exception as exc:
         logger.warning("Library context retrieval failed: %s", exc)

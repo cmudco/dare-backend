@@ -1,10 +1,10 @@
-"""Query selected shared libraries and return provenance-tagged context.
+"""Query selected shared libraries and return structured matches.
 
 A shared library lives in a dedicated, un-scoped container (Pinecone namespace
 or Weaviate collection), so queries run near-vector against it with NO user
 filter. Results are blended into the RAG context alongside the user's own
-documents, tagged with their source so archival material is never mistaken for
-the user's own.
+documents and saved as citation snippets, tagged with their source so archival
+material is never mistaken for the user's own.
 """
 
 import logging
@@ -28,17 +28,11 @@ def search_libraries(
     library_ids: List[int],
     top_k: int = 10,
     similarity_threshold: float = 0.0,
-) -> List[str]:
-    """Search each selected library's container and return context snippets.
+) -> List[Dict]:
+    """Search each selected library's container and return structured matches.
 
-    Args:
-        query_vector: Embedding of the user's query (text-embedding-3-large).
-        library_ids: SharedLibrary ids the user selected for this query.
-        top_k: Max snippets per library.
-        similarity_threshold: Minimum score to keep a snippet.
-
-    Returns:
-        Provenance-tagged context strings, one per surviving snippet.
+    Returns a list of dicts, each: ``{library, text, source_ref, score,
+    chunk_index}`` — ready to both render as context and persist as a snippet.
     """
     if not library_ids:
         return []
@@ -47,7 +41,7 @@ def search_libraries(
         id__in=library_ids, is_available=True
     )
 
-    context_parts: List[str] = []
+    results: List[Dict] = []
     for library in libraries:
         store = LibraryVectorStore(library)
         try:
@@ -66,9 +60,18 @@ def search_libraries(
             text = metadata.get("text", "")
             if not text:
                 continue
-            source = metadata.get("source_ref") or metadata.get("title") or library.name
-            context_parts.append(
-                f"From {library.name} - {source} (shared library):\n{text}"
+            results.append(
+                {
+                    "library": library,
+                    "text": text,
+                    "source_ref": (
+                        metadata.get("source_ref")
+                        or metadata.get("title")
+                        or library.name
+                    ),
+                    "score": float(score),
+                    "chunk_index": int(metadata.get("chunk_index") or 0),
+                }
             )
 
-    return context_parts
+    return results

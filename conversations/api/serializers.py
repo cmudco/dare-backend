@@ -2,30 +2,31 @@ import json
 
 from djangorestframework_camel_case.util import camelize
 from rest_framework import serializers
-from conversations.models import (
-    LLM,
-    Message,
-    Conversation,
-    Snippet,
-    WebSearchSource,
-    Artifact,
-    ArtifactCheckpoint,
-    Feedback,
-    ModelCardData,
-    PublicFeedbackSourceCluster,
-    PublicFeedbackSource,
-    MessageToolCall,
-    ConversationSummary,
-)
-from core.services.energy_service import compute_relatable_stats
-from files.api.serializers import FileSerializer, TagSerializer
-from prompts.models import Prompt
-from prompts.api.serializers import PromptSerializer
-from users.constants import VectorDBChoice
-from mcp.models import MCPServer
-from dare_tools.models import DareTool
+
 from agents.models import Agent
 from conversations.constants import ToolCallOrigin
+from conversations.models import (
+    LLM,
+    Artifact,
+    ArtifactCheckpoint,
+    Conversation,
+    ConversationSummary,
+    Feedback,
+    Message,
+    MessageToolCall,
+    ModelCardData,
+    PublicFeedbackSource,
+    PublicFeedbackSourceCluster,
+    Snippet,
+    WebSearchSource,
+)
+from core.services.energy_service import compute_relatable_stats
+from dare_tools.models import DareTool
+from files.api.serializers import FileSerializer, TagSerializer
+from mcp.models import MCPServer
+from prompts.api.serializers import PromptSerializer
+from prompts.models import Prompt
+from users.constants import VectorDBChoice
 
 
 class LLMSerializer(serializers.ModelSerializer):
@@ -285,12 +286,15 @@ class ConversationSummarySerializer(serializers.ModelSerializer):
 class SnippetSerializer(serializers.ModelSerializer):
     file = FileSerializer(read_only=True)
     vector_db_source = serializers.SerializerMethodField()
+    library = serializers.SerializerMethodField()
 
     class Meta:
         model = Snippet
         fields = [
             "id",
             "file",
+            "library",
+            "source_ref",
             "text",
             "similarity_score",
             "chunk_index",
@@ -299,17 +303,29 @@ class SnippetSerializer(serializers.ModelSerializer):
         read_only_fields = [
             "id",
             "file",
+            "library",
+            "source_ref",
             "text",
             "similarity_score",
             "chunk_index",
             "vector_db_source",
         ]
 
+    def get_library(self, obj):
+        """Lightweight library reference for shared-library snippets."""
+        if obj.library_id is None:
+            return None
+        return {
+            "id": obj.library.id,
+            "name": obj.library.name,
+            "slug": obj.library.slug,
+        }
+
     def get_vector_db_source(self, obj):
         """Return the human-readable name of the vector database source."""
         if (
-            hasattr(obj.file, "vector_db_source")
-            and obj.file.vector_db_source is not None
+            obj.file is not None
+            and getattr(obj.file, "vector_db_source", None) is not None
         ):
             return dict(VectorDBChoice.choices).get(
                 obj.file.vector_db_source, "Unknown"
