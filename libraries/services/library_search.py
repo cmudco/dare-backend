@@ -28,11 +28,19 @@ def search_libraries(
     library_ids: List[int],
     top_k: int = 10,
     similarity_threshold: float = 0.0,
+    query_text: str = "",
+    include_vector: bool = False,
 ) -> List[Dict]:
     """Search each selected library's container and return structured matches.
 
     Returns a list of dicts, each: ``{library, text, source_ref, score,
-    chunk_index}`` — ready to both render as context and persist as a snippet.
+    chunk_index, vector?}`` — ready to both render as context and persist as a
+    snippet.
+
+    Passing ``query_text`` enables hybrid (BM25 + dense) retrieval on Weaviate
+    libraries so exact terms (names, certificate/case numbers) are matched
+    alongside semantic similarity. Pass ``include_vector`` to also return each
+    match's embedding (needed for MMR diversification).
     """
     if not library_ids:
         return []
@@ -45,7 +53,12 @@ def search_libraries(
     for library in libraries:
         store = LibraryVectorStore(library)
         try:
-            matches = store.query(query_vector, top_k=top_k)
+            matches = store.query(
+                query_vector,
+                top_k=top_k,
+                query_text=query_text,
+                include_vector=include_vector,
+            )
         except Exception as exc:
             logger.warning("Library search failed for %s: %s", library.slug, exc)
             continue
@@ -71,6 +84,7 @@ def search_libraries(
                     ),
                     "score": float(score),
                     "chunk_index": int(metadata.get("chunk_index") or 0),
+                    "vector": _match_field(match, "vector", None),
                 }
             )
 

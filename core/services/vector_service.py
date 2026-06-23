@@ -45,6 +45,7 @@ class BaseVectorClient(ABC):
         top_k: int = 5,
         namespace: Optional[str] = None,
         filter: Optional[Dict] = None,
+        query_text: str = "",
     ) -> List[Dict]:
         pass
 
@@ -76,6 +77,7 @@ class BaseVectorService(ABC):
         top_k: int = 5,
         namespace: Optional[str] = None,
         filter: Optional[Dict] = None,
+        query_text: str = "",
     ) -> List[Dict]:
         """Query similar vectors from the vector database."""
         pass
@@ -91,11 +93,19 @@ class BaseVectorService(ABC):
         pass
 
     def search_documents(
-        self, vector: List[float], user_id: int, file_ids: List[int], top_k: int = 10
+        self,
+        vector: List[float],
+        user_id: int,
+        file_ids: List[int],
+        top_k: int = 10,
+        query_text: str = "",
     ) -> List[Dict]:
         """
         Search for documents similar to the given vector.
         This provides a higher-level interface that works with document concepts.
+
+        Passing ``query_text`` enables hybrid (BM25 + dense) retrieval on
+        backends that support it (Weaviate); Pinecone stays dense-only.
         """
         filter_query = {
             "user_id": str(user_id),
@@ -107,6 +117,7 @@ class BaseVectorService(ABC):
             top_k=top_k,
             namespace=get_user_namespace(user_id),
             filter=filter_query,
+            query_text=query_text,
         )
 
     def delete_file_vectors(self, file_id: int, user_id: int) -> bool:
@@ -154,7 +165,9 @@ class PineconeVectorService(BaseVectorService):
         top_k: int = 5,
         namespace: Optional[str] = None,
         filter: Optional[Dict] = None,
+        query_text: str = "",
     ) -> List[Dict]:
+        # Pinecone path is dense-only here; query_text is accepted but unused.
         return self.client.query_vectors(vector, top_k, namespace, filter)
 
     def delete_vectors(self, ids: List[str], namespace: Optional[str] = None) -> bool:
@@ -185,8 +198,11 @@ class WeaviateVectorService(BaseVectorService):
         top_k: int = 5,
         namespace: Optional[str] = None,
         filter: Optional[Dict] = None,
+        query_text: str = "",
     ) -> List[Dict]:
-        return self.client.query_vectors(vector, top_k, namespace, filter)
+        return self.client.query_vectors(
+            vector, top_k, namespace, filter, query_text=query_text
+        )
 
     @client_operation
     def delete_vectors(self, ids: List[str], namespace: Optional[str] = None) -> bool:

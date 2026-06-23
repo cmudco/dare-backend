@@ -12,7 +12,7 @@ from typing import Dict, List, Tuple
 import weaviate
 from django.conf import settings
 from weaviate.classes.config import Configure, DataType, Property
-from weaviate.classes.query import MetadataQuery
+from weaviate.classes.query import HybridFusion, MetadataQuery
 
 # The library envelope, declared as a typed Weaviate schema.
 LIBRARY_PROPERTIES = [
@@ -72,19 +72,65 @@ class WeaviateLibraryClient:
                 batch.add_object(properties=props, vector=vector, uuid=weaviate_uuid)
 
     def query(
-        self, collection_name: str, vector: List[float], top_k: int = 10
+        self,
+        collection_name: str,
+        vector: List[float],
+        top_k: int = 10,
+        query_text: str = "",
+        include_vector: bool = False,
     ) -> List[Dict]:
-        """Near-vector search with NO user filter. Returns [{score, metadata}]."""
+        """Search with NO user filter. Returns [{score, metadata, vector?}].
+
+        When ``query_text`` is given, run a HYBRID search (BM25 keyword + dense
+        vector, fused with Reciprocal Rank Fusion) so exact terms — names,
+        certificate/case numbers, place names — are matched alongside meaning.
+        Falls back to pure near-vector when no text is supplied. Pass
+        ``include_vector`` to also return each object's embedding (needed for MMR).
+        """
         if not self.client.collections.exists(collection_name):
             return []
         collection = self.client.collections.get(collection_name)
-        response = collection.query.near_vector(
-            near_vector=vector,
-            limit=top_k,
-            return_metadata=MetadataQuery(distance=True),
-        )
+
+        def _vec(obj):
+            if not include_vector:
+                return None
+            v = getattr(obj, "vector", None)
+            return v.get("default") if isinstance(v, dict) else v
+
         results = []
-        for obj in response.objects:
-            distance = getattr(obj.metadata, "distance", 1.0)
-            results.append({"score": 1.0 - distance, "metadata": dict(obj.properties)})
+        if query_text:
+            response = collection.query.hybrid(
+                query=query_text,
+                vector=vector,
+                alpha=0.5,  # balanced keyword/vector blend
+                limit=top_k,
+                fusion_type=HybridFusion.RANKED,  # Reciprocal Rank Fusion
+                return_metadata=MetadataQuery(score=True),
+                include_vector=include_vector,
+            )
+            for obj in response.objects:
+                score = getattr(obj.metadata, "score", 0.0) or 0.0
+                results.append(
+                    {
+                        "score": score,
+                        "metadata": dict(obj.properties),
+                        "vector": _vec(obj),
+                    }
+                )
+        else:
+            response = collection.query.near_vector(
+                near_vector=vector,
+                limit=top_k,
+                return_metadata=MetadataQuery(distance=True),
+                include_vector=include_vector,
+            )
+            for obj in response.objects:
+                distance = getattr(obj.metadata, "distance", 1.0)
+                results.append(
+                    {
+                        "score": 1.0 - distance,
+                        "metadata": dict(obj.properties),
+                        "vector": _vec(obj),
+                    }
+                )
         return results

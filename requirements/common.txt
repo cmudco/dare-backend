@@ -70,6 +70,10 @@ pycryptodome==3.22.0
 # weaviate
 weaviate-client==4.14.1
 
+# Local cross-encoder reranker (Track A). Optional at runtime: only imported when
+# RAG_RERANKER_ENABLED is set; pulls in torch transitively (~CPU/MPS build).
+sentence-transformers~=5.6.0
+
 #email
 resend~=2.7.0
 

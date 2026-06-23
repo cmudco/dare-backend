@@ -46,9 +46,22 @@ class LibraryVectorStore:
         else:
             self._pinecone.upsert_vectors(items, namespace=self.library.namespace)
 
-    def query(self, vector: List[float], top_k: int = 10) -> List[Dict]:
+    def query(
+        self,
+        vector: List[float],
+        top_k: int = 10,
+        query_text: str = "",
+        include_vector: bool = False,
+    ) -> List[Dict]:
         if self.backend == VectorBackend.WEAVIATE:
-            return self._weaviate.query(self.library.weaviate_class, vector, top_k)
+            return self._weaviate.query(
+                self.library.weaviate_class,
+                vector,
+                top_k,
+                query_text=query_text,
+                include_vector=include_vector,
+            )
+        # Pinecone has no native BM25 here; keep it dense-only (query_text ignored).
         return self._pinecone.query_vectors(
             vector=vector, top_k=top_k, namespace=self.library.namespace, filter=None
         )
