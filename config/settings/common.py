@@ -15,9 +15,13 @@ from datetime import timedelta
 from config import env
 from config.sentry import init_sentry
 
-init_sentry(
-    dsn=env.SENTRY_DSN,
-)
+# Only initialize Sentry when a DSN is configured. sentry_sdk.init() eagerly
+# imports all auto-enabling integrations (incl. the Anthropic SDK, which is
+# ~30s to import), so calling it with no DSN just slows startup for no benefit.
+if env.SENTRY_DSN:
+    init_sentry(
+        dsn=env.SENTRY_DSN,
+    )
 
 SECRET_KEY = env.SECRET_KEY
 
