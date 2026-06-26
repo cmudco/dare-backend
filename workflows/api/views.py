@@ -10,6 +10,7 @@ from django.db.models import Prefetch
 from django.http import HttpResponse
 from django.template.loader import render_to_string
 from django.utils import timezone
+from django.utils.text import slugify
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -136,22 +137,33 @@ class WorkflowViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['get'], url_path='export')
     def export_workflow(self, request, pk=None):
-        """Export a workflow as a self-contained execution graph (JSON).
+        """Export a workflow as a self-contained JSON template (file download).
 
-        Intended for external runtimes (e.g. SyftBox) that execute the workflow
-        without access to Dare's database. File content and retrieval are
-        delegated back to Dare APIs at runtime, so only references are included.
+        Produces a portable template for external runtimes (e.g. a SyftBox app)
+        that recreate and execute the workflow without access to Dare's database
+        and without runtime calls back to Dare. Files are not included: nodes that
+        need a file declare upload slots (see ``required_inputs``) which the user
+        fulfills in the target app. The response is sent as a downloadable file.
         """
         workflow = self.get_object()
         try:
             data = WorkflowExportService().export(workflow)
-            return Response(data, status=status.HTTP_200_OK)
+            response = Response(data, status=status.HTTP_200_OK)
+            filename = self._export_filename(workflow)
+            response['Content-Disposition'] = f'attachment; filename="{filename}"'
+            return response
         except Exception as e:
             logger.error(f"Error exporting workflow {pk}: {str(e)}")
             return Response(
                 {"error": f"Failed to export workflow: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+    @staticmethod
+    def _export_filename(workflow) -> str:
+        """Build a safe, filesystem-friendly download filename for an export."""
+        slug = slugify(workflow.title) or f"workflow-{workflow.id}"
+        return f"{slug}.dare.json"
 
     @action(detail=True, methods=['post'], url_path='clone')
     def clone_workflow(self, request, pk=None):
