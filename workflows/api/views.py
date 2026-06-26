@@ -10,6 +10,7 @@ from django.db.models import Prefetch
 from django.http import HttpResponse
 from django.template.loader import render_to_string
 from django.utils import timezone
+from django.utils.text import slugify
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -26,7 +27,10 @@ from workflows.models import (
 )
 from workflows.handlers.utils.constants import NodeType
 from workflows.constants import SharingErrorCode
-from workflows.services import WorkflowCloningService, WorkflowSharingService, SharingValidationError
+from workflows.services import (
+    WorkflowCloningService, WorkflowSharingService, SharingValidationError,
+    WorkflowExportService,
+)
 from workflows.services.workflow_graph_service import WorkflowGraphService
 
 
@@ -130,6 +134,36 @@ class WorkflowViewSet(viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         serializer.save(user=self.request.user)
+
+    @action(detail=True, methods=['get'], url_path='export')
+    def export_workflow(self, request, pk=None):
+        """Export a workflow as a self-contained JSON template (file download).
+
+        Produces a portable template for external runtimes (e.g. a SyftBox app)
+        that recreate and execute the workflow without access to Dare's database
+        and without runtime calls back to Dare. Files are not included: nodes that
+        need a file declare upload slots (see ``required_inputs``) which the user
+        fulfills in the target app. The response is sent as a downloadable file.
+        """
+        workflow = self.get_object()
+        try:
+            data = WorkflowExportService().export(workflow)
+            response = Response(data, status=status.HTTP_200_OK)
+            filename = self._export_filename(workflow)
+            response['Content-Disposition'] = f'attachment; filename="{filename}"'
+            return response
+        except Exception as e:
+            logger.error(f"Error exporting workflow {pk}: {str(e)}")
+            return Response(
+                {"error": f"Failed to export workflow: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+    @staticmethod
+    def _export_filename(workflow) -> str:
+        """Build a safe, filesystem-friendly download filename for an export."""
+        slug = slugify(workflow.title) or f"workflow-{workflow.id}"
+        return f"{slug}.dare.json"
 
     @action(detail=True, methods=['post'], url_path='clone')
     def clone_workflow(self, request, pk=None):
