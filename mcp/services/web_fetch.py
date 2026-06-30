@@ -1,14 +1,16 @@
 """
-Page fetch for the MCP gateway — DARE's own web reader.
+DARE's own web tools for the MCP gateway — search and read.
 
-The agent runtime's built-in page extraction (Hermes ``web_extract``, Playwright-
-backed) proved slow — minutes on some pages. DARE's chat already has a fast,
-reliable reader: Anthropic's native ``web_fetch`` server tool (the same one the
-"Web Fetch" toggle drives in a normal conversation). The gateway exposes exactly
-that, as the builtin ``fetch_page`` tool, so a delegated agent reads pages the
-same way the chat does.
+The agent runtime's built-in web tools route through a credit-gated runtime
+gateway (and its page extraction proved slow — minutes on some pages). DARE's
+chat already has fast, reliable equivalents on the Anthropic API: the native
+``web_search`` and ``web_fetch`` server tools (the same ones the "Web Search" /
+"Web Fetch" toggles drive in a normal conversation). The gateway exposes exactly
+those, as the builtins ``web_search`` and ``fetch_page``, so a delegated agent
+searches and reads the same way the chat does — DARE-owned, audited, and with no
+dependency on the agent runtime's web tooling or its billing.
 
-Failure is honest: when the page genuinely can't be retrieved (paywall, block,
+Failure is honest: when a page genuinely can't be retrieved (paywall, block,
 robots, a fetch error), Anthropic returns a ``web_fetch_tool_error`` with an
 ``error_code`` — we raise on it rather than passing the model's polite refusal
 back as if it were page content. The gateway turns the raised error into a tool
@@ -25,9 +27,17 @@ logger = logging.getLogger(__name__)
 # A full paper should come through whole — truncating mid-paper degrades staging
 # quality. Runaway cost is contained by the per-run budget, not by chopping.
 MAX_CHARS = 40_000
-# Cheap model to drive the server-side fetch; the readable text comes from the
-# web_fetch tool result, not the model's own knowledge.
+# Cheap model to drive the server-side web tools; the results/text come from the
+# server tool result, not the model's own knowledge.
 WEB_FETCH_MODEL = "claude-haiku-4-5-20251001"
+WEB_SEARCH_MODEL = "claude-haiku-4-5-20251001"
+# How many results to hand back per search — enough to triage, not a flood.
+MAX_SEARCH_RESULTS = 8
+_SEARCH_TOOL = {
+    "type": "web_search_20250305",
+    "name": "web_search",
+    "max_uses": 1,
+}
 _BETA_HEADER = "web-fetch-2025-09-10"
 _TOOL = {
     "type": "web_fetch_20250910",
@@ -162,3 +172,85 @@ def fetch_page(url):
             "script-only page (this page only, not a tool error)."
         )
     return text[:MAX_CHARS]
+
+
+class SearchError(Exception):
+    """A web search could not be completed (no API key, request failed, no hits)."""
+
+
+def _search_results(message):
+    """The web_search_tool_result block's result list. Raises SearchError on the
+    tool's own error shape; returns [] when no result block is present."""
+    for block in message.content:
+        data = block.model_dump() if hasattr(block, "model_dump") else block
+        if not (
+            isinstance(data, dict) and data.get("type") == "web_search_tool_result"
+        ):
+            continue
+        content = data.get("content")
+        if isinstance(content, list):
+            return content
+        if (
+            isinstance(content, dict)
+            and content.get("type") == "web_search_tool_result_error"
+        ):
+            code = content.get("error_code", "unavailable")
+            raise SearchError(f"Web search failed ({code}).")
+    return []
+
+
+def web_search(query, max_results=MAX_SEARCH_RESULTS):
+    """
+    Search the web via Anthropic's native ``web_search`` tool — DARE's chat
+    searcher — and return a compact list of result links (title + URL + age),
+    so a delegated agent can triage sources and then read the best ones with
+    ``fetch_page``. Raises ``SearchError`` when the search can't be run, so the
+    gateway reports an honest tool error instead of a false empty success.
+    """
+    if not isinstance(query, str) or not query.strip():
+        raise SearchError("'query' must be a non-empty string.")
+
+    api_key = get_provider_api_key_sync(Provider.CLAUDE.value)
+    if not api_key:
+        raise SearchError("No Anthropic API key configured for web search.")
+
+    import anthropic
+
+    client = anthropic.Anthropic(api_key=api_key)
+    try:
+        message = client.messages.create(
+            model=WEB_SEARCH_MODEL,
+            max_tokens=128,
+            tools=[_SEARCH_TOOL],
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        "Use the web_search tool exactly once for the query "
+                        "below. Do not analyse or summarise the results — reply "
+                        f"with only the word DONE.\n\nQuery: {query.strip()}"
+                    ),
+                }
+            ],
+        )
+    except anthropic.APIError as exc:
+        raise SearchError(f"Web search request failed: {exc}") from exc
+
+    lines = []
+    for r in _search_results(message):
+        if not (isinstance(r, dict) and r.get("type") == "web_search_result"):
+            continue
+        url = (r.get("url") or "").strip()
+        if not url:
+            continue
+        title = (r.get("title") or "").strip() or url
+        age = (r.get("page_age") or "").strip()
+        lines.append(f"- {title}\n  {url}" + (f"  ({age})" if age else ""))
+        if len(lines) >= max_results:
+            break
+
+    if not lines:
+        raise SearchError(
+            f"No web results for '{query.strip()}' (try different terms)."
+        )
+    return "\n".join(lines)

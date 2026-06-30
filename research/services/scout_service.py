@@ -28,10 +28,11 @@ Workflow — search first, then READ before you stage:
    are run for you inside DARE — when present, their results are already in your
    input. Use those first and PRIORITIZE peer-reviewed scholarly results over
    generic web snippets, drawing candidates from EVERY tool that returned
-   results. For coverage they lack you may run web_search (AT MOST
-   %(max_searches)d calls total). Do NOT try to call consensus__search,
-   scite__search_literature, or any other research tool directly — they run only
-   server-side under the scholar's account, never from here.
+   results. For coverage they lack, run `mcp_dare_web_search` (DARE's own web
+   search — it returns result links) AT MOST %(max_searches)d times. Do NOT use
+   any runtime-native web_search / web_extract / browser tool, and do NOT try to
+   call consensus__search or scite__search_literature directly — the scholarly
+   tools run only server-side under the scholar's account, never from here.
 2. READ before you stage. Fetch a promising source's page with the `fetch_page`
    MCP tool (for papers, the DOI link: https://doi.org/<doi>) and quote the
    fetched text in `citationContext`. If the full text cannot be fetched
@@ -79,9 +80,10 @@ def build_scout_instructions(soul_content, max_candidates=4, max_searches=4):
     # credential-free builtins. The scholar's research tools run server-side
     # (their results are injected into the input), so they aren't callable here.
     parts.append(
-        "TOOLS FOR THIS RUN: web_search and mcp_dare_fetch_page only. The "
-        "scholar's research tools are not callable from here — their results "
-        "are already in your input."
+        "TOOLS FOR THIS RUN: mcp_dare_web_search and mcp_dare_fetch_page only — "
+        "DARE's own web search and reader. Do NOT use any runtime-native "
+        "web_search, web_extract, or browser tool. The scholar's research tools "
+        "are not callable from here — their results are already in your input."
     )
     return "\n\n".join(parts)
 

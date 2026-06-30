@@ -16,7 +16,7 @@ from asgiref.sync import async_to_sync
 
 from mcp.models import GatewayFetch, UserMCPConnection
 from mcp.services.mcp_tool_executor import mcp_tool_executor
-from mcp.services.web_fetch import fetch_page
+from mcp.services.web_fetch import fetch_page, web_search
 
 logger = logging.getLogger(__name__)
 
@@ -25,13 +25,32 @@ _SEP = "__"  # namespace separator: <server_slug>__<tool_name>
 
 # DARE-native gateway tools — available to every agent regardless of which MCP
 # servers the user connected. No namespace prefix (they're the gateway's own).
+# DARE-owned and audited, they run on DARE's API key (not the agent runtime's
+# web tooling), so search + read never depend on the runtime's tools or billing.
 _BUILTIN_TOOL_DEFS = [
+    {
+        "name": "web_search",
+        "description": (
+            "Search the web and return a list of result links (title + URL). "
+            "Prefer this over any runtime/native web_search tool. Then read the "
+            "best results with fetch_page."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "The search query"}
+            },
+            "required": ["query"],
+        },
+    },
     {
         "name": "fetch_page",
         "description": (
-            "Fetch a web page (article, abstract, paper landing page) and "
-            "return its readable text. Fast — prefer this over any browser or "
-            "extract tool for reading links found by search tools."
+            "Read ONE article/abstract/paper page and return its readable text. "
+            "Pass a single 'url' (an article URL, e.g. from web_search results). "
+            "Do NOT pass a search-engine results URL (Google/Scholar/DuckDuckGo) "
+            "— use web_search to find pages, then fetch_page to read them. Prefer "
+            "this over any browser or extract tool."
         ),
         "inputSchema": {
             "type": "object",
@@ -44,6 +63,7 @@ _BUILTIN_TOOL_DEFS = [
 ]
 
 _BUILTIN_HANDLERS = {
+    "web_search": lambda user, arguments: web_search(str(arguments.get("query") or "")),
     "fetch_page": lambda user, arguments: fetch_page(str(arguments.get("url") or "")),
 }
 
