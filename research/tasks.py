@@ -394,7 +394,7 @@ def _scout_input(run, task, soul_content):
             "re-stage these sources; find new or complementary evidence that "
             f"builds on them:\n{knowledge}"
         )
-    return text, run_tools
+    return text
 
 
 def _stage_items(run, items, soul, version):
@@ -462,7 +462,7 @@ def run_scout_job(run_id):
     hermes.provision_soul(soul_content)
 
     _set_status(run, "Querying research tools…")
-    scout_input, run_tools = _scout_input(run, run.task, soul_content)
+    scout_input = _scout_input(run, run.task, soul_content)
 
     _set_status(run, "Starting Scout…")
     quick = (run.selected_context or {}).get("depth") == "quick"
@@ -472,7 +472,6 @@ def run_scout_job(run_id):
         # justifies; 1 great source or 10 are both fine.
         max_candidates=3 if quick else 10,
         max_searches=2 if quick else 5,
-        allowed_tools=run_tools,
     )
     if not _start_run(hermes, run, scout_input, instructions):
         return

@@ -49,27 +49,22 @@ _BUILTIN_HANDLERS = {
 
 
 def list_user_tools(user):
-    """Namespaced tool definitions from the user's active connections."""
-    tools = list(_BUILTIN_TOOL_DEFS)
-    connections = UserMCPConnection.all_objects.filter(
-        user=user, is_active=True, is_deleted=False
-    ).select_related("server")
-    for conn in connections:
-        slug = conn.server.slug
-        for tool in conn.cached_tools or []:
-            name = tool.get("name")
-            if not name:
-                continue
-            tools.append(
-                {
-                    "name": f"{slug}{_SEP}{name}",
-                    "description": tool.get("description", "") or "",
-                    "inputSchema": tool.get("inputSchema")
-                    or tool.get("input_schema")
-                    or {"type": "object"},
-                }
-            )
-    return tools
+    """Tool definitions exposed to a delegated agent over the live gateway.
+
+    Tenant isolation (Path B): a live gateway call carries no project/run/owner
+    identity — Hermes forwards none — so the gateway cannot safely decide whose
+    credentials a `<server>__<tool>` call should use. It would fall back to the
+    shared service-user's credentials, leaking one tenant's tools to another.
+
+    So the live gateway exposes ONLY DARE-owned, credential-free builtins
+    (fetch_page). User-credentialed research tools (Consensus, Scite, Scholar)
+    are never exposed here; DARE runs them server-side under the project owner
+    (`gather_tool_results(run.user, …)`) and injects their results into the run.
+
+    `user` is accepted for signature stability but intentionally unused — the
+    live surface is identity-independent by design.
+    """
+    return list(_BUILTIN_TOOL_DEFS)
 
 
 def _doi_from_url(url):
@@ -329,25 +324,34 @@ def _handle_tool_call(user, rpc_id, params):
 
     if _SEP not in name:
         return _error(rpc_id, -32602, f"Unknown tool: {name!r}")
-    server_slug, tool_name = name.split(_SEP, 1)
-    try:
-        result = async_to_sync(mcp_tool_executor.execute_tool_call)(
-            user, server_slug, tool_name, arguments
-        )
-    except Exception as exc:  # noqa: BLE001 - surface as a tool error
-        logger.warning("MCP gateway tool %s failed: %s", name, exc)
-        _capture_error(user, name, str(exc), arguments)
-        return _error(rpc_id, -32000, str(exc))
 
-    # The executor returns the tool result; normalise to MCP content.
-    if not (isinstance(result, dict) and result.get("isError")):
-        _capture_fetch(user, name, _result_text(result).strip(), arguments)
-    else:
-        _capture_error(user, name, _result_text(result).strip(), arguments)
-    if isinstance(result, dict) and "content" in result:
-        return _result(rpc_id, result)
-    text = result if isinstance(result, str) else json.dumps(result)
-    return _result(rpc_id, {"content": [{"type": "text", "text": text}]})
+    # Tenant isolation (Path B): a namespaced, user-credentialed tool reached
+    # the live gateway, which has no identity to resolve the owner. Refuse it
+    # rather than fall back to the shared service-user's credentials (a
+    # cross-tenant leak). DARE runs these server-side under the project owner
+    # and provides the results in the run input. Returned as isError so the
+    # agent reads the reason and continues, and the audit records an honest
+    # refusal — never a false success.
+    logger.info("MCP gateway refused credentialed tool %s (server-side only)", name)
+    _capture_error(
+        user, name, "credentialed tool not available on the live gateway", arguments
+    )
+    return _result(
+        rpc_id,
+        {
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        f"{name} cannot be called here. The scholar's "
+                        "research-tool results are already in your input — use "
+                        "those, and read pages with fetch_page."
+                    ),
+                }
+            ],
+            "isError": True,
+        },
+    )
 
 
 def handle_jsonrpc(user, payload):

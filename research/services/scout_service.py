@@ -24,12 +24,14 @@ exception: if the request carries no research intent at all (a greeting, small
 talk, a test message), do not search — return {"stagingItems": []} immediately.
 
 Workflow — search first, then READ before you stage:
-1. SEARCH. Use the scholar's connected research MCP tools (e.g. consensus__search,
-   scite__search_literature) and/or web_search to find real, relevant sources for
-   the task. Credentialed results may already be provided in the input — use them.
-   PRIORITIZE peer-reviewed scholarly results (Scite, Consensus) over generic web
-   snippets, and draw candidates from EVERY scholarly tool that returned results,
-   not just one. Run AT MOST %(max_searches)d search calls total.
+1. SEARCH. The scholar's connected research tools (Scite, Consensus, Scholar)
+   are run for you inside DARE — when present, their results are already in your
+   input. Use those first and PRIORITIZE peer-reviewed scholarly results over
+   generic web snippets, drawing candidates from EVERY tool that returned
+   results. For coverage they lack you may run web_search (AT MOST
+   %(max_searches)d calls total). Do NOT try to call consensus__search,
+   scite__search_literature, or any other research tool directly — they run only
+   server-side under the scholar's account, never from here.
 2. READ before you stage. Fetch a promising source's page with the `fetch_page`
    MCP tool (for papers, the DOI link: https://doi.org/<doi>) and quote the
    fetched text in `citationContext`. If the full text cannot be fetched
@@ -65,9 +67,7 @@ Stage as many genuinely relevant sources as the evidence justifies, up to
 source just to stay short. `confidence` is a number from 0.0 to 1.0."""
 
 
-def build_scout_instructions(
-    soul_content, max_candidates=4, max_searches=4, allowed_tools=None
-):
+def build_scout_instructions(soul_content, max_candidates=4, max_searches=4):
     """Compose the run instructions: the soul file (standards) + the Scout brief."""
     parts = []
     if soul_content and soul_content.strip():
@@ -75,16 +75,14 @@ def build_scout_instructions(
     parts.append(
         SCOUT_BRIEF % {"max_candidates": max_candidates, "max_searches": max_searches}
     )
-    if allowed_tools:
-        # Prompt-level scoping: the gateway still exposes the scholar's whole
-        # toolbox (per-project gateway credentials are the structural fix), so
-        # the run names its permitted slice explicitly.
-        scoped = ", ".join(f"mcp_dare_{t}__*" for t in allowed_tools)
-        parts.append(
-            "TOOLS FOR THIS RUN: web_search, mcp_dare_fetch_page, and these "
-            f"research tools only: {scoped}. Do not call any other mcp_dare_* "
-            "tool — others may be visible but are out of scope for this run."
-        )
+    # Live tool surface (Path B): the gateway exposes only DARE-owned,
+    # credential-free builtins. The scholar's research tools run server-side
+    # (their results are injected into the input), so they aren't callable here.
+    parts.append(
+        "TOOLS FOR THIS RUN: web_search and mcp_dare_fetch_page only. The "
+        "scholar's research tools are not callable from here — their results "
+        "are already in your input."
+    )
     return "\n\n".join(parts)
 
 
