@@ -893,6 +893,11 @@ class Message(BaseModel):
         blank=True,
         help_text="Memory items used as context for this message. List of {content, memory_type, categories}.",
     )
+    retrieval_trace = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="Per-stage RAG pipeline trace (query analysis, hybrid, rerank, MMR, grounding) for the retrieval-trace UI.",
+    )
 
     # Content type for specialized rendering (diagrams, charts, etc.)
     content_type = models.CharField(
