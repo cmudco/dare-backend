@@ -142,8 +142,17 @@ def _chat_instructions(project, soul_content, history=""):
     parts = [soul_content] if soul_content else []
     parts.append(CHAT_BRIEF)
     context = []
-    if project.question:
-        context.append(f"The project's research question: {project.question}")
+    if project.question and project.question.strip():
+        context.append(
+            "The project's research question (what this project is about): "
+            + project.question.strip()
+        )
+    else:
+        context.append(
+            "This project has no research question set yet. If the scholar's "
+            "message implies a research topic, help them articulate and sharpen "
+            "it into one — never claim you have no idea what the project is about."
+        )
     knowledge = _knowledge_block(project)
     if knowledge:
         context.append(f"The scholar's approved project knowledge so far:\n{knowledge}")

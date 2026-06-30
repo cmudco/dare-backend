@@ -347,9 +347,21 @@ def _finalize_at_budget(hermes, run):
 
 
 def _scout_input(run, task, soul_content):
-    """The Scout task plus DARE-side context: credentialed results + knowledge."""
+    """The Scout task plus DARE-side context: the project's research question
+    (the bare-minimum framing — what this project is about), credentialed
+    results, and approved knowledge."""
     project = run.project
     text = task
+    # Always anchor the task in the project's research question — that overall
+    # framing is the whole point of research mode, so Scout judges relevance
+    # against it rather than treating the task in a vacuum.
+    if project.question and project.question.strip():
+        question = project.question.strip()
+        if question != task.strip():
+            text = (
+                f"Project research question (overall context): {question}\n\n"
+                f"Scout task for this run: {task}"
+            )
 
     # DARE executes the scholar's connected research tools itself (creds and
     # audit stay here) and both logs the calls and injects the results.
