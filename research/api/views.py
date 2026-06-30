@@ -2,16 +2,18 @@
 ViewSets and views for the Research app API.
 """
 
+import io
 import json
 import logging
+import zipfile
 
-from django.http import StreamingHttpResponse
+from django.http import HttpResponse, StreamingHttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from djangorestframework_camel_case.render import CamelCaseJSONRenderer
 from rest_framework import mixins, status, viewsets
 from rest_framework.permissions import IsAuthenticated
-from rest_framework.renderers import BaseRenderer
+from rest_framework.renderers import BaseRenderer, JSONRenderer
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -37,13 +39,20 @@ from research.models import (
     ResearchChatMessage,
     ResearchKnowledgeItem,
     ResearchProject,
+    ResearchProjectMemory,
     ResearchSession,
     ResearchStagingItem,
+    ResearchThesisSource,
     SoulFile,
     SoulFileVersion,
 )
 from research.services import get_hermes_service
 from research.services.graph_service import build_evidence_graph
+from research.services.okf_service import (
+    build_okf_bundle,
+    build_okf_view,
+    bundle_filename,
+)
 from research.tasks import (
     _knowledge_block,
     _match_gateway_fetch,
@@ -575,6 +584,131 @@ class ResearchProjectGraphView(APIView):
             ResearchProject.active_objects, id=project_id, user=request.user
         )
         return Response(build_evidence_graph(project), status=status.HTTP_200_OK)
+
+
+class ResearchProjectOKFExportView(APIView):
+    """
+    GET /api/research/projects/{id}/okf-export/ — the project's durable
+    knowledge as a downloadable Open Knowledge Format (OKF v0.1) bundle: a zip
+    of markdown files with YAML frontmatter. Durable layer only (promoted
+    knowledge + project memory); staging is never exported. See
+    research.services.okf_service.
+    """
+
+    permission_classes = [IsAuthenticated, IsResearcherOrAbove]
+
+    def get(self, request, project_id):
+        project = get_object_or_404(
+            ResearchProject.active_objects, id=project_id, user=request.user
+        )
+        bundle = build_okf_bundle(project)
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+            for path, content in bundle.items():
+                archive.writestr(path, content)
+        response = HttpResponse(buffer.getvalue(), content_type="application/zip")
+        response["Content-Disposition"] = (
+            f'attachment; filename="{bundle_filename(project)}"'
+        )
+        return response
+
+
+class ResearchProjectOKFBundleView(APIView):
+    """
+    GET /api/research/projects/{id}/okf-bundle/ — the same durable-knowledge OKF
+    bundle as the zip export, but as structured JSON (ordered files with parsed
+    frontmatter + markdown body, plus the source-citation link graph) for the
+    in-app Maps viewer. See research.services.okf_service.build_okf_view.
+
+    Uses the plain JSONRenderer (not the global CamelCase one) so OKF frontmatter
+    keys stay verbatim — `evidence_label`, `soul_file_version` etc. are exactly
+    what the exported .md files carry, and must not be camelCased.
+    """
+
+    permission_classes = [IsAuthenticated, IsResearcherOrAbove]
+    renderer_classes = [JSONRenderer]
+
+    def get(self, request, project_id):
+        project = get_object_or_404(
+            ResearchProject.active_objects, id=project_id, user=request.user
+        )
+        return Response(build_okf_view(project), status=status.HTTP_200_OK)
+
+
+class ResearchThesisSourceLinkView(APIView):
+    """
+    Manage the typed links between a thesis (ResearchProjectMemory) and the
+    durable sources that bear on it — the relationship that drives the OKF
+    bundle's "Supported by / Disputed by" sections.
+
+    - GET  /api/research/theses/{memory_id}/sources/  — list links
+    - POST /api/research/theses/{memory_id}/sources/  — body {sourceId, stance?};
+      stance defaults to the source's own evidence label when omitted.
+    """
+
+    permission_classes = [IsAuthenticated, IsResearcherOrAbove]
+
+    def _thesis(self, request, memory_id):
+        return get_object_or_404(
+            ResearchProjectMemory.active_objects,
+            id=memory_id,
+            project__user=request.user,
+        )
+
+    def get(self, request, memory_id):
+        thesis = self._thesis(request, memory_id)
+        links = ResearchThesisSource.active_objects.filter(thesis=thesis)
+        return Response(
+            [{"sourceId": link.source_id, "stance": link.stance} for link in links]
+        )
+
+    def post(self, request, memory_id):
+        thesis = self._thesis(request, memory_id)
+        source = get_object_or_404(
+            ResearchKnowledgeItem.active_objects,
+            id=request.data.get("sourceId") or request.data.get("source_id"),
+            project=thesis.project,
+        )
+        stance = (request.data.get("stance") or "").strip()
+        if not stance:
+            si = source.source_staging_item
+            stance = (si.evidence_label if si else "") or ""
+        link, _ = ResearchThesisSource.objects.get_or_create(
+            thesis=thesis,
+            source=source,
+            defaults={"stance": stance, "created_by": request.user},
+        )
+        changed = False
+        if not link.is_active or link.is_deleted:
+            link.is_active, link.is_deleted = True, False
+            changed = True
+        if stance and link.stance != stance:
+            link.stance = stance
+            changed = True
+        if changed:
+            link.save()
+        return Response(
+            {"sourceId": source.id, "stance": link.stance},
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class ResearchThesisSourceLinkDetailView(APIView):
+    """DELETE /api/research/theses/{memory_id}/sources/{source_id}/ — unlink."""
+
+    permission_classes = [IsAuthenticated, IsResearcherOrAbove]
+
+    def delete(self, request, memory_id, source_id):
+        thesis = get_object_or_404(
+            ResearchProjectMemory.active_objects,
+            id=memory_id,
+            project__user=request.user,
+        )
+        for link in ResearchThesisSource.active_objects.filter(
+            thesis=thesis, source_id=source_id
+        ):
+            link.soft_delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class ResearchAgentMemoryView(APIView):

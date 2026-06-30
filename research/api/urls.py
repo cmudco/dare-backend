@@ -11,11 +11,15 @@ from research.api.views import (
     ResearchArtifactGenerateView,
     ResearchChatView,
     ResearchProjectGraphView,
+    ResearchProjectOKFBundleView,
+    ResearchProjectOKFExportView,
     ResearchProjectViewSet,
     ResearchScoutView,
     ResearchSoulFileView,
     ResearchStagingItemCriticView,
     ResearchStagingItemReviewView,
+    ResearchThesisSourceLinkDetailView,
+    ResearchThesisSourceLinkView,
 )
 
 router = DefaultRouter()
@@ -46,6 +50,26 @@ urlpatterns = [
         "projects/<int:project_id>/graph/",
         ResearchProjectGraphView.as_view(),
         name="research-project-graph",
+    ),
+    path(
+        "projects/<int:project_id>/okf-export/",
+        ResearchProjectOKFExportView.as_view(),
+        name="research-project-okf-export",
+    ),
+    path(
+        "projects/<int:project_id>/okf-bundle/",
+        ResearchProjectOKFBundleView.as_view(),
+        name="research-project-okf-bundle",
+    ),
+    path(
+        "theses/<int:memory_id>/sources/",
+        ResearchThesisSourceLinkView.as_view(),
+        name="research-thesis-sources",
+    ),
+    path(
+        "theses/<int:memory_id>/sources/<int:source_id>/",
+        ResearchThesisSourceLinkDetailView.as_view(),
+        name="research-thesis-source-detail",
     ),
     path(
         "staging-items/<int:item_id>/review/",

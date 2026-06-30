@@ -833,6 +833,59 @@ class ResearchKnowledgeItem(BaseModel):
         return f"knowledge ({self.project_id})"
 
 
+class ResearchThesisSource(BaseModel):
+    """
+    A direct, typed link between a thesis (ResearchProjectMemory) and a durable
+    source (ResearchKnowledgeItem) that bears on it.
+
+    The shared project FK only says "same project"; it cannot express that a
+    given source *supports* or *disputes* a given thesis. This is that missing
+    edge. `stance` says how the source bears on the thesis (supporting /
+    disputing / partial / …, free-form like evidence_label); it defaults to the
+    source's own evidence label when set via the API. Only the scholar creates
+    these, and they drive the OKF bundle's "Supported by / Disputed by" links.
+    """
+
+    thesis = models.ForeignKey(
+        ResearchProjectMemory,
+        on_delete=models.CASCADE,
+        related_name="source_links",
+        help_text="The thesis / open question / decision.",
+    )
+    source = models.ForeignKey(
+        ResearchKnowledgeItem,
+        on_delete=models.CASCADE,
+        related_name="thesis_links",
+        help_text="The durable source that bears on the thesis.",
+    )
+    stance = models.CharField(
+        max_length=32,
+        blank=True,
+        default="",
+        help_text="How the source bears on the thesis: supporting/disputing/partial/… (free-form).",
+    )
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="research_thesis_source_links",
+        help_text="The scholar who established the link.",
+    )
+
+    objects = models.Manager()
+    active_objects = ActiveObjectsManager()
+
+    class Meta:
+        verbose_name = "Research Thesis-Source Link"
+        verbose_name_plural = "Research Thesis-Source Links"
+        ordering = ["-created_at"]
+        unique_together = ("thesis", "source")
+
+    def __str__(self):
+        return f"thesis {self.thesis_id} -[{self.stance or 'related'}]-> source {self.source_id}"
+
+
 class ResearchArtifact(BaseModel):
     """
     A renderable artifact produced for a project (diagram, HTML, SVG, Excalidraw,
