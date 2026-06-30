@@ -2,6 +2,7 @@
    query -> hybrid(pool) -> local cross-encoder rerank -> [S#] cited context.
 Runs the REAL _run_library_search against the live pension library.
 """
+
 import os
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings.local")
@@ -12,11 +13,11 @@ import django
 
 django.setup()
 
-from core.services import reranker_service
 from core.services.document_processor import DocumentProcessor
 from core.services.llm_helpers.semantic_context_helpers import _run_library_search
+from core.services.rag import Reranker
 
-print("reranker enabled:", reranker_service.is_enabled())
+print("reranker enabled:", Reranker().is_enabled())
 dp = DocumentProcessor()
 parts = _run_library_search(
     dp,

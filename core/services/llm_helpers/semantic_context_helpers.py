@@ -11,9 +11,16 @@ from typing import Any, Dict, List, Optional, Set
 from asgiref.sync import sync_to_async
 
 from core.services.document_processor import DocumentProcessor
+from core.services.rag import RetrievalRequest, build_pipeline
+from core.services.rag.config import bool_flag
 from core.services.vector_service import get_vector_service_async
 
-from .db_helpers import get_files_from_folders, get_files_from_tags
+from .db_helpers import (
+    get_files_from_folders,
+    get_files_from_tags,
+    save_library_snippet,
+    save_retrieval_trace,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -159,99 +166,28 @@ def _run_library_search(
     max_context_snippets: int,
     message_obj: Optional[Any],
 ) -> List[str]:
-    """Run the Track-A library pipeline and return formatted, cited context.
+    """Thin entry: delegate to the RAG pipeline; persist library citation snippets.
 
-    query analysis (intent) -> hybrid retrieve -> rerank -> conditional MMR
-    -> answer-grounding -> token-budgeted, [S#]-cited context. Every advanced
-    stage is opt-in and degrades safely to plain hybrid retrieval.
+    All heavy lifting (query analysis, hybrid retrieve, rerank, conditional MMR,
+    grounding, [S#] assembly) lives in ``core.services.rag``.
     """
-    from django.conf import settings
-
-    from conversations.models import Snippet
-    from core.services import query_analysis_service, rag_postprocess, reranker_service
-    from libraries.services.library_search import search_libraries
-
-    # 1) Understand the query (optional). intent gates conditional MMR; the
-    #    rewritten/HyDE text feeds retrieval only when HyDE is explicitly enabled.
-    plan = query_analysis_service.analyze_query(query)
-    exploratory = bool(plan) and plan.get("intent") == "exploratory"
-
-    dense_text, bm25_text = query, query
-    if plan and query_analysis_service.use_hyde():
-        dense_text = plan.get("hyde_passage") or query
-        bm25_text = plan.get("rewritten_query") or query
-
-    query_embedding = document_processor.openai_client.create_embeddings(dense_text)
-
-    # 2) Retrieve a wider pool when we will rerank or diversify it down.
-    want_mmr = exploratory  # diversify only broad questions; never precise lookups
-    rerank_on = reranker_service.is_enabled()
-    multiplier = 5 if rerank_on else (4 if want_mmr else 1)
-    pool_k = max_context_snippets * multiplier
-    results = search_libraries(
-        query_embedding,
-        library_ids,
-        top_k=pool_k,
-        query_text=bm25_text,
-        include_vector=want_mmr,  # MMR needs candidate embeddings
+    trace_on = bool_flag("RAG_TRACE_ENABLED")
+    request = RetrievalRequest(
+        query=query,
+        top_k=max_context_snippets,
+        library_ids=tuple(library_ids),
+        trace=trace_on,
     )
+    pipeline = build_pipeline("library", document_processor.openai_client)
 
-    # 3) Rerank for true relevance (keep a wider set if MMR will trim it further).
-    if rerank_on:
-        working_k = max_context_snippets * 2 if want_mmr else max_context_snippets
-        results = reranker_service.rerank(query, results, top_k=working_k)
-
-    # 4) Conditional MMR — diversity for exploratory queries only.
-    if want_mmr:
-        results = rag_postprocess.mmr_diversify(
-            query_embedding, results, top_k=max_context_snippets
-        )
-    else:
-        results = results[:max_context_snippets]
-
-    # 5) Answer-grounding: only trust the flag when the calibrated reranker ran.
-    context_parts: List[str] = []
-    if rerank_on:
-        grounding = rag_postprocess.answer_grounding(results)
-        if not grounding["answer_found"]:
-            context_parts.append(
-                "[grounding] Retrieval confidence is low "
-                f"(top score {grounding['top_score']:.2f}). If the passages below "
-                "do not answer the question, say it is not in the sources."
-            )
-
-    # 6) Assemble: per-snippet cap + total budget + [S#] inline citations.
-    char_budget = int(getattr(settings, "RAG_CONTEXT_CHAR_BUDGET", 16000))
-    snippet_cap = int(getattr(settings, "RAG_SNIPPET_CHAR_CAP", 2000))
-    used = 0
-    for idx, result in enumerate(results, 1):
-        library = result["library"]
-        text = result["text"]
-        if len(text) > snippet_cap:
-            text = text[:snippet_cap].rstrip() + " …"
-        block = (
-            f"[S{idx}] {library.name} - {result['source_ref']} (shared library):\n"
-            f"{text}"
-        )
-        if used + len(block) > char_budget and context_parts:
-            break  # stay within the prompt budget
-        used += len(block)
-        context_parts.append(block)
+    def _persist(_position, chunk) -> None:
         if message_obj:
-            try:
-                Snippet.active_objects.create(
-                    message=message_obj,
-                    file=None,
-                    library=library,
-                    source_ref=result["source_ref"],
-                    text=result["text"],
-                    similarity_score=result["score"],
-                    chunk_index=result["chunk_index"],
-                )
-            except Exception as exc:
-                logger.warning("Failed to save library snippet: %s", exc)
+            save_library_snippet(message_obj, chunk)
 
-    return context_parts
+    result = pipeline.run(request, on_keep=_persist)
+    if trace_on and message_obj and result.trace:
+        save_retrieval_trace(message_obj, result.trace.to_payload())
+    return result.blocks
 
 
 async def _search_libraries_for_query(
