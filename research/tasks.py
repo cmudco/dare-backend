@@ -167,18 +167,23 @@ def _token_count(text):
 
 
 def _match_gateway_fetch(run, tool, want_error=False):
-    """The GatewayFetch this agent gateway call produced — matched by user and
-    normalised tool name, taking the most recent one in the run's window. The
-    gateway captures the full response (the event stream carries only the tool
-    name and a pass/fail bit), so this is how a `mcp_dare_*` call gets its result
-    or, with want_error, the real failure reason it hit. Returns None for native
-    tools (web_search) that never touch the gateway."""
+    """The GatewayFetch this agent gateway call produced — matched by normalised
+    tool name within the run's window, most recent first (its result, or with
+    want_error the real failure reason). Returns None for native tools
+    (web_search) that never touch the gateway.
+
+    We deliberately do NOT filter by run.user: the live gateway authenticates as
+    the shared service account (Hermes opens one global MCP connection and
+    forwards no per-run identity), so these rows are stored under THAT account,
+    not the project owner — filtering by run.user silently dropped every reason
+    in multi-user runs (the empty-red bug). Scoping is best-effort by time
+    window; the gateway builtins are DARE-owned public fetches, so a rare
+    cross-run match only changes which reason the audit shows, never tool
+    execution or credentials."""
     if not tool.startswith(_GATEWAY_PREFIX):
         return None
     base = tool[len(_GATEWAY_PREFIX) :]
-    qs = GatewayFetch.all_objects.filter(
-        user=run.user, tool=base, created_at__gte=run.started_at
-    )
+    qs = GatewayFetch.all_objects.filter(tool=base, created_at__gte=run.started_at)
     qs = qs.exclude(error="") if want_error else qs.filter(error="")
     return qs.order_by("-created_at").first()
 
