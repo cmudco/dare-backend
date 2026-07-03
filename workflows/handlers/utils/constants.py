@@ -274,6 +274,19 @@ class ValidationRule:
     MAX_ROUTE_NAME_LENGTH = 100
 
 
+# ==================== Export Node Types ====================
+
+EXCLUDED_NODE_TYPES = {NodeType.NOTES}
+
+RUNTIME_NODE_TYPE = {
+    NodeType.START: "start",
+    NodeType.STEP: "step",
+    NodeType.STRUCTURED_OUTPUT: "router",
+    NodeType.FILE: "file",
+    NodeType.CHAT_OUTPUT: "output",
+}
+
+
 # ==================== Export All ====================
 
 __all__ = [
@@ -294,4 +307,6 @@ __all__ = [
     "RetryConfig",
     "LogConfig",
     "ValidationRule",
+    "EXCLUDED_NODE_TYPES",
+    "RUNTIME_NODE_TYPE",
 ]

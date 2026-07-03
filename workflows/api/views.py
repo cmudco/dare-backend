@@ -10,6 +10,7 @@ from django.db.models import Prefetch
 from django.http import HttpResponse
 from django.template.loader import render_to_string
 from django.utils import timezone
+from django.utils.text import slugify
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -27,6 +28,7 @@ from workflows.models import (
 from workflows.handlers.utils.constants import NodeType
 from workflows.constants import SharingErrorCode
 from workflows.services import WorkflowCloningService, WorkflowSharingService, SharingValidationError
+from workflows.services.export_workflow import WorkflowExportService
 from workflows.services.workflow_graph_service import WorkflowGraphService
 
 
@@ -256,6 +258,24 @@ class WorkflowViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+    @action(detail=True, methods=['get'], url_path='export')
+    def export_workflow(self, request, pk=None):
+        """Export a workflow as a self-contained JSON file download."""
+        workflow = self.get_object()
+        try:
+            data = WorkflowExportService().export(workflow)
+            slug = slugify(workflow.title)[:40] or f"workflow-{workflow.id}"
+            filename = f"{slug}.json"
+            response = Response(data, status=status.HTTP_200_OK)
+            response['Content-Disposition'] = f'attachment; filename="{filename}"'
+            return response
+        except Exception as e:
+            logger.error(f"Error exporting workflow {pk}: {str(e)}")
+            return Response(
+                {"error": f"Failed to export workflow: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
 
 class WorkflowRunViewSet(viewsets.ModelViewSet):
     """
@@ -428,3 +448,5 @@ class WorkflowRunViewSet(viewsets.ModelViewSet):
                 {'error': f'Failed to generate PDF: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+    
+
