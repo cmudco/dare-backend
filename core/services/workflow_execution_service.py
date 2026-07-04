@@ -211,7 +211,7 @@ class WorkflowExecutionService:
                     routes=result.metadata.get('available_routes', []),
                     context={'label': result.metadata.get('label'),
                              'customPrompt': result.metadata.get('custom_prompt'),
-                             'aiAnalysis': result.metadata.get('ai_analysis')},
+                             'aiAnalysis': result.metadata.get('explanation') or result.metadata.get('analysis')},
                     ai_recommendation=result.metadata.get('ai_recommendation'),
                     workflow_run_id=workflow_run.id
                 ))
