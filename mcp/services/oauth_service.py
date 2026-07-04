@@ -148,8 +148,11 @@ class MCPOAuthService:
         if not frontend_base:
             return ""
         params = urlencode({"server": server_slug, "status": status, "message": message})
-        mcp_path = f"/mcp/{server_slug}" if server_slug else "/mcp"
-        return f"{frontend_base.rstrip('/')}{mcp_path}?{params}"
+        # Land on the dedicated callback page, which renders a proper
+        # success/error state (the slug travels in `params`, not the path).
+        # This route is not feature-flag gated on the frontend, so a failed
+        # connect no longer falls through to a 404.
+        return f"{frontend_base.rstrip('/')}/mcp/callback?{params}"
 
     async def _post_token_request(self, url: str, payload: dict[str, str]) -> MCPOAuthToken:
         try:
