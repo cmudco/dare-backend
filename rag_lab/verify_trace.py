@@ -1,13 +1,11 @@
 """Print the pipelineTrace payload the frontend will consume, for two queries
-(precise -> MMR skipped; exploratory -> MMR applied). Flags on; MiniLM for speed.
+(precise -> MMR skipped; exploratory -> MMR applied). MiniLM for speed.
 """
 
 import json
 import os
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings.local")
-os.environ["RAG_QUERY_ANALYSIS_ENABLED"] = "1"
-os.environ["RAG_RERANKER_ENABLED"] = "1"
 os.environ.setdefault("RAG_RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
 
 import django

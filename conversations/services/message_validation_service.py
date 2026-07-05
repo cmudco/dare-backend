@@ -6,7 +6,7 @@ Provides type-safe extraction of message data with defaults.
 """
 
 from typing import Dict, Any, List, Optional
-from conversations.constants import SenderType
+from conversations.constants import RagMode, SenderType
 
 
 class MessageValidationService:
@@ -18,6 +18,7 @@ class MessageValidationService:
     DEFAULT_MAX_CONTEXT_SNIPPETS = 10
     DEFAULT_DOCUMENT_SIMILARITY_THRESHOLD = 0.7
     DEFAULT_HISTORY_LIMIT = 10
+    DEFAULT_RAG_MODE = RagMode.ADVANCED
 
     @classmethod
     def validate_and_parse(
@@ -70,6 +71,7 @@ class MessageValidationService:
                 "document_similarity_threshold",
                 cls.DEFAULT_DOCUMENT_SIMILARITY_THRESHOLD,
             ),
+            "rag_mode": cls._get_rag_mode(data),
             "history_limit": data.get("history_limit", cls.DEFAULT_HISTORY_LIMIT),
             # Feature flags
             "web_search_enabled": data.get("web_search_enabled"),
@@ -124,6 +126,12 @@ class MessageValidationService:
         return value if isinstance(value, list) else []
 
     @classmethod
+    def _get_rag_mode(cls, data: Dict[str, Any]) -> str:
+        value = data.get("rag_mode", data.get("ragMode", cls.DEFAULT_RAG_MODE))
+        valid_modes = {choice.value for choice in RagMode}
+        return value if value in valid_modes else cls.DEFAULT_RAG_MODE
+
+    @classmethod
     def validate_required_fields(
         cls, data: Dict[str, Any], required_fields: List[str]
     ) -> tuple[bool, Optional[str]]:
@@ -165,6 +173,7 @@ class MessageValidationService:
                 "document_similarity_threshold",
                 cls.DEFAULT_DOCUMENT_SIMILARITY_THRESHOLD,
             ),
+            "rag_mode": cls._get_rag_mode(data),
             "history_limit": data.get("history_limit", cls.DEFAULT_HISTORY_LIMIT),
             "web_search_enabled": data.get("web_search_enabled"),
             "web_fetch_enabled": data.get("web_fetch_enabled"),

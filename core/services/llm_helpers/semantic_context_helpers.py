@@ -10,10 +10,16 @@ from typing import Any, Dict, List, Optional, Set
 
 from asgiref.sync import sync_to_async
 
+from conversations.constants import RagMode
 from core.services.document_processor import DocumentProcessor
-from core.services.rag import RetrievalRequest, build_pipeline
-from core.services.rag.config import bool_flag
+from core.services.rag import (
+    ContextAssembler,
+    RetrievalRequest,
+    RetrievedChunk,
+    build_pipeline,
+)
 from core.services.vector_service import get_vector_service_async
+from libraries.services.library_search import search_libraries
 
 from .db_helpers import (
     get_files_from_folders,
@@ -74,6 +80,7 @@ async def add_semantic_context_to_messages(
     is_socratic_mode: bool,
     similarity_threshold: float,
     max_context_snippets: int,
+    rag_mode: str = RagMode.ADVANCED,
     message_obj: Optional[Any] = None,
     workflow_run_step_obj: Optional[Any] = None,
 ) -> None:
@@ -95,6 +102,7 @@ async def add_semantic_context_to_messages(
         is_socratic_mode: Whether Socratic mode is enabled
         similarity_threshold: Base similarity threshold
         max_context_snippets: Max number of snippets to retrieve
+        rag_mode: Retrieval mode for shared library context
         message_obj: Optional message for snippet tracking
         workflow_run_step_obj: Optional workflow step for snippet tracking
     """
@@ -143,7 +151,12 @@ async def add_semantic_context_to_messages(
     # --- Shared libraries (dedicated, un-scoped corpora; no user filter) ---
     if library_ids:
         library_snippets = await _search_libraries_for_query(
-            document_processor, query, library_ids, max_context_snippets, message_obj
+            document_processor,
+            query,
+            library_ids,
+            max_context_snippets,
+            rag_mode,
+            message_obj,
         )
         if library_snippets:
             joined = "\n\n".join(library_snippets)
@@ -171,12 +184,11 @@ def _run_library_search(
     All heavy lifting (query analysis, hybrid retrieve, rerank, conditional MMR,
     grounding, [S#] assembly) lives in ``core.services.rag``.
     """
-    trace_on = bool_flag("RAG_TRACE_ENABLED")
     request = RetrievalRequest(
         query=query,
         top_k=max_context_snippets,
         library_ids=tuple(library_ids),
-        trace=trace_on,
+        trace=True,
     )
     pipeline = build_pipeline("library", document_processor.openai_client)
 
@@ -185,9 +197,44 @@ def _run_library_search(
             save_library_snippet(message_obj, chunk)
 
     result = pipeline.run(request, on_keep=_persist)
-    if trace_on and message_obj and result.trace:
+    if message_obj and result.trace:
         save_retrieval_trace(message_obj, result.trace.to_payload())
     return result.blocks
+
+
+def _run_naive_library_search(
+    document_processor: DocumentProcessor,
+    query: str,
+    library_ids: List[int],
+    max_context_snippets: int,
+    message_obj: Optional[Any],
+) -> List[str]:
+    """Dense-only shared-library lookup for baseline RAG mode."""
+    query_vector = document_processor.openai_client.create_embeddings(query)
+    matches = search_libraries(
+        query_vector,
+        library_ids,
+        top_k=max_context_snippets,
+        query_text="",
+        include_vector=False,
+    )
+    chunks = [
+        RetrievedChunk(
+            text=match["text"],
+            source_ref=match["source_ref"],
+            score=match["score"],
+            chunk_index=match.get("chunk_index", 0),
+            source_type="library",
+            library=match.get("library"),
+        )
+        for match in matches
+    ]
+
+    def _persist(_position, chunk) -> None:
+        if message_obj:
+            save_library_snippet(message_obj, chunk)
+
+    return ContextAssembler().assemble(chunks, on_keep=_persist)
 
 
 async def _search_libraries_for_query(
@@ -195,10 +242,19 @@ async def _search_libraries_for_query(
     query: str,
     library_ids: List[int],
     max_context_snippets: int,
+    rag_mode: str,
     message_obj: Optional[Any],
 ) -> List[str]:
     """Async wrapper — library search touches the ORM and opens vector clients."""
     try:
+        if rag_mode == RagMode.NAIVE:
+            return await sync_to_async(_run_naive_library_search)(
+                document_processor,
+                query,
+                library_ids,
+                max_context_snippets,
+                message_obj,
+            )
         return await sync_to_async(_run_library_search)(
             document_processor, query, library_ids, max_context_snippets, message_obj
         )

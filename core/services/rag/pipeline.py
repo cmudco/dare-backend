@@ -6,8 +6,8 @@ Composes the stage classes into one flow:
     -> grounding -> token-budgeted, [S#]-cited assembly
 
 This is the single entry point callers use; it is deliberately thin — all heavy
-lifting lives in the stage classes (rules.md §2/§8). Every advanced stage is
-opt-in and degrades to plain hybrid retrieval.
+lifting lives in the stage classes (rules.md §2/§8). Advanced mode always runs
+query analysis, reranking, grounding, and trace capture; failures degrade safely.
 """
 
 import logging
@@ -70,9 +70,9 @@ class RetrievalPipeline:
 
         query_vector = self.retriever.embed(dense_text)
 
-        # 2) Retrieve a wider pool when we will rerank or diversify it down.
-        rerank_on = self.reranker.is_enabled()
-        multiplier = 5 if rerank_on else (4 if exploratory else 1)
+        # 2) Retrieve a wider pool so rerank/MMR can trim it down.
+        rerank_on = True
+        multiplier = 5
         pool = self.retriever.search(
             replace(request, top_k=request.top_k * multiplier),
             query_vector,
@@ -85,6 +85,7 @@ class RetrievalPipeline:
         if rerank_on:
             working_k = request.top_k * 2 if exploratory else request.top_k
             reranked = self.reranker.rerank(request.query, pool, working_k)
+        rerank_applied = any(chunk.rerank_score is not None for chunk in reranked)
 
         # 4) Conditional MMR — diversity for exploratory queries only.
         if exploratory:
@@ -92,13 +93,18 @@ class RetrievalPipeline:
         else:
             final = reranked[: request.top_k]
 
-        # 5) Grounding (trusted only when the calibrated reranker ran).
-        grounding = self.grounding.check(final) if rerank_on else None
+        # 5) Grounding (trusted only when the reranker actually produced scores).
+        grounding_threshold = self.reranker.grounding_threshold()
+        grounding = (
+            self.grounding.check(final, threshold=grounding_threshold)
+            if rerank_applied
+            else None
+        )
 
         # 6) Assemble cited, budget-bounded context.
         blocks = self.assembler.assemble(final, grounding, on_keep=on_keep)
 
-        # 7) Optional per-stage trace for the UI (kept off the hot path otherwise).
+        # 7) Per-stage trace for the UI.
         trace = None
         if request.trace:
             trace = build_trace(
@@ -106,10 +112,11 @@ class RetrievalPipeline:
                 plan=plan,
                 pool=pool,
                 reranked=reranked,
-                rerank_applied=rerank_on,
+                rerank_applied=rerank_applied,
                 mmr_applied=exploratory,
                 mmr_reason=self._mmr_reason(plan, exploratory),
                 grounding=grounding,
+                grounding_threshold=grounding_threshold,
                 final_size=len(final),
             )
 
@@ -123,7 +130,7 @@ class RetrievalPipeline:
             return "applied — exploratory query"
         if plan is None:
             return "skipped — query analysis off"
-        return "skipped — precise lookup"
+        return f"skipped — {plan.intent} query"
 
 
 def build_pipeline(

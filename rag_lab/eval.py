@@ -37,10 +37,6 @@ import json
 import os
 from pathlib import Path
 
-# Config D exercises the real prod reranker, which is flag-gated. bool_flag()
-# reads os.environ, so enabling it here (before any import that reads it) makes
-# the eval drive the genuine rerank path. Set it first so nothing caches "off".
-os.environ.setdefault("RAG_RERANKER_ENABLED", "1")
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings.local")
 
 import django  # noqa: E402

@@ -7,7 +7,6 @@ including each reranked chunk's rank movement vs. the hybrid stage.
 
 from typing import List, Optional, Tuple
 
-from core.services.rag.config import setting
 from core.services.rag.dtos import (
     Grounding,
     QueryPlan,
@@ -59,6 +58,7 @@ def build_trace(
     mmr_applied: bool,
     mmr_reason: str,
     grounding: Optional[Grounding],
+    grounding_threshold: float,
     final_size: int,
 ) -> RetrievalTrace:
     pool_ranks = {_key(c): i for i, c in enumerate(pool, 1)}
@@ -72,6 +72,6 @@ def build_trace(
         mmr_applied=mmr_applied,
         mmr_reason=mmr_reason,
         grounding=grounding,
-        grounding_threshold=float(setting("RAG_GROUNDING_THRESHOLD", 0.3)),
+        grounding_threshold=grounding_threshold,
         final_size=final_size,
     )

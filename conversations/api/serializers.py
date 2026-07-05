@@ -191,6 +191,7 @@ class ConversationSerializer(serializers.ModelSerializer):
             "user",
             "max_context_snippets",
             "document_similarity_threshold",
+            "rag_mode",
             "temperature",
             "effort",
             "max_tokens",

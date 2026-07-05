@@ -6,7 +6,6 @@ Runs the REAL _run_library_search against the live pension library.
 import os
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings.local")
-os.environ["RAG_RERANKER_ENABLED"] = "1"
 os.environ.setdefault("RAG_RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
 
 import django
@@ -15,9 +14,7 @@ django.setup()
 
 from core.services.document_processor import DocumentProcessor
 from core.services.llm_helpers.semantic_context_helpers import _run_library_search
-from core.services.rag import Reranker
 
-print("reranker enabled:", Reranker().is_enabled())
 dp = DocumentProcessor()
 parts = _run_library_search(
     dp,

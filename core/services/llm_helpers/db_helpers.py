@@ -181,7 +181,9 @@ def save_library_snippet(message_obj, chunk) -> None:
             library=chunk.library,
             source_ref=chunk.source_ref,
             text=chunk.text,
-            similarity_score=chunk.score,
+            similarity_score=(
+                chunk.rerank_score if chunk.rerank_score is not None else chunk.score
+            ),
             chunk_index=chunk.chunk_index,
         )
     except Exception as exc:

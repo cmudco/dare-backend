@@ -22,6 +22,7 @@ class ContextConfig:
         referenced_summary_ids: Conversation summary IDs to include as context
         max_context_snippets: Maximum number of retrieved document snippets
         document_similarity_threshold: Minimum similarity score for retrieval
+        rag_mode: Retrieval mode for vector database context
         history_limit: Number of conversation messages to include
         use_memory: Whether to search user's memory store using the message
     """
@@ -38,6 +39,7 @@ class ContextConfig:
     referenced_summary_ids: List[int] = field(default_factory=list)
     max_context_snippets: int = 4
     document_similarity_threshold: float = 0.5
+    rag_mode: str = "advanced"
     history_limit: int = 20
     use_memory: bool = False
 

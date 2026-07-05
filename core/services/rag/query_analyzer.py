@@ -2,8 +2,8 @@
 
 A fast, cheap LLM turns a raw question into a structured QueryPlan — intent
 (which gates conditional MMR), exact keywords (for the BM25 leg), a cleaned
-rewrite, and a HyDE passage. Opt-in via ``RAG_QUERY_ANALYSIS_ENABLED``; returns
-``None`` on disable or any error so retrieval always proceeds on the raw query.
+rewrite, and a HyDE passage. Any failure returns ``None`` so retrieval always
+proceeds on the raw query.
 """
 
 import json
@@ -12,7 +12,7 @@ from typing import Optional
 
 import anthropic
 
-from core.services.rag.config import bool_flag, setting
+from core.services.rag.config import setting
 from core.services.rag.dtos import QueryPlan
 
 logger = logging.getLogger(__name__)
@@ -48,15 +48,12 @@ _SYSTEM = (
 class QueryAnalyzer:
     """Raw query -> QueryPlan, via a structured LLM call."""
 
-    def is_enabled(self) -> bool:
-        return bool_flag("RAG_QUERY_ANALYSIS_ENABLED")
-
     def use_hyde(self) -> bool:
-        """Whether the rewritten/HyDE text should feed retrieval (opt-in, A/B first)."""
-        return bool_flag("RAG_HYDE_ENABLED")
+        """Advanced RAG always feeds the rewritten/HyDE text into retrieval."""
+        return True
 
     def analyze(self, query: str) -> Optional[QueryPlan]:
-        if not self.is_enabled() or not query:
+        if not query:
             return None
         try:
             client = anthropic.Anthropic()

@@ -1,13 +1,11 @@
 """End-to-end check of the FULL advanced library pipeline through prod code:
    query analysis (intent) -> hybrid -> rerank -> conditional MMR -> grounding -> cited.
-Flags all ON. Makes a few small Haiku + embedding calls.
+Makes a few small Haiku + embedding calls.
 """
 
 import os
 
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings.local")
-os.environ["RAG_QUERY_ANALYSIS_ENABLED"] = "1"
-os.environ["RAG_RERANKER_ENABLED"] = "1"
 os.environ.setdefault("RAG_RERANKER_MODEL", "cross-encoder/ms-marco-MiniLM-L-6-v2")
 
 import django

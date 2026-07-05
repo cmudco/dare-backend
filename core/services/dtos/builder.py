@@ -94,6 +94,9 @@ class LLMQueryRequestBuilder:
             document_similarity_threshold=message_data.get(
                 "document_similarity_threshold", 0.5
             ),
+            rag_mode=message_data.get(
+                "rag_mode", getattr(conversation, "rag_mode", "advanced")
+            ),
             history_limit=message_data.get("history_limit", 20),
             use_memory=bool(message_data.get("use_memory", False)),
         )

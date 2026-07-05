@@ -32,9 +32,9 @@ flowchart LR
 
 | Stage | What it does | Status |
 |---|---|---|
-| Query analysis | Turns a raw question into `intent` + exact `keywords` + a HyDE passage. `intent` gates MMR. | opt-in (`RAG_QUERY_ANALYSIS_ENABLED`) |
+| Query analysis | Turns a raw question into `intent` + exact `keywords` + a HyDE passage. `intent` gates MMR. | enabled in Advanced RAG |
 | Hybrid retrieve | Runs keyword (BM25) **and** vector search, fuses with Reciprocal Rank Fusion. Catches exact terms vector search misses. | **landed (default)** |
-| Rerank | A cross-encoder reads (query, chunk) together and re-sorts; the true answer rises to the top. | opt-in (`RAG_RERANKER_ENABLED`) |
+| Rerank | A cross-encoder reads (query, chunk) together and re-sorts; the true answer rises to the top. | enabled in Advanced RAG |
 | Conditional MMR | Diversifies results — **only for exploratory queries**; precise lookups are left alone. | auto (gated on intent) |
 | Grounding | Flags low retrieval confidence so the model can say "not in the sources." | auto (when reranker on) |
 | Assemble | Token/char budget + inline `[S#]` citation tags. | **landed (default)** |
@@ -101,9 +101,9 @@ Measured locally on the M1 Pro (MPS), reranking a 20-candidate pool:
 | `ms-marco-MiniLM-L-6-v2` | 22M | **~200–500 ms** (first call ~2.8 s = one-time MPS warmup) | raw logits | **#1** |
 | `bge-reranker-v2-m3` | 568M | ~1.7–3.3 s (avg 2.3 s) | **calibrated 0–1** (0.914, 0.962) | **#1** |
 
-Both are **$0, fully local**. `bge`'s calibrated 0–1 score is what powers the grounding flag (mistake #10). MiniLM is the sub-500 ms option; `bge` is the quality/thresholding option (optimise with fp16 / smaller pool / server GPU).
+Both are **$0, fully local**. MiniLM is the sub-500 ms option currently used for local testing; its scores are raw logits, so they are useful for ranking but not as percentages. `bge` is the heavier quality/thresholding option if deployment latency allows it (optimise with fp16 / smaller pool / server GPU).
 
-**What the field uses (2026 R&D):** `bge-reranker-v2-m3` is the de-facto **open / self-host default**; **Cohere Rerank 3.5/v4** is the hosted default; **Zerank-2 / Voyage-2.5 / Jina v3** lead leaderboards. Crucially, on English corpora they're within **~1–3 NDCG@10** of each other — the decision is cost / latency / self-hostability, not absolute quality. We went local with `bge` to keep "local except embeddings."
+**What the field uses (2026 R&D):** `bge-reranker-v2-m3` is the de-facto **open / self-host default**; **Cohere Rerank 3.5/v4** is the hosted default; **Zerank-2 / Voyage-2.5 / Jina v3** lead leaderboards. Crucially, on English corpora they're within **~1–3 NDCG@10** of each other — the decision is cost / latency / self-hostability, not absolute quality.
 
 ### 3.4 MMR — why it's *conditional*
 
@@ -136,8 +136,8 @@ We bumped the document path from 500 chars (~96 tok) to **1,500 chars / 180 over
 - **The reranker is the single most impactful lever** and it runs locally for $0. Go local with `bge-reranker-v2-m3`; keep Cohere only as a "what's the ceiling" benchmark. Quality differences between modern rerankers are small — optimise for deployment, not leaderboard points.
 - **MMR must be conditional.** Blanket MMR *causes* the quality dips. It belongs behind an intent gate, full stop.
 - **Match the data, not the textbook.** CMU curated this archive and landed on ~350 tokens/chunk; mirroring that is more defensible than chasing a generic 800–1000.
-- **Everything opt-in, lazy, and safe.** New stages are flag-gated and degrade to plain hybrid on any error. `torch` is only imported when the reranker is actually enabled, so the base install stays lean and the backend never hard-depends on it.
-- **HyDE / query-rewrite into retrieval is left opt-in (`RAG_HYDE_ENABLED`)** until A/B'd against an eval set — we trust the intent gate (proven) more than the input-rewrite (unproven on this corpus).
+- **Advanced mode is the product switch.** Query analysis, HyDE/rewrite retrieval input, tracing, reranking, and grounding run when the conversation is set to Advanced RAG. Failures degrade safely to the best available retrieval output.
+- **Reranking stays lazy.** `torch` / `sentence-transformers` load only when advanced retrieval actually runs.
 
 ---
 
@@ -157,16 +157,13 @@ We bumped the document path from 500 chars (~96 tok) to **1,500 chars / 180 over
 | `core/config/processing.py` | chunk size → CMU-matched, env-tunable |
 | `requirements/common.txt` | `sentence-transformers` (optional at runtime) |
 
-### Config reference (all env-tunable, safe defaults)
+### Config reference
 
 | Flag | Default | Effect |
 |---|---|---|
-| `RAG_RERANKER_ENABLED` | `false` | turn on local reranking |
 | `RAG_RERANKER_MODEL` | `BAAI/bge-reranker-v2-m3` | reranker model |
-| `RAG_QUERY_ANALYSIS_ENABLED` | `false` | turn on Haiku query analysis |
 | `RAG_QUERY_ANALYSIS_MODEL` | `claude-haiku-4-5` | analysis model |
-| `RAG_HYDE_ENABLED` | `false` | feed rewritten/HyDE text into retrieval |
-| `RAG_GROUNDING_THRESHOLD` | `0.3` | "not found" cutoff (calibrated reranker score) |
+| `RAG_GROUNDING_THRESHOLD` | model-specific | optional "not found" cutoff for the reranker score scale |
 | `RAG_CONTEXT_CHAR_BUDGET` | `12000` | max assembled context chars |
 | `RAG_CHUNK_SIZE` / `RAG_OVERLAP_SIZE` | `1500` / `180` | document-path chunking |
 
@@ -213,6 +210,5 @@ All verification scripts live in `dare_app/dare-backend/rag_lab/` and reuse cach
 
 ```bash
 cd dare_app/dare-backend
-RAG_RERANKER_ENABLED=1 RAG_QUERY_ANALYSIS_ENABLED=1 \
-  PYTHONPATH="$PWD" venv/bin/python rag_lab/verify_advanced.py
+PYTHONPATH="$PWD" venv/bin/python rag_lab/verify_advanced.py
 ```

@@ -12,9 +12,13 @@ from core.services.document_processor import DocumentProcessor
 from core.services.dtos import LLMQueryRequest
 from core.services.file_processor import FileProcessor
 
-from .db_helpers import (get_conversation_history, get_full_file_contents,
-                         get_prompt, get_referenced_conversations_context,
-                         get_referenced_summaries_context)
+from .db_helpers import (
+    get_conversation_history,
+    get_full_file_contents,
+    get_prompt,
+    get_referenced_conversations_context,
+    get_referenced_summaries_context,
+)
 from .memory_context_helpers import add_memory_context_to_messages
 from .semantic_context_helpers import add_semantic_context_to_messages
 
@@ -106,6 +110,7 @@ async def build_standard_messages(
         is_socratic_mode=request.is_socratic_mode(),
         similarity_threshold=request.context.document_similarity_threshold,
         max_context_snippets=request.context.max_context_snippets,
+        rag_mode=request.context.rag_mode,
         message_obj=request.message_obj,
         workflow_run_step_obj=request.workflow_run_step_obj,
     )
@@ -138,7 +143,7 @@ async def build_standard_messages(
         request.message,
     )
     for _i, _m in enumerate(messages):
-        _c = (_m.get("content") or "")
+        _c = _m.get("content") or ""
         logger.warning(
             "[GLITCH-DEBUG]   [%02d] role=%s len=%d :: %s",
             _i,

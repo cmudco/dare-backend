@@ -19,6 +19,7 @@ from .constants import (
     ModelEffort,
     ModelTier,
     Provider,
+    RagMode,
     SenderType,
     ToolCallOrigin,
 )
@@ -438,6 +439,12 @@ class Conversation(BaseModel):
     document_similarity_threshold = models.FloatField(
         default=0.2, help_text="Similarity threshold for document retrieval."
     )
+    rag_mode = models.CharField(
+        max_length=20,
+        choices=RagMode.choices,
+        default=RagMode.ADVANCED,
+        help_text="Retrieval mode for selected vector databases and shared libraries.",
+    )
     temperature = models.FloatField(
         default=0.7, help_text="Temperature setting for the LLM."
     )
@@ -638,6 +645,7 @@ class Conversation(BaseModel):
                 source=self.source,
                 max_context_snippets=self.max_context_snippets,
                 document_similarity_threshold=self.document_similarity_threshold,
+                rag_mode=self.rag_mode,
                 temperature=self.temperature,
                 effort=self.effort,
                 max_tokens=self.max_tokens,
