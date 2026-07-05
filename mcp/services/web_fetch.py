@@ -19,10 +19,18 @@ error, so the run's audit shows the call failed instead of a false success.
 
 import logging
 
+import httpx
+
 from conversations.constants import Provider
 from core.services.api_key_service import get_provider_api_key_sync
 
 logger = logging.getLogger(__name__)
+
+# Browser-ish UA for the fallback status probe — some publishers 403 obvious bots.
+_PROBE_UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+)
 
 # A full paper should come through whole — truncating mid-paper degrades staging
 # quality. Runaway cost is contained by the per-run budget, not by chopping.
@@ -49,7 +57,15 @@ _TOOL = {
 
 
 class FetchError(Exception):
-    """A page genuinely could not be fetched (paywall, block, fetch error)."""
+    """A page fetch could not be completed (bad input, no key, upstream error)."""
+
+
+class PageUnreadable(FetchError):
+    """A specific page couldn't be read (paywall, 404, block, login wall). This
+    is a normal fetch OUTCOME, not a tool failure — callers surface it to the
+    agent as a result to move past, not as an error that implies the reader is
+    broken. Kept a FetchError subclass so existing `except FetchError` handlers
+    still catch it."""
 
 
 # Anthropic web_fetch error codes -> plain, honest reasons. The wording makes
@@ -70,6 +86,37 @@ _FETCH_REASONS = {
 def _fetch_reason(code):
     """A plain-language reason for an Anthropic web_fetch error code."""
     return _FETCH_REASONS.get(code, f"the reader could not retrieve it ({code})")
+
+
+def _probe_reason(url):
+    """When the reader returns no text, ask the site directly for its real HTTP
+    status and turn it into an honest reason — so a 404 (dead/fabricated link),
+    a 403 (blocked/paywalled), and a 200-but-empty page (JS-only) read as what
+    they actually are, not a blanket "login wall" guess. Best-effort and
+    vantage-dependent, so only unambiguous statuses map to a reason; anything
+    else falls back to the generic no-text message. Streams so we read the
+    status line without downloading the body."""
+    try:
+        with httpx.stream(
+            "GET",
+            url,
+            follow_redirects=True,
+            timeout=8,
+            headers={"User-Agent": _PROBE_UA},
+        ) as resp:
+            code = resp.status_code
+    except Exception as exc:  # noqa: BLE001 - probe is best-effort
+        logger.info("fetch_page status probe failed for %s: %s", url, exc)
+        return None
+    if code in (404, 410):
+        return f"the page was not found (HTTP {code}) — the link may be wrong or fabricated"
+    if code in (401, 403):
+        return (
+            f"the site refused access (HTTP {code}) — likely paywalled or bot-blocked"
+        )
+    if code == 429:
+        return "the site rate-limited the request (HTTP 429)"
+    return None
 
 
 def _fetch_result(message):
@@ -153,21 +200,29 @@ def fetch_page(url):
 
     result = _fetch_result(message)
     if result is None:
-        raise FetchError(f"The reader did not fetch {url}.")
+        raise PageUnreadable(f"The reader did not fetch {url}.")
 
     content = result.get("content") or {}
     if content.get("type") == "web_fetch_tool_error":
         # Anthropic's own failure signal — surface it as a typed, honest reason so
         # the agent reports "this page is paywalled/blocked", never "tool is down".
         code = content.get("error_code", "unavailable")
-        raise FetchError(
+        raise PageUnreadable(
             f"Could not read {url} — {_fetch_reason(code)} (this page only, not a "
             "tool or system error; try a different source)."
         )
 
     text = _document_text(result)
     if not text:
-        raise FetchError(
+        # The reader hides the real HTTP status (it returns empty text for a
+        # 403, a 404, and a JS-only 200 alike). Probe for the true reason so the
+        # audit and the agent see what actually happened, not a guess.
+        reason = _probe_reason(url)
+        if reason:
+            raise PageUnreadable(
+                f"Could not read {url} — {reason} (this page only, not a tool error)."
+            )
+        raise PageUnreadable(
             f"Reached {url} but found no readable text — likely a login wall or a "
             "script-only page (this page only, not a tool error)."
         )

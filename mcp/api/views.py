@@ -424,7 +424,12 @@ class MCPGatewayView(APIView):
 
     def post(self, request):
         payload = request.data if isinstance(request.data, dict) else {}
-        response = handle_jsonrpc(request.user, payload)
+        # The agent runtime forwards its run/session id here (DARE's
+        # "<hermes_session_id>-r<run_id>") when configured to, so captured rows
+        # can be attributed to the exact run. Absent until Hermes forwards it;
+        # the audit falls back to in-order matching in that case.
+        run_key = request.headers.get("X-DARE-Run-Session", "")
+        response = handle_jsonrpc(request.user, payload, run_key)
         if response is None:  # notification — no body
             return HttpResponse(status=202)
         return Response(response)

@@ -328,6 +328,18 @@ class GatewayFetch(BaseModel):
         default="",
         help_text="Failure reason when the gateway call errored (blank on success)",
     )
+    run_key = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        db_index=True,
+        help_text=(
+            "Hermes session id that made this call (DARE's "
+            "'<hermes_session_id>-r<run_id>'), when the agent runtime forwards "
+            "it — lets the run audit attribute each row to its exact run instead "
+            "of matching by time window. Blank when not forwarded."
+        ),
+    )
 
     all_objects = models.Manager()
     active_objects = ActiveObjectsManager()

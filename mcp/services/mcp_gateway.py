@@ -16,7 +16,7 @@ from asgiref.sync import async_to_sync
 
 from mcp.models import GatewayFetch, UserMCPConnection
 from mcp.services.mcp_tool_executor import mcp_tool_executor
-from mcp.services.web_fetch import fetch_page, web_search
+from mcp.services.web_fetch import PageUnreadable, fetch_page, web_search
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +95,7 @@ def _doi_from_url(url):
     return ""
 
 
-def _capture_fetch(user, tool, content, arguments):
+def _capture_fetch(user, tool, content, arguments, run_key=""):
     """
     Persist the complete response of a gateway-served call (the agent's reading
     corpus). Page fetches dedup by URL; everything else is one row per call.
@@ -114,29 +114,40 @@ def _capture_fetch(user, tool, content, arguments):
                     "doi": _doi_from_url(url),
                     "arguments": arguments,
                     "content": content,
+                    "run_key": run_key,
+                    "error": "",
                 },
             )
         else:
             GatewayFetch.all_objects.create(
-                user=user, tool=tool, arguments=arguments, content=content
+                user=user,
+                tool=tool,
+                arguments=arguments,
+                content=content,
+                run_key=run_key,
             )
     except Exception:  # noqa: BLE001 - capture is best-effort by design
         logger.exception("Gateway fetch capture failed for %s", tool)
 
 
-def _capture_error(user, tool, error, arguments):
+def _capture_error(user, tool, error, arguments, run_key=""):
     """Persist a gateway call's failure reason so the run audit can show WHY a
     mcp_dare_* tool failed (paywall / auth / rate-limit), not merely that it did.
-    Capture must never break the call it records."""
+    Records the URL too, so the audit names the page that failed. Capture must
+    never break the call it records."""
     if not error:
         return
+    url = str(arguments.get("url") or "")[:1000]
     try:
         GatewayFetch.all_objects.create(
             user=user,
             tool=tool,
+            url=url,
+            doi=_doi_from_url(url),
             arguments=arguments,
             content="",
             error=str(error)[:1000],
+            run_key=run_key,
         )
     except Exception:  # noqa: BLE001 - capture is best-effort by design
         logger.exception("Gateway error capture failed for %s", tool)
@@ -321,7 +332,7 @@ def _error(rpc_id, code, message):
     return {"jsonrpc": "2.0", "id": rpc_id, "error": {"code": code, "message": message}}
 
 
-def _handle_tool_call(user, rpc_id, params):
+def _handle_tool_call(user, rpc_id, params, run_key=""):
     """Route one tools/call to a gateway builtin or the user's tool executor."""
     name = params.get("name", "")
     arguments = params.get("arguments") or {}
@@ -329,17 +340,25 @@ def _handle_tool_call(user, rpc_id, params):
     if name in _BUILTIN_HANDLERS:
         try:
             text = _BUILTIN_HANDLERS[name](user, arguments)
-        except Exception as exc:  # noqa: BLE001 - surface as a tool-level error
-            # isError (not a JSON-RPC error) so the agent gets the message and
-            # moves on, and the run audit records an honest failed tool call —
-            # never a false success with a refusal passed off as content.
+        except PageUnreadable as exc:
+            # A specific page couldn't be read (paywall / 404 / login wall). That
+            # is a normal fetch OUTCOME, not a tool failure — return it WITHOUT
+            # isError so the agent moves to another source and the runtime's
+            # per-server circuit breaker doesn't count healthy per-page misses as
+            # an outage. The reason is still captured for the run audit.
+            logger.info("MCP gateway builtin %s: %s", name, exc)
+            _capture_error(user, name, str(exc), arguments, run_key)
+            return _result(rpc_id, {"content": [{"type": "text", "text": str(exc)}]})
+        except Exception as exc:  # noqa: BLE001 - genuine tool/system failure
+            # A real malfunction (no API key, upstream API error, bad input) —
+            # surface as isError so the audit is honest and the breaker can react.
             logger.info("MCP gateway builtin %s failed: %s", name, exc)
-            _capture_error(user, name, str(exc), arguments)
+            _capture_error(user, name, str(exc), arguments, run_key)
             return _result(
                 rpc_id,
                 {"content": [{"type": "text", "text": str(exc)}], "isError": True},
             )
-        _capture_fetch(user, name, text, arguments)
+        _capture_fetch(user, name, text, arguments, run_key)
         return _result(rpc_id, {"content": [{"type": "text", "text": text}]})
 
     if _SEP not in name:
@@ -354,7 +373,11 @@ def _handle_tool_call(user, rpc_id, params):
     # refusal — never a false success.
     logger.info("MCP gateway refused credentialed tool %s (server-side only)", name)
     _capture_error(
-        user, name, "credentialed tool not available on the live gateway", arguments
+        user,
+        name,
+        "credentialed tool not available on the live gateway",
+        arguments,
+        run_key,
     )
     return _result(
         rpc_id,
@@ -374,10 +397,12 @@ def _handle_tool_call(user, rpc_id, params):
     )
 
 
-def handle_jsonrpc(user, payload):
+def handle_jsonrpc(user, payload, run_key=""):
     """
     Handle one MCP JSON-RPC message. Returns the response dict, or None for
-    notifications (which take no response).
+    notifications (which take no response). `run_key` is the caller's run/session
+    identifier (when the agent runtime forwards it), stamped on captured rows so
+    the run audit can attribute each call to its exact run.
     """
     method = payload.get("method")
     rpc_id = payload.get("id")
@@ -397,5 +422,5 @@ def handle_jsonrpc(user, payload):
     if method == "tools/list":
         return _result(rpc_id, {"tools": list_user_tools(user)})
     if method == "tools/call":
-        return _handle_tool_call(user, rpc_id, payload.get("params") or {})
+        return _handle_tool_call(user, rpc_id, payload.get("params") or {}, run_key)
     return _error(rpc_id, -32601, f"Method not found: {method}")

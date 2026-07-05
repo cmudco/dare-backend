@@ -35,7 +35,6 @@ from research.constants import (
 )
 from research.models import (
     ResearchAgentRun,
-    ResearchAgentToolCall,
     ResearchChatMessage,
     ResearchKnowledgeItem,
     ResearchProject,
@@ -55,8 +54,8 @@ from research.services.okf_service import (
 )
 from research.tasks import (
     _knowledge_block,
-    _match_gateway_fetch,
     _project_memory_block,
+    _record_tool_call,
     run_artifact_job,
     run_critic_job,
     run_scout_job,
@@ -289,6 +288,7 @@ class ResearchChatView(APIView):
 
         def event_stream():
             chunks = []
+            seen_ids = set()  # GatewayFetch rows already claimed by this run's audit
             try:
                 for event in hermes.stream_events(hermes_run_id):
                     event_type = event.get("event")
@@ -306,48 +306,25 @@ class ResearchChatView(APIView):
                             }
                         )
                     elif event_type == "tool.completed":
-                        duration = event.get("duration")
+                        # Same recorder as the delegated jobs: reads the outcome
+                        # from the captured GatewayFetch row (run-key first, then
+                        # in-order), so paywalls read as failures and no call
+                        # borrows another's reason.
                         tool_name = event.get("tool", "")
-                        raw_error = event.get("error")
-                        is_error = bool(raw_error)
-                        # SSE flags failure as a boolean; the gateway captured the
-                        # real reason (paywall/auth) and the result body — link both.
-                        error_text = raw_error if isinstance(raw_error, str) else ""
-                        result_summary = ""
-                        if is_error and not error_text:
-                            failed = _match_gateway_fetch(
-                                run, tool_name, want_error=True
-                            )
-                            if failed:
-                                error_text = failed.error
-                        elif not is_error:
-                            fetch = _match_gateway_fetch(run, tool_name)
-                            if fetch:
-                                result_summary = fetch.content[:2000]
-                        ResearchAgentToolCall.objects.create(
-                            run=run,
-                            tool=tool_name,
-                            status=(
-                                AgentToolCallStatus.ERROR
-                                if is_error
-                                else AgentToolCallStatus.SUCCESS
-                            ),
-                            duration_ms=(int(duration * 1000) if duration else None),
-                            result_summary=result_summary,
-                            error=error_text,
-                        )
+                        call = _record_tool_call(run, event, {}, seen_ids)
+                        is_error = call.status == AgentToolCallStatus.ERROR
                         logger.info(
                             "research.chat run %s tool %s -> %s%s",
                             run.id,
                             tool_name,
                             "error" if is_error else "ok",
-                            f" ({error_text[:120]})" if error_text else "",
+                            f" ({call.error[:120]})" if call.error else "",
                         )
                         yield _sse(
                             {
                                 "type": "tool",
                                 "phase": "completed",
-                                "tool": event.get("tool", ""),
+                                "tool": tool_name,
                             }
                         )
                     elif event_type == "run.completed":
