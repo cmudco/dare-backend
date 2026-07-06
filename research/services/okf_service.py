@@ -318,14 +318,10 @@ def _source_concept(ki, cites, linked_theses):
             ("soul_file_version", ki.soul_file_version, "str"),
         ]
     )
-<<<<<<< HEAD
     body = [
         "# Finding",
         ki.content or (si.abstract if si else "") or "_No content recorded._",
     ]
-=======
-    body = ["# Finding", ki.content or (si.abstract if si else "") or "_No content recorded._"]
->>>>>>> ae7fe4f (feat(research): OKF export + thesis-source linking (backend))
     if ki.rationale:
         body += ["", "# Why it is in the record", ki.rationale]
     ref = []
@@ -344,16 +340,12 @@ def _source_concept(ki, cites, linked_theses):
         for cid, text, via in cites:
             body.append(f"- [{text}](/{SOURCE_DIR}/source-{cid}.md)")
             links.append(
-<<<<<<< HEAD
                 {
                     "to": f"{SOURCE_DIR}/source-{cid}",
                     "text": text,
                     "kind": "cites",
                     "via": via,
                 }
-=======
-                {"to": f"{SOURCE_DIR}/source-{cid}", "text": text, "kind": "cites", "via": via}
->>>>>>> ae7fe4f (feat(research): OKF export + thesis-source linking (backend))
             )
     # Backlinks to the theses this source bears on. Body-only — the graph edge is
     # emitted once, from the thesis side, to avoid duplicate links.
@@ -398,13 +390,9 @@ def _index_concept(project, theses, sources):
     lines += ["", intro]
     if theses:
         lines += ["", "## Theses and open questions"]
-<<<<<<< HEAD
         lines += [
             f"- [{c['title']}](/{c['path']}) — {c['type'].lower()}" for c in theses
         ]
-=======
-        lines += [f"- [{c['title']}](/{c['path']}) — {c['type'].lower()}" for c in theses]
->>>>>>> ae7fe4f (feat(research): OKF export + thesis-source linking (backend))
     if sources:
         lines += ["", "## Sources"]
         lines += [
@@ -460,13 +448,9 @@ def _collect(project):
     """Query the durable layer once and build ordered concept dicts:
     [index, *theses, *sources, log]."""
     memories = list(
-<<<<<<< HEAD
         ResearchProjectMemory.active_objects.filter(project=project).order_by(
             "created_at"
         )
-=======
-        ResearchProjectMemory.active_objects.filter(project=project).order_by("created_at")
->>>>>>> ae7fe4f (feat(research): OKF export + thesis-source linking (backend))
     )
     kis = list(
         ResearchKnowledgeItem.active_objects.filter(project=project)
@@ -484,19 +468,12 @@ def _collect(project):
         sources_by_thesis.setdefault(link.thesis_id, []).append((link.source, stance))
         theses_by_source.setdefault(link.source_id, []).append((link.thesis, stance))
     theses = [
-<<<<<<< HEAD
         _thesis_concept(m, project.field, sources_by_thesis.get(m.id, []))
         for m in memories
     ]
     sources = [
         _source_concept(ki, cites.get(ki.id), theses_by_source.get(ki.id, []))
         for ki in kis
-=======
-        _thesis_concept(m, project.field, sources_by_thesis.get(m.id, [])) for m in memories
-    ]
-    sources = [
-        _source_concept(ki, cites.get(ki.id), theses_by_source.get(ki.id, [])) for ki in kis
->>>>>>> ae7fe4f (feat(research): OKF export + thesis-source linking (backend))
     ]
     index_c = _index_concept(project, theses, sources)
     log_c = _log_concept(theses + sources)
@@ -519,15 +496,11 @@ def _link_graph(concepts):
         for c in knowledge
     ]
     edges = [
-<<<<<<< HEAD
         {
             "source": c["conceptId"],
             "target": link["to"],
             "kind": link.get("kind", "cites"),
         }
-=======
-        {"source": c["conceptId"], "target": link["to"], "kind": link.get("kind", "cites")}
->>>>>>> ae7fe4f (feat(research): OKF export + thesis-source linking (backend))
         for c in knowledge
         for link in c["links"]
         if link["to"] in ids
@@ -540,13 +513,9 @@ def build_okf_bundle(project):
     {bundle_relative_path: file_contents}."""
     bundle = {}
     for c in _collect(project):
-<<<<<<< HEAD
         md = (
             (c["yaml"] + "\n\n" + c["body"]).strip() if c["yaml"] else c["body"].strip()
         )
-=======
-        md = (c["yaml"] + "\n\n" + c["body"]).strip() if c["yaml"] else c["body"].strip()
->>>>>>> ae7fe4f (feat(research): OKF export + thesis-source linking (backend))
         bundle[c["path"]] = md + "\n"
     return bundle
 
