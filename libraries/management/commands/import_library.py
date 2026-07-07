@@ -21,6 +21,9 @@ Example:
   python manage.py import_library --library civil-war-pensions \\
     --source-url https://<host> --source-class CivilWarPensionPage \\
     --source-api-key $SOURCE_WEAVIATE_API_KEY
+
+Or set SOURCE_WEAVIATE_URL, SOURCE_WEAVIATE_CLASS, and
+SOURCE_WEAVIATE_API_KEY in the environment and pass only --library/--backend.
 """
 
 import os
@@ -94,13 +97,19 @@ class Command(BaseCommand):
         )
         parser.add_argument(
             "--source-url",
-            required=True,
-            help="Base URL of the source Weaviate, e.g. https://host",
+            default="",
+            help=(
+                "Base URL of the source Weaviate, e.g. https://host "
+                "(or env SOURCE_WEAVIATE_URL)."
+            ),
         )
         parser.add_argument(
             "--source-class",
-            required=True,
-            help="Source collection/class, e.g. CivilWarPensionPage",
+            default="",
+            help=(
+                "Source collection/class, e.g. CivilWarPensionPage "
+                "(or env SOURCE_WEAVIATE_CLASS)."
+            ),
         )
         parser.add_argument(
             "--source-api-key",
@@ -131,13 +140,26 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **opts):
-        source_url = opts["source_url"].rstrip("/")
-        source_class = opts["source_class"]
+        source_url = (opts["source_url"] or os.getenv("SOURCE_WEAVIATE_URL", "")).rstrip(
+            "/"
+        )
+        source_class = opts["source_class"] or os.getenv("SOURCE_WEAVIATE_CLASS", "")
         api_key = opts["source_api_key"] or os.getenv("SOURCE_WEAVIATE_API_KEY", "")
         batch_size = opts["batch_size"]
         limit = opts["limit"]
         dry_run = opts["dry_run"]
         use_source_vectors = opts["use_source_vectors"]
+
+        if not source_url:
+            raise CommandError(
+                "Source Weaviate URL is required. Pass --source-url or set "
+                "SOURCE_WEAVIATE_URL."
+            )
+        if not source_class:
+            raise CommandError(
+                "Source Weaviate class is required. Pass --source-class or set "
+                "SOURCE_WEAVIATE_CLASS."
+            )
 
         library = self._get_or_create_library(opts["library"], opts)
         container = (

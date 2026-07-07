@@ -78,6 +78,26 @@ python manage.py import_library --library civil-war-pensions \
 # --use-source-vectors   trust the source's vectors (ONLY if compat-checked, below)
 ```
 
+The source connection can also be configured via env, which is cleaner for
+staging/prod dry-runs:
+
+```env
+SOURCE_WEAVIATE_URL=https://<source-weaviate-host>
+SOURCE_WEAVIATE_CLASS=CivilWarPensionPage
+SOURCE_WEAVIATE_API_KEY=<source-api-key>
+```
+
+Then run:
+
+```bash
+python manage.py import_library --library civil-war-pensions \
+  --backend weaviate --dry-run
+```
+
+Those are the only source-specific envs. The target DARE vector store still uses
+the normal `WEAVIATE_HOST` / `WEAVIATE_PORT` settings, and re-embedding uses the
+existing `OPENAI_API_KEY`.
+
 ## The critical lesson: verify embedding-space compatibility
 
 The source's vectors were labelled `text-embedding-3-large / 3072-dim / cosine /
