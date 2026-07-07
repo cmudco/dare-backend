@@ -206,22 +206,21 @@ We bumped the document path from 500 chars (~96 tok) to **1,500 chars / 180 over
 
 ## 8. How to run / verify
 
-All verification scripts live in `dare_app/dare-backend/rag_lab/` and reuse cached embeddings (re-runs are ~$0):
+Use the product paths rather than committing lab scripts:
 
-| Script | Proves |
-|---|---|
-| `bench.py` | dense vs hybrid vs hybrid+MMR ranks |
-| `query_analysis.py` | structured query plans + cost |
-| `rerank_test.py` | local reranker latency + quality (set `RERANK_MODEL`) |
-| `verify_hybrid.py` | hybrid through the real library code path |
-| `verify_doc_hybrid.py` | document-path hybrid + threshold survivability |
-| `verify_rerank.py` | end-to-end with reranking on |
-| `verify_advanced.py` | full pipeline: analysis → hybrid → rerank → conditional MMR → cited |
-| `verify_pdf_parse.py` | PyPDF2 vs PyMuPDF extraction (structure, reading order, tables) |
-| `verify_pdf_e2e.py` | real upload → worker → parse → chunk → store, then confidence probes in both rag modes |
-| `verify_doc_advanced.py` | document-path advanced pipeline through real Message rows: trace, grounding, naive fallback, dual-source traces |
+- Run migrations, then confirm the shared-library catalog rows exist.
+- Dry-run `import_library` before importing the Civil War pension corpus into the
+  target DARE Weaviate collection.
+- Create a conversation with the Civil War pension library selected and compare
+  `naive` vs `advanced` retrieval mode from the chat UI.
+- Inspect the message metadata panel: final snippets should carry rerank scores
+  when reranking succeeds, and the retrieval trace should show query analysis,
+  hybrid retrieval, rerank movement, MMR, and grounding.
 
 ```bash
-cd dare_app/dare-backend
-PYTHONPATH="$PWD" venv/bin/python rag_lab/verify_advanced.py
+venv/bin/python manage.py migrate
+venv/bin/python manage.py check
+venv/bin/python -m compileall core/services/rag core/services/llm_helpers
+venv/bin/python manage.py import_library --library civil-war-pensions \
+  --backend weaviate --dry-run
 ```
