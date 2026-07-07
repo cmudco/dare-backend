@@ -12,21 +12,14 @@ from asgiref.sync import sync_to_async
 
 from conversations.constants import RagMode
 from core.services.document_processor import DocumentProcessor
-from core.services.rag import (
-    ContextAssembler,
-    RetrievalRequest,
-    RetrievedChunk,
-    build_pipeline,
-)
+from core.services.rag import (ContextAssembler, RetrievalRequest,
+                               RetrievedChunk, build_pipeline)
 from core.services.vector_service import get_vector_service_async
 from libraries.services.library_search import search_libraries
 
-from .db_helpers import (
-    get_files_from_folders,
-    get_files_from_tags,
-    save_library_snippet,
-    save_retrieval_trace,
-)
+from .db_helpers import (get_files_from_folders, get_files_from_tags,
+                         save_document_snippet, save_library_snippet,
+                         save_retrieval_trace)
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +102,12 @@ async def add_semantic_context_to_messages(
     if not (embedding_ids or tag_ids or folder_ids or library_ids):
         return
 
+    # Fresh turn: documents and libraries each save their own trace below, and
+    # save_retrieval_trace appends to whatever is on the message — so clear any
+    # trace left from a previous generation of this message first.
+    if message_obj is not None:
+        message_obj.retrieval_trace = None
+
     effective_threshold = 0.05 if is_socratic_mode else similarity_threshold
 
     # --- The user's own documents (embeddings / tags / folders) ---
@@ -126,15 +125,31 @@ async def add_semantic_context_to_messages(
                 vector_user_id
             )
 
-        context = await document_processor.search_similar_documents(
-            query_text=query,
-            file_ids=list(all_embedding_file_ids),
-            user_id=vector_user_id,
-            top_k=max_context_snippets,
-            similarity_threshold=effective_threshold,
-            message_obj=message_obj,
-            workflow_run_step_obj=workflow_run_step_obj,
-        )
+        # Advanced mode routes chat retrieval through the full RAG pipeline
+        # (query analysis -> hybrid -> rerank -> grounding -> trace) — the same
+        # treatment shared libraries get. Naive mode and workflow steps keep the
+        # plain hybrid search.
+        if rag_mode == RagMode.ADVANCED and workflow_run_step_obj is None:
+            blocks = await _search_documents_for_query(
+                document_processor,
+                query,
+                sorted(all_embedding_file_ids),
+                vector_user_id,
+                max_context_snippets,
+                effective_threshold,
+                message_obj,
+            )
+            context = "\n\n".join(blocks)
+        else:
+            context = await document_processor.search_similar_documents(
+                query_text=query,
+                file_ids=list(all_embedding_file_ids),
+                user_id=vector_user_id,
+                top_k=max_context_snippets,
+                similarity_threshold=effective_threshold,
+                message_obj=message_obj,
+                workflow_run_step_obj=workflow_run_step_obj,
+            )
 
         if context and context.strip():
             messages.append(
@@ -198,8 +213,72 @@ def _run_library_search(
 
     result = pipeline.run(request, on_keep=_persist)
     if message_obj and result.trace:
-        save_retrieval_trace(message_obj, result.trace.to_payload())
+        payload = result.trace.to_payload()
+        payload["source"] = "libraries"
+        save_retrieval_trace(message_obj, payload)
     return result.blocks
+
+
+def _run_document_search(
+    document_processor: DocumentProcessor,
+    query: str,
+    file_ids: List[int],
+    user_id: Optional[int],
+    max_context_snippets: int,
+    similarity_threshold: float,
+    message_obj: Optional[Any],
+) -> List[str]:
+    """Advanced-mode document retrieval: the library pipeline, pointed at files.
+
+    Same stages, same trace; only the retriever differs. The similarity
+    threshold keeps its legacy meaning (filter on the hybrid retrieval score,
+    before reranking).
+    """
+    request = RetrievalRequest(
+        query=query,
+        top_k=max_context_snippets,
+        file_ids=tuple(file_ids),
+        user_id=user_id,
+        similarity_threshold=similarity_threshold,
+        trace=True,
+    )
+    pipeline = build_pipeline("document", document_processor.openai_client)
+
+    def _persist(_position, chunk) -> None:
+        if message_obj:
+            save_document_snippet(message_obj, chunk)
+
+    result = pipeline.run(request, on_keep=_persist)
+    if message_obj and result.trace:
+        payload = result.trace.to_payload()
+        payload["source"] = "documents"
+        save_retrieval_trace(message_obj, payload)
+    return result.blocks
+
+
+async def _search_documents_for_query(
+    document_processor: DocumentProcessor,
+    query: str,
+    file_ids: List[int],
+    user_id: Optional[int],
+    max_context_snippets: int,
+    similarity_threshold: float,
+    message_obj: Optional[Any],
+) -> List[str]:
+    """Async wrapper — document search touches the ORM and opens vector clients."""
+    try:
+        return await sync_to_async(_run_document_search)(
+            document_processor,
+            query,
+            file_ids,
+            user_id,
+            max_context_snippets,
+            similarity_threshold,
+            message_obj,
+        )
+    except Exception as exc:
+        logger.warning("Document context retrieval failed: %s", exc)
+        return []
 
 
 def _run_naive_library_search(

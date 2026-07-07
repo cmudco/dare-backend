@@ -147,6 +147,7 @@ We bumped the document path from 500 chars (~96 tok) to **1,500 chars / 180 over
 - **MMR must be conditional.** Blanket MMR *causes* the quality dips. It belongs behind an intent gate, full stop.
 - **Match the data, not the textbook.** CMU curated this archive and landed on ~350 tokens/chunk; mirroring that is more defensible than chasing a generic 800–1000.
 - **Advanced mode is the product switch.** Query analysis, HyDE/rewrite retrieval input, tracing, reranking, and grounding run when the conversation is set to Advanced RAG. Failures degrade safely to the best available retrieval output.
+- **Advanced mode covers BOTH retrieval paths.** Uploaded documents run through the same pipeline as shared libraries (a `DocumentRetriever` behind the same `build_pipeline` factory); the legacy hybrid search remains the naive mode and the workflow-step path. A message that searches documents *and* libraries gets one trace per source (`{"traces": [...]}`); snippets carry the calibrated rerank score. Verified: verbatim chunk paste on an uploaded file → rerank 0.9868, grounded. Caveat: cross-encoders score markdown-table answers lower than prose (a correct table hit scored 0.22 on a natural-language question — still ranked #1 and cited, but below the 0.3 grounding note threshold).
 - **Reranking stays lazy.** `torch` / `sentence-transformers` load only when advanced retrieval actually runs.
 
 ---
@@ -218,6 +219,7 @@ All verification scripts live in `dare_app/dare-backend/rag_lab/` and reuse cach
 | `verify_advanced.py` | full pipeline: analysis → hybrid → rerank → conditional MMR → cited |
 | `verify_pdf_parse.py` | PyPDF2 vs PyMuPDF extraction (structure, reading order, tables) |
 | `verify_pdf_e2e.py` | real upload → worker → parse → chunk → store, then confidence probes in both rag modes |
+| `verify_doc_advanced.py` | document-path advanced pipeline through real Message rows: trace, grounding, naive fallback, dual-source traces |
 
 ```bash
 cd dare_app/dare-backend

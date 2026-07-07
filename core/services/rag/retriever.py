@@ -66,7 +66,48 @@ class LibraryRetriever(BaseRetriever):
         ]
 
 
-_RETRIEVERS = {"library": LibraryRetriever}
+class DocumentRetriever(BaseRetriever):
+    """User-uploaded files (per-user collections, scoped to explicit file ids)."""
+
+    def search(
+        self,
+        request: RetrievalRequest,
+        query_vector: List[float],
+        query_text: str,
+        want_vectors: bool,
+    ) -> List[RetrievedChunk]:
+        # Local import: vector_service pulls in Django models at import time.
+        from core.services.vector_service import get_vector_service
+
+        service = get_vector_service(request.user_id)
+        matches = service.search_documents(
+            vector=query_vector,
+            user_id=request.user_id,
+            file_ids=list(request.file_ids),
+            top_k=request.top_k,
+            query_text=query_text,
+        )
+        chunks = []
+        for m in matches:
+            if m.get("score", 0.0) < request.similarity_threshold:
+                continue
+            metadata = m.get("metadata", {})
+            file_name = metadata.get("file_name", "")
+            chunks.append(
+                RetrievedChunk(
+                    text=metadata.get("text", ""),
+                    source_ref=file_name,  # trace rows label entries by source_ref
+                    score=m.get("score", 0.0),
+                    chunk_index=metadata.get("chunk_index", 0),
+                    source_type="document",
+                    file_id=str(metadata.get("file_id", "")),
+                    file_name=file_name,
+                )
+            )
+        return chunks
+
+
+_RETRIEVERS = {"library": LibraryRetriever, "document": DocumentRetriever}
 
 
 def get_retriever(

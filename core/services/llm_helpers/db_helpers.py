@@ -15,13 +15,8 @@ from typing import Callable, List, Optional
 from channels.db import database_sync_to_async
 
 from conversations.constants import SenderType
-from conversations.models import (
-    Artifact,
-    Conversation,
-    ConversationSummary,
-    Message,
-    Snippet,
-)
+from conversations.models import (Artifact, Conversation, ConversationSummary,
+                                  Message, Snippet)
 from files.models import File
 from prompts.models import Prompt
 
@@ -190,14 +185,51 @@ def save_library_snippet(message_obj, chunk) -> None:
         logger.warning("Failed to save library snippet: %s", exc)
 
 
+def save_document_snippet(message_obj, chunk) -> None:
+    """Persist one document citation snippet for a message (best-effort, never raises).
+
+    Document twin of ``save_library_snippet``: same duck-typed
+    ``core.services.rag`` RetrievedChunk, but resolved to a ``File`` row. Prefers
+    the calibrated rerank score so the UI shows the score that ranked the chunk.
+    """
+    try:
+        file = File.active_objects.get(id=int(chunk.file_id))
+        Snippet.active_objects.create(
+            message=message_obj,
+            file=file,
+            library=None,
+            text=chunk.text,
+            similarity_score=(
+                chunk.rerank_score if chunk.rerank_score is not None else chunk.score
+            ),
+            chunk_index=chunk.chunk_index,
+        )
+    except Exception as exc:
+        logger.warning("Failed to save document snippet: %s", exc)
+
+
 def save_retrieval_trace(message_obj, payload) -> None:
     """Persist the RAG pipeline trace onto a message (best-effort, never raises).
 
     Sync (called from an already-sync context). ``payload`` is the camelized dict
     from ``RetrievalTrace.to_payload()``.
+
+    A message can retrieve from more than one source in a single turn (uploaded
+    documents AND shared libraries), each producing its own trace. The first
+    trace is stored as a plain object (the shape the frontend has always read);
+    a second one in the same turn wraps both into ``{"traces": [...]}``. Callers
+    must reset ``message_obj.retrieval_trace`` at the start of a turn so traces
+    from a previous generation never accumulate.
     """
     try:
-        message_obj.retrieval_trace = payload
+        existing = message_obj.retrieval_trace
+        if existing:
+            traces = existing.get("traces") if isinstance(existing, dict) else None
+            if traces is None:
+                traces = [existing]
+            message_obj.retrieval_trace = {"traces": traces + [payload]}
+        else:
+            message_obj.retrieval_trace = payload
         message_obj.save(update_fields=["retrieval_trace"])
     except Exception as exc:
         logger.warning("Failed to save retrieval trace: %s", exc)
