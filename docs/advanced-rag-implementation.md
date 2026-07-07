@@ -7,7 +7,7 @@
 ## 0. TL;DR
 
 - We built the **Track A "Precision Retrofit" retrieval pipeline** end-to-end and verified each stage on real data.
-- The audit scored us **~2/10** on its production-mistakes checklist. We're now at **~8/10** — the two remaining are *document-parsing* problems, not retrieval problems.
+- The audit scored us **~2/10** on its production-mistakes checklist. We're now at **~9/10** — the one remaining item is reference resolution (a second-pass parsing feature).
 - Headline proof: for the query `pension certificate 366,181`, the chunk that literally holds `Ctf. # 366,181` moved from **rank #5 (dense, today's baseline) → #2 (hybrid) → #1 (after local reranking)**.
 - Everything new is **flag-gated and lazy**, with safe fallbacks. With flags off, behaviour is identical to before. Added cost per query ≈ **$0.002**, almost all of it one optional LLM call.
 - Chunking was sized to **match CMU's curated corpus (~350 tokens/chunk)**, not a generic textbook number.
@@ -45,7 +45,7 @@ flowchart LR
 
 | # | Mistake | Then | Now |
 |---|---|:---:|:---:|
-| 1 | Parsing loses tables/layout | ❌ | ❌ *(still PyPDF2 — parsing track)* |
+| 1 | Parsing loses tables/layout | ❌ | ✅ PyMuPDF structure-aware (PyPDF2 fallback) |
 | 2 | Whole-doc stuffing | ✅ | ✅ |
 | 3 | Fixed tiny chunking | ❌ | ✅ matched to CMU (~350 tok) |
 | 4 | Raw question embedded | ❌ | ✅ query analysis |
@@ -57,7 +57,17 @@ flowchart LR
 | 10 | No absence proof (chat path) | ❌ | ✅ "not in sources" threshold |
 | — | Citations saved but not shown to model | ❌ | ✅ inline `[S#]` tags |
 
-**Score: 2/10 → 8/10.** The two open items (#1, #8) are about getting cleaner text *out of* PDFs — a different problem from retrieval quality.
+**Score: 2/10 → 9/10.** The one open item (#8, reference resolution) needs a second retrieval pass — a feature, not a parsing fix.
+
+### The parsing upgrade (mistake #1), verified
+
+`FileProcessor._read_pdf` now goes through **PyMuPDF** (lazy import, PyPDF2 as safe fallback):
+
+- **Paragraph structure**: pages joined with a single space became one flat blob before; now text-block boundaries survive, so the splitter cuts on real paragraph edges. Barabási-Albert 1999 (two-column arXiv): 1 block → **294 blocks**, reading order verified contiguous across columns. The HRM report: 1 blob → **224 blocks** with headings intact.
+- **Tables come out as markdown** (`page.find_tables()` → `to_markdown()`), emitted once at their reading position instead of flattened word soup. Proven end-to-end: a ruled pension-ledger PDF ingested through the real RQ worker path put `|366181|Harriet Fields|$12.00|` in a chunk; the query "monthly pension rate for certificate 366181" then hit it at **hybrid 1.000** (dense alone: 0.477 — the BM25 leg catches the exact number).
+- **Chunk shape holds**: median stays in the CMU band (~290–305 tok) with slightly fewer mid-sentence chunk endings.
+
+Also fixed while closing this out: existing users carried the old `chunk_size=500/overlap=100` **on their user rows**, which silently overrode the new CMU-matched defaults on every upload. A data migration (`users/0035`) bumps rows still holding both legacy defaults; customized values are untouched.
 
 ---
 
@@ -145,6 +155,8 @@ We bumped the document path from 500 chars (~96 tok) to **1,500 chars / 180 over
 
 | File | Change |
 |---|---|
+| `core/services/file_processor.py` | structure-aware PDF parse (PyMuPDF, PyPDF2 fallback) |
+| `users/migrations/0035_bump_legacy_chunk_defaults.py` | legacy 500/100 user rows → CMU-matched defaults |
 | `core/services/reranker_service.py` | **NEW** — lazy, flag-gated local cross-encoder |
 | `core/services/query_analysis_service.py` | **NEW** — Haiku structured query plan |
 | `core/services/rag_postprocess.py` | **NEW** — `mmr_diversify`, `answer_grounding` |
@@ -181,14 +193,11 @@ We bumped the document path from 500 chars (~96 tok) to **1,500 chars / 180 over
 
 ---
 
-## 7. What's open (the parsing track)
+## 7. What's open
 
-The two remaining audit items are about *document parsing*, not retrieval:
-
-- **#1 — structure-aware parsing.** Still PyPDF2, which flattens tables and headings. Swap to PyMuPDF / Unstructured to preserve them.
 - **#8 — reference resolution.** A document says "see Section 4.2"; we retrieve the pointer but not the target. Needs a second resolution pass.
 
-**Idea for existing docs:** rather than bulk re-embedding, expose a per-document **"re-parse / re-index"** action (or let the user simply re-upload). The current small-chunk docs aren't a big deal — they upgrade naturally as files are re-processed.
+**Idea for existing docs:** rather than bulk re-embedding, expose a per-document **"re-parse / re-index"** action (or let the user simply re-upload). The current small-chunk docs aren't a big deal — they upgrade naturally as files are re-processed, and new uploads now get both the PyMuPDF parse and the CMU-matched chunking.
 
 **Recommended next step:** stand up a small **eval set** (RAGAS-style) so each future change — and the parsing track — is *provable*, not vibes. This mirrors the audit's own advice: do A, measure, then climb to B/C.
 
@@ -207,6 +216,8 @@ All verification scripts live in `dare_app/dare-backend/rag_lab/` and reuse cach
 | `verify_doc_hybrid.py` | document-path hybrid + threshold survivability |
 | `verify_rerank.py` | end-to-end with reranking on |
 | `verify_advanced.py` | full pipeline: analysis → hybrid → rerank → conditional MMR → cited |
+| `verify_pdf_parse.py` | PyPDF2 vs PyMuPDF extraction (structure, reading order, tables) |
+| `verify_pdf_e2e.py` | real upload → worker → parse → chunk → store, then confidence probes in both rag modes |
 
 ```bash
 cd dare_app/dare-backend
