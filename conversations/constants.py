@@ -42,6 +42,7 @@ class ConversationSource(models.TextChoices):
 class RagMode(models.TextChoices):
     NAIVE = "naive", "Naive RAG"
     ADVANCED = "advanced", "Advanced RAG"
+    AGENTIC = "agentic", "Agentic RAG"
 
 
 class WebSocketMessageType(Enum):
