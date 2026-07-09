@@ -6,6 +6,7 @@ from .dispatch_credentials_dto import ResolvedDispatchCredentials
 from .generation_dto import GenerationConfig
 from .llm_descriptor_dto import LLMDescriptor
 from .media_dto import MediaConfig
+from .prepared_chat_dto import PreparedChat
 from .request_dto import LLMQueryChunk, LLMQueryRequest
 from .socratic_dto import SocraticConfig
 from .stream_event_dto import LLMStreamEvent, StreamEventKind
@@ -23,6 +24,7 @@ __all__ = [
     "LLMQueryChunk",
     "LLMQueryRequestBuilder",
     "LLMStreamEvent",
+    "PreparedChat",
     "StreamEventKind",
     "ToolCallRequest",
     "ToolCallResult",

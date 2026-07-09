@@ -17,6 +17,7 @@ from core.services.dtos import (
     LLMQueryChunk,
     LLMQueryRequest,
     LLMStreamEvent,
+    PreparedChat,
     ResolvedDispatchCredentials,
     StreamEventKind,
 )
@@ -128,6 +129,79 @@ class LLMService:
 
         except Exception as e:
             yield f"Error: {str(e)}", None
+
+    # ========== Tool-Loop Seams ==========
+
+    async def prepare_chat(self, request: LLMQueryRequest) -> PreparedChat:
+        """Build everything a tool loop needs, exactly once per turn.
+
+        Runs the full prompt build (system, context, RAG pre-injection,
+        history, current message), media processing, tool resolution and
+        provider dispatch. The loop then appends tool turns to the returned
+        messages and calls :meth:`stream_round` per round — the prompt is
+        never rebuilt.
+
+        Args:
+            request: LLMQueryRequest for the turn.
+
+        Returns:
+            PreparedChat ready for round streaming.
+        """
+        llm = await self._resolve_llm(request)
+        self._pending_memory_context = []
+        messages = await self._build_messages_for_request(request, llm)
+        all_images = await self._process_media_files(request)
+
+        if all_images:
+            messages = await self.add_video_transcriptions_to_context(
+                all_images, messages, request.user
+            )
+
+        all_tools = await self.tool_fetcher.get_all_tools(request, llm, None)
+        llm_tools = all_tools or None
+        if not llm_tools and request.requires_web_search():
+            llm_tools = self._get_web_search_tools(llm)
+        if request.requires_web_fetch():
+            llm_tools = (llm_tools or []) + self._get_web_fetch_tools(llm)
+
+        ai_service = await self._get_ai_service(llm, request.user)
+
+        return PreparedChat(
+            messages=messages,
+            tools=llm_tools,
+            images=all_images,
+            ai_service=ai_service,
+            generation=request.generation,
+            memory_context=self._pending_memory_context,
+            llm=llm,
+        )
+
+    async def stream_round(
+        self,
+        prepared: PreparedChat,
+        messages: List[Dict],
+        tools: Optional[List[Dict]],
+    ) -> AsyncGenerator[LLMStreamEvent, None]:
+        """Stream one model call of a tool loop as typed events.
+
+        Args:
+            prepared: The turn's PreparedChat.
+            messages: Current message list (round 1 messages plus any
+                appended tool turns).
+            tools: Tools for this round — None on the forced final round.
+
+        Yields:
+            LLMStreamEvent
+        """
+        async for event in prepared.ai_service.stream_chat_completion(
+            messages,
+            prepared.generation.max_tokens,
+            prepared.generation.temperature,
+            effort=prepared.generation.effort,
+            images=prepared.images,
+            tools=tools,
+        ):
+            yield event
 
     # ========== Query Orchestration Methods ==========
 

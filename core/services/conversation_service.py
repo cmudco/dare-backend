@@ -78,10 +78,10 @@ class ConversationService:
                 "artifactId": msg.get("artifactId", None),
                 "memoryContextData": msg.get("memory_context_data") or [],
                 # Keep socket fallback history aligned with the REST message
-                # serializer; the client camelizes this to `mcpToolCalls`.
-                "mcp_tool_calls": [
+                # serializer; the client camelizes this to `toolCalls`.
+                "tool_calls": [
                     self._build_tool_call_payload(tc)
-                    for tc in msg.get("mcp_tool_calls", [])
+                    for tc in msg.get("tool_calls", [])
                 ],
             }
             for msg in serialized_messages
@@ -104,6 +104,7 @@ class ConversationService:
             "serverSlug": tc["server_slug"],
             "origin": origin,
             "status": tc["status"],
+            "round": tc.get("round", 0),
             "error": tc.get("error"),
         }
 
