@@ -361,6 +361,7 @@ class MessageToolCallSerializer(serializers.ModelSerializer):
     """Serializer for persisted tool calls shown when messages are reloaded."""
 
     id = serializers.CharField(source="tool_call_id", read_only=True)
+    round = serializers.IntegerField(source="round_index", read_only=True)
     mcp_result = serializers.SerializerMethodField()
     dare_result = serializers.SerializerMethodField()
     provider_result = serializers.SerializerMethodField()
@@ -374,6 +375,7 @@ class MessageToolCallSerializer(serializers.ModelSerializer):
             "server_slug",
             "origin",
             "status",
+            "round",
             "result",
             "error",
             "mcp_result",
@@ -417,7 +419,11 @@ class MessageSerializer(serializers.ModelSerializer):
     web_search_sources = WebSearchSourceSerializer(many=True, read_only=True)
     llm = serializers.PrimaryKeyRelatedField(read_only=True, allow_null=True)
     artifactId = serializers.SerializerMethodField()
-    mcp_tool_calls = MessageToolCallSerializer(many=True, read_only=True)
+    # Unified tool-call list (DARE + MCP + provider). The model's
+    # related_name stays mcp_tool_calls for schema stability.
+    tool_calls = MessageToolCallSerializer(
+        many=True, read_only=True, source="mcp_tool_calls"
+    )
     energy_stats = serializers.SerializerMethodField()
 
     class Meta:
@@ -450,7 +456,7 @@ class MessageSerializer(serializers.ModelSerializer):
             "water_ml",
             "energy_stats",
             "artifactId",
-            "mcp_tool_calls",
+            "tool_calls",
             "content_type",
             "content_metadata",
             "memory_context_data",
@@ -472,7 +478,7 @@ class MessageSerializer(serializers.ModelSerializer):
             "water_ml",
             "energy_stats",
             "artifactId",
-            "mcp_tool_calls",
+            "tool_calls",
             "content_type",
             "content_metadata",
             "memory_context_data",

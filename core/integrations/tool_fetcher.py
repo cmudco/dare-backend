@@ -56,7 +56,7 @@ class ToolFetcher:
 
         try:
             # Lazy import to avoid circular dependency
-            # (mcp.services.mcp_tool_handler imports from core.services)
+            # (mcp.services modules import from core.services)
             from mcp.services import MCPToolExecutor
 
             executor = MCPToolExecutor()

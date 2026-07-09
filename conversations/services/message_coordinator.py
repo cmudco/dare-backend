@@ -57,9 +57,8 @@ from core.services.file_upload_service import FileUploadService
 from core.services.learning_progress_service import LearningProgressService
 from core.services.llm_service import LLMService
 from core.services.sb_client import SocraticBooksClient
-from dare_tools.services import dare_tool_handler
+from conversations.services.tool_loop_service import ToolLoopService
 from dare_tools.services.retrieval_tool_executor import RetrievalScope
-from mcp.services import mcp_tool_handler
 from users.utils import should_run_learning_progress
 
 logger = logging.getLogger(__name__)
@@ -94,6 +93,9 @@ class MessageCoordinator:
         self.llm_service = LLMService()
         self.billing_service = BillingService()
         self.learning_progress_service = LearningProgressService()
+        self.tool_loop_service = ToolLoopService(
+            self.llm_service, self.billing_service
+        )
 
         # Track active artifact generation tasks for cancellation
         self._artifact_tasks: Dict[str, asyncio.Task] = {}
@@ -250,61 +252,6 @@ class MessageCoordinator:
                 )
 
         await save_tool_calls()
-
-    async def _send_provider_tool_calls(
-        self,
-        token_usage: Optional[Dict],
-        bot_message_id: int,
-        sent_tool_call_ids: set,
-    ) -> None:
-        """
-        Stream provider-native server tool calls to the frontend.
-
-        Providers execute these tools internally, so there is no DARE/MCP
-        handler involved. Emitting the generic tool events keeps live rendering
-        aligned with the persisted history renderer.
-        """
-        if not token_usage or not token_usage.get("provider_tool_calls"):
-            return
-
-        for tool_call in token_usage["provider_tool_calls"]:
-            tool_call_id = tool_call.get("id")
-            if not tool_call_id or tool_call_id in sent_tool_call_ids:
-                continue
-
-            server_slug = tool_call.get("provider", "anthropic")
-            tool_name = tool_call.get("name", "provider_tool")
-            status = tool_call.get("status") or ToolCallStatus.COMPLETED
-            result = tool_call.get("result")
-
-            await self.send(
-                {
-                    "type": "tool_call",
-                    "messageId": bot_message_id,
-                    "toolCallId": tool_call_id,
-                    "toolName": tool_name,
-                    "serverSlug": server_slug,
-                    "origin": ToolCallOrigin.PROVIDER,
-                    "status": ToolCallStatus.EXECUTING,
-                }
-            )
-
-            await self.send(
-                {
-                    "type": "tool_result",
-                    "messageId": bot_message_id,
-                    "toolCallId": tool_call_id,
-                    "toolName": tool_name,
-                    "serverSlug": server_slug,
-                    "origin": ToolCallOrigin.PROVIDER,
-                    "status": "error"
-                    if status == ToolCallStatus.FAILED
-                    else "success",
-                    "result": camelize(result) if isinstance(result, dict) else result,
-                    "error": tool_call.get("error"),
-                }
-            )
-            sent_tool_call_ids.add(tool_call_id)
 
     async def _save_memory_context(
         self,
@@ -591,8 +538,11 @@ class MessageCoordinator:
         """
         Stream AI response with billing checks.
 
-        Supports both standard LLM streaming and artifact generation mode.
-        When artifacts_enabled is True, delegates to ArtifactService.
+        Standard chat runs through the bounded tool loop (ToolLoopService):
+        the model streams, executes tools, sees their results as native
+        tool turns, and keeps going until it answers in text or the round
+        cap forces a final answer. Image generation and audio transcription
+        remain single-pass flows.
 
         Args:
             message_data: Validated message data
@@ -600,18 +550,7 @@ class MessageCoordinator:
             llm: LLM instance to use
             regenerate: Whether this is a regeneration request
         """
-        # Note: artifacts_enabled controls tool injection via LLMQueryRequestBuilder
-        # LLM naturally decides when to use create_artifact/update_artifact tools
-        # No longer using intent detection - tools handle artifact creation directly
-
         try:
-            bot_message_id = message_obj.id  # Keep as integer for consistency
-            ai_response_accumulator = ""
-            token_usage = None
-            generated_image_data = None
-            generated_transcription_data = None
-            sent_provider_tool_call_ids = set()
-
             # Build LLM query request using DTO builder
             # Note: mcp_server_ids are automatically extracted in the builder
             request = LLMQueryRequestBuilder.from_message_data(
@@ -624,42 +563,119 @@ class MessageCoordinator:
                 platform=self.platform,
             )
 
-            # Track DARE/MCP tool results that need a follow-up model response.
-            executed_tool_results = []
+            # Image generation / audio transcription bypass the tool loop —
+            # single-pass flows with their own usage payloads.
+            if (
+                request.requires_audio_transcription()
+                or request.requires_image_generation()
+            ):
+                await self._stream_media_response(
+                    request, message_data, message_obj, llm, regenerate
+                )
+                return
 
-            # Stream from LLM service (MCP tools fetched internally if mcp_server_ids present)
+            retrieval_scope = RetrievalScope(
+                embedding_ids=tuple(request.context.embedding_ids or ()),
+                tag_ids=tuple(request.context.tag_ids or ()),
+                folder_ids=tuple(request.context.folder_ids or ()),
+                library_ids=tuple(request.context.library_ids or ()),
+                user_id=self.user.id if self.user else None,
+                file_owner_id=request.context.file_owner_id,
+                max_context_snippets=request.context.max_context_snippets,
+                similarity_threshold=request.context.document_similarity_threshold,
+            )
+
+            result = await self.tool_loop_service.run(
+                request=request,
+                message_obj=message_obj,
+                llm=llm,
+                user=self.user,
+                conversation=self.conversation,
+                send_callback=self.send,
+                retrieval_scope=retrieval_scope,
+                regenerate=regenerate,
+            )
+
+            if result.interrupted:
+                await self._handle_insufficient_balance(
+                    message_obj,
+                    result.text,
+                    result.token_usage or {},
+                    result.error_response,
+                )
+                return
+
+            token_usage = result.token_usage
+            if result.text.strip():
+                await self._save_web_search_sources(
+                    message_obj, token_usage, regenerate
+                )
+                await self._save_provider_tool_calls(
+                    message_obj, token_usage, regenerate
+                )
+                await self._save_memory_context(message_obj, token_usage)
+                await self._save_usage_breakdown(
+                    message_obj, result.usage_breakdown
+                )
+                await self._finalize_message(
+                    message_obj=message_obj,
+                    ai_response=result.text,
+                    token_usage=token_usage,
+                    regenerate=regenerate,
+                )
+
+                # Run learning progress assessment (Socratic only, sequential after AI response)
+                if not regenerate and should_run_learning_progress(
+                    self.platform, message_data.get("enable_progress")
+                ):
+                    await self._run_learning_progress_stream(
+                        message_data, message_obj, llm
+                    )
+            elif result.tool_calls_made:
+                # Edge case: tools ran but the model produced no text.
+                logger.warning(
+                    "[MessageCoordinator] Tools ran but no response was generated; "
+                    "finalizing with fallback message."
+                )
+                await self._finalize_message(
+                    message_obj=message_obj,
+                    ai_response=(
+                        "The tool execution completed but I was unable to "
+                        "generate a response. Please try again."
+                    ),
+                    token_usage=token_usage,
+                    regenerate=regenerate,
+                )
+
+        except Exception as e:
+            logger.exception(f"Error streaming AI response: {str(e)}")
+            await self.send_error(ErrorCode.STREAM_ERROR, ErrorMessage.STREAM_ERROR)
+
+    async def _stream_media_response(
+        self,
+        request,
+        message_data: Dict[str, Any],
+        message_obj: Message,
+        llm: LLM,
+        regenerate: bool,
+    ):
+        """Single-pass streaming for image generation / audio transcription."""
+        try:
+            bot_message_id = message_obj.id
+            ai_response_accumulator = ""
+            token_usage = None
+            generated_image_data = None
+            generated_transcription_data = None
+
             async for chunk, usage in self.llm_service.query(request):
                 if usage:
                     token_usage = usage
 
-                    if usage.get("tool_calls"):
-                        tool_results = await mcp_tool_handler.handle_tool_calls(
-                            tool_calls=usage["tool_calls"],
-                            message=message_obj,
-                            user=self.user,
-                            conversation=self.conversation,
-                            send_callback=self.send,
+                    # Handle generated image
+                    if usage.get("image_bytes"):
+                        generated_image_data = await self._handle_generated_image(
+                            usage, message_data, message_obj
                         )
-                        executed_tool_results.extend(tool_results)
-
-                        dare_results = await dare_tool_handler.handle_tool_calls(
-                            tool_calls=usage["tool_calls"],
-                            message=message_obj,
-                            user=self.user,
-                            conversation=self.conversation,
-                            send_callback=self.send,
-                            retrieval_scope=RetrievalScope(
-                                embedding_ids=tuple(request.context.embedding_ids or ()),
-                                tag_ids=tuple(request.context.tag_ids or ()),
-                                folder_ids=tuple(request.context.folder_ids or ()),
-                                library_ids=tuple(request.context.library_ids or ()),
-                                user_id=self.user.id if self.user else None,
-                                file_owner_id=request.context.file_owner_id,
-                                max_context_snippets=request.context.max_context_snippets,
-                                similarity_threshold=request.context.document_similarity_threshold,
-                            ),
-                        )
-                        executed_tool_results.extend(dare_results)
 
                     # Handle generated image
                     if usage.get("image_bytes"):
@@ -670,13 +686,6 @@ class MessageCoordinator:
                     # Handle audio transcription (final result)
                     if usage.get("transcription_result"):
                         generated_transcription_data = build_transcription_data(usage)
-
-                    if usage.get("provider_tool_calls"):
-                        await self._send_provider_tool_calls(
-                            token_usage=usage,
-                            bot_message_id=bot_message_id,
-                            sent_tool_call_ids=sent_provider_tool_call_ids,
-                        )
 
                     # Check billing during streaming (only for authenticated users)
                     if self.user:
@@ -711,61 +720,8 @@ class MessageCoordinator:
                     )
                     await self.send(payload)
 
-            # If we executed local tools, ALWAYS make a follow-up LLM call
-            # Even if there's text, it's just the LLM "thinking" before calling tools
-            # The LLM needs to see the tool results to generate the final response
-            if executed_tool_results:
-                logger.info(
-                    f"[MessageCoordinator] Making follow-up LLM call with {len(executed_tool_results)} tool results"
-                )
-                try:
-                    # The follow-up response REPLACES any partial text from before tool calls
-                    ai_response_accumulator = (
-                        await mcp_tool_handler.stream_tool_result_response(
-                            tool_results=executed_tool_results,
-                            message_data=message_data,
-                            message_obj=message_obj,
-                            llm=llm,
-                            conversation=self.conversation,
-                            user=self.user,
-                            platform=self.platform,
-                            send_callback=self.send,
-                            llm_service=self.llm_service,
-                            regenerate=regenerate,
-                        )
-                    )
-                except Exception as e:
-                    # If follow-up call fails, generate a fallback error message
-                    logger.exception(
-                        f"[MessageCoordinator] Follow-up LLM call failed: {e}"
-                    )
-                    # Build fallback response from tool results
-                    error_parts = []
-                    for tr in executed_tool_results:
-                        if tr.get("result", "").startswith("Error:"):
-                            error_parts.append(
-                                f"Tool `{tr['tool_name']}`: {tr['result']}"
-                            )
-                    if error_parts:
-                        ai_response_accumulator = (
-                            "I encountered some issues while executing the requested tools:\n\n"
-                            + "\n".join(error_parts)
-                        )
-                    else:
-                        ai_response_accumulator = "I was unable to complete the tool execution. Please try again."
-
             # Ensure we always finalize the message
             if ai_response_accumulator.strip():
-                # Save web search sources if present (before finalization)
-                await self._save_web_search_sources(
-                    message_obj, token_usage, regenerate
-                )
-
-                # Save provider-native tool calls if present (Anthropic web fetch)
-                await self._save_provider_tool_calls(
-                    message_obj, token_usage, regenerate
-                )
-
                 # Save memory context if present (before finalization)
                 await self._save_memory_context(message_obj, token_usage)
 
@@ -778,31 +734,22 @@ class MessageCoordinator:
                     generated_transcription_data=generated_transcription_data,
                 )
 
-                # Run learning progress assessment (Socratic only, sequential after AI response)
-                if not regenerate and should_run_learning_progress(
-                    self.platform, message_data.get("enable_progress")
-                ):
-                    await self._run_learning_progress_stream(
-                        message_data, message_obj, llm
-                    )
-            elif executed_tool_results:
-                # Edge case: tool results exist but no response was generated
-                # This shouldn't happen after the fix above, but handle defensively
-                logger.warning(
-                    f"[MessageCoordinator] Tool results existed but no response generated. "
-                    f"Finalizing with fallback message."
-                )
-                fallback_message = "The tool execution completed but I was unable to generate a response. Please try again."
-                await self._finalize_message(
-                    message_obj=message_obj,
-                    ai_response=fallback_message,
-                    token_usage=token_usage,
-                    regenerate=regenerate,
-                )
-
         except Exception as e:
-            logger.exception(f"Error streaming AI response: {str(e)}")
+            logger.exception(f"Error streaming media response: {str(e)}")
             await self.send_error(ErrorCode.STREAM_ERROR, ErrorMessage.STREAM_ERROR)
+
+    @database_sync_to_async
+    def _save_usage_breakdown(
+        self, message_obj: Message, usage_breakdown: List[Dict]
+    ) -> None:
+        """Persist the per-round token breakdown for multi-round turns."""
+        if not usage_breakdown or len(usage_breakdown) < 2:
+            return
+        try:
+            message_obj.usage_details = usage_breakdown
+            message_obj.save(update_fields=["usage_details"])
+        except Exception as exc:
+            logger.warning("Failed to save usage breakdown: %s", exc)
 
     async def _finalize_message(
         self,
