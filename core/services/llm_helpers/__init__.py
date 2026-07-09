@@ -14,7 +14,6 @@ from .context_helpers import (
 
 from .db_helpers import (
     get_prompt,
-    get_conversation_history,
     get_files_from_tags,
     get_files_from_folders,
     get_audio_or_video_files,
@@ -23,6 +22,14 @@ from .db_helpers import (
     get_referenced_conversations_context,
     get_referenced_summaries_context,
     convert_file_to_base64_dict,
+)
+
+from .history_helpers import get_conversation_history
+
+from .tool_turn_helpers import (
+    build_assistant_tool_call_turn,
+    build_tool_result_turn,
+    synthesize_tool_call_id,
 )
 
 from .socratic_helpers import (
@@ -50,7 +57,6 @@ __all__ = [
     "insert_context_before_last_user_message",
     # Database helpers
     "get_prompt",
-    "get_conversation_history",
     "get_files_from_tags",
     "get_files_from_folders",
     "get_audio_or_video_files",
@@ -59,6 +65,12 @@ __all__ = [
     "get_referenced_conversations_context",
     "get_referenced_summaries_context",
     "convert_file_to_base64_dict",
+    # History helpers
+    "get_conversation_history",
+    # Tool-turn helpers
+    "build_assistant_tool_call_turn",
+    "build_tool_result_turn",
+    "synthesize_tool_call_id",
     # Socratic message builders
     "build_classic_socratic_messages",
     "build_advanced_socratic_messages",

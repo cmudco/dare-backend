@@ -12,7 +12,7 @@ from typing import List, Dict, Any, Optional
 from core.services.dtos import LLMQueryRequest
 from core.services.document_processor import DocumentProcessor
 from core.services.vector_service import get_vector_service_async
-from .db_helpers import get_conversation_history
+from .history_helpers import get_conversation_history
 
 
 logger = logging.getLogger(__name__)

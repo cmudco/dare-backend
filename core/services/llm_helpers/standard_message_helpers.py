@@ -13,12 +13,12 @@ from core.services.dtos import LLMQueryRequest
 from core.services.file_processor import FileProcessor
 
 from .db_helpers import (
-    get_conversation_history,
     get_full_file_contents,
     get_prompt,
     get_referenced_conversations_context,
     get_referenced_summaries_context,
 )
+from .history_helpers import get_conversation_history
 from .memory_context_helpers import add_memory_context_to_messages
 from .semantic_context_helpers import add_semantic_context_to_messages
 
@@ -131,7 +131,16 @@ async def build_standard_messages(
         if request.conversation
         else []
     )
-    messages.extend([msg for msg in conversation_history if msg["content"].strip()])
+    # Keep turns that carry tool_calls even when their text content is empty —
+    # dropping them would orphan the role:"tool" results that follow.
+    messages.extend(
+        [
+            msg
+            for msg in conversation_history
+            if msg.get("tool_calls")
+            or (isinstance(msg.get("content"), str) and msg["content"].strip())
+        ]
+    )
 
     # Add current user message
     messages.append({"role": "user", "content": f"User's message: {request.message}"})
