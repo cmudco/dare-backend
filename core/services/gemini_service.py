@@ -18,6 +18,7 @@ from config import env
 from conversations.models import LLM
 from core.services.api_key_service import get_provider_api_key
 from core.services.dtos.stream_event_dto import LLMStreamEvent
+from core.services.llm_utils.provider_message_converters import GeminiMessageConverter
 from core.services.llm_utils import (
     GeminiMessageFormatter,
     GeminiVisionHandler,
@@ -261,8 +262,13 @@ class GeminiService:
         Returns:
             Async Gemini response stream
         """
-        contents = GeminiMessageFormatter.convert_to_contents(messages)
-        config = self._build_generation_config(max_tokens, temperature, tools)
+        # Convert internal (OpenAI-format) messages into structured Contents:
+        # role:"model" function_call parts and role:"user" function_response
+        # parts, replacing the legacy role-prefixed string flattening.
+        system_instruction, contents = GeminiMessageConverter.convert(messages)
+        config = self._build_generation_config(
+            max_tokens, temperature, tools, system_instruction
+        )
 
         # Use native async interface for true real-time streaming
         return await self.async_client.models.generate_content_stream(
@@ -275,7 +281,8 @@ class GeminiService:
         self,
         max_tokens: int,
         temperature: float,
-        tools: Optional[List[Dict]]
+        tools: Optional[List[Dict]],
+        system_instruction: Optional[str] = None,
     ) -> types.GenerateContentConfig:
         """
         Build Gemini generation configuration.
@@ -284,6 +291,7 @@ class GeminiService:
             max_tokens: Max tokens to generate
             temperature: Temperature setting
             tools: Optional tools configuration
+            system_instruction: Optional system prompt (extracted from messages)
 
         Returns:
             Gemini generation config
@@ -292,6 +300,8 @@ class GeminiService:
         config_kwargs = {"max_output_tokens": max_tokens + self.TOKEN_BUFFER}
         if self.capabilities.supports_temperature:
             config_kwargs["temperature"] = temperature
+        if system_instruction:
+            config_kwargs["system_instruction"] = system_instruction
         config = types.GenerateContentConfig(**config_kwargs)
 
         native_tools = self._build_native_tools(tools)
@@ -322,14 +332,15 @@ class GeminiService:
             
             if gemini_tools:
                 config.tools = gemini_tools
-                # Force function calling when tools are provided
-                # This ensures Gemini uses the tool instead of generating raw text
+                # AUTO lets the model decide per turn. ANY (the old setting)
+                # forces a function call on EVERY request — inside a tool loop
+                # that means the model can never produce a final text answer.
                 config.tool_config = types.ToolConfig(
                     function_calling_config=types.FunctionCallingConfig(
-                        mode="ANY"  # Force the model to use a function
+                        mode="AUTO"
                     )
                 )
-                logger.debug(f"[Gemini] Set {len(gemini_tools)} tools with tool_config mode=ANY")
+                logger.debug(f"[Gemini] Set {len(gemini_tools)} tools with tool_config mode=AUTO")
 
         return config
 

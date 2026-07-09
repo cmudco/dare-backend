@@ -906,6 +906,11 @@ class Message(BaseModel):
         blank=True,
         help_text="Per-stage RAG pipeline trace (query analysis, hybrid, rerank, MMR, grounding) for the retrieval-trace UI.",
     )
+    usage_details = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="Per-round token/cost breakdown for multi-round tool responses; summed values live in input_tokens/output_tokens/cost.",
+    )
 
     # Content type for specialized rendering (diagrams, charts, etc.)
     content_type = models.CharField(
@@ -992,6 +997,10 @@ class MessageToolCall(BaseModel):
     )
     arguments = models.JSONField(
         default=dict, help_text="Arguments passed to the tool."
+    )
+    round_index = models.PositiveSmallIntegerField(
+        default=0,
+        help_text="Tool-loop round this call executed in (1-based); 0 for rows persisted before rounds existed.",
     )
 
     # Execution state

@@ -14,16 +14,11 @@ from typing import Callable, List, Optional
 
 from channels.db import database_sync_to_async
 
-from conversations.constants import SenderType
-from conversations.models import (Artifact, Conversation, ConversationSummary,
-                                  Message, Snippet)
+from conversations.models import ConversationSummary, Snippet
 from files.models import File
 from prompts.models import Prompt
 
 logger = logging.getLogger(__name__)
-
-# Maximum artifact content to include in LLM context (chars, ~2k tokens)
-MAX_ARTIFACT_CONTENT_IN_CONTEXT = 8000
 
 
 @database_sync_to_async
@@ -40,126 +35,6 @@ def get_prompt(prompt_id: str = None) -> str:
         prompt = Prompt.active_objects.filter(id=prompt_id).first()
         return prompt.content if prompt else ""
     return ""
-
-
-@database_sync_to_async
-def get_conversation_history(conversation: Conversation, limit: int = 10) -> list:
-    """Retrieves recent chat history for AI context, including tool results and artifacts.
-
-    For assistant messages with tool calls, appends the tool results to give
-    the LLM context for follow-up messages (e.g., modifying a chart).
-
-    For assistant messages with artifacts, includes the LATEST VERSION of each
-    artifact group to enable intelligent inline edits using string replacement.
-
-    Args:
-        conversation: Conversation instance
-        limit: Maximum number of messages to retrieve
-
-    Returns:
-        List of message dictionaries with role and content
-    """
-    messages = (
-        Message.active_objects.filter(conversation=conversation)
-        .prefetch_related("mcp_tool_calls", "artifacts__artifact_group__latest_version")
-        .order_by("-created_at")
-    )
-
-    if limit >= 50:
-        messages = messages[2:]
-    else:
-        messages = messages[2 : limit + 2] if limit > 0 else messages[2:]
-
-    # Track artifact groups to only include latest version once
-    included_artifact_groups = set()
-
-    result = []
-    for msg in reversed(messages):
-        role = "user" if msg.sender_type == SenderType.PLAYER else "assistant"
-        content = msg.message
-
-        # For assistant messages, include tool call results and artifacts
-        if msg.sender_type == SenderType.AI_ASSISTANT:
-            # Include tool call results from MessageToolCall
-            tool_calls = msg.mcp_tool_calls.all()
-            if tool_calls.exists():
-                tool_results_text = []
-                for tc in tool_calls:
-                    if tc.result:
-                        tool_results_text.append(f"[Tool: {tc.tool_name}]\n{tc.result}")
-                if tool_results_text:
-                    content = f"{content}\n\n--- Tool Results ---\n" + "\n\n".join(
-                        tool_results_text
-                    )
-
-            # Include LATEST artifact content for LLM context
-            # This ensures the LLM sees current state for accurate inline edits
-            artifacts = msg.artifacts.filter(is_deleted=False)
-            for artifact in artifacts:
-                group = artifact.artifact_group
-                if not group:
-                    continue
-                group_id = group.id
-
-                # Skip if we've already included the latest version from this group
-                if group_id in included_artifact_groups:
-                    logger.debug(
-                        f"[get_conversation_history] Skipping artifact #{artifact.id} "
-                        f"(group {group_id} already included)"
-                    )
-                    continue
-                included_artifact_groups.add(group_id)
-
-                # Use the LATEST version from the group, not the version attached to this message
-                latest_artifact = group.latest_version
-                if not latest_artifact:
-                    latest_artifact = artifact  # Fallback to current if no latest set
-
-                # Build artifact context block with latest content
-                artifact_context = _format_artifact_for_history(latest_artifact)
-                content = f"{content}\n\n{artifact_context}"
-                logger.info(
-                    f"[get_conversation_history] Including artifact #{latest_artifact.id} "
-                    f"(type={latest_artifact.artifact_type}, v{latest_artifact.version}, group={group_id}) "
-                    f"as LATEST version in message {msg.id}"
-                )
-
-        result.append({"role": role, "content": content})
-
-    logger.info(
-        f"[get_conversation_history] Returning {len(result)} messages, "
-        f"{len(included_artifact_groups)} artifact groups included"
-    )
-    return result
-
-
-def _format_artifact_for_history(artifact: "Artifact") -> str:
-    """Format a single artifact for inclusion in conversation history.
-
-    Provides structured context that helps the LLM understand:
-    - Artifact identity (ID, title, group)
-    - Type and version for context
-    - Complete content for string-based modifications
-
-    Args:
-        artifact: Artifact model instance
-
-    Returns:
-        Formatted string with artifact metadata and content
-    """
-    # Truncate very large artifacts to prevent context explosion
-    content_to_include = artifact.content
-    if len(content_to_include) > MAX_ARTIFACT_CONTENT_IN_CONTEXT:
-        content_to_include = (
-            content_to_include[:MAX_ARTIFACT_CONTENT_IN_CONTEXT]
-            + f"\n... [truncated, {len(artifact.content)} total chars]"
-        )
-
-    return f"""[Artifact #{artifact.id}] {artifact.title}
-Type: {artifact.artifact_type} | Version: v{artifact.version} | Group: {artifact.artifact_group_id}
---- Content ---
-{content_to_include}
---- End Content ---"""
 
 
 def save_library_snippet(message_obj, chunk) -> None:

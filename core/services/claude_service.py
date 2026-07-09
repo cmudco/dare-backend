@@ -16,6 +16,7 @@ from config import env
 from conversations.models import LLM
 from core.services.api_key_service import get_provider_api_key_sync
 from core.services.dtos.stream_event_dto import LLMStreamEvent
+from core.services.llm_utils.provider_message_converters import ClaudeMessageConverter
 from core.services.llm_utils import (
     MessageFormatter,
     ClaudeVisionHandler,
@@ -302,13 +303,15 @@ class ClaudeService:
         Returns:
             API call parameters dictionary
         """
-        # Extract system message (Claude requires it separately)
-        system_message, filtered_messages = MessageFormatter.extract_system_messages(messages)
+        # Convert internal (OpenAI-format) messages: extracts the system
+        # prompt and translates tool_calls / role:"tool" turns into Claude's
+        # tool_use / tool_result content blocks.
+        system_message, converted_messages = ClaudeMessageConverter.convert(messages)
 
         params = {
             "model": self.model,
             "max_tokens": max_tokens,
-            "messages": filtered_messages,
+            "messages": converted_messages,
             "stream": True
         }
         self.capabilities.apply_sampling_params(params, temperature, effort)
