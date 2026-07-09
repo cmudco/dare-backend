@@ -92,11 +92,12 @@ If there is no current status, follow the system prompt to make a new status rep
             ]
 
             ai_service = await self._get_ai_service(llm, user=user)
-            async for chunk, usage in ai_service.stream_chat_completion(
+            event_stream = ai_service.stream_chat_completion(
                 messages=messages,
                 max_tokens=max_tokens,
                 temperature=temperature,
-            ):
+            )
+            async for chunk, usage in LLMService._stream_legacy_chunks(event_stream):
                 yield chunk, usage
 
         except Exception as e:
