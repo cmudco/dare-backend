@@ -16,7 +16,9 @@ from core.services.dtos import (
     LLMDescriptor,
     LLMQueryChunk,
     LLMQueryRequest,
+    LLMStreamEvent,
     ResolvedDispatchCredentials,
+    StreamEventKind,
 )
 from core.services.file_processor import FileProcessor
 from core.services.gemini_service import GeminiService
@@ -47,7 +49,8 @@ class AIService(ABC):
         effort: Optional[str] = None,
         images: list = None,
         tools: list = None,
-    ) -> AsyncGenerator[Tuple[str, Dict], None]:
+    ) -> AsyncGenerator[LLMStreamEvent, None]:
+        """Stream a completion as normalized ``LLMStreamEvent`` objects."""
         pass
 
     @abstractmethod
@@ -318,16 +321,49 @@ class LLMService:
             )
             yield text, None
         else:
-            # Standard streaming completion
-            async for chunk, usage in ai_service.stream_chat_completion(
+            # Standard streaming completion, downgraded to the legacy
+            # (chunk, usage) contract that query() consumers expect.
+            event_stream = ai_service.stream_chat_completion(
                 messages,
                 request.generation.max_tokens,
                 request.generation.temperature,
                 effort=request.generation.effort,
                 images=all_images,
                 tools=llm_tools,
-            ):
+            )
+            async for chunk, usage in self._stream_legacy_chunks(event_stream):
                 yield chunk, usage
+
+    @staticmethod
+    async def _stream_legacy_chunks(
+        event_stream: AsyncGenerator[LLMStreamEvent, None],
+    ) -> AsyncGenerator[Tuple[str, Optional[Dict]], None]:
+        """Downgrade a typed event stream to the legacy (chunk, usage) contract.
+
+        Text deltas pass through as chunks; completed tool calls are folded
+        into the next usage frame under ``usage["tool_calls"]`` (with a final
+        synthetic frame if no usage frame follows them) — exactly the shape
+        pre-event consumers of ``query()`` were built against. Tool-call
+        lifecycle events (start/args progress) have no legacy equivalent and
+        are dropped here; consumers that want them use ``stream_round()``.
+        """
+        ready_tool_calls: List[Dict[str, str]] = []
+        tool_calls_delivered = False
+
+        async for event in event_stream:
+            if event.kind is StreamEventKind.TEXT_DELTA:
+                yield event.text, None
+            elif event.kind is StreamEventKind.TOOL_CALL_READY and event.tool_call:
+                ready_tool_calls.append(event.tool_call.to_payload_dict())
+            elif event.kind is StreamEventKind.USAGE and event.usage is not None:
+                usage = dict(event.usage)
+                if ready_tool_calls:
+                    usage["tool_calls"] = list(ready_tool_calls)
+                    tool_calls_delivered = True
+                yield "", usage
+
+        if ready_tool_calls and not tool_calls_delivered:
+            yield "", {"tool_calls": ready_tool_calls}
 
     # ========== End Query Orchestration Methods ==========
 

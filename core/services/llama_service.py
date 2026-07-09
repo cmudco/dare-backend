@@ -4,6 +4,7 @@ from typing import AsyncGenerator, Dict, List, Tuple, Optional
 import ollama
 from config import env
 from conversations.models import LLM
+from core.services.dtos.stream_event_dto import LLMStreamEvent
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +97,7 @@ class LlamaService:
 
     async def stream_chat_completion(
         self, messages: List[Dict[str, str]], max_tokens: int = 1024, temperature: float = 0.7, effort: Optional[str] = None, images: List[Dict] = None, tools: list = None
-    ) -> AsyncGenerator[Tuple[str, Dict], None]:
+    ) -> AsyncGenerator[LLMStreamEvent, None]:
         """
         Streams chat completions from LLaMA via Ollama.
 
@@ -111,7 +112,7 @@ class LlamaService:
             tools: Optional list of tools (not used for Ollama).
 
         Yields:
-            Tuple[str, Dict]: Text chunk and usage data (or None if usage not available)
+            LLMStreamEvent: Text deltas and a final usage frame
 
         Raises:
             Exception: If an error occurs during the API call, yields an error message and logs the exception.
@@ -159,7 +160,7 @@ class LlamaService:
                         total_chars += len(text)
                         if chunk_count <= 3:
                             logger.debug(f"[LlamaService] Chunk {chunk_count}: '{text[:50]}...' ({len(text)} chars)")
-                        yield text, None
+                        yield LLMStreamEvent.text_delta(text)
 
                 if chunk.get('done', False):
                     logger.info(f"[LlamaService] Received 'done' signal from Ollama")
@@ -178,14 +179,14 @@ class LlamaService:
                     "total_tokens": input_tokens + output_tokens
                 }
                 logger.info(f"[LlamaService] Token usage - input: {input_tokens}, output: {output_tokens}, total: {input_tokens + output_tokens}")
-                yield "", usage_data
+                yield LLMStreamEvent.usage_frame(usage_data)
             else:
                 logger.warning(f"[LlamaService] No token usage data received from Ollama")
 
         except Exception as e:
             elapsed = time.time() - start_time
             logger.error(f"[LlamaService] Error in stream_chat_completion after {elapsed:.2f}s: {type(e).__name__}: {e}", exc_info=True)
-            yield f"Error: {str(e)}", None
+            yield LLMStreamEvent.text_delta(f"Error: {str(e)}")
 
     def _prepare_messages_with_images(
         self,

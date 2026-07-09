@@ -136,21 +136,4 @@ async def build_standard_messages(
     # Add current user message
     messages.append({"role": "user", "content": f"User's message: {request.message}"})
 
-    # === TEMP DIAGNOSTIC (glitch repro) — remove after debugging ===
-    logger.warning(
-        "[GLITCH-DEBUG] outgoing payload to LLM | conv=%s | current request.message=%r",
-        getattr(request.conversation, "id", None),
-        request.message,
-    )
-    for _i, _m in enumerate(messages):
-        _c = _m.get("content") or ""
-        logger.warning(
-            "[GLITCH-DEBUG]   [%02d] role=%s len=%d :: %s",
-            _i,
-            _m.get("role"),
-            len(_c),
-            _c[:120].replace("\n", " "),
-        )
-    # === END TEMP DIAGNOSTIC ===
-
     return MessageBuildResult(messages=messages, memory_context=memory_context)

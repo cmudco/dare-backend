@@ -17,6 +17,7 @@ from google.genai import types
 from config import env
 from conversations.models import LLM
 from core.services.api_key_service import get_provider_api_key
+from core.services.dtos.stream_event_dto import LLMStreamEvent
 from core.services.llm_utils import (
     GeminiMessageFormatter,
     GeminiVisionHandler,
@@ -86,7 +87,7 @@ class GeminiService:
         effort: Optional[str] = None,
         images: List[Dict] = None,
         tools: Optional[List[Dict]] = None
-    ) -> AsyncGenerator[Tuple[str, Dict], None]:
+    ) -> AsyncGenerator[LLMStreamEvent, None]:
         """
         Stream chat completions from Google Gemini API.
 
@@ -101,7 +102,7 @@ class GeminiService:
             tools: List of tools including google_search support
 
         Yields:
-            Tuple of (text_chunk, usage_data)
+            LLMStreamEvent
         """
         try:
             # Step 1: Prepare messages with vision if needed
@@ -115,14 +116,14 @@ class GeminiService:
                 tools
             )
 
-            # Step 3: Process and yield stream chunks
-            async for chunk, usage in GeminiStreamProcessor.process_stream(response_stream):
-                yield chunk, usage
+            # Step 3: Process and yield stream events
+            async for event in GeminiStreamProcessor.process_stream(response_stream):
+                yield event
 
         except Exception as e:
             logger.error(f"Error in Gemini stream_chat_completion: {e}")
             error_message = GeminiErrorHandler.format_error(e)
-            yield f"Error: {error_message}", None
+            yield LLMStreamEvent.text_delta(f"Error: {error_message}")
 
     async def get_chat_completion(
         self,
