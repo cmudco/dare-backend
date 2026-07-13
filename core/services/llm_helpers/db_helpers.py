@@ -8,16 +8,17 @@ All functions are stateless - they receive the required models and dependencies
 as parameters instead of accessing class instance state.
 """
 
-from typing import Optional, List, Callable
 import base64
 import logging
+from typing import Callable, List, Optional
+
 from channels.db import database_sync_to_async
 
-from conversations.models import Conversation, ConversationSummary, Message, Artifact
 from conversations.constants import SenderType
+from conversations.models import (Artifact, Conversation, ConversationSummary,
+                                  Message, Snippet)
 from files.models import File
 from prompts.models import Prompt
-
 
 logger = logging.getLogger(__name__)
 
@@ -28,10 +29,10 @@ MAX_ARTIFACT_CONTENT_IN_CONTEXT = 8000
 @database_sync_to_async
 def get_prompt(prompt_id: str = None) -> str:
     """Fetches the prompt if the prompt_id is provided.
-    
+
     Args:
         prompt_id: UUID of the prompt to fetch
-        
+
     Returns:
         Prompt content string or empty string
     """
@@ -58,17 +59,16 @@ def get_conversation_history(conversation: Conversation, limit: int = 10) -> lis
     Returns:
         List of message dictionaries with role and content
     """
-    messages = Message.active_objects.filter(
-        conversation=conversation
-    ).prefetch_related(
-        'mcp_tool_calls',
-        'artifacts__artifact_group__latest_version'
-    ).order_by('-created_at')
+    messages = (
+        Message.active_objects.filter(conversation=conversation)
+        .prefetch_related("mcp_tool_calls", "artifacts__artifact_group__latest_version")
+        .order_by("-created_at")
+    )
 
     if limit >= 50:
         messages = messages[2:]
     else:
-        messages = messages[2:limit+2] if limit > 0 else messages[2:]
+        messages = messages[2 : limit + 2] if limit > 0 else messages[2:]
 
     # Track artifact groups to only include latest version once
     included_artifact_groups = set()
@@ -86,11 +86,11 @@ def get_conversation_history(conversation: Conversation, limit: int = 10) -> lis
                 tool_results_text = []
                 for tc in tool_calls:
                     if tc.result:
-                        tool_results_text.append(
-                            f"[Tool: {tc.tool_name}]\n{tc.result}"
-                        )
+                        tool_results_text.append(f"[Tool: {tc.tool_name}]\n{tc.result}")
                 if tool_results_text:
-                    content = f"{content}\n\n--- Tool Results ---\n" + "\n\n".join(tool_results_text)
+                    content = f"{content}\n\n--- Tool Results ---\n" + "\n\n".join(
+                        tool_results_text
+                    )
 
             # Include LATEST artifact content for LLM context
             # This ensures the LLM sees current state for accurate inline edits
@@ -133,7 +133,7 @@ def get_conversation_history(conversation: Conversation, limit: int = 10) -> lis
     return result
 
 
-def _format_artifact_for_history(artifact: 'Artifact') -> str:
+def _format_artifact_for_history(artifact: "Artifact") -> str:
     """Format a single artifact for inclusion in conversation history.
 
     Provides structured context that helps the LLM understand:
@@ -151,8 +151,8 @@ def _format_artifact_for_history(artifact: 'Artifact') -> str:
     content_to_include = artifact.content
     if len(content_to_include) > MAX_ARTIFACT_CONTENT_IN_CONTEXT:
         content_to_include = (
-            content_to_include[:MAX_ARTIFACT_CONTENT_IN_CONTEXT] +
-            f"\n... [truncated, {len(artifact.content)} total chars]"
+            content_to_include[:MAX_ARTIFACT_CONTENT_IN_CONTEXT]
+            + f"\n... [truncated, {len(artifact.content)} total chars]"
         )
 
     return f"""[Artifact #{artifact.id}] {artifact.title}
@@ -162,68 +162,144 @@ Type: {artifact.artifact_type} | Version: v{artifact.version} | Group: {artifact
 --- End Content ---"""
 
 
+def save_library_snippet(message_obj, chunk) -> None:
+    """Persist one library citation snippet for a message (best-effort, never raises).
+
+    Called from an already-sync context, so it is a plain function (not
+    ``@database_sync_to_async``). ``chunk`` is a ``core.services.rag`` RetrievedChunk,
+    duck-typed here to avoid a cross-package import.
+    """
+    try:
+        Snippet.active_objects.create(
+            message=message_obj,
+            file=None,
+            library=chunk.library,
+            source_ref=chunk.source_ref,
+            text=chunk.text,
+            similarity_score=(
+                chunk.rerank_score if chunk.rerank_score is not None else chunk.score
+            ),
+            chunk_index=chunk.chunk_index,
+        )
+    except Exception as exc:
+        logger.warning("Failed to save library snippet: %s", exc)
+
+
+def save_document_snippet(message_obj, chunk) -> None:
+    """Persist one document citation snippet for a message (best-effort, never raises).
+
+    Document twin of ``save_library_snippet``: same duck-typed
+    ``core.services.rag`` RetrievedChunk, but resolved to a ``File`` row. Prefers
+    the calibrated rerank score so the UI shows the score that ranked the chunk.
+    """
+    try:
+        file = File.active_objects.get(id=int(chunk.file_id))
+        Snippet.active_objects.create(
+            message=message_obj,
+            file=file,
+            library=None,
+            text=chunk.text,
+            similarity_score=(
+                chunk.rerank_score if chunk.rerank_score is not None else chunk.score
+            ),
+            chunk_index=chunk.chunk_index,
+        )
+    except Exception as exc:
+        logger.warning("Failed to save document snippet: %s", exc)
+
+
+def save_retrieval_trace(message_obj, payload) -> None:
+    """Persist the RAG pipeline trace onto a message (best-effort, never raises).
+
+    Sync (called from an already-sync context). ``payload`` is the camelized dict
+    from ``RetrievalTrace.to_payload()``.
+
+    A message can retrieve from more than one source in a single turn (uploaded
+    documents AND shared libraries), each producing its own trace. The first
+    trace is stored as a plain object (the shape the frontend has always read);
+    a second one in the same turn wraps both into ``{"traces": [...]}``. Callers
+    must reset ``message_obj.retrieval_trace`` at the start of a turn so traces
+    from a previous generation never accumulate.
+    """
+    try:
+        existing = message_obj.retrieval_trace
+        if existing:
+            traces = existing.get("traces") if isinstance(existing, dict) else None
+            if traces is None:
+                traces = [existing]
+            message_obj.retrieval_trace = {"traces": traces + [payload]}
+        else:
+            message_obj.retrieval_trace = payload
+        message_obj.save(update_fields=["retrieval_trace"])
+    except Exception as exc:
+        logger.warning("Failed to save retrieval trace: %s", exc)
+
+
 @database_sync_to_async
 def get_files_from_tags(tag_ids: list, user_id: int) -> list:
     """Fetch file IDs from tags.
-    
+
     Args:
         tag_ids: List of tag IDs
         user_id: User ID for filtering
-        
+
     Returns:
         List of file IDs
     """
     if not tag_ids:
         return []
-    return list(File.active_objects.filter(
-        tags__id__in=tag_ids, user_id=user_id
-    ).distinct().values_list('id', flat=True))
+    return list(
+        File.active_objects.filter(tags__id__in=tag_ids, user_id=user_id)
+        .distinct()
+        .values_list("id", flat=True)
+    )
 
 
 @database_sync_to_async
 def get_files_from_folders(folder_ids: list, user_id: int) -> list:
     """Fetch file IDs from folders.
-    
+
     Args:
         folder_ids: List of folder IDs
         user_id: User ID for filtering
-        
+
     Returns:
         List of file IDs
     """
     if not folder_ids:
         return []
-    return list(File.active_objects.filter(
-        folders__id__in=folder_ids, user_id=user_id
-    ).distinct().values_list('id', flat=True))
+    return list(
+        File.active_objects.filter(folders__id__in=folder_ids, user_id=user_id)
+        .distinct()
+        .values_list("id", flat=True)
+    )
 
 
 @database_sync_to_async
 def get_audio_or_video_files(media_ids: list) -> list:
     """Fetch audio/video File objects by IDs for transcription.
-    
+
     Args:
         media_ids: List of media file IDs
-        
+
     Returns:
         List of File objects
     """
     if not media_ids:
         return []
-    return list(File.active_objects.filter(
-        id__in=media_ids,
-        media_type__in=['audio', 'video']
-    ))
+    return list(
+        File.active_objects.filter(id__in=media_ids, media_type__in=["audio", "video"])
+    )
 
 
 @database_sync_to_async
 def get_full_file_contents(file_ids: list, file_processor) -> list:
     """Read full content from files for the given file IDs.
-    
+
     Args:
         file_ids: List of file IDs
         file_processor: FileProcessor instance for reading file content
-        
+
     Returns:
         List of formatted file content strings
     """
@@ -244,28 +320,28 @@ def get_full_file_contents(file_ids: list, file_processor) -> list:
     return file_contents
 
 
-def convert_file_to_base64_dict(media_file: 'File') -> Optional[dict]:
+def convert_file_to_base64_dict(media_file: "File") -> Optional[dict]:
     """Convert a single media file to base64 data URL dict for vision API.
-    
+
     This is a synchronous helper used by get_media_files_as_images.
-    
+
     Args:
         media_file: File object to convert
-        
+
     Returns:
         Dict with 'preview', 'name', 'type' or None if conversion fails
     """
     try:
-        with media_file.file.open('rb') as f:
+        with media_file.file.open("rb") as f:
             file_data = f.read()
-        
-        base64_data = base64.b64encode(file_data).decode('utf-8')
+
+        base64_data = base64.b64encode(file_data).decode("utf-8")
         data_url = f"data:{media_file.file_type};base64,{base64_data}"
-        
+
         return {
-            'preview': data_url,
-            'name': media_file.name or media_file.file.name,
-            'type': media_file.file_type
+            "preview": data_url,
+            "name": media_file.name or media_file.file.name,
+            "type": media_file.file_type,
         }
     except Exception as e:
         logger.error(f"Error reading media file {media_file.id}: {str(e)}")
@@ -275,7 +351,7 @@ def convert_file_to_base64_dict(media_file: 'File') -> Optional[dict]:
 @database_sync_to_async
 def get_media_files_as_images(media_ids: list, user_id: int) -> list:
     """Convert media file IDs to image format for LLM vision API.
-    
+
     Reads media files from disk and converts to base64 data URLs.
 
     Args:
@@ -290,9 +366,7 @@ def get_media_files_as_images(media_ids: list, user_id: int) -> list:
 
     media_images = []
     media_files = File.active_objects.filter(
-        id__in=media_ids,
-        user_id=user_id,
-        is_media=True
+        id__in=media_ids, user_id=user_id, is_media=True
     )
 
     for media_file in media_files:
@@ -315,7 +389,7 @@ def get_referenced_conversations_context(
         conversation_ids: List of conversation IDs to fetch
         user_id: User ID for filtering
         history_limit: Optional limit for messages (None = all messages)
-        
+
     Returns:
         Formatted context string from referenced conversations
     """
@@ -324,14 +398,13 @@ def get_referenced_conversations_context(
 
     context_parts = []
     conversations = Conversation.active_objects.filter(
-        conversation_id__in=conversation_ids,
-        user_id=user_id
+        conversation_id__in=conversation_ids, user_id=user_id
     )
 
     for conversation in conversations:
         messages_query = Message.active_objects.filter(
             conversation=conversation
-        ).order_by('-created_at')
+        ).order_by("-created_at")
 
         if history_limit is not None:
             messages_query = messages_query[:history_limit]
@@ -340,7 +413,9 @@ def get_referenced_conversations_context(
 
         if messages:
             conversation_title = conversation.title or "Untitled Conversation"
-            context_parts.append(f"=== Referenced Conversation: {conversation_title} ===")
+            context_parts.append(
+                f"=== Referenced Conversation: {conversation_title} ==="
+            )
 
             for msg in reversed(messages):
                 role = "User" if msg.sender_type == SenderType.PLAYER else "Assistant"

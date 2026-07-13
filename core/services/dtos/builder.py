@@ -1,12 +1,13 @@
 """Builder pattern for constructing LLMQueryRequest from dictionaries."""
 
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
 
 from users.constants import AuthSourceChoice
-from .request_dto import LLMQueryRequest
+
 from .context_dto import ContextConfig
 from .generation_dto import GenerationConfig
 from .media_dto import MediaConfig
+from .request_dto import LLMQueryRequest
 from .socratic_dto import SocraticConfig
 
 # Minimum max_tokens for Socratic bots to prevent truncated responses
@@ -81,6 +82,7 @@ class LLMQueryRequestBuilder:
             media_ids=message_data.get("media_ids", []),
             tag_ids=message_data.get("tag_ids", []),
             folder_ids=message_data.get("folder_ids", []),
+            library_ids=message_data.get("library_ids", []),
             referenced_conversation_ids=message_data.get(
                 "referenced_conversation_ids", []
             ),
@@ -91,6 +93,9 @@ class LLMQueryRequestBuilder:
             max_context_snippets=message_data.get("max_context_snippets", 4),
             document_similarity_threshold=message_data.get(
                 "document_similarity_threshold", 0.5
+            ),
+            rag_mode=message_data.get(
+                "rag_mode", getattr(conversation, "rag_mode", "advanced")
             ),
             history_limit=message_data.get("history_limit", 20),
             use_memory=bool(message_data.get("use_memory", False)),
