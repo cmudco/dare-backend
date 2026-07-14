@@ -1,0 +1,7 @@
+[package]
+name = "cmu-brand"
+version = "0.1.0"
+entrypoint = "src/lib.typ"
+authors = ["TongueToQuill"]
+license = "MIT"
+description = "Carnegie Mellon University brand system for Typst: official palette, typography, and layout components per CMU Brand Standards (brand.cmu.edu)."

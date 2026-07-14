@@ -1,0 +1,3 @@
+[submodule "quillmark-mcp"]
+	path = quillmark-mcp
+	url = https://github.com/tonguetoquill/quillmark-mcp.git

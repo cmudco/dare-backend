@@ -80,6 +80,7 @@ class ArtifactType(models.TextChoices):
     REACT = 'react', 'React Component'
     DOCX = 'docx', 'Word Document'
     PPTX = 'pptx', 'PowerPoint Presentation'
+    PDF = 'pdf', 'PDF Document'
 
 
 class ArtifactStatus(models.TextChoices):
@@ -261,4 +262,5 @@ ARTIFACT_CONTENT_TYPES = {
     'document': 'text/markdown',
     'code': 'text/plain',
     'react': 'application/vnd.dare.react+jsx',
+    'pdf': 'application/pdf',
 }

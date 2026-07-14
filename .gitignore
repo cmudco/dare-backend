@@ -68,3 +68,7 @@ model_card_cache/
 
 # rag_lab embedding cache (derived artifact)
 rag_lab/.embed_cache.json
+
+# Local-only files (contain secrets / caches)
+docker-compose.override.yml
+.cache/

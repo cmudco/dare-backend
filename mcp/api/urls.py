@@ -9,6 +9,7 @@ from mcp.api.views import (
     UserMCPConnectionViewSet,
     MCPToolExecutionViewSet,
     MCPGatewayView,
+    QuillmarkQuillsView,
     oauth_callback,
 )
 
@@ -20,5 +21,6 @@ router.register('executions', MCPToolExecutionViewSet, basename='mcp-executions'
 urlpatterns = [
     path('oauth/callback/', oauth_callback, name='oauth-callback'),
     path('gateway/', MCPGatewayView.as_view(), name='mcp-gateway'),
+    path('quillmark/quills/', QuillmarkQuillsView.as_view(), name='quillmark-quills'),
     path('', include(router.urls)),
 ]
