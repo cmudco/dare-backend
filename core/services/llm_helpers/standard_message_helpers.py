@@ -8,6 +8,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import List, Dict, Any
 
+from core.prompts.system_prompt import build_system_prompt
 from core.services.document_processor import DocumentProcessor
 from core.services.file_processor import FileProcessor
 from core.services.dtos import LLMQueryRequest
@@ -63,10 +64,13 @@ async def build_standard_messages(
     messages = []
     memory_context = []
 
-    # Add prompt if provided
+    # System prompt: identity, session context, capabilities, style, and tool
+    # rules. The conversation's saved Prompt (custom instructions) is folded
+    # into it — previously it was injected as a fake assistant turn, the
+    # weakest position for instruction-following.
     prompt = await get_prompt(request.generation.prompt_id)
-    if prompt and prompt.strip():
-        messages.append({"role": "assistant", "content": f"Prompt: {prompt}"})
+    system_prompt = build_system_prompt(request, custom_instructions=prompt)
+    messages.append({"role": "system", "content": system_prompt})
 
     # Add referenced conversation context
     if request.context.referenced_conversation_ids:
@@ -125,7 +129,8 @@ async def build_standard_messages(
     ) if request.conversation else []
     messages.extend([msg for msg in conversation_history if msg["content"].strip()])
 
-    # Add current user message
-    messages.append({"role": "user", "content": f"User's message: {request.message}"})
+    # Add current user message (verbatim — labels like "User's message:" add
+    # nothing and pollute few-shot structure)
+    messages.append({"role": "user", "content": request.message})
 
     return MessageBuildResult(messages=messages, memory_context=memory_context)
