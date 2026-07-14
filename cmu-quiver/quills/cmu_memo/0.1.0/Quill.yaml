@@ -1,0 +1,94 @@
+quill:
+  name: cmu_memo
+  version: 0.1.0
+  backend: typst
+  plate_file: plate.typ
+  description: Carnegie Mellon University letterhead memorandum for official internal correspondence (to a dean, department head, committee, or staff). Official CMU wordmark letterhead with a TO/FROM/DATE/SUBJECT block.
+
+main:
+  body:
+    example: |
+      This memorandum summarizes the committee's funding recommendation.
+
+      Write in complete, professional paragraphs. Use short paragraphs; bulleted
+      lists are acceptable for enumerations.
+  fields:
+    memo_to:
+      type: array
+      items:
+        type: string
+      example:
+        - Dr. Jane Rivera
+        - Dean, Dietrich College of Humanities and Social Sciences
+      ui:
+        group: Addressing
+      description: "Required. Recipient, one line per entry: line 1 the person's name with title (e.g. 'Dr. Jane Rivera'), line 2 their role (e.g. 'Dean, Dietrich College'). Add more recipients as additional pairs of lines."
+
+    memo_from:
+      type: array
+      items:
+        type: string
+      example:
+        - Alex Chen
+        - Chair, Applied AI Committee
+      ui:
+        group: Addressing
+      description: "Required. Sender, one line per entry: line 1 the name, line 2 the role/title."
+
+    subject:
+      type: string
+      example: FY26 Applied AI Initiative — Funding Recommendation
+      ui:
+        group: Addressing
+      description: Required. One concise line. Capitalize the first letter of each principal word. No trailing period.
+
+    date:
+      type: string
+      example: July 12, 2026
+      ui:
+        group: Addressing
+      description: "Human-readable date, format 'Month D, YYYY'. Omit to use today's date."
+
+    cc:
+      type: array
+      items:
+        type: string
+      example:
+        - Office of the Provost
+      ui:
+        group: Addressing
+      description: Optional courtesy-copy recipients, one per line.
+
+    department:
+      type: string
+      default: ""
+      example: Dietrich College of Humanities and Social Sciences
+      ui:
+        group: Letterhead
+      description: Department or unit name shown bold in the letterhead. Omit for university-level correspondence.
+
+    contact:
+      type: array
+      items:
+        type: string
+      example:
+        - 5000 Forbes Avenue, Pittsburgh, PA 15213
+      ui:
+        group: Letterhead
+      description: Optional letterhead contact lines (address, phone, or email), one per line.
+
+    signature_name:
+      type: string
+      default: ""
+      example: Alex Chen
+      ui:
+        group: Signature
+      description: Optional signature block name. Omit to end the memo without a signature line.
+
+    signature_title:
+      type: string
+      default: ""
+      example: Chair, Applied AI Committee
+      ui:
+        group: Signature
+      description: Optional signature block title, shown under the signature name.

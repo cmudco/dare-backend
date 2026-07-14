@@ -44,40 +44,55 @@ The bundled `docker-compose.yml` provisions:
 - **Weaviate** on `${WEAVIATE_PORT:-8080}` and `${WEAVIATE_GRPC_PORT:-50051}`
 - **Weaviate console** on `${WEAVIATE_CONSOLE_PORT:-8081}` when the `debug` profile is enabled
 - **Ollama** on `${OLLAMA_PORT:-11434}` when the `llama` profile is enabled
+- **[quillmark-mcp](https://github.com/tonguetoquill/quillmark-mcp)** (document generation, built from the `quillmark-mcp/` git submodule) on `127.0.0.1:${QUILLMARK_DEBUG_PORT:-8090}` (debug only — DARE talks to it over the compose network)
 
-### Steps
+### Quick start (recommended)
 
 ```bash
-# 1. Clone and enter the repo
-git clone <repo-url> dare-backend && cd dare-backend
+# 1. Clone with submodules
+git clone --recurse-submodules https://github.com/tonguetoquill/dare-backend.git
+cd dare-backend
+# Already cloned without submodules? Run: git submodule update --init
 
-# 2. Copy and edit environment file
-cp .example.env .env
-# Edit .env — see docs/configuration.md for the full variable reference.
-# At minimum:
-#   - OPENAI_API_KEY (or CLAUDE_API_KEY / GEMINI_API_KEY)
-#   - DJANGO_SECRET_KEY (rotate from the example)
+# 2. One-command setup: checks Docker, inits the submodule, creates .env +
+#    docker-compose.override.yml, builds and starts the stack (migrations
+#    run automatically), and optionally creates a verified demo superuser
+#    with a $100 wallet.
+scripts/dev-setup.sh --demo-user
 
-# 3. Build and start the backend stack
+# 3. Set your Anthropic key in docker-compose.override.yml (CLAUDE_API_KEY),
+#    then reload:
+docker compose up -d
+```
+
+Then start the frontend:
+
+```bash
+cd ../dare-frontend
+npm install && npm run dev    # http://localhost:5173
+```
+
+**Document-generation quickstart:** log in on the frontend, open `/mcp`, click **Connect** on *CMU Documents*, then start a chat and ask for a document (e.g. a memo) — the assistant renders a PDF via quillmark-mcp.
+
+### Manual steps
+
+If you prefer to do what `scripts/dev-setup.sh` does by hand:
+
+```bash
+git submodule update --init                      # quillmark-mcp build context
+cp .example.env .env                             # set DB_PASSWORD at minimum
+cp docker-compose.override.yml.example docker-compose.override.yml
+# Put DJANGO_SECRET_KEY and CLAUDE_API_KEY (or OPENAI/GEMINI keys) in the override
 docker compose up --build -d
-
-# 4. Create a superuser
 docker compose exec web python manage.py createsuperuser
 
-# 5. Check container health
+# Check container health
 docker compose ps
 curl http://localhost:8000/api/health/
 curl http://localhost:8000/api/ready/
 ```
 
-The web container waits for Postgres and Redis, then runs migrations before starting Uvicorn. Static and media files are stored in named Docker volumes.
-
-For local development overrides:
-
-```bash
-cp docker-compose.override.yml.example docker-compose.override.yml
-docker compose up --build
-```
+The web container waits for Postgres and Redis, then runs migrations before starting Uvicorn. Static and media files are stored in named Docker volumes. See [docs/local-setup-notes.md](docs/local-setup-notes.md) for local-dev gotchas (email verification, wallet credit, model catalog).
 
 To enable optional services:
 

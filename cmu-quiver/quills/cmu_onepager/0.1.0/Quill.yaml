@@ -1,0 +1,51 @@
+quill:
+  name: cmu_onepager
+  version: 0.1.0
+  backend: typst
+  plate_file: plate.typ
+  description: Carnegie Mellon University one-page brief for boards, sponsors, and leadership. A striking single page — full-width Carnegie Red headline band, bold statistics row, two-column bulleted highlights, and an optional call-to-action strip.
+
+main:
+  body:
+    example: |
+      - **Platform reach.** DARE now serves 2,400+ students across nine courses.
+      - **Cost efficiency.** Per-student model spend held 68% under budget.
+
+      Write 4-8 short bulleted highlights, each in the form
+      "- **Bold lead-in.** One-sentence detail." No headings, no long paragraphs.
+      Everything must fit on a single page — keep each bullet to one sentence.
+  fields:
+    headline:
+      type: string
+      example: Applied AI at Carnegie Mellon
+      ui:
+        group: Header
+      description: "Required. Punchy title for the red header band, 8 words or fewer, e.g. 'Applied AI at Carnegie Mellon'. No trailing period."
+
+    subhead:
+      type: string
+      default: ""
+      example: How the DARE platform scaled frontier AI across the university in one year.
+      ui:
+        group: Header
+      description: One supporting sentence shown under the headline inside the red band. Omit for a headline-only band.
+
+    stats:
+      type: array
+      items:
+        type: string
+      example:
+        - "2,400+ :: students served"
+        - "9 :: courses onboarded"
+        - "4x :: semester growth"
+      ui:
+        group: Stats
+      description: "Required. 3 or 4 headline statistics, each EXACTLY in the format 'VALUE :: label' — value, then space-colon-colon-space, then a short lowercase label. Examples: '2,400+ :: students served', '9 :: courses onboarded', '4x :: semester growth'. Keep values compact (a number plus at most one symbol) and labels 2-4 words."
+
+    cta:
+      type: string
+      default: ""
+      example: Partner with us — dare.cmu.edu · ai-committee@andrew.cmu.edu
+      ui:
+        group: Closing
+      description: "Closing call-to-action / contact line shown in a black strip at the bottom of the page, e.g. 'Partner with us — dare.cmu.edu · ai-committee@andrew.cmu.edu'. Omit to end without the strip."
