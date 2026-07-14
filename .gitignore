@@ -59,3 +59,7 @@ data/
 weaviate_data/
 backups/
 model_card_cache/
+
+# Local-only files (contain secrets / caches)
+docker-compose.override.yml
+.cache/

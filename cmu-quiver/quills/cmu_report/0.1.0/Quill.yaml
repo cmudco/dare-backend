@@ -1,0 +1,81 @@
+quill:
+  name: cmu_report
+  version: 0.1.0
+  backend: typst
+  plate_file: plate.typ
+  description: Carnegie Mellon University multi-page report with a branded cover page (wordmark, Carnegie Red title, author block), an optional executive-summary panel, and running header/footer on content pages. For evaluations, program reviews, committee findings, and white papers.
+
+main:
+  body:
+    # Body = report content in markdown: '#' for top-level sections, '##'/'###'
+    # for subsections; tables and lists allowed; professional prose.
+    example: |
+      # Introduction
+
+      State the report's purpose, scope, and evaluation period in one or two
+      paragraphs.
+
+      # Findings
+
+      ## Adoption
+
+      Present evidence in short paragraphs. Small markdown tables and bulleted
+      lists are acceptable for data.
+
+      ### Methodology
+
+      Note data sources and limitations where relevant.
+
+      # Recommendations
+
+      1. Lead each recommendation with the action verb.
+      2. Keep each item to one or two sentences.
+  fields:
+    title:
+      type: string
+      example: "Applied AI at Carnegie Mellon: FY26 Evaluation"
+      ui:
+        group: Cover
+      description: Required. Report title, shown large in Carnegie Red on the cover and in the running page header. Keep it to one line under about 60 characters. Capitalize the first letter of each principal word. No trailing period.
+
+    subtitle:
+      type: string
+      default: ""
+      example: Findings and Recommendations of the Applied AI Committee
+      ui:
+        group: Cover
+      description: Optional italic line under the cover title, e.g. a descriptive tagline or report-series name. One sentence fragment, no trailing period. Omit to show the title alone.
+
+    author:
+      type: array
+      items:
+        type: string
+      example:
+        - Alex Chen
+        - Dr. Jane Rivera
+      ui:
+        group: Cover
+      description: Required. Author names, one per entry, exactly as they should appear on the cover (include titles, e.g. 'Dr. Jane Rivera'). Names are joined on one line in the cover's author block.
+
+    department:
+      type: string
+      default: ""
+      example: Dietrich College of Humanities and Social Sciences
+      ui:
+        group: Cover
+      description: Department or unit name, shown under the authors on the cover and in the running page footer. Omit for university-level reports.
+
+    date:
+      type: string
+      example: July 12, 2026
+      ui:
+        group: Cover
+      description: "Human-readable date, format 'Month D, YYYY'. Omit to use today's date."
+
+    exec_summary:
+      type: string
+      default: ""
+      example: The FY26 pilot served more than 2,000 students across nine courses at a per-student cost 18 percent under budget. Usage grew fourfold semester-over-semester with no marginal licensing spend. The committee recommends full funding and a phased expansion to twenty courses in FY27.
+      ui:
+        group: Content
+      description: Optional executive summary rendered in a highlighted panel on the first content page, before the body. Write 2-4 complete sentences of plain text (no markdown) stating the key finding and the recommendation. Omit to go straight to the body.

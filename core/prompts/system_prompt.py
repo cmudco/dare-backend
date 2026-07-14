@@ -47,6 +47,10 @@ source you used."""
 _ARTIFACT_RULES = """\
 - Visual/document tools (charts, diagrams, docx, pptx, react): call the tool instead of describing the output in text. Create tools are for NEW artifacts only; to change an existing artifact use update_artifact (or update_artifact_inline for small text edits), and never call update tools in parallel — each call makes a new version."""
 
+_DOCUMENT_RULES = """\
+- CMU document generation (quillmark tools): first call get_spec for the chosen template to learn its required fields, then call create_document with a single content string — a ~~~card-yaml fenced block whose first two lines are `$quill: <name>@<version>` and `$kind: main`, then the template's fields, a closing ~~~ line, and the markdown body (never `---` YAML frontmatter). If rendering fails, read the diagnostics, fix the content, and retry. Rendered documents appear automatically in the user's artifact panel — tell them it is ready and summarize it; never paste raw URLs or links to the document.
+- A single request may call for several documents (e.g. a memo plus a companion one-pager): render each with its own create_document call, keep every fact, figure, name, and date identical across them, and give each a distinct title. When one document should reference another, cite the other document's exact title (e.g. 'see the attached brief, "Applied AI at Carnegie Mellon"')."""
+
 _TOOL_PREAMBLE = """\
 ## Tools
 Use tools when they serve the request; don't narrate mechanics ("calling the \
@@ -117,6 +121,8 @@ def build_system_prompt(request, custom_instructions: Optional[str] = None) -> s
     tool_rules = []
     if request.requires_artifact_generation() or request.requires_dare_tools():
         tool_rules.append(_ARTIFACT_RULES)
+    if request.requires_mcp_tools():
+        tool_rules.append(_DOCUMENT_RULES)
     if tool_rules:
         sections.append(_TOOL_PREAMBLE + "\n" + "\n".join(tool_rules))
 

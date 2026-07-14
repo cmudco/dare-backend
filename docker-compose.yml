@@ -156,8 +156,42 @@ services:
     profiles:
       - llama
 
+  quillmark-mcp:
+    build:
+      context: ./quillmark-mcp
+      dockerfile: Dockerfile
+    image: quillmark-mcp:dev
+    container_name: dare-quillmark
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      # Debug only — DARE talks to quillmark over the compose network; the
+      # backend proxies rendered PDFs, so the browser never needs this port.
+      # 8090 because weaviate owns 8080 on the host.
+      - "127.0.0.1:${QUILLMARK_DEBUG_PORT:-8090}:8080"
+    volumes:
+      - ./cmu-quiver:/quiver:ro
+      - quillmark_artifacts:/data/artifacts
+    environment:
+      LOG_LEVEL: info
+      QUILLMARK_BIND: 0.0.0.0:8080
+      QUILLMARK_ENDPOINT: /mcp
+      QUILLMARK_QUIVER_DIR: /quiver
+      QUILLMARK_OUTPUT_DIR: /data/artifacts
+      # Consumed only by the DARE backend over the compose network.
+      QUILLMARK_BASE_URL: http://quillmark-mcp:8080/artifacts
+    restart: unless-stopped
+
 volumes:
   postgres_data:
+    driver: local
+  quillmark_artifacts:
     driver: local
   redis_data:
     driver: local

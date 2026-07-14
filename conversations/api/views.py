@@ -1,4 +1,5 @@
 # fmt: off
+import base64
 import json
 import logging
 import os
@@ -915,6 +916,7 @@ def _build_artifact_download_response(request, artifact, artifact_id):
     supported_formats = {
         ArtifactType.PPTX: {"pptx", "pdf"},
         ArtifactType.DOCX: {"pdf"},
+        ArtifactType.PDF: {"pdf"},
     }
     allowed_formats = supported_formats.get(artifact.artifact_type, set())
     if requested_format not in allowed_formats:
@@ -929,6 +931,20 @@ def _build_artifact_download_response(request, artifact, artifact_id):
         )
 
     try:
+        if artifact.artifact_type == ArtifactType.PDF:
+            # PDF artifacts (e.g. quillmark documents) store the finished file
+            # as a base64 data URI — decode, no regeneration step.
+            _, _, encoded = artifact.content.partition("base64,")
+            if not encoded:
+                raise ValueError("PDF artifact content is not a base64 data URI")
+            download_content = base64.b64decode(encoded)
+            content_type = "application/pdf"
+            filename = _artifact_download_filename(artifact, requested_format)
+            response = HttpResponse(download_content, content_type=content_type)
+            response["Content-Disposition"] = _attachment_disposition(filename)
+            response["Content-Length"] = len(download_content)
+            return response
+
         config = json.loads(artifact.content)
         if artifact.artifact_type == ArtifactType.PPTX and requested_format == "pptx":
             download_content = generate_pptx_bytes(config)

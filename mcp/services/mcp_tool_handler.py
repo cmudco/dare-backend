@@ -24,6 +24,7 @@ from conversations.constants import (
 from conversations.models import Conversation, Message, MessageToolCall
 from conversations.services.websocket_response_service import WebSocketResponseService
 from core.services.dtos.builder import LLMQueryRequestBuilder
+from mcp.services.artifact_bridge import maybe_create_pdf_artifact
 from mcp.services.mcp_tool_executor import mcp_tool_executor, MCPToolExecutorError
 from mcp.services.tool_result_context import tool_result_context_builder
 
@@ -144,6 +145,30 @@ class MCPToolHandler:
                 
                 # Extract result text
                 result_text = self._extract_result_text(result)
+
+                # Bridge document results (e.g. quillmark PDFs) into artifacts.
+                # Never fails the tool call — returns None for non-PDF results
+                # or on any bridge error, in which case behavior is unchanged.
+                bridged = await maybe_create_pdf_artifact(
+                    result,
+                    message=message,
+                    conversation=conversation,
+                    arguments=arguments,
+                    server_slug=server_slug,
+                    tool_name=actual_tool_name,
+                    send_callback=send_callback,
+                )
+                if bridged:
+                    # The hosted URL is docker-internal and useless to both the
+                    # browser and the model — replace it everywhere.
+                    result = self._sanitize_document_result(result, bridged)
+                    result_text = (
+                        f"Document rendered successfully as PDF artifact "
+                        f"'{bridged['title']}' (version {bridged['version']}). It is "
+                        f"already displayed to the user in the artifact panel with a "
+                        f"download button. Tell them it is ready and briefly summarize "
+                        f"its contents. Do not output any URL or link."
+                    )
 
                 # Send tool result to client
                 tool_result_payload = {
@@ -352,6 +377,31 @@ class MCPToolHandler:
         return response_accumulator
     
     # ========== Private Helper Methods ==========
+    
+    def _sanitize_document_result(self, result: Any, bridged: Dict) -> Any:
+        """
+        Rewrite a bridged document result for the frontend tool-call UI.
+
+        The MCP server's hosted URL points inside the Docker network, so any
+        link in the payload would be dead in the browser. Replace text/link
+        content with a pointer to the created artifact.
+        """
+        if not isinstance(result, dict):
+            return result
+        sanitized = dict(result)
+        summary = (
+            f"Rendered PDF artifact '{bridged['title']}' "
+            f"(version {bridged['version']})."
+        )
+        sanitized["content"] = [{"type": "text", "text": summary}]
+        if "structuredContent" in sanitized:
+            sanitized["structuredContent"] = {
+                "artifactId": bridged["artifact_id"],
+                "title": bridged["title"],
+                "filename": bridged["filename"],
+                "mimeType": "application/pdf",
+            }
+        return sanitized
 
     def _extract_result_text(self, result: Any) -> str:
         """Extract text from tool result."""
