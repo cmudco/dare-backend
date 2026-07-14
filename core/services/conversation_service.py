@@ -249,6 +249,7 @@ class ConversationService:
         user_message: str,
         ai_response: str = "",
         user: Optional[User] = None,
+        llm: Optional[LLM] = None,
     ) -> str:
         """Generate a concise conversation title.
 
@@ -256,13 +257,22 @@ class ConversationService:
         wallet (DARE / BYO / LITELLM) decides which key pays for the title
         call, just like the main chat path. Pre-wallet-refactor this used a
         direct ``OpenAIService(...)`` instantiation that always billed DARE.
+
+        Prefers the conversation's own model (``llm``) when the caller
+        provides it: that model just handled the chat, so the title call
+        can never fail on a provider the deployment has no key for.
         """
         from core.services.llm_service import LLMService  # avoid module-load cycle
 
         messages = [
             {
                 "role": "system",
-                "content": "Generate a short, descriptive conversation title (max 6 words).",
+                "content": (
+                    "Generate a short, descriptive conversation title of at "
+                    "most 6 words. Reply with ONLY the title itself - no "
+                    "quotes, no markdown, no explanation, no punctuation at "
+                    "the end."
+                ),
             },
             {
                 "role": "user",
@@ -270,27 +280,56 @@ class ConversationService:
             },
         ]
 
-        llm = await self.get_gpt_35_turbo_model()
+        llm = llm or await self.get_gpt_35_turbo_model()
         if not llm:
             return "New Chat"
 
         try:
             ai_service = await LLMService()._get_ai_service(llm, user=user)
-            return await ai_service.get_chat_completion(messages)
+            title = await ai_service.get_chat_completion(messages)
+            return self._sanitize_title(title)
         except Exception:
             return "New Chat"
 
+    @staticmethod
+    def _sanitize_title(raw: str) -> str:
+        """Normalize a model-generated title for the 255-char DB column.
+
+        Models (especially small ones) sometimes return markdown headers,
+        surrounding quotes, or whole paragraphs; unsanitized output crashed
+        the save with StringDataRightTruncation and left conversations
+        untitled.
+        """
+        if not raw:
+            return "New Chat"
+        first_line = raw.strip().splitlines()[0]
+        title = first_line.strip().lstrip("#*- ").strip().strip("\"'`").strip()
+        # Provider failures surface as error text in the aggregated stream
+        # rather than exceptions; never let that become a title.
+        if title.lower().startswith("error"):
+            return "New Chat"
+        if len(title) > 120:
+            title = title[:119].rstrip() + "…"
+        return title or "New Chat"
+
     async def get_gpt_35_turbo_model(self) -> LLM:
-        """Fetch the gpt-3.5-turbo LLM."""
+        """Fetch the cheapest active text model for title generation.
+
+        Prefers gpt-3.5-turbo when it is active, but falls back to any
+        active non-image model (cheapest first) so installs without an
+        OpenAI key still get titles from whichever provider is configured.
+        """
         llm = await database_sync_to_async(
             lambda: LLM.objects.filter(
-                identifier="gpt-3.5-turbo", provider="openai"
+                identifier="gpt-3.5-turbo", provider="openai", is_active=True
             ).first()
         )()
         return (
             llm
             or await database_sync_to_async(
-                lambda: LLM.objects.filter(provider="openai").first()
+                lambda: LLM.objects.filter(is_active=True, is_image_generator=False)
+                .order_by("output_token_rate_per_million")
+                .first()
             )()
         )
 

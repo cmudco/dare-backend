@@ -296,9 +296,7 @@ class MessageCoordinator:
                     "toolName": tool_name,
                     "serverSlug": server_slug,
                     "origin": ToolCallOrigin.PROVIDER,
-                    "status": "error"
-                    if status == ToolCallStatus.FAILED
-                    else "success",
+                    "status": "error" if status == ToolCallStatus.FAILED else "success",
                     "result": camelize(result) if isinstance(result, dict) else result,
                     "error": tool_call.get("error"),
                 }
@@ -433,7 +431,9 @@ class MessageCoordinator:
 
             # Generate conversation title if first message (User + AI = 2 messages)
             if await should_generate_title(self.conversation):
-                asyncio.create_task(self._generate_conversation_title())
+                asyncio.create_task(
+                    self._generate_conversation_title(llm=dispatch_handle)
+                )
 
             # Stream AI response
             await self.stream_ai_response(
@@ -897,7 +897,7 @@ class MessageCoordinator:
             get_llm_callback=self._fetch_progress_llm,
         )
 
-    async def _generate_conversation_title(self):
+    async def _generate_conversation_title(self, llm=None):
         """Generate conversation title asynchronously (fire and forget)."""
         try:
             # Refresh conversation from DB
@@ -913,10 +913,13 @@ class MessageCoordinator:
                 return
 
             # Generate title — pass `user` so the title call honors the
-            # user's active wallet (DARE/BYO/LITELLM) just like the main chat.
+            # user's active wallet (DARE/BYO/LITELLM) just like the main chat,
+            # and the conversation's own model so titles never depend on some
+            # other provider being configured.
             title = await self.conversation_service.generate_title(
                 user_message.message,
                 user=self.user,
+                llm=llm,
             )
 
             # Update conversation
