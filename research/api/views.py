@@ -20,6 +20,7 @@ from rest_framework.views import APIView
 from common.permissions import IsResearcherOrAbove
 from research.api.permissions import IsResearchFeatureEnabled
 from research.api.serializers import (
+    ResearchAgentRunDetailSerializer,
     ResearchAgentRunSerializer,
     ResearchChatMessageSerializer,
     ResearchProjectDetailSerializer,
@@ -46,7 +47,11 @@ from research.models import (
     SoulFile,
     SoulFileVersion,
 )
-from research.services import get_hermes_service
+from research.services import (
+    get_hermes_service,
+    request_run_cancellation,
+    safe_hermes_usage,
+)
 from research.services.graph_service import build_evidence_graph
 from research.services.okf_service import (
     build_okf_bundle,
@@ -101,6 +106,7 @@ class ResearchProjectViewSet(
     """
 
     serializer_class = ResearchProjectSerializer
+
     def get_serializer_class(self):
         # The single-project payload is the workspace aggregation point; it will
         # grow to nest soul file, sources, runs and staging items over time.
@@ -305,6 +311,8 @@ class ResearchChatView(ResearchAPIView):
         def event_stream():
             chunks = []
             seen_ids = set()  # GatewayFetch rows already claimed by this run's audit
+            terminal_event = ""
+            stream_error = None
             try:
                 for event in hermes.stream_events(hermes_run_id):
                     event_type = event.get("event")
@@ -344,24 +352,132 @@ class ResearchChatView(ResearchAPIView):
                             }
                         )
                     elif event_type == "run.completed":
+                        terminal_event = event_type
                         break
-            except Exception as exc:  # noqa: BLE001 - mark the run failed
+                    elif event_type in {"run.failed", "run.cancelled"}:
+                        terminal_event = event_type
+                        break
+            except Exception as exc:  # noqa: BLE001 - verify instead of guessing
+                stream_error = exc
                 logger.error(
                     "research.chat run %s stream failed: %s",
                     run.id,
                     exc,
                     exc_info=True,
                 )
-                run.status = AgentRunStatus.FAILED
-                run.error = str(exc)
-                run.completed_at = timezone.now()
-                run.save(
-                    update_fields=["status", "error", "completed_at", "updated_at"]
-                )
-                yield _sse(
-                    {"type": "error", "error": f"The agent stream failed: {exc}"}
-                )
-                return
+
+            if stream_error or terminal_event != "run.completed" or not chunks:
+                try:
+                    terminal = hermes.get_run(hermes_run_id)
+                except Exception:  # noqa: BLE001 - preserve honest ambiguity
+                    run.status = AgentRunStatus.OUTCOME_UNKNOWN
+                    run.status_detail = (
+                        "Hermes outcome unconfirmed; terminal status is unavailable."
+                    )
+                    run.completed_at = None
+                    run.save(
+                        update_fields=[
+                            "status",
+                            "status_detail",
+                            "completed_at",
+                            "updated_at",
+                        ]
+                    )
+                    yield _sse(
+                        {
+                            "type": "error",
+                            "error": "The agent outcome could not be confirmed.",
+                        }
+                    )
+                    return
+
+                terminal_status = str(terminal.get("status") or "").lower()
+                if terminal_status == AgentRunStatus.COMPLETED:
+                    terminal_output = terminal.get("output")
+                    chunks = [
+                        terminal_output if isinstance(terminal_output, str) else ""
+                    ]
+                elif terminal_status == AgentRunStatus.FAILED:
+                    run.status = AgentRunStatus.FAILED
+                    run.status_detail = "Hermes confirmed that the chat run failed."
+                    run.error = "Hermes reported a failed run."
+                    run.completed_at = timezone.now()
+                    run.save(
+                        update_fields=[
+                            "status",
+                            "status_detail",
+                            "error",
+                            "completed_at",
+                            "updated_at",
+                        ]
+                    )
+                    yield _sse({"type": "error", "error": "The agent run failed."})
+                    return
+                elif terminal_status == AgentRunStatus.CANCELLED:
+                    run.status = AgentRunStatus.CANCELLED
+                    run.status_detail = (
+                        "Hermes confirmed that the chat run was cancelled."
+                    )
+                    run.completed_at = timezone.now()
+                    fields = ["status", "status_detail", "completed_at", "updated_at"]
+                    if (
+                        run.cancellation_requested_at
+                        and not run.cancellation_confirmed_at
+                    ):
+                        run.cancellation_confirmed_at = timezone.now()
+                        fields.append("cancellation_confirmed_at")
+                    usage = safe_hermes_usage(terminal.get("usage"))
+                    if usage:
+                        run.usage = usage
+                        fields.append("usage")
+                    run.save(update_fields=fields)
+                    yield _sse(
+                        {"type": "error", "error": "The agent run was cancelled."}
+                    )
+                    return
+                elif terminal_status in {
+                    AgentRunStatus.STARTED,
+                    AgentRunStatus.QUEUED,
+                    AgentRunStatus.RUNNING,
+                    AgentRunStatus.WAITING_FOR_APPROVAL,
+                    AgentRunStatus.STOPPING,
+                }:
+                    run.status = terminal_status
+                    run.status_detail = f"Hermes still reports {terminal_status}; terminal outcome is pending."
+                    run.completed_at = None
+                    run.save(
+                        update_fields=[
+                            "status",
+                            "status_detail",
+                            "completed_at",
+                            "updated_at",
+                        ]
+                    )
+                    yield _sse(
+                        {"type": "error", "error": "The agent run is still active."}
+                    )
+                    return
+                else:
+                    run.status = AgentRunStatus.OUTCOME_UNKNOWN
+                    run.status_detail = (
+                        "Hermes returned an unrecognized terminal status."
+                    )
+                    run.completed_at = None
+                    run.save(
+                        update_fields=[
+                            "status",
+                            "status_detail",
+                            "completed_at",
+                            "updated_at",
+                        ]
+                    )
+                    yield _sse(
+                        {
+                            "type": "error",
+                            "error": "The agent outcome could not be confirmed.",
+                        }
+                    )
+                    return
 
             assistant_message = ResearchChatMessage.objects.create(
                 session=session,
@@ -458,7 +574,16 @@ class ResearchScoutView(ResearchAPIView):
 
 
 class ResearchAgentRunView(ResearchAPIView):
-    """GET /api/research/agent-runs/{id}/ — a run's live status (for polling)."""
+    """GET /api/research/agent-runs/{id}/ — a run's live status (for polling)
+    and full run-details audit payload (adds the agent's exact final response)."""
+
+    # Terminal states whose final output is worth backfilling from Hermes.
+    _BACKFILLABLE = {
+        AgentRunStatus.COMPLETED,
+        AgentRunStatus.FAILED,
+        AgentRunStatus.CANCELLED,
+        AgentRunStatus.OUTCOME_UNKNOWN,
+    }
 
     def get(self, request, run_id):
         run = get_object_or_404(
@@ -466,7 +591,45 @@ class ResearchAgentRunView(ResearchAPIView):
             id=run_id,
             project__user=request.user,
         )
-        return Response(ResearchAgentRunSerializer(run).data)
+        if (
+            not run.raw_output
+            and run.hermes_run_id
+            and run.status in self._BACKFILLABLE
+        ):
+            self._backfill_raw_output(run)
+        return Response(ResearchAgentRunDetailSerializer(run).data)
+
+    @staticmethod
+    def _backfill_raw_output(run):
+        """Best-effort pull of the final response from Hermes for runs that
+        predate raw_output persistence, while its run record is still retained.
+        Absence stays honest — the record may have expired (Hermes TTL)."""
+        try:
+            terminal = get_hermes_service(run.project).get_run(run.hermes_run_id)
+        except Exception:  # noqa: BLE001 - absence is an honest state, not an error
+            return
+        output = terminal.get("output")
+        if isinstance(output, str) and output.strip():
+            run.raw_output = output
+            run.save(update_fields=["raw_output", "updated_at"])
+
+
+class ResearchAgentRunCancelView(ResearchAPIView):
+    """POST an idempotent, durable cancellation request for an owned run."""
+
+    def post(self, request, run_id):
+        try:
+            run, attempted = request_run_cancellation(run_id, request.user)
+        except ResearchAgentRun.DoesNotExist:
+            run = get_object_or_404(
+                ResearchAgentRun.active_objects,
+                id=run_id,
+                project__user=request.user,
+            )
+            return Response(ResearchAgentRunSerializer(run).data)
+
+        response_status = status.HTTP_202_ACCEPTED if attempted else status.HTTP_200_OK
+        return Response(ResearchAgentRunSerializer(run).data, status=response_status)
 
 
 class ResearchStagingItemCriticView(ResearchAPIView):

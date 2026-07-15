@@ -168,6 +168,7 @@ class ResearchAgentRunSerializer(serializers.ModelSerializer):
     ran_at = serializers.SerializerMethodField()
     staged_count = serializers.SerializerMethodField()
     tool_calls = serializers.SerializerMethodField()
+    cancellation = serializers.SerializerMethodField()
 
     class Meta:
         model = ResearchAgentRun
@@ -188,6 +189,7 @@ class ResearchAgentRunSerializer(serializers.ModelSerializer):
             "ran_at",
             "hermes_run_id",
             "tool_calls",
+            "cancellation",
         ]
         read_only_fields = fields
 
@@ -202,6 +204,42 @@ class ResearchAgentRunSerializer(serializers.ModelSerializer):
             "created_at"
         )
         return ResearchAgentToolCallSerializer(calls, many=True).data
+
+    def get_cancellation(self, obj):
+        if obj.cancellation_requested_at is None:
+            return None
+        if obj.cancellation_confirmed_at is not None:
+            state = "confirmed"
+        elif obj.cancellation_acknowledged_at is not None:
+            state = "acknowledged"
+        else:
+            state = "unconfirmed"
+        return {
+            "state": state,
+            "requested_at": obj.cancellation_requested_at,
+            "last_attempt_at": obj.cancellation_last_attempt_at,
+            "attempt_count": obj.cancellation_attempt_count,
+            "acknowledged_at": obj.cancellation_acknowledged_at,
+            "confirmed_at": obj.cancellation_confirmed_at,
+            "stop_http_status": obj.cancellation_stop_http_status,
+            "error_code": obj.cancellation_error_code,
+            "error_detail": obj.cancellation_error_detail,
+        }
+
+
+class ResearchAgentRunDetailSerializer(ResearchAgentRunSerializer):
+    """Single-run audit view: everything the list carries plus the agent's exact
+    final response. `raw_output` is excluded from the list serializer so run
+    lists stay lean; it is only sent for one explicitly opened run.
+
+    Note: `reasoning_trace` is still captured to the DB (dormant) but not
+    surfaced — for the current model `reasoning.available` merely duplicates the
+    start of `raw_output`. If a model that emits genuinely distinct per-turn
+    reasoning is configured later, add it back here."""
+
+    class Meta(ResearchAgentRunSerializer.Meta):
+        fields = ResearchAgentRunSerializer.Meta.fields + ["raw_output"]
+        read_only_fields = fields
 
 
 class ResearchProjectMemorySerializer(serializers.ModelSerializer):

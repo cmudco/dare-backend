@@ -9,12 +9,37 @@ gives Hermes DB access; this is the only place DARE talks to Hermes.
 
 import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 import requests
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
+_SAFE_USAGE_FIELDS = ("input_tokens", "output_tokens", "total_tokens")
+
+
+def safe_hermes_usage(value):
+    """Keep only numeric token counters from an upstream usage object."""
+    if not isinstance(value, dict):
+        return {}
+    return {
+        key: value[key]
+        for key in _SAFE_USAGE_FIELDS
+        if isinstance(value.get(key), (int, float))
+        and not isinstance(value.get(key), bool)
+    }
+
+
+@dataclass(frozen=True)
+class HermesStopResult:
+    """Safe, structured result of one Hermes stop request."""
+
+    code: str
+    acknowledged: bool = False
+    http_status: int | None = None
+    upstream_status: str = ""
+    detail: str = ""
 
 
 class HermesService:
@@ -136,15 +161,79 @@ class HermesService:
         return resp.json()
 
     def stop_run(self, hermes_run_id, timeout=15):
-        """Cancel a running Hermes run (the budget kill-switch)."""
+        """Request cancellation and return a safe, structured transport result."""
         try:
-            requests.post(
+            resp = requests.post(
                 f"{self.base_url}/v1/runs/{hermes_run_id}/stop",
                 headers=self._headers(),
                 timeout=timeout,
             )
+        except requests.Timeout:
+            return HermesStopResult(
+                code="stop_timeout",
+                detail="The Hermes stop request timed out.",
+            )
+        except requests.ConnectionError:
+            return HermesStopResult(
+                code="stop_connection_failure",
+                detail="Could not connect to Hermes for the stop request.",
+            )
         except requests.RequestException as exc:
             logger.warning("Could not stop Hermes run %s: %s", hermes_run_id, exc)
+            return HermesStopResult(
+                code="stop_transport_error",
+                detail="The Hermes stop request failed before a response was received.",
+            )
+
+        http_status = resp.status_code
+        if http_status == 404:
+            return HermesStopResult(
+                code="hermes_run_not_found",
+                http_status=http_status,
+                detail="Hermes did not have an active stop target for this run.",
+            )
+        if http_status >= 500:
+            return HermesStopResult(
+                code="stop_upstream_error",
+                http_status=http_status,
+                detail="Hermes returned a server error for the stop request.",
+            )
+        if not 200 <= http_status < 300:
+            return HermesStopResult(
+                code="stop_http_error",
+                http_status=http_status,
+                detail="Hermes rejected the stop request.",
+            )
+
+        try:
+            data = resp.json()
+        except ValueError:
+            return HermesStopResult(
+                code="stop_invalid_json",
+                http_status=http_status,
+                detail="Hermes returned invalid JSON for the stop request.",
+            )
+        if not isinstance(data, dict):
+            return HermesStopResult(
+                code="stop_invalid_json",
+                http_status=http_status,
+                detail="Hermes returned an invalid stop response.",
+            )
+
+        upstream_status = str(data.get("status") or "").lower()
+        if upstream_status == "stopping":
+            return HermesStopResult(
+                code="stop_acknowledged",
+                acknowledged=True,
+                http_status=http_status,
+                upstream_status=upstream_status,
+            )
+        return HermesStopResult(
+            code="stop_unexpected_response",
+            http_status=http_status,
+            upstream_status=upstream_status,
+            detail="Hermes returned an unexpected stop status.",
+        )
 
     def fetch_usage(self, hermes_run_id, timeout=30):
         """
@@ -159,7 +248,7 @@ class HermesService:
                 "Could not fetch Hermes usage for run %s: %s", hermes_run_id, exc
             )
             return {}
-        return usage if isinstance(usage, dict) else {}
+        return safe_hermes_usage(usage)
 
 
 _hermes_service = None
