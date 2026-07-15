@@ -1,0 +1,288 @@
+{
+  "fixture_version": "dare-hermes-artifact-replay-v1",
+  "captured_at": "2026-07-15T01:50:05+05:00",
+  "purpose": "Redacted, deterministic input and protocol fixture for the DARE background-job artifact path. Model output is evidence, not a golden semantic assertion.",
+  "redactions": {
+    "authorization": "<redacted-bearer>",
+    "user_identity": "<local-diagnostic-user>",
+    "secrets_persisted": false
+  },
+  "source_revision": "7c97a617c1f9697aed39699d2fc56f04e3ffc9e3",
+  "historical_environment": {
+    "environment": "DARE dev server",
+    "host_alias": "dare-dev",
+    "backend_path": "/home/deployer/dare/dare-backend",
+    "project_id": 4,
+    "project_title": "The Effectiveness and Risks of Generative AI in Higher Education",
+    "user_id": 4,
+    "researcher": "Eira",
+    "artifact_session_id": 7,
+    "artifact_session_hermes_id": "dare-proj4-artifact",
+    "scope": "2026-07-10 runs 31–37, with artifact evidence from runs 34–37",
+    "identity_warning": "Run IDs are database-local. Local workstation run IDs 31–37 are unrelated records."
+  },
+  "canonical_context": {
+    "project_question": "How does the use of generative AI tools (e.g., ChatGPT, Claude, Gemini, Copilot) affect student learning outcomes, academic integrity, critical thinking, writing quality, productivity, and educational equity in higher education? What evidence supports or contradicts these effects?",
+    "soul_version": "v1",
+    "soul": "1. Never fabricate — every statistic and citation must be real and checkable.\n2. Signal uncertainty honestly — separate what the data shows from what it merely suggests.\n3. Do not overstate sources — a cross-country correlation is not proof of cause or transfer.\n4. Separate values from evidence — flag normative or ideological claims distinctly from empirical findings.",
+    "approved_knowledge_at_run_time": [
+      {
+        "title": "Whether and When Could Generative AI Improve College Student Learning Engagement?",
+        "authors": "Guo, Fei; Zhang, Lanwen; Shi, Tianle; Coates, Hamish",
+        "year": 2025,
+        "content": "Large-scale observational study drawing on the 2024 China College Student Survey (N=72,615 undergraduates across 25 institutions). Examines GenAI use versus behavioral, cognitive, and emotional engagement. Finds mixed effects: positive for cognitive and emotional engagement but potentially negative for active learning and intrinsic motivation, and highly context-dependent (positive mainly in high-challenge, high-support courses)."
+      }
+    ],
+    "excluded_later_knowledge": "The second approved item was created after historical runs 34–37 and must not be injected when replaying that window.",
+    "input_assembly": "{task}\n\nThe project's research question: {project_question}\n\nGround the artifact in the scholar's approved project knowledge:\n- {title} ({authors}, {year}): {content_truncated_to_300_chars}",
+    "instruction_contract_reconstructed_from_source_revision": "# Research standards (soul file)\n{soul}\n\nYou are the Presentation Assistant. The scholar describes what they want in plain language — infer the most fitting structure, content and emphasis from their words and the project's approved knowledge; never require specifications or ask follow-up questions. Everything you produce must be about THIS project (its research question and approved knowledge). Decline ONLY when the request names no subject at all AND the project context is empty (e.g. just 'generate an artifact in a blank project) — then return {\"artifacts\": []}. Any request that names a subject, audience, or purpose (a briefing, a deck for a team, a diagram of the evidence) MUST produce an artifact grounded in the project. {type_brief}\n\nReturn ONLY a single JSON object — no prose, no markdown fences — shaped exactly: {\"artifacts\": [{\"type\": \"...\", \"title\": \"...\", \"content\": ...}]}. `content` is the raw artifact payload (mermaid/svg/html/markdown text, the Excalidraw scene JSON as a string, or for docx/pptx the document/deck JSON object itself).",
+    "instruction_evidence_limit": "This template is reconstructed from the pinned DARE source revision and retained soul, not extracted from a historical runs 34–37 POST capture."
+  },
+  "controlled_context": {
+    "note": "Runs 137–140 used this existing local project. It is intentionally separate from Eira's historical project-4 context above.",
+    "project_question": "Do AI coding assistants actually make developers more productive, and where do they not?",
+    "soul": "1. Prefer primary sources and pre-registered studies.\n2. Always surface the method — sample size, design and effect size.\n3. Flag replication status where it is known.\n4. Distinguish correlation from causation explicitly.",
+    "approved_knowledge": [
+      {
+        "citation": "Do Users Write More Insecure Code with AI Assistants? (Neil Perry; Megha Srivastava; Deepak Kumar; Dan Boneh, 2023)",
+        "content": "Peer-reviewed experimental study directly testing whether AI assistants cause developers to write less secure code; provides causal evidence on security-quality impact."
+      },
+      {
+        "citation": "The New Developer: AI Skill Threat, Identity Change & Developer Thriving in the Transition to AI-Assisted Software Development (Catherine M. Hicks; Carol S. Lee; Kristen L. Foster-Marks, 2024)",
+        "content": "Reported a direct subgroup comparison of perceived AI code quality between junior and senior developers in a large survey (3000+ developers, 12+ industries), finding that juniors rated AI quality significantly lower."
+      },
+      {
+        "citation": "The Effect of Developing the Pragmatic Competence of Kurdish EFL Students on Their Conversational Interaction Ability (Walaa Jabbar Katti, 2018)",
+        "content": "Treats greetings as speech acts ('saying Hello' is a greeting) and examines effects of pragmatic instruction on interaction ability, offering a teaching/learning angle on 'hello' usage."
+      }
+    ],
+    "assembled_input_sha256": {
+      "dare-hermes-artifact-v1-mermaid": {"chars": 1463, "sha256": "152cefe576338ed6b882fd199b179bc481af2029cbfbced9bbfdcddda7ad5925"},
+      "dare-hermes-artifact-v1-svg": {"chars": 1492, "sha256": "40e2f5e46279c6b35b80be4658a7520b4042a0fba06981bd8f92b566ed665aa6"},
+      "dare-hermes-artifact-v1-excalidraw": {"chars": 1431, "sha256": "f634c2343e08ee3dda2da8fde9836023e3cdbba2978f845c36c316d73eb9b94b"},
+      "dare-hermes-artifact-v1-svg-retry": {"chars": 1631, "sha256": "305a77fdd9984c80e03b7f7348a27b9b2843a91d6f47ced873766ab9e27d82e1"}
+    }
+  },
+  "transport_contract": {
+    "snapshot_scope": "Captured pre-execution-control behavior at source_revision. Current deviations are documented in dare-hermes-execution-control-contract.md; historical event and terminal handling below must not be read as current code behavior.",
+    "dare_request": {
+      "method": "POST",
+      "path": "/api/research/projects/{project_id}/artifact/",
+      "json": {"prompt": "{task}", "artifactType": "{artifact_type}"},
+      "response_status": 202,
+      "response_shape": {"runId": "<integer>", "status": "running"}
+    },
+    "hermes_start": {
+      "method": "POST",
+      "path": "/v1/runs",
+      "headers": {
+        "Authorization": "Bearer <redacted>",
+        "Content-Type": "application/json",
+        "X-Hermes-Session-Key": "dare-proj{project_id}"
+      },
+      "json": {
+        "input": "{assembled_input}",
+        "instructions": "{instruction_contract_reconstructed_from_source_revision}",
+        "session_id": "{artifact_session_hermes_id}-r{dare_run_id}"
+      },
+      "response_status": 202,
+      "response_shape": {"object": "hermes.run", "run_id": "<hermes_run_id>", "status": "queued"}
+    },
+    "hermes_events": {
+      "method": "GET",
+      "path": "/v1/runs/{hermes_run_id}/events",
+      "consumed_by_dare": ["message.delta", "tool.started", "tool.completed", "run.completed"],
+      "transient_worker_state": {
+        "message.delta": "delta strings are concatenated in worker memory until parsing",
+        "tool.started": "updates the in-memory last_preview value only",
+        "tool.completed": "increments the in-memory tool-call budget; invokes provenance persistence only when an on_tool callback is supplied",
+        "run.completed": "ends stream consumption",
+        "reasoning.available": "ignored"
+      },
+      "durable_dare_persistence": {
+        "complete_raw_sse_body": false,
+        "complete_model_envelope": false,
+        "successful_parse": "accepted artifact_type, title, content, source, provenance, and run linkage are persisted as ResearchArtifact rows",
+        "parsing_failure": "the accumulated raw model response is generally lost; the run status/detail remains but no complete response body is stored",
+        "artifact_tool_events": "not persisted because run_artifact_job calls _stream_run without on_tool"
+      },
+      "capture_limit": "The controlled proxy observed event timing/order and payload shapes live. The redacted fixture retains normalized evidence, not a byte-for-byte raw SSE archive. Historical raw SSE for runs 34–37 was unavailable after gateway restart."
+    },
+    "hermes_terminal": {
+      "method": "GET",
+      "path": "/v1/runs/{hermes_run_id}",
+      "used_by_dare": ["usage"],
+      "ignored_by_dare": ["status", "last_event", "output", "model", "timestamps"]
+    }
+  },
+  "source_evidence": {
+    "route": "research/api/urls.py:45",
+    "artifact_run_metadata": "research/api/views.py:537",
+    "allowed_tools_metadata": "research/api/views.py:547",
+    "knowledge_truncation": "research/tasks.py:86",
+    "session_id_and_key": "research/tasks.py:113",
+    "sse_event_handling": "research/tasks.py:272",
+    "artifact_job_and_persistence": "research/tasks.py:682",
+    "hermes_post_body_and_headers": "research/services/hermes_service.py:27",
+    "allowed_tools_serializer_alias": "research/api/serializers.py:163",
+    "frontend_poll_cadence": "dare-frontend/src/pages/Research/usePolledRun.ts:11",
+    "classification": "Current source at source_revision; line numbers are orientation aids, not historical transport capture."
+  },
+  "configured_tool_metadata": {
+    "dare_run_allowed_tools": ["skills"],
+    "stored_on_research_agent_run": true,
+    "serialized_to_frontend_as": "tools",
+    "present_in_hermes_post_body": false,
+    "enforced_by_current_hermes_adapter": false,
+    "local_api_server_enabled_toolsets": ["web", "vision", "skills", "todo"],
+    "local_api_server_disabled_toolsets": ["browser", "terminal", "file", "code_execution", "video", "image_gen", "video_gen", "x_search", "moa", "tts", "memory", "context_engine", "session_search", "clarify", "delegation", "cronjob", "messaging", "homeassistant", "spotify", "yuanbao", "computer_use"],
+    "dare_mcp_configured": true,
+    "dare_mcp_registered_in_controlled_run": false,
+    "reason": "The gateway restart could not reach the local DARE MCP server and registered zero MCP tools. Configuration metadata is therefore not evidence of effective availability."
+  },
+  "prompt_size": {
+    "hermes_api_server_system_prompt": {"chars": 18278, "bytes": 18336, "tool_schema_count": 19, "tool_schema_json_bytes": 41044},
+    "controlled_components_cl100k_estimate": {
+      "project_question": {"chars": 88, "tokens": 16},
+      "approved_knowledge_block": {"chars": 1034, "tokens": 219},
+      "soul": {"chars": 221, "tokens": 46}
+    },
+    "caveat": "Component tokens are a cl100k_base diagnostic estimate. Controlled-run terminal GET usage is the verified whole-run source used here. Historical log fields are labeled separately and are not assumed to be authoritative aggregates."
+  },
+  "historical_evidence_provenance": {
+    "task_exact_and_dare_state": "read-only DARE dev database ResearchAgentRun records",
+    "assembled_input_hashes_and_message_hashes": "read-only retained Hermes state DB messages",
+    "completion_times_and_usage_fields": "read-only Hermes service logs",
+    "session_key_and_instruction_construction": "reconstructed from the pinned source revision and explicitly labeled as inference",
+    "unavailable": ["historical raw POST capture", "historical raw SSE transcript", "historical terminal GET envelope after gateway restart"]
+  },
+  "historical_cases": [
+    {
+      "dare_run_id": 34,
+      "artifact_type": "svg",
+      "task_exact": "Generate a publication-quality SVG infographic summarizing the current evidence on generative AI in higher education. Include key findings, evidence strength, supporting vs. contradicting studies, major risks, and future research gaps using a clean academic design.",
+      "session_id": "dare-proj4-artifact-r34",
+      "session_key_inferred_from_source": "dare-proj4",
+      "hermes_run_id": "run_a05bc3a197df4138b04459d22cf89e67",
+      "dare_interval_utc": {"started": "2026-07-10T12:04:19.545Z", "completed": "2026-07-10T12:15:00.368Z"},
+      "dare_terminal": {"status": "failed", "detail": "Stopped: the run exceeded its budget (more than 8 minutes).", "usage": {}},
+      "assembled_input_evidence": {"source": "retained Hermes state DB user message", "chars": 1094, "sha256": "d398201e093735588607f7f6a0ffcc6bc6388aba824b551f65367361711b8a39", "exact_body_in_fixture": false},
+      "hermes_logged_usage_fields": {"input": 9360, "output": 58200, "aggregate_interpretation": "not asserted"},
+      "terminal_message_evidence": {"chars": 30262, "sha256": "a6b835fee1c00e592829cbf0e1ded3a0d2142cb801320631240bc39678e62137"},
+      "evidence_limit": "Historical POST body, headers, raw SSE, and terminal GET envelope were not retained as a canonical capture; session_key is a deterministic source-code reconstruction, not a captured header."
+    },
+    {
+      "dare_run_id": 35,
+      "artifact_type": "svg",
+      "task_exact": "Generate a publication-quality SVG infographic summarizing the current evidence on generative AI in higher education. Include key findings, evidence strength, supporting vs. contradicting studies, major risks, and future research gaps using a clean academic design.",
+      "session_id": "dare-proj4-artifact-r35",
+      "session_key_inferred_from_source": "dare-proj4",
+      "hermes_run_id": "run_04e4e4582e4849c98849f826906522ed",
+      "dare_interval_utc": {"started": "2026-07-10T12:16:24.879Z", "completed": "2026-07-10T12:25:59.526Z"},
+      "dare_terminal": {"status": "failed", "detail": "Stopped: the run exceeded its budget (more than 8 minutes).", "usage": {}},
+      "assembled_input_evidence": {"source": "retained Hermes state DB user message", "chars": 1094, "sha256": "d398201e093735588607f7f6a0ffcc6bc6388aba824b551f65367361711b8a39", "exact_body_in_fixture": false},
+      "hermes_logged_usage_fields": {"input": 9360, "output": 60502, "aggregate_interpretation": "not asserted"},
+      "terminal_message_evidence": {"chars": 37342, "sha256": "4bd6fabac4b6179f512128038feab6b0cd31028f10b0842c2394d5c9691c26fb"},
+      "evidence_limit": "Historical POST body, headers, raw SSE, and terminal GET envelope were not retained as a canonical capture; session_key is a deterministic source-code reconstruction, not a captured header."
+    },
+    {
+      "dare_run_id": 36,
+      "artifact_type": "excalidraw",
+      "task_exact": "Generate an Excalidraw whiteboard illustrating the ecosystem of generative AI in higher education, including stakeholders (students, faculty, universities, policymakers), AI tools, learning outcomes, risks, governance mechanisms, and evidence flows.",
+      "session_id": "dare-proj4-artifact-r36",
+      "session_key_inferred_from_source": "dare-proj4",
+      "hermes_run_id": "run_03f79a94534447e69648b42db61ded72",
+      "dare_interval_utc": {"started": "2026-07-10T12:30:41.705Z", "completed": "2026-07-10T12:41:38.261Z"},
+      "dare_terminal": {"status": "failed", "detail": "Stopped: the run exceeded its budget (more than 8 minutes).", "usage": {}},
+      "assembled_input_evidence": {"source": "retained Hermes state DB user message", "chars": 1078, "sha256": "8f141301cb51a78cc8c3dd8e2118b1e592f88f6866bb9e60d8b28b13e62a1951", "exact_body_in_fixture": false},
+      "automatic_continuation": {"classification": "Hermes output-length continuation, not DARE _reask_json", "message_exact": "[System: Your previous response was truncated by the output length limit. Continue exactly where you left off. Do not restart or repeat prior text. Finish the answer directly.]", "chars": 176, "sha256": "c528a82294a08dd3b703454b6dc5f5cf8cfefa40565e7cadeded33490fe0cabf"},
+      "assistant_message_evidence": [{"chars": 39071, "sha256": "939bb79d77083254efb1a3f552652c09a53bf5c4cf5d4a3b7e83c340d6d13e5c"}, {"chars": 8292, "sha256": "daefd342b873ca9e8012bec394151c56a01f4d17faee6fd533ad2f1c2750f01d"}],
+      "hermes_logged_usage_fields": {"input": 73421, "output": 2784, "aggregate_interpretation": "uncertain because automatic continuation and observed accounting behavior prevent treating these as an authoritative aggregate"},
+      "evidence_limit": "DARE had already recorded budget failure before Hermes completed; DARE could not have parsed the later reply or initiated _reask_json. Historical POST body, headers, raw SSE, and terminal GET envelope were not retained."
+    },
+    {
+      "dare_run_id": 37,
+      "artifact_type": "excalidraw",
+      "task_exact": "Generate an Excalidraw whiteboard illustrating the ecosystem of generative AI in higher education, including stakeholders (students, faculty, universities, policymakers), AI tools, learning outcomes, risks, governance mechanisms, and evidence flows.",
+      "session_id": "dare-proj4-artifact-r37",
+      "session_key_inferred_from_source": "dare-proj4",
+      "hermes_run_id": "run_fbc120b6e2e047549889a7bd2a92df41",
+      "dare_interval_utc": {"started": "2026-07-10T12:32:07.739Z", "completed": "2026-07-10T12:53:21.381Z"},
+      "dare_terminal": {"status": "failed", "detail": "Stopped: the run exceeded its budget (more than 8 minutes).", "usage": {}},
+      "assembled_input_evidence": {"source": "retained Hermes state DB user message", "chars": 1078, "sha256": "8f141301cb51a78cc8c3dd8e2118b1e592f88f6866bb9e60d8b28b13e62a1951", "exact_body_in_fixture": false},
+      "automatic_continuation": {"classification": "Hermes output-length continuation, not DARE _reask_json", "message_exact": "[System: Your previous response was truncated by the output length limit. Continue exactly where you left off. Do not restart or repeat prior text. Finish the answer directly.]", "chars": 176, "sha256": "c528a82294a08dd3b703454b6dc5f5cf8cfefa40565e7cadeded33490fe0cabf"},
+      "assistant_message_evidence": [{"chars": 0, "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}, {"chars": 26862, "sha256": "93ff0f0983c16b116ff1a1f3b6b42ed27fcb0b4b1239e7c39302ea553d7dcace"}],
+      "hermes_logged_usage_fields": {"input": 9415, "output": 41288, "aggregate_interpretation": "not asserted; automatic continuation is present"},
+      "evidence_limit": "DARE had already recorded budget failure before Hermes completed; DARE could not have parsed the later reply or initiated _reask_json. Historical POST body, headers, raw SSE, and terminal GET envelope were not retained."
+    }
+  ],
+  "controlled_cases": [
+    {
+      "diagnostic_id": "dare-hermes-artifact-v1-mermaid",
+      "artifact_type": "diagram",
+      "task": "[diagnostic_id: dare-hermes-artifact-v1-mermaid] Create a compact Mermaid flowchart with exactly five nodes showing evidence collection -> review -> approval -> durable knowledge -> presentation. Use only those five nodes and short labels.",
+      "captured_ids": {"dare_run_id": 137, "session_id": "dare-proj2-artifact-r137", "session_key": "dare-proj2", "hermes_run_id": "run_3f2e2a6af662449ab078d92f856feae1"},
+      "dare_transitions": ["running/Queued…", "running/Generating artifact…", "completed/Generated 1 artifact."],
+      "sse_order": ["message.delta", "message.delta", "message.delta", "message.delta", "reasoning.available", "run.completed"],
+      "tool_calls": [],
+      "terminal_usage": {"input_tokens": 6797, "output_tokens": 132, "total_tokens": 6929},
+      "persisted_artifact_count": 1
+    },
+    {
+      "diagnostic_id": "dare-hermes-artifact-v1-svg",
+      "artifact_type": "svg",
+      "task": "[diagnostic_id: dare-hermes-artifact-v1-svg] Create one bounded SVG infographic with viewBox 0 0 640 360, exactly four labeled boxes and three connecting arrows, no images, scripts, foreignObject, external links, animation, filters, or more than 12 graphical elements.",
+      "captured_ids": {"dare_run_id": 138, "session_id": "dare-proj2-artifact-r138", "session_key": "dare-proj2", "hermes_run_id": "run_eb744917944a4ddab3ac1f41c283e3ed", "repair_run_id": "run_fe11b359dc124a8ba57bdad93e6824a5"},
+      "observed_hermes_tools": ["skill_view", "skill_view", "skill_view", "vision_analyze", "todo"],
+      "vision_analyze": {"preview": "placeholder", "result": "invalid image source"},
+      "repair_boundary": "The first output contained a malformed raw newline. DARE started a second Hermes run with the same session_id but empty instructions and no X-Hermes-Session-Key. Hermes reported no previous context; DARE then marked the run completed with no artifact.",
+      "dare_transitions": ["running/Queued…", "running/Generating artifact…", "running/Repairing the artifact format…", "completed/No artifact produced."],
+      "terminal_usage_original_run": {"input_tokens": 61896, "output_tokens": 10328, "total_tokens": 72224},
+      "persisted_tool_call_rows": 0,
+      "persisted_artifact_count": 0
+    },
+    {
+      "diagnostic_id": "dare-hermes-artifact-v1-excalidraw",
+      "artifact_type": "excalidraw",
+      "task": "[diagnostic_id: dare-hermes-artifact-v1-excalidraw] Create one bounded Excalidraw scene with exactly four labeled rectangle nodes and three arrows, no images, no freedraw, and no more than 12 elements total.",
+      "captured_ids": {"dare_run_id": 139, "session_id": "dare-proj2-artifact-r139", "session_key": "dare-proj2", "hermes_run_id": "run_32384ad58fec437f972f5ef63c2630f5"},
+      "observed_hermes_tools": ["skill_view", "skill_view"],
+      "dare_transitions": ["running/Queued…", "running/Generating artifact…", "completed/Generated 1 artifact."],
+      "terminal_usage": {"input_tokens": 35391, "output_tokens": 7934, "total_tokens": 43325},
+      "persisted_artifact_count": 1,
+      "artifact_element_count": 11
+    },
+    {
+      "diagnostic_id": "dare-hermes-artifact-v1-svg-retry",
+      "artifact_type": "svg",
+      "task": "[diagnostic_id: dare-hermes-artifact-v1-svg-retry] Return the artifact contract immediately. Create one bounded SVG with viewBox 0 0 640 360, four labeled rectangles and three lines with arrow markers. Use no tools. Use no prose before or after the JSON. No images, scripts, foreignObject, links, animation, filters, or more than 20 SVG elements. Ensure every newline inside the SVG content is JSON-escaped.",
+      "captured_ids": {"dare_run_id": 140, "session_id": "dare-proj2-artifact-r140", "session_key": "dare-proj2", "hermes_run_id": "run_e15c8cfaa40f44ba806eb85134812e4e"},
+      "post_response": {"runId": 140, "status": "running"},
+      "observed_hermes_tools": [],
+      "dare_transitions": ["running/Queued…", "running/Generating artifact…", "completed/Generated 1 artifact."],
+      "terminal_usage": {"input_tokens": 6867, "output_tokens": 6650, "total_tokens": 13517},
+      "persisted_artifact_count": 1,
+      "semantic_assertion": "topic-aligned with the controlled local AI-coding-assistant project; not evidence of alignment with Eira's separate historical project",
+      "retained_svg_evidence": {
+        "source": "retained local Hermes session assistant message",
+        "envelope_chars": 2256,
+        "envelope_sha256": "53f0b462db1851fb1e858e1db6fc23bfe7950796d3267203d48ede4bb9d4e79f",
+        "content_chars": 1906,
+        "content_bytes": 1906,
+        "content_sha256": "f9c7b70d6f128f85e4ef0d6d164d92c12547dc34e7ee4d2f13b77cb8bcefa57c",
+        "xml_parse": "valid",
+        "root": "svg",
+        "viewBox": "0 0 640 360",
+        "xml_element_count_including_root": 19,
+        "tag_counts": {"defs": 1, "line": 3, "marker": 1, "path": 1, "rect": 4, "svg": 1, "text": 8},
+        "script_count": 0,
+        "foreignObject_count": 0,
+        "image_count": 0,
+        "href_attribute_count": 0,
+        "event_handler_attribute_count": 0,
+        "qualification": "The requested viewBox and inspected prohibited constructs are proven. No general renderer-safety or geometric clipping proof is claimed."
+      },
+      "protocol_assertions": ["valid JSON envelope", "artifact type svg", "verified viewBox 0 0 640 360", "no observed tool events", "DARE terminal status completed"]
+    }
+  ]
+}
