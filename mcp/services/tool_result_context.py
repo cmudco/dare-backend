@@ -17,7 +17,12 @@ class ToolResultContextBuilder:
       from the results it has.
     """
 
-    def build(self, tool_results: List[Dict], final: bool = True) -> str:
+    def build(
+        self,
+        tool_results: List[Dict],
+        final: bool = True,
+        original_request: str = "",
+    ) -> str:
         if final:
             header = (
                 "External tool results are below.",
@@ -38,7 +43,16 @@ class ToolResultContextBuilder:
                 "outcome for the user.",
             )
 
-        parts: List[str] = list(header)
+        parts: List[str] = []
+        # The follow-up request replaces the user's message with this context,
+        # and on a conversation's first exchange the original request is not
+        # yet in persisted history — restate it so the model can always see
+        # what it is answering.
+        if original_request:
+            parts.append(
+                "The user's request being handled:\n" f"{original_request}"
+            )
+        parts.extend(header)
         for result in tool_results:
             tool_name = result.get("tool_name", "unknown_tool")
             tool_output = result.get("result") or ""
