@@ -136,3 +136,12 @@ class ToolResultContextTests(SimpleTestCase):
             "Do not call additional tools",
             tool_result_context_builder.build(self.RESULTS),
         )
+
+    def test_original_request_is_restated(self):
+        text = tool_result_context_builder.build(
+            self.RESULTS,
+            final=False,
+            original_request="Write a memo to Dean Rivera about FY27 funding.",
+        )
+        self.assertIn("Write a memo to Dean Rivera", text)
+        self.assertTrue(text.startswith("The user's request being handled:"))
