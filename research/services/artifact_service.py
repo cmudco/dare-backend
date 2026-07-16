@@ -1,10 +1,14 @@
 """
 Artifact generation — a structured contract, not prose-scraping.
 
-The Presentation Assistant is asked to return a single JSON object describing the
-artifact(s) it produced. We parse that with json.loads (no regex, no markdown
-heuristics): the structure is the contract. Chat replies are rendered inline on
-the frontend (markdown), but artifacts are *created* only through this path.
+The Presentation Assistant returns a short metadata JSON line, a ``===CONTENT===``
+marker, then the raw artifact content — so it never hand-escapes a large HTML/
+SVG/Markdown blob into a JSON string (which silently lost multi-line artifacts to
+escaping errors). Metadata parses reliably; content is taken verbatim. Structured
+types (docx/pptx/excalidraw) carry a JSON object as their content, validated with
+the same validators the chat tools use. The legacy ``{"artifacts": [...]}``
+envelope is still accepted as a fallback. Chat replies render inline on the
+frontend (markdown); artifacts are *created* only through this path.
 """
 
 import json
@@ -120,11 +124,17 @@ def build_artifact_instructions(soul_content, artifact_type=""):
         "a deck for a team, a diagram of the evidence) MUST produce an "
         "artifact grounded in the project. "
         + want
-        + "\n\nReturn ONLY a single JSON object — no prose, no markdown fences — "
-        'shaped exactly: {"artifacts": [{"type": "...", "title": "...", '
-        '"content": ...}]}. `content` is the raw artifact payload (mermaid/svg/'
-        "html/markdown text, the Excalidraw scene JSON as a string, or for "
-        "docx/pptx the document/deck JSON object itself)."
+        + "\n\nReturn EXACTLY this and nothing else — no prose, no markdown "
+        "fences: one line of metadata JSON, then a line containing only "
+        "===CONTENT===, then the raw artifact content:\n"
+        '{"type": "<type>", "title": "<short title>"}\n'
+        "===CONTENT===\n"
+        "<the content here, verbatim>\n\n"
+        "Put the content verbatim after the marker — do NOT wrap it in JSON or "
+        "escape it. For diagram/svg/html/document/code the content is the raw "
+        "text (Mermaid source, <svg>…</svg>, full HTML, GitHub-flavored "
+        "Markdown, code). For excalidraw/docx/pptx the content is the JSON "
+        "object itself."
     )
     parts.append(
         "TOOLS: when you search or read the web to ground the artifact, use "
@@ -155,67 +165,92 @@ def _strip_code_fence(text):
     return text.strip()
 
 
+CONTENT_MARKER = "===CONTENT==="
+
+
+def _build_artifact(atype, title, content, errors):
+    """Validate one artifact's type + content, returning the persisted dict, or
+    None (appending the specific reason to `errors`). Structured types are
+    validated with the same validators the chat tools use."""
+    atype = str(atype or "").strip().lower()
+    if atype not in ALLOWED_TYPES:
+        errors.append(f'"{atype}" is not an allowed artifact type')
+        return None
+
+    if atype in _STRUCTURED_VALIDATORS:
+        validator, config_key = _STRUCTURED_VALIDATORS[atype]
+        if isinstance(content, str):
+            try:
+                content = json.loads(_strip_code_fence(content))
+            except json.JSONDecodeError:
+                logger.warning("%s artifact content was not valid JSON", atype)
+                errors.append(f"the {atype} content was not valid JSON")
+                return None
+        if not isinstance(content, dict):
+            errors.append(f"the {atype} content must be a JSON object")
+            return None
+        result = validator(content)
+        if not result.get("success"):
+            logger.warning(
+                "%s artifact failed validation: %s", atype, result.get("error")
+            )
+            errors.append(f"{atype}: {result.get('error')}")
+            return None
+        content = json.dumps(result[config_key], indent=2)
+    elif not isinstance(content, str) or not content.strip():
+        errors.append(f"the {atype} content must be a non-empty string")
+        return None
+
+    return {
+        "artifact_type": atype,
+        "title": str(title or atype).strip(),
+        "content": content,
+    }
+
+
 def parse_artifacts(output, errors=None):
     """
-    Parse the JSON artifact envelope into a list of
-    {artifact_type, title, content}. Returns [] if the output isn't the contract.
-    Pass `errors` (a list) to collect the specific reasons items were rejected —
-    the repair re-ask feeds these back so the model fixes the actual problem.
+    Parse the artifact contract into a list of {artifact_type, title, content}.
+
+    Primary contract: a short metadata JSON line, then a ``===CONTENT===``
+    marker, then the raw artifact content — so the model never hand-escapes a
+    large HTML/SVG/Markdown blob into a JSON string (the escaping failures that
+    silently lost multi-line artifacts). Falls back to the legacy
+    ``{"artifacts": [...]}`` JSON envelope when the model still returns that.
+    `errors` (a list) collects the specific rejection reasons.
     """
     if errors is None:
         errors = []
     if not output:
         return []
+
+    # Primary: metadata line + ===CONTENT=== + raw content (one artifact).
+    if CONTENT_MARKER in output:
+        head, _, content = output.partition(CONTENT_MARKER)
+        meta = find_json_object(head, required_key="type")
+        if isinstance(meta, dict) and content.strip():
+            built = _build_artifact(
+                meta.get("type"), meta.get("title"), content.strip(), errors
+            )
+            return [built] if built else []
+
+    # Fallback: the legacy JSON envelope (works when the model escaped correctly).
     data = find_json_object(_strip_code_fence(output), required_key="artifacts")
     if not isinstance(data, dict):
-        logger.warning("Artifact output was not valid JSON")
-        errors.append("the reply was not a single valid JSON object")
+        logger.warning("Artifact output matched neither the marker nor JSON contract")
+        errors.append("the reply was not the artifact contract")
         return []
-
-    items = data.get("artifacts") if isinstance(data, dict) else None
+    items = data.get("artifacts")
     if not isinstance(items, list):
-        errors.append('the JSON object had no "artifacts" array')
+        errors.append('the reply had no "artifacts" array')
         return []
 
     artifacts = []
     for item in items:
-        if not isinstance(item, dict):
-            continue
-        atype = str(item.get("type") or "").strip().lower()
-        content = item.get("content")
-        if atype not in ALLOWED_TYPES:
-            errors.append(f'"{atype}" is not an allowed artifact type')
-            continue
-
-        if atype in _STRUCTURED_VALIDATORS:
-            validator, config_key = _STRUCTURED_VALIDATORS[atype]
-            if isinstance(content, str):
-                try:
-                    content = json.loads(_strip_code_fence(content))
-                except json.JSONDecodeError:
-                    logger.warning("%s artifact content was not valid JSON", atype)
-                    errors.append(f"the {atype} content was not valid JSON")
-                    continue
-            if not isinstance(content, dict):
-                errors.append(f"the {atype} content must be a JSON object")
-                continue
-            result = validator(content)
-            if not result.get("success"):
-                logger.warning(
-                    "%s artifact failed validation: %s", atype, result.get("error")
-                )
-                errors.append(f"{atype}: {result.get('error')}")
-                continue
-            content = json.dumps(result[config_key], indent=2)
-        elif not isinstance(content, str) or not content.strip():
-            errors.append(f"the {atype} content must be a non-empty string")
-            continue
-
-        artifacts.append(
-            {
-                "artifact_type": atype,
-                "title": str(item.get("title") or atype).strip(),
-                "content": content,
-            }
-        )
+        if isinstance(item, dict):
+            built = _build_artifact(
+                item.get("type"), item.get("title"), item.get("content"), errors
+            )
+            if built:
+                artifacts.append(built)
     return artifacts
