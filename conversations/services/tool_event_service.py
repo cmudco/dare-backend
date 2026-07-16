@@ -157,6 +157,14 @@ class ToolEventEmitter:
         )
 
     async def _send_payload(self, payload: Dict[str, Any]) -> None:
+        if payload.get("type") != "tool_call_args_progress":
+            logger.info(
+                "[journey] mid=%s event %s call=%s status=%s",
+                self._message_id,
+                payload.get("type"),
+                payload.get("tool_call_id"),
+                payload.get("status"),
+            )
         try:
             await self._send(camelize(payload))
         except Exception as exc:

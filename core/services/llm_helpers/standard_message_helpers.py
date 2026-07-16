@@ -12,12 +12,9 @@ from core.services.document_processor import DocumentProcessor
 from core.services.dtos import LLMQueryRequest
 from core.services.file_processor import FileProcessor
 
-from .db_helpers import (
-    get_full_file_contents,
-    get_prompt,
-    get_referenced_conversations_context,
-    get_referenced_summaries_context,
-)
+from .db_helpers import (get_full_file_contents, get_prompt,
+                         get_referenced_conversations_context,
+                         get_referenced_summaries_context)
 from .history_helpers import get_conversation_history
 from .memory_context_helpers import add_memory_context_to_messages
 from .semantic_context_helpers import add_semantic_context_to_messages
@@ -132,12 +129,16 @@ async def build_standard_messages(
         else []
     )
     # Keep turns that carry tool_calls even when their text content is empty —
-    # dropping them would orphan the role:"tool" results that follow.
+    # dropping them would orphan the role:"tool" results that follow. The same
+    # goes for role:"tool" turns themselves: every tool_call id MUST keep its
+    # result turn or providers reject the request, so they bypass the
+    # empty-content filter entirely.
     messages.extend(
         [
             msg
             for msg in conversation_history
-            if msg.get("tool_calls")
+            if msg.get("role") == "tool"
+            or msg.get("tool_calls")
             or (isinstance(msg.get("content"), str) and msg["content"].strip())
         ]
     )

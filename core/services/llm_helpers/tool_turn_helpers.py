@@ -29,21 +29,31 @@ def synthesize_tool_call_id(message_id: Any, round_index: int, position: int) ->
 def build_assistant_tool_call_turn(
     text: str, tool_calls: Sequence[ToolCallRequest]
 ) -> Dict[str, Any]:
-    """Assistant turn announcing the calls the model made this round."""
+    """Assistant turn announcing the calls the model made this round.
+
+    Gemini's ``thought_signature`` rides along on the call entry when
+    present; the Gemini converter reattaches it to the function_call part
+    (Gemini 3.x rejects replays without it). Same-turn rounds always run
+    on the provider that produced the call, so other providers never see
+    the extra key.
+    """
+    entries = []
+    for call in tool_calls:
+        entry = {
+            "id": call.id,
+            "type": "function",
+            "function": {
+                "name": call.name,
+                "arguments": call.arguments or "{}",
+            },
+        }
+        if getattr(call, "thought_signature", None):
+            entry["thought_signature"] = call.thought_signature
+        entries.append(entry)
     return {
         "role": "assistant",
         "content": text or "",
-        "tool_calls": [
-            {
-                "id": call.id,
-                "type": "function",
-                "function": {
-                    "name": call.name,
-                    "arguments": call.arguments or "{}",
-                },
-            }
-            for call in tool_calls
-        ],
+        "tool_calls": entries,
     }
 
 
@@ -131,10 +141,18 @@ def summarize_tool_usage(tool_call_rows: List[Any]) -> str:
 
 
 def _history_result_text(row: Any) -> str:
-    """Model-facing result text for a persisted tool call, truncated."""
+    """Model-facing result text for a persisted tool call, truncated.
+
+    Never returns an empty string: an empty ``role:"tool"`` turn risks being
+    dropped by empty-content message filters, which orphans its parent
+    assistant ``tool_calls`` turn and makes providers reject the whole
+    request (tool_use without a matching tool_result).
+    """
     if row.status == "failed" or (not row.result and row.error):
         return f"Error: {row.error or 'tool execution failed'}"
     text = row.result or ""
+    if not text.strip():
+        return "(tool completed with no output)"
     if len(text) > TOOL_RESULT_HISTORY_MAX_CHARS:
         text = (
             text[:TOOL_RESULT_HISTORY_MAX_CHARS]

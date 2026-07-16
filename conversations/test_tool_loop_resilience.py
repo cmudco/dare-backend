@@ -100,3 +100,43 @@ class ToolLoopResilienceTests(SimpleTestCase):
         )
 
         self.assertEqual(result.text, "Hello world\n\nDone")
+
+    async def test_idle_timeout_returns_partial_turn(self):
+        # Regression: a stalled stream used to raise out of run(), and the
+        # coordinator replaced already-streamed text with a generic failure
+        # notice and dropped the accumulated usage (unbilled tokens).
+        class TextThenStallLLMService:
+            async def prepare_chat(self, request):
+                return SimpleNamespace(
+                    messages=[{"role": "user", "content": "long question"}],
+                    tools=None,
+                    memory_context=[],
+                )
+
+            async def stream_round(self, prepared, messages, tools):
+                yield LLMStreamEvent.text_delta("Partial answer the user saw")
+                yield LLMStreamEvent.usage_frame(
+                    {"input_tokens": 11, "output_tokens": 7}
+                )
+                await asyncio.sleep(1)
+
+        service = ToolLoopService(TextThenStallLLMService(), billing_service=None)
+        service.stream_idle_timeout_seconds = 0.01
+
+        async def send(_payload):
+            return None
+
+        result = await service.run(
+            request=SimpleNamespace(),
+            message_obj=SimpleNamespace(id=9, created_at=timezone.now()),
+            llm=SimpleNamespace(),
+            user=None,
+            conversation=SimpleNamespace(),
+            send_callback=send,
+            retrieval_scope=None,
+        )
+
+        self.assertTrue(result.timed_out)
+        self.assertEqual(result.text, "Partial answer the user saw")
+        self.assertEqual(result.token_usage["input_tokens"], 11)
+        self.assertEqual(result.token_usage["output_tokens"], 7)

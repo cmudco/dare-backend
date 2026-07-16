@@ -11,15 +11,16 @@ These functions handle:
 """
 
 import logging
-from typing import Dict, Optional, Callable, Awaitable
+from typing import Awaitable, Callable, Dict, Optional
 
 from channels.db import database_sync_to_async
 from django.core.exceptions import ValidationError as DjangoValidationError
 
 from billing.exceptions import PaymentRequiredError
-from conversations.models import Message
 from conversations.constants import ErrorCode, ErrorMessage
-from conversations.services.websocket_response_service import WebSocketResponseService
+from conversations.models import Message
+from conversations.services.websocket_response_service import \
+    WebSocketResponseService
 from core.services.sb_client import SocraticBooksClient
 
 logger = logging.getLogger(__name__)
@@ -76,7 +77,12 @@ async def finalize_message(
         )(message_obj, ai_response, token_usage or {})
 
         cost = getattr(finalized_message, "cost", None) or 0
-        if conversation and conversation.bot_id and getattr(conversation, "user_id", None) is None and cost > 0:
+        if (
+            conversation
+            and conversation.bot_id
+            and getattr(conversation, "user_id", None) is None
+            and cost > 0
+        ):
             await database_sync_to_async(SocraticBooksClient.update_bot_budget)(
                 conversation.bot_id,
                 cost,
@@ -97,6 +103,12 @@ async def finalize_message(
         )
 
         await send_callback(final_payload)
+        logger.info(
+            "[journey] mid=%s final message sent: cost=%s, artifacts=%s",
+            message_obj.id,
+            cost,
+            final_payload.get("artifactIds"),
+        )
 
     except DjangoValidationError as e:
         logger.error(f"Validation error finalizing message: {str(e)}")

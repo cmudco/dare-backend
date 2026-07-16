@@ -15,18 +15,28 @@ class ToolCallRequest:
         name: Tool function name (MCP tools keep their ``server__tool`` form).
         arguments: Raw JSON string of the call arguments, exactly as the
             provider streamed it.
+        thought_signature: Base64 signature Gemini 3.x attaches to function
+            calls. It MUST be echoed back on the function_call part when the
+            turn is replayed in the next round, or Gemini rejects the request.
+            None for every other provider.
     """
 
     id: str
     name: str
     arguments: str
+    thought_signature: Optional[str] = None
 
     def to_payload_dict(self) -> Dict[str, str]:
         """Legacy dict shape consumed by the tool handlers."""
         return {"id": self.id, "name": self.name, "arguments": self.arguments}
 
     def with_id(self, new_id: str) -> "ToolCallRequest":
-        return ToolCallRequest(id=new_id, name=self.name, arguments=self.arguments)
+        return ToolCallRequest(
+            id=new_id,
+            name=self.name,
+            arguments=self.arguments,
+            thought_signature=self.thought_signature,
+        )
 
 
 @dataclass(frozen=True)

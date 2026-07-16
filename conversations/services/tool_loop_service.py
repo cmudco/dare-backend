@@ -64,6 +64,7 @@ class ToolLoopResult:
     rounds_used: int = 0
     tool_calls_made: int = 0
     interrupted: bool = False
+    timed_out: bool = False
     error_response: Optional[Dict[str, Any]] = None
 
 
@@ -131,6 +132,13 @@ class ToolLoopService:
 
         prepared = await self.llm_service.prepare_chat(request)
         messages: List[Dict[str, Any]] = list(prepared.messages)
+        logger.info(
+            "[journey] mid=%s prepared: %d prompt turns, %d tools, regenerate=%s",
+            message_obj.id,
+            len(messages),
+            len(prepared.tools or []),
+            regenerate,
+        )
         emitter = ToolEventEmitter(send_callback, message_obj.id)
         usage = UsageAccumulator()
         ctx = ToolExecutionContext(
@@ -161,76 +169,115 @@ class ToolLoopService:
             pending_calls: List[ToolCallRequest] = []
             synthesized_ids: deque = deque()
             round_has_text = False
+            logger.info(
+                "[journey] mid=%s round %d start (tools=%s)",
+                message_obj.id,
+                round_index,
+                "on" if tools else "off",
+            )
 
-            async for event in self._stream_round(prepared, messages, tools):
-                if event.kind is StreamEventKind.TEXT_DELTA:
-                    if not event.text:
-                        continue
-                    if not round_has_text and text_accum:
-                        # New segment after a tool round: append, never replace.
-                        text_accum += "\n\n"
-                    round_has_text = True
-                    text_accum += event.text
-                    await self._emit_stream_chunk(
-                        send_callback, message_obj, text_accum, regenerate
-                    )
-
-                elif event.kind is StreamEventKind.TOOL_CALL_START:
-                    call_id = event.tool_call_id
-                    if not call_id:
-                        # Providers without call ids (Gemini): synthesize one
-                        # and hand it to the matching READY via FIFO order.
-                        call_id = synthesize_tool_call_id(
-                            message_obj.id, round_index, len(synthesized_ids)
+            try:
+                async for event in self._stream_round(prepared, messages, tools):
+                    if event.kind is StreamEventKind.TEXT_DELTA:
+                        if not event.text:
+                            continue
+                        if not round_has_text and text_accum:
+                            # New segment after a tool round: append, never replace.
+                            text_accum += "\n\n"
+                        round_has_text = True
+                        text_accum += event.text
+                        await self._emit_stream_chunk(
+                            send_callback, message_obj, text_accum, regenerate
                         )
-                        synthesized_ids.append(call_id)
-                    origin, server_slug, _ = ToolExecutionService._classify(
-                        event.tool_name or ""
-                    )
-                    await emitter.tool_call_pending(
-                        call_id, event.tool_name or "", server_slug, origin, round_index
-                    )
 
-                elif event.kind is StreamEventKind.TOOL_CALL_ARGS_DELTA:
-                    progress_id = event.tool_call_id or (
-                        synthesized_ids[-1] if synthesized_ids else ""
-                    )
-                    if progress_id:
-                        await emitter.args_progress(progress_id, event.args_len)
-
-                elif event.kind is StreamEventKind.TOOL_CALL_READY and event.tool_call:
-                    call = event.tool_call
-                    if not call.id:
-                        call = call.with_id(
-                            synthesized_ids.popleft()
-                            if synthesized_ids
-                            else synthesize_tool_call_id(
-                                message_obj.id, round_index, len(pending_calls)
+                    elif event.kind is StreamEventKind.TOOL_CALL_START:
+                        call_id = event.tool_call_id
+                        if not call_id:
+                            # Providers without call ids (Gemini): synthesize one
+                            # and hand it to the matching READY via FIFO order.
+                            call_id = synthesize_tool_call_id(
+                                message_obj.id, round_index, len(synthesized_ids)
                             )
+                            synthesized_ids.append(call_id)
+                        origin, server_slug, _ = ToolExecutionService._classify(
+                            event.tool_name or ""
                         )
-                    pending_calls.append(call)
-
-                elif event.kind is StreamEventKind.USAGE and event.usage:
-                    usage.observe(round_index, event.usage)
-                    if event.usage.get("web_search_sources"):
-                        web_search_sources = event.usage["web_search_sources"]
-                    for provider_call in event.usage.get("provider_tool_calls") or []:
-                        await self._emit_provider_tool_call(
-                            emitter, provider_call, round_index, sent_provider_ids
+                        await emitter.tool_call_pending(
+                            call_id,
+                            event.tool_name or "",
+                            server_slug,
+                            origin,
+                            round_index,
                         )
-                        provider_tool_calls.append(provider_call)
 
-                    if user:
-                        can_continue, error_response = (
-                            await self.billing_service.check_streaming_credit_usage(
-                                user, llm, usage.totals()
+                    elif event.kind is StreamEventKind.TOOL_CALL_ARGS_DELTA:
+                        progress_id = event.tool_call_id or (
+                            synthesized_ids[-1] if synthesized_ids else ""
+                        )
+                        if progress_id:
+                            await emitter.args_progress(progress_id, event.args_len)
+
+                    elif (
+                        event.kind is StreamEventKind.TOOL_CALL_READY
+                        and event.tool_call
+                    ):
+                        call = event.tool_call
+                        if not call.id:
+                            call = call.with_id(
+                                synthesized_ids.popleft()
+                                if synthesized_ids
+                                else synthesize_tool_call_id(
+                                    message_obj.id, round_index, len(pending_calls)
+                                )
                             )
-                        )
-                        if not can_continue:
-                            result.interrupted = True
-                            result.error_response = error_response
-                            break
+                        pending_calls.append(call)
 
+                    elif event.kind is StreamEventKind.USAGE and event.usage:
+                        usage.observe(round_index, event.usage)
+                        if event.usage.get("web_search_sources"):
+                            web_search_sources = event.usage["web_search_sources"]
+                        for provider_call in (
+                            event.usage.get("provider_tool_calls") or []
+                        ):
+                            await self._emit_provider_tool_call(
+                                emitter, provider_call, round_index, sent_provider_ids
+                            )
+                            provider_tool_calls.append(provider_call)
+
+                        if user:
+                            can_continue, error_response = (
+                                await self.billing_service.check_streaming_credit_usage(
+                                    user, llm, usage.totals()
+                                )
+                            )
+                            if not can_continue:
+                                result.interrupted = True
+                                result.error_response = error_response
+                                break
+
+            except TimeoutError as exc:
+                # Return the partial turn instead of raising: text the user
+                # already read, usage already billed, and tool work already
+                # persisted must survive a stalled provider stream.
+                result.timed_out = True
+                logger.warning(
+                    "[ToolLoopService] %s (round %s, message %s) — "
+                    "finishing with the partial turn",
+                    exc,
+                    round_index,
+                    message_obj.id,
+                )
+                break
+
+            logger.info(
+                "[journey] mid=%s round %d stream done: text=%d chars, "
+                "pending_calls=%s, interrupted=%s",
+                message_obj.id,
+                round_index,
+                len(text_accum),
+                [call.name for call in pending_calls],
+                result.interrupted,
+            )
             if result.interrupted:
                 break
             if not pending_calls:
@@ -272,6 +319,11 @@ class ToolLoopService:
             result.tool_calls_made += len(pending_calls)
 
             if round_index == MAX_TOOL_ROUNDS:
+                logger.info(
+                    "[journey] mid=%s round cap hit — next round forces a "
+                    "text answer",
+                    message_obj.id,
+                )
                 await emitter.rounds_capped(round_index)
 
         token_usage = usage.totals() if usage.has_usage() else {}
@@ -284,6 +336,18 @@ class ToolLoopService:
 
         result.text = text_accum
         result.token_usage = token_usage or None
+        logger.info(
+            "[journey] mid=%s loop done: rounds=%d, tool_calls=%d, "
+            "text=%d chars, tokens=%s/%s, interrupted=%s, timed_out=%s",
+            message_obj.id,
+            result.rounds_used,
+            result.tool_calls_made,
+            len(text_accum),
+            (token_usage or {}).get("input_tokens"),
+            (token_usage or {}).get("output_tokens"),
+            result.interrupted,
+            result.timed_out,
+        )
         result.usage_breakdown = usage.breakdown()
         return result
 

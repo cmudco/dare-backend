@@ -10,6 +10,7 @@ being buried in a final usage dict. Includes extraction of web search
 sources/citations when web search is enabled.
 """
 
+import base64
 import json
 import logging
 from typing import AsyncGenerator, Dict, List
@@ -464,27 +465,30 @@ class GeminiStreamProcessor:
                             if hasattr(part, 'text') and part.text:
                                 yield LLMStreamEvent.text_delta(part.text)
 
-                            # Handle function calls (Gemini's tool calling)
-                            # When Gemini uses tools, it returns function_call with content in args
+                            # Handle function calls (Gemini's tool calling).
+                            # Arguments travel only via TOOL_CALL_READY — a
+                            # `content` arg is tool input, never chat text.
                             if hasattr(part, 'function_call') and part.function_call:
                                 fc = part.function_call
-
-                                # Extract content from function call args if present
-                                # This handles the case where Gemini wraps content in a tool call
-                                if fc.args and 'content' in dict(fc.args):
-                                    content = dict(fc.args).get('content', '')
-                                    if content:
-                                        yield LLMStreamEvent.text_delta(content)
 
                                 arguments = (
                                     json.dumps(dict(fc.args)) if fc.args else "{}"
                                 )
+                                # Gemini 3.x signs each function call; the
+                                # signature must be echoed when the call is
+                                # replayed or the next round is rejected.
+                                signature = getattr(part, 'thought_signature', None)
                                 yield LLMStreamEvent.tool_call_start("", fc.name)
                                 yield LLMStreamEvent.tool_call_ready(
                                     ToolCallRequest(
                                         id="",  # Gemini doesn't provide IDs
                                         name=fc.name,
                                         arguments=arguments,
+                                        thought_signature=(
+                                            base64.b64encode(signature).decode()
+                                            if signature
+                                            else None
+                                        ),
                                     )
                                 )
 
