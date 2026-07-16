@@ -80,13 +80,16 @@ class DocumentRetriever(BaseRetriever):
         from core.services.vector_service import get_vector_service
 
         service = get_vector_service(request.user_id)
-        matches = service.search_documents(
-            vector=query_vector,
-            user_id=request.user_id,
-            file_ids=list(request.file_ids),
-            top_k=request.top_k,
-            query_text=query_text,
-        )
+        try:
+            matches = service.search_documents(
+                vector=query_vector,
+                user_id=request.user_id,
+                file_ids=list(request.file_ids),
+                top_k=request.top_k,
+                query_text=query_text,
+            )
+        finally:
+            service.close()
         chunks = []
         for m in matches:
             if m.get("score", 0.0) < request.similarity_threshold:

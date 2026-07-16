@@ -63,9 +63,40 @@ class ToolLoopResilienceTests(SimpleTestCase):
         )
 
         self.assertEqual(result.text, "Recovered answer")
+        self.assertEqual(result.rounds_used, 1)
         self.assertEqual(len(llm_service.calls), 2)
         self.assertIn(
             "return a substantive answer",
             llm_service.calls[1][-1]["content"],
         )
         self.assertEqual(len(sent), 1)
+
+    async def test_stream_preserves_whitespace_only_deltas(self):
+        class WhitespaceLLMService:
+            async def prepare_chat(self, request):
+                return SimpleNamespace(
+                    messages=[{"role": "user", "content": "format this"}],
+                    tools=None,
+                    memory_context=[],
+                )
+
+            async def stream_round(self, prepared, messages, tools):
+                for text in ("Hello", " ", "world", "\n\n", "Done"):
+                    yield LLMStreamEvent.text_delta(text)
+
+        service = ToolLoopService(WhitespaceLLMService(), billing_service=None)
+
+        async def send(_payload):
+            return None
+
+        result = await service.run(
+            request=SimpleNamespace(),
+            message_obj=SimpleNamespace(id=8, created_at=timezone.now()),
+            llm=SimpleNamespace(),
+            user=None,
+            conversation=SimpleNamespace(),
+            send_callback=send,
+            retrieval_scope=None,
+        )
+
+        self.assertEqual(result.text, "Hello world\n\nDone")

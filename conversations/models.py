@@ -149,6 +149,20 @@ class LLM(models.Model):
             is_image_generator=False, is_audio_transcriber=False
         ).first()
 
+    @classmethod
+    def visible_for_user(cls, user):
+        """Return the active model catalog the given user may dispatch."""
+        queryset = cls.objects.filter(is_active=True)
+        if user is None:
+            return queryset
+        access_group = getattr(user, "access_code_group", None)
+        model_group = (
+            getattr(access_group, "model_group", None) if access_group else None
+        )
+        if not model_group or not model_group.is_active:
+            return queryset
+        return model_group.allowed_models.filter(is_active=True)
+
     class Meta:
         verbose_name_plural = "LLMs"
 

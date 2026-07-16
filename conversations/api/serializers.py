@@ -370,13 +370,12 @@ class MessageToolCallSerializer(serializers.ModelSerializer):
         model = MessageToolCall
         fields = [
             "id",
-            "tool_call_id",
             "tool_name",
             "server_slug",
             "origin",
             "status",
             "round",
-            "result",
+            "arguments",
             "error",
             "mcp_result",
             "dare_result",
@@ -496,20 +495,43 @@ class MessageSerializer(serializers.ModelSerializer):
         request URL, so advertising an artifact that lives in a different
         conversation would hand the UI an id that 404s. Stay consistent.
         """
-        artifact = obj.artifacts.filter(
-            is_active=True, conversation_id=obj.conversation_id
-        ).first()
-        return str(artifact.id) if artifact else None
+        artifact_ids = self._get_artifact_ids(obj)
+        return str(artifact_ids[0]) if artifact_ids else None
 
     def get_artifactIds(self, obj):
         """Return every active artifact created by this assistant message."""
-        return list(
-            obj.artifacts.filter(
-                is_active=True, conversation_id=obj.conversation_id
+        return self._get_artifact_ids(obj)
+
+    @staticmethod
+    def _get_artifact_ids(obj):
+        """Resolve artifact IDs once when both compatibility fields serialize."""
+        cache_attr = "_serialized_active_artifact_ids"
+        artifact_ids = getattr(obj, cache_attr, None)
+        if artifact_ids is None:
+            prefetched = getattr(obj, "_prefetched_objects_cache", {}).get(
+                "artifacts"
             )
-            .order_by("created_at", "id")
-            .values_list("id", flat=True)
-        )
+            if prefetched is not None:
+                artifacts = sorted(
+                    (
+                        artifact
+                        for artifact in prefetched
+                        if artifact.is_active
+                        and artifact.conversation_id == obj.conversation_id
+                    ),
+                    key=lambda artifact: (artifact.created_at, artifact.id),
+                )
+                artifact_ids = [artifact.id for artifact in artifacts]
+            else:
+                artifact_ids = list(
+                    obj.artifacts.filter(
+                        is_active=True, conversation_id=obj.conversation_id
+                    )
+                    .order_by("created_at", "id")
+                    .values_list("id", flat=True)
+                )
+            setattr(obj, cache_attr, artifact_ids)
+        return artifact_ids
 
     def get_energy_stats(self, obj):
         """Compute relatable energy stats at read time from stored energy_wh."""

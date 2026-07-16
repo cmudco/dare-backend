@@ -81,6 +81,33 @@ class ToolExecutionContext:
 class ToolExecutionService:
     """Executes model tool calls and persists their outcomes."""
 
+    @staticmethod
+    def _serialize_persisted_result(raw_result: Dict) -> str:
+        """Serialize a bounded, valid JSON result for conversation history."""
+        serialized = json.dumps(raw_result)
+        if len(serialized) <= MAX_PERSISTED_RESULT_CHARS:
+            return serialized
+
+        compact_result = {
+            "truncated": True,
+            "original_chars": len(serialized),
+            "content_preview": serialized[: MAX_PERSISTED_RESULT_CHARS - 500],
+        }
+        for key in ("success", "artifactId", "artifact_id", "message", "error"):
+            if key in raw_result:
+                compact_result[key] = raw_result[key]
+
+        # The preserved metadata can itself be unexpectedly large. Reduce the
+        # preview until the envelope remains within the database/UI limit.
+        compact_serialized = json.dumps(compact_result)
+        overflow = len(compact_serialized) - MAX_PERSISTED_RESULT_CHARS
+        if overflow > 0:
+            compact_result["content_preview"] = compact_result[
+                "content_preview"
+            ][: -(overflow + 1)]
+            compact_serialized = json.dumps(compact_result)
+        return compact_serialized
+
     async def execute_round(
         self,
         tool_calls: List[ToolCallRequest],
@@ -318,7 +345,7 @@ class ToolExecutionService:
         try:
             result_text = None
             if raw_result and not is_error:
-                result_text = json.dumps(raw_result)[:MAX_PERSISTED_RESULT_CHARS]
+                result_text = self._serialize_persisted_result(raw_result)
             MessageToolCall.objects.create(
                 message=message,
                 tool_call_id=call.id,

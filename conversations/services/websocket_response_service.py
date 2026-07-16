@@ -84,6 +84,7 @@ class WebSocketResponseService:
                 "snippets__file",
                 "snippets__library",
                 "web_search_sources",
+                "artifacts",
             ).get(id=message.id)
             return MessageSerializer(msg).data
 
@@ -108,28 +109,22 @@ class WebSocketResponseService:
             lambda: message.learning_progress_data
         )()
 
-        # Get all linked artifacts. Keep artifactId as a compatibility alias
-        # for older clients while artifactIds carries the complete message set.
-        # Use fresh DB query to avoid stale cached relation
-        @database_sync_to_async
-        def get_artifact_ids():
-            return list(
-                Artifact.active_objects.filter(message_id=message.id)
-                .order_by("created_at", "id")
-                .values_list("id", flat=True)
-            )
-
-        artifact_ids = await get_artifact_ids()
+        # The serializer loaded a fresh Message row and resolved this relation;
+        # reuse it rather than issuing a third artifact query for the same payload.
+        artifact_ids = serialized_data.get("artifactIds", [])
         artifact_id = str(artifact_ids[0]) if artifact_ids else None
 
         # Debug log to trace artifact ID resolution
         if artifact_id:
             logger.info(
-                f"format_message: message_id={message.id}, resolved artifact_id={artifact_id}"
+                "format_message: message_id=%s, resolved artifact_id=%s",
+                message.id,
+                artifact_id,
             )
         else:
-            logger.warning(
-                f"format_message: message_id={message.id}, NO artifact found in DB"
+            logger.debug(
+                "format_message: message_id=%s, no artifact found",
+                message.id,
             )
 
         # Build response — field names match MessageSerializer (camelCase via DRF)
