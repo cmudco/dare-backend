@@ -108,14 +108,19 @@ class WebSocketResponseService:
             lambda: message.learning_progress_data
         )()
 
-        # Get linked artifact ID if exists
+        # Get all linked artifacts. Keep artifactId as a compatibility alias
+        # for older clients while artifactIds carries the complete message set.
         # Use fresh DB query to avoid stale cached relation
         @database_sync_to_async
-        def get_artifact_id():
-            artifact = Artifact.active_objects.filter(message_id=message.id).first()
-            return str(artifact.id) if artifact else None
+        def get_artifact_ids():
+            return list(
+                Artifact.active_objects.filter(message_id=message.id)
+                .order_by("created_at", "id")
+                .values_list("id", flat=True)
+            )
 
-        artifact_id = await get_artifact_id()
+        artifact_ids = await get_artifact_ids()
+        artifact_id = str(artifact_ids[0]) if artifact_ids else None
 
         # Debug log to trace artifact ID resolution
         if artifact_id:
@@ -133,6 +138,7 @@ class WebSocketResponseService:
             "id": message.id,
             "message": message.message,
             "artifactId": artifact_id,
+            "artifactIds": artifact_ids,
             "senderType": message.sender_type,
             "senderName": message.sender or "AI Assistant",
             "streaming": streaming,

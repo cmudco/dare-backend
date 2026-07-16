@@ -11,6 +11,7 @@ sources/citations when web search is enabled.
 """
 
 import json
+import logging
 from typing import AsyncGenerator, Dict, List
 
 from core.services.dtos.stream_event_dto import LLMStreamEvent, StreamEventKind
@@ -28,6 +29,7 @@ from .web_search_extractors import (
 )
 
 WEB_FETCH_PREVIEW_CHARS = 4000
+logger = logging.getLogger(__name__)
 
 
 def _safe_get(obj, attr: str, default=None):
@@ -387,6 +389,14 @@ class ClaudeStreamProcessor:
             # Extract usage from message delta
             elif event.type == "message_delta":
                 usage = usage_extractor.extract_from_message_delta(event) or {}
+                stop_reason = getattr(event.delta, "stop_reason", None)
+                if stop_reason:
+                    logger.info(
+                        "[ClaudeStreamProcessor] stream stopped: reason=%s, "
+                        "output_tokens=%s",
+                        stop_reason,
+                        usage.get("output_tokens"),
+                    )
 
                 if provider_tool_calls:
                     usage["provider_tool_calls"] = _merge_provider_tool_calls(

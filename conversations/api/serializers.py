@@ -419,6 +419,7 @@ class MessageSerializer(serializers.ModelSerializer):
     web_search_sources = WebSearchSourceSerializer(many=True, read_only=True)
     llm = serializers.PrimaryKeyRelatedField(read_only=True, allow_null=True)
     artifactId = serializers.SerializerMethodField()
+    artifactIds = serializers.SerializerMethodField()
     # Unified tool-call list (DARE + MCP + provider). The model's
     # related_name stays mcp_tool_calls for schema stability.
     tool_calls = MessageToolCallSerializer(
@@ -456,6 +457,7 @@ class MessageSerializer(serializers.ModelSerializer):
             "water_ml",
             "energy_stats",
             "artifactId",
+            "artifactIds",
             "tool_calls",
             "content_type",
             "content_metadata",
@@ -478,6 +480,7 @@ class MessageSerializer(serializers.ModelSerializer):
             "water_ml",
             "energy_stats",
             "artifactId",
+            "artifactIds",
             "tool_calls",
             "content_type",
             "content_metadata",
@@ -497,6 +500,16 @@ class MessageSerializer(serializers.ModelSerializer):
             is_active=True, conversation_id=obj.conversation_id
         ).first()
         return str(artifact.id) if artifact else None
+
+    def get_artifactIds(self, obj):
+        """Return every active artifact created by this assistant message."""
+        return list(
+            obj.artifacts.filter(
+                is_active=True, conversation_id=obj.conversation_id
+            )
+            .order_by("created_at", "id")
+            .values_list("id", flat=True)
+        )
 
     def get_energy_stats(self, obj):
         """Compute relatable energy stats at read time from stored energy_wh."""
