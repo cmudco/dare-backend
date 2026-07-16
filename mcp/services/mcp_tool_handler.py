@@ -272,6 +272,14 @@ class MCPToolHandler:
             "mcp_server_ids": [],
             "dare_tool_slugs": [],
             "web_search_enabled": False,
+            # Also strip retrieval sources: the synthesis prompt is the
+            # tool-result blob, and running RAG against it would waste a
+            # pipeline call and clobber the snippets/trace already persisted
+            # on the message by the real turn.
+            "embedding_ids": [],
+            "tag_ids": [],
+            "folder_ids": [],
+            "library_ids": [],
         }
 
         # Build a new request with tool results as the message

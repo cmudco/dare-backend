@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 from channels.db import database_sync_to_async
 from djangorestframework_camel_case.util import camelize
@@ -28,6 +28,8 @@ from core.services.dtos.builder import LLMQueryRequestBuilder
 from dare_tools.constants import ExecutionStatus
 from dare_tools.models import DareTool, DareToolExecution
 from dare_tools.services.registry import DareToolRegistry
+from dare_tools.services.retrieval_tool_executor import (RetrievalScope,
+                                                         retrieval_tool_executor)
 from conversations.services.artifact_tool_executor import artifact_tool_executor
 
 logger = logging.getLogger(__name__)
@@ -58,6 +60,11 @@ class DareToolHandler:
         "create_react_component",
     ]
 
+    # Tools that retrieve document context - routed to RetrievalToolExecutor
+    RETRIEVAL_TOOLS = [
+        "search_documents",
+    ]
+
     def __init__(self):
         # No LLMService here - it's passed via stream_tool_result_response
         # to match MCP tool handler pattern and avoid potential circular imports
@@ -70,19 +77,23 @@ class DareToolHandler:
         user,
         conversation: 'Conversation',
         send_callback: Callable,
+        retrieval_scope: Optional[RetrievalScope] = None,
     ) -> List[Dict]:
         """
         Handle DARE tool calls from LLM response.
-        
+
         Filters tool_calls to only DARE tools, executes them, and returns results.
-        
+
         Args:
             tool_calls: List of tool calls from LLM response
             message: The Message model instance
             user: User who triggered the message
             conversation: Conversation context
             send_callback: Async function to send WebSocket messages
-            
+            retrieval_scope: Attached-source scope for retrieval tools
+                (search_documents); built from the request DTO, never from
+                model arguments
+
         Returns:
             List of tool results for follow-up LLM call
         """
@@ -122,8 +133,15 @@ class DareToolHandler:
             # Execute the tool
             start_time = time.time()
             try:
+                # Route retrieval tools to RetrievalToolExecutor (async, ORM-safe)
+                if tool_name in self.RETRIEVAL_TOOLS:
+                    result = await retrieval_tool_executor.execute(
+                        arguments=arguments,
+                        message=message,
+                        scope=retrieval_scope,
+                    )
                 # Route visual tools to ArtifactToolExecutor for artifact panel
-                if tool_name in self.ARTIFACT_TOOLS:
+                elif tool_name in self.ARTIFACT_TOOLS:
                     result = await artifact_tool_executor.execute(
                         tool_name=tool_name,
                         arguments=arguments,
@@ -293,6 +311,19 @@ class DareToolHandler:
                 f"PowerPoint created successfully. Artifact ID: {result.get('artifact_id')}. "
                 f"Title: {ppt_config.get('title')}, "
                 f"Slides: {len(ppt_config.get('slides', []))}"
+            )
+        elif tool_name == "search_documents":
+            blocks = result.get("blocks") or []
+            query = result.get("query", "")
+            if not blocks:
+                return (
+                    f'No relevant passages found for query "{query}". '
+                    "The attached sources may not cover this topic."
+                )
+            return (
+                f'Retrieved {len(blocks)} passages for query "{query}". '
+                "When you use a passage in your answer, cite it inline with "
+                "its [S#] tag:\n\n" + "\n\n".join(blocks)
             )
         elif tool_name == "create_react_component":
             return f"React component created successfully. Artifact ID: {result.get('artifact_id')}, Title: {result.get('message', 'Component')}"
