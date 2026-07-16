@@ -23,7 +23,9 @@ logger = logging.getLogger(__name__)
 
 
 @database_sync_to_async
-def get_ai_message_by_id(message_id: int) -> Optional[Message]:
+def get_ai_message_by_id(
+    message_id: int, conversation_id: int
+) -> Optional[Message]:
     """Fetch an AI message by ID with dispatch relations loaded.
 
     Eager-loads ``llm`` and ``litellm_key`` so the regeneration path can
@@ -32,13 +34,18 @@ def get_ai_message_by_id(message_id: int) -> Optional[Message]:
 
     Args:
         message_id: ID of the AI message to fetch
+        conversation_id: Conversation the active socket coordinator owns
 
     Returns:
         Message instance or None if not found
     """
     return (
         Message.active_objects.select_related("llm", "litellm_key")
-        .filter(id=message_id, sender_type=SenderType.AI_ASSISTANT)
+        .filter(
+            id=message_id,
+            conversation_id=conversation_id,
+            sender_type=SenderType.AI_ASSISTANT,
+        )
         .first()
     )
 
@@ -60,14 +67,21 @@ def get_message_media_file_ids(message: Message) -> List[int]:
     )
 
 
-def _resolve_litellm_ref(key_id: str, model_name: str) -> Optional[LLMDescriptor]:
+def _resolve_litellm_ref(
+    key_id: str, model_name: str, user=None
+) -> Optional[LLMDescriptor]:
     """Look up a LiteLLM dispatch reference and build the descriptor.
 
     Uses the cached probe (`billing.litellm_models_service.list_models`) to
     discover the provider the proxy reports for ``model_name``; falls back
     to ``"custom"`` if the probe is unavailable so dispatch can still run.
     """
-    key = LiteLLMKey.objects.filter(pk=key_id).first()
+    key_queryset = (
+        LiteLLMKey.visible_for_user(user)
+        if user is not None
+        else LiteLLMKey.objects.all()
+    )
+    key = key_queryset.filter(pk=key_id).first()
     if key is None:
         logger.info("LiteLLM ref references missing LiteLLMKey id=%s", key_id)
         return None
@@ -88,8 +102,13 @@ def _resolve_litellm_ref(key_id: str, model_name: str) -> Optional[LLMDescriptor
 LITELLM_ID_PREFIX = "litellm:"
 
 
+def _visible_llms_for_user(user):
+    """Mirror the model catalog entitlement rules at dispatch time."""
+    return LLM.visible_for_user(user)
+
+
 @database_sync_to_async
-def parse_model_id(model_id) -> Optional[LLMDescriptor]:
+def parse_model_id(model_id, user=None) -> Optional[LLMDescriptor]:
     """Resolve an opaque ``model_id`` string to an ``LLMDescriptor``.
 
     The FE treats ``model_id`` as opaque — it just hands back whatever the
@@ -112,19 +131,19 @@ def parse_model_id(model_id) -> Optional[LLMDescriptor]:
         if not key_id or not model_name:
             logger.warning("Malformed LiteLLM model_id: %r", model_id)
             return None
-        return _resolve_litellm_ref(key_id, model_name)
+        return _resolve_litellm_ref(key_id, model_name, user=user)
     try:
         pk = int(model_id)
     except ValueError:
         logger.warning("Unparseable model_id: %r", model_id)
         return None
-    llm = LLM.objects.filter(id=pk).first()
+    llm = _visible_llms_for_user(user).filter(id=pk).first()
     return LLMDescriptor.from_llm(llm) if llm else None
 
 
 @database_sync_to_async
 def get_conversation_default_descriptor(
-    conversation: Conversation,
+    conversation: Conversation, user=None
 ) -> Optional[LLMDescriptor]:
     """Get the descriptor for the conversation's default LLM (or first available).
 
@@ -132,9 +151,13 @@ def get_conversation_default_descriptor(
     LiteLLM models are picked per-message and never persisted on
     ``Conversation.selected_model``.
     """
-    llm = conversation.selected_model or LLM.objects.filter(is_active=True).first()
-    if llm is None:
-        llm = LLM.objects.first()
+    visible = _visible_llms_for_user(user)
+    selected_model_id = getattr(conversation, "selected_model_id", None)
+    llm = (
+        visible.filter(id=selected_model_id).first()
+        if selected_model_id is not None
+        else visible.first()
+    )
     return LLMDescriptor.from_llm(llm) if llm else None
 
 

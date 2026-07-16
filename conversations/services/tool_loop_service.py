@@ -149,7 +149,13 @@ class ToolLoopService:
         sent_provider_ids: set = set()
         empty_stream_retried = False
 
-        for round_index in range(1, MAX_TOOL_ROUNDS + 2):
+        # One extra stream attempt is reserved for the initial empty-response
+        # recovery. ``round_index`` remains the logical tool round, so a
+        # provider anomaly cannot consume the user's bounded tool budget.
+        for stream_index in range(1, MAX_TOOL_ROUNDS + 3):
+            round_index = stream_index - int(empty_stream_retried)
+            if round_index > MAX_TOOL_ROUNDS + 1:
+                break
             result.rounds_used = round_index
             tools = prepared.tools if round_index <= MAX_TOOL_ROUNDS else None
             pending_calls: List[ToolCallRequest] = []
@@ -158,7 +164,7 @@ class ToolLoopService:
 
             async for event in self._stream_round(prepared, messages, tools):
                 if event.kind is StreamEventKind.TEXT_DELTA:
-                    if not (event.text and event.text.strip()):
+                    if not event.text:
                         continue
                     if not round_has_text and text_accum:
                         # New segment after a tool round: append, never replace.

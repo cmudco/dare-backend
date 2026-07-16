@@ -39,6 +39,7 @@ from conversations.models import (
     Message,
     MessageToolCall,
     Snippet,
+    WebSearchSource,
 )
 from conversations.services.image_generation_service import ImageGenerationService
 from conversations.services.message_helpers import (  # Database helpers; Learning progress helpers; Billing helpers; Finalization helpers; Regeneration helpers
@@ -433,7 +434,9 @@ class MessageCoordinator:
                 return None
 
             # Get the existing AI message to regenerate
-            ai_message = await get_ai_message_by_id(message_id)
+            ai_message = await get_ai_message_by_id(
+                message_id, self.conversation.id
+            )
 
             if not ai_message:
                 await self.send_error(
@@ -487,7 +490,7 @@ class MessageCoordinator:
                     )
                     return None
 
-            await self._clear_regeneration_retrieval(ai_message)
+            await self._clear_regeneration_run_state(ai_message)
 
             # Send streaming placeholder to show loading animation
             await self._send_regeneration_placeholder(ai_message)
@@ -538,11 +541,27 @@ class MessageCoordinator:
         await self.send(placeholder_payload)
 
     @database_sync_to_async
-    def _clear_regeneration_retrieval(self, ai_message: Message) -> None:
-        """Remove evidence from the prior run before regenerating a message."""
+    def _clear_regeneration_run_state(self, ai_message: Message) -> None:
+        """Remove prior-run state before regenerating an assistant message.
+
+        Artifacts are detached, not deleted: they remain available in the
+        conversation artifact library while the regenerated message gets a
+        clean set of cards and model-visible artifact associations.
+        """
         Snippet.active_objects.filter(message=ai_message).delete()
+        WebSearchSource.active_objects.filter(message=ai_message).delete()
+        MessageToolCall.objects.filter(message=ai_message).delete()
+        Artifact.active_objects.filter(message=ai_message).update(message=None)
         ai_message.retrieval_trace = None
-        ai_message.save(update_fields=["retrieval_trace"])
+        ai_message.memory_context_data = []
+        ai_message.usage_details = None
+        ai_message.save(
+            update_fields=[
+                "retrieval_trace",
+                "memory_context_data",
+                "usage_details",
+            ]
+        )
 
     async def stream_ai_response(
         self,
@@ -953,10 +972,12 @@ class MessageCoordinator:
             the id nor the conversation default resolves.
         """
         if model_id:
-            return await parse_model_id(model_id)
+            return await parse_model_id(model_id, user=self.user)
         if default is not None:
             return default
-        return await get_conversation_default_descriptor(self.conversation)
+        return await get_conversation_default_descriptor(
+            self.conversation, user=self.user
+        )
 
     async def _get_preceding_user_message(self) -> Optional[Message]:
         """Get the most recent user message in the conversation."""
