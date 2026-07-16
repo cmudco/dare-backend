@@ -19,7 +19,9 @@ across rounds for billing, and every tool-call lifecycle moment streams to
 the FE through the unified ``ToolEventEmitter`` vocabulary.
 """
 
+import asyncio
 import logging
+import os
 from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -72,6 +74,32 @@ class ToolLoopService:
         self.llm_service = llm_service
         self.billing_service = billing_service
         self.execution_service: ToolExecutionService = tool_execution_service
+        self.stream_idle_timeout_seconds = float(
+            os.environ.get("LLM_STREAM_IDLE_TIMEOUT_SECONDS", "45")
+        )
+
+    async def _stream_round(self, prepared, messages, tools):
+        """Yield provider events, failing when a stream goes silent.
+
+        The timeout resets after every event, so healthy long responses are
+        unaffected. It specifically bounds the no-first-token / stalled-stream
+        case that otherwise leaves an empty assistant placeholder forever.
+        """
+        iterator = self.llm_service.stream_round(prepared, messages, tools).__aiter__()
+        while True:
+            try:
+                event = await asyncio.wait_for(
+                    anext(iterator), timeout=self.stream_idle_timeout_seconds
+                )
+            except StopAsyncIteration:
+                return
+            except TimeoutError as exc:
+                await iterator.aclose()
+                raise TimeoutError(
+                    "The model stream was idle for "
+                    f"{self.stream_idle_timeout_seconds:g} seconds"
+                ) from exc
+            yield event
 
     async def run(
         self,
@@ -119,6 +147,7 @@ class ToolLoopService:
         web_search_sources: List[Dict] = []
         provider_tool_calls: List[Dict] = []
         sent_provider_ids: set = set()
+        empty_stream_retried = False
 
         for round_index in range(1, MAX_TOOL_ROUNDS + 2):
             result.rounds_used = round_index
@@ -127,7 +156,7 @@ class ToolLoopService:
             synthesized_ids: deque = deque()
             round_has_text = False
 
-            async for event in self.llm_service.stream_round(prepared, messages, tools):
+            async for event in self._stream_round(prepared, messages, tools):
                 if event.kind is StreamEventKind.TEXT_DELTA:
                     if not (event.text and event.text.strip()):
                         continue
@@ -199,6 +228,28 @@ class ToolLoopService:
             if result.interrupted:
                 break
             if not pending_calls:
+                if not round_has_text and not text_accum and not empty_stream_retried:
+                    # Anthropic can occasionally close a successful HTTP 200
+                    # stream with usage but no content block. Retry once with
+                    # the identical prepared turn; this is safe because no
+                    # text was emitted and no tool was executed.
+                    empty_stream_retried = True
+                    logger.warning(
+                        "[ToolLoopService] Provider returned an empty stream; "
+                        "retrying the round once with explicit answer guidance."
+                    )
+                    messages = [dict(message) for message in messages]
+                    if messages and messages[-1].get("role") == "user":
+                        prior_content = messages[-1].get("content") or ""
+                        if isinstance(prior_content, str):
+                            messages[-1]["content"] = (
+                                f"{prior_content}\n\n"
+                                "Important: return a substantive answer. Do not "
+                                "end the turn with empty content. If the request "
+                                "is ambiguous, state your interpretation and "
+                                "answer it directly."
+                            )
+                    continue
                 break  # The model answered in text — the turn is done.
 
             messages.append(

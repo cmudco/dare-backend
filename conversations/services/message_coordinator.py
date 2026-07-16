@@ -32,7 +32,14 @@ from conversations.constants import (
     ToolCallOrigin,
     ToolCallStatus,
 )
-from conversations.models import LLM, Artifact, Conversation, Message, MessageToolCall
+from conversations.models import (
+    LLM,
+    Artifact,
+    Conversation,
+    Message,
+    MessageToolCall,
+    Snippet,
+)
 from conversations.services.image_generation_service import ImageGenerationService
 from conversations.services.message_helpers import (  # Database helpers; Learning progress helpers; Billing helpers; Finalization helpers; Regeneration helpers
     build_generated_image_data,
@@ -480,6 +487,8 @@ class MessageCoordinator:
                     )
                     return None
 
+            await self._clear_regeneration_retrieval(ai_message)
+
             # Send streaming placeholder to show loading animation
             await self._send_regeneration_placeholder(ai_message)
 
@@ -527,6 +536,13 @@ class MessageCoordinator:
             regenerate=True,
         )
         await self.send(placeholder_payload)
+
+    @database_sync_to_async
+    def _clear_regeneration_retrieval(self, ai_message: Message) -> None:
+        """Remove evidence from the prior run before regenerating a message."""
+        Snippet.active_objects.filter(message=ai_message).delete()
+        ai_message.retrieval_trace = None
+        ai_message.save(update_fields=["retrieval_trace"])
 
     async def stream_ai_response(
         self,
@@ -646,9 +662,38 @@ class MessageCoordinator:
                     token_usage=token_usage,
                     regenerate=regenerate,
                 )
+            else:
+                # Some provider streams can close cleanly without yielding a
+                # token or an exception. Treat that as a completed failure,
+                # otherwise the original empty placeholder remains forever.
+                logger.warning(
+                    "[MessageCoordinator] Provider stream ended without text "
+                    "or tool calls; finalizing with retry guidance."
+                )
+                await self._finalize_message(
+                    message_obj=message_obj,
+                    ai_response=(
+                        "I couldn’t generate a response for that request. "
+                        "Your request is saved—please retry it."
+                    ),
+                    token_usage=token_usage,
+                    regenerate=regenerate,
+                )
 
         except Exception as e:
             logger.exception(f"Error streaming AI response: {str(e)}")
+            # Never leave the placeholder as an empty, apparently streaming
+            # message. Persist a visible recovery state so refresh and socket
+            # reconnects agree about how the turn ended.
+            await self._finalize_message(
+                message_obj=message_obj,
+                ai_response=(
+                    "I couldn’t complete that response because the model stopped "
+                    "responding. Your request is saved—please retry it."
+                ),
+                token_usage=None,
+                regenerate=regenerate,
+            )
             await self.send_error(ErrorCode.STREAM_ERROR, ErrorMessage.STREAM_ERROR)
 
     async def _stream_media_response(
