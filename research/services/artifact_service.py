@@ -126,6 +126,13 @@ def build_artifact_instructions(soul_content, artifact_type=""):
         "html/markdown text, the Excalidraw scene JSON as a string, or for "
         "docx/pptx the document/deck JSON object itself)."
     )
+    parts.append(
+        "TOOLS: when you search or read the web to ground the artifact, use "
+        "mcp_dare_web_search and mcp_dare_fetch_page only — DARE's own audited "
+        "web search and reader. Do NOT use any runtime-native web_search, "
+        "web_extract, or browser tool. Non-web tools with no DARE equivalent "
+        "(e.g. vision) may be used normally."
+    )
     schema = _structured_schema(artifact_type)
     if schema:
         parts.append(

@@ -147,7 +147,10 @@ CHAT_BRIEF = (
     "Be honest about tool failures: if a tool errors, tell the scholar plainly "
     "what failed and why (quota exhausted, auth, not found, blocked/paywalled) "
     "instead of guessing or blaming the wrong layer, and do not retry a tool "
-    "that returned a quota or auth error — switch approaches or say what you need."
+    "that returned a quota or auth error — switch approaches or say what you need. "
+    "When you search or read the web, use mcp_dare_web_search and "
+    "mcp_dare_fetch_page only — DARE's own audited web search and reader; never a "
+    "runtime-native web_search, web_extract, or browser tool."
 )
 
 
