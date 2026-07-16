@@ -26,6 +26,11 @@ from google.genai import types
 
 logger = logging.getLogger(__name__)
 
+# Google's documented bypass signature for function calls in histories that
+# were not produced by the live stream (transferred or DB-reconstructed
+# conversations). Gemini 3.x otherwise rejects unsigned function_call parts.
+GEMINI_HISTORY_THOUGHT_SIGNATURE = b"context_engineering_is_the_way_to_go"
+
 
 def _parse_arguments(arguments: Any) -> Dict[str, Any]:
     """Best-effort parse of a tool-call arguments JSON string."""
@@ -158,12 +163,24 @@ class GeminiMessageConverter:
                     parts.append(types.Part(text=content))
                 for call in message.get("tool_calls") or []:
                     function = call.get("function", {})
+                    # Gemini 3.x rejects replayed function_call parts that
+                    # lack a thought_signature. Same-turn calls carry the
+                    # real signature from the stream; DB-rebuilt history
+                    # never captured one, so it gets Google's documented
+                    # bypass value for constructed histories.
+                    signature = call.get("thought_signature")
+                    signature_bytes = (
+                        base64.b64decode(signature)
+                        if signature
+                        else GEMINI_HISTORY_THOUGHT_SIGNATURE
+                    )
                     parts.append(
                         types.Part(
                             function_call=types.FunctionCall(
                                 name=function.get("name", ""),
                                 args=_parse_arguments(function.get("arguments")),
-                            )
+                            ),
+                            thought_signature=signature_bytes,
                         )
                     )
                 if parts:

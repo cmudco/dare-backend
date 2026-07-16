@@ -22,42 +22,29 @@ from django.utils import timezone
 from djangorestframework_camel_case.util import camelize
 
 from conversations.api.serializers import ArtifactListSerializer
-from conversations.constants import (
-    DEFAULT_AI_SENDER_NAME,
-    DEFAULT_CONVERSATION_TITLE,
-    ArtifactStatus,
-    ErrorCode,
-    ErrorMessage,
-    SenderType,
-    ToolCallOrigin,
-    ToolCallStatus,
-)
-from conversations.models import (
-    LLM,
-    Artifact,
-    Conversation,
-    Message,
-    MessageToolCall,
-    Snippet,
-    WebSearchSource,
-)
-from conversations.services.image_generation_service import ImageGenerationService
+from conversations.constants import (DEFAULT_AI_SENDER_NAME,
+                                     DEFAULT_CONVERSATION_TITLE,
+                                     ArtifactStatus, ErrorCode, ErrorMessage,
+                                     SenderType, ToolCallOrigin,
+                                     ToolCallStatus)
+from conversations.models import (LLM, Artifact, Conversation, Message,
+                                  MessageToolCall, Snippet, WebSearchSource)
+from conversations.services.image_generation_service import \
+    ImageGenerationService
 from conversations.services.message_helpers import (  # Database helpers; Learning progress helpers; Billing helpers; Finalization helpers; Regeneration helpers
-    build_generated_image_data,
-    build_transcription_data,
-    fetch_preceding_user_message,
-    finalize_message,
-    get_ai_message_by_id,
-    get_conversation_default_descriptor,
-    handle_insufficient_balance,
-    parse_model_id,
-    prepare_regeneration_data,
-    run_learning_progress_stream,
-    should_generate_title,
-)
-from conversations.services.message_validation_service import MessageValidationService
-from conversations.services.web_search_source_service import WebSearchSourceService
-from conversations.services.websocket_response_service import WebSocketResponseService
+    build_generated_image_data, build_transcription_data,
+    fetch_preceding_user_message, finalize_message, get_ai_message_by_id,
+    get_conversation_default_descriptor, handle_insufficient_balance,
+    parse_model_id, prepare_regeneration_data, run_learning_progress_stream,
+    should_generate_title)
+from conversations.services.message_validation_service import \
+    MessageValidationService
+from conversations.services.tool_loop_service import (ToolLoopResult,
+                                                      ToolLoopService)
+from conversations.services.web_search_source_service import \
+    WebSearchSourceService
+from conversations.services.websocket_response_service import \
+    WebSocketResponseService
 from core.services.billing_service import BillingService
 from core.services.conversation_service import ConversationService
 from core.services.dtos import LLMDescriptor, LLMQueryRequestBuilder
@@ -65,7 +52,6 @@ from core.services.file_upload_service import FileUploadService
 from core.services.learning_progress_service import LearningProgressService
 from core.services.llm_service import LLMService
 from core.services.sb_client import SocraticBooksClient
-from conversations.services.tool_loop_service import ToolLoopService
 from dare_tools.services.retrieval_tool_executor import RetrievalScope
 from users.utils import should_run_learning_progress
 
@@ -101,9 +87,7 @@ class MessageCoordinator:
         self.llm_service = LLMService()
         self.billing_service = BillingService()
         self.learning_progress_service = LearningProgressService()
-        self.tool_loop_service = ToolLoopService(
-            self.llm_service, self.billing_service
-        )
+        self.tool_loop_service = ToolLoopService(self.llm_service, self.billing_service)
 
         # Track active artifact generation tasks for cancellation
         self._artifact_tasks: Dict[str, asyncio.Task] = {}
@@ -434,9 +418,7 @@ class MessageCoordinator:
                 return None
 
             # Get the existing AI message to regenerate
-            ai_message = await get_ai_message_by_id(
-                message_id, self.conversation.id
-            )
+            ai_message = await get_ai_message_by_id(message_id, self.conversation.id)
 
             if not ai_message:
                 await self.send_error(
@@ -552,11 +534,17 @@ class MessageCoordinator:
         WebSearchSource.active_objects.filter(message=ai_message).delete()
         MessageToolCall.objects.filter(message=ai_message).delete()
         Artifact.active_objects.filter(message=ai_message).update(message=None)
+        # Capture the pre-regeneration text NOW: the placeholder sender blanks
+        # ai_message.message in memory right after this, so waiting until
+        # finalization (the old behavior) captured an empty string.
+        if not ai_message.original_message and ai_message.message:
+            ai_message.original_message = ai_message.message
         ai_message.retrieval_trace = None
         ai_message.memory_context_data = []
         ai_message.usage_details = None
         ai_message.save(
             update_fields=[
+                "original_message",
                 "retrieval_trace",
                 "memory_context_data",
                 "usage_details",
@@ -586,6 +574,18 @@ class MessageCoordinator:
             regenerate: Whether this is a regeneration request
         """
         try:
+            logger.info(
+                "[journey] mid=%s turn start: conv=%s regenerate=%s rag=%s "
+                "dare_tools=%s mcp_servers=%s artifacts=%s web_search=%s",
+                message_obj.id,
+                self.conversation.id,
+                regenerate,
+                message_data.get("rag_mode"),
+                message_data.get("dare_tool_slugs") or [],
+                message_data.get("mcp_server_ids") or [],
+                message_data.get("artifacts_enabled", False),
+                message_data.get("web_search_enabled", False),
+            )
             # Build LLM query request using DTO builder
             # Note: mcp_server_ids are automatically extracted in the builder
             request = LLMQueryRequestBuilder.from_message_data(
@@ -641,6 +641,13 @@ class MessageCoordinator:
                 return
 
             token_usage = result.token_usage
+            if result.timed_out:
+                # A stalled provider stream ends the turn, but everything
+                # that already happened is real: keep the streamed text,
+                # bill the accumulated usage, and be honest about the cut.
+                await self._finalize_timed_out_turn(message_obj, result, regenerate)
+                return
+
             if result.text.strip():
                 await self._save_web_search_sources(
                     message_obj, token_usage, regenerate
@@ -649,8 +656,13 @@ class MessageCoordinator:
                     message_obj, token_usage, regenerate
                 )
                 await self._save_memory_context(message_obj, token_usage)
-                await self._save_usage_breakdown(
-                    message_obj, result.usage_breakdown
+                await self._save_usage_breakdown(message_obj, result.usage_breakdown)
+                logger.info(
+                    "[journey] mid=%s finalizing: text=%d chars, tokens=%s/%s",
+                    message_obj.id,
+                    len(result.text),
+                    (token_usage or {}).get("input_tokens"),
+                    (token_usage or {}).get("output_tokens"),
                 )
                 await self._finalize_message(
                     message_obj=message_obj,
@@ -741,12 +753,6 @@ class MessageCoordinator:
                             usage, message_data, message_obj
                         )
 
-                    # Handle generated image
-                    if usage.get("image_bytes"):
-                        generated_image_data = await self._handle_generated_image(
-                            usage, message_data, message_obj
-                        )
-
                     # Handle audio transcription (final result)
                     if usage.get("transcription_result"):
                         generated_transcription_data = build_transcription_data(usage)
@@ -801,6 +807,45 @@ class MessageCoordinator:
         except Exception as e:
             logger.exception(f"Error streaming media response: {str(e)}")
             await self.send_error(ErrorCode.STREAM_ERROR, ErrorMessage.STREAM_ERROR)
+
+    async def _finalize_timed_out_turn(
+        self, message_obj: Message, result: ToolLoopResult, regenerate: bool
+    ) -> None:
+        """Finalize a turn whose provider stream went idle mid-way.
+
+        The partial text stays (the user already read it), the accumulated
+        usage is billed, and completed tool work keeps its persisted rows —
+        so the notice must not tell the user to retry when tools already
+        produced artifacts.
+        """
+        token_usage = result.token_usage
+        if result.text.strip():
+            notice = "The model stopped responding, so this answer was cut short."
+            if result.tool_calls_made:
+                notice += " The work completed by tools so far has been kept."
+            ai_response = f"{result.text}\n\n*{notice}*"
+            await self._save_web_search_sources(message_obj, token_usage, regenerate)
+            await self._save_provider_tool_calls(message_obj, token_usage, regenerate)
+            await self._save_memory_context(message_obj, token_usage)
+            await self._save_usage_breakdown(message_obj, result.usage_breakdown)
+        elif result.tool_calls_made:
+            ai_response = (
+                "The model stopped responding before it could summarize, but "
+                "the tool work it completed has been kept. You can ask me to "
+                "continue from here."
+            )
+        else:
+            ai_response = (
+                "I couldn’t complete that response because the model stopped "
+                "responding. Your request is saved—please retry it."
+            )
+        await self._finalize_message(
+            message_obj=message_obj,
+            ai_response=ai_response,
+            token_usage=token_usage,
+            regenerate=regenerate,
+        )
+        await self.send_error(ErrorCode.STREAM_ERROR, ErrorMessage.STREAM_ERROR)
 
     @database_sync_to_async
     def _save_usage_breakdown(

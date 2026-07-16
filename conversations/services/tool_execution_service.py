@@ -102,9 +102,9 @@ class ToolExecutionService:
         compact_serialized = json.dumps(compact_result)
         overflow = len(compact_serialized) - MAX_PERSISTED_RESULT_CHARS
         if overflow > 0:
-            compact_result["content_preview"] = compact_result[
-                "content_preview"
-            ][: -(overflow + 1)]
+            compact_result["content_preview"] = compact_result["content_preview"][
+                : -(overflow + 1)
+            ]
             compact_serialized = json.dumps(compact_result)
         return compact_serialized
 
@@ -170,6 +170,16 @@ class ToolExecutionService:
         execution_time_ms = int((time.time() - start_time) * 1000)
 
         error_message = raw_result.get("error", "") if is_error else ""
+        logger.info(
+            "[journey] mid=%s round %d tool %s (%s/%s) -> %s in %dms",
+            ctx.message.id,
+            round_index,
+            call.name,
+            origin,
+            server_slug,
+            "failed" if is_error else "ok",
+            execution_time_ms,
+        )
 
         if origin == ToolCallOrigin.DARE:
             await self._save_dare_execution(
