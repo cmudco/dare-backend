@@ -1,4 +1,5 @@
 import logging
+import time
 from abc import ABC, abstractmethod
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
@@ -149,20 +150,36 @@ class LLMService:
         """
         llm = await self._resolve_llm(request)
         self._pending_memory_context = []
+        self._pending_context_trace = None
         messages = await self._build_messages_for_request(request, llm)
+        context_trace = self._pending_context_trace
+
+        media_start = time.monotonic()
         all_images = await self._process_media_files(request)
 
         if all_images:
             messages = await self.add_video_transcriptions_to_context(
                 all_images, messages, request.user
             )
+        media_ms = int((time.monotonic() - media_start) * 1000)
 
+        tools_start = time.monotonic()
         all_tools = await self.tool_fetcher.get_all_tools(request, llm, None)
-        llm_tools = all_tools or None
-        if not llm_tools and request.requires_web_search():
-            llm_tools = self._get_web_search_tools(llm)
-        if request.requires_web_fetch():
-            llm_tools = (llm_tools or []) + self._get_web_fetch_tools(llm)
+        llm_tools = self._append_web_tools(request, llm, all_tools)
+        tools_ms = int((time.monotonic() - tools_start) * 1000)
+
+        # Media processing and tool resolution happen here rather than in the
+        # message builder, so their stages append to the builder's trace.
+        if context_trace:
+            if all_images:
+                context_trace["stages"].append(
+                    {"kind": "media", "ms": media_ms, "count": len(all_images)}
+                )
+            if llm_tools:
+                context_trace["stages"].append(
+                    {"kind": "tools", "ms": tools_ms, "count": len(llm_tools)}
+                )
+            context_trace["totalMs"] += media_ms + tools_ms
 
         ai_service = await self._get_ai_service(llm, request.user)
 
@@ -174,6 +191,7 @@ class LLMService:
             generation=request.generation,
             memory_context=self._pending_memory_context,
             llm=llm,
+            context_trace=context_trace,
         )
 
     async def stream_round(
@@ -276,6 +294,7 @@ class LLMService:
         )
         # Store memory context for inclusion in final usage data
         self._pending_memory_context = result.memory_context
+        self._pending_context_trace = result.context_trace
         return result.messages
 
     async def _process_media_files(self, request: LLMQueryRequest) -> List[Dict]:
@@ -370,12 +389,7 @@ class LLMService:
 
         ai_service = await self._get_ai_service(llm, request.user)
 
-        # Use provided tools, or web search tools if enabled
-        llm_tools = tools
-        if not llm_tools and request.requires_web_search():
-            llm_tools = self._get_web_search_tools(llm)
-        if request.requires_web_fetch():
-            llm_tools = (llm_tools or []) + self._get_web_fetch_tools(llm)
+        llm_tools = self._append_web_tools(request, llm, tools)
 
         if request.generation.structured_spec:
             # Structured output (non-streaming)
@@ -496,6 +510,27 @@ class LLMService:
         elif llm.provider == Provider.CUSTOM.value:
             return CustomLLMService(llm=llm, api_key=api_key)
         return ClaudeService(llm=llm, api_key=api_key)
+
+    def _append_web_tools(
+        self,
+        request: LLMQueryRequest,
+        llm: LLM,
+        tools: Optional[List[Dict]],
+    ) -> Optional[List[Dict]]:
+        """Append the enabled provider-native web tools to a turn's tool list.
+
+        Web search and web fetch are additive capabilities: enabling
+        artifacts, DARE tools, or MCP servers must never displace them, and
+        vice versa. (An earlier guard added web search only when no other
+        tools existed, which silently disabled search whenever artifacts
+        were on.)
+        """
+        combined = list(tools or [])
+        if request.requires_web_search():
+            combined += self._get_web_search_tools(llm)
+        if request.requires_web_fetch():
+            combined += self._get_web_fetch_tools(llm)
+        return combined or None
 
     def _get_web_search_tools(self, llm: LLM) -> list:
         """Get web search tools based on the LLM provider.

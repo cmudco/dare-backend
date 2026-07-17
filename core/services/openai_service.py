@@ -137,6 +137,8 @@ class OpenAIService:
             prepared_messages = self._prepare_messages(messages, images)
 
             # Step 2: Create appropriate stream (Responses API vs Chat Completions).
+            # The Responses API takes web search and function tools together, so
+            # a mixed turn no longer has to drop either one.
             if self._uses_responses_api(tools):
                 response = await self._stream_responses_api(
                     prepared_messages,

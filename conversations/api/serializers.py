@@ -462,6 +462,7 @@ class MessageSerializer(serializers.ModelSerializer):
             "content_metadata",
             "memory_context_data",
             "retrieval_trace",
+            "context_trace",
         ]
         read_only_fields = [
             "id",
@@ -485,6 +486,7 @@ class MessageSerializer(serializers.ModelSerializer):
             "content_metadata",
             "memory_context_data",
             "retrieval_trace",
+            "context_trace",
         ]
 
     def get_artifactId(self, obj):

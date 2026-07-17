@@ -920,6 +920,11 @@ class Message(BaseModel):
         blank=True,
         help_text="Per-stage RAG pipeline trace (query analysis, hybrid, rerank, MMR, grounding) for the retrieval-trace UI.",
     )
+    context_trace = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="Timed context-assembly stages for the turn (prompt, files, retrieval, memory, history) for the context-trace UI.",
+    )
     usage_details = models.JSONField(
         null=True,
         blank=True,

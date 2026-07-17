@@ -540,12 +540,14 @@ class MessageCoordinator:
         if not ai_message.original_message and ai_message.message:
             ai_message.original_message = ai_message.message
         ai_message.retrieval_trace = None
+        ai_message.context_trace = None
         ai_message.memory_context_data = []
         ai_message.usage_details = None
         ai_message.save(
             update_fields=[
                 "original_message",
                 "retrieval_trace",
+                "context_trace",
                 "memory_context_data",
                 "usage_details",
             ]

@@ -34,6 +34,7 @@ class ToolLoopResilienceTests(SimpleTestCase):
                     messages=[{"role": "user", "content": "Ambiguous topic"}],
                     tools=None,
                     memory_context=[],
+                    context_trace=None,
                 )
 
             async def stream_round(self, prepared, messages, tools):
@@ -78,6 +79,7 @@ class ToolLoopResilienceTests(SimpleTestCase):
                     messages=[{"role": "user", "content": "format this"}],
                     tools=None,
                     memory_context=[],
+                    context_trace=None,
                 )
 
             async def stream_round(self, prepared, messages, tools):
@@ -111,6 +113,7 @@ class ToolLoopResilienceTests(SimpleTestCase):
                     messages=[{"role": "user", "content": "long question"}],
                     tools=None,
                     memory_context=[],
+                    context_trace=None,
                 )
 
             async def stream_round(self, prepared, messages, tools):
