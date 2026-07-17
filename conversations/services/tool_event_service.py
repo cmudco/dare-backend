@@ -133,6 +133,16 @@ class ToolEventEmitter:
             }
         )
 
+    async def context_trace(self, trace: Dict[str, Any]) -> None:
+        """The turn's context-assembly trace, sent once before round 1."""
+        await self._send_payload(
+            {
+                "type": "context_trace",
+                "message_id": self._message_id,
+                "trace": trace,
+            }
+        )
+
     async def _emit(
         self,
         event_type: str,
@@ -158,12 +168,16 @@ class ToolEventEmitter:
 
     async def _send_payload(self, payload: Dict[str, Any]) -> None:
         if payload.get("type") != "tool_call_args_progress":
+            detail = (
+                f" call={payload['tool_call_id']} status={payload.get('status')}"
+                if payload.get("tool_call_id")
+                else ""
+            )
             logger.info(
-                "[journey] mid=%s event %s call=%s status=%s",
+                "[journey] mid=%s event %s%s",
                 self._message_id,
                 payload.get("type"),
-                payload.get("tool_call_id"),
-                payload.get("status"),
+                detail,
             )
         try:
             await self._send(camelize(payload))

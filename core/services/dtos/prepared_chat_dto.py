@@ -24,6 +24,9 @@ class PreparedChat:
         generation: Generation config (max_tokens, temperature, effort).
         memory_context: Memory items used while building the prompt.
         llm: Resolved LLM model row.
+        context_trace: Timed context-assembly stages for the turn (the
+            ``context_trace`` event payload), or None for flows that don't
+            record one (Socratic mode).
     """
 
     messages: List[Dict[str, Any]]
@@ -33,3 +36,4 @@ class PreparedChat:
     generation: GenerationConfig
     memory_context: List[Dict[str, Any]]
     llm: Any
+    context_trace: Optional[Dict[str, Any]] = None

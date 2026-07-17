@@ -305,42 +305,32 @@ class GeminiService:
         config = types.GenerateContentConfig(**config_kwargs)
 
         native_tools = self._build_native_tools(tools)
-        if native_tools:
-            config.tools = native_tools
-            if self._has_function_tools(tools):
-                logger.warning(
-                    "[Gemini] Native tools cannot be combined with function "
-                    "calling; using native Gemini tools only"
-                )
-        elif tools:
-            # Handle tools - could be native Gemini types.Tool or OpenAI format dicts
-            gemini_tools = []
-            
-            for tool in tools:
-                # Check if it's already a Gemini types.Tool object
-                if isinstance(tool, types.Tool):
-                    gemini_tools.append(tool)
-                # OpenAI format: {"type": "function", "function": {...}}
-                elif isinstance(tool, dict) and tool.get("type") == "function":
-                    func = tool.get("function", {})
-                    func_decl = types.FunctionDeclaration(
-                        name=func.get("name", ""),
-                        description=func.get("description", ""),
-                        parameters=func.get("parameters", {})
-                    )
-                    gemini_tools.append(types.Tool(function_declarations=[func_decl]))
-            
-            if gemini_tools:
-                config.tools = gemini_tools
+        function_tools = self._convert_tools_to_gemini_format(tools or [])
+        gemini_tools = native_tools + function_tools
+
+        if gemini_tools:
+            config.tools = gemini_tools
+            if function_tools:
                 # AUTO lets the model decide per turn. ANY (the old setting)
                 # forces a function call on EVERY request — inside a tool loop
                 # that means the model can never produce a final text answer.
-                config.tool_config = types.ToolConfig(
-                    function_calling_config=types.FunctionCallingConfig(
+                tool_config_kwargs = {
+                    "function_calling_config": types.FunctionCallingConfig(
                         mode="AUTO"
                     )
-                )
-                logger.debug(f"[Gemini] Set {len(gemini_tools)} tools with tool_config mode=AUTO")
+                }
+                if native_tools:
+                    # Built-in tools (google_search, url_context) and function
+                    # calling can only share a request with this flag set —
+                    # the API returns INVALID_ARGUMENT otherwise.
+                    tool_config_kwargs["include_server_side_tool_invocations"] = True
+                config.tool_config = types.ToolConfig(**tool_config_kwargs)
+            logger.debug(
+                "[Gemini] Set %d tools (%d native, %d function declarations)",
+                len(gemini_tools),
+                len(native_tools),
+                len(function_tools),
+            )
 
         return config
 
@@ -348,28 +338,37 @@ class GeminiService:
         """
         Convert OpenAI-style tool definitions to Gemini format.
 
+        Pre-built ``types.Tool`` objects pass through unchanged; native web
+        tool indicators (google_search / url_context dicts) are NOT handled
+        here — they belong to ``_build_native_tools``.
+
         Args:
             tools: List of tools in OpenAI format
 
         Returns:
             List of Gemini Tool objects
         """
+        gemini_tools = []
         function_declarations = []
 
         for tool in tools:
-            if tool.get("type") == "function" and "function" in tool:
+            if isinstance(tool, types.Tool):
+                gemini_tools.append(tool)
+            elif tool.get("type") == "function" and "function" in tool:
                 func = tool["function"]
                 # Build Gemini function declaration
                 func_decl = types.FunctionDeclaration(
                     name=func.get("name", ""),
                     description=func.get("description", ""),
-                    parameters=func.get("parameters", {})
+                    parameters=func.get("parameters", {}),
                 )
                 function_declarations.append(func_decl)
 
         if function_declarations:
-            return [types.Tool(function_declarations=function_declarations)]
-        return []
+            gemini_tools.append(
+                types.Tool(function_declarations=function_declarations)
+            )
+        return gemini_tools
 
     def _build_native_tools(self, tools: Optional[List[Dict]]) -> List[types.Tool]:
         """
@@ -389,16 +388,6 @@ class GeminiService:
             native_tools.append(GeminiUrlContextTools.build_url_context_tool())
 
         return native_tools
-
-    @staticmethod
-    def _has_function_tools(tools: Optional[List[Dict]]) -> bool:
-        """Return whether an OpenAI-format function tool is present."""
-        if not tools:
-            return False
-        return any(
-            isinstance(tool, dict) and tool.get("type") == "function"
-            for tool in tools
-        )
 
     async def _get_structured_completion(
         self,

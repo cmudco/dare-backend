@@ -28,21 +28,22 @@ from typing import Any, Dict, List, Optional
 
 from channels.db import database_sync_to_async
 
-from conversations.constants import (DEFAULT_AI_SENDER_NAME, MAX_TOOL_ROUNDS,
-                                     SenderType)
+from conversations.constants import DEFAULT_AI_SENDER_NAME, MAX_TOOL_ROUNDS, SenderType
 from conversations.models import LLM, Conversation, Message, MessageToolCall
-from conversations.services.message_helpers.usage_helpers import \
-    UsageAccumulator
+from conversations.services.message_helpers.usage_helpers import UsageAccumulator
 from conversations.services.tool_event_service import ToolEventEmitter
 from conversations.services.tool_execution_service import (
-    ToolExecutionContext, ToolExecutionService, tool_execution_service)
-from conversations.services.websocket_response_service import \
-    WebSocketResponseService
-from core.services.dtos import (LLMQueryRequest, StreamEventKind,
-                                ToolCallRequest)
+    ToolExecutionContext,
+    ToolExecutionService,
+    tool_execution_service,
+)
+from conversations.services.websocket_response_service import WebSocketResponseService
+from core.services.dtos import LLMQueryRequest, StreamEventKind, ToolCallRequest
 from core.services.llm_helpers.tool_turn_helpers import (
-    build_assistant_tool_call_turn, build_tool_result_turn,
-    synthesize_tool_call_id)
+    build_assistant_tool_call_turn,
+    build_tool_result_turn,
+    synthesize_tool_call_id,
+)
 from dare_tools.services.retrieval_tool_executor import RetrievalScope
 
 logger = logging.getLogger(__name__)
@@ -140,6 +141,11 @@ class ToolLoopService:
             regenerate,
         )
         emitter = ToolEventEmitter(send_callback, message_obj.id)
+        if prepared.context_trace and prepared.context_trace["stages"]:
+            # Persist first, then emit: a client that misses the event (or
+            # refreshes) still gets the trace from the message payload.
+            await self._save_context_trace(message_obj, prepared.context_trace)
+            await emitter.context_trace(prepared.context_trace)
         usage = UsageAccumulator()
         ctx = ToolExecutionContext(
             message=message_obj,
@@ -403,6 +409,12 @@ class ToolLoopService:
             status=provider_call.get("status", "completed"),
             result=provider_call.get("result"),
         )
+
+    @staticmethod
+    @database_sync_to_async
+    def _save_context_trace(message_obj: Message, trace: Dict[str, Any]) -> None:
+        message_obj.context_trace = trace
+        message_obj.save(update_fields=["context_trace"])
 
     @staticmethod
     @database_sync_to_async
