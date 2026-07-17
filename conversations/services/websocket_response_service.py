@@ -84,6 +84,7 @@ class WebSocketResponseService:
                 "snippets__file",
                 "snippets__library",
                 "web_search_sources",
+                "artifacts",
             ).get(id=message.id)
             return MessageSerializer(msg).data
 
@@ -108,23 +109,22 @@ class WebSocketResponseService:
             lambda: message.learning_progress_data
         )()
 
-        # Get linked artifact ID if exists
-        # Use fresh DB query to avoid stale cached relation
-        @database_sync_to_async
-        def get_artifact_id():
-            artifact = Artifact.active_objects.filter(message_id=message.id).first()
-            return str(artifact.id) if artifact else None
-
-        artifact_id = await get_artifact_id()
+        # The serializer loaded a fresh Message row and resolved this relation;
+        # reuse it rather than issuing a third artifact query for the same payload.
+        artifact_ids = serialized_data.get("artifactIds", [])
+        artifact_id = str(artifact_ids[0]) if artifact_ids else None
 
         # Debug log to trace artifact ID resolution
         if artifact_id:
             logger.info(
-                f"format_message: message_id={message.id}, resolved artifact_id={artifact_id}"
+                "format_message: message_id=%s, resolved artifact_id=%s",
+                message.id,
+                artifact_id,
             )
         else:
-            logger.warning(
-                f"format_message: message_id={message.id}, NO artifact found in DB"
+            logger.debug(
+                "format_message: message_id=%s, no artifact found",
+                message.id,
             )
 
         # Build response — field names match MessageSerializer (camelCase via DRF)
@@ -133,6 +133,7 @@ class WebSocketResponseService:
             "id": message.id,
             "message": message.message,
             "artifactId": artifact_id,
+            "artifactIds": artifact_ids,
             "senderType": message.sender_type,
             "senderName": message.sender or "AI Assistant",
             "streaming": streaming,
@@ -161,6 +162,7 @@ class WebSocketResponseService:
             "generatedTranscription": generated_transcription,
             "memoryContextData": serialized_data.get("memory_context_data") or [],
             "retrievalTrace": serialized_data.get("retrieval_trace"),
+            "contextTrace": serialized_data.get("context_trace"),
         }
 
         return cls._dict_to_camel_case(response)

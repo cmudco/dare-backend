@@ -30,9 +30,14 @@ class WeaviateClient:
                 f"Could not connect to Weaviate. Details: {error_details}"
             )
 
-    def _close_connection(self):
+    def close(self):
+        """Release the underlying Weaviate transport."""
         if hasattr(self, "client") and self.client:
             self.client.close()
+
+    # Backwards-compatible alias for older internal callers.
+    def _close_connection(self):
+        self.close()
 
     def _create_collection(self):
         try:

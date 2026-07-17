@@ -15,6 +15,8 @@ from django.core.exceptions import SynchronousOnlyOperation
 from config import env
 from conversations.models import LLM
 from core.services.api_key_service import get_provider_api_key_sync
+from core.services.dtos.stream_event_dto import LLMStreamEvent
+from core.services.llm_utils.provider_message_converters import ClaudeMessageConverter
 from core.services.llm_utils import (
     MessageFormatter,
     ClaudeVisionHandler,
@@ -74,7 +76,7 @@ class ClaudeService:
         effort: Optional[str] = None,
         images: List[Dict] = None,
         tools: Optional[List[Dict]] = None
-    ) -> AsyncGenerator[Tuple[str, Dict], None]:
+    ) -> AsyncGenerator[LLMStreamEvent, None]:
         """
         Stream chat completions from Claude API.
 
@@ -89,7 +91,7 @@ class ClaudeService:
             tools: Optional tools for web search support
 
         Yields:
-            Tuple of (text_chunk, usage_data)
+            LLMStreamEvent
         """
         try:
             # Step 1: Prepare messages with vision if needed
@@ -104,14 +106,14 @@ class ClaudeService:
                 tools
             )
 
-            # Step 3: Process and yield stream chunks
-            async for chunk, usage in ClaudeStreamProcessor.process_stream(stream):
-                yield chunk, usage
+            # Step 3: Process and yield stream events
+            async for event in ClaudeStreamProcessor.process_stream(stream):
+                yield event
 
         except Exception as e:
             logger.exception(f"Error streaming chat completion: {str(e)}")
             error_message = ClaudeErrorHandler.format_error(e)
-            yield f"Error: {error_message}", None
+            yield LLMStreamEvent.text_delta(f"Error: {error_message}")
 
     async def get_chat_completion(
         self,
@@ -301,13 +303,15 @@ class ClaudeService:
         Returns:
             API call parameters dictionary
         """
-        # Extract system message (Claude requires it separately)
-        system_message, filtered_messages = MessageFormatter.extract_system_messages(messages)
+        # Convert internal (OpenAI-format) messages: extracts the system
+        # prompt and translates tool_calls / role:"tool" turns into Claude's
+        # tool_use / tool_result content blocks.
+        system_message, converted_messages = ClaudeMessageConverter.convert(messages)
 
         params = {
             "model": self.model,
             "max_tokens": max_tokens,
-            "messages": filtered_messages,
+            "messages": converted_messages,
             "stream": True
         }
         self.capabilities.apply_sampling_params(params, temperature, effort)

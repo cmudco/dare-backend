@@ -102,10 +102,26 @@ def execute_create_docx(arguments: Dict[str, Any]) -> Dict[str, Any]:
                 "error": "Document title is required",
             }
 
+        # Weaker models flatten the nested schema into a plain `content`
+        # string. Coerce that shape into paragraph blocks instead of
+        # failing the whole turn.
+        if (not isinstance(blocks, list) or not blocks) and isinstance(
+            arguments.get("content"), str
+        ):
+            blocks = [
+                {"type": "paragraph", "text": paragraph.strip()}
+                for paragraph in arguments["content"].split("\n\n")
+                if paragraph.strip()
+            ]
+
         if not isinstance(blocks, list) or not blocks:
             return {
                 "success": False,
-                "error": "At least one document block is required",
+                "error": (
+                    "At least one document block is required. Pass a 'blocks' "
+                    'array of objects like {"type": "heading", "level": 1, '
+                    '"text": ...} or {"type": "paragraph", "text": ...}.'
+                ),
             }
 
         allowed_alignments = {"left", "center", "right"}
@@ -316,7 +332,10 @@ def get_create_docx_tool_openai() -> Dict:
                                 },
                                 "level": {
                                     "type": "integer",
-                                    "enum": [1, 2, 3, 4],
+                                    # min/max, not an integer enum — Gemini
+                                    # only accepts string enum values.
+                                    "minimum": 1,
+                                    "maximum": 4,
                                     "description": "Heading level (1=main section, 2=subsection, 3-4=sub-subsection). Only for heading blocks.",
                                 },
                                 "text": {

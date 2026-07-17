@@ -22,34 +22,29 @@ from django.utils import timezone
 from djangorestframework_camel_case.util import camelize
 
 from conversations.api.serializers import ArtifactListSerializer
-from conversations.constants import (
-    DEFAULT_AI_SENDER_NAME,
-    DEFAULT_CONVERSATION_TITLE,
-    ArtifactStatus,
-    ErrorCode,
-    ErrorMessage,
-    SenderType,
-    ToolCallOrigin,
-    ToolCallStatus,
-)
-from conversations.models import LLM, Artifact, Conversation, Message, MessageToolCall
-from conversations.services.image_generation_service import ImageGenerationService
+from conversations.constants import (DEFAULT_AI_SENDER_NAME,
+                                     DEFAULT_CONVERSATION_TITLE,
+                                     ArtifactStatus, ErrorCode, ErrorMessage,
+                                     SenderType, ToolCallOrigin,
+                                     ToolCallStatus)
+from conversations.models import (LLM, Artifact, Conversation, Message,
+                                  MessageToolCall, Snippet, WebSearchSource)
+from conversations.services.image_generation_service import \
+    ImageGenerationService
 from conversations.services.message_helpers import (  # Database helpers; Learning progress helpers; Billing helpers; Finalization helpers; Regeneration helpers
-    build_generated_image_data,
-    build_transcription_data,
-    fetch_preceding_user_message,
-    finalize_message,
-    get_ai_message_by_id,
-    get_conversation_default_descriptor,
-    handle_insufficient_balance,
-    parse_model_id,
-    prepare_regeneration_data,
-    run_learning_progress_stream,
-    should_generate_title,
-)
-from conversations.services.message_validation_service import MessageValidationService
-from conversations.services.web_search_source_service import WebSearchSourceService
-from conversations.services.websocket_response_service import WebSocketResponseService
+    build_generated_image_data, build_transcription_data,
+    fetch_preceding_user_message, finalize_message, get_ai_message_by_id,
+    get_conversation_default_descriptor, handle_insufficient_balance,
+    parse_model_id, prepare_regeneration_data, run_learning_progress_stream,
+    should_generate_title)
+from conversations.services.message_validation_service import \
+    MessageValidationService
+from conversations.services.tool_loop_service import (ToolLoopResult,
+                                                      ToolLoopService)
+from conversations.services.web_search_source_service import \
+    WebSearchSourceService
+from conversations.services.websocket_response_service import \
+    WebSocketResponseService
 from core.services.billing_service import BillingService
 from core.services.conversation_service import ConversationService
 from core.services.dtos import LLMDescriptor, LLMQueryRequestBuilder
@@ -57,9 +52,7 @@ from core.services.file_upload_service import FileUploadService
 from core.services.learning_progress_service import LearningProgressService
 from core.services.llm_service import LLMService
 from core.services.sb_client import SocraticBooksClient
-from dare_tools.services import dare_tool_handler
 from dare_tools.services.retrieval_tool_executor import RetrievalScope
-from mcp.services import mcp_tool_handler
 from users.utils import should_run_learning_progress
 
 logger = logging.getLogger(__name__)
@@ -94,6 +87,7 @@ class MessageCoordinator:
         self.llm_service = LLMService()
         self.billing_service = BillingService()
         self.learning_progress_service = LearningProgressService()
+        self.tool_loop_service = ToolLoopService(self.llm_service, self.billing_service)
 
         # Track active artifact generation tasks for cancellation
         self._artifact_tasks: Dict[str, asyncio.Task] = {}
@@ -250,61 +244,6 @@ class MessageCoordinator:
                 )
 
         await save_tool_calls()
-
-    async def _send_provider_tool_calls(
-        self,
-        token_usage: Optional[Dict],
-        bot_message_id: int,
-        sent_tool_call_ids: set,
-    ) -> None:
-        """
-        Stream provider-native server tool calls to the frontend.
-
-        Providers execute these tools internally, so there is no DARE/MCP
-        handler involved. Emitting the generic tool events keeps live rendering
-        aligned with the persisted history renderer.
-        """
-        if not token_usage or not token_usage.get("provider_tool_calls"):
-            return
-
-        for tool_call in token_usage["provider_tool_calls"]:
-            tool_call_id = tool_call.get("id")
-            if not tool_call_id or tool_call_id in sent_tool_call_ids:
-                continue
-
-            server_slug = tool_call.get("provider", "anthropic")
-            tool_name = tool_call.get("name", "provider_tool")
-            status = tool_call.get("status") or ToolCallStatus.COMPLETED
-            result = tool_call.get("result")
-
-            await self.send(
-                {
-                    "type": "tool_call",
-                    "messageId": bot_message_id,
-                    "toolCallId": tool_call_id,
-                    "toolName": tool_name,
-                    "serverSlug": server_slug,
-                    "origin": ToolCallOrigin.PROVIDER,
-                    "status": ToolCallStatus.EXECUTING,
-                }
-            )
-
-            await self.send(
-                {
-                    "type": "tool_result",
-                    "messageId": bot_message_id,
-                    "toolCallId": tool_call_id,
-                    "toolName": tool_name,
-                    "serverSlug": server_slug,
-                    "origin": ToolCallOrigin.PROVIDER,
-                    "status": "error"
-                    if status == ToolCallStatus.FAILED
-                    else "success",
-                    "result": camelize(result) if isinstance(result, dict) else result,
-                    "error": tool_call.get("error"),
-                }
-            )
-            sent_tool_call_ids.add(tool_call_id)
 
     async def _save_memory_context(
         self,
@@ -479,7 +418,7 @@ class MessageCoordinator:
                 return None
 
             # Get the existing AI message to regenerate
-            ai_message = await get_ai_message_by_id(message_id)
+            ai_message = await get_ai_message_by_id(message_id, self.conversation.id)
 
             if not ai_message:
                 await self.send_error(
@@ -533,6 +472,8 @@ class MessageCoordinator:
                     )
                     return None
 
+            await self._clear_regeneration_run_state(ai_message)
+
             # Send streaming placeholder to show loading animation
             await self._send_regeneration_placeholder(ai_message)
 
@@ -581,6 +522,37 @@ class MessageCoordinator:
         )
         await self.send(placeholder_payload)
 
+    @database_sync_to_async
+    def _clear_regeneration_run_state(self, ai_message: Message) -> None:
+        """Remove prior-run state before regenerating an assistant message.
+
+        Artifacts are detached, not deleted: they remain available in the
+        conversation artifact library while the regenerated message gets a
+        clean set of cards and model-visible artifact associations.
+        """
+        Snippet.active_objects.filter(message=ai_message).delete()
+        WebSearchSource.active_objects.filter(message=ai_message).delete()
+        MessageToolCall.objects.filter(message=ai_message).delete()
+        Artifact.active_objects.filter(message=ai_message).update(message=None)
+        # Capture the pre-regeneration text NOW: the placeholder sender blanks
+        # ai_message.message in memory right after this, so waiting until
+        # finalization (the old behavior) captured an empty string.
+        if not ai_message.original_message and ai_message.message:
+            ai_message.original_message = ai_message.message
+        ai_message.retrieval_trace = None
+        ai_message.context_trace = None
+        ai_message.memory_context_data = []
+        ai_message.usage_details = None
+        ai_message.save(
+            update_fields=[
+                "original_message",
+                "retrieval_trace",
+                "context_trace",
+                "memory_context_data",
+                "usage_details",
+            ]
+        )
+
     async def stream_ai_response(
         self,
         message_data: Dict[str, Any],
@@ -591,8 +563,11 @@ class MessageCoordinator:
         """
         Stream AI response with billing checks.
 
-        Supports both standard LLM streaming and artifact generation mode.
-        When artifacts_enabled is True, delegates to ArtifactService.
+        Standard chat runs through the bounded tool loop (ToolLoopService):
+        the model streams, executes tools, sees their results as native
+        tool turns, and keeps going until it answers in text or the round
+        cap forces a final answer. Image generation and audio transcription
+        remain single-pass flows.
 
         Args:
             message_data: Validated message data
@@ -600,18 +575,19 @@ class MessageCoordinator:
             llm: LLM instance to use
             regenerate: Whether this is a regeneration request
         """
-        # Note: artifacts_enabled controls tool injection via LLMQueryRequestBuilder
-        # LLM naturally decides when to use create_artifact/update_artifact tools
-        # No longer using intent detection - tools handle artifact creation directly
-
         try:
-            bot_message_id = message_obj.id  # Keep as integer for consistency
-            ai_response_accumulator = ""
-            token_usage = None
-            generated_image_data = None
-            generated_transcription_data = None
-            sent_provider_tool_call_ids = set()
-
+            logger.info(
+                "[journey] mid=%s turn start: conv=%s regenerate=%s rag=%s "
+                "dare_tools=%s mcp_servers=%s artifacts=%s web_search=%s",
+                message_obj.id,
+                self.conversation.id,
+                regenerate,
+                message_data.get("rag_mode"),
+                message_data.get("dare_tool_slugs") or [],
+                message_data.get("mcp_server_ids") or [],
+                message_data.get("artifacts_enabled", False),
+                message_data.get("web_search_enabled", False),
+            )
             # Build LLM query request using DTO builder
             # Note: mcp_server_ids are automatically extracted in the builder
             request = LLMQueryRequestBuilder.from_message_data(
@@ -624,42 +600,154 @@ class MessageCoordinator:
                 platform=self.platform,
             )
 
-            # Track DARE/MCP tool results that need a follow-up model response.
-            executed_tool_results = []
+            # Image generation / audio transcription bypass the tool loop —
+            # single-pass flows with their own usage payloads.
+            if (
+                request.requires_audio_transcription()
+                or request.requires_image_generation()
+            ):
+                await self._stream_media_response(
+                    request, message_data, message_obj, llm, regenerate
+                )
+                return
 
-            # Stream from LLM service (MCP tools fetched internally if mcp_server_ids present)
+            retrieval_scope = RetrievalScope(
+                embedding_ids=tuple(request.context.embedding_ids or ()),
+                tag_ids=tuple(request.context.tag_ids or ()),
+                folder_ids=tuple(request.context.folder_ids or ()),
+                library_ids=tuple(request.context.library_ids or ()),
+                user_id=self.user.id if self.user else None,
+                file_owner_id=request.context.file_owner_id,
+                max_context_snippets=request.context.max_context_snippets,
+                similarity_threshold=request.context.document_similarity_threshold,
+            )
+
+            result = await self.tool_loop_service.run(
+                request=request,
+                message_obj=message_obj,
+                llm=llm,
+                user=self.user,
+                conversation=self.conversation,
+                send_callback=self.send,
+                retrieval_scope=retrieval_scope,
+                regenerate=regenerate,
+            )
+
+            if result.interrupted:
+                await self._handle_insufficient_balance(
+                    message_obj,
+                    result.text,
+                    result.token_usage or {},
+                    result.error_response,
+                )
+                return
+
+            token_usage = result.token_usage
+            if result.timed_out:
+                # A stalled provider stream ends the turn, but everything
+                # that already happened is real: keep the streamed text,
+                # bill the accumulated usage, and be honest about the cut.
+                await self._finalize_timed_out_turn(message_obj, result, regenerate)
+                return
+
+            if result.text.strip():
+                await self._save_web_search_sources(
+                    message_obj, token_usage, regenerate
+                )
+                await self._save_provider_tool_calls(
+                    message_obj, token_usage, regenerate
+                )
+                await self._save_memory_context(message_obj, token_usage)
+                await self._save_usage_breakdown(message_obj, result.usage_breakdown)
+                logger.info(
+                    "[journey] mid=%s finalizing: text=%d chars, tokens=%s/%s",
+                    message_obj.id,
+                    len(result.text),
+                    (token_usage or {}).get("input_tokens"),
+                    (token_usage or {}).get("output_tokens"),
+                )
+                await self._finalize_message(
+                    message_obj=message_obj,
+                    ai_response=result.text,
+                    token_usage=token_usage,
+                    regenerate=regenerate,
+                )
+
+                # Run learning progress assessment (Socratic only, sequential after AI response)
+                if not regenerate and should_run_learning_progress(
+                    self.platform, message_data.get("enable_progress")
+                ):
+                    await self._run_learning_progress_stream(
+                        message_data, message_obj, llm
+                    )
+            elif result.tool_calls_made:
+                # Edge case: tools ran but the model produced no text.
+                logger.warning(
+                    "[MessageCoordinator] Tools ran but no response was generated; "
+                    "finalizing with fallback message."
+                )
+                await self._finalize_message(
+                    message_obj=message_obj,
+                    ai_response=(
+                        "The tool execution completed but I was unable to "
+                        "generate a response. Please try again."
+                    ),
+                    token_usage=token_usage,
+                    regenerate=regenerate,
+                )
+            else:
+                # Some provider streams can close cleanly without yielding a
+                # token or an exception. Treat that as a completed failure,
+                # otherwise the original empty placeholder remains forever.
+                logger.warning(
+                    "[MessageCoordinator] Provider stream ended without text "
+                    "or tool calls; finalizing with retry guidance."
+                )
+                await self._finalize_message(
+                    message_obj=message_obj,
+                    ai_response=(
+                        "I couldn’t generate a response for that request. "
+                        "Your request is saved—please retry it."
+                    ),
+                    token_usage=token_usage,
+                    regenerate=regenerate,
+                )
+
+        except Exception as e:
+            logger.exception(f"Error streaming AI response: {str(e)}")
+            # Never leave the placeholder as an empty, apparently streaming
+            # message. Persist a visible recovery state so refresh and socket
+            # reconnects agree about how the turn ended.
+            await self._finalize_message(
+                message_obj=message_obj,
+                ai_response=(
+                    "I couldn’t complete that response because the model stopped "
+                    "responding. Your request is saved—please retry it."
+                ),
+                token_usage=None,
+                regenerate=regenerate,
+            )
+            await self.send_error(ErrorCode.STREAM_ERROR, ErrorMessage.STREAM_ERROR)
+
+    async def _stream_media_response(
+        self,
+        request,
+        message_data: Dict[str, Any],
+        message_obj: Message,
+        llm: LLM,
+        regenerate: bool,
+    ):
+        """Single-pass streaming for image generation / audio transcription."""
+        try:
+            bot_message_id = message_obj.id
+            ai_response_accumulator = ""
+            token_usage = None
+            generated_image_data = None
+            generated_transcription_data = None
+
             async for chunk, usage in self.llm_service.query(request):
                 if usage:
                     token_usage = usage
-
-                    if usage.get("tool_calls"):
-                        tool_results = await mcp_tool_handler.handle_tool_calls(
-                            tool_calls=usage["tool_calls"],
-                            message=message_obj,
-                            user=self.user,
-                            conversation=self.conversation,
-                            send_callback=self.send,
-                        )
-                        executed_tool_results.extend(tool_results)
-
-                        dare_results = await dare_tool_handler.handle_tool_calls(
-                            tool_calls=usage["tool_calls"],
-                            message=message_obj,
-                            user=self.user,
-                            conversation=self.conversation,
-                            send_callback=self.send,
-                            retrieval_scope=RetrievalScope(
-                                embedding_ids=tuple(request.context.embedding_ids or ()),
-                                tag_ids=tuple(request.context.tag_ids or ()),
-                                folder_ids=tuple(request.context.folder_ids or ()),
-                                library_ids=tuple(request.context.library_ids or ()),
-                                user_id=self.user.id if self.user else None,
-                                file_owner_id=request.context.file_owner_id,
-                                max_context_snippets=request.context.max_context_snippets,
-                                similarity_threshold=request.context.document_similarity_threshold,
-                            ),
-                        )
-                        executed_tool_results.extend(dare_results)
 
                     # Handle generated image
                     if usage.get("image_bytes"):
@@ -670,13 +758,6 @@ class MessageCoordinator:
                     # Handle audio transcription (final result)
                     if usage.get("transcription_result"):
                         generated_transcription_data = build_transcription_data(usage)
-
-                    if usage.get("provider_tool_calls"):
-                        await self._send_provider_tool_calls(
-                            token_usage=usage,
-                            bot_message_id=bot_message_id,
-                            sent_tool_call_ids=sent_provider_tool_call_ids,
-                        )
 
                     # Check billing during streaming (only for authenticated users)
                     if self.user:
@@ -711,61 +792,8 @@ class MessageCoordinator:
                     )
                     await self.send(payload)
 
-            # If we executed local tools, ALWAYS make a follow-up LLM call
-            # Even if there's text, it's just the LLM "thinking" before calling tools
-            # The LLM needs to see the tool results to generate the final response
-            if executed_tool_results:
-                logger.info(
-                    f"[MessageCoordinator] Making follow-up LLM call with {len(executed_tool_results)} tool results"
-                )
-                try:
-                    # The follow-up response REPLACES any partial text from before tool calls
-                    ai_response_accumulator = (
-                        await mcp_tool_handler.stream_tool_result_response(
-                            tool_results=executed_tool_results,
-                            message_data=message_data,
-                            message_obj=message_obj,
-                            llm=llm,
-                            conversation=self.conversation,
-                            user=self.user,
-                            platform=self.platform,
-                            send_callback=self.send,
-                            llm_service=self.llm_service,
-                            regenerate=regenerate,
-                        )
-                    )
-                except Exception as e:
-                    # If follow-up call fails, generate a fallback error message
-                    logger.exception(
-                        f"[MessageCoordinator] Follow-up LLM call failed: {e}"
-                    )
-                    # Build fallback response from tool results
-                    error_parts = []
-                    for tr in executed_tool_results:
-                        if tr.get("result", "").startswith("Error:"):
-                            error_parts.append(
-                                f"Tool `{tr['tool_name']}`: {tr['result']}"
-                            )
-                    if error_parts:
-                        ai_response_accumulator = (
-                            "I encountered some issues while executing the requested tools:\n\n"
-                            + "\n".join(error_parts)
-                        )
-                    else:
-                        ai_response_accumulator = "I was unable to complete the tool execution. Please try again."
-
             # Ensure we always finalize the message
             if ai_response_accumulator.strip():
-                # Save web search sources if present (before finalization)
-                await self._save_web_search_sources(
-                    message_obj, token_usage, regenerate
-                )
-
-                # Save provider-native tool calls if present (Anthropic web fetch)
-                await self._save_provider_tool_calls(
-                    message_obj, token_usage, regenerate
-                )
-
                 # Save memory context if present (before finalization)
                 await self._save_memory_context(message_obj, token_usage)
 
@@ -778,31 +806,61 @@ class MessageCoordinator:
                     generated_transcription_data=generated_transcription_data,
                 )
 
-                # Run learning progress assessment (Socratic only, sequential after AI response)
-                if not regenerate and should_run_learning_progress(
-                    self.platform, message_data.get("enable_progress")
-                ):
-                    await self._run_learning_progress_stream(
-                        message_data, message_obj, llm
-                    )
-            elif executed_tool_results:
-                # Edge case: tool results exist but no response was generated
-                # This shouldn't happen after the fix above, but handle defensively
-                logger.warning(
-                    f"[MessageCoordinator] Tool results existed but no response generated. "
-                    f"Finalizing with fallback message."
-                )
-                fallback_message = "The tool execution completed but I was unable to generate a response. Please try again."
-                await self._finalize_message(
-                    message_obj=message_obj,
-                    ai_response=fallback_message,
-                    token_usage=token_usage,
-                    regenerate=regenerate,
-                )
-
         except Exception as e:
-            logger.exception(f"Error streaming AI response: {str(e)}")
+            logger.exception(f"Error streaming media response: {str(e)}")
             await self.send_error(ErrorCode.STREAM_ERROR, ErrorMessage.STREAM_ERROR)
+
+    async def _finalize_timed_out_turn(
+        self, message_obj: Message, result: ToolLoopResult, regenerate: bool
+    ) -> None:
+        """Finalize a turn whose provider stream went idle mid-way.
+
+        The partial text stays (the user already read it), the accumulated
+        usage is billed, and completed tool work keeps its persisted rows —
+        so the notice must not tell the user to retry when tools already
+        produced artifacts.
+        """
+        token_usage = result.token_usage
+        if result.text.strip():
+            notice = "The model stopped responding, so this answer was cut short."
+            if result.tool_calls_made:
+                notice += " The work completed by tools so far has been kept."
+            ai_response = f"{result.text}\n\n*{notice}*"
+            await self._save_web_search_sources(message_obj, token_usage, regenerate)
+            await self._save_provider_tool_calls(message_obj, token_usage, regenerate)
+            await self._save_memory_context(message_obj, token_usage)
+            await self._save_usage_breakdown(message_obj, result.usage_breakdown)
+        elif result.tool_calls_made:
+            ai_response = (
+                "The model stopped responding before it could summarize, but "
+                "the tool work it completed has been kept. You can ask me to "
+                "continue from here."
+            )
+        else:
+            ai_response = (
+                "I couldn’t complete that response because the model stopped "
+                "responding. Your request is saved—please retry it."
+            )
+        await self._finalize_message(
+            message_obj=message_obj,
+            ai_response=ai_response,
+            token_usage=token_usage,
+            regenerate=regenerate,
+        )
+        await self.send_error(ErrorCode.STREAM_ERROR, ErrorMessage.STREAM_ERROR)
+
+    @database_sync_to_async
+    def _save_usage_breakdown(
+        self, message_obj: Message, usage_breakdown: List[Dict]
+    ) -> None:
+        """Persist the per-round token breakdown for multi-round turns."""
+        if not usage_breakdown or len(usage_breakdown) < 2:
+            return
+        try:
+            message_obj.usage_details = usage_breakdown
+            message_obj.save(update_fields=["usage_details"])
+        except Exception as exc:
+            logger.warning("Failed to save usage breakdown: %s", exc)
 
     async def _finalize_message(
         self,
@@ -961,10 +1019,12 @@ class MessageCoordinator:
             the id nor the conversation default resolves.
         """
         if model_id:
-            return await parse_model_id(model_id)
+            return await parse_model_id(model_id, user=self.user)
         if default is not None:
             return default
-        return await get_conversation_default_descriptor(self.conversation)
+        return await get_conversation_default_descriptor(
+            self.conversation, user=self.user
+        )
 
     async def _get_preceding_user_message(self) -> Optional[Message]:
         """Get the most recent user message in the conversation."""

@@ -16,6 +16,7 @@ from openai import AsyncOpenAI
 from config import env
 from conversations.models import LLM
 from core.services.api_key_service import get_provider_api_key
+from core.services.dtos.stream_event_dto import LLMStreamEvent
 from core.services.llm_utils import (
     OpenAIErrorHandler,
     OpenAIMessageFormatter,
@@ -94,7 +95,7 @@ class OpenAIService:
         effort: Optional[str] = None,
         images: List[Dict] = None,
         tools: Optional[List[Dict]] = None,
-    ) -> AsyncGenerator[Tuple[str, Dict], None]:
+    ) -> AsyncGenerator[LLMStreamEvent, None]:
         """
         Stream chat completions from OpenAI's GPT model.
 
@@ -109,7 +110,7 @@ class OpenAIService:
             tools: Optional tools list for web search
 
         Yields:
-            Tuple of (text_chunk, usage_data)
+            LLMStreamEvent
         """
         try:
             # Step 1: Prepare messages with vision if needed
@@ -117,15 +118,23 @@ class OpenAIService:
 
             # Step 2: Create appropriate stream (web search vs regular)
             web_search_enabled = WebSearchTools.has_web_search(tools)
+            non_web_tools = [t for t in (tools or []) if t.get("type") != "web_search"]
 
-            if web_search_enabled:
+            if web_search_enabled and not non_web_tools:
                 response = await self._stream_with_web_search(prepared_messages)
                 processor = OpenAIStreamProcessor.process_responses_api_stream
             else:
-                # Filter out web_search tools before passing to chat completions
-                non_web_tools = [
-                    t for t in (tools or []) if t.get("type") != "web_search"
-                ]
+                if web_search_enabled:
+                    # Native web search runs on the Responses API, which this
+                    # service cannot yet combine with function tools. Keep the
+                    # function tools (artifacts, MCP, retrieval) — dropping
+                    # them would break the tool loop mid-conversation.
+                    logger.warning(
+                        "[OpenAI] Web search requested alongside %d function "
+                        "tools; continuing on the chat-completions path "
+                        "without native search",
+                        len(non_web_tools),
+                    )
                 response = await self._stream_chat_completions(
                     prepared_messages,
                     max_tokens,
@@ -135,14 +144,14 @@ class OpenAIService:
                 )
                 processor = OpenAIStreamProcessor.process_chat_completion_stream
 
-            # Step 3: Process and yield stream chunks
-            async for chunk, usage in processor(response):
-                yield chunk, usage
+            # Step 3: Process and yield stream events
+            async for event in processor(response):
+                yield event
 
         except Exception as e:
             logger.exception("OpenAI streaming error")
             error_message = OpenAIErrorHandler.format_error(e)
-            yield f"Error: {error_message}", None
+            yield LLMStreamEvent.text_delta(f"Error: {error_message}")
 
     async def get_chat_completion(
         self,
