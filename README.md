@@ -3,7 +3,7 @@
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.13-3776AB.svg)](https://www.python.org/)
 
-> Django REST + Socket.IO backend for **DARE** — the Dietrich Analysis Research Education Platform.
+> Django REST + Socket.IO backend for the **Dietrich Analysis Research Education (DARE) Platform**.
 
 ## Table of Contents
 
@@ -21,7 +21,7 @@
 
 ## What is DARE?
 
-DARE (Dietrich Analysis Research Education Platform) is an open-source, multi-LLM research and
+The Dietrich Analysis Research Education (DARE) Platform is an open-source, multi-LLM research and
 conversation platform. It provides a single, vendor-agnostic interface to OpenAI, Anthropic Claude,
 Google Gemini, and self-hosted LLaMA models, with file-grounded retrieval (RAG), Model Context
 Protocol (MCP) tool integration, visual multi-step workflows, and real-time streaming. DARE is
@@ -183,19 +183,18 @@ complete Docker, local, and production guidance.
 
 ## Acknowledgements
 
-DARE is developed at the Dietrich College of Humanities and Social Sciences, Carnegie Mellon University.
+DARE is an Open Forum for AI (OFAI) initiative, Carnegie Mellon University Libraries.
 
-"DARE" (Dietrich Analysis Research Education Platform) and "SocraticBots" are trademarks of Carnegie
-Mellon University. See [BRAND.md](BRAND.md) for the brand usage policy. For trademark, licensing, or
-general inquiries, contact the project team at vks@andrew.cmu.edu.
+The DARE name and marks are owned by Carnegie Mellon University. Use of the name, wordmark,
+Scotty dog mark, header lockup, and footer badge is governed by the
+[DARE Brand Guidelines & Usage Policy](BRAND.md), independently of the software license.
 
 This software integrates with third-party APIs (Anthropic, OpenAI, Google, and others); use of those
 APIs is subject to each provider's own Terms of Service.
 
 ## Contributors
 
-DARE is built and maintained by the team at the Dietrich College of Humanities and Social Sciences,
-Carnegie Mellon University.
+DARE is built and maintained by contributors at Carnegie Mellon University and in the open-source community.
 
 **Creators**
 
@@ -225,5 +224,7 @@ Carnegie Mellon University.
 ## License
 
 This project is licensed under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0-only).
+The software license does not grant rights to the DARE name or marks; see the
+[DARE Brand Guidelines & Usage Policy](BRAND.md).
 
 See the [LICENSE](LICENSE) file for the full license text, or visit <https://www.gnu.org/licenses/agpl-3.0.en.html>.

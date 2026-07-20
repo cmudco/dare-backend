@@ -134,7 +134,7 @@ print(t)"
 > ⚠️ **After adding or changing gateway tools, run `hermes gateway restart`** —
 > Hermes caches the MCP tool list per connection.
 
-### 5.1 Deterministic audit attribution — Hermes runtime patches
+### 5.1 Audit attribution — do not patch Hermes in production
 
 DARE talks to Hermes over **two channels**: the per-run SSE **control stream**
 (`tool.completed` events — names + timing, no result body) and the shared **MCP
@@ -144,14 +144,20 @@ in `GatewayFetch` — but with no run id). To show *which* result belongs to
 
 DARE (this repo) already carries its half: it reads a per-call id from MCP
 `_meta` and stores it as `GatewayFetch.call_id`, and joins the stream event to
-the corpus row on that id (falling back to an in-order/time-window match when
-absent — so **these patches are optional but recommended**; without them the
-audit still works, just fuzzily, and can blank or mis-attribute rows for
-re-fetched URLs or concurrent runs).
+the corpus row on that id. When the upstream end-to-end correlation metadata is
+absent, DARE falls back to an in-order/time-window match. That fallback keeps
+the audit usable but can blank or mis-attribute rows for re-fetched URLs or
+concurrent runs; treat this as a known observability limitation, not a reason to
+patch Hermes in production.
 
-To make it exact, patch the **Hermes clone** to forward each call's `tool_use`
-id on both channels (kept minimal; ideally upstreamed — a package reinstall
-overwrites them):
+The patch recipe below is retained only to explain older local installations.
+**Do not apply it to a deployed Hermes package.** Newer upstream releases
+already expose `toolCallId` in API streaming events; the DARE-specific MCP
+`_meta.dareCall` forwarding is not an upstream contract. Production must pin a
+clean upstream Hermes release and use the fallback correlation above until a
+generic end-to-end metadata contract is released upstream.
+
+Historical local patch recipe (diagnostic reference only):
 
 1. **`tools/mcp_tool.py`** — send the id on the MCP call (in the `_call()`
    coroutine that wraps `session.call_tool`):
@@ -180,9 +186,10 @@ overwrites them):
               "toolCallId": kwargs.get("tool_call_id", "")})
    ```
 
-Then `hermes gateway restart`. Verify by confirming a Scout's
-`GatewayFetch.call_id` equals the `toolCallId` on its stream event — the audit
-should then show each call's own result/reason with no blank rows.
+Older patched installations required a gateway restart and were verified by
+matching `GatewayFetch.call_id` to the streamed `toolCallId`. Do not reproduce
+that deployment pattern; use it only when diagnosing and removing an existing
+local patch.
 
 ## 6. DARE backend settings
 
@@ -235,20 +242,19 @@ curl -s -X POST http://127.0.0.1:8642/v1/runs \
 #    /api/research/agent-runs/<id>/, expect staged findings in the Review Inbox.
 ```
 
-## 8. Cost containment (already enforced in code — knobs for reference)
+## 8. Cost containment
 
 | Layer | Knob | Default |
 |---|---|---|
 | Hermes loop | `agent.max_turns` | 40 |
-| DARE per run | `MAX_RUN_TOOL_CALLS` / `MAX_RUN_SECONDS` (`research/tasks.py`) | 18 / 480s |
 | Scout depth | quick = 2 searches/3 reads · deep = 5 searches/10 reads | per request |
 | Page reads | `MAX_CHARS` (`mcp/services/web_fetch.py`) | 40k chars |
 
-Budget-exceeded runs are stopped via the Hermes stop endpoint, then a final
-synthesis turn writes findings from the pages already fetched this run — DARE
-injects those page excerpts into the finalize prompt (the fresh turn has no
-session memory of them), so a capped run salvages a real result instead of
-returning empty. Every run records token usage.
+Hermes owns the execution-loop ceiling. DARE does not independently count
+streamed tool events, impose an eight-minute execution deadline, or start a
+second synthesis run after cancelling the first. The Hermes stop endpoint is
+reserved for explicit cancellation. Every completed run records the usage
+reported by Hermes.
 
 Page failures are honest, not fatal: a paywalled / blocked / 404 page is
 returned to the agent as a normal "couldn't read this one" result (its real
@@ -271,7 +277,8 @@ hard tool scoping. **Per-project Hermes profiles are deliberately not used**
 
 - Gateway exposes all of the service user's connected MCP servers; per-run
   scoping is prompt-level today, credential-level later.
-- Structured output is prompt-contract + tolerant parsing + repair re-ask
-  (Hermes's API has no native schema forcing yet; tracked upstream).
+- Structured output is prompt-contract + tolerant parsing. Automatic repair
+  re-asks are disabled until child execution attempts have durable identity,
+  usage aggregation, and fencing (Hermes has no native schema forcing yet).
 - `SOUL.md` file sync assumes runs from different projects don't overlap
   in the same instant; per-run `instructions` always carry the soul as fallback.
