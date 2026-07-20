@@ -141,7 +141,7 @@ complete Docker, local, and production guidance.
 | [docs/configuration.md](docs/configuration.md)                                               | Every environment variable, with type, default, and description |
 | [docs/architecture.md](docs/architecture.md)                                                 | Component diagram and request flows                             |
 | [docs/admin-guide.md](docs/admin-guide.md)                                                   | User/role management, access codes, analytics                   |
-| [CONTRIBUTING.md](CONTRIBUTING.md)                                                           | Issues, pull requests, coding standards                         |
+| [CONTRIBUTING.md](https://github.com/cmudco/dare-backend/blob/main/CONTRIBUTING.md)           | Issues, pull requests, coding standards                         |
 | [CHANGELOG.md](CHANGELOG.md)                                                                 | Release notes                                                   |
 | [SECURITY.md](SECURITY.md)                                                                   | Vulnerability disclosure process                                |
 | [docs/integration/socraticbooks-dare-proxy.md](docs/integration/socraticbooks-dare-proxy.md) | DARE/SocraticBooks integration contract and update rules        |

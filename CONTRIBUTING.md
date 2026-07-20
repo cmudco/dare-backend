@@ -2,6 +2,8 @@
 
 Thanks for your interest in contributing. This guide covers issues, pull requests, and the coding standards we follow.
 
+The canonical online version of this guide is available at [https://github.com/cmudco/dare-backend/blob/main/CONTRIBUTING.md](https://github.com/cmudco/dare-backend/blob/main/CONTRIBUTING.md).
+
 ## Filing issues
 
 Before opening an issue:
