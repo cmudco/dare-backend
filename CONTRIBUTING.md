@@ -32,7 +32,7 @@ Include:
 
 ### Security issues
 
-**Do not** open public issues for security vulnerabilities. See [SECURITY.md](SECURITY.md) for the disclosure process.
+**Do not** open public issues for security vulnerabilities. See [SECURITY.md](https://github.com/cmudco/dare-backend/blob/main/SECURITY.md) for the disclosure process.
 
 ---
 
@@ -108,7 +108,7 @@ Each PR should include:
 - Inherit from `viewsets.ModelViewSet` for standard CRUD.
 - Always declare `permission_classes`. Default to `[IsAuthenticated]`.
 - Filter querysets by user in `get_queryset()` for any user-owned resource.
-- Use serializer field separation for read vs. write (see [docs/code-standards.md](docs/code-standards.md) and [docs/serialization.md](docs/serialization.md)).
+- Use serializer field separation for read vs. write (see [docs/code-standards.md](https://github.com/cmudco/dare-backend/blob/main/docs/code-standards.md) and [docs/serialization.md](https://github.com/cmudco/dare-backend/blob/main/docs/serialization.md)).
 
 ### Background jobs
 
