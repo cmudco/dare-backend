@@ -1,6 +1,6 @@
 # DARE Backend
 
-[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](LICENSE)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-blue.svg)](https://github.com/cmudco/dare-backend/blob/main/LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.13-3776AB.svg)](https://www.python.org/)
 
 > Django REST + Socket.IO backend for the **Dietrich Analysis Research Education (DARE) Platform**.
@@ -73,8 +73,8 @@ flowchart TB
     services --> ollama
 ```
 
-See [docs/architecture.md](docs/architecture.md) for the full diagram and
-[docs/architecture/overview.md](docs/architecture/overview.md) for component-level detail.
+See [docs/architecture.md](https://github.com/cmudco/dare-backend/blob/main/docs/architecture.md) for the full diagram and
+[docs/architecture/overview.md](https://github.com/cmudco/dare-backend/blob/main/docs/architecture/overview.md) for component-level detail.
 
 ## Quick Start
 
@@ -108,7 +108,7 @@ restricted network.
 
 Docker Compose starts the API server, RQ worker, Postgres + pgvector, Redis, and Weaviate. Optional
 Ollama and Weaviate console services are available through Compose profiles. See
-[INSTALL.md](INSTALL.md) for details.
+[INSTALL.md](https://github.com/cmudco/dare-backend/blob/main/INSTALL.md) for details.
 
 ### Local Python
 
@@ -130,24 +130,24 @@ source .venv/bin/activate
 OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES python -Wd manage.py rqworker default -v 3
 ```
 
-Redis must be running for Socket.IO pub/sub and background jobs. See [INSTALL.md](INSTALL.md) for
+Redis must be running for Socket.IO pub/sub and background jobs. See [INSTALL.md](https://github.com/cmudco/dare-backend/blob/main/INSTALL.md) for
 complete Docker, local, and production guidance.
 
 ## Documentation
 
-| Doc                                                                                          | What's in it                                                    |
-| -------------------------------------------------------------------------------------------- | --------------------------------------------------------------- |
-| [INSTALL.md](INSTALL.md)                                                                     | Full deployment guide — Docker and bare metal                   |
-| [docs/configuration.md](docs/configuration.md)                                               | Every environment variable, with type, default, and description |
-| [docs/architecture.md](docs/architecture.md)                                                 | Component diagram and request flows                             |
-| [docs/admin-guide.md](docs/admin-guide.md)                                                   | User/role management, access codes, analytics                   |
-| [CONTRIBUTING.md](CONTRIBUTING.md)                                                           | Issues, pull requests, coding standards                         |
-| [CHANGELOG.md](CHANGELOG.md)                                                                 | Release notes                                                   |
-| [SECURITY.md](SECURITY.md)                                                                   | Vulnerability disclosure process                                |
-| [docs/integration/socraticbooks-dare-proxy.md](docs/integration/socraticbooks-dare-proxy.md) | DARE/SocraticBooks integration contract and update rules        |
-| [docs/architecture/socketio-events.md](docs/architecture/socketio-events.md)                 | Socket.IO event reference                                       |
-| [docs/api/dare-backend.md](docs/api/dare-backend.md)                                         | REST API reference                                              |
-| [docs/code-standards.md](docs/code-standards.md)                                             | Coding conventions                                              |
+| Doc | What's in it |
+| --- | --- |
+| [INSTALL.md](https://github.com/cmudco/dare-backend/blob/main/INSTALL.md) | Full deployment guide — Docker and bare metal |
+| [docs/configuration.md](https://github.com/cmudco/dare-backend/blob/main/docs/configuration.md) | Every environment variable, with type, default, and description |
+| [docs/architecture.md](https://github.com/cmudco/dare-backend/blob/main/docs/architecture.md) | Component diagram and request flows |
+| [docs/admin-guide.md](https://github.com/cmudco/dare-backend/blob/main/docs/admin-guide.md) | User/role management, access codes, analytics |
+| [CONTRIBUTING.md](https://github.com/cmudco/dare-backend/blob/main/CONTRIBUTING.md) | Issues, pull requests, coding standards |
+| [CHANGELOG.md](https://github.com/cmudco/dare-backend/blob/main/CHANGELOG.md) | Release notes |
+| [SECURITY.md](https://github.com/cmudco/dare-backend/blob/main/SECURITY.md) | Vulnerability disclosure process |
+| [docs/integration/socraticbooks-dare-proxy.md](https://github.com/cmudco/dare-backend/blob/main/docs/integration/socraticbooks-dare-proxy.md) | DARE/SocraticBooks integration contract and update rules |
+| [docs/architecture/socketio-events.md](https://github.com/cmudco/dare-backend/blob/main/docs/architecture/socketio-events.md) | Socket.IO event reference |
+| [docs/api/dare-backend.md](https://github.com/cmudco/dare-backend/blob/main/docs/api/dare-backend.md) | REST API reference |
+| [docs/code-standards.md](https://github.com/cmudco/dare-backend/blob/main/docs/code-standards.md) | Coding conventions |
 
 ## Tech Stack
 
@@ -168,9 +168,9 @@ complete Docker, local, and production guidance.
 
 ## What is not included in this repo?
 
-- [dare-frontend](../dare-frontend/) — the React/TypeScript web client (run it separately)
-- [socraticbooks-backend](../../socraticbooks/socraticbooks-backend/) and
-  [socraticbooks-react](../../socraticbooks/socraticbooks-react/) — the SocraticBooks platform that
+- [dare-frontend](https://github.com/cmudco/dare-frontend) — the React/TypeScript web client (run it separately)
+- [socraticbooks-backend](https://github.com/cmudco/socraticbooks-backend) and
+  [socraticbooks-react](https://github.com/cmudco/socraticbooks-react) — the SocraticBooks platform that
   proxies to DARE
 - External infrastructure you provide yourself — LLM provider API keys, an Ollama host for
   self-hosted models, and managed Postgres/Redis/vector-store instances in production
@@ -179,7 +179,7 @@ complete Docker, local, and production guidance.
 
 - **Found a bug or have a feature request?** Open an issue on the project's GitHub repository.
 - **Questions or general inquiries?** Email the project team at vks@andrew.cmu.edu.
-- **Security disclosures:** see [SECURITY.md](SECURITY.md).
+- **Security disclosures:** see [SECURITY.md](https://github.com/cmudco/dare-backend/blob/main/SECURITY.md).
 
 ## Acknowledgements
 
@@ -187,7 +187,7 @@ DARE is an Open Forum for AI (OFAI) initiative, Carnegie Mellon University Libra
 
 The DARE name and marks are owned by Carnegie Mellon University. Use of the name, wordmark,
 Scotty dog mark, header lockup, and footer badge is governed by the
-[DARE Brand Guidelines & Usage Policy](BRAND.md), independently of the software license.
+[DARE Brand Guidelines & Usage Policy](https://github.com/cmudco/dare-backend/blob/main/BRAND.md), independently of the software license.
 
 This software integrates with third-party APIs (Anthropic, OpenAI, Google, and others); use of those
 APIs is subject to each provider's own Terms of Service.
@@ -201,8 +201,8 @@ DARE is built and maintained by contributors at Carnegie Mellon University and i
 <table>
   <tr>
     <td align="center" valign="top" width="33.33%"><img src="https://ui-avatars.com/api/?name=Sayeed+Choudhury&size=100&background=162B4B&color=fff" width="100" height="100" style="border-radius:50%" alt="Sayeed Choudhury" /><br /><sub><b>Sayeed Choudhury</b></sub><br />Creator</td>
-    <td align="center" valign="top" width="33.33%"><img src=".github/assets/team/vince.png" width="100" height="100" style="border-radius:50%" alt="Vincent Sha" /><br /><sub><b>Vincent Sha</b></sub><br />Creator</td>
-    <td align="center" valign="top" width="33.33%"><img src=".github/assets/team/george.png" width="100" height="100" style="border-radius:50%" alt="George Cann" /><br /><sub><b>George Cann</b></sub><br />Creator</td>
+    <td align="center" valign="top" width="33.33%"><img src="https://raw.githubusercontent.com/cmudco/dare-backend/main/.github/assets/team/vince.png" width="100" height="100" style="border-radius:50%" alt="Vincent Sha" /><br /><sub><b>Vincent Sha</b></sub><br />Creator</td>
+    <td align="center" valign="top" width="33.33%"><img src="https://raw.githubusercontent.com/cmudco/dare-backend/main/.github/assets/team/george.png" width="100" height="100" style="border-radius:50%" alt="George Cann" /><br /><sub><b>George Cann</b></sub><br />Creator</td>
   </tr>
 </table>
 
@@ -210,7 +210,7 @@ DARE is built and maintained by contributors at Carnegie Mellon University and i
 
 <table>
   <tr>
-    <td align="center" valign="top" width="33.33%"><img src=".github/assets/team/carl.png" width="100" height="100" style="border-radius:50%" alt="Carl Skipper" /><br /><sub><b>Carl Skipper</b></sub><br />Contributor</td>
+    <td align="center" valign="top" width="33.33%"><img src="https://raw.githubusercontent.com/cmudco/dare-backend/main/.github/assets/team/carl.png" width="100" height="100" style="border-radius:50%" alt="Carl Skipper" /><br /><sub><b>Carl Skipper</b></sub><br />Contributor</td>
     <td align="center" valign="top" width="33.33%"><img src="https://ui-avatars.com/api/?name=Muhammad+Abdurrehman&size=100&background=162B4B&color=fff" width="100" height="100" style="border-radius:50%" alt="Muhammad Abdurrehman" /><br /><sub><b>Muhammad Abdurrehman</b></sub><br />Team Lead</td>
     <td align="center" valign="top" width="33.33%"><img src="https://ui-avatars.com/api/?name=Brian+Wingenroth&size=100&background=162B4B&color=fff" width="100" height="100" style="border-radius:50%" alt="Brian Wingenroth" /><br /><sub><b>Brian Wingenroth</b></sub><br />Developer</td>
   </tr>
@@ -223,8 +223,8 @@ DARE is built and maintained by contributors at Carnegie Mellon University and i
 
 ## License
 
-This project is licensed under the [GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0-only).
+This project is licensed under the [GNU Affero General Public License v3.0](https://github.com/cmudco/dare-backend/blob/main/LICENSE) (AGPL-3.0-only).
 The software license does not grant rights to the DARE name or marks; see the
-[DARE Brand Guidelines & Usage Policy](BRAND.md).
+[DARE Brand Guidelines & Usage Policy](https://github.com/cmudco/dare-backend/blob/main/BRAND.md).
 
-See the [LICENSE](LICENSE) file for the full license text, or visit <https://www.gnu.org/licenses/agpl-3.0.en.html>.
+See the [LICENSE](https://github.com/cmudco/dare-backend/blob/main/LICENSE) file for the full license text, or visit <https://www.gnu.org/licenses/agpl-3.0.en.html>.
