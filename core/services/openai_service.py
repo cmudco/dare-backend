@@ -24,7 +24,6 @@ from core.services.llm_utils import (
     OpenAIWebSearchTools,
     SchemaTransformer,
     StreamAggregator,
-    WebSearchTools,
 )
 from core.services.model_capabilities import ModelCapabilities
 
@@ -86,6 +85,27 @@ class OpenAIService:
             return True
         return self.model.startswith(("gpt-5", "o1", "o3", "o4"))
 
+    def _uses_responses_api(self, tools: Optional[List[Dict]]) -> bool:
+        """
+        Determine whether this request should go through the Responses API.
+
+        Anything tool-shaped belongs there: it is the only OpenAI surface that
+        accepts function tools on reasoning models (the whole GPT-5.x family)
+        and the only one that can run web search alongside them.
+
+        The exception is a custom ``base_url``, which means we are talking to a
+        LiteLLM proxy or another OpenAI-compatible gateway rather than OpenAI
+        itself. Those speak /v1/chat/completions but not necessarily
+        /v1/responses, so proxied traffic keeps the Chat Completions path.
+
+        Args:
+            tools: Tools requested for this turn, if any
+
+        Returns:
+            True when the Responses API should be used
+        """
+        return bool(tools) and self.base_url is None
+
     async def stream_chat_completion(
         self,
         messages: List[Dict[str, str]],
@@ -115,14 +135,18 @@ class OpenAIService:
             # Step 1: Prepare messages with vision if needed
             prepared_messages = self._prepare_messages(messages, images)
 
-            # Step 2: Create appropriate stream (web search vs regular)
-            web_search_enabled = WebSearchTools.has_web_search(tools)
-
-            if web_search_enabled:
-                response = await self._stream_with_web_search(prepared_messages)
+            # Step 2: Create appropriate stream (Responses API vs Chat Completions).
+            if self._uses_responses_api(tools):
+                response = await self._stream_responses_api(
+                    prepared_messages,
+                    max_tokens,
+                    temperature,
+                    tools,
+                )
                 processor = OpenAIStreamProcessor.process_responses_api_stream
             else:
-                # Filter out web_search tools before passing to chat completions
+                # Chat Completions has no web search tool; drop the marker so it
+                # does not reach the API as an unknown tool type.
                 non_web_tools = [
                     t for t in (tools or []) if t.get("type") != "web_search"
                 ]
@@ -131,7 +155,7 @@ class OpenAIService:
                     max_tokens,
                     temperature,
                     effort,
-                    non_web_tools if non_web_tools else None,
+                    non_web_tools or None,
                 )
                 processor = OpenAIStreamProcessor.process_chat_completion_stream
 
@@ -258,24 +282,86 @@ class OpenAIService:
 
         return OpenAIVisionHandler.add_images_to_messages(messages, images)
 
-    async def _stream_with_web_search(self, messages: List[Dict[str, str]]):
+    async def _stream_responses_api(
+        self,
+        messages: List[Dict[str, str]],
+        max_tokens: int,
+        temperature: float,
+        tools: Optional[List[Dict]] = None,
+    ):
         """
-        Stream using Responses API with web search enabled.
+        Stream using the Responses API.
+
+        This is the path for anything tool-shaped: web search, function calling,
+        or both together. Chat Completions rejects function tools on reasoning
+        models (the whole GPT-5.x family) unless reasoning is disabled, and it
+        cannot mix web search with function tools at all.
 
         Args:
             messages: Prepared messages
+            max_tokens: Max tokens to generate
+            temperature: Temperature setting
+            tools: Tools in Chat Completions shape (converted here)
 
         Returns:
             OpenAI Responses API stream
         """
-        input_data = OpenAIMessageFormatter.format_for_responses_api(messages)
+        params = {
+            "model": self.model,
+            "input": OpenAIMessageFormatter.format_for_responses_api(messages),
+            "max_output_tokens": max_tokens,
+            "stream": True,
+        }
 
-        return await self.client.responses.create(
-            model=self.model,
-            input=input_data,
-            tools=[{"type": "web_search"}],
-            stream=True,
-        )
+        responses_tools = self._convert_tools_for_responses(tools)
+        if responses_tools:
+            params["tools"] = responses_tools
+
+        if self.capabilities.supports_temperature:
+            params["temperature"] = temperature
+
+        return await self.client.responses.create(**params)
+
+    @staticmethod
+    def _convert_tools_for_responses(
+        tools: Optional[List[Dict]],
+    ) -> List[Dict]:
+        """
+        Convert Chat Completions tool definitions to Responses API shape.
+
+        Chat Completions nests the schema under a "function" key; the Responses
+        API flattens it. Hosted tools (``{"type": "web_search"}``) pass through
+        untouched.
+
+        Args:
+            tools: Tools in Chat Completions shape
+
+        Returns:
+            Tools in Responses API shape
+        """
+        converted = []
+
+        for tool in tools or []:
+            if tool.get("type") != "function":
+                converted.append(tool)
+                continue
+
+            function = tool.get("function") or {}
+            if not function:
+                # Already flat - keep as-is.
+                converted.append(tool)
+                continue
+
+            converted.append(
+                {
+                    "type": "function",
+                    "name": function.get("name"),
+                    "description": function.get("description", ""),
+                    "parameters": function.get("parameters", {}),
+                }
+            )
+
+        return converted
 
     async def _stream_chat_completions(
         self,
