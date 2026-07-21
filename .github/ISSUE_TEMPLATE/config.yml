@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/cmudco/dare-backend/blob/main/SECURITY.md
+    about: Never report security issues in the public tracker — follow the disclosure process instead.
+  - name: Frontend issue?
+    url: https://github.com/cmudco/dare-frontend/issues/new/choose
+    about: If the problem is in the web UI rather than the API, file it on dare-frontend.

@@ -1,0 +1,19 @@
+name: Feature Request
+description: I have a suggestion for a feature
+labels: ['enhancement']
+body:
+  - type: markdown
+    attributes:
+      value: Please use a descriptive title for this issue.
+  - type: textarea
+    attributes:
+      label: Pitch
+      description: Describe your idea. What would it look like? How would it work?
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Motivation
+      description: What user-facing problem does this solve? Who is affected, and how often? Any constraints or non-goals?
+    validations:
+      required: true

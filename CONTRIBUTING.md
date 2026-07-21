@@ -4,6 +4,12 @@ Thanks for your interest in contributing. This guide covers issues, pull request
 
 The canonical online version of this guide is available at [https://github.com/cmudco/dare-backend/blob/main/CONTRIBUTING.md](https://github.com/cmudco/dare-backend/blob/main/CONTRIBUTING.md).
 
+## What to work on
+
+- Issues labeled [`good first issue`](https://github.com/cmudco/dare-backend/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22) are scoped for first-time contributors.
+- Issues labeled [`help wanted`](https://github.com/cmudco/dare-backend/issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22) are ones where we'd especially appreciate outside help.
+- Issues labeled [`effort`](https://github.com/cmudco/dare-backend/issues?q=is%3Aissue+is%3Aopen+label%3Aeffort) are larger stories that make up the roadmap — comment on the issue before starting one of these so we can coordinate.
+
 ## Filing issues
 
 Before opening an issue:

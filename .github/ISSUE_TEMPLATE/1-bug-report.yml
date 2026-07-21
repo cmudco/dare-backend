@@ -1,0 +1,55 @@
+name: Bug Report
+description: Something isn't working as intended
+labels: ['bug']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Please use a descriptive title, and check
+        [existing issues](https://github.com/cmudco/dare-backend/issues?q=label%3Abug)
+        first to avoid duplicates.
+
+        **Security vulnerabilities:** do **not** report them here — see
+        [SECURITY.md](https://github.com/cmudco/dare-backend/blob/main/SECURITY.md).
+  - type: textarea
+    attributes:
+      label: Steps to reproduce
+      description: Minimal, numbered steps. Include the API endpoint or WebSocket event if relevant.
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: Expected behavior
+      placeholder: "Ex: the file finishes vectorizing and becomes searchable"
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: Actual behavior
+      placeholder: "Ex: the upload stays stuck in 'processing' and the worker log shows a traceback"
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Logs / traceback
+      description: Relevant server output, stack traces, or error responses. **Redact secrets and tokens.**
+      render: shell
+    validations:
+      required: false
+  - type: input
+    attributes:
+      label: Environment
+      description: OS, Python version, and how you're running the backend (Docker / bare-metal / dev server).
+      placeholder: "macOS 15.1, Python 3.11, uvicorn dev setup"
+    validations:
+      required: false
+  - type: textarea
+    attributes:
+      label: Additional details
+      description: "Anything else useful — screenshots, request/response excerpts, related issues."
+    validations:
+      required: false
