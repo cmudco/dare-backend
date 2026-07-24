@@ -113,7 +113,14 @@ def _refill_from_group_budget(user, wallet, group_wallet, policy, now, stats):
     the owner row entirely (no self-referential rows on the member).
     """
     with db_transaction.atomic():
-        gw = GroupWallet.objects.select_for_update().select_related("group", "group__group_owner").get(pk=group_wallet.pk)
+        gw = (
+            GroupWallet.objects
+            # Lock only the wallet row: group__group_owner is nullable, and
+            # Postgres rejects FOR UPDATE on the nullable side of an outer join.
+            .select_for_update(of=("self",))
+            .select_related("group", "group__group_owner")
+            .get(pk=group_wallet.pk)
+        )
         if gw.budget_balance < policy.amount:
             stats["budget_exhausted"] += 1
             return
