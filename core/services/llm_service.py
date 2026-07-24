@@ -14,6 +14,7 @@ from core.services.custom_llm_service import CustomLLMService
 from core.services.document_processor import DocumentProcessor
 from core.services.dtos import (
     LLMDescriptor,
+    LLMGenerationContext,
     LLMQueryChunk,
     LLMQueryRequest,
     ResolvedDispatchCredentials,
@@ -28,6 +29,10 @@ from core.services.llm_helpers import (  # Database helpers; Socratic message bu
     build_standard_messages,
     execute_audio_transcription,
     get_media_files_as_images,
+)
+from core.services.llm_observability_service import (
+    GenerationTracker,
+    get_llm_observability_service,
 )
 from core.services.openai_service import OpenAIService
 from files.models import File, Folder
@@ -70,6 +75,7 @@ class LLMService:
         self.document_processor = DocumentProcessor(vector_service=None)
         self.file_processor = FileProcessor()
         self.tool_fetcher = ToolFetcher()
+        self.observability = get_llm_observability_service()
 
     async def query(
         self,
@@ -306,28 +312,85 @@ class LLMService:
                 f"[LLMService] Using structured output with provider: {llm.provider}, "
                 f"model: {llm.identifier}, spec: {request.generation.structured_spec}"
             )
-            text = await ai_service.get_chat_completion(
-                messages,
-                request.generation.max_tokens,
-                request.generation.temperature,
-                request.generation.effort,
-                structured_spec=request.generation.structured_spec,
+            tracker = self._start_generation_tracking(
+                request, llm, messages, is_streaming=False
             )
+            try:
+                text = await ai_service.get_chat_completion(
+                    messages,
+                    request.generation.max_tokens,
+                    request.generation.temperature,
+                    request.generation.effort,
+                    structured_spec=request.generation.structured_spec,
+                )
+                tracker.record_chunk(text)
+            except Exception as e:
+                tracker.record_error(e)
+                raise
+            finally:
+                tracker.finish()
             logger.info(
                 f"[LLMService] Structured output response received: {text[:200]}..."
             )
             yield text, None
         else:
             # Standard streaming completion
-            async for chunk, usage in ai_service.stream_chat_completion(
-                messages,
-                request.generation.max_tokens,
-                request.generation.temperature,
-                effort=request.generation.effort,
-                images=all_images,
-                tools=llm_tools,
-            ):
-                yield chunk, usage
+            tracker = self._start_generation_tracking(request, llm, messages)
+            try:
+                async for chunk, usage in ai_service.stream_chat_completion(
+                    messages,
+                    request.generation.max_tokens,
+                    request.generation.temperature,
+                    effort=request.generation.effort,
+                    images=all_images,
+                    tools=llm_tools,
+                ):
+                    tracker.record_chunk(chunk)
+                    tracker.record_usage(usage)
+                    yield chunk, usage
+            except Exception as e:
+                tracker.record_error(e)
+                raise
+            finally:
+                tracker.finish()
+
+    def _start_generation_tracking(
+        self,
+        request: LLMQueryRequest,
+        llm: LLM,
+        messages: List[Dict[str, str]],
+        is_streaming: bool = True,
+    ) -> GenerationTracker:
+        """Start observability tracking for one LLM provider call.
+
+        Identity mapping for PostHog traces:
+        - trace_id (message id): groups all generations of one chat turn,
+          including follow-up calls after tool execution.
+        - session_id (conversation id): groups all turns of a conversation.
+        - distinct_id (user id): attributes the call to a person.
+
+        Args:
+            request: LLMQueryRequest carrying message/conversation/user refs
+            llm: Resolved LLM model
+            messages: Built messages array sent to the provider
+            is_streaming: Whether this call streams chunks
+
+        Returns:
+            GenerationTracker to feed chunks/usage into and finish()
+        """
+        message_obj = request.message_obj
+        conversation = request.conversation
+        context = LLMGenerationContext(
+            provider=llm.provider,
+            model=llm.identifier,
+            input_messages=messages,
+            trace_id=str(message_obj.id) if message_obj is not None else None,
+            session_id=str(conversation.id) if conversation is not None else None,
+            distinct_id=str(request.user.id) if request.user is not None else None,
+            is_streaming=is_streaming,
+            extra_properties={"is_socratic": request.is_socratic_mode()},
+        )
+        return self.observability.track_generation(context)
 
     # ========== End Query Orchestration Methods ==========
 
