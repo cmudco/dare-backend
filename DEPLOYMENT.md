@@ -54,7 +54,7 @@ The bundled `docker-compose.yml` provisions:
 
 ```bash
 # 1. Clone and enter the repo
-git clone <repo-url> dare-backend && cd dare-backend
+git clone https://github.com/cmudco/dare-backend.git && cd dare-backend
 
 # 2. Copy and edit environment file
 cp .example.env .env
@@ -69,7 +69,10 @@ docker compose up --build -d
 # 4. Create a superuser
 docker compose exec web python manage.py createsuperuser
 
-# 5. Check container health
+# 5. Collect static files so the Django admin renders with its CSS/JS
+docker compose exec web python manage.py collectstatic --noinput
+
+# 6. Check container health
 docker compose ps
 curl http://localhost:8000/api/health/
 curl http://localhost:8000/api/ready/
@@ -158,7 +161,7 @@ DARE supports two vector backends — pick one or run both:
 
 ```bash
 # Clone and enter
-git clone <repo-url> dare-backend && cd dare-backend
+git clone https://github.com/cmudco/dare-backend.git && cd dare-backend
 
 # Create env file
 cp .example.env .env
