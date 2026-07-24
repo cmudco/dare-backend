@@ -4,6 +4,7 @@ MemU Service Wrapper
 Provides a service layer for cross-conversation memory using memu-py.
 Requires PostgreSQL with pgvector for memory storage.
 """
+
 import json
 import logging
 import os
@@ -12,16 +13,11 @@ import threading
 import traceback
 from typing import Any, Optional
 
-from pydantic import BaseModel
-from memu.app import (
-    MemoryService,
-    LLMConfig,
-    LLMProfilesConfig,
-    RetrieveConfig,
-)
+import memu.app as memu_app
 from memu.app.settings import UserConfig
+from pydantic import BaseModel
 
-from config.env import USE_POSTGRES, DB_NAME, DB_USER, DB_PASSWORD, DB_HOST, DB_PORT
+from config import env as config_env
 
 logger = logging.getLogger(__name__)
 
@@ -61,9 +57,9 @@ class MemUService:
                 raise ValueError("OPENAI_API_KEY environment variable not set")
 
             # Configure LLM profiles for memory extraction and embeddings
-            llm_profiles = LLMProfilesConfig(
+            llm_profiles = memu_app.LLMProfilesConfig(
                 root={
-                    "default": LLMConfig(
+                    "default": memu_app.LLMConfig(
                         provider="openai",
                         api_key=openai_api_key,
                         chat_model="gpt-4o-mini",
@@ -79,13 +75,17 @@ class MemUService:
             user_config = UserConfig(model=DareUserModel)
 
             # MemU requires PostgreSQL — skip initialization if not configured
-            if not USE_POSTGRES:
+            if not config_env.USE_POSTGRES:
                 raise RuntimeError(
                     "MemU requires PostgreSQL (USE_POSTGRES=True). "
                     "Memory features are disabled."
                 )
 
-            db_url = f"postgresql+psycopg://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+            db_url = (
+                "postgresql+psycopg://"
+                f"{config_env.DB_USER}:{config_env.DB_PASSWORD}@"
+                f"{config_env.DB_HOST}:{config_env.DB_PORT}/{config_env.DB_NAME}"
+            )
             database_config = {
                 "metadata_store": {
                     "provider": "postgres",
@@ -93,15 +93,18 @@ class MemUService:
                     "ddl_mode": "create",
                 },
             }
-            logger.info(f"MemU initialized with PostgreSQL at: {DB_HOST}:{DB_PORT}/{DB_NAME}")
+            logger.info(
+                "MemU initialized with PostgreSQL at: "
+                f"{config_env.DB_HOST}:{config_env.DB_PORT}/{config_env.DB_NAME}"
+            )
 
             # Configure retrieval with RAG method
-            retrieve_config = RetrieveConfig(
+            retrieve_config = memu_app.RetrieveConfig(
                 method="rag",
                 route_intention=False,  # Always retrieve, don't route
             )
 
-            self._service = MemoryService(
+            self._service = memu_app.MemoryService(
                 llm_profiles=llm_profiles,
                 database_config=database_config,
                 retrieve_config=retrieve_config,
@@ -117,33 +120,37 @@ class MemUService:
     async def list_items(self, user_id: str) -> list[dict[str, Any]]:
         """
         List all memory items for a user with their category names.
-        
+
         Args:
             user_id: The user's unique identifier
-            
+
         Returns:
             List of memory item dictionaries with categories populated
         """
         await self._ensure_initialized()
-        
+
         try:
             # List only this user's items from memu
             result = await self._service.list_memory_items(where={"user_id": user_id})
-            
+
             # Handle dict response format {'items': [...]}
             if isinstance(result, dict):
                 items_list = result.get("items", [])
             elif isinstance(result, (list, tuple)):
                 items_list = result
             else:
-                logger.warning(f"Unexpected return type from list_memory_items: {type(result)}")
+                logger.warning(
+                    f"Unexpected return type from list_memory_items: {type(result)}"
+                )
                 return []
-            
+
             if not items_list:
                 return []
-            
+
             # Fetch categories and build a lookup map (id -> name)
-            categories_result = await self._service.list_memory_categories(where={"user_id": user_id})
+            categories_result = await self._service.list_memory_categories(
+                where={"user_id": user_id}
+            )
             category_map = {}
             if isinstance(categories_result, dict):
                 cats = categories_result.get("categories", [])
@@ -151,7 +158,7 @@ class MemUService:
                 cats = categories_result
             else:
                 cats = []
-            
+
             for cat in cats:
                 if hasattr(cat, "model_dump"):
                     cat = cat.model_dump()
@@ -161,9 +168,9 @@ class MemUService:
                 cat_name = cat.get("name")
                 if cat_id and cat_name:
                     category_map[cat_id] = cat_name
-            
+
             logger.info(f"Category map for user {user_id}: {category_map}")
-            
+
             # Get relations from database (item_id -> category_id mappings)
             relations_map = {}  # item_id -> [category_names]
             try:
@@ -177,21 +184,21 @@ class MemUService:
                         rel = vars(relation)
                     else:
                         rel = relation if isinstance(relation, dict) else {}
-                    
+
                     item_id = rel.get("item_id")
                     category_id = rel.get("category_id")
-                    
+
                     if item_id and category_id:
                         cat_name = category_map.get(category_id)
                         if cat_name:
                             if item_id not in relations_map:
                                 relations_map[item_id] = []
                             relations_map[item_id].append(cat_name)
-                
+
                 logger.info(f"Relations map has {len(relations_map)} items")
             except Exception as e:
                 logger.warning(f"Could not fetch relations: {e}")
-            
+
             # Convert items to dicts and populate categories
             user_items = []
             for item in items_list:
@@ -203,15 +210,20 @@ class MemUService:
                 elif hasattr(item, "__dict__") and not isinstance(item, str):
                     item_dict = vars(item)
                 else:
-                    item_dict = {"id": str(item), "content": str(item), "memory_type": "unknown", "categories": []}
-                
+                    item_dict = {
+                        "id": str(item),
+                        "content": str(item),
+                        "memory_type": "unknown",
+                        "categories": [],
+                    }
+
                 # Populate categories from relations map
                 item_id = item_dict.get("id")
                 item_dict["categories"] = relations_map.get(item_id, [])
-                
+
                 # Add to results
                 user_items.append(item_dict)
-            
+
             logger.info(f"Returning {len(user_items)} items for user {user_id}")
             return user_items
         except Exception as e:
@@ -222,22 +234,23 @@ class MemUService:
     async def search(self, user_id: str, query: str) -> dict[str, Any]:
         """
         Perform vector search on user's memories.
-        
+
         Args:
             user_id: The user's unique identifier
             query: The search query
-            
+
         Returns:
             Dict with categories, items, and resources
         """
         await self._ensure_initialized()
-        
+
         try:
             result = await self._service.retrieve(
-                queries=[query],
-                where={"user_id": user_id}
+                queries=[query], where={"user_id": user_id}
             )
-            return result if result else {"categories": [], "items": [], "resources": []}
+            return (
+                result if result else {"categories": [], "items": [], "resources": []}
+            )
         except Exception as e:
             logger.error(f"Failed to search memories for user {user_id}: {e}")
             raise
@@ -258,7 +271,11 @@ class MemUService:
         try:
             # Verify ownership: list user's items and check if this item belongs to them
             result = await self._service.list_memory_items(where={"user_id": user_id})
-            items_list = result.get("items", []) if isinstance(result, dict) else result if isinstance(result, (list, tuple)) else []
+            items_list = (
+                result.get("items", [])
+                if isinstance(result, dict)
+                else result if isinstance(result, (list, tuple)) else []
+            )
 
             for item in items_list:
                 if hasattr(item, "model_dump"):
@@ -310,21 +327,23 @@ class MemUService:
         except PermissionError:
             raise
         except Exception as e:
-            logger.error(f"Failed to delete memory item {item_id} for user {user_id}: {e}")
+            logger.error(
+                f"Failed to delete memory item {item_id} for user {user_id}: {e}"
+            )
             raise
 
     async def clear_all(self, user_id: str) -> bool:
         """
         Clear all memory items for a user.
-        
+
         Args:
             user_id: The user's unique identifier
-            
+
         Returns:
             True if cleared successfully
         """
         await self._ensure_initialized()
-        
+
         try:
             await self._service.clear_memory(where={"user_id": user_id})
             return True
@@ -341,18 +360,18 @@ class MemUService:
     ) -> dict[str, Any]:
         """
         Create a memory item manually.
-        
+
         Args:
             user_id: The user's unique identifier
             memory_type: Type of memory (profile, event, knowledge, behavior)
             content: The memory content
             categories: List of category names
-            
+
         Returns:
             Created memory item dict
         """
         await self._ensure_initialized()
-        
+
         try:
             result = await self._service.create_memory_item(
                 memory_type=memory_type,
@@ -370,16 +389,17 @@ class MemUService:
     ) -> dict[str, Any]:
         """
         Extract and store memories from a conversation.
-        
+
         Args:
             user_id: The user's unique identifier
             messages: List of message dicts with 'role' and 'content'
-            
+
         Returns:
             Dict with extracted items, categories, and resource reference
         """
         await self._ensure_initialized()
-        
+
+        conv_path = None
         try:
             # Write messages to temp file (memu reads from file/URL)
             with tempfile.NamedTemporaryFile(
@@ -387,7 +407,7 @@ class MemUService:
             ) as f:
                 json.dump(messages, f)
                 conv_path = f.name
-            
+
             logger.info(f"[SEED DEBUG] Calling memorize with file: {conv_path}")
             logger.info(f"[SEED DEBUG] Messages: {messages}")
             logger.info(f"[SEED DEBUG] User: {user_id}")
@@ -397,71 +417,118 @@ class MemUService:
                 modality="conversation",
                 user={"user_id": user_id},
             )
-            
+
             logger.info(f"[SEED DEBUG] memorize returned type: {type(result)}")
             logger.info(f"[SEED DEBUG] memorize returned: {result}")
 
-            # Cleanup temp file
-            os.unlink(conv_path)
-
-            return result if result else {"items": [], "categories": [], "resource": None}
+            return (
+                result if result else {"items": [], "categories": [], "resource": None}
+            )
         except Exception as e:
             logger.error(f"Failed to memorize conversation for user {user_id}: {e}")
             logger.error(traceback.format_exc())
             raise
+        finally:
+            if conv_path and os.path.exists(conv_path):
+                os.unlink(conv_path)
 
     async def seed_demo_data(self, user_id: str) -> dict[str, Any]:
         """
         Seed demo memory data for development/testing using the memorize approach.
-        
+
         Args:
             user_id: The user's unique identifier
-            
+
         Returns:
             Dict with created items count
         """
         await self._ensure_initialized()
-        
+
         logger.info(f"[SEED DEBUG] Starting seed_demo_data for user {user_id}")
         logger.info(f"[SEED DEBUG] Service instance: {id(self._service)}")
 
-        # Create demo conversations that will be extracted into memories
         demo_conversations = [
             [
-                {"role": "user", "content": "Hi! My name is Alex and I'm a researcher interested in AI applications."},
-                {"role": "assistant", "content": "Nice to meet you Alex! That's fascinating - what areas of AI are you focusing on?"},
-                {"role": "user", "content": "I work primarily with NLP and machine learning frameworks in Python."},
+                {
+                    "role": "user",
+                    "content": "Hi! My name is Alex and I'm a researcher interested in AI applications.",
+                },
+                {
+                    "role": "assistant",
+                    "content": "Nice to meet you Alex! That's fascinating - what areas of AI are you focusing on?",
+                },
+                {
+                    "role": "user",
+                    "content": "I work primarily with NLP and machine learning frameworks in Python.",
+                },
             ],
             [
-                {"role": "user", "content": "I prefer concise and direct responses - no fluff please."},
-                {"role": "assistant", "content": "Got it, I'll keep my responses focused and to the point."},
-                {"role": "user", "content": "Also, I value accuracy over speed. Take your time to be precise."},
+                {
+                    "role": "user",
+                    "content": "I prefer concise and direct responses - no fluff please.",
+                },
+                {
+                    "role": "assistant",
+                    "content": "Got it, I'll keep my responses focused and to the point.",
+                },
+                {
+                    "role": "user",
+                    "content": "Also, I value accuracy over speed. Take your time to be precise.",
+                },
             ],
             [
-                {"role": "user", "content": "When explaining technical concepts, I really appreciate code examples."},
-                {"role": "assistant", "content": "That makes sense for a developer. I'll include code snippets when relevant."},
-                {"role": "user", "content": "Yes, I'm proficient in Python and familiar with vector databases and embedding models."},
+                {
+                    "role": "user",
+                    "content": "When explaining technical concepts, I really appreciate code examples.",
+                },
+                {
+                    "role": "assistant",
+                    "content": "That makes sense for a developer. I'll include code snippets when relevant.",
+                },
+                {
+                    "role": "user",
+                    "content": "Yes, I'm proficient in Python and familiar with vector databases and embedding models.",
+                },
             ],
         ]
 
         all_items = []
         for i, conv in enumerate(demo_conversations):
-            logger.info(f"[SEED DEBUG] Processing conversation {i + 1}/{len(demo_conversations)}")
+            logger.info(
+                "[SEED DEBUG] Processing conversation %s/%s",
+                i + 1,
+                len(demo_conversations),
+            )
             try:
                 result = await self.memorize_conversation(user_id, conv)
                 logger.info(f"[SEED DEBUG] Conversation {i + 1} result: {result}")
                 if result and result.get("items"):
                     all_items.extend(result["items"])
-                    logger.info(f"[SEED DEBUG] Added {len(result['items'])} items, total: {len(all_items)}")
+                    logger.info(
+                        "[SEED DEBUG] Added %s items, total: %s",
+                        len(result["items"]),
+                        len(all_items),
+                    )
             except Exception as e:
-                logger.warning(f"[SEED DEBUG] Failed to memorize conversation {i + 1}: {e}")
-        
-        logger.info(f"[SEED DEBUG] Seeding complete. Total items created: {len(all_items)}")
-        
+                logger.warning(
+                    "[SEED DEBUG] Failed to memorize conversation %s: %s",
+                    i + 1,
+                    e,
+                )
+
+        logger.info(
+            "[SEED DEBUG] Seeding complete. Total items available: %s",
+            len(all_items),
+        )
+
         # Check what's in the DB after seeding (scoped to this user)
         try:
-            check_result = await self._service.list_memory_items(where={"user_id": user_id})
-            logger.info(f"[SEED DEBUG] Post-seed DB check for user {user_id}: {check_result}")
+            check_result = await self._service.list_memory_items(
+                where={"user_id": user_id}
+            )
+            logger.info(
+                f"[SEED DEBUG] Post-seed DB check for user {user_id}: {check_result}"
+            )
         except Exception as e:
             logger.error(f"[SEED DEBUG] Failed to check DB: {e}")
 
@@ -474,7 +541,7 @@ class MemUService:
 def get_memu_service() -> MemUService:
     """
     Get or create the singleton MemU service instance.
-    
+
     Returns:
         MemUService instance
     """
