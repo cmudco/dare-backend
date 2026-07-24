@@ -1,6 +1,7 @@
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 from users.api.views import (
+    AccountDeletionView,
     CustomVerifyEmailView,
     UserStatsView,
     VectorDBViewSet,
@@ -26,6 +27,7 @@ urlpatterns = [
     path("dj-rest-auth/", include("dj_rest_auth.urls")),
     path("dj-rest-auth/registration/", include("dj_rest_auth.registration.urls")),
 
+    path("account/", AccountDeletionView.as_view(), name="account-deletion"),
     path("stats/", UserStatsView.as_view(), name="user-stats"),
     path("token-health/", token_health_check, name="token-health-check"),
     path("access-codes/check/", AccessCodeCheckView.as_view(), name="access-code-check"),
