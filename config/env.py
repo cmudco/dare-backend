@@ -39,6 +39,11 @@ EMAIL_USE_SSL = env.bool('EMAIL_USE_SSL', default=False)
 # sentry
 SENTRY_DSN = os.getenv("SENTRY_DSN")
 
+# posthog (LLM observability) — analytics disabled when API key is unset
+POSTHOG_API_KEY = os.getenv("POSTHOG_API_KEY")
+POSTHOG_HOST = os.getenv("POSTHOG_HOST", "https://us.i.posthog.com")
+POSTHOG_LLM_CAPTURE_CONTENT = env.bool("POSTHOG_LLM_CAPTURE_CONTENT", default=True)
+
 # frontend
 FRONTEND_CONFIRM_EMAIL_URL = os.getenv("FRONTEND_CONFIRM_EMAIL_URL")
 FRONTEND_PASSWORD_RESET_URL = os.getenv("FRONTEND_PASSWORD_RESET_URL")

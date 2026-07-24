@@ -5,6 +5,7 @@ from .context_dto import ContextConfig
 from .dispatch_credentials_dto import ResolvedDispatchCredentials
 from .generation_dto import GenerationConfig
 from .llm_descriptor_dto import LLMDescriptor
+from .llm_generation_dto import LLMGenerationContext, LLMGenerationRecord
 from .media_dto import MediaConfig
 from .request_dto import LLMQueryChunk, LLMQueryRequest
 from .socratic_dto import SocraticConfig
@@ -14,6 +15,8 @@ __all__ = [
     "ContextConfig",
     "GenerationConfig",
     "LLMDescriptor",
+    "LLMGenerationContext",
+    "LLMGenerationRecord",
     "MediaConfig",
     "ResolvedDispatchCredentials",
     "SocraticConfig",

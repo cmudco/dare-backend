@@ -97,6 +97,9 @@ psycopg[binary]~=3.2.0
 # Energy/environmental impact tracking for LLM calls
 ecologits>=0.10.0
 
+# PostHog LLM observability ($ai_generation traces: cost, latency, errors)
+posthog~=6.0
+
 # SyftBox (distributed file storage)
 syft-core
 syft-perm
