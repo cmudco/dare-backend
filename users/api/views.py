@@ -1,3 +1,4 @@
+import logging
 import os
 import uuid
 
@@ -29,8 +30,14 @@ from prompts.models import Prompt
 from users.constants import VectorDBChoice, AuthSourceChoice, RoleChoice
 from users.models import AccessCodeGroup
 from users.services import AvatarService, AvatarValidationError
+from users.services.account_deletion_service import (
+    AccountDeletionBlocked,
+    AccountDeletionService,
+)
 
 User = get_user_model()
+
+logger = logging.getLogger(__name__)
 
 
 class CustomVerifyEmailView(VerifyEmailView):
@@ -100,6 +107,47 @@ class CustomVerifyEmailView(VerifyEmailView):
         return Response(response_data, status=status.HTTP_200_OK)
 
 
+
+
+class AccountDeletionView(APIView):
+    """Permanently delete the authenticated user's account and all their data."""
+
+    permission_classes = [IsAuthenticated]
+
+    CONFIRMATION_PHRASE = "DELETE"
+
+    def delete(self, request):
+        confirmation = (request.data or {}).get("confirmation", "")
+        if confirmation != self.CONFIRMATION_PHRASE:
+            return Response(
+                {"error": 'Confirmation phrase "DELETE" is required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if request.user.is_staff or request.user.is_superuser:
+            return Response(
+                {"error": "Staff accounts cannot be deleted through this endpoint."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        try:
+            report = AccountDeletionService().expunge(request.user)
+        except AccountDeletionBlocked as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_409_CONFLICT)
+        except Exception:
+            logger.exception("Account expunge failed for user %s", request.user.id)
+            return Response(
+                {"error": "Account deletion failed. Nothing has been removed."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return Response(
+            {
+                "detail": "Your account and all associated data have been permanently deleted.",
+                "warnings": report.warnings,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class UserStatsView(APIView):
