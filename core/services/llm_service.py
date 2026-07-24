@@ -1,6 +1,7 @@
 import logging
 import time
 from abc import ABC, abstractmethod
+from dataclasses import replace
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
 from conversations.constants import Provider, SenderType
@@ -15,6 +16,7 @@ from core.services.custom_llm_service import CustomLLMService
 from core.services.document_processor import DocumentProcessor
 from core.services.dtos import (
     LLMDescriptor,
+    LLMGenerationContext,
     LLMQueryChunk,
     LLMQueryRequest,
     LLMStreamEvent,
@@ -32,6 +34,10 @@ from core.services.llm_helpers import (  # Database helpers; Socratic message bu
     build_standard_messages,
     execute_audio_transcription,
     get_media_files_as_images,
+)
+from core.services.llm_observability_service import (
+    GenerationTracker,
+    get_llm_observability_service,
 )
 from core.services.openai_service import OpenAIService
 from files.models import File, Folder
@@ -75,6 +81,7 @@ class LLMService:
         self.document_processor = DocumentProcessor(vector_service=None)
         self.file_processor = FileProcessor()
         self.tool_fetcher = ToolFetcher()
+        self.observability = get_llm_observability_service()
 
     async def query(
         self,
@@ -204,6 +211,7 @@ class LLMService:
             memory_context=self._pending_memory_context,
             llm=llm,
             context_trace=context_trace,
+            generation_context=self._generation_context(request, llm, messages),
         )
 
     async def stream_round(
@@ -223,14 +231,20 @@ class LLMService:
         Yields:
             LLMStreamEvent
         """
-        async for event in prepared.ai_service.stream_chat_completion(
+        event_stream = prepared.ai_service.stream_chat_completion(
             messages,
             prepared.generation.max_tokens,
             prepared.generation.temperature,
             effort=prepared.generation.effort,
             images=prepared.images,
             tools=tools,
-        ):
+        )
+        if prepared.generation_context is not None:
+            tracker = self.observability.track_generation(
+                replace(prepared.generation_context, input_messages=messages)
+            )
+            event_stream = self._tracked_events(event_stream, tracker)
+        async for event in event_stream:
             yield event
 
     # ========== Query Orchestration Methods ==========
@@ -421,13 +435,23 @@ class LLMService:
                 f"[LLMService] Using structured output with provider: {llm.provider}, "
                 f"model: {llm.identifier}, spec: {request.generation.structured_spec}"
             )
-            text = await ai_service.get_chat_completion(
-                messages,
-                request.generation.max_tokens,
-                request.generation.temperature,
-                request.generation.effort,
-                structured_spec=request.generation.structured_spec,
+            tracker = self._start_generation_tracking(
+                request, llm, messages, is_streaming=False
             )
+            try:
+                text = await ai_service.get_chat_completion(
+                    messages,
+                    request.generation.max_tokens,
+                    request.generation.temperature,
+                    request.generation.effort,
+                    structured_spec=request.generation.structured_spec,
+                )
+                tracker.record_chunk(text)
+            except Exception as e:
+                tracker.record_error(e)
+                raise
+            finally:
+                tracker.finish()
             logger.info(
                 f"[LLMService] Structured output response received: {text[:200]}..."
             )
@@ -443,8 +467,60 @@ class LLMService:
                 images=all_images,
                 tools=llm_tools,
             )
-            async for chunk, usage in self._stream_legacy_chunks(event_stream):
+            tracker = self._start_generation_tracking(request, llm, messages)
+            async for chunk, usage in self._stream_legacy_chunks(
+                self._tracked_events(event_stream, tracker)
+            ):
                 yield chunk, usage
+
+    def _generation_context(
+        self,
+        request: LLMQueryRequest,
+        llm: LLM,
+        messages: List[Dict[str, Any]],
+        is_streaming: bool = True,
+    ) -> LLMGenerationContext:
+        """Identity for PostHog traces: message id groups a turn's rounds
+        (trace), conversation id groups turns (session), user id is the person."""
+        message_obj = request.message_obj
+        conversation = request.conversation
+        return LLMGenerationContext(
+            provider=llm.provider,
+            model=llm.identifier,
+            input_messages=messages,
+            trace_id=str(message_obj.id) if message_obj is not None else None,
+            session_id=str(conversation.id) if conversation is not None else None,
+            distinct_id=str(request.user.id) if request.user is not None else None,
+            is_streaming=is_streaming,
+            extra_properties={"is_socratic": request.is_socratic_mode()},
+        )
+
+    def _start_generation_tracking(
+        self,
+        request: LLMQueryRequest,
+        llm: LLM,
+        messages: List[Dict[str, Any]],
+        is_streaming: bool = True,
+    ) -> GenerationTracker:
+        return self.observability.track_generation(
+            self._generation_context(request, llm, messages, is_streaming)
+        )
+
+    @staticmethod
+    async def _tracked_events(
+        event_stream: AsyncGenerator[LLMStreamEvent, None],
+        tracker: GenerationTracker,
+    ) -> AsyncGenerator[LLMStreamEvent, None]:
+        """Feed a provider event stream into ``tracker`` while passing it on."""
+        try:
+            async for event in event_stream:
+                tracker.record_event(event)
+                yield event
+        except Exception as e:
+            tracker.record_error(e)
+            raise
+        finally:
+            tracker.finish()
 
     @staticmethod
     async def _stream_legacy_chunks(

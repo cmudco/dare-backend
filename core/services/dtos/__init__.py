@@ -5,6 +5,7 @@ from .context_dto import ContextConfig
 from .dispatch_credentials_dto import ResolvedDispatchCredentials
 from .generation_dto import GenerationConfig
 from .llm_descriptor_dto import LLMDescriptor
+from .llm_generation_dto import LLMGenerationContext, LLMGenerationRecord
 from .media_dto import MediaConfig
 from .parsed_document_dto import (BoundingBox, DocumentStructure,
                                   ParsedDocument, ParsedElement,
@@ -22,6 +23,8 @@ __all__ = [
     "DocumentStructure",
     "GenerationConfig",
     "LLMDescriptor",
+    "LLMGenerationContext",
+    "LLMGenerationRecord",
     "MediaConfig",
     "ParsedDocument",
     "ParsedElement",
