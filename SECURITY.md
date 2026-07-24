@@ -62,7 +62,7 @@ We will not pursue or support legal action against researchers who:
 
 ## Hardening recommendations
 
-For operators deploying DARE, please review the deployment guide ([INSTALL.md](INSTALL.md)) and configuration reference ([docs/configuration.md](docs/configuration.md)). At minimum:
+For operators deploying DARE, please review the deployment guide ([DEPLOYMENT.md](DEPLOYMENT.md)) and configuration reference ([docs/configuration.md](docs/configuration.md)). At minimum:
 
 - Rotate `DJANGO_SECRET_KEY` and `DARE_INTERNAL_KEY` from their example values before any non-local deployment.
 - Set `DJANGO_DEBUG=False` in production.

@@ -8,7 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
-- Documentation overhaul: added `INSTALL.md`, `docs/configuration.md`, `docs/architecture.md`, `docs/admin-guide.md`, `CONTRIBUTING.md`, `SECURITY.md`, and `CHANGELOG.md`.
+- Documentation overhaul: added `QUICKSTART.md`, `DEPLOYMENT.md`, `docs/configuration.md`, `docs/architecture.md`, `docs/admin-guide.md`, `CONTRIBUTING.md`, `SECURITY.md`, and `CHANGELOG.md`.
+- Split setup docs by intent: `QUICKSTART.md` is the short "run it locally" guide (Docker one-command stack, or local Python + venv); `DEPLOYMENT.md` (renamed from `INSTALL.md`) is the production/server reference.
 
 ---
 
@@ -78,7 +79,7 @@ First public release of the DARE backend. Establishes the platform for multi-LLM
 #### Operations
 
 - Docker Compose for the API server, worker, Postgres + pgvector, Redis, Weaviate, Weaviate console, and Ollama.
-- Example Nginx and systemd configurations in `INSTALL.md`.
+- Example Nginx and systemd configurations in `DEPLOYMENT.md`.
 - Drf-spectacular auto-generated OpenAPI schema at `/api/schema/`, with Swagger UI at `/api/docs/`.
 
 ### Known limitations

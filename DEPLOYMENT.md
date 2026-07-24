@@ -1,9 +1,14 @@
-# DARE Backend — Installation Guide
+# DARE Backend — Deployment Guide
+
+> **Just want to run it locally?** See [QUICKSTART.md](QUICKSTART.md) — the **Docker** path stands up
+> the whole stack (API, worker, Postgres, Redis, Weaviate) in one command, or the **Local Python**
+> path runs Django directly in a venv. **This guide is for deploying to a server** and is the fuller
+> reference behind that quick start.
 
 This guide covers two deployment paths:
 
-1. **Docker path** — recommended for first-time setup and development
-2. **Bare-metal path** — for production deployments or environments where Docker is not available
+1. **Docker path** — the simplest way to stand up the full stack; recommended for most deployments
+2. **Bare-metal path** — for production hosts or environments where Docker is not available
 
 For environment variable reference, see [docs/configuration.md](docs/configuration.md).
 
@@ -49,7 +54,7 @@ The bundled `docker-compose.yml` provisions:
 
 ```bash
 # 1. Clone and enter the repo
-git clone <repo-url> dare-backend && cd dare-backend
+git clone https://github.com/cmudco/dare-backend.git && cd dare-backend
 
 # 2. Copy and edit environment file
 cp .example.env .env
@@ -64,7 +69,10 @@ docker compose up --build -d
 # 4. Create a superuser
 docker compose exec web python manage.py createsuperuser
 
-# 5. Check container health
+# 5. Collect static files so the Django admin renders with its CSS/JS
+docker compose exec web python manage.py collectstatic --noinput
+
+# 6. Check container health
 docker compose ps
 curl http://localhost:8000/api/health/
 curl http://localhost:8000/api/ready/
@@ -153,7 +161,7 @@ DARE supports two vector backends — pick one or run both:
 
 ```bash
 # Clone and enter
-git clone <repo-url> dare-backend && cd dare-backend
+git clone https://github.com/cmudco/dare-backend.git && cd dare-backend
 
 # Create env file
 cp .example.env .env
