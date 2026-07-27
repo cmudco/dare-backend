@@ -6,7 +6,8 @@ required by various LLM providers (OpenAI, Claude, Gemini).
 """
 
 import base64
-from typing import Dict, List, Union
+import json
+from typing import Any, Dict, List, Union
 
 from google.genai import types
 
@@ -141,14 +142,110 @@ class OpenAIMessageFormatter:
             messages: List of message dictionaries
 
         Returns:
-            String for text-only, list for multimodal
+            String for plain text-only, list of input items once the history
+            carries tool turns or images
         """
+        if OpenAIMessageFormatter._has_tool_turns(messages):
+            # Tool turns must stay structured: flattening them to
+            # "assistant: " / "tool: ..." lines drops the call_id linkage the
+            # model needs to tie a result back to the call it made.
+            return OpenAIMessageFormatter._build_tool_aware_input(messages)
+
         has_multimodal = MessageFormatter.has_multimodal_content(messages)
 
         if not has_multimodal:
             return "\n".join([f"{msg['role']}: {msg['content']}" for msg in messages])
 
         return OpenAIMessageFormatter._build_multimodal_content(messages)
+
+    @staticmethod
+    def _has_tool_turns(messages: List[Dict]) -> bool:
+        """Whether the history contains tool calls or tool results."""
+        return any(
+            msg.get("role") == "tool" or msg.get("tool_calls") for msg in messages
+        )
+
+    @staticmethod
+    def _build_tool_aware_input(messages: List[Dict]) -> List[Dict]:
+        """
+        Build Responses API input items from a history containing tool turns.
+
+        The internal schema is Chat Completions shaped — an assistant turn
+        carrying ``tool_calls`` followed by one ``role:"tool"`` turn per
+        result. The Responses API instead wants those as sibling input items:
+        ``function_call`` for the request and ``function_call_output`` for the
+        result, matched on ``call_id``.
+
+        Args:
+            messages: Messages in the internal (Chat Completions) schema
+
+        Returns:
+            List of Responses API input items
+        """
+        input_items: List[Dict[str, Any]] = []
+
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+
+            if role == "tool":
+                output = content if isinstance(content, str) else json.dumps(content)
+                input_items.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": msg.get("tool_call_id", ""),
+                        "output": output,
+                    }
+                )
+                continue
+
+            if content:
+                if not isinstance(content, str):
+                    content = OpenAIMessageFormatter._build_content_parts(role, content)
+                input_items.append({"role": role, "content": content})
+
+            # Calls the assistant made on this turn. Emitted after its own
+            # text so the model reads the reasoning before the call.
+            for call in msg.get("tool_calls") or []:
+                function = call.get("function") or {}
+                input_items.append(
+                    {
+                        "type": "function_call",
+                        "call_id": call.get("id", ""),
+                        "name": function.get("name", ""),
+                        "arguments": function.get("arguments") or "{}",
+                    }
+                )
+
+        return input_items
+
+    @staticmethod
+    def _build_content_parts(role: str, content: List[Dict]) -> List[Dict]:
+        """
+        Convert structured (text + image) content into Responses API parts.
+
+        Args:
+            role: Turn role - assistant output uses a different part type
+            content: Chat Completions style content items
+
+        Returns:
+            List of Responses API content parts
+        """
+        text_type = "output_text" if role == "assistant" else "input_text"
+        parts = []
+
+        for item in content:
+            if item.get("type") == "text":
+                parts.append({"type": text_type, "text": item.get("text", "")})
+            elif item.get("type") == "image_url":
+                parts.append(
+                    {
+                        "type": "input_image",
+                        "image_url": item.get("image_url", {}).get("url", ""),
+                    }
+                )
+
+        return parts
 
     @staticmethod
     def _build_multimodal_content(messages: List[Dict]) -> List:

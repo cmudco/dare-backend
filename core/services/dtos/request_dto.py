@@ -60,9 +60,6 @@ class LLMQueryRequest:
         default_factory=tuple
     )  # Selected DARE tool slugs
 
-    # Tool results for follow-up calls
-    tool_results: list = field(default_factory=list)  # Results from previous tool calls
-
     def __post_init__(self):
         """Validate request data."""
         if not self.message or not self.message.strip():
@@ -112,10 +109,6 @@ class LLMQueryRequest:
     def requires_dare_tools(self) -> bool:
         """Check if DARE tools should be loaded."""
         return len(self.dare_tool_slugs) > 0
-
-    def has_tool_results(self) -> bool:
-        """Check if there are tool results from a previous call."""
-        return len(self.tool_results) > 0
 
     def with_conversation_defaults(self, conversation: Any) -> "LLMQueryRequest":
         """Apply conversation-level defaults for generation settings.

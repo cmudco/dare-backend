@@ -16,6 +16,7 @@ from openai import AsyncOpenAI
 from config import env
 from conversations.models import LLM
 from core.services.api_key_service import get_provider_api_key
+from core.services.dtos.stream_event_dto import LLMStreamEvent
 from core.services.llm_utils import (
     OpenAIErrorHandler,
     OpenAIMessageFormatter,
@@ -114,7 +115,7 @@ class OpenAIService:
         effort: Optional[str] = None,
         images: List[Dict] = None,
         tools: Optional[List[Dict]] = None,
-    ) -> AsyncGenerator[Tuple[str, Dict], None]:
+    ) -> AsyncGenerator[LLMStreamEvent, None]:
         """
         Stream chat completions from OpenAI's GPT model.
 
@@ -129,13 +130,15 @@ class OpenAIService:
             tools: Optional tools list for web search
 
         Yields:
-            Tuple of (text_chunk, usage_data)
+            LLMStreamEvent
         """
         try:
             # Step 1: Prepare messages with vision if needed
             prepared_messages = self._prepare_messages(messages, images)
 
             # Step 2: Create appropriate stream (Responses API vs Chat Completions).
+            # The Responses API takes web search and function tools together, so
+            # a mixed turn no longer has to drop either one.
             if self._uses_responses_api(tools):
                 response = await self._stream_responses_api(
                     prepared_messages,
@@ -159,14 +162,14 @@ class OpenAIService:
                 )
                 processor = OpenAIStreamProcessor.process_chat_completion_stream
 
-            # Step 3: Process and yield stream chunks
-            async for chunk, usage in processor(response):
-                yield chunk, usage
+            # Step 3: Process and yield stream events
+            async for event in processor(response):
+                yield event
 
         except Exception as e:
             logger.exception("OpenAI streaming error")
             error_message = OpenAIErrorHandler.format_error(e)
-            yield f"Error: {error_message}", None
+            yield LLMStreamEvent.text_delta(f"Error: {error_message}")
 
     async def get_chat_completion(
         self,

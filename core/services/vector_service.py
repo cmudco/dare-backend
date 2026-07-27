@@ -61,6 +61,12 @@ class BaseVectorClient(ABC):
 class BaseVectorService(ABC):
     """Abstract base class for vector database services."""
 
+    def close(self) -> None:
+        """Release an optional underlying client transport."""
+        close = getattr(getattr(self, "client", None), "close", None)
+        if callable(close):
+            close()
+
     @abstractmethod
     def upsert_vectors(
         self,

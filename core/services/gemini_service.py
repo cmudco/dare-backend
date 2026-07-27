@@ -17,6 +17,8 @@ from google.genai import types
 from config import env
 from conversations.models import LLM
 from core.services.api_key_service import get_provider_api_key
+from core.services.dtos.stream_event_dto import LLMStreamEvent
+from core.services.llm_utils.provider_message_converters import GeminiMessageConverter
 from core.services.llm_utils import (
     GeminiMessageFormatter,
     GeminiVisionHandler,
@@ -86,7 +88,7 @@ class GeminiService:
         effort: Optional[str] = None,
         images: List[Dict] = None,
         tools: Optional[List[Dict]] = None
-    ) -> AsyncGenerator[Tuple[str, Dict], None]:
+    ) -> AsyncGenerator[LLMStreamEvent, None]:
         """
         Stream chat completions from Google Gemini API.
 
@@ -101,7 +103,7 @@ class GeminiService:
             tools: List of tools including google_search support
 
         Yields:
-            Tuple of (text_chunk, usage_data)
+            LLMStreamEvent
         """
         try:
             # Step 1: Prepare messages with vision if needed
@@ -115,14 +117,14 @@ class GeminiService:
                 tools
             )
 
-            # Step 3: Process and yield stream chunks
-            async for chunk, usage in GeminiStreamProcessor.process_stream(response_stream):
-                yield chunk, usage
+            # Step 3: Process and yield stream events
+            async for event in GeminiStreamProcessor.process_stream(response_stream):
+                yield event
 
         except Exception as e:
             logger.error(f"Error in Gemini stream_chat_completion: {e}")
             error_message = GeminiErrorHandler.format_error(e)
-            yield f"Error: {error_message}", None
+            yield LLMStreamEvent.text_delta(f"Error: {error_message}")
 
     async def get_chat_completion(
         self,
@@ -260,8 +262,13 @@ class GeminiService:
         Returns:
             Async Gemini response stream
         """
-        contents = GeminiMessageFormatter.convert_to_contents(messages)
-        config = self._build_generation_config(max_tokens, temperature, tools)
+        # Convert internal (OpenAI-format) messages into structured Contents:
+        # role:"model" function_call parts and role:"user" function_response
+        # parts, replacing the legacy role-prefixed string flattening.
+        system_instruction, contents = GeminiMessageConverter.convert(messages)
+        config = self._build_generation_config(
+            max_tokens, temperature, tools, system_instruction
+        )
 
         # Use native async interface for true real-time streaming
         return await self.async_client.models.generate_content_stream(
@@ -274,7 +281,8 @@ class GeminiService:
         self,
         max_tokens: int,
         temperature: float,
-        tools: Optional[List[Dict]]
+        tools: Optional[List[Dict]],
+        system_instruction: Optional[str] = None,
     ) -> types.GenerateContentConfig:
         """
         Build Gemini generation configuration.
@@ -283,6 +291,7 @@ class GeminiService:
             max_tokens: Max tokens to generate
             temperature: Temperature setting
             tools: Optional tools configuration
+            system_instruction: Optional system prompt (extracted from messages)
 
         Returns:
             Gemini generation config
@@ -291,44 +300,37 @@ class GeminiService:
         config_kwargs = {"max_output_tokens": max_tokens + self.TOKEN_BUFFER}
         if self.capabilities.supports_temperature:
             config_kwargs["temperature"] = temperature
+        if system_instruction:
+            config_kwargs["system_instruction"] = system_instruction
         config = types.GenerateContentConfig(**config_kwargs)
 
         native_tools = self._build_native_tools(tools)
-        if native_tools:
-            config.tools = native_tools
-            if self._has_function_tools(tools):
-                logger.warning(
-                    "[Gemini] Native tools cannot be combined with function "
-                    "calling; using native Gemini tools only"
-                )
-        elif tools:
-            # Handle tools - could be native Gemini types.Tool or OpenAI format dicts
-            gemini_tools = []
-            
-            for tool in tools:
-                # Check if it's already a Gemini types.Tool object
-                if isinstance(tool, types.Tool):
-                    gemini_tools.append(tool)
-                # OpenAI format: {"type": "function", "function": {...}}
-                elif isinstance(tool, dict) and tool.get("type") == "function":
-                    func = tool.get("function", {})
-                    func_decl = types.FunctionDeclaration(
-                        name=func.get("name", ""),
-                        description=func.get("description", ""),
-                        parameters=func.get("parameters", {})
+        function_tools = self._convert_tools_to_gemini_format(tools or [])
+        gemini_tools = native_tools + function_tools
+
+        if gemini_tools:
+            config.tools = gemini_tools
+            if function_tools:
+                # AUTO lets the model decide per turn. ANY (the old setting)
+                # forces a function call on EVERY request — inside a tool loop
+                # that means the model can never produce a final text answer.
+                tool_config_kwargs = {
+                    "function_calling_config": types.FunctionCallingConfig(
+                        mode="AUTO"
                     )
-                    gemini_tools.append(types.Tool(function_declarations=[func_decl]))
-            
-            if gemini_tools:
-                config.tools = gemini_tools
-                # Force function calling when tools are provided
-                # This ensures Gemini uses the tool instead of generating raw text
-                config.tool_config = types.ToolConfig(
-                    function_calling_config=types.FunctionCallingConfig(
-                        mode="ANY"  # Force the model to use a function
-                    )
-                )
-                logger.debug(f"[Gemini] Set {len(gemini_tools)} tools with tool_config mode=ANY")
+                }
+                if native_tools:
+                    # Built-in tools (google_search, url_context) and function
+                    # calling can only share a request with this flag set —
+                    # the API returns INVALID_ARGUMENT otherwise.
+                    tool_config_kwargs["include_server_side_tool_invocations"] = True
+                config.tool_config = types.ToolConfig(**tool_config_kwargs)
+            logger.debug(
+                "[Gemini] Set %d tools (%d native, %d function declarations)",
+                len(gemini_tools),
+                len(native_tools),
+                len(function_tools),
+            )
 
         return config
 
@@ -336,28 +338,37 @@ class GeminiService:
         """
         Convert OpenAI-style tool definitions to Gemini format.
 
+        Pre-built ``types.Tool`` objects pass through unchanged; native web
+        tool indicators (google_search / url_context dicts) are NOT handled
+        here — they belong to ``_build_native_tools``.
+
         Args:
             tools: List of tools in OpenAI format
 
         Returns:
             List of Gemini Tool objects
         """
+        gemini_tools = []
         function_declarations = []
 
         for tool in tools:
-            if tool.get("type") == "function" and "function" in tool:
+            if isinstance(tool, types.Tool):
+                gemini_tools.append(tool)
+            elif tool.get("type") == "function" and "function" in tool:
                 func = tool["function"]
                 # Build Gemini function declaration
                 func_decl = types.FunctionDeclaration(
                     name=func.get("name", ""),
                     description=func.get("description", ""),
-                    parameters=func.get("parameters", {})
+                    parameters=func.get("parameters", {}),
                 )
                 function_declarations.append(func_decl)
 
         if function_declarations:
-            return [types.Tool(function_declarations=function_declarations)]
-        return []
+            gemini_tools.append(
+                types.Tool(function_declarations=function_declarations)
+            )
+        return gemini_tools
 
     def _build_native_tools(self, tools: Optional[List[Dict]]) -> List[types.Tool]:
         """
@@ -377,16 +388,6 @@ class GeminiService:
             native_tools.append(GeminiUrlContextTools.build_url_context_tool())
 
         return native_tools
-
-    @staticmethod
-    def _has_function_tools(tools: Optional[List[Dict]]) -> bool:
-        """Return whether an OpenAI-format function tool is present."""
-        if not tools:
-            return False
-        return any(
-            isinstance(tool, dict) and tool.get("type") == "function"
-            for tool in tools
-        )
 
     async def _get_structured_completion(
         self,

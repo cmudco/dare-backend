@@ -996,23 +996,7 @@ class LLMViewSet(viewsets.ModelViewSet):
         - If the access code group has no model group (or is inactive), return ALL models.
         - Otherwise, return the allowed models from the group's model list.
         """
-        user = self.request.user
-
-        # No access code group: all models
-        if not getattr(user, "access_code_group", None):
-            return LLM.objects.filter(is_active=True).order_by("tier", "name")
-
-        acg = user.access_code_group
-        # ACG without model group or inactive group: all models
-        if not getattr(acg, "model_group", None):
-            return LLM.objects.filter(is_active=True).order_by("tier", "name")
-        if not acg.model_group.is_active:
-            return LLM.objects.filter(is_active=True).order_by("tier", "name")
-
-        # Restrict to allowed models from the access code group's model group
-        return acg.model_group.allowed_models.filter(is_active=True).order_by(
-            "tier", "name"
-        )
+        return LLM.visible_for_user(self.request.user).order_by("tier", "name")
 
     def list(self, request, *args, **kwargs):
         """

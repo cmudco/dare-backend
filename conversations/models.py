@@ -149,6 +149,20 @@ class LLM(models.Model):
             is_image_generator=False, is_audio_transcriber=False
         ).first()
 
+    @classmethod
+    def visible_for_user(cls, user):
+        """Return the active model catalog the given user may dispatch."""
+        queryset = cls.objects.filter(is_active=True)
+        if user is None:
+            return queryset
+        access_group = getattr(user, "access_code_group", None)
+        model_group = (
+            getattr(access_group, "model_group", None) if access_group else None
+        )
+        if not model_group or not model_group.is_active:
+            return queryset
+        return model_group.allowed_models.filter(is_active=True)
+
     class Meta:
         verbose_name_plural = "LLMs"
 
@@ -906,6 +920,16 @@ class Message(BaseModel):
         blank=True,
         help_text="Per-stage RAG pipeline trace (query analysis, hybrid, rerank, MMR, grounding) for the retrieval-trace UI.",
     )
+    context_trace = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="Timed context-assembly stages for the turn (prompt, files, retrieval, memory, history) for the context-trace UI.",
+    )
+    usage_details = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="Per-round token/cost breakdown for multi-round tool responses; summed values live in input_tokens/output_tokens/cost.",
+    )
 
     # Content type for specialized rendering (diagrams, charts, etc.)
     content_type = models.CharField(
@@ -992,6 +1016,10 @@ class MessageToolCall(BaseModel):
     )
     arguments = models.JSONField(
         default=dict, help_text="Arguments passed to the tool."
+    )
+    round_index = models.PositiveSmallIntegerField(
+        default=0,
+        help_text="Tool-loop round this call executed in (1-based); 0 for rows persisted before rounds existed.",
     )
 
     # Execution state

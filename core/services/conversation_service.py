@@ -1,4 +1,3 @@
-import json
 from decimal import Decimal
 from typing import Dict, Optional
 
@@ -76,12 +75,13 @@ class ConversationService:
                 "waterMl": msg.get("water_ml", None),
                 "energyStats": msg.get("energy_stats", None),
                 "artifactId": msg.get("artifactId", None),
+                "artifactIds": msg.get("artifactIds", []),
                 "memoryContextData": msg.get("memory_context_data") or [],
                 # Keep socket fallback history aligned with the REST message
-                # serializer; the client camelizes this to `mcpToolCalls`.
-                "mcp_tool_calls": [
+                # serializer; the client camelizes this to `toolCalls`.
+                "tool_calls": [
                     self._build_tool_call_payload(tc)
-                    for tc in msg.get("mcp_tool_calls", [])
+                    for tc in msg.get("tool_calls", [])
                 ],
             }
             for msg in serialized_messages
@@ -96,41 +96,26 @@ class ConversationService:
         for clean, zero-confusion typing on FE side.
         """
         origin = tc.get("origin") or ToolCallOrigin.MCP
-        parsed_result = self._parse_tool_result(tc.get("result"))
 
         payload = {
-            "id": tc["tool_call_id"],
+            "id": tc["id"],
             "toolName": tc["tool_name"],
             "serverSlug": tc["server_slug"],
             "origin": origin,
             "status": tc["status"],
+            "round": tc.get("round", 0),
+            "arguments": tc.get("arguments") or {},
             "error": tc.get("error"),
         }
 
         if origin == ToolCallOrigin.DARE:
-            payload["dareResult"] = parsed_result
+            payload["dareResult"] = tc.get("dare_result")
         elif origin == ToolCallOrigin.PROVIDER:
-            payload["providerResult"] = parsed_result
+            payload["providerResult"] = tc.get("provider_result")
         else:
-            payload["mcpResult"] = parsed_result
+            payload["mcpResult"] = tc.get("mcp_result")
 
         return payload
-
-    def _parse_tool_result(self, result: str):
-        """
-        Parse tool result JSON string and camelize for FE.
-
-        The result is stored as a JSON string in the database, but FE
-        expects a properly camelCased object - no parsing needed on FE side.
-        """
-        if not result:
-            return None
-        try:
-            parsed = json.loads(result)
-            return camelize(parsed)
-        except (json.JSONDecodeError, TypeError):
-            # If parsing fails, return as-is (shouldn't happen normally)
-            return result
 
     async def get_user_email(self, conversation: Conversation) -> str:
         """Fetch user email associated with the conversation."""

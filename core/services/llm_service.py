@@ -1,4 +1,5 @@
 import logging
+import time
 from abc import ABC, abstractmethod
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
@@ -16,7 +17,10 @@ from core.services.dtos import (
     LLMDescriptor,
     LLMQueryChunk,
     LLMQueryRequest,
+    LLMStreamEvent,
+    PreparedChat,
     ResolvedDispatchCredentials,
+    StreamEventKind,
 )
 from core.services.file_processor import FileProcessor
 from core.services.gemini_service import GeminiService
@@ -47,7 +51,8 @@ class AIService(ABC):
         effort: Optional[str] = None,
         images: list = None,
         tools: list = None,
-    ) -> AsyncGenerator[Tuple[str, Dict], None]:
+    ) -> AsyncGenerator[LLMStreamEvent, None]:
+        """Stream a completion as normalized ``LLMStreamEvent`` objects."""
         pass
 
     @abstractmethod
@@ -126,6 +131,96 @@ class LLMService:
         except Exception as e:
             yield f"Error: {str(e)}", None
 
+    # ========== Tool-Loop Seams ==========
+
+    async def prepare_chat(self, request: LLMQueryRequest) -> PreparedChat:
+        """Build everything a tool loop needs, exactly once per turn.
+
+        Runs the full prompt build (system, context, RAG pre-injection,
+        history, current message), media processing, tool resolution and
+        provider dispatch. The loop then appends tool turns to the returned
+        messages and calls :meth:`stream_round` per round — the prompt is
+        never rebuilt.
+
+        Args:
+            request: LLMQueryRequest for the turn.
+
+        Returns:
+            PreparedChat ready for round streaming.
+        """
+        llm = await self._resolve_llm(request)
+        self._pending_memory_context = []
+        self._pending_context_trace = None
+        messages = await self._build_messages_for_request(request, llm)
+        context_trace = self._pending_context_trace
+
+        media_start = time.monotonic()
+        all_images = await self._process_media_files(request)
+
+        if all_images:
+            messages = await self.add_video_transcriptions_to_context(
+                all_images, messages, request.user
+            )
+        media_ms = int((time.monotonic() - media_start) * 1000)
+
+        tools_start = time.monotonic()
+        all_tools = await self.tool_fetcher.get_all_tools(request, llm, None)
+        llm_tools = self._append_web_tools(request, llm, all_tools)
+        tools_ms = int((time.monotonic() - tools_start) * 1000)
+
+        # Media processing and tool resolution happen here rather than in the
+        # message builder, so their stages append to the builder's trace.
+        if context_trace:
+            if all_images:
+                context_trace["stages"].append(
+                    {"kind": "media", "ms": media_ms, "count": len(all_images)}
+                )
+            if llm_tools:
+                context_trace["stages"].append(
+                    {"kind": "tools", "ms": tools_ms, "count": len(llm_tools)}
+                )
+            context_trace["totalMs"] += media_ms + tools_ms
+
+        ai_service = await self._get_ai_service(llm, request.user)
+
+        return PreparedChat(
+            messages=messages,
+            tools=llm_tools,
+            images=all_images,
+            ai_service=ai_service,
+            generation=request.generation,
+            memory_context=self._pending_memory_context,
+            llm=llm,
+            context_trace=context_trace,
+        )
+
+    async def stream_round(
+        self,
+        prepared: PreparedChat,
+        messages: List[Dict],
+        tools: Optional[List[Dict]],
+    ) -> AsyncGenerator[LLMStreamEvent, None]:
+        """Stream one model call of a tool loop as typed events.
+
+        Args:
+            prepared: The turn's PreparedChat.
+            messages: Current message list (round 1 messages plus any
+                appended tool turns).
+            tools: Tools for this round — None on the forced final round.
+
+        Yields:
+            LLMStreamEvent
+        """
+        async for event in prepared.ai_service.stream_chat_completion(
+            messages,
+            prepared.generation.max_tokens,
+            prepared.generation.temperature,
+            effort=prepared.generation.effort,
+            images=prepared.images,
+            tools=tools,
+        ):
+            yield event
+
     # ========== Query Orchestration Methods ==========
 
     async def _resolve_llm(self, request: LLMQueryRequest) -> LLM:
@@ -199,6 +294,7 @@ class LLMService:
         )
         # Store memory context for inclusion in final usage data
         self._pending_memory_context = result.memory_context
+        self._pending_context_trace = result.context_trace
         return result.messages
 
     async def _process_media_files(self, request: LLMQueryRequest) -> List[Dict]:
@@ -293,12 +389,7 @@ class LLMService:
 
         ai_service = await self._get_ai_service(llm, request.user)
 
-        # Use provided tools, or web search tools if enabled
-        llm_tools = tools
-        if not llm_tools and request.requires_web_search():
-            llm_tools = self._get_web_search_tools(llm)
-        if request.requires_web_fetch():
-            llm_tools = (llm_tools or []) + self._get_web_fetch_tools(llm)
+        llm_tools = self._append_web_tools(request, llm, tools)
 
         if request.generation.structured_spec:
             # Structured output (non-streaming)
@@ -318,16 +409,49 @@ class LLMService:
             )
             yield text, None
         else:
-            # Standard streaming completion
-            async for chunk, usage in ai_service.stream_chat_completion(
+            # Standard streaming completion, downgraded to the legacy
+            # (chunk, usage) contract that query() consumers expect.
+            event_stream = ai_service.stream_chat_completion(
                 messages,
                 request.generation.max_tokens,
                 request.generation.temperature,
                 effort=request.generation.effort,
                 images=all_images,
                 tools=llm_tools,
-            ):
+            )
+            async for chunk, usage in self._stream_legacy_chunks(event_stream):
                 yield chunk, usage
+
+    @staticmethod
+    async def _stream_legacy_chunks(
+        event_stream: AsyncGenerator[LLMStreamEvent, None],
+    ) -> AsyncGenerator[Tuple[str, Optional[Dict]], None]:
+        """Downgrade a typed event stream to the legacy (chunk, usage) contract.
+
+        Text deltas pass through as chunks; completed tool calls are folded
+        into the next usage frame under ``usage["tool_calls"]`` (with a final
+        synthetic frame if no usage frame follows them) — exactly the shape
+        pre-event consumers of ``query()`` were built against. Tool-call
+        lifecycle events (start/args progress) have no legacy equivalent and
+        are dropped here; consumers that want them use ``stream_round()``.
+        """
+        ready_tool_calls: List[Dict[str, str]] = []
+        tool_calls_delivered = False
+
+        async for event in event_stream:
+            if event.kind is StreamEventKind.TEXT_DELTA:
+                yield event.text, None
+            elif event.kind is StreamEventKind.TOOL_CALL_READY and event.tool_call:
+                ready_tool_calls.append(event.tool_call.to_payload_dict())
+            elif event.kind is StreamEventKind.USAGE and event.usage is not None:
+                usage = dict(event.usage)
+                if ready_tool_calls:
+                    usage["tool_calls"] = list(ready_tool_calls)
+                    tool_calls_delivered = True
+                yield "", usage
+
+        if ready_tool_calls and not tool_calls_delivered:
+            yield "", {"tool_calls": ready_tool_calls}
 
     # ========== End Query Orchestration Methods ==========
 
@@ -386,6 +510,27 @@ class LLMService:
         elif llm.provider == Provider.CUSTOM.value:
             return CustomLLMService(llm=llm, api_key=api_key)
         return ClaudeService(llm=llm, api_key=api_key)
+
+    def _append_web_tools(
+        self,
+        request: LLMQueryRequest,
+        llm: LLM,
+        tools: Optional[List[Dict]],
+    ) -> Optional[List[Dict]]:
+        """Append the enabled provider-native web tools to a turn's tool list.
+
+        Web search and web fetch are additive capabilities: enabling
+        artifacts, DARE tools, or MCP servers must never displace them, and
+        vice versa. (An earlier guard added web search only when no other
+        tools existed, which silently disabled search whenever artifacts
+        were on.)
+        """
+        combined = list(tools or [])
+        if request.requires_web_search():
+            combined += self._get_web_search_tools(llm)
+        if request.requires_web_fetch():
+            combined += self._get_web_fetch_tools(llm)
+        return combined or None
 
     def _get_web_search_tools(self, llm: LLM) -> list:
         """Get web search tools based on the LLM provider.
