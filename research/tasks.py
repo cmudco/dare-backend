@@ -3,9 +3,9 @@ Background jobs for the Research app.
 
 Delegated runs are long (search + reading + synthesis), so they run on
 django-rq rather than tying up a request. Every job follows the same shape:
-prepare (soul + input) → start the Hermes run → stream its events under a hard
-budget → parse the structured reply → persist results. The frontend polls the
-run for live status; only DARE writes to the database.
+prepare (soul + input) → start the Hermes run → stream its events → parse the
+structured reply → persist results. Hermes owns execution limits; the frontend
+polls the run for live status and only DARE writes to the database.
 """
 
 import logging
@@ -35,16 +35,10 @@ from research.services import (
     parse_artifacts,
     parse_critic_verdict,
     parse_staging_items,
+    safe_hermes_usage,
 )
 
 logger = logging.getLogger(__name__)
-
-# Hard per-run budget: a delegated run that exceeds either bound is stopped,
-# not left to burn tokens. (Hermes-side agent.max_turns caps the loop too.)
-# Sized to fit a full deep Scout (up to 5 searches + 10 reads) with headroom.
-MAX_RUN_TOOL_CALLS = 18
-MAX_RUN_SECONDS = 480
-
 
 # ── Shared run plumbing ──────────────────────────────────────────────────────
 
@@ -65,15 +59,112 @@ def _fail(run, detail, exc):
     )
 
 
-def _finish(run, detail, hermes, failed=False):
-    """Close out a run: final status + detail + token usage, in one save."""
+def _finish(run, detail, hermes, failed=False, raw_output=None):
+    """Close out a run: final status + detail + token usage, in one save.
+
+    ``raw_output`` is the agent's exact final response text; persisted verbatim
+    for the run-details audit view (observability only, never re-parsed).
+    """
     run.status = AgentRunStatus.FAILED if failed else AgentRunStatus.COMPLETED
     run.status_detail = detail[:255]
     run.completed_at = timezone.now()
     run.usage = hermes.fetch_usage(run.hermes_run_id)
-    run.save(
-        update_fields=["status", "status_detail", "completed_at", "usage", "updated_at"]
+    fields = ["status", "status_detail", "completed_at", "usage", "updated_at"]
+    if raw_output is not None:
+        run.raw_output = raw_output
+        fields.append("raw_output")
+    run.save(update_fields=fields)
+
+
+def _save_verified_status(run, status, detail, *, terminal=False, usage=None):
+    """Persist a Hermes-reported or explicitly unconfirmed execution state."""
+    run.status = status
+    run.status_detail = detail[:255]
+    fields = ["status", "status_detail", "updated_at"]
+    if terminal:
+        run.completed_at = timezone.now()
+        fields.append("completed_at")
+    if isinstance(usage, dict):
+        run.usage = usage
+        fields.append("usage")
+    run.save(update_fields=fields)
+
+
+def _cancel_before_hermes_start(run):
+    """Honor durable intent before a queued DARE job creates a Hermes run."""
+    run.refresh_from_db(fields=["cancellation_requested_at", "hermes_run_id"])
+    if not run.cancellation_requested_at or run.hermes_run_id:
+        return False
+    run.status = AgentRunStatus.CANCELLED
+    run.status_detail = "Cancelled before agent execution started."
+    run.completed_at = timezone.now()
+    run.save(update_fields=["status", "status_detail", "completed_at", "updated_at"])
+    return True
+
+
+def _verify_terminal_run(hermes, run, interrupted_detail):
+    """Resolve ambiguous SSE termination through Hermes's pollable run state.
+
+    Returns terminal output only for a confirmed completion. Every other result
+    is persisted without fabricating a failure and returns None.
+    """
+    try:
+        terminal = hermes.get_run(run.hermes_run_id)
+    except Exception as exc:  # noqa: BLE001 - absence is itself an honest state
+        logger.warning(
+            "Could not verify terminal Hermes state for run %s: %s",
+            run.hermes_run_id,
+            exc,
+        )
+        _save_verified_status(
+            run,
+            AgentRunStatus.OUTCOME_UNKNOWN,
+            "Hermes outcome unconfirmed; terminal status is unavailable.",
+        )
+        return None
+
+    status = str(terminal.get("status") or "").lower()
+    if status == AgentRunStatus.COMPLETED:
+        output = terminal.get("output")
+        return output if isinstance(output, str) else ""
+    if status == AgentRunStatus.FAILED:
+        error = terminal.get("error") or "Hermes reported a failed run."
+        _fail(run, interrupted_detail, Exception(error))
+        return None
+    if status == AgentRunStatus.CANCELLED:
+        _save_verified_status(
+            run,
+            AgentRunStatus.CANCELLED,
+            "Hermes confirmed that the run was cancelled.",
+            terminal=True,
+            usage=safe_hermes_usage(terminal.get("usage")),
+        )
+        if getattr(run, "cancellation_requested_at", None) and not getattr(
+            run, "cancellation_confirmed_at", None
+        ):
+            run.cancellation_confirmed_at = timezone.now()
+            run.save(update_fields=["cancellation_confirmed_at", "updated_at"])
+        return None
+    if status in {
+        AgentRunStatus.STARTED,
+        AgentRunStatus.QUEUED,
+        AgentRunStatus.RUNNING,
+        AgentRunStatus.WAITING_FOR_APPROVAL,
+        AgentRunStatus.STOPPING,
+    }:
+        _save_verified_status(
+            run,
+            status,
+            f"Hermes still reports {status}; terminal outcome is pending.",
+        )
+        return None
+
+    _save_verified_status(
+        run,
+        AgentRunStatus.OUTCOME_UNKNOWN,
+        f"Hermes returned an unrecognized run status: {status or 'empty'}.",
     )
+    return None
 
 
 def _project_soul(project):
@@ -118,6 +209,9 @@ def _start_run(hermes, run, input_text, instructions):
     Hermes's session summaries), while the session KEY pins long-term memory
     to the project. Returns the Hermes run id, or None after failing the run.
     """
+    if _cancel_before_hermes_start(run):
+        return None
+
     session_id = f"{run.session.hermes_session_id}-r{run.id}"
     session_key = f"dare-proj{run.project_id}"
     # The runtime can be briefly unreachable (a gateway restart/drain); a single
@@ -134,6 +228,14 @@ def _start_run(hermes, run, input_text, instructions):
             )
             run.hermes_run_id = started["run_id"]
             run.save(update_fields=["hermes_run_id", "updated_at"])
+            run.refresh_from_db(fields=["cancellation_requested_at"])
+            if run.cancellation_requested_at:
+                from research.services.cancellation_service import (
+                    execute_pending_cancellation,
+                )
+
+                execute_pending_cancellation(run.id, hermes=hermes)
+                return None
             return run.hermes_run_id
         except Exception as exc:  # noqa: BLE001 - retry transient runtime hiccups
             last_exc = exc
@@ -254,153 +356,67 @@ def _record_tool_call(run, event, arguments, seen_ids):
     )
 
 
-class _RunBudget:
-    """Tracks a delegated run's budget; trips when either bound is exceeded."""
-
-    def __init__(self):
-        self.started = time.monotonic()
-        self.tool_calls = 0
-
-    def exceeded(self):
-        if self.tool_calls > MAX_RUN_TOOL_CALLS:
-            return f"more than {MAX_RUN_TOOL_CALLS} tool calls"
-        if time.monotonic() - self.started > MAX_RUN_SECONDS:
-            return f"more than {MAX_RUN_SECONDS // 60} minutes"
-        return ""
-
-
 def _stream_run(hermes, run, interrupted_detail, on_tool=None):
     """
-    Consume the run's SSE stream under the budget. `on_tool(event, preview)`
-    is called per completed tool call (for audit rows + live status). Returns
-    (output, stopped_reason) — stopped_reason is set when the budget tripped
-    (the Hermes run is stopped, but the partial output is still returned so
-    callers can salvage it). Returns None when the run already failed.
+    Consume Hermes's SSE stream. `on_tool(event, preview)` is called per
+    completed tool call for audit rows and live status. Hermes owns the agent
+    loop limit through its global ``agent.max_turns`` configuration; DARE does
+    not count tool events or impose a competing wall-clock execution deadline.
+    Returns confirmed output for downstream parsing. Returns None after any
+    verified non-completed or unconfirmed state; that state is already persisted.
     """
     chunks = []
+    reasoning_parts = []
     last_preview = ""
-    stopped = ""
-    budget = _RunBudget()
+    terminal_event = ""
+    stream_error = None
     try:
         for event in hermes.stream_events(run.hermes_run_id):
-            stopped = budget.exceeded()
-            if stopped:
-                hermes.stop_run(run.hermes_run_id)
-                break
             etype = event.get("event")
             if etype == "message.delta":
                 chunks.append(event.get("delta", ""))
+            elif etype == "reasoning.available":
+                # The agent's own account of what it read and why it chose it —
+                # for a JSON-forced Scout run this is the only place the thinking
+                # survives, so keep it as durable observability.
+                text = event.get("text")
+                if isinstance(text, str) and text.strip():
+                    reasoning_parts.append(text.strip())
             elif etype == "tool.started":
                 last_preview = event.get("preview") or ""
             elif etype == "tool.completed":
-                budget.tool_calls += 1
                 if on_tool:
                     on_tool(event, last_preview)
             elif etype == "run.completed":
+                terminal_event = etype
+                break
+            elif etype in {"run.failed", "run.cancelled"}:
+                terminal_event = etype
                 break
     except Exception as exc:  # noqa: BLE001
-        _fail(run, interrupted_detail, exc)
-        return None
-
-    # An empty stream can mean Hermes itself died (e.g. the brain hit a rate
-    # limit) — never report that as a successful run with no findings.
-    if not chunks:
-        try:
-            hermes_failed = hermes.get_run(run.hermes_run_id).get("status") == "failed"
-        except Exception:  # noqa: BLE001 - can't confirm; let parsing decide
-            hermes_failed = False
-        if hermes_failed:
-            _fail(run, "The agent runtime failed mid-run.", Exception("hermes failed"))
-            return None
-
-    return "".join(chunks), stopped
-
-
-def _reask_json(hermes, run, expectation):
-    """
-    One corrective re-ask when a structured reply wasn't parseable. Hermes's
-    API has no schema forcing — the contract is prompt-level — so the official
-    pattern is: parse defensively, then ask once for a repaired reply in the
-    same session (the model still has its previous answer in context).
-    """
-    try:
-        started = hermes.start_run(
-            input_text=(
-                "Your previous reply was not parseable. Return ONLY "
-                + expectation
-                + " — a single JSON object, no prose, no markdown fences."
-            ),
-            instructions="",
-            session_id=f"{run.session.hermes_session_id}-r{run.id}",
+        stream_error = exc
+        logger.warning(
+            "Hermes event stream ended unexpectedly for run %s: %s",
+            run.hermes_run_id,
+            exc,
         )
-    except Exception as exc:  # noqa: BLE001 - repair is best-effort
-        logger.warning("Corrective re-ask could not start: %s", exc)
-        return ""
-    chunks = []
-    try:
-        for event in hermes.stream_events(started["run_id"]):
-            if event.get("event") == "message.delta":
-                chunks.append(event.get("delta", ""))
-            elif event.get("event") == "run.completed":
-                break
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Corrective re-ask stream failed: %s", exc)
-    return "".join(chunks)
 
+    # Persist the reasoning trace regardless of how the run resolves — it is
+    # captured live from the stream and cannot be re-fetched from the terminal
+    # record afterwards.
+    if reasoning_parts:
+        run.reasoning_trace = "\n\n".join(reasoning_parts)
+        run.save(update_fields=["reasoning_trace", "updated_at"])
 
-def _gathered_corpus(run, max_sources=12, per_source_chars=1500):
-    """A compact digest of the pages this run actually fetched — for injection
-    into the budget-finalize prompt. The finalize runs as a fresh Hermes turn
-    (history=0), so it has NONE of the run's gathered context; handing it the
-    real page excerpts here lets it write findings from content in the prompt
-    rather than from a session memory it doesn't have. Scoped by the run's time
-    window (best-effort); once the tool_use id is on the stream we can scope by
-    run_key exactly."""
-    rows = (
-        GatewayFetch.all_objects.filter(
-            tool="fetch_page", created_at__gte=run.started_at
-        )
-        .exclude(content="")
-        .order_by("created_at")[:max_sources]
-    )
-    parts = [
-        f"### {r.url}\n{(r.content or '').strip()[:per_source_chars]}" for r in rows
-    ]
-    return "\n\n".join(parts)
+    # A transport error, a stream that closes without a terminal event, or a
+    # terminal stream with no text is ambiguous at the transport layer. Hermes's
+    # pollable run record is the verification boundary.
+    if stream_error or not terminal_event or not chunks:
+        return _verify_terminal_run(hermes, run, interrupted_detail)
 
+    if terminal_event != "run.completed":
+        return _verify_terminal_run(hermes, run, interrupted_detail)
 
-def _finalize_at_budget(hermes, run):
-    """At the run budget: instead of stopping cold with nothing, ask the agent to
-    write its final answer NOW from what it already gathered — no more searching or
-    reading. Salvages a real result rather than failing empty. Best-effort."""
-    corpus = _gathered_corpus(run)
-    if not corpus:
-        # Nothing readable was gathered — no material to salvage a finding from.
-        return ""
-    try:
-        started = hermes.start_run(
-            input_text=(
-                "You have reached this run's time/tool budget — do NOT search, "
-                "read, or call any tool again. Below are the sources you already "
-                "fetched in this run. Using ONLY these, return your final "
-                '{"stagingItems": [...]} object now — a single JSON object, no '
-                "prose, no markdown fences.\n\n# Sources you gathered\n" + corpus
-            ),
-            instructions="",
-            session_id=f"{run.session.hermes_session_id}-r{run.id}",
-        )
-    except Exception as exc:  # noqa: BLE001 - best-effort salvage
-        logger.warning("Budget finalize could not start: %s", exc)
-        return ""
-    chunks = []
-    try:
-        for event in hermes.stream_events(started["run_id"]):
-            if event.get("event") == "message.delta":
-                chunks.append(event.get("delta", ""))
-            elif event.get("event") == "run.completed":
-                break
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Budget finalize stream failed: %s", exc)
     return "".join(chunks)
 
 
@@ -529,6 +545,8 @@ def run_scout_job(run_id):
     if not run:
         logger.warning("run_scout_job: run %s not found", run_id)
         return
+    if _cancel_before_hermes_start(run):
+        return
 
     soul, version, soul_content = _project_soul(run.project)
     hermes = get_hermes_service(run.project)
@@ -560,39 +578,16 @@ def run_scout_job(run_id):
         _record_tool_call(run, event, {"query": preview}, seen_ids)
         _set_status(run, f"Searched {searches} source{'s' if searches != 1 else ''}…")
 
-    streamed = _stream_run(hermes, run, "The Scout run was interrupted.", on_tool)
-    if streamed is None:
+    output = _stream_run(hermes, run, "The Scout run was interrupted.", on_tool)
+    if output is None:
         return
-    output, stopped = streamed
 
     _set_status(run, "Evaluating findings…")
     items = parse_staging_items(output)
-    if not items and stopped:
-        # Hit the budget mid-work — don't end empty. Force one final synthesis
-        # from what was already gathered (no further searching or reading).
-        _set_status(run, "At the budget — writing up final findings…")
-        items = parse_staging_items(_finalize_at_budget(hermes, run))
-    elif not items and output.strip():
-        _set_status(run, "Repairing the result format…")
-        items = parse_staging_items(
-            _reask_json(
-                hermes, run, 'the {"stagingItems": [...]} object from your instructions'
-            )
-        )
     staged = _stage_items(run, items, soul, version)
 
     plural = "s" if staged != 1 else ""
-    if stopped:
-        # Budget hit: we forced a final synthesis above, so the run delivers what
-        # it gathered rather than failing empty. Only a truly empty result fails.
-        detail = (
-            f"Reached the run budget ({stopped}); finalized with "
-            f"{staged} finding{plural} from what was gathered."
-            if staged
-            else f"Reached the run budget ({stopped}); could not finalize a finding."
-        )
-        _finish(run, detail, hermes, failed=not staged)
-    elif staged == 0:
+    if staged == 0:
         # Surface what happened — a deliberate empty envelope (no research
         # intent in the request) reads differently from an opaque zero.
         if '"stagingItems"' in output:
@@ -604,9 +599,9 @@ def run_scout_job(run_id):
                 if snippet
                 else "Staged 0 findings."
             )
-        _finish(run, detail, hermes)
+        _finish(run, detail, hermes, raw_output=output)
     else:
-        _finish(run, f"Staged {staged} finding{plural}.", hermes)
+        _finish(run, f"Staged {staged} finding{plural}.", hermes, raw_output=output)
 
     run.session.last_run_at = timezone.now()
     run.session.save(update_fields=["last_run_at", "updated_at"])
@@ -622,6 +617,8 @@ def run_critic_job(run_id, item_id):
     item = ResearchStagingItem.objects.filter(id=item_id).first()
     if not run or not item:
         logger.warning("run_critic_job: run %s / item %s not found", run_id, item_id)
+        return
+    if _cancel_before_hermes_start(run):
         return
 
     _, _, soul_content = _project_soul(item.project)
@@ -640,29 +637,11 @@ def run_critic_job(run_id, item_id):
         _record_tool_call(run, event, {"itemId": item.id, "query": preview}, seen_ids)
         _set_status(run, "Assessing the source…")
 
-    streamed = _stream_run(hermes, run, "The Critic run was interrupted.", on_tool)
-    if streamed is None:
-        return
-    output, stopped = streamed
-    if stopped:
-        _finish(
-            run,
-            f"Stopped: the run exceeded its budget ({stopped}).",
-            hermes,
-            failed=True,
-        )
+    output = _stream_run(hermes, run, "The Critic run was interrupted.", on_tool)
+    if output is None:
         return
 
     verdict = parse_critic_verdict(output)
-    if not verdict and output.strip():
-        verdict = parse_critic_verdict(
-            _reask_json(
-                hermes,
-                run,
-                'the {"verdict": ..., "reasoning": ..., "concerns": [...]} '
-                "object from your instructions",
-            )
-        )
     if verdict:
         item.critic_metadata = {
             **verdict,
@@ -670,9 +649,9 @@ def run_critic_job(run_id, item_id):
             "assessedAt": timezone.now().isoformat(),
         }
         item.save(update_fields=["critic_metadata", "updated_at"])
-        _finish(run, f"Critic: {verdict['verdict']}.", hermes)
+        _finish(run, f"Critic: {verdict['verdict']}.", hermes, raw_output=output)
     else:
-        _finish(run, "Critic could not return a verdict.", hermes)
+        _finish(run, "Critic could not return a verdict.", hermes, raw_output=output)
 
 
 # ── Artifacts ────────────────────────────────────────────────────────────────
@@ -684,6 +663,8 @@ def run_artifact_job(run_id):
     run = ResearchAgentRun.objects.filter(id=run_id).first()
     if not run:
         logger.warning("run_artifact_job: run %s not found", run_id)
+        return
+    if _cancel_before_hermes_start(run):
         return
 
     _, _, soul_content = _project_soul(run.project)
@@ -706,32 +687,18 @@ def run_artifact_job(run_id):
     if not _start_run(hermes, run, artifact_input, instructions):
         return
 
-    streamed = _stream_run(hermes, run, "The artifact run was interrupted.")
-    if streamed is None:
-        return
-    output, stopped = streamed
-    if stopped:
-        _finish(
-            run,
-            f"Stopped: the run exceeded its budget ({stopped}).",
-            hermes,
-            failed=True,
-        )
+    # Record the agent's tool calls (web_search, fetch_page, vision_analyze, …)
+    # so a long artifact run isn't an opaque black box in the Runs audit.
+    seen_ids = set()
+
+    def on_tool(event, preview):
+        _record_tool_call(run, event, {"query": preview}, seen_ids)
+
+    output = _stream_run(hermes, run, "The artifact run was interrupted.", on_tool)
+    if output is None:
         return
 
-    problems = []
-    artifacts = parse_artifacts(output, errors=problems)
-    # Re-ask only on actual format problems — a valid empty envelope is the
-    # model deliberately declining a no-substance request, not a parse failure.
-    if not artifacts and output.strip() and problems:
-        _set_status(run, "Repairing the artifact format…")
-        expectation = (
-            'the {"artifacts": [{"type": ..., "title": ..., "content": ...}]} '
-            "object from your instructions"
-            ". Fix these specific problems: " + "; ".join(problems[:5])
-        )
-        artifacts = parse_artifacts(_reask_json(hermes, run, expectation))
-
+    artifacts = parse_artifacts(output)
     now = timezone.now()
     created = 0
     for art in artifacts:
@@ -758,4 +725,5 @@ def run_artifact_job(run_id):
             else "No artifact produced."
         ),
         hermes,
+        raw_output=output,
     )

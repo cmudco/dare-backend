@@ -18,7 +18,9 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from common.permissions import IsResearcherOrAbove
+from research.api.permissions import IsResearchFeatureEnabled
 from research.api.serializers import (
+    ResearchAgentRunDetailSerializer,
     ResearchAgentRunSerializer,
     ResearchChatMessageSerializer,
     ResearchProjectDetailSerializer,
@@ -45,7 +47,11 @@ from research.models import (
     SoulFile,
     SoulFileVersion,
 )
-from research.services import get_hermes_service
+from research.services import (
+    get_hermes_service,
+    request_run_cancellation,
+    safe_hermes_usage,
+)
 from research.services.graph_service import build_evidence_graph
 from research.services.okf_service import (
     build_okf_bundle,
@@ -64,12 +70,30 @@ from research.tasks import (
 logger = logging.getLogger(__name__)
 
 
+class ResearchAccessMixin:
+    """Apply the Research Mode release flag to all research endpoints."""
+
+    permission_classes = [
+        IsAuthenticated,
+        IsResearcherOrAbove,
+        IsResearchFeatureEnabled,
+    ]
+
+
+class ResearchGenericViewSet(ResearchAccessMixin, viewsets.GenericViewSet):
+    pass
+
+
+class ResearchAPIView(ResearchAccessMixin, APIView):
+    pass
+
+
 class ResearchProjectViewSet(
     mixins.CreateModelMixin,
     mixins.ListModelMixin,
     mixins.RetrieveModelMixin,
     mixins.UpdateModelMixin,
-    viewsets.GenericViewSet,
+    ResearchGenericViewSet,
 ):
     """
     Research projects owned by the authenticated researcher.
@@ -82,7 +106,6 @@ class ResearchProjectViewSet(
     """
 
     serializer_class = ResearchProjectSerializer
-    permission_classes = [IsAuthenticated, IsResearcherOrAbove]
 
     def get_serializer_class(self):
         # The single-project payload is the workspace aggregation point; it will
@@ -124,7 +147,10 @@ CHAT_BRIEF = (
     "Be honest about tool failures: if a tool errors, tell the scholar plainly "
     "what failed and why (quota exhausted, auth, not found, blocked/paywalled) "
     "instead of guessing or blaming the wrong layer, and do not retry a tool "
-    "that returned a quota or auth error — switch approaches or say what you need."
+    "that returned a quota or auth error — switch approaches or say what you need. "
+    "When you search or read the web, use mcp_dare_web_search and "
+    "mcp_dare_fetch_page only — DARE's own audited web search and reader; never a "
+    "runtime-native web_search, web_extract, or browser tool."
 )
 
 
@@ -182,7 +208,7 @@ def _chat_instructions(project, soul_content, history=""):
     return "\n\n".join(parts)
 
 
-class ResearchChatView(APIView):
+class ResearchChatView(ResearchAPIView):
     """
     Hands-on chat for a project — one persistent chat session, backed by Hermes.
 
@@ -191,7 +217,6 @@ class ResearchChatView(APIView):
       assistant reply back as SSE (proxying Hermes `message.delta` events).
     """
 
-    permission_classes = [IsAuthenticated, IsResearcherOrAbove]
     renderer_classes = [CamelCaseJSONRenderer, ServerSentEventRenderer]
 
     def _get_project(self, request, project_id):
@@ -289,6 +314,8 @@ class ResearchChatView(APIView):
         def event_stream():
             chunks = []
             seen_ids = set()  # GatewayFetch rows already claimed by this run's audit
+            terminal_event = ""
+            stream_error = None
             try:
                 for event in hermes.stream_events(hermes_run_id):
                     event_type = event.get("event")
@@ -328,24 +355,132 @@ class ResearchChatView(APIView):
                             }
                         )
                     elif event_type == "run.completed":
+                        terminal_event = event_type
                         break
-            except Exception as exc:  # noqa: BLE001 - mark the run failed
+                    elif event_type in {"run.failed", "run.cancelled"}:
+                        terminal_event = event_type
+                        break
+            except Exception as exc:  # noqa: BLE001 - verify instead of guessing
+                stream_error = exc
                 logger.error(
                     "research.chat run %s stream failed: %s",
                     run.id,
                     exc,
                     exc_info=True,
                 )
-                run.status = AgentRunStatus.FAILED
-                run.error = str(exc)
-                run.completed_at = timezone.now()
-                run.save(
-                    update_fields=["status", "error", "completed_at", "updated_at"]
-                )
-                yield _sse(
-                    {"type": "error", "error": f"The agent stream failed: {exc}"}
-                )
-                return
+
+            if stream_error or terminal_event != "run.completed" or not chunks:
+                try:
+                    terminal = hermes.get_run(hermes_run_id)
+                except Exception:  # noqa: BLE001 - preserve honest ambiguity
+                    run.status = AgentRunStatus.OUTCOME_UNKNOWN
+                    run.status_detail = (
+                        "Hermes outcome unconfirmed; terminal status is unavailable."
+                    )
+                    run.completed_at = None
+                    run.save(
+                        update_fields=[
+                            "status",
+                            "status_detail",
+                            "completed_at",
+                            "updated_at",
+                        ]
+                    )
+                    yield _sse(
+                        {
+                            "type": "error",
+                            "error": "The agent outcome could not be confirmed.",
+                        }
+                    )
+                    return
+
+                terminal_status = str(terminal.get("status") or "").lower()
+                if terminal_status == AgentRunStatus.COMPLETED:
+                    terminal_output = terminal.get("output")
+                    chunks = [
+                        terminal_output if isinstance(terminal_output, str) else ""
+                    ]
+                elif terminal_status == AgentRunStatus.FAILED:
+                    run.status = AgentRunStatus.FAILED
+                    run.status_detail = "Hermes confirmed that the chat run failed."
+                    run.error = "Hermes reported a failed run."
+                    run.completed_at = timezone.now()
+                    run.save(
+                        update_fields=[
+                            "status",
+                            "status_detail",
+                            "error",
+                            "completed_at",
+                            "updated_at",
+                        ]
+                    )
+                    yield _sse({"type": "error", "error": "The agent run failed."})
+                    return
+                elif terminal_status == AgentRunStatus.CANCELLED:
+                    run.status = AgentRunStatus.CANCELLED
+                    run.status_detail = (
+                        "Hermes confirmed that the chat run was cancelled."
+                    )
+                    run.completed_at = timezone.now()
+                    fields = ["status", "status_detail", "completed_at", "updated_at"]
+                    if (
+                        run.cancellation_requested_at
+                        and not run.cancellation_confirmed_at
+                    ):
+                        run.cancellation_confirmed_at = timezone.now()
+                        fields.append("cancellation_confirmed_at")
+                    usage = safe_hermes_usage(terminal.get("usage"))
+                    if usage:
+                        run.usage = usage
+                        fields.append("usage")
+                    run.save(update_fields=fields)
+                    yield _sse(
+                        {"type": "error", "error": "The agent run was cancelled."}
+                    )
+                    return
+                elif terminal_status in {
+                    AgentRunStatus.STARTED,
+                    AgentRunStatus.QUEUED,
+                    AgentRunStatus.RUNNING,
+                    AgentRunStatus.WAITING_FOR_APPROVAL,
+                    AgentRunStatus.STOPPING,
+                }:
+                    run.status = terminal_status
+                    run.status_detail = f"Hermes still reports {terminal_status}; terminal outcome is pending."
+                    run.completed_at = None
+                    run.save(
+                        update_fields=[
+                            "status",
+                            "status_detail",
+                            "completed_at",
+                            "updated_at",
+                        ]
+                    )
+                    yield _sse(
+                        {"type": "error", "error": "The agent run is still active."}
+                    )
+                    return
+                else:
+                    run.status = AgentRunStatus.OUTCOME_UNKNOWN
+                    run.status_detail = (
+                        "Hermes returned an unrecognized terminal status."
+                    )
+                    run.completed_at = None
+                    run.save(
+                        update_fields=[
+                            "status",
+                            "status_detail",
+                            "completed_at",
+                            "updated_at",
+                        ]
+                    )
+                    yield _sse(
+                        {
+                            "type": "error",
+                            "error": "The agent outcome could not be confirmed.",
+                        }
+                    )
+                    return
 
             assistant_message = ResearchChatMessage.objects.create(
                 session=session,
@@ -383,7 +518,7 @@ class ResearchChatView(APIView):
         return response
 
 
-class ResearchScoutView(APIView):
+class ResearchScoutView(ResearchAPIView):
     """
     Delegated Scout discovery for a project.
 
@@ -392,8 +527,6 @@ class ResearchScoutView(APIView):
     with the run id. The client polls GET /api/research/agent-runs/{id}/ for live
     status; staged findings land in the Review Inbox when the run completes.
     """
-
-    permission_classes = [IsAuthenticated, IsResearcherOrAbove]
 
     def post(self, request, project_id):
         project = get_object_or_404(
@@ -443,10 +576,17 @@ class ResearchScoutView(APIView):
         )
 
 
-class ResearchAgentRunView(APIView):
-    """GET /api/research/agent-runs/{id}/ — a run's live status (for polling)."""
+class ResearchAgentRunView(ResearchAPIView):
+    """GET /api/research/agent-runs/{id}/ — a run's live status (for polling)
+    and full run-details audit payload (adds the agent's exact final response)."""
 
-    permission_classes = [IsAuthenticated, IsResearcherOrAbove]
+    # Terminal states whose final output is worth backfilling from Hermes.
+    _BACKFILLABLE = {
+        AgentRunStatus.COMPLETED,
+        AgentRunStatus.FAILED,
+        AgentRunStatus.CANCELLED,
+        AgentRunStatus.OUTCOME_UNKNOWN,
+    }
 
     def get(self, request, run_id):
         run = get_object_or_404(
@@ -454,17 +594,53 @@ class ResearchAgentRunView(APIView):
             id=run_id,
             project__user=request.user,
         )
-        return Response(ResearchAgentRunSerializer(run).data)
+        if (
+            not run.raw_output
+            and run.hermes_run_id
+            and run.status in self._BACKFILLABLE
+        ):
+            self._backfill_raw_output(run)
+        return Response(ResearchAgentRunDetailSerializer(run).data)
+
+    @staticmethod
+    def _backfill_raw_output(run):
+        """Best-effort pull of the final response from Hermes for runs that
+        predate raw_output persistence, while its run record is still retained.
+        Absence stays honest — the record may have expired (Hermes TTL)."""
+        try:
+            terminal = get_hermes_service(run.project).get_run(run.hermes_run_id)
+        except Exception:  # noqa: BLE001 - absence is an honest state, not an error
+            return
+        output = terminal.get("output")
+        if isinstance(output, str) and output.strip():
+            run.raw_output = output
+            run.save(update_fields=["raw_output", "updated_at"])
 
 
-class ResearchStagingItemCriticView(APIView):
+class ResearchAgentRunCancelView(ResearchAPIView):
+    """POST an idempotent, durable cancellation request for an owned run."""
+
+    def post(self, request, run_id):
+        try:
+            run, attempted = request_run_cancellation(run_id, request.user)
+        except ResearchAgentRun.DoesNotExist:
+            run = get_object_or_404(
+                ResearchAgentRun.active_objects,
+                id=run_id,
+                project__user=request.user,
+            )
+            return Response(ResearchAgentRunSerializer(run).data)
+
+        response_status = status.HTTP_202_ACCEPTED if attempted else status.HTTP_200_OK
+        return Response(ResearchAgentRunSerializer(run).data, status=response_status)
+
+
+class ResearchStagingItemCriticView(ResearchAPIView):
     """
     POST /api/research/staging-items/{id}/critic/ — enqueue a Critic run that
     pressure-tests the staged source against the standards. The verdict lands on
     the item's criticMetadata. Returns {runId}; poll GET /agent-runs/{id}/.
     """
-
-    permission_classes = [IsAuthenticated, IsResearcherOrAbove]
 
     def post(self, request, item_id):
         item = get_object_or_404(
@@ -498,14 +674,12 @@ class ResearchStagingItemCriticView(APIView):
         )
 
 
-class ResearchArtifactGenerateView(APIView):
+class ResearchArtifactGenerateView(ResearchAPIView):
     """
     POST /api/research/projects/{id}/artifact/ {prompt, artifactType?} — enqueue a
     delegated run that produces a renderable artifact via the JSON contract.
     Returns {runId}; poll GET /agent-runs/{id}/. The artifact lands in the project.
     """
-
-    permission_classes = [IsAuthenticated, IsResearcherOrAbove]
 
     def post(self, request, project_id):
         project = get_object_or_404(
@@ -547,14 +721,12 @@ class ResearchArtifactGenerateView(APIView):
         )
 
 
-class ResearchProjectGraphView(APIView):
+class ResearchProjectGraphView(ResearchAPIView):
     """
     GET /api/research/projects/{id}/graph/ — the project's evidence graph
     (nodes/edges), derived deterministically from staged sources, run
     provenance, and the gateway fetch corpus. See research.services.graph_service.
     """
-
-    permission_classes = [IsAuthenticated, IsResearcherOrAbove]
 
     def get(self, request, project_id):
         project = get_object_or_404(
@@ -563,7 +735,7 @@ class ResearchProjectGraphView(APIView):
         return Response(build_evidence_graph(project), status=status.HTTP_200_OK)
 
 
-class ResearchProjectOKFExportView(APIView):
+class ResearchProjectOKFExportView(ResearchAPIView):
     """
     GET /api/research/projects/{id}/okf-export/ — the project's durable
     knowledge as a downloadable Open Knowledge Format (OKF v0.1) bundle: a zip
@@ -571,8 +743,6 @@ class ResearchProjectOKFExportView(APIView):
     knowledge + project memory); staging is never exported. See
     research.services.okf_service.
     """
-
-    permission_classes = [IsAuthenticated, IsResearcherOrAbove]
 
     def get(self, request, project_id):
         project = get_object_or_404(
@@ -590,7 +760,7 @@ class ResearchProjectOKFExportView(APIView):
         return response
 
 
-class ResearchProjectOKFBundleView(APIView):
+class ResearchProjectOKFBundleView(ResearchAPIView):
     """
     GET /api/research/projects/{id}/okf-bundle/ — the same durable-knowledge OKF
     bundle as the zip export, but as structured JSON (ordered files with parsed
@@ -602,7 +772,6 @@ class ResearchProjectOKFBundleView(APIView):
     what the exported .md files carry, and must not be camelCased.
     """
 
-    permission_classes = [IsAuthenticated, IsResearcherOrAbove]
     renderer_classes = [JSONRenderer]
 
     def get(self, request, project_id):
@@ -612,7 +781,7 @@ class ResearchProjectOKFBundleView(APIView):
         return Response(build_okf_view(project), status=status.HTTP_200_OK)
 
 
-class ResearchThesisSourceLinkView(APIView):
+class ResearchThesisSourceLinkView(ResearchAPIView):
     """
     Manage the typed links between a thesis (ResearchProjectMemory) and the
     durable sources that bear on it — the relationship that drives the OKF
@@ -622,8 +791,6 @@ class ResearchThesisSourceLinkView(APIView):
     - POST /api/research/theses/{memory_id}/sources/  — body {sourceId, stance?};
       stance defaults to the source's own evidence label when omitted.
     """
-
-    permission_classes = [IsAuthenticated, IsResearcherOrAbove]
 
     def _thesis(self, request, memory_id):
         return get_object_or_404(
@@ -670,10 +837,8 @@ class ResearchThesisSourceLinkView(APIView):
         )
 
 
-class ResearchThesisSourceLinkDetailView(APIView):
+class ResearchThesisSourceLinkDetailView(ResearchAPIView):
     """DELETE /api/research/theses/{memory_id}/sources/{source_id}/ — unlink."""
-
-    permission_classes = [IsAuthenticated, IsResearcherOrAbove]
 
     def delete(self, request, memory_id, source_id):
         thesis = get_object_or_404(
@@ -688,7 +853,7 @@ class ResearchThesisSourceLinkDetailView(APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-class ResearchAgentMemoryView(APIView):
+class ResearchAgentMemoryView(ResearchAPIView):
     """
     GET /api/research/agent-memory/ — the Hermes profile's operational memory
     files (SOUL.md, MEMORY.md, USER.md), read-only, for the Agent Memory view.
@@ -696,13 +861,11 @@ class ResearchAgentMemoryView(APIView):
     auto-writes as it learns.
     """
 
-    permission_classes = [IsAuthenticated, IsResearcherOrAbove]
-
     def get(self, request):
         return Response(get_hermes_service().read_agent_memory())
 
 
-class ResearchStagingItemReviewView(APIView):
+class ResearchStagingItemReviewView(ResearchAPIView):
     """
     Scholar review of a staged candidate.
 
@@ -711,8 +874,6 @@ class ResearchStagingItemReviewView(APIView):
     - reject  -> status rejected (+ reason)
     - later   -> status later   (+ reason)
     """
-
-    permission_classes = [IsAuthenticated, IsResearcherOrAbove]
 
     def post(self, request, item_id):
         item = get_object_or_404(
@@ -755,7 +916,7 @@ class ResearchStagingItemReviewView(APIView):
         return Response(ResearchStagingItemSerializer(item).data)
 
 
-class ResearchSoulFileView(APIView):
+class ResearchSoulFileView(ResearchAPIView):
     """
     The project's versioned soul file (standards).
 
@@ -764,8 +925,6 @@ class ResearchSoulFileView(APIView):
       version (the old one is kept; staging items keep the version that governed
       them).
     """
-
-    permission_classes = [IsAuthenticated, IsResearcherOrAbove]
 
     def _project(self, request, project_id):
         return get_object_or_404(

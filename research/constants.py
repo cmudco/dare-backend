@@ -87,8 +87,12 @@ class AgentRunStatus:
     STARTED = "started"
     RUNNING = "running"
     QUEUED = "queued"
+    WAITING_FOR_APPROVAL = "waiting_for_approval"
+    STOPPING = "stopping"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
+    OUTCOME_UNKNOWN = "outcome_unknown"
 
     @classmethod
     def choices(cls):
@@ -96,8 +100,12 @@ class AgentRunStatus:
             (cls.STARTED, "Started"),
             (cls.RUNNING, "Running"),
             (cls.QUEUED, "Queued"),
+            (cls.WAITING_FOR_APPROVAL, "Waiting for approval"),
+            (cls.STOPPING, "Stopping"),
             (cls.COMPLETED, "Completed"),
             (cls.FAILED, "Failed"),
+            (cls.CANCELLED, "Cancelled"),
+            (cls.OUTCOME_UNKNOWN, "Outcome unknown"),
         ]
 
 

@@ -1,10 +1,14 @@
 import os
 import uuid
 
+from allauth.account import app_settings as allauth_account_settings
+from allauth.account.models import EmailAddress
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.core import signing
 from django.core.files.storage import default_storage
 from django.db.models import Sum
+from django.http import Http404
 from django.utils import timezone
 from django_rq import enqueue, get_queue
 from dj_rest_auth.registration.views import VerifyEmailView
@@ -37,31 +41,62 @@ class CustomVerifyEmailView(VerifyEmailView):
     Only DARE users receive tokens - Socratic Bots users are redirected to their own
     frontend and can't use tokens stored in DARE's localStorage anyway.
     """
+    def _already_verified_response(self):
+        return Response(
+            {'detail': 'Email already verified', 'already_verified': True},
+            status=status.HTTP_200_OK,
+        )
+
+    def _find_verified_email_address(self, key):
+        """
+        Resolve the key to an already-verified EmailAddress.
+
+        allauth's EmailConfirmationHMAC.from_key() only matches unverified
+        addresses, so re-opening a confirmation link after verification raises
+        404 (email security scanners pre-click links, making this the first
+        thing many users see). The HMAC signature is still validated here;
+        expiry is ignored because this path issues no credentials.
+        """
+        try:
+            pk = signing.loads(key, salt=allauth_account_settings.SALT)
+        except signing.BadSignature:
+            return None
+        return EmailAddress.objects.filter(pk=pk, verified=True).first()
+
     def post(self, request, *args, **kwargs):
         # Validate the key first
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        
+        key = serializer.validated_data['key']
+
         # Set the key in kwargs so get_object() works (like parent class does)
-        self.kwargs['key'] = serializer.validated_data['key']
-        
+        self.kwargs['key'] = key
+
         # Get the confirmation object and confirm it
-        confirmation = self.get_object()
-        confirmation.confirm(self.request)
-        
+        try:
+            confirmation = self.get_object()
+        except Http404:
+            if self._find_verified_email_address(key):
+                return self._already_verified_response()
+            raise
+
+        if confirmation.confirm(self.request) is None:
+            # A concurrent request confirmed this address first
+            return self._already_verified_response()
+
         # Get the user from the confirmation
         user = confirmation.email_address.user
-        
+
         # Prepare response
         response_data = {'detail': 'ok'}
-        
+
         # Only generate JWT tokens for DARE users (auto-login)
         # Socratic Bots users will be redirected to their frontend where these tokens wouldn't be accessible
         if user.auth_source == AuthSourceChoice.DARE:
             refresh = RefreshToken.for_user(user)
             response_data['access'] = str(refresh.access_token)
             response_data['refresh'] = str(refresh)
-        
+
         return Response(response_data, status=status.HTTP_200_OK)
 
 

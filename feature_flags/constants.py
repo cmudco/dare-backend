@@ -63,4 +63,9 @@ DEFAULT_FLAG_DEFINITIONS = [
         "description": "Publish/share prompts, conversations, and workflows.",
         "default_enabled": False,
     },
+    {
+        "key": "enable_research",
+        "description": "Research Mode projects, agents, and research APIs.",
+        "default_enabled": False,
+    },
 ]

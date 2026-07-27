@@ -237,6 +237,21 @@ class ResearchAgentRun(BaseModel):
         default="",
         help_text="Human-readable live progress line (e.g. 'Searching the web…').",
     )
+    raw_output = models.TextField(
+        blank=True,
+        default="",
+        help_text="The agent's exact final response text as Hermes returned it, "
+        "before DARE parsing. Observability/audit only; may be backfilled from "
+        "Hermes on demand while its run record is still retained.",
+    )
+    reasoning_trace = models.TextField(
+        blank=True,
+        default="",
+        help_text="The agent's own reasoning ('reasoning.available' events) — "
+        "what it read and why it chose it. Captured live from the stream; for a "
+        "JSON-forced run this is the only place the thinking survives. Cannot be "
+        "backfilled after the run (not part of the terminal record).",
+    )
     soul_file_version = models.CharField(
         max_length=64,
         blank=True,
@@ -286,6 +301,55 @@ class ResearchAgentRun(BaseModel):
         blank=True,
         default="",
         help_text="Correlating Hermes run id (set when Hermes is wired).",
+    )
+    cancellation_requested_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When an authorized user first requested cancellation.",
+    )
+    cancellation_requested_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="requested_research_run_cancellations",
+        help_text="The authorized user who first requested cancellation.",
+    )
+    cancellation_attempt_count = models.PositiveIntegerField(
+        default=0,
+        help_text="Number of claimed upstream stop attempts.",
+    )
+    cancellation_last_attempt_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When the latest upstream stop attempt was claimed.",
+    )
+    cancellation_acknowledged_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When Hermes acknowledged a stop request with 'stopping'.",
+    )
+    cancellation_confirmed_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When terminal Hermes truth confirmed 'cancelled'.",
+    )
+    cancellation_stop_http_status = models.PositiveSmallIntegerField(
+        null=True,
+        blank=True,
+        help_text="Safe HTTP status from the latest Hermes stop response.",
+    )
+    cancellation_error_code = models.CharField(
+        max_length=64,
+        blank=True,
+        default="",
+        help_text="Safe machine-readable result of the latest cancellation attempt.",
+    )
+    cancellation_error_detail = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        help_text="Safe fixed-text detail for the latest cancellation attempt.",
     )
 
     objects = models.Manager()

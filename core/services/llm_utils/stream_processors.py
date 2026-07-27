@@ -217,8 +217,11 @@ class OpenAIStreamProcessor:
         """
         Process OpenAI Responses API stream.
 
-        Extracts both text content and web search sources (when enabled).
-        Sources are included in the final usage data under 'web_search_sources'.
+        Extracts text content, function tool calls, and web search sources
+        (when enabled). Sources are included in the final usage data under
+        'web_search_sources'; tool calls under 'tool_calls', in the same
+        {id, name, arguments} shape the Chat Completions processor emits so the
+        downstream tool loop stays provider-agnostic.
 
         Args:
             response: OpenAI Responses API stream
@@ -227,6 +230,8 @@ class OpenAIStreamProcessor:
             Tuple of (text_chunk, usage_data)
         """
         web_search_extractor = OpenAIWebSearchExtractor()
+        tool_calls = []
+        tool_calls_yielded = False
 
         async for chunk in response:
             if not hasattr(chunk, 'type'):
@@ -236,6 +241,19 @@ class OpenAIStreamProcessor:
             if chunk.type == 'response.output_text.delta':
                 if hasattr(chunk, 'delta') and chunk.delta:
                     yield chunk.delta, None
+
+            # A finished function call arrives as a completed output item.
+            # Arguments are already fully accumulated by this point.
+            if chunk.type == 'response.output_item.done':
+                item = getattr(chunk, 'item', None)
+                if item is not None and getattr(item, 'type', None) == 'function_call':
+                    tool_calls.append({
+                        # call_id is what a follow-up turn must echo back;
+                        # id identifies the output item itself.
+                        "id": getattr(item, 'call_id', None) or getattr(item, 'id', ''),
+                        "name": getattr(item, 'name', '') or '',
+                        "arguments": getattr(item, 'arguments', '') or '',
+                    })
 
             # Extract web search sources from streaming events
             web_search_extractor.process_chunk(chunk)
@@ -249,7 +267,16 @@ class OpenAIStreamProcessor:
                 if sources:
                     usage["web_search_sources"] = sources
 
+                if tool_calls:
+                    usage["tool_calls"] = tool_calls
+                    tool_calls_yielded = True
+
                 yield "", usage
+
+        # Incomplete responses (e.g. max_output_tokens hit mid-turn) never emit
+        # response.completed, so surface any tool calls we did collect.
+        if tool_calls and not tool_calls_yielded:
+            yield "", {"tool_calls": tool_calls}
 
 
 class ClaudeStreamProcessor:

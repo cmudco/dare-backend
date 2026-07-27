@@ -1,6 +1,6 @@
 # Generated manually for workflow file inheritance feature
 
-from django.db import migrations, models
+from django.db import migrations
 
 
 class Migration(migrations.Migration):
@@ -9,15 +9,8 @@ class Migration(migrations.Migration):
         ('workflows', '0013_workflowstepsnippet'),
     ]
 
-    operations = [
-        migrations.AddField(
-            model_name='step',
-            name='use_previous_step_files',
-            field=models.BooleanField(default=False, help_text='If True, inherit files from the previous step in the workflow instead of using manually selected files.'),
-        ),
-        migrations.AddField(
-            model_name='step',
-            name='use_previous_step_embeddings',
-            field=models.BooleanField(default=False, help_text='If True, inherit embeddings from the previous step in the workflow instead of using manually selected embeddings.'),
-        ),
-    ]
+    # This migration duplicates the fields added by
+    # 0014_step_use_previous_step_embeddings_and_more. Keep the migration node
+    # so databases retain a consistent migration history, but do not run the
+    # duplicate schema operations.
+    operations = []
