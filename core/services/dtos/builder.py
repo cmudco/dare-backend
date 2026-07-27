@@ -1,7 +1,9 @@
 """Builder pattern for constructing LLMQueryRequest from dictionaries."""
 
+from dataclasses import replace
 from typing import Any, Dict, Optional
 
+from conversations.constants import Provider, RagMode
 from users.constants import AuthSourceChoice
 
 from .context_dto import ContextConfig
@@ -176,6 +178,26 @@ class LLMQueryRequestBuilder:
         selected_slugs = set(message_data.get("dare_tool_slugs") or [])
         if artifacts_enabled:
             selected_slugs |= ARTIFACT_TOOL_SLUGS
+
+        # Agentic RAG: retrieval is exposed as a tool the model calls on
+        # demand instead of pre-injecting context. Fall back to advanced
+        # pre-injection when there is nothing to search or the provider
+        # cannot call tools (llama), so agentic never silently disables RAG.
+        if context.rag_mode == RagMode.AGENTIC:
+            has_sources = bool(
+                context.embedding_ids
+                or context.tag_ids
+                or context.folder_ids
+                or context.library_ids
+            )
+            provider_supports_tools = (
+                getattr(llm, "provider", None) != Provider.LLAMA.value
+            )
+            if has_sources and provider_supports_tools:
+                selected_slugs.add("search_documents")
+            else:
+                context = replace(context, rag_mode=RagMode.ADVANCED)
+
         dare_tool_slugs = tuple(selected_slugs)
 
         # Build request

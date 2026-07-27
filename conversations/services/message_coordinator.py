@@ -58,6 +58,7 @@ from core.services.learning_progress_service import LearningProgressService
 from core.services.llm_service import LLMService
 from core.services.sb_client import SocraticBooksClient
 from dare_tools.services import dare_tool_handler
+from dare_tools.services.retrieval_tool_executor import RetrievalScope
 from mcp.services import mcp_tool_handler
 from users.utils import should_run_learning_progress
 
@@ -647,6 +648,16 @@ class MessageCoordinator:
                             user=self.user,
                             conversation=self.conversation,
                             send_callback=self.send,
+                            retrieval_scope=RetrievalScope(
+                                embedding_ids=tuple(request.context.embedding_ids or ()),
+                                tag_ids=tuple(request.context.tag_ids or ()),
+                                folder_ids=tuple(request.context.folder_ids or ()),
+                                library_ids=tuple(request.context.library_ids or ()),
+                                user_id=self.user.id if self.user else None,
+                                file_owner_id=request.context.file_owner_id,
+                                max_context_snippets=request.context.max_context_snippets,
+                                similarity_threshold=request.context.document_similarity_threshold,
+                            ),
                         )
                         executed_tool_results.extend(dare_results)
 

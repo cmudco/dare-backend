@@ -102,6 +102,12 @@ async def add_semantic_context_to_messages(
     if not (embedding_ids or tag_ids or folder_ids or library_ids):
         return
 
+    # Agentic mode: retrieval happens on demand through the search_documents
+    # tool — nothing is pre-injected, and the tool executor owns the trace
+    # lifecycle for the turn.
+    if rag_mode == RagMode.AGENTIC:
+        return
+
     # Fresh turn: documents and libraries each save their own trace below, and
     # save_retrieval_trace appends to whatever is on the message — so clear any
     # trace left from a previous generation of this message first.
@@ -187,7 +193,7 @@ async def add_semantic_context_to_messages(
             )
 
 
-def _run_library_search(
+def run_library_search(
     document_processor: DocumentProcessor,
     query: str,
     library_ids: List[int],
@@ -219,7 +225,7 @@ def _run_library_search(
     return result.blocks
 
 
-def _run_document_search(
+def run_document_search(
     document_processor: DocumentProcessor,
     query: str,
     file_ids: List[int],
@@ -267,7 +273,7 @@ async def _search_documents_for_query(
 ) -> List[str]:
     """Async wrapper — document search touches the ORM and opens vector clients."""
     try:
-        return await sync_to_async(_run_document_search)(
+        return await sync_to_async(run_document_search)(
             document_processor,
             query,
             file_ids,
@@ -334,7 +340,7 @@ async def _search_libraries_for_query(
                 max_context_snippets,
                 message_obj,
             )
-        return await sync_to_async(_run_library_search)(
+        return await sync_to_async(run_library_search)(
             document_processor, query, library_ids, max_context_snippets, message_obj
         )
     except Exception as exc:

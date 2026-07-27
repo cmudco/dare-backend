@@ -649,10 +649,59 @@ def execute_create_react_component(arguments: Dict[str, Any]) -> Dict[str, Any]:
 
 # ============ REGISTRY ============
 
+def get_search_documents_tool_openai() -> Dict:
+    """Get search_documents tool definition in OpenAI format."""
+    return {
+        "type": "function",
+        "function": {
+            "name": "search_documents",
+            "description": (
+                "Search the user's attached documents and shared libraries for "
+                "passages relevant to a query. Use this whenever the answer may "
+                "depend on the attached sources — facts, quotes, definitions, "
+                "data, or anything you are not certain about. Write a focused "
+                "search query describing the information you need (not the "
+                "user's message verbatim). Results are passages tagged [S1], "
+                "[S2], ...; when you use a passage in your answer, cite it "
+                "inline with its [S#] tag. If the question is general knowledge "
+                "unrelated to the attached documents, answer directly without "
+                "calling this tool."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Focused natural-language search query describing the information needed."
+                    },
+                    "top_k": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10,
+                        "description": "Number of passages to retrieve. Omit to use the conversation's default."
+                    }
+                },
+                "required": ["query"]
+            }
+        }
+    }
+
+
+def get_search_documents_tool_claude() -> Dict:
+    """Get search_documents tool definition in Claude/Anthropic format."""
+    openai_spec = get_search_documents_tool_openai()
+    func = openai_spec["function"]
+    return {
+        "name": func["name"],
+        "description": func["description"],
+        "input_schema": func["parameters"]
+    }
+
+
 class DareToolRegistry:
     """
     Registry of all available DARE tools.
-    
+
     Maps tool function names to their definitions and executors.
     """
     
@@ -727,6 +776,16 @@ class DareToolRegistry:
             "get_openai_schema": get_create_react_component_tool_openai,
             "get_claude_schema": get_create_react_component_tool_claude,
             "executor": execute_create_react_component,
+        },
+        "search_documents": {
+            "name": "Search Documents",
+            "slug": "search_documents",
+            "description": "Search attached documents and shared libraries for relevant passages (agentic RAG).",
+            "icon": "search",
+            "category": "retrieval",
+            "get_openai_schema": get_search_documents_tool_openai,
+            "get_claude_schema": get_search_documents_tool_claude,
+            "executor": None,  # Handled by RetrievalToolExecutor directly (async, needs request scope)
         },
     }
     
