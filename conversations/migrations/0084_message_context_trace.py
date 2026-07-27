@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("conversations", "0082_message_usage_details_messagetoolcall_round_index"),
+        ("conversations", "0083_message_usage_details_messagetoolcall_round_index"),
     ]
 
     operations = [

@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('conversations', '0081_alter_conversation_rag_mode'),
+        ('conversations', '0082_merge_20260727_2019'),
     ]
 
     operations = [
