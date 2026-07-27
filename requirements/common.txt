@@ -37,6 +37,7 @@ httpx~=0.28.1
 
 # PDF
 PyPDF2~=3.0.1
+PyMuPDF~=1.28.0
 weasyprint~=62.3
 pydyf<0.12.0
 markdown~=3.7
@@ -69,6 +70,10 @@ pycryptodome==3.22.0
 
 # weaviate
 weaviate-client==4.14.1
+
+# Local cross-encoder reranker (Track A). Imported lazily when advanced retrieval
+# runs; pulls in torch transitively (~CPU/MPS build).
+sentence-transformers~=5.6.0
 
 #email
 resend~=2.7.0

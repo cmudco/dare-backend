@@ -1,12 +1,15 @@
 """Builder pattern for constructing LLMQueryRequest from dictionaries."""
 
-from typing import Dict, Any, Optional
+from dataclasses import replace
+from typing import Any, Dict, Optional
 
+from conversations.constants import Provider, RagMode
 from users.constants import AuthSourceChoice
-from .request_dto import LLMQueryRequest
+
 from .context_dto import ContextConfig
 from .generation_dto import GenerationConfig
 from .media_dto import MediaConfig
+from .request_dto import LLMQueryRequest
 from .socratic_dto import SocraticConfig
 
 # Minimum max_tokens for Socratic bots to prevent truncated responses
@@ -81,6 +84,7 @@ class LLMQueryRequestBuilder:
             media_ids=message_data.get("media_ids", []),
             tag_ids=message_data.get("tag_ids", []),
             folder_ids=message_data.get("folder_ids", []),
+            library_ids=message_data.get("library_ids", []),
             referenced_conversation_ids=message_data.get(
                 "referenced_conversation_ids", []
             ),
@@ -91,6 +95,9 @@ class LLMQueryRequestBuilder:
             max_context_snippets=message_data.get("max_context_snippets", 4),
             document_similarity_threshold=message_data.get(
                 "document_similarity_threshold", 0.5
+            ),
+            rag_mode=message_data.get(
+                "rag_mode", getattr(conversation, "rag_mode", "advanced")
             ),
             history_limit=message_data.get("history_limit", 20),
             use_memory=bool(message_data.get("use_memory", False)),
@@ -171,6 +178,26 @@ class LLMQueryRequestBuilder:
         selected_slugs = set(message_data.get("dare_tool_slugs") or [])
         if artifacts_enabled:
             selected_slugs |= ARTIFACT_TOOL_SLUGS
+
+        # Agentic RAG: retrieval is exposed as a tool the model calls on
+        # demand instead of pre-injecting context. Fall back to advanced
+        # pre-injection when there is nothing to search or the provider
+        # cannot call tools (llama), so agentic never silently disables RAG.
+        if context.rag_mode == RagMode.AGENTIC:
+            has_sources = bool(
+                context.embedding_ids
+                or context.tag_ids
+                or context.folder_ids
+                or context.library_ids
+            )
+            provider_supports_tools = (
+                getattr(llm, "provider", None) != Provider.LLAMA.value
+            )
+            if has_sources and provider_supports_tools:
+                selected_slugs.add("search_documents")
+            else:
+                context = replace(context, rag_mode=RagMode.ADVANCED)
+
         dare_tool_slugs = tuple(selected_slugs)
 
         # Build request

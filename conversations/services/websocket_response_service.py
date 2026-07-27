@@ -8,13 +8,13 @@ dictionaries with camelCase keys.
 
 import logging
 from datetime import datetime
-from typing import Dict, Any, Optional, List
+from typing import Any, Dict, List, Optional
 
 from channels.db import database_sync_to_async
 
 from conversations.api.serializers import MessageSerializer
 from conversations.constants import SenderType
-from conversations.models import Message, Artifact
+from conversations.models import Artifact, Message
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +79,11 @@ class WebSocketResponseService:
         @database_sync_to_async
         def serialize_message():
             msg = Message.active_objects.prefetch_related(
-                "files", "tags", "snippets__file", "web_search_sources"
+                "files",
+                "tags",
+                "snippets__file",
+                "snippets__library",
+                "web_search_sources",
             ).get(id=message.id)
             return MessageSerializer(msg).data
 
@@ -156,6 +160,7 @@ class WebSocketResponseService:
             "generatedImage": generated_image,
             "generatedTranscription": generated_transcription,
             "memoryContextData": serialized_data.get("memory_context_data") or [],
+            "retrievalTrace": serialized_data.get("retrieval_trace"),
         }
 
         return cls._dict_to_camel_case(response)

@@ -38,6 +38,13 @@ class ConversationSource(models.TextChoices):
     DARE = 'DARE', 'DARE'
     SOCRATIC_BOTS = 'SocraticBots', 'SocraticBots'
 
+
+class RagMode(models.TextChoices):
+    NAIVE = "naive", "Naive RAG"
+    ADVANCED = "advanced", "Advanced RAG"
+    AGENTIC = "agentic", "Agentic RAG"
+
+
 class WebSocketMessageType(Enum):
     """WebSocket message types for outgoing messages."""
     MESSAGE = "message"
