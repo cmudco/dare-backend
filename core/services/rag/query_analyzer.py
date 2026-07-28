@@ -12,6 +12,8 @@ from typing import Optional
 
 import anthropic
 
+from conversations.constants import Provider
+from core.services.api_key_service import get_provider_api_key_sync
 from core.services.rag.config import setting
 from core.services.rag.dtos import QueryPlan
 
@@ -46,17 +48,33 @@ _SYSTEM = (
 
 
 class QueryAnalyzer:
-    """Raw query -> QueryPlan, via a structured LLM call."""
+    """Raw query -> QueryPlan, via a structured LLM call.
+
+    Credentials come from ``get_provider_api_key_sync`` — the same
+    database-first, env-fallback resolution every other Claude call in DARE
+    uses. Letting the SDK find its own key would make this stage depend on
+    ``ANTHROPIC_API_KEY`` alone, so it would sit dead in any environment that
+    configures Claude the normal way (admin key, or ``CLAUDE_API_KEY``).
+
+    A pipeline builds one analyzer per retrieval, so ``last_error`` describes
+    the most recent ``analyze`` call and is safe to read straight after it.
+    """
+
+    def __init__(self) -> None:
+        self.last_error: Optional[str] = None
 
     def use_hyde(self) -> bool:
         """Advanced RAG always feeds the rewritten/HyDE text into retrieval."""
         return True
 
     def analyze(self, query: str) -> Optional[QueryPlan]:
+        self.last_error = None
         if not query:
             return None
         try:
-            client = anthropic.Anthropic()
+            client = anthropic.Anthropic(
+                api_key=get_provider_api_key_sync(Provider.CLAUDE.value)
+            )
             model = setting("RAG_QUERY_ANALYSIS_MODEL", DEFAULT_MODEL)
             data = self._call(client, model, query)
             return QueryPlan(
@@ -67,6 +85,7 @@ class QueryAnalyzer:
             )
         except Exception as exc:  # never let analysis break retrieval
             logger.warning("Query analysis failed; using raw query: %s", exc)
+            self.last_error = str(exc)
             return None
 
     def _call(self, client, model: str, query: str) -> dict:

@@ -60,6 +60,7 @@ def build_trace(
     grounding: Optional[Grounding],
     grounding_threshold: float,
     final_size: int,
+    analysis_error: Optional[str] = None,
 ) -> RetrievalTrace:
     pool_ranks = {_key(c): i for i, c in enumerate(pool, 1)}
     return RetrievalTrace(
@@ -74,4 +75,5 @@ def build_trace(
         grounding=grounding,
         grounding_threshold=grounding_threshold,
         final_size=final_size,
+        analysis_error=analysis_error,
     )

@@ -104,6 +104,7 @@ class RetrievalTrace:
     grounding: Optional[Grounding]
     grounding_threshold: float
     final_size: int
+    analysis_error: Optional[str] = None
 
     def to_payload(self) -> Dict[str, Any]:
         """Camelized payload for the frontend (rules.md §11: typed, no FE parsing)."""
@@ -119,6 +120,9 @@ class RetrievalTrace:
                 if self.plan
                 else None
             ),
+            # Set only when the stage broke. A null queryAnalysis with a null
+            # error means it simply had nothing to analyse.
+            "queryAnalysisError": self.analysis_error,
             "hybrid": {
                 "poolSize": self.pool_size,
                 "topCandidates": [e.to_payload() for e in self.hybrid],
