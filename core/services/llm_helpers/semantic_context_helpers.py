@@ -76,12 +76,18 @@ async def add_semantic_context_to_messages(
     rag_mode: str = RagMode.ADVANCED,
     message_obj: Optional[Any] = None,
     workflow_run_step_obj: Optional[Any] = None,
-) -> None:
+) -> List[str]:
     """
     Add semantic search results to messages array.
 
     Performs vector similarity search on documents and appends
     relevant context to the messages list.
+
+    Returns:
+        Descriptions of any retrieval failures. Empty means every configured
+        source was searched successfully — which is not the same as finding
+        nothing, and callers are expected to keep the two apart when they
+        report what happened.
 
     Args:
         document_processor: DocumentProcessor instance for vector search
@@ -99,14 +105,16 @@ async def add_semantic_context_to_messages(
         message_obj: Optional message for snippet tracking
         workflow_run_step_obj: Optional workflow step for snippet tracking
     """
+    failures: List[str] = []
+
     if not (embedding_ids or tag_ids or folder_ids or library_ids):
-        return
+        return failures
 
     # Agentic mode: retrieval happens on demand through the search_documents
     # tool — nothing is pre-injected, and the tool executor owns the trace
     # lifecycle for the turn.
     if rag_mode == RagMode.AGENTIC:
-        return
+        return failures
 
     # Fresh turn: documents and libraries each save their own trace below, and
     # save_retrieval_trace appends to whatever is on the message — so clear any
@@ -144,6 +152,7 @@ async def add_semantic_context_to_messages(
                 max_context_snippets,
                 effective_threshold,
                 message_obj,
+                failures,
             )
             context = "\n\n".join(blocks)
         else:
@@ -155,6 +164,7 @@ async def add_semantic_context_to_messages(
                 similarity_threshold=effective_threshold,
                 message_obj=message_obj,
                 workflow_run_step_obj=workflow_run_step_obj,
+                failures=failures,
             )
 
         if context and context.strip():
@@ -178,6 +188,7 @@ async def add_semantic_context_to_messages(
             max_context_snippets,
             rag_mode,
             message_obj,
+            failures,
         )
         if library_snippets:
             joined = "\n\n".join(library_snippets)
@@ -191,6 +202,8 @@ async def add_semantic_context_to_messages(
                     ),
                 }
             )
+
+    return failures
 
 
 def run_library_search(
@@ -270,8 +283,14 @@ async def _search_documents_for_query(
     max_context_snippets: int,
     similarity_threshold: float,
     message_obj: Optional[Any],
+    failures: Optional[List[str]] = None,
 ) -> List[str]:
-    """Async wrapper — document search touches the ORM and opens vector clients."""
+    """Async wrapper — document search touches the ORM and opens vector clients.
+
+    A failure degrades to "no context" rather than killing the turn, but it is
+    recorded in ``failures`` so the trace can say the search broke instead of
+    reporting an honest-looking zero.
+    """
     try:
         return await sync_to_async(run_document_search)(
             document_processor,
@@ -284,6 +303,8 @@ async def _search_documents_for_query(
         )
     except Exception as exc:
         logger.warning("Document context retrieval failed: %s", exc)
+        if failures is not None:
+            failures.append(f"documents: {exc}")
         return []
 
 
@@ -329,8 +350,13 @@ async def _search_libraries_for_query(
     max_context_snippets: int,
     rag_mode: str,
     message_obj: Optional[Any],
+    failures: Optional[List[str]] = None,
 ) -> List[str]:
-    """Async wrapper — library search touches the ORM and opens vector clients."""
+    """Async wrapper — library search touches the ORM and opens vector clients.
+
+    Failures are collected rather than raised; see
+    ``_search_documents_for_query``.
+    """
     try:
         if rag_mode == RagMode.NAIVE:
             return await sync_to_async(_run_naive_library_search)(
@@ -345,4 +371,6 @@ async def _search_libraries_for_query(
         )
     except Exception as exc:
         logger.warning("Library context retrieval failed: %s", exc)
+        if failures is not None:
+            failures.append(f"libraries: {exc}")
         return []

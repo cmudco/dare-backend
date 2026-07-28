@@ -1,4 +1,5 @@
-from typing import Dict, List, Tuple
+import logging
+from typing import Dict, List, Optional, Tuple
 
 from channels.db import database_sync_to_async
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -14,6 +15,8 @@ from core.services.file_processor import FileProcessor
 from core.services.vector_service import get_vector_service
 from files.models import File
 from workflows.models import WorkflowStepSnippet
+
+logger = logging.getLogger(__name__)
 
 
 class DocumentProcessor:
@@ -224,8 +227,14 @@ class DocumentProcessor:
         similarity_threshold: float = DEFAULT_SIMILARITY_THRESHOLD,
         message_obj=None,
         workflow_run_step_obj=None,
+        failures: Optional[List[str]] = None,
     ) -> str:
-        """Search for similar documents based on the query text."""
+        """Search for similar documents based on the query text.
+
+        A broken vector backend degrades to "no context" rather than failing
+        the turn, but the reason is logged and recorded in ``failures`` — an
+        unreachable index and a genuinely empty result must not look alike.
+        """
         if not file_ids:
             return ""
 
@@ -244,6 +253,9 @@ class DocumentProcessor:
                 results, similarity_threshold, message_obj, workflow_run_step_obj
             )
         except Exception as e:
+            logger.warning("Document similarity search failed: %s", e)
+            if failures is not None:
+                failures.append(f"documents: {e}")
             return ""
 
     async def _process_search_results(
