@@ -100,6 +100,13 @@ HERMES_PROFILES_ROOT = os.getenv(
 )
 # Profile names must match Hermes's [a-z0-9][a-z0-9_-]{0,63}.
 HERMES_PROFILE_PREFIX = os.getenv("HERMES_PROFILE_PREFIX", "dare-proj")
+# Model pinned into every project profile. A profile with no model of its own
+# inherits the runtime's current default, which means an operator running
+# `hermes model` silently re-points every research project — and a model that
+# refuses (content_filter) takes chat down with it. Pin it so the project's
+# agent is a DARE decision, not a side effect of gateway config.
+HERMES_PROFILE_MODEL = os.getenv("HERMES_PROFILE_MODEL", "claude-sonnet-5")
+HERMES_PROFILE_MODEL_PROVIDER = os.getenv("HERMES_PROFILE_MODEL_PROVIDER", "anthropic")
 # Lifetime of the DARE-minted JWT written into a profile's .env so its MCP tools
 # (web search / page fetch) run as the project's owner, not a shared identity.
 HERMES_PROFILE_TOKEN_DAYS = int(os.getenv("HERMES_PROFILE_TOKEN_DAYS", "365"))
