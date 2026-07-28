@@ -165,7 +165,7 @@ async def build_standard_messages(
     )
     with trace.stage("retrieval") as stage:
         before_retrieval = len(messages)
-        await add_semantic_context_to_messages(
+        retrieval_failures = await add_semantic_context_to_messages(
             document_processor=document_processor,
             messages=messages,
             query=request.message,
@@ -187,6 +187,11 @@ async def build_standard_messages(
             stage["threshold"] = request.context.document_similarity_threshold
             stage["topK"] = request.context.max_context_snippets
             stage["injectedBlocks"] = len(messages) - before_retrieval
+            if retrieval_failures:
+                # Without this the UI cannot tell "nothing matched" from "the
+                # vector store never answered" — both render as zero blocks.
+                stage["failed"] = True
+                stage["errors"] = retrieval_failures
             sources = _retrieval_sources(request.message_obj)
             if sources:
                 stage["sources"] = sources

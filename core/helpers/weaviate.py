@@ -1,9 +1,12 @@
+import logging
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 import weaviate
 from django.conf import settings
 from weaviate.classes.config import Configure, DataType, Property
+
+logger = logging.getLogger(__name__)
 
 
 class WeaviateClient:
@@ -13,17 +16,41 @@ class WeaviateClient:
         self._create_collection()
 
     def _connect_to_weaviate(self):
+        """
+        Open a Weaviate connection.
+
+        ``grpc_port`` matters as much as ``port``: the HTTP port carries
+        schema and single-object writes, but every search runs over gRPC.
+        Leaving it unset falls back to the client's 50051 default, which on a
+        host running more than one Weaviate silently routes reads to the wrong
+        instance — writes land correctly while every query fails against a
+        foreign schema.
+        """
+        host = settings.WEAVIATE.get("HOST", "localhost")
+        port = settings.WEAVIATE.get("PORT", 8080)
+        grpc_port = settings.WEAVIATE.get("GRPC_PORT", 50051)
+
         try:
             client = weaviate.connect_to_local(
-                host=settings.WEAVIATE.get("HOST", "localhost"),
-                port=settings.WEAVIATE.get("PORT", 8080),
+                host=host,
+                port=port,
+                grpc_port=grpc_port,
                 skip_init_checks=settings.WEAVIATE.get("SKIP_INIT_CHECKS", True),
+            )
+            # Logged because SKIP_INIT_CHECKS leaves the gRPC channel
+            # unverified at connect time: a wrong port surfaces much later as
+            # a schema error from whatever else answered.
+            logger.info(
+                "[Weaviate] connected host=%s http=%s grpc=%s collection=%s",
+                host,
+                port,
+                grpc_port,
+                self.collection_name,
             )
             return client
         except Exception as e:
             error_details = (
-                f"Host: {settings.WEAVIATE.get('HOST', 'localhost')}, "
-                f"Port: {settings.WEAVIATE.get('PORT', 8080)}, "
+                f"Host: {host}, Port: {port}, gRPC Port: {grpc_port}, "
                 f"Error: {str(e)}"
             )
             raise ConnectionError(

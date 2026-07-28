@@ -66,6 +66,10 @@ REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
 # Add these configurations
 WEAVIATE_HOST = os.getenv("WEAVIATE_HOST", "localhost")
 WEAVIATE_PORT = int(os.getenv("WEAVIATE_PORT", "8080"))
+# Searches travel over gRPC, not the HTTP port above. Deployments that remap
+# the HTTP port to dodge a collision almost always remap gRPC too, and the
+# client's 50051 default will then silently point at whatever else is there.
+WEAVIATE_GRPC_PORT = int(os.getenv("WEAVIATE_GRPC_PORT", "50051"))
 WEAVIATE_COLLECTION_NAME = os.getenv("WEAVIATE_COLLECTION_NAME", "Document")
 WEAVIATE_SKIP_INIT_CHECKS = os.getenv("WEAVIATE_SKIP_INIT_CHECKS", "True") == "True"
 WEAVIATE_AUTOSCHEMA_ENABLED = os.getenv("WEAVIATE_AUTOSCHEMA_ENABLED", "False") == "True"
