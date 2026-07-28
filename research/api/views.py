@@ -154,6 +154,39 @@ CHAT_BRIEF = (
     "runtime-native web_search, web_extract, or browser tool."
 )
 
+# Memory discipline. The runtime keeps two operational files (MEMORY.md for the
+# project, USER.md for the person) that persist across sessions. They stayed
+# empty because the `memory` toolset was not in platform_toolsets.api_server —
+# the agent had no tool to write with. With it enabled, the agent still must not
+# use them as a back door around the review gate: a research CLAIM only becomes
+# durable when the scholar approves it into ResearchKnowledgeItem. These files
+# are for working context, not findings.
+MEMORY_BRIEF = (
+    "MEMORY DISCIPLINE. You have a `memory` tool with two durable stores that "
+    "outlive this session:\n"
+    "- project memory (MEMORY.md): stable facts about THIS project — its "
+    "corpus and where it lives, the working thesis, methodological choices and "
+    "protocol rules, decisions already taken and rejected directions, recurring "
+    "collaborators.\n"
+    "- user memory (USER.md): stable facts about THIS scholar — their name, "
+    "field and seniority, how they like answers delivered, tools and formats "
+    "they prefer, constraints such as deadlines.\n"
+    "Write when a fact is durable and would be expensive to re-derive next "
+    "session. Do NOT write transient chatter, anything already in the approved "
+    "knowledge base, or a research finding — findings become durable only "
+    "through the scholar's review gate, never by you writing them to memory. "
+    "Store ONE fact per entry. Never combine an identity fact, a preference and "
+    "a project fact in a single entry: `replace` swaps a whole matched entry, so "
+    "a combined entry silently loses its other facts the moment any one of them "
+    "changes. Name, affiliation, delivery preference and corpus size are four "
+    "entries, not one.\n"
+    "When the scholar contradicts something, replace only the entry that is "
+    "wrong, and re-add any other fact that entry happened to carry. After a "
+    "correction, confirm what is still remembered, not just what changed. "
+    "Never store secrets, credentials or personal data the scholar has not "
+    "chosen to share. Say in one short line what you saved."
+)
+
 
 def _recent_transcript(session, max_turns=12, max_chars=6000):
     """The running chat transcript (prior turns) so the agent has verbatim memory
@@ -176,6 +209,7 @@ def _chat_instructions(project, soul_content, history=""):
     """Soul + chat framing + project context + the running conversation transcript."""
     parts = [soul_content] if soul_content else []
     parts.append(CHAT_BRIEF)
+    parts.append(MEMORY_BRIEF)
     context = []
     if project.question and project.question.strip():
         context.append(
