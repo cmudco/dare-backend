@@ -138,7 +138,8 @@ def build_artifact_instructions(soul_content, artifact_type=""):
     )
     parts.append(
         "TOOLS: when you search or read the web to ground the artifact, use "
-        "mcp_dare_web_search and mcp_dare_fetch_page only — DARE's own audited "
+        "mcp__dare__web_search and mcp__dare__fetch_page only (older runtimes "
+        "name these mcp_dare_web_search / mcp_dare_fetch_page) — DARE's own audited "
         "web search and reader. Do NOT use any runtime-native web_search, "
         "web_extract, or browser tool. Non-web tools with no DARE equivalent "
         "(e.g. vision) may be used normally."

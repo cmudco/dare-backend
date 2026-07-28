@@ -246,8 +246,22 @@ def _start_run(hermes, run, input_text, instructions):
     return None
 
 
-_GATEWAY_PREFIX = "mcp_dare_"
+# Hermes namespaces MCP tools as `<prefix><server>_<tool>`. It used a single
+# underscore until v0.19, which switched to the `mcp__<server>__<tool>` form
+# shared with Claude Code/Codex (tools/mcp_tool.py MCP_TOOL_NAME_PREFIX). Both
+# are accepted so the audit keeps working across runtime versions — matching the
+# wrong one silently drops every GatewayFetch row (no URL, no content, no
+# failure reason) rather than raising.
+_GATEWAY_PREFIXES = ("mcp__dare__", "mcp_dare_")
 _encoder = None
+
+
+def _gateway_tool_base(tool):
+    """The bare gateway tool name (`web_search`), or None if not a gateway call."""
+    for prefix in _GATEWAY_PREFIXES:
+        if tool.startswith(prefix):
+            return tool[len(prefix) :]
+    return None
 
 
 def _token_count(text):
@@ -291,9 +305,9 @@ def _next_gateway_fetch(run, tool, seen_ids, call_id=""):
     calls that shared a time window (and, when a call wrote no row at all,
     borrowed a different call's reason — the "same URL ×N" audit artifact).
     Returns None for tools that never touch the gateway."""
-    if not tool.startswith(_GATEWAY_PREFIX):
+    base = _gateway_tool_base(tool)
+    if base is None:
         return None
-    base = tool[len(_GATEWAY_PREFIX) :]
     row = None
     if call_id:
         # tool_use ids are globally unique, so match them WITHOUT the time
