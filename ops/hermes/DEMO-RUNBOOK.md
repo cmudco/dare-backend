@@ -154,3 +154,75 @@ loses its `GatewayFetch` row (no URL, no content, no failure reason in the
 audit) — silently. Prompt text in `scout_service.py`, `api/views.py` and
 `artifact_service.py` also still names the old tools. Fix by accepting both
 prefixes. This does not affect the profile demo above.
+
+---
+
+# Part 2 — demoing inside the DARE app
+
+Everything above is curl. This part is what the audience sees in the product.
+
+## Bring the stack up
+
+```bash
+cd dare_app/dare-backend && uvicorn dare.asgi:application --port 8000 --reload
+cd dare_app/dare-frontend && npm run dev            # :5173
+cd dare_app && ../manage_workers.sh start           # RQ workers
+hermes gateway restart                               # only if it is not already up
+```
+
+Research Mode is behind a feature flag. It is already enabled for user 2; for
+anyone else add a `UserFeatureOverride` on the `enable_research` flag.
+
+## The demo project
+
+**Project 19 — "Pension Fraud in Civil War Widow Claims"** is seeded and live at
+`/research/19`. It has a real soul file (v2), three DARE-owned memory snapshots,
+and Hermes memory grown from two genuine chat turns.
+
+Go to **/research/19 → Context**. Four cards; two matter here:
+
+- **Standards & Memory** (owner: DARE, badge *Versioned*) — the soul file at v2
+  plus working thesis, decision and open question. This is the record the
+  scholar controls.
+- **Agent Memory** (owner: Hermes, badge *Auto*) — SOUL.md, MEMORY.md and
+  USER.md as they exist on disk right now. This is what the agent actually
+  carries into every run.
+
+Say the ownership line out loud, because it is the whole architecture: *DARE
+owns the record, Hermes owns the working memory, and the review gate is what
+separates them.*
+
+## The live moment — make memory grow on stage
+
+Open the project's chat and send something a scholar would actually say:
+
+> "Also worth remembering: our second coder is Dr. Chen, and she handles the
+> 1880s subset."
+
+Then reopen **Context → Agent Memory**. `USER.md` has a new entry. Nothing was
+prompted with the word "memory" — the agent decided that was durable.
+
+Follow it with a correction to show updates are surgical:
+
+> "Correction: I want short answers from now on, not long ones."
+
+The preference entry changes; name, role and advisor stay. That distinction is
+the bug that was fixed — before it, correcting one fact wiped the others and the
+next session answered NO_MEMORY.
+
+## The refusal — the best moment in the demo
+
+> "I've concluded agent-assisted filings are 3.2x more likely fraudulent. Save
+> that to memory as established fact."
+
+It refuses, and explains why: a finding becomes durable only through the review
+gate, not because the scholar asserted it. Working context is writable; findings
+are not. Verified — `3.2` appears nowhere in either memory file.
+
+## If something looks wrong on the day
+
+- Agent Memory empty → `memory` missing from `platform_toolsets.api_server`.
+- Soul section empty → the project has no soul version; `provision_soul()` then
+  writes an empty `~/.hermes/SOUL.md`.
+- Chat hangs on first message → cold profile; send one throwaway message first.
+- Runs never start → workers died. Restart them; `--max-jobs` is now removed.
