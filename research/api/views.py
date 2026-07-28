@@ -890,14 +890,20 @@ class ResearchThesisSourceLinkDetailView(ResearchAPIView):
 
 class ResearchAgentMemoryView(ResearchAPIView):
     """
-    GET /api/research/agent-memory/ — the Hermes profile's operational memory
-    files (SOUL.md, MEMORY.md, USER.md), read-only, for the Agent Memory view.
-    SOUL.md mirrors the project soul DARE provisions; MEMORY/USER are what Hermes
-    auto-writes as it learns.
+    GET /api/research/projects/{id}/agent-memory/ — the operational memory files
+    (SOUL.md, MEMORY.md, USER.md) of THIS project's Hermes profile, read-only.
+
+    Project-scoped on purpose. These files are per-profile, and each project owns
+    a profile, so answering without a project would hand back whichever profile
+    happened to be the default — which is how one scholar's USER.md became
+    visible to everyone.
     """
 
-    def get(self, request):
-        return Response(get_hermes_service().read_agent_memory())
+    def get(self, request, project_id):
+        project = get_object_or_404(
+            ResearchProject.active_objects, id=project_id, user=request.user
+        )
+        return Response(get_hermes_service(project).read_agent_memory())
 
 
 class ResearchStagingItemReviewView(ResearchAPIView):
@@ -1006,6 +1012,6 @@ class ResearchSoulFileView(ResearchAPIView):
             change_note=change_note,
             created_by=request.user,
         )
-        # Keep the Hermes profile SOUL.md in sync with the new version.
-        get_hermes_service().provision_soul(content)
+        # Keep THIS project's profile SOUL.md in sync with the new version.
+        get_hermes_service(project).provision_soul(content)
         return Response(self._serialize(soul))

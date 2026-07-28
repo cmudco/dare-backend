@@ -93,7 +93,7 @@ urlpatterns = [
         name="research-agent-run-cancel",
     ),
     path(
-        "agent-memory/",
+        "projects/<int:project_id>/agent-memory/",
         ResearchAgentMemoryView.as_view(),
         name="research-agent-memory",
     ),

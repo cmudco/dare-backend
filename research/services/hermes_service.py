@@ -45,9 +45,23 @@ class HermesStopResult:
 class HermesService:
     """REST client for the Hermes gateway (drive + SSE stream)."""
 
-    def __init__(self, base_url=None, api_key=None):
+    def __init__(self, base_url=None, api_key=None, profile=""):
         self.base_url = (base_url or settings.HERMES_GATEWAY_URL).rstrip("/")
         self.api_key = api_key or settings.HERMES_API_KEY
+        # Empty => the shared default profile (pre-multiplex behaviour).
+        self.profile = profile
+
+    @property
+    def home(self):
+        """The profile's HERMES_HOME — the root every per-profile file hangs off.
+
+        Hermes resolves SOUL.md, sessions and the memory tool's
+        ``memories/{MEMORY,USER}.md`` from this directory, so pointing it at the
+        project's own profile is what makes that project's agent memory private.
+        """
+        if self.profile:
+            return Path(settings.HERMES_PROFILES_ROOT) / self.profile
+        return Path(settings.HERMES_SOUL_PATH).parent
 
     def _headers(self, *, json_body=False):
         headers = {"Authorization": f"Bearer {self.api_key}"}
@@ -118,15 +132,13 @@ class HermesService:
         """
         if not settings.HERMES_SYNC_SOUL:
             return False
+        path = self.home / "SOUL.md"
         try:
-            Path(settings.HERMES_SOUL_PATH).write_text(content or "", encoding="utf-8")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content or "", encoding="utf-8")
             return True
         except OSError as exc:
-            logger.warning(
-                "Could not provision Hermes SOUL.md at %s: %s",
-                settings.HERMES_SOUL_PATH,
-                exc,
-            )
+            logger.warning("Could not provision Hermes SOUL.md at %s: %s", path, exc)
             return False
 
     def read_agent_memory(self):
@@ -136,7 +148,7 @@ class HermesService:
         — so it mirrors the project's soul), plus MEMORY.md / USER.md that Hermes
         auto-writes as it learns. Returns {} values for files that don't exist yet.
         """
-        home = Path(settings.HERMES_SOUL_PATH).parent
+        home = self.home
 
         def _read(path):
             try:
@@ -148,6 +160,10 @@ class HermesService:
             "soul": _read(home / "SOUL.md"),
             "memory": _read(home / "memories" / "MEMORY.md"),
             "user": _read(home / "memories" / "USER.md"),
+            # Which profile these files came from, so the UI can say whose memory
+            # it is showing instead of implying there is only ever one.
+            "profile": self.profile or "default",
+            "isolated": bool(self.profile),
         }
 
     def get_run(self, hermes_run_id, timeout=30):
@@ -255,15 +271,30 @@ _hermes_service = None
 
 
 def get_hermes_service(project=None):
-    """Return a HermesService for ``project`` — its own per-project Hermes endpoint
-    when one is provisioned, else the shared default instance. A per-project
-    endpoint (one gateway per project) is how DARE keeps each project's agent
-    memory and credentials separate; with none set this is behaviour-neutral and
-    returns the shared default."""
-    base = getattr(project, "hermes_base_url", "") if project else ""
-    if base:
-        key = getattr(project, "hermes_api_key", "") or settings.HERMES_API_KEY
-        return HermesService(base_url=base, api_key=key)
+    """Return a HermesService bound to ``project``'s own Hermes profile.
+
+    The profile is provisioned on first use (a directory, a config and an
+    owner-scoped token) and the project remembers its gateway URL, so every
+    later call routes to ``/p/<profile>/`` on the shared multiplex listener.
+    That one indirection is what separates each project's SOUL.md and
+    memories/{MEMORY,USER}.md — they are different directories, not different
+    sections of one file.
+
+    Without a project, or with per-project profiles switched off, this returns
+    the shared default instance exactly as before.
+    """
+    if project is not None:
+        from research.services.profile_service import ensure_project_profile
+
+        profile = ensure_project_profile(project)
+        base = getattr(project, "hermes_base_url", "") or ""
+        if profile or base:
+            key = getattr(project, "hermes_api_key", "") or settings.HERMES_API_KEY
+            return HermesService(
+                base_url=base or settings.HERMES_GATEWAY_URL,
+                api_key=key,
+                profile=profile,
+            )
     global _hermes_service
     if _hermes_service is None:
         _hermes_service = HermesService()
