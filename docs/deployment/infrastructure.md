@@ -31,7 +31,7 @@ uvicorn dare.asgi:application --host 0.0.0.0 --port 8000
 python manage.py rqworker default -v 1
 ```
 
-For systemd examples, see [INSTALL.md](../../INSTALL.md#6-process-management-production).
+For systemd examples, see [DEPLOYMENT.md](../../DEPLOYMENT.md#6-process-management-production).
 
 ## Environment Management
 

@@ -78,66 +78,30 @@ See [docs/architecture.md](https://github.com/cmudco/dare-backend/blob/main/docs
 
 ## Quick Start
 
-### Docker
+Fastest path — Docker brings up the whole stack (API, worker, Postgres, Redis, Weaviate):
 
 ```bash
-# 1. Clone
-git clone <repo-url> dare-backend && cd dare-backend
-
-# 2. Configure
-cp .example.env .env
-# Edit .env. At minimum, set DJANGO_SECRET_KEY and one provider key
-# such as OPENAI_API_KEY, CLAUDE_API_KEY, or GEMINI_API_KEY.
-
-# 3. Build and start the backend stack
+git clone https://github.com/cmudco/dare-backend.git
+cd dare-backend
+cp .example.env .env      # set DJANGO_SECRET_KEY + one provider key (OPENAI_API_KEY / CLAUDE_API_KEY / GEMINI_API_KEY)
 docker compose up --build -d
-
-# 4. Create an admin user
 docker compose exec web python manage.py createsuperuser
-
-# 5. Check health
-docker compose ps
+docker compose exec web python manage.py collectstatic --noinput   # so the admin panel renders with its CSS/JS
 curl http://localhost:8000/api/health/
-curl http://localhost:8000/api/ready/
 ```
 
-The API will be available at `http://localhost:8000/`. The OpenAPI schema is served at
-`http://localhost:8000/api/schema/`. Swagger UI is routed at `http://localhost:8000/api/docs/`, but
-it loads Swagger assets from a CDN, so use the raw schema if the UI does not render in an offline or
-restricted network.
+The API is at `http://localhost:8000/`; Swagger UI at `http://localhost:8000/api/docs/`.
 
-Docker Compose starts the API server, RQ worker, Postgres + pgvector, Redis, and Weaviate. Optional
-Ollama and Weaviate console services are available through Compose profiles. See
-[INSTALL.md](https://github.com/cmudco/dare-backend/blob/main/INSTALL.md) for details.
-
-### Local Python
-
-Use this path when you want the Django process running directly on your machine.
-
-```bash
-cp .example.env .env
-python3.13 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements/local.txt
-python manage.py migrate
-uvicorn dare.asgi:application --host 0.0.0.0 --port 8000 --reload
-```
-
-In a second terminal, start a worker:
-
-```bash
-source .venv/bin/activate
-OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES python -Wd manage.py rqworker default -v 3
-```
-
-Redis must be running for Socket.IO pub/sub and background jobs. See [INSTALL.md](https://github.com/cmudco/dare-backend/blob/main/INSTALL.md) for
-complete Docker, local, and production guidance.
+See **[QUICKSTART.md](https://github.com/cmudco/dare-backend/blob/main/QUICKSTART.md)** for the full walkthrough — the local-Python path,
+collecting static files, and creating an access code so users can register — and
+**[DEPLOYMENT.md](https://github.com/cmudco/dare-backend/blob/main/DEPLOYMENT.md)** for production and server deployment.
 
 ## Documentation
 
 | Doc | What's in it |
 | --- | --- |
-| [INSTALL.md](https://github.com/cmudco/dare-backend/blob/main/INSTALL.md) | Full deployment guide — Docker and bare metal |
+| [QUICKSTART.md](https://github.com/cmudco/dare-backend/blob/main/QUICKSTART.md) | Run the backend locally — Docker stack, or local Python in a venv |
+| [DEPLOYMENT.md](https://github.com/cmudco/dare-backend/blob/main/DEPLOYMENT.md) | Production deployment — Docker and bare metal |
 | [docs/configuration.md](https://github.com/cmudco/dare-backend/blob/main/docs/configuration.md) | Every environment variable, with type, default, and description |
 | [docs/architecture.md](https://github.com/cmudco/dare-backend/blob/main/docs/architecture.md) | Component diagram and request flows |
 | [docs/admin-guide.md](https://github.com/cmudco/dare-backend/blob/main/docs/admin-guide.md) | User/role management, access codes, analytics |
@@ -164,7 +128,7 @@ complete Docker, local, and production guidance.
 - `core/services/` — the service layer (LLM providers, vector stores, MCP, email)
 - `docs/` — architecture, configuration, admin, API reference, deployment, and integration guides
 - Docker Compose stack (API, RQ worker, Postgres + pgvector, Redis, Weaviate) and `requirements/`
-- Supporting docs — `INSTALL.md`, `CONTRIBUTING.md`, `CHANGELOG.md`, `SECURITY.md`, `BRAND.md`
+- Supporting docs — `QUICKSTART.md`, `DEPLOYMENT.md`, `CONTRIBUTING.md`, `CHANGELOG.md`, `SECURITY.md`, `BRAND.md`
 
 ## What is not included in this repo?
 
