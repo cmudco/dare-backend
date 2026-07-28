@@ -114,7 +114,10 @@ class RetrievalPipeline:
                 reranked=reranked,
                 rerank_applied=rerank_applied,
                 mmr_applied=exploratory,
-                mmr_reason=self._mmr_reason(plan, exploratory),
+                mmr_reason=self._mmr_reason(
+                    plan, exploratory, self.analyzer.last_error
+                ),
+                analysis_error=self.analyzer.last_error,
                 grounding=grounding,
                 grounding_threshold=grounding_threshold,
                 final_size=len(final),
@@ -125,11 +128,17 @@ class RetrievalPipeline:
         )
 
     @staticmethod
-    def _mmr_reason(plan, exploratory: bool) -> str:
+    def _mmr_reason(plan, exploratory: bool, analysis_error: Optional[str]) -> str:
         if exploratory:
             return "applied — exploratory query"
         if plan is None:
-            return "skipped — query analysis off"
+            # "off" would read as a deliberate setting; there is no such
+            # switch, so a missing plan means the stage did not survive.
+            return (
+                "skipped — query analysis unavailable"
+                if analysis_error
+                else "skipped — no query analysis"
+            )
         return f"skipped — {plan.intent} query"
 
 
