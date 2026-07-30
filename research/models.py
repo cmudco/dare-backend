@@ -81,6 +81,18 @@ class ResearchProject(BaseModel):
             "memory + the owner's tools). Blank uses the shared default gateway."
         ),
     )
+    hermes_model = models.CharField(
+        max_length=128,
+        blank=True,
+        default="",
+        help_text=(
+            "Model pinned into this project's Hermes profile, e.g. "
+            "'claude-haiku-4.5' for a cheap project or 'claude-sonnet-5' for a "
+            "demanding one. Blank uses settings.HERMES_PROFILE_MODEL. Never "
+            "leave the runtime to choose: an unpinned profile resolves to the "
+            "provider's flagship."
+        ),
+    )
 
     objects = models.Manager()
     active_objects = ActiveObjectsManager()

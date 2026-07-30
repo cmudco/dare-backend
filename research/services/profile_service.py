@@ -77,7 +77,9 @@ def _render_config(project):
     reviewable — an operator opening it should see exactly the four decisions
     this profile encodes.
     """
-    model = (settings.HERMES_PROFILE_MODEL or "").strip()
+    model = (
+        getattr(project, "hermes_model", "") or settings.HERMES_PROFILE_MODEL or ""
+    ).strip()
     provider = (settings.HERMES_PROFILE_MODEL_PROVIDER or "").strip()
     if provider and not model:
         # The expensive trapdoor: with a provider set and no model, Hermes falls
