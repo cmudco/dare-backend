@@ -1066,3 +1066,64 @@ class ResearchAgentMemorySnapshot(BaseModel):
             and self.memory == files.get("memory", "")
             and self.user == files.get("user", "")
         )
+
+
+class ResearcherProfile(BaseModel):
+    """
+    What DARE knows about a scholar — the person, not any one project.
+
+    The runtime keeps two memory files per profile, and they have different
+    natural owners: MEMORY.md is about a project, USER.md is about the person.
+    Because a Hermes profile holds both, scoping profiles per project (which
+    MEMORY.md needs) left USER.md re-learned from scratch in every new project.
+
+    So DARE owns the person. This record is rendered into the USER.md of every
+    profile the scholar owns, and anything the agent learns about them in one
+    project is absorbed back here and propagated to the rest. Learn once, known
+    everywhere — without merging the projects' memories, which must stay apart.
+    """
+
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="researcher_profile",
+        help_text="The scholar this describes.",
+    )
+    content = models.TextField(
+        blank=True,
+        default="",
+        help_text=(
+            "The scholar's durable facts, one per entry, in the runtime's own "
+            "'§'-separated form so it can be written to USER.md verbatim."
+        ),
+    )
+
+    objects = models.Manager()
+    active_objects = ActiveObjectsManager()
+
+    class Meta:
+        verbose_name = "Researcher Profile"
+        verbose_name_plural = "Researcher Profiles"
+
+    def __str__(self):
+        return f"Researcher profile ({self.user_id})"
+
+    def entries(self):
+        return [e.strip() for e in (self.content or "").split("§") if e.strip()]
+
+    def merge(self, incoming):
+        """Fold `incoming` entries in, keeping order and dropping duplicates.
+
+        Additive on purpose. A correction the agent makes in one project rewrites
+        that profile's USER.md, but we cannot tell from text alone whether a
+        missing entry was corrected or simply not mentioned — so removals stay a
+        deliberate act by the scholar rather than a side effect of one chat.
+        """
+        merged = self.entries()
+        for entry in incoming:
+            if entry and entry not in merged:
+                merged.append(entry)
+        changed = merged != self.entries()
+        if changed:
+            self.content = "\n§\n".join(merged)
+        return changed

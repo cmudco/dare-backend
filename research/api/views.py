@@ -54,6 +54,7 @@ from research.services import (
     safe_hermes_usage,
 )
 from research.services.graph_service import build_evidence_graph
+from research.services.profile_service import absorb_user_memory
 from research.services.okf_service import (
     build_okf_bundle,
     build_okf_view,
@@ -957,6 +958,11 @@ class ResearchAgentMemoryView(ResearchAPIView):
             ResearchProject.active_objects, id=project_id, user=request.user
         )
         files = get_hermes_service(project).read_agent_memory()
+        # Anything the agent learned about the scholar here belongs to the
+        # scholar, not to this project — fold it into their DARE record and push
+        # it to their other projects, so the next one they open already knows
+        # them. The project's own MEMORY.md is untouched and stays private.
+        files["sharedTo"] = absorb_user_memory(project, files.get("user", ""))
         files["history"] = _record_and_diff_memory(project, files)
         return Response(files)
 

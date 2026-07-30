@@ -163,6 +163,7 @@ def ensure_project_profile(project, *, refresh_token=False):
         (home / "memories").mkdir(exist_ok=True)
 
         _write_if_changed(home / _CONFIG_FILENAME, _render_config(project))
+        render_user_memory(project)
 
         env_path = home / _ENV_FILENAME
         if refresh_token or not env_path.exists():
@@ -186,3 +187,83 @@ def ensure_project_profile(project, *, refresh_token=False):
         logger.info("Project %s bound to Hermes profile %s", project.id, name)
 
     return name
+
+
+def _user_memory_path(project):
+    return profile_home_for(project) / "memories" / "USER.md"
+
+
+def render_user_memory(project):
+    """Write the scholar's DARE-owned record into THIS project's USER.md.
+
+    Called on every provision, so a new project starts already knowing who its
+    scholar is instead of re-learning it. MEMORY.md is deliberately untouched:
+    the person travels between projects, the project's facts do not.
+    """
+    from research.models import ResearcherProfile
+
+    record = ResearcherProfile.active_objects.filter(user=project.user).first()
+    if record is None or not record.content.strip():
+        return False
+    path = _user_memory_path(project)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists() and path.read_text(encoding="utf-8") == record.content:
+            return False
+        path.write_text(record.content, encoding="utf-8")
+        return True
+    except OSError as exc:
+        logger.warning("Could not render USER.md for project %s: %s", project.id, exc)
+        return False
+
+
+def absorb_user_memory(project, user_file_text):
+    """Fold anything the agent learned about the scholar back into DARE's record.
+
+    The agent writes USER.md inside whichever project it is working in. Without
+    this that knowledge would stay stranded there, which is the whole complaint:
+    "it knows me in this project and nowhere else." Absorbing on read means one
+    project teaching it your name makes every project know it, while the
+    projects' own memories stay separate.
+
+    Returns the names of profiles that were refreshed as a result.
+    """
+    from research.models import ResearcherProfile, ResearchProject
+
+    incoming = [e.strip() for e in (user_file_text or "").split("§") if e.strip()]
+    if not incoming:
+        return []
+
+    record, _ = ResearcherProfile.objects.get_or_create(user=project.user)
+    changed = record.merge(incoming)
+
+    siblings = [
+        p
+        for p in ResearchProject.active_objects.filter(user=project.user)
+        if profile_home_for(p).is_dir()
+    ]
+
+    # Take in what every OTHER profile already knows before writing over any of
+    # them. Rendering first would destroy a fact the scholar taught a different
+    # project — the same silent clobber that combined memory entries caused, and
+    # just as invisible. Absorb everywhere, then render everywhere.
+    for sibling in siblings:
+        if sibling.id == project.id:
+            continue
+        try:
+            existing = _user_memory_path(sibling).read_text(encoding="utf-8")
+        except OSError:
+            continue
+        others = [e.strip() for e in existing.split("§") if e.strip()]
+        changed = record.merge(others) or changed
+
+    if not changed:
+        return []
+    record.save(update_fields=["content", "updated_at"])
+
+    # Propagate, so the next project the scholar opens already knows them.
+    refreshed = []
+    for sibling in siblings:
+        if render_user_memory(sibling):
+            refreshed.append(profile_name_for(sibling))
+    return refreshed
