@@ -31,6 +31,8 @@ from research.constants import (
     AgentRunStatus,
     AgentToolCallStatus,
     ChatMessageRole,
+    MemoryProposalStatus,
+    ProjectMemorySource,
     ResearchSessionMode,
     SoulFileOrigin,
     StagingItemStatus,
@@ -41,6 +43,7 @@ from research.models import (
     ResearchKnowledgeItem,
     ResearchAgentMemorySnapshot,
     ResearchProject,
+    ResearchMemoryProposal,
     ResearchProjectMemory,
     ResearchSession,
     ResearchStagingItem,
@@ -54,7 +57,11 @@ from research.services import (
     safe_hermes_usage,
 )
 from research.services.graph_service import build_evidence_graph
-from research.services.profile_service import absorb_user_memory
+from research.services.profile_service import (
+    absorb_user_memory,
+    forget_project_memory,
+    propose_project_memory,
+)
 from research.services.okf_service import (
     build_okf_bundle,
     build_okf_view,
@@ -971,8 +978,64 @@ class ResearchAgentMemoryView(ResearchAPIView):
         # it to their other projects, so the next one they open already knows
         # them. The project's own MEMORY.md is untouched and stays private.
         files["sharedTo"] = absorb_user_memory(project, files.get("user", ""))
+        propose_project_memory(project)
         files["history"] = _record_and_diff_memory(project, files)
         return Response(files)
+
+
+class ResearchMemoryProposalReviewView(ResearchAPIView):
+    """
+    Scholar review of something the agent wants to remember.
+
+    POST /api/research/memory-proposals/{id}/review/  body {decision}
+    - accept -> promoted to ResearchProjectMemory, which DARE owns and versions
+    - reject -> status rejected, and the entry is dropped from the profile's
+      MEMORY.md so the agent stops repeating it back
+
+    The agent writes project memory as it works, because a run that had to wait
+    for approval before remembering anything would be useless. This is the gate
+    on the other side: what the agent finds useful stays in its working memory,
+    and only what the scholar accepts becomes part of the project's record.
+    """
+
+    def post(self, request, proposal_id):
+        proposal = get_object_or_404(
+            ResearchMemoryProposal.objects.select_related("project"),
+            id=proposal_id,
+            project__user=request.user,
+        )
+        decision = (request.data or {}).get("decision", "")
+        if decision not in ("accept", "reject"):
+            return Response(
+                {"detail": "decision must be 'accept' or 'reject'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if proposal.status != MemoryProposalStatus.PROPOSED:
+            return Response(
+                {"detail": f"This proposal was already {proposal.status}."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        if decision == "accept":
+            ResearchProjectMemory.objects.create(
+                project=proposal.project,
+                added_by=request.user,
+                label="From the agent",
+                detail=proposal.content,
+                source=ProjectMemorySource.PROPOSAL,
+            )
+            proposal.status = MemoryProposalStatus.ACCEPTED
+            proposal.accepted_by = request.user
+            proposal.accepted_at = timezone.now()
+            proposal.save(update_fields=["status", "accepted_by", "accepted_at"])
+        else:
+            proposal.status = MemoryProposalStatus.REJECTED
+            proposal.save(update_fields=["status", "updated_at"])
+            # Rejecting has to reach the file, or the agent keeps believing it
+            # and proposes it again on the next read.
+            forget_project_memory(proposal.project, proposal.content)
+
+        return Response({"id": proposal.id, "status": proposal.status})
 
 
 class ResearchStagingItemReviewView(ResearchAPIView):

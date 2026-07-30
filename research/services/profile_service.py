@@ -267,3 +267,78 @@ def absorb_user_memory(project, user_file_text):
         if render_user_memory(sibling):
             refreshed.append(profile_name_for(sibling))
     return refreshed
+
+
+def propose_project_memory(project):
+    """Raise a proposal for anything in MEMORY.md the scholar has not seen.
+
+    The runtime writes project memory directly, which is fine for working
+    context but leaves DARE with no say over what becomes durable — the gap the
+    Agent Memory panel used to paper over. Turning each new entry into a
+    ResearchMemoryProposal gives the scholar the same accept/reject control they
+    already have over staged findings, without blocking the agent mid-run: the
+    entry stays in MEMORY.md and keeps working, and the proposal decides whether
+    it graduates into DARE's own record.
+
+    Returns the proposals created by this call.
+    """
+    from research.constants import MemoryProposalStatus, MemoryType
+    from research.models import (
+        ResearchMemoryProposal,
+        ResearchProjectMemory,
+    )
+
+    path = profile_home_for(project) / "memories" / "MEMORY.md"
+    try:
+        entries = [e.strip() for e in path.read_text(encoding="utf-8").split("§")]
+    except OSError:
+        return []
+
+    # Anything already proposed, decided, or promoted is not news.
+    seen = set(
+        ResearchMemoryProposal.objects.filter(project=project).values_list(
+            "content", flat=True
+        )
+    )
+    seen.update(
+        ResearchProjectMemory.active_objects.filter(project=project).values_list(
+            "detail", flat=True
+        )
+    )
+
+    created = []
+    for entry in entries:
+        if not entry or entry in seen:
+            continue
+        created.append(
+            ResearchMemoryProposal.objects.create(
+                project=project,
+                content=entry,
+                memory_type=MemoryType.PROJECT_MEMORY,
+                proposed_by_role="agent",
+                status=MemoryProposalStatus.PROPOSED,
+            )
+        )
+        seen.add(entry)
+    return created
+
+
+def forget_project_memory(project, entry):
+    """Remove one entry from a project's MEMORY.md.
+
+    Rejecting a proposal has to reach the file. Left in place the agent still
+    believes it, still acts on it, and proposes it again the next time DARE
+    reads — so "reject" would mean nothing.
+    """
+    path = profile_home_for(project) / "memories" / "MEMORY.md"
+    try:
+        kept = [
+            e.strip()
+            for e in path.read_text(encoding="utf-8").split("§")
+            if e.strip() and e.strip() != entry.strip()
+        ]
+        path.write_text("\n§\n".join(kept), encoding="utf-8")
+        return True
+    except OSError as exc:
+        logger.warning("Could not forget memory for project %s: %s", project.id, exc)
+        return False
