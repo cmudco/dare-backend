@@ -6,13 +6,18 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('research', '0017_researchagentrun_reasoning_trace'),
+        ("research", "0017_researchagentrun_reasoning_trace"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='researchproject',
-            name='hermes_model',
-            field=models.CharField(blank=True, default='', help_text="Model pinned into this project's Hermes profile, e.g. 'claude-haiku-4.5' for a cheap project or 'claude-sonnet-5' for a demanding one. Blank uses settings.HERMES_PROFILE_MODEL. Never leave the runtime to choose: an unpinned profile resolves to the provider's flagship.", max_length=128),
+            model_name="researchproject",
+            name="hermes_model",
+            field=models.CharField(
+                blank=True,
+                default="",
+                help_text="Model pinned into this project's Hermes profile, e.g. 'claude-haiku-4.5' for a cheap project or 'claude-sonnet-5' for a demanding one. Blank uses settings.HERMES_PROFILE_MODEL. Never leave the runtime to choose: an unpinned profile resolves to the provider's flagship.",
+                max_length=128,
+            ),
         ),
     ]

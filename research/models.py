@@ -1011,3 +1011,58 @@ class ResearchArtifact(BaseModel):
 
     def __str__(self):
         return f"{self.artifact_type} artifact ({self.project_id})"
+
+
+class ResearchAgentMemorySnapshot(BaseModel):
+    """
+    A point-in-time copy of a project's Hermes memory files.
+
+    The runtime rewrites MEMORY.md and USER.md in place, so on their own they can
+    only ever answer "what does the agent believe now" — the scholar cannot see
+    that a fact arrived on Tuesday, or that a preference was corrected. Keeping a
+    snapshot each time the contents change turns those files into a history the
+    workspace can show and the scholar can audit.
+
+    Cheap by construction: a snapshot is only written when the text actually
+    differs from the previous one, so an idle project stores nothing.
+    """
+
+    project = models.ForeignKey(
+        ResearchProject,
+        on_delete=models.CASCADE,
+        related_name="agent_memory_snapshots",
+        help_text="Project whose Hermes profile this snapshot came from.",
+    )
+    soul = models.TextField(
+        blank=True, default="", help_text="SOUL.md at the time of the snapshot."
+    )
+    memory = models.TextField(
+        blank=True, default="", help_text="memories/MEMORY.md at the time."
+    )
+    user = models.TextField(
+        blank=True, default="", help_text="memories/USER.md at the time."
+    )
+
+    objects = models.Manager()
+    active_objects = ActiveObjectsManager()
+
+    class Meta:
+        verbose_name = "Agent Memory Snapshot"
+        verbose_name_plural = "Agent Memory Snapshots"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"Agent memory ({self.project_id}) @ {self.created_at:%Y-%m-%d %H:%M}"
+
+    @staticmethod
+    def entries(text):
+        """The runtime separates memory entries with '§'; split back into a list."""
+        return [part.strip() for part in (text or "").split("§") if part.strip()]
+
+    def matches(self, files):
+        """True when `files` is the same content this snapshot already holds."""
+        return (
+            self.soul == files.get("soul", "")
+            and self.memory == files.get("memory", "")
+            and self.user == files.get("user", "")
+        )

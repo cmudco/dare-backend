@@ -39,6 +39,7 @@ from research.models import (
     ResearchAgentRun,
     ResearchChatMessage,
     ResearchKnowledgeItem,
+    ResearchAgentMemorySnapshot,
     ResearchProject,
     ResearchProjectMemory,
     ResearchSession,
@@ -888,6 +889,58 @@ class ResearchThesisSourceLinkDetailView(ResearchAPIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+def _record_and_diff_memory(project, files, keep=12):
+    """Snapshot this project's memory if it changed, and return its recent history.
+
+    The runtime edits MEMORY.md and USER.md in place, so without this the files
+    can only say what the agent believes *now*. Snapshotting on read is enough to
+    reconstruct how they got there, and it stays off the run path — a slow or
+    failing snapshot can never break a chat.
+
+    Each entry reports what changed against the snapshot before it, so the
+    workspace can show "the agent learned X on Tuesday" rather than a wall of
+    current text.
+    """
+    latest = (
+        ResearchAgentMemorySnapshot.active_objects.filter(project=project)
+        .order_by("-created_at")
+        .first()
+    )
+    if latest is None or not latest.matches(files):
+        # Only when the text actually moved, so an idle project stores nothing.
+        latest = ResearchAgentMemorySnapshot.objects.create(
+            project=project,
+            soul=files.get("soul", ""),
+            memory=files.get("memory", ""),
+            user=files.get("user", ""),
+        )
+
+    snaps = list(
+        ResearchAgentMemorySnapshot.active_objects.filter(project=project).order_by(
+            "-created_at"
+        )[:keep]
+    )
+    history = []
+    for index, snap in enumerate(snaps):
+        older = snaps[index + 1] if index + 1 < len(snaps) else None
+        entry = {"id": snap.id, "takenAt": snap.created_at}
+        for field in ("memory", "user"):
+            now = ResearchAgentMemorySnapshot.entries(getattr(snap, field))
+            before = (
+                ResearchAgentMemorySnapshot.entries(getattr(older, field))
+                if older
+                else []
+            )
+            entry[field] = {
+                "count": len(now),
+                "added": [e for e in now if e not in before],
+                "removed": [e for e in before if e not in now],
+            }
+        entry["isFirst"] = older is None
+        history.append(entry)
+    return history
+
+
 class ResearchAgentMemoryView(ResearchAPIView):
     """
     GET /api/research/projects/{id}/agent-memory/ — the operational memory files
@@ -903,7 +956,9 @@ class ResearchAgentMemoryView(ResearchAPIView):
         project = get_object_or_404(
             ResearchProject.active_objects, id=project_id, user=request.user
         )
-        return Response(get_hermes_service(project).read_agent_memory())
+        files = get_hermes_service(project).read_agent_memory()
+        files["history"] = _record_and_diff_memory(project, files)
+        return Response(files)
 
 
 class ResearchStagingItemReviewView(ResearchAPIView):
