@@ -1,0 +1,30 @@
+# Preserved on update — retune the model here and it survives `hermes profile update`.
+
+# Protocol discipline over many sources is the hardest job here, so it gets the stronger model.
+# Pinned deliberately: a profile with a provider and no model resolves to that
+# provider's flagship, so leaving this blank is expensive, not neutral.
+model:
+  default: claude-sonnet-5
+  provider: anthropic
+
+platform_toolsets:
+  api_server:
+    - memory
+    - skills
+    - todo
+
+# Tiered disclosure hides MCP tools behind `tool_search`. That trade is wrong for
+# an agent with a handful of tools and fails badly on cheaper models — observed
+# one reading the tool catalogue as if it were the literature index and reporting
+# "only 2 results, none matching" as a research finding. Show the tools directly.
+tools:
+  tool_search:
+    enabled: false
+
+mcp_servers:
+  dare:
+    url: ${DARE_MCP_GATEWAY_URL}
+    transport: http
+    enabled: true
+    headers:
+      Authorization: Bearer ${MCP_DARE_API_KEY}

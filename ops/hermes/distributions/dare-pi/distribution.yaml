@@ -1,0 +1,25 @@
+name: dare-pi
+version: 0.1.0
+description: >-
+  DARE's principal investigator — weighs the specialists' work and commits to a judgement with a stated confidence.
+author: DARE (Carnegie Mellon University)
+license: AGPL-3.0
+hermes_requires: ">=0.19.0"
+
+env_requires:
+  - name: MCP_DARE_API_KEY
+    description: >-
+      A DARE access token for the scholar this agent works for. It reaches the
+      web only through DARE's MCP gateway, so this token decides whose account
+      the reading runs under and who the captured pages are attributed to.
+    required: true
+  - name: DARE_MCP_GATEWAY_URL
+    description: >-
+      Your DARE backend's MCP gateway. Must be reachable from the machine
+      running the Hermes gateway, not from your browser.
+    required: false
+    default: "http://127.0.0.1:8000/mcp/api/gateway/"
+
+distribution_owned:
+  - SOUL.md
+  - skills/
