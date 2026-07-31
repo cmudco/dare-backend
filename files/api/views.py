@@ -7,7 +7,7 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db.models import BooleanField, Count, Exists, OuterRef, Prefetch, Q, Value
 from django.db.models.functions import Lower
-from django.http import FileResponse, Http404
+from django.http import FileResponse, Http404, HttpResponse
 from django_rq import enqueue, get_queue
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -20,6 +20,11 @@ from rest_framework.views import APIView
 from common.permissions import IsOwner
 from conversations.models import Conversation
 from core.models import DareConfig
+from core.services.document_crop_service import (
+    CROP_CONTENT_TYPE,
+    DocumentCropService,
+    ElementNotFound,
+)
 from core.services.document_processor import DocumentProcessor
 from core.services.file_processor import FileProcessor
 from core.services.file_upload_service import FileUploadService
@@ -43,6 +48,10 @@ from .serializers import (
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
+
+# Statuses whose stored bytes are complete, so the original can be served.
+# Embedding success is a separate question from whether the file is readable.
+VIEWABLE_FILE_STATUSES = (FileStatus.PROCESSED, FileStatus.NEEDS_OCR)
 
 
 class FileViewSet(viewsets.ModelViewSet):
@@ -538,6 +547,40 @@ class FileViewSet(viewsets.ModelViewSet):
         serializer = FileStructureSerializer(file_obj, context={"page_no": page_no})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
+    @action(detail=True, methods=["get"], url_path="element-image")
+    def element_image(self, request, pk=None):
+        """
+        Render one element of a document as an image.
+
+        Takes `?order=N`, the element's reading-order index from the structure
+        endpoint, and crops that region out of the original using the page and
+        bounding box the parser recorded. Nothing is stored — the crop is
+        rendered on demand.
+        """
+        file_obj = self.get_object()
+
+        try:
+            order = int(request.query_params.get("order", ""))
+        except (TypeError, ValueError):
+            raise ValidationError({"order": "Must be an integer."})
+
+        try:
+            image = DocumentCropService().crop_element(file_obj, order)
+        except ElementNotFound as error:
+            return Response({"error": str(error)}, status=status.HTTP_404_NOT_FOUND)
+        except Exception as error:
+            logger.error(f"Could not crop element {order} of file {pk}: {error}")
+            return Response(
+                {"error": "Could not render this region"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        response = HttpResponse(image, content_type=CROP_CONTENT_TYPE)
+        # The crop is a pure function of the file and the element, and the
+        # document model never changes once parsed.
+        response["Cache-Control"] = "private, max-age=86400"
+        return response
+
     @action(detail=True, methods=["get"], url_path="shares")
     def shares(self, request, pk=None):
         """
@@ -747,8 +790,11 @@ class FileViewAPIView(APIView):
                 if not file_obj:
                     raise File.DoesNotExist()
 
-            # Ensure file is processed successfully
-            if file_obj.status != FileStatus.PROCESSED:
+            # Ensure the stored bytes are complete. NEEDS_OCR counts: a scanned
+            # PDF is a perfectly good document to look at, it just has no text
+            # to embed, and refusing to display it hides the very pages the
+            # user needs to see.
+            if file_obj.status not in VIEWABLE_FILE_STATUSES:
                 return Response(
                     {"error": "File is not ready for viewing"},
                     status=status.HTTP_400_BAD_REQUEST,

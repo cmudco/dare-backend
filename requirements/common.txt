@@ -44,6 +44,9 @@ httpx~=0.28.1
 docling~=2.117.0
 # PyPDF2 remains the flat-text fallback when a Docling conversion fails.
 PyPDF2~=3.0.1
+# Renders a page region back to an image, so a picture the parser located can
+# be cropped out of the original on demand instead of being stored twice.
+pypdfium2~=5.12.1
 weasyprint~=62.3
 pydyf<0.12.0
 markdown~=3.7
