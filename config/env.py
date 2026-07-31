@@ -110,6 +110,12 @@ HERMES_PROFILE_MODEL_PROVIDER = os.getenv("HERMES_PROFILE_MODEL_PROVIDER", "anth
 # Lifetime of the DARE-minted JWT written into a profile's .env so its MCP tools
 # (web search / page fetch) run as the project's owner, not a shared identity.
 HERMES_PROFILE_TOKEN_DAYS = int(os.getenv("HERMES_PROFILE_TOKEN_DAYS", "365"))
+
+# How long a run's SSE stream may go without a real event before DARE stops
+# reading and resolves the outcome from Hermes's pollable run record instead.
+# Generous: a deep run can think for a while between tool calls. See
+# HermesService.stream_events for why a plain socket timeout is not enough.
+HERMES_STREAM_IDLE_SECONDS = int(os.getenv("HERMES_STREAM_IDLE_SECONDS", "180"))
 # Where a profile's MCP client reaches back to DARE. This is written into each
 # profile's config.yaml, so it must be resolvable from the machine running the
 # gateway, not from the browser.

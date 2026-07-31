@@ -9,6 +9,7 @@ gives Hermes DB access; this is the only place DARE talks to Hermes.
 
 import json
 import logging
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -95,12 +96,25 @@ class HermesService:
         resp.raise_for_status()
         return resp.json()
 
-    def stream_events(self, hermes_run_id, timeout=300):
+    def stream_events(self, hermes_run_id, timeout=300, idle_timeout=None):
         """
         Stream a run's SSE events as parsed dicts. Each event carries an
         ``event`` key: ``message.delta`` (``delta`` token), ``tool.started`` /
         ``tool.completed``, ``run.completed``, etc.
+
+        Ends the stream once ``idle_timeout`` seconds pass with no real event.
+
+        The socket timeout alone does not bound this. `requests` measures it
+        between *bytes*, and an SSE channel emits keep-alive lines that carry no
+        event — so a stream that stops delivering events while staying alive
+        blocks forever. That is not hypothetical: a run whose terminal event was
+        missed held its worker for 55 minutes and only ended when a scholar hit
+        cancel. Ending the generator hands the outcome to `_verify_terminal_run`,
+        which resolves it from Hermes's pollable record.
         """
+        if idle_timeout is None:
+            idle_timeout = settings.HERMES_STREAM_IDLE_SECONDS
+        last_event = time.monotonic()
         with requests.get(
             f"{self.base_url}/v1/runs/{hermes_run_id}/events",
             headers=self._headers(),
@@ -109,17 +123,31 @@ class HermesService:
         ) as resp:
             resp.raise_for_status()
             for line in resp.iter_lines(decode_unicode=True):
+                # Checked on every line, keep-alives included — they are the
+                # only thing arriving when a stream goes quiet, so they are the
+                # only chance to notice.
+                if time.monotonic() - last_event > idle_timeout:
+                    logger.warning(
+                        "Hermes SSE: no event for run %s in %ss — ending the "
+                        "stream and verifying the outcome instead",
+                        hermes_run_id,
+                        idle_timeout,
+                    )
+                    return
                 if not line or not line.startswith("data:"):
                     continue
                 payload = line[len("data:") :].strip()
                 if not payload:
                     continue
                 try:
-                    yield json.loads(payload)
+                    event = json.loads(payload)
                 except json.JSONDecodeError:
                     logger.warning(
                         "Hermes SSE: could not parse event line: %s", payload[:200]
                     )
+                    continue
+                last_event = time.monotonic()
+                yield event
 
     def provision_soul(self, content):
         """
