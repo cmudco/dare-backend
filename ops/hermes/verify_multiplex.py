@@ -125,7 +125,9 @@ def main():
 
     try:
         api("/p/definitely-not-a-real-profile/v1/models")
-        record("an unknown profile is refused", False, "it answered — routing is too loose")
+        record(
+            "an unknown profile is refused", False, "it answered — routing is too loose"
+        )
     except urllib.error.HTTPError as exc:
         record(
             "an unknown profile is refused",
@@ -145,7 +147,7 @@ def main():
     #    Uses whatever each profile has actually stored, so it works on any box.
     facts = {}
     for name in reachable:
-        mem = (PROFILES_ROOT / name / "memories" / "MEMORY.md")
+        mem = PROFILES_ROOT / name / "memories" / "MEMORY.md"
         if mem.exists() and mem.read_text().strip():
             first = [e.strip() for e in mem.read_text().split("§") if e.strip()][0]
             facts[name] = first[:70]
@@ -167,8 +169,11 @@ def main():
         record(
             "no profile can recall another profile's memory",
             not leaked,
-            "; ".join(leaked) if leaked else
-            f"checked {len(names)} profiles pairwise, no cross-recall",
+            (
+                "; ".join(leaked)
+                if leaked
+                else f"checked {len(names)} profiles pairwise, no cross-recall"
+            ),
         )
     else:
         record(
@@ -178,8 +183,11 @@ def main():
         )
 
     # 5. Tool ceilings are configuration, not a polite request.
-    offline = [n for n in reachable
-               if "mcp_servers" not in (PROFILES_ROOT / n / "config.yaml").read_text()]
+    offline = [
+        n
+        for n in reachable
+        if "mcp_servers" not in (PROFILES_ROOT / n / "config.yaml").read_text()
+    ]
     if offline:
         name = offline[0]
         reply, tools = ask(
@@ -196,8 +204,10 @@ def main():
 
     print("=" * 66)
     failed = [n for n, ok, _ in results if not ok]
-    print(f"{len(results) - len(failed)}/{len(results)} checks passed"
-          + (f" — FAILED: {', '.join(failed)}" if failed else ""))
+    print(
+        f"{len(results) - len(failed)}/{len(results)} checks passed"
+        + (f" — FAILED: {', '.join(failed)}" if failed else "")
+    )
     return 1 if failed else 0
 
 
