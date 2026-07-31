@@ -983,6 +983,22 @@ class ResearchAgentMemoryView(ResearchAPIView):
         return Response(files)
 
 
+def _memory_label(content, limit=48):
+    """A short title for a promoted memory.
+
+    Agents tend to write "Working thesis: ...", "Method decision: ...",
+    "Corpus: ..." — that leading clause is exactly the label a scholar would
+    have written, so use it when it is there and fall back to a trimmed opening
+    otherwise. Better a title taken from the fact than the same three words on
+    every row.
+    """
+    text = (content or "").strip()
+    head = text.split(":", 1)[0].strip() if ":" in text[:limit] else ""
+    if head and len(head) <= limit:
+        return head
+    return (text[: limit - 1] + "\u2026") if len(text) > limit else text or "Note"
+
+
 class ResearchMemoryProposalReviewView(ResearchAPIView):
     """
     Scholar review of something the agent wants to remember.
@@ -1020,7 +1036,12 @@ class ResearchMemoryProposalReviewView(ResearchAPIView):
             ResearchProjectMemory.objects.create(
                 project=proposal.project,
                 added_by=request.user,
-                label="From the agent",
+                # Every promoted row said "From the agent", which the source
+                # field already records and which crowds out the labels that
+                # carry meaning — "Working thesis", "Decision", "Open question".
+                # Take the fact's own opening clause when it has one; the text
+                # is a better title than a constant.
+                label=_memory_label(proposal.content),
                 detail=proposal.content,
                 source=ProjectMemorySource.PROPOSAL,
             )
