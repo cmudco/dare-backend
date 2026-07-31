@@ -336,6 +336,17 @@ def _next_gateway_fetch(run, tool, seen_ids, call_id=""):
             .order_by("created_at")
             .first()
         )
+        if row is None:
+            # The runtime named an id and we still could not match it. Ordering
+            # takes over from here, which is a guess — and a silent guess is how
+            # a whole run's audit ended up blank once already. Say it out loud.
+            logger.warning(
+                "research.audit run %s: %s carried toolCallId=%r with no "
+                "matching GatewayFetch row — falling back to positional order",
+                run.id,
+                tool,
+                call_id,
+            )
     if row is None:
         window = GatewayFetch.all_objects.filter(
             tool=base, created_at__gte=run.started_at
@@ -365,6 +376,18 @@ def _record_tool_call(run, event, arguments, seen_ids):
     result_summary = ""
 
     row = _next_gateway_fetch(run, tool, seen_ids, event.get("toolCallId") or "")
+    if row is None and _gateway_tool_base(tool) is not None:
+        # A gateway tool that produced no row means the audit lost this call's
+        # URL and body entirely. It has failed silently twice now (once on a
+        # tool-name rename), so say so rather than persist a blank row.
+        logger.warning(
+            "research.audit run %s: no GatewayFetch row for %s "
+            "(toolCallId=%r, run_key=%r) — url and result will be blank",
+            run.id,
+            tool,
+            event.get("toolCallId") or "",
+            _run_session_key(run),
+        )
     if row is not None:
         if row.url:
             arguments = {**arguments, "url": row.url}
