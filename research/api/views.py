@@ -554,6 +554,17 @@ class ResearchChatView(ResearchAPIView):
             )
             session.last_run_at = timezone.now()
             session.save(update_fields=["last_run_at", "updated_at"])
+            # Chat is where the agent most often learns something, and it does
+            # not go through tasks._finish — so raise the decision here too, or
+            # the Context badge would stay dark until someone went looking.
+            try:
+                propose_project_memory(project)
+            except Exception:  # noqa: BLE001 - never break a delivered reply
+                logger.warning(
+                    "Could not raise memory proposals for project %s",
+                    project.id,
+                    exc_info=True,
+                )
             yield _sse(
                 {
                     "type": "done",
@@ -980,6 +991,14 @@ class ResearchAgentMemoryView(ResearchAPIView):
         files["sharedTo"] = absorb_user_memory(project, files.get("user", ""))
         propose_project_memory(project)
         files["history"] = _record_and_diff_memory(project, files)
+        # What the scholar has already thrown out. A dropped entry otherwise
+        # reads as the agent forgetting on its own, when the usual cause is
+        # someone discarding it — the timeline should name which.
+        files["discarded"] = list(
+            ResearchMemoryProposal.active_objects.filter(
+                project=project, status=MemoryProposalStatus.REJECTED
+            ).values_list("content", flat=True)
+        )
         return Response(files)
 
 

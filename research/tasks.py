@@ -37,6 +37,7 @@ from research.services import (
     parse_staging_items,
     safe_hermes_usage,
 )
+from research.services.profile_service import propose_project_memory
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +75,22 @@ def _finish(run, detail, hermes, failed=False, raw_output=None):
         run.raw_output = raw_output
         fields.append("raw_output")
     run.save(update_fields=fields)
+    _raise_memory_proposals(run.project)
+
+
+def _raise_memory_proposals(project):
+    """Surface anything the run wrote to MEMORY.md as a pending decision.
+
+    Raised here rather than only when the Context tab is opened, because a
+    badge that appears the first time you look is a badge that can never tell
+    you to look. Best-effort: a proposal is never worth failing a finished run.
+    """
+    try:
+        propose_project_memory(project)
+    except Exception:  # noqa: BLE001 - never let bookkeeping break a run
+        logger.warning(
+            "Could not raise memory proposals for project %s", project.id, exc_info=True
+        )
 
 
 def _save_verified_status(run, status, detail, *, terminal=False, usage=None):
