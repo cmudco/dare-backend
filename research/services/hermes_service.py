@@ -284,6 +284,8 @@ def get_hermes_service(project=None):
     the shared default instance exactly as before.
     """
     if project is not None:
+        # Imported here, not at module scope: research.services.__init__ pulls
+        # this module in, and profile_service reaches back for the same package.
         from research.services.profile_service import ensure_project_profile
 
         profile = ensure_project_profile(project)

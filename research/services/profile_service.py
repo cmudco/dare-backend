@@ -26,6 +26,15 @@ from pathlib import Path
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
+from rest_framework_simplejwt.tokens import AccessToken
+
+from research.constants import MemoryProposalStatus, MemoryType
+from research.models import (
+    ResearcherProfile,
+    ResearchMemoryProposal,
+    ResearchProject,
+    ResearchProjectMemory,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -63,8 +72,6 @@ def mint_project_token(project):
     `fetch_page` run under the owner's account and every captured GatewayFetch
     row is attributed to the right scholar instead of one shared identity.
     """
-    from rest_framework_simplejwt.tokens import AccessToken
-
     token = AccessToken.for_user(project.user)
     token.set_exp(lifetime=timedelta(days=settings.HERMES_PROFILE_TOKEN_DAYS))
     return str(token)
@@ -209,8 +216,6 @@ def render_user_memory(project):
     scholar is instead of re-learning it. MEMORY.md is deliberately untouched:
     the person travels between projects, the project's facts do not.
     """
-    from research.models import ResearcherProfile
-
     record = ResearcherProfile.active_objects.filter(user=project.user).first()
     if record is None or not record.content.strip():
         return False
@@ -237,8 +242,6 @@ def absorb_user_memory(project, user_file_text):
 
     Returns the names of profiles that were refreshed as a result.
     """
-    from research.models import ResearcherProfile, ResearchProject
-
     incoming = [e.strip() for e in (user_file_text or "").split("§") if e.strip()]
     if not incoming:
         return []
@@ -291,12 +294,6 @@ def propose_project_memory(project):
 
     Returns the proposals created by this call.
     """
-    from research.constants import MemoryProposalStatus, MemoryType
-    from research.models import (
-        ResearchMemoryProposal,
-        ResearchProjectMemory,
-    )
-
     path = profile_home_for(project) / "memories" / "MEMORY.md"
     try:
         entries = [e.strip() for e in path.read_text(encoding="utf-8").split("§")]
