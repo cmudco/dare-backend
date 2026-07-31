@@ -174,6 +174,46 @@ class File(BaseModel):
         help_text=_("Last known SyftBox ETag used to detect remote content changes"),
     )
 
+    # Document parsing (see core/services/document_parsing_service.py)
+    extracted_text = models.TextField(
+        blank=True,
+        null=True,
+        verbose_name=_("Extracted Text"),
+        help_text=_(
+            "Text recovered at upload. Referencing a file reads this instead of "
+            "re-parsing the original on every request."
+        ),
+    )
+    document_model = models.JSONField(
+        blank=True,
+        null=True,
+        verbose_name=_("Document Model"),
+        help_text=_(
+            "Parsed structure: elements in reading order with their label, page, "
+            "bounding box and caption."
+        ),
+    )
+    page_count = models.PositiveIntegerField(
+        blank=True,
+        null=True,
+        verbose_name=_("Page Count"),
+        help_text=_("Number of pages, for paginated formats such as PDF"),
+    )
+    pages_without_text = models.PositiveIntegerField(
+        default=0,
+        verbose_name=_("Pages Without Text"),
+        help_text=_(
+            "Pages that yielded no readable text, i.e. scans awaiting transcription"
+        ),
+    )
+    parser_name = models.CharField(
+        max_length=32,
+        blank=True,
+        null=True,
+        verbose_name=_("Parser"),
+        help_text=_("Parser that produced the extracted text (docling or legacy)"),
+    )
+
     # Lineage tracking
     source_file = models.ForeignKey(
         "self",

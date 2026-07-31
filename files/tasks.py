@@ -1,19 +1,47 @@
+import logging
 import time
 from datetime import datetime
-import logging
+from typing import Optional, Tuple
 
 from django.contrib.auth import get_user_model
 from django_rq import job
 
-from core.storage.constants import StorageBackendChoice
 from core.services.document_processor import DocumentProcessor
 from core.services.vector_service import get_vector_service
+from core.storage.constants import StorageBackendChoice
 from users.constants import VectorDBChoice
+
 from .constants import FileStatus
 from .models import File
 from .utils import migrate_file_to_target_storage
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_status(file: File, vector_count: int) -> Tuple[int, Optional[str]]:
+    """Decide a file's post-ingest status from what the parse actually yielded.
+
+    A file that produced no vectors did not succeed, whatever the parser
+    reported. When the pages are scans we can name the reason and the vision
+    layer can pick it up later; otherwise we surface it as a failure rather
+    than leaving the user with a library entry that answers nothing.
+    """
+    # Checked before the vector count: a scanned PDF can still produce a
+    # markdown export full of image placeholders, and chunking that would
+    # yield vectors for a document that says nothing.
+    if file.page_count and file.pages_without_text >= file.page_count:
+        return FileStatus.NEEDS_OCR, (
+            f"All {file.page_count} pages are scanned images with no readable "
+            f"text. Nothing was embedded, so this file cannot answer questions yet."
+        )
+
+    if vector_count > 0:
+        return FileStatus.PROCESSED, None
+
+    return FileStatus.FAILED, (
+        "No text could be extracted from this file, so nothing was embedded."
+    )
+
 
 @job
 def process_file_embeddings(file_id, chunk_size=None, overlap_size=None):
@@ -46,12 +74,11 @@ def process_file_embeddings(file_id, chunk_size=None, overlap_size=None):
         file.save(update_fields=['status', 'error_message'])
 
         processor = DocumentProcessor()
-        result = processor.create_file_embeddings(file, chunk_size, overlap_size)
+        vector_count = processor.create_file_embeddings(file, chunk_size, overlap_size)
 
         # Record the user's current vector DB preference with the file
         file.vector_db_source = file.user.vector_db
-        file.status = FileStatus.PROCESSED
-        file.error_message = None
+        file.status, file.error_message = _resolve_status(file, vector_count)
         file.save(update_fields=['status', 'vector_db_source', 'error_message'])
 
         elapsed_time = time.time() - start_time
@@ -62,7 +89,7 @@ def process_file_embeddings(file_id, chunk_size=None, overlap_size=None):
 
         try:
             file.status = FileStatus.FAILED
-            file.error_message = error_message 
+            file.error_message = error_message
             file.save(update_fields=['status', 'error_message'])
         except Exception as update_error:
             pass
@@ -118,6 +145,7 @@ def delete_file_vectors(file_id, user_id):
 
     except Exception as e:
         pass
+
 
 # @job("default", timeout=3600)
 # def migrate_vector_db(user_id, target_vector_db, source_vector_db=None):

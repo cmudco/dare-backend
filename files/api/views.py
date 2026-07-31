@@ -36,6 +36,7 @@ from ..models import File, FileShare, Folder, Tag
 from .serializers import (
     FileSerializer,
     FileShareSerializer,
+    FileStructureSerializer,
     FolderSerializer,
     TagSerializer,
 )
@@ -513,6 +514,28 @@ class FileViewSet(viewsets.ModelViewSet):
             .first()
         )
         serializer = self.get_serializer(refreshed)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["get"], url_path="structure")
+    def structure(self, request, pk=None):
+        """
+        Return the parsed document model for a file.
+
+        Elements come back in reading order with their label, page and bounding
+        box. Pass ``?page_no=N`` to narrow to a single page, which is what the
+        page-by-page structure view uses instead of shipping every element.
+
+        Response: {"id", "parser", "counts", "outline", "elements", "needsOcr"}
+        """
+        file_obj = self.get_object()
+
+        page_no = request.query_params.get("page_no")
+        try:
+            page_no = int(page_no) if page_no is not None else None
+        except (TypeError, ValueError):
+            raise ValidationError({"page_no": "Must be an integer."})
+
+        serializer = FileStructureSerializer(file_obj, context={"page_no": page_no})
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["get"], url_path="shares")

@@ -35,3 +35,7 @@ class FileStatus(models.IntegerChoices):
     PROCESSING = 0, "Processing"
     PROCESSED = 1, "Processed"
     FAILED = 2, "Failed"
+    # Parsed without error, but every page is a scanned image so there was no
+    # text to embed. Distinct from FAILED (nothing went wrong) and from
+    # PROCESSED (the file cannot answer questions yet).
+    NEEDS_OCR = 3, "Needs OCR"

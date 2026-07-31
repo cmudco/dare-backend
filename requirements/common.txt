@@ -35,9 +35,15 @@ djangorestframework_simplejwt~=5.5.0
 requests~=2.32.3
 httpx~=0.28.1
 
-# PDF
+# Document parsing
+# Docling produces the structured document model (elements in reading order,
+# tables as markdown, picture positions and captions). Importing it loads a
+# layout model on top of the torch stack sentence-transformers already brings
+# in, so it is imported lazily and only ever reached in the RQ worker that
+# parses uploads — see core/services/document_parsers/__init__.py.
+docling~=2.117.0
+# PyPDF2 remains the flat-text fallback when a Docling conversion fails.
 PyPDF2~=3.0.1
-PyMuPDF~=1.28.0
 weasyprint~=62.3
 pydyf<0.12.0
 markdown~=3.7

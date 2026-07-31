@@ -10,6 +10,8 @@ from core.config.processing import (BATCH_SIZE, CHUNK_SIZE,
                                     DEFAULT_TOP_K, OVERLAP_SIZE)
 from core.config.vector_db import get_user_namespace
 from core.helpers.openai import OpenAIWrapper
+from core.services.document_parsing_service import DocumentParsingService
+from core.services.dtos.parsed_document_dto import ParsedDocument
 from core.services.embedding_service import EmbeddingService
 from core.services.file_processor import FileProcessor
 from core.services.vector_service import get_vector_service
@@ -27,6 +29,7 @@ class DocumentProcessor:
         embedding_service=None,
         file_processor=None,
         user_id=None,
+        parsing_service=None,
     ):
         self.openai_client = openai_client or OpenAIWrapper()
         self.user_id = user_id
@@ -34,7 +37,8 @@ class DocumentProcessor:
         self.embedding_service = embedding_service or EmbeddingService(
             self.openai_client
         )
-        self.file_processor = file_processor or FileProcessor()
+        self.parsing_service = parsing_service or DocumentParsingService()
+        self.file_processor = file_processor or FileProcessor(self.parsing_service)
 
     def _ensure_vector_service(self):
         """Ensure we have a vector service available, initializing it if needed."""
@@ -50,11 +54,16 @@ class DocumentProcessor:
     def create_file_embeddings(
         self, file: File, chunk_size=None, overlap_size=None
     ) -> int:
-        """Process a single file and create embeddings."""
+        """Process a single file and create embeddings.
+
+        Returns the number of vectors stored. Zero is a legitimate outcome for
+        a file that carries no text — an image-only PDF — and the caller is
+        responsible for reporting that honestly rather than as success.
+        """
         try:
             self.update_vector_service(file.user.id)
 
-            content = self.file_processor.read_file_content(file)
+            content = self.parse_file(file).embeddable_text
 
             user_chunk_size = getattr(file.user, "chunk_size", CHUNK_SIZE)
             user_overlap_size = getattr(file.user, "overlap_size", OVERLAP_SIZE)
@@ -84,6 +93,15 @@ class DocumentProcessor:
             return len(vectors)
         except Exception as e:
             raise Exception(f"Error processing file: {str(e)}")
+
+    def parse_file(self, file: File) -> ParsedDocument:
+        """Parse a file and persist its text and document model.
+
+        Exposed on the processor so the ingestion task can inspect the parse —
+        page count, pages without text — and decide the file's status without
+        parsing the document a second time.
+        """
+        return self.parsing_service.parse_and_persist(file)
 
     def create_user_files_embeddings(self, user_id: int) -> bool:
         """Process all files belonging to a specific user"""
