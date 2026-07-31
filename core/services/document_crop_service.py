@@ -12,6 +12,7 @@ that will describe these regions later.
 
 import io
 import logging
+import threading
 from typing import Any, Dict, Tuple
 
 import pypdfium2 as pdfium
@@ -19,6 +20,17 @@ import pypdfium2 as pdfium
 from files.models import File
 
 logger = logging.getLogger(__name__)
+
+# pdfium is not thread-safe, and Django's sync views run in a threadpool under
+# ASGI — so a structure panel opening thirty figures at once puts thirty
+# threads inside the same native library. That corrupts pdfium's heap during
+# font enumeration and takes the whole worker process down with SIGTRAP, which
+# is not something the request can catch or recover from.
+#
+# Every call into pdfium is therefore serialised. A crop takes ~30ms, so even a
+# 65-picture document costs about two seconds in total, and the requests are
+# already queued behind the browser's own per-origin connection limit.
+_PDFIUM_LOCK = threading.Lock()
 
 # Rendered at 2x so a half-page figure still reads at full width in the UI.
 RENDER_SCALE = 2.0
@@ -89,16 +101,28 @@ class DocumentCropService:
 
     @classmethod
     def _render(cls, data: bytes, page_no: int, bbox: Dict[str, float]) -> bytes:
-        document = pdfium.PdfDocument(io.BytesIO(data))
-        try:
-            if page_no < 1 or page_no > len(document):
-                raise ElementNotFound(f"Page {page_no} is outside this document")
+        """Rasterise one page and cut the bounding box out of it.
 
-            # page_no is 1-based in the document model, pypdfium2 is 0-based.
-            image = document[page_no - 1].render(scale=RENDER_SCALE).to_pil()
-            return cls._encode(image.crop(cls._box(image.size, bbox)))
-        finally:
-            document.close()
+        Held under ``_PDFIUM_LOCK`` for the whole open/render/close cycle:
+        pdfium keeps process-global state (its font cache among it), so two
+        threads overlapping anywhere in this sequence is enough to corrupt it.
+        Encoding happens outside the lock — that is pure Pillow work.
+        """
+        with _PDFIUM_LOCK:
+            document = pdfium.PdfDocument(io.BytesIO(data))
+            try:
+                if page_no < 1 or page_no > len(document):
+                    raise ElementNotFound(f"Page {page_no} is outside this document")
+
+                # page_no is 1-based in the document model, pypdfium2 is 0-based.
+                page = document[page_no - 1]
+                image = page.render(scale=RENDER_SCALE).to_pil()
+                # Detach from pdfium before the document closes.
+                image = image.copy()
+            finally:
+                document.close()
+
+        return cls._encode(image.crop(cls._box(image.size, bbox)))
 
     @staticmethod
     def _box(
