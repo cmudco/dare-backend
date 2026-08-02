@@ -30,6 +30,11 @@ class ModelEffort(models.TextChoices):
     XHIGH = 'xhigh', 'Extra High'
     MAX = 'max', 'Max'
 
+class ModelReasoningLevel(models.TextChoices):
+    NONE = 'none', 'None'
+    COST_PREDICTABLE = 'cost_predictable', 'Cost Predictable'
+    COST_UNCONSTRAINED = 'cost_unconstrained', 'Cost Unconstrained'
+
 class FeedbackType(models.TextChoices):
     LIKE = 'like', 'Like'
     DISLIKE = 'dislike', 'Dislike'

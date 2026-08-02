@@ -17,6 +17,7 @@ from .constants import (
     ConversationSource,
     FeedbackType,
     ModelEffort,
+    ModelReasoningLevel,
     ModelTier,
     Provider,
     RagMode,
@@ -56,6 +57,13 @@ class LLM(models.Model):
     )
     is_reasoning = models.BooleanField(
         default=False, help_text="Whether the model supports reasoning."
+    )
+    reasoning_level = models.CharField(
+        max_length=20,
+        choices=ModelReasoningLevel.choices,
+        default=ModelReasoningLevel.NONE,
+        # Placeholder: so we can mirror ModelCardData.reasoning_level and display the value in ModelPicker
+        help_text="How likely the model's reasoning is to produce surprising levels of token usage",
     )
     supports_vision = models.BooleanField(
         default=True,
@@ -274,7 +282,36 @@ class ModelCardData(TimeStampMixin):
     name_variants = models.JSONField(default=list, blank=True)
     provider_name = models.CharField(max_length=255)
 
-    # Public feedback (pilot JSON blob)
+    # External data sources
+    wikidata_id = models.CharField(
+        max_length=20,
+        blank=True,
+        null=True,
+        help_text="Wikidata QID (e.g., Q113741966 for GPT-4)",
+    )
+
+    external_metadata = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Cached metadata from Wikidata/other sources (publication_date, param_count, etc.)",
+    )
+
+    # Reasoning behavior
+    reasoning_level = models.CharField(
+        max_length=20,
+        choices=ModelReasoningLevel.choices,
+        default=ModelReasoningLevel.NONE,
+        help_text=(
+            "How likely the model's reasoning is to produce surprising levels of token usage. "
+            "cost_predictable: Reasoning depth stays proportional to the task; token use stays predictable. "
+            "cost_unconstrained: Sets its own reasoning depth. Simple prompts can generate large token "
+            "counts without warning."
+        ),
+    )
+
+    # Data streams
+    benchmark_scores = models.JSONField(default=dict, blank=True)
+    arena_data = models.JSONField(default=dict, blank=True)
     public_feedback = models.JSONField(default=dict, blank=True)
 
     class Meta:
@@ -400,6 +437,50 @@ class PublicFeedbackSource(TimeStampMixin):
 
     def __str__(self):
         return f"{self.get_source_type_display()}: {self.title[:40]}"
+
+
+class Benchmark(TimeStampMixin):
+    """
+    Metadata about a benchmark evaluation.
+    Scores are stored in ModelCardData.benchmark_scores JSONField.
+    """
+
+    slug = models.SlugField(
+        unique=True, help_text="Unique identifier (e.g., 'mmlu_pro', 'aaii')"
+    )
+    name = models.CharField(
+        max_length=100, help_text="Display name (e.g., 'MMLU-Pro')"
+    )
+    display_name = models.CharField(
+        max_length=200,
+        blank=True,
+        help_text="Full name for tooltips (e.g., 'Massive Multitask Language Understanding Pro')",
+    )
+    description = models.TextField(
+        blank=True, help_text="What this benchmark measures"
+    )
+    category = models.CharField(
+        max_length=150,
+        help_text="Category: knowledge, reasoning, coding, safety, composite, multimodal",
+    )
+    source_url = models.URLField(blank=True, help_text="Leaderboard or paper URL")
+    methodology_notes = models.TextField(
+        blank=True, help_text="Notes on scoring methodology, variants, caveats"
+    )
+    higher_is_better = models.BooleanField(default=True)
+    scale = models.CharField(
+        max_length=20,
+        default="percentage",
+        help_text="Scale type: percentage, index, elo, raw",
+    )
+
+    class Meta:
+        ordering = ["category", "name"]
+        verbose_name = "Benchmark"
+        verbose_name_plural = "Benchmarks"
+
+    def __str__(self):
+        return f"{self.name} ({self.category})"
 
 
 class Conversation(BaseModel):
