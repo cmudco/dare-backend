@@ -11,6 +11,14 @@ billing gate and finalization; the per-round breakdown persists to
 from typing import Any, Dict, List, Optional
 
 _TOKEN_KEYS = ("input_tokens", "output_tokens", "total_tokens")
+_BREAKDOWN_KEYS = (
+    "thinking_tokens",
+    "visible_output_tokens",
+    "stop_reason",
+    "request_max_tokens",
+    "effort",
+    "thinking_summary",
+)
 
 
 class UsageAccumulator:
@@ -44,6 +52,15 @@ class UsageAccumulator:
             totals["total_tokens"] = totals["input_tokens"] + totals["output_tokens"]
         if cost is not None:
             totals["cost"] = cost
+        for key in ("thinking_tokens", "visible_output_tokens"):
+            values = [usage.get(key) for usage in self._rounds.values()]
+            if any(value is not None for value in values):
+                totals[key] = sum(value or 0 for value in values)
+        if self._rounds:
+            final_usage = self._rounds[max(self._rounds)]
+            for key in ("stop_reason", "request_max_tokens", "effort"):
+                if final_usage.get(key) is not None:
+                    totals[key] = final_usage[key]
         return totals
 
     def breakdown(self) -> List[Dict[str, Any]]:
@@ -53,6 +70,11 @@ class UsageAccumulator:
                 "round": round_index,
                 "input_tokens": usage.get("input_tokens") or 0,
                 "output_tokens": usage.get("output_tokens") or 0,
+                **{
+                    key: usage[key]
+                    for key in _BREAKDOWN_KEYS
+                    if usage.get(key) is not None
+                },
                 **({"cost": usage["cost"]} if usage.get("cost") is not None else {}),
             }
             for round_index, usage in sorted(self._rounds.items())

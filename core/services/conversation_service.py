@@ -70,6 +70,7 @@ class ConversationService:
                 "cost": msg.get("cost", None),
                 "inputTokens": msg.get("input_tokens", None),
                 "outputTokens": msg.get("output_tokens", None),
+                "usageDetails": msg.get("usage_details", None),
                 "energyWh": msg.get("energy_wh", None),
                 "carbonG": msg.get("carbon_g", None),
                 "waterMl": msg.get("water_ml", None),

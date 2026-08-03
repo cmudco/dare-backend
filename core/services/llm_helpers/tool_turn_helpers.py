@@ -27,7 +27,9 @@ def synthesize_tool_call_id(message_id: Any, round_index: int, position: int) ->
 
 
 def build_assistant_tool_call_turn(
-    text: str, tool_calls: Sequence[ToolCallRequest]
+    text: str,
+    tool_calls: Sequence[ToolCallRequest],
+    provider_thinking_blocks: Sequence[Dict[str, str]] = (),
 ) -> Dict[str, Any]:
     """Assistant turn announcing the calls the model made this round.
 
@@ -50,11 +52,14 @@ def build_assistant_tool_call_turn(
         if getattr(call, "thought_signature", None):
             entry["thought_signature"] = call.thought_signature
         entries.append(entry)
-    return {
+    turn = {
         "role": "assistant",
         "content": text or "",
         "tool_calls": entries,
     }
+    if provider_thinking_blocks:
+        turn["provider_thinking_blocks"] = list(provider_thinking_blocks)
+    return turn
 
 
 def build_tool_result_turn(result: ToolCallResult) -> Dict[str, Any]:

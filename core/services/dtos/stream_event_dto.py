@@ -17,6 +17,8 @@ class StreamEventKind(Enum):
     """Kinds of events a provider stream can emit."""
 
     TEXT_DELTA = "text_delta"
+    THINKING_DELTA = "thinking_delta"
+    THINKING_BLOCK_READY = "thinking_block_ready"
     TOOL_CALL_START = "tool_call_start"  # name (and usually id) known, args streaming
     TOOL_CALL_ARGS_DELTA = "tool_call_args_delta"  # argument JSON grew
     TOOL_CALL_READY = "tool_call_ready"  # arguments complete
@@ -45,10 +47,39 @@ class LLMStreamEvent:
     args_len: int = 0
     tool_call: Optional[ToolCallRequest] = None
     usage: Optional[Dict[str, Any]] = None
+    thinking_signature: Optional[str] = None
+    provider_thinking_block: Optional[Dict[str, Any]] = None
 
     @classmethod
     def text_delta(cls, text: str) -> "LLMStreamEvent":
         return cls(kind=StreamEventKind.TEXT_DELTA, text=text)
+
+    @classmethod
+    def thinking_delta(cls, summary: str) -> "LLMStreamEvent":
+        """Provider-supplied summarized thinking, never private raw reasoning."""
+        return cls(kind=StreamEventKind.THINKING_DELTA, text=summary)
+
+    @classmethod
+    def thinking_block_ready(cls, summary: str, signature: str) -> "LLMStreamEvent":
+        """Complete provider thinking block for unchanged tool-turn replay."""
+        return cls(
+            kind=StreamEventKind.THINKING_BLOCK_READY,
+            text=summary,
+            thinking_signature=signature,
+            provider_thinking_block={
+                "type": "thinking",
+                "thinking": summary,
+                "signature": signature,
+            },
+        )
+
+    @classmethod
+    def redacted_thinking_block_ready(cls, data: str) -> "LLMStreamEvent":
+        """Opaque safety-redacted thinking block for unchanged tool replay."""
+        return cls(
+            kind=StreamEventKind.THINKING_BLOCK_READY,
+            provider_thinking_block={"type": "redacted_thinking", "data": data},
+        )
 
     @classmethod
     def tool_call_start(cls, tool_call_id: str, tool_name: str) -> "LLMStreamEvent":

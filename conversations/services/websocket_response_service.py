@@ -108,6 +108,12 @@ class WebSocketResponseService:
         learning_progress_data = await database_sync_to_async(
             lambda: message.learning_progress_data
         )()
+        usage_details = serialized_data.get("usage_details") or []
+        thinking_summary = "\n\n".join(
+            detail.get("thinking_summary", "")
+            for detail in usage_details
+            if detail.get("thinking_summary")
+        )
 
         # The serializer loaded a fresh Message row and resolved this relation;
         # reuse it rather than issuing a third artifact query for the same payload.
@@ -153,6 +159,10 @@ class WebSocketResponseService:
             "cost": str(cost) if cost is not None else None,
             "inputTokens": input_tokens,
             "outputTokens": output_tokens,
+            "usageDetails": serialized_data.get("usage_details"),
+            # Explicitly send null when a regeneration starts so Redux does
+            # not retain the prior run's streamed summary during object merge.
+            "thinkingSummary": thinking_summary or None,
             "energyWh": serialized_data.get("energy_wh"),
             "carbonG": serialized_data.get("carbon_g"),
             "waterMl": serialized_data.get("water_ml"),
