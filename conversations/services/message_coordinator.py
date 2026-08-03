@@ -22,29 +22,43 @@ from django.utils import timezone
 from djangorestframework_camel_case.util import camelize
 
 from conversations.api.serializers import ArtifactListSerializer
-from conversations.constants import (DEFAULT_AI_SENDER_NAME,
-                                     DEFAULT_CONVERSATION_TITLE,
-                                     ArtifactStatus, ErrorCode, ErrorMessage,
-                                     SenderType, ToolCallOrigin,
-                                     ToolCallStatus)
-from conversations.models import (LLM, Artifact, Conversation, Message,
-                                  MessageToolCall, Snippet, WebSearchSource)
-from conversations.services.image_generation_service import \
-    ImageGenerationService
+from conversations.constants import (
+    DEFAULT_AI_SENDER_NAME,
+    DEFAULT_CONVERSATION_TITLE,
+    ArtifactStatus,
+    ErrorCode,
+    ErrorMessage,
+    SenderType,
+    ToolCallOrigin,
+    ToolCallStatus,
+)
+from conversations.models import (
+    LLM,
+    Artifact,
+    Conversation,
+    Message,
+    MessageToolCall,
+    Snippet,
+    WebSearchSource,
+)
+from conversations.services.image_generation_service import ImageGenerationService
 from conversations.services.message_helpers import (  # Database helpers; Learning progress helpers; Billing helpers; Finalization helpers; Regeneration helpers
-    build_generated_image_data, build_transcription_data,
-    fetch_preceding_user_message, finalize_message, get_ai_message_by_id,
-    get_conversation_default_descriptor, handle_insufficient_balance,
-    parse_model_id, prepare_regeneration_data, run_learning_progress_stream,
-    should_generate_title)
-from conversations.services.message_validation_service import \
-    MessageValidationService
-from conversations.services.tool_loop_service import (ToolLoopResult,
-                                                      ToolLoopService)
-from conversations.services.web_search_source_service import \
-    WebSearchSourceService
-from conversations.services.websocket_response_service import \
-    WebSocketResponseService
+    build_generated_image_data,
+    build_transcription_data,
+    fetch_preceding_user_message,
+    finalize_message,
+    get_ai_message_by_id,
+    get_conversation_default_descriptor,
+    handle_insufficient_balance,
+    parse_model_id,
+    prepare_regeneration_data,
+    run_learning_progress_stream,
+    should_generate_title,
+)
+from conversations.services.message_validation_service import MessageValidationService
+from conversations.services.tool_loop_service import ToolLoopResult, ToolLoopService
+from conversations.services.web_search_source_service import WebSearchSourceService
+from conversations.services.websocket_response_service import WebSocketResponseService
 from core.services.billing_service import BillingService
 from core.services.conversation_service import ConversationService
 from core.services.dtos import LLMDescriptor, LLMQueryRequestBuilder
@@ -634,12 +648,7 @@ class MessageCoordinator:
             )
 
             if result.interrupted:
-                await self._handle_insufficient_balance(
-                    message_obj,
-                    result.text,
-                    result.token_usage or {},
-                    result.error_response,
-                )
+                await self._finalize_interrupted_turn(message_obj, result)
                 return
 
             token_usage = result.token_usage
@@ -650,6 +659,10 @@ class MessageCoordinator:
                 await self._finalize_timed_out_turn(message_obj, result, regenerate)
                 return
 
+            # Persist provider observability even when no visible text was
+            # emitted. Hidden thinking can consume the entire token budget.
+            await self._save_usage_breakdown(message_obj, result.usage_breakdown)
+
             if result.text.strip():
                 await self._save_web_search_sources(
                     message_obj, token_usage, regenerate
@@ -658,7 +671,6 @@ class MessageCoordinator:
                     message_obj, token_usage, regenerate
                 )
                 await self._save_memory_context(message_obj, token_usage)
-                await self._save_usage_breakdown(message_obj, result.usage_breakdown)
                 logger.info(
                     "[journey] mid=%s finalizing: text=%d chars, tokens=%s/%s",
                     message_obj.id,
@@ -821,6 +833,7 @@ class MessageCoordinator:
         produced artifacts.
         """
         token_usage = result.token_usage
+        await self._save_usage_breakdown(message_obj, result.usage_breakdown)
         if result.text.strip():
             notice = "The model stopped responding, so this answer was cut short."
             if result.tool_calls_made:
@@ -829,7 +842,6 @@ class MessageCoordinator:
             await self._save_web_search_sources(message_obj, token_usage, regenerate)
             await self._save_provider_tool_calls(message_obj, token_usage, regenerate)
             await self._save_memory_context(message_obj, token_usage)
-            await self._save_usage_breakdown(message_obj, result.usage_breakdown)
         elif result.tool_calls_made:
             ai_response = (
                 "The model stopped responding before it could summarize, but "
@@ -849,12 +861,24 @@ class MessageCoordinator:
         )
         await self.send_error(ErrorCode.STREAM_ERROR, ErrorMessage.STREAM_ERROR)
 
+    async def _finalize_interrupted_turn(
+        self, message_obj: Message, result: ToolLoopResult
+    ) -> None:
+        """Persist provider observability before an insufficient-credit exit."""
+        await self._save_usage_breakdown(message_obj, result.usage_breakdown)
+        await self._handle_insufficient_balance(
+            message_obj,
+            result.text,
+            result.token_usage or {},
+            result.error_response,
+        )
+
     @database_sync_to_async
     def _save_usage_breakdown(
         self, message_obj: Message, usage_breakdown: List[Dict]
     ) -> None:
-        """Persist the per-round token breakdown for multi-round turns."""
-        if not usage_breakdown or len(usage_breakdown) < 2:
+        """Persist token observability for every provider round."""
+        if not usage_breakdown:
             return
         try:
             message_obj.usage_details = usage_breakdown

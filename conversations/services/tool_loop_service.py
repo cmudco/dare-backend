@@ -158,6 +158,7 @@ class ToolLoopService:
 
         result = ToolLoopResult()
         text_accum = ""
+        thinking_accum = ""
         web_search_sources: List[Dict] = []
         provider_tool_calls: List[Dict] = []
         sent_provider_ids: set = set()
@@ -175,6 +176,9 @@ class ToolLoopService:
             pending_calls: List[ToolCallRequest] = []
             synthesized_ids: deque = deque()
             round_has_text = False
+            round_has_thinking = False
+            round_thinking = ""
+            round_thinking_blocks: List[Dict[str, str]] = []
             logger.info(
                 "[journey] mid=%s round %d start (tools=%s)",
                 message_obj.id,
@@ -195,6 +199,26 @@ class ToolLoopService:
                         await self._emit_stream_chunk(
                             send_callback, message_obj, text_accum, regenerate
                         )
+
+                    elif event.kind is StreamEventKind.THINKING_DELTA:
+                        if not event.text:
+                            continue
+                        if not round_has_thinking and thinking_accum:
+                            thinking_accum += "\n\n"
+                        round_has_thinking = True
+                        round_thinking += event.text
+                        thinking_accum += event.text
+                        await self._emit_thinking_chunk(
+                            send_callback,
+                            message_obj,
+                            text_accum,
+                            thinking_accum,
+                            regenerate,
+                        )
+
+                    elif event.kind is StreamEventKind.THINKING_BLOCK_READY:
+                        if event.provider_thinking_block:
+                            round_thinking_blocks.append(event.provider_thinking_block)
 
                     elif event.kind is StreamEventKind.TOOL_CALL_START:
                         call_id = event.tool_call_id
@@ -239,7 +263,10 @@ class ToolLoopService:
                         pending_calls.append(call)
 
                     elif event.kind is StreamEventKind.USAGE and event.usage:
-                        usage.observe(round_index, event.usage)
+                        observed_usage = dict(event.usage)
+                        if round_thinking:
+                            observed_usage["thinking_summary"] = round_thinking
+                        usage.observe(round_index, observed_usage)
                         if event.usage.get("web_search_sources"):
                             web_search_sources = event.usage["web_search_sources"]
                         for provider_call in (
@@ -313,7 +340,9 @@ class ToolLoopService:
 
             messages.append(
                 build_assistant_tool_call_turn(
-                    self._round_text(round_has_text, text_accum), pending_calls
+                    self._round_text(round_has_text, text_accum),
+                    pending_calls,
+                    provider_thinking_blocks=round_thinking_blocks,
                 )
             )
             tool_results = await self.execution_service.execute_round(
@@ -384,6 +413,29 @@ class ToolLoopService:
                 "streaming": True,
                 "regenerate": regenerate,
                 "createdAt": message_obj.created_at.isoformat(),
+            },
+        )
+        await send_callback(payload)
+
+    @staticmethod
+    async def _emit_thinking_chunk(
+        send_callback: Any,
+        message_obj: Message,
+        accumulated_text: str,
+        thinking_summary: str,
+        regenerate: bool,
+    ) -> None:
+        payload = WebSocketResponseService.format_streaming_chunk(
+            message_id=message_obj.id,
+            chunk=accumulated_text,
+            is_complete=False,
+            metadata={
+                "senderName": DEFAULT_AI_SENDER_NAME,
+                "senderType": SenderType.AI_ASSISTANT,
+                "streaming": True,
+                "regenerate": regenerate,
+                "createdAt": message_obj.created_at.isoformat(),
+                "thinkingSummary": thinking_summary,
             },
         )
         await send_callback(payload)

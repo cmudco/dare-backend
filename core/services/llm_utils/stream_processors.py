@@ -19,14 +19,14 @@ from core.services.dtos.stream_event_dto import LLMStreamEvent, StreamEventKind
 from core.services.dtos.tool_dto import ToolCallRequest
 
 from .usage_extractors import (
-    OpenAIUsageExtractor,
     ClaudeUsageExtractor,
-    GeminiUsageExtractor
+    GeminiUsageExtractor,
+    OpenAIUsageExtractor,
 )
 from .web_search_extractors import (
-    OpenAIWebSearchExtractor,
     ClaudeWebSearchExtractor,
     GeminiWebSearchExtractor,
+    OpenAIWebSearchExtractor,
 )
 
 WEB_FETCH_PREVIEW_CHARS = 4000
@@ -90,7 +90,9 @@ def _sanitize_web_fetch_result(block) -> Dict:
     return {key: value for key, value in result.items() if value is not None}
 
 
-def _merge_provider_tool_calls(tool_calls: List[Dict], results: List[Dict]) -> List[Dict]:
+def _merge_provider_tool_calls(
+    tool_calls: List[Dict], results: List[Dict]
+) -> List[Dict]:
     results_by_id = {
         result.get("tool_call_id"): result
         for result in results
@@ -103,9 +105,11 @@ def _merge_provider_tool_calls(tool_calls: List[Dict], results: List[Dict]) -> L
             {
                 **tool_call,
                 "result": result.get("result") if result else None,
-                "status": "failed"
-                if result and result.get("result", {}).get("error_code")
-                else "completed",
+                "status": (
+                    "failed"
+                    if result and result.get("result", {}).get("error_code")
+                    else "completed"
+                ),
             }
         )
     return merged
@@ -130,9 +134,9 @@ def _extract_gemini_url_metadata(candidate) -> List[Dict]:
         retrieved_url = _safe_get(item_dict, "retrieved_url") or _safe_get(
             item_dict, "retrievedUrl"
         )
-        retrieval_status = _safe_get(
-            item_dict, "url_retrieval_status"
-        ) or _safe_get(item_dict, "urlRetrievalStatus")
+        retrieval_status = _safe_get(item_dict, "url_retrieval_status") or _safe_get(
+            item_dict, "urlRetrievalStatus"
+        )
         retrieval_status = getattr(retrieval_status, "value", retrieval_status)
         if not retrieved_url and not retrieval_status:
             continue
@@ -176,7 +180,7 @@ class OpenAIStreamProcessor:
 
     @staticmethod
     async def process_chat_completion_stream(
-        response
+        response,
     ) -> AsyncGenerator[LLMStreamEvent, None]:
         """
         Process OpenAI chat completion stream.
@@ -219,8 +223,12 @@ class OpenAIStreamProcessor:
                     if idx not in current_tool_calls:
                         current_tool_calls[idx] = {
                             "id": tc.id or "",
-                            "name": tc.function.name if tc.function and tc.function.name else "",
-                            "arguments": ""
+                            "name": (
+                                tc.function.name
+                                if tc.function and tc.function.name
+                                else ""
+                            ),
+                            "arguments": "",
                         }
                     call = current_tool_calls[idx]
                     if tc.id and not call["id"]:
@@ -250,7 +258,7 @@ class OpenAIStreamProcessor:
 
     @staticmethod
     async def process_responses_api_stream(
-        response
+        response,
     ) -> AsyncGenerator[LLMStreamEvent, None]:
         """
         Process OpenAI Responses API stream (web search path).
@@ -270,12 +278,12 @@ class OpenAIStreamProcessor:
         web_search_extractor = OpenAIWebSearchExtractor()
 
         async for chunk in response:
-            if not hasattr(chunk, 'type'):
+            if not hasattr(chunk, "type"):
                 continue
 
             # Handle text delta events
-            if chunk.type == 'response.output_text.delta':
-                if hasattr(chunk, 'delta') and chunk.delta:
+            if chunk.type == "response.output_text.delta":
+                if hasattr(chunk, "delta") and chunk.delta:
                     yield LLMStreamEvent.text_delta(chunk.delta)
 
             # A finished function call arrives as a completed output item with
@@ -283,14 +291,14 @@ class OpenAIStreamProcessor:
             # collapses into one point. Emitting here rather than at
             # response.completed also covers incomplete responses (e.g.
             # max_output_tokens hit mid-turn), which never send that event.
-            if chunk.type == 'response.output_item.done':
-                item = getattr(chunk, 'item', None)
-                if item is not None and getattr(item, 'type', None) == 'function_call':
+            if chunk.type == "response.output_item.done":
+                item = getattr(chunk, "item", None)
+                if item is not None and getattr(item, "type", None) == "function_call":
                     # call_id is what a follow-up turn must echo back;
                     # id identifies the output item itself.
-                    call_id = getattr(item, 'call_id', None) or getattr(item, 'id', '')
-                    name = getattr(item, 'name', '') or ''
-                    arguments = getattr(item, 'arguments', '') or ''
+                    call_id = getattr(item, "call_id", None) or getattr(item, "id", "")
+                    name = getattr(item, "name", "") or ""
+                    arguments = getattr(item, "arguments", "") or ""
 
                     yield LLMStreamEvent.tool_call_start(call_id, name)
                     if arguments:
@@ -305,7 +313,7 @@ class OpenAIStreamProcessor:
             web_search_extractor.process_chunk(chunk)
 
             # Handle completion event with usage
-            if chunk.type == 'response.completed':
+            if chunk.type == "response.completed":
                 usage = OpenAIUsageExtractor.extract_from_responses_api(chunk) or {}
 
                 # Include web search sources in usage data
@@ -342,29 +350,41 @@ class ClaudeStreamProcessor:
         provider_tool_results = []
         current_tool_call = None
         current_provider_tool_call = None
+        current_thinking_block = None
         provider_tool_calls_yielded = False
 
         async for event in response:
             # Handle content block start (for tool use and web search results)
             if event.type == "content_block_start":
-                if hasattr(event, 'content_block'):
+                if hasattr(event, "content_block"):
                     block = event.content_block
-                    if block.type == "tool_use":
+                    if block.type == "thinking":
+                        current_thinking_block = {
+                            "type": "thinking",
+                            "thinking": getattr(block, "thinking", "") or "",
+                            "signature": getattr(block, "signature", "") or "",
+                        }
+                    elif block.type == "redacted_thinking":
+                        current_thinking_block = {
+                            "type": "redacted_thinking",
+                            "data": getattr(block, "data", "") or "",
+                        }
+                    elif block.type == "tool_use":
                         current_tool_call = {
                             "id": block.id,
                             "name": block.name,
-                            "arguments": ""
+                            "arguments": "",
                         }
                         yield LLMStreamEvent.tool_call_start(block.id, block.name)
                     elif block.type == "server_tool_use":
                         current_provider_tool_call = {
                             "id": block.id,
                             "name": block.name,
-                            "arguments": json.dumps(
-                                _safe_to_dict(_safe_get(block, "input", {}))
-                            )
-                            if _safe_get(block, "input", None)
-                            else "",
+                            "arguments": (
+                                json.dumps(_safe_to_dict(_safe_get(block, "input", {})))
+                                if _safe_get(block, "input", None)
+                                else ""
+                            ),
                             "provider": "anthropic",
                         }
                     elif block.type == "web_fetch_tool_result":
@@ -379,10 +399,20 @@ class ClaudeStreamProcessor:
 
             # Handle text deltas
             elif event.type == "content_block_delta":
-                if hasattr(event.delta, 'text'):
+                delta_type = getattr(event.delta, "type", None)
+                if delta_type == "thinking_delta" and hasattr(event.delta, "thinking"):
+                    if current_thinking_block is not None:
+                        current_thinking_block["thinking"] += event.delta.thinking
+                    yield LLMStreamEvent.thinking_delta(event.delta.thinking)
+                elif delta_type == "signature_delta" and hasattr(
+                    event.delta, "signature"
+                ):
+                    if current_thinking_block is not None:
+                        current_thinking_block["signature"] = event.delta.signature
+                elif hasattr(event.delta, "text"):
                     yield LLMStreamEvent.text_delta(event.delta.text)
                 # Handle tool input JSON delta
-                elif hasattr(event.delta, 'partial_json'):
+                elif hasattr(event.delta, "partial_json"):
                     if current_tool_call:
                         current_tool_call["arguments"] += event.delta.partial_json
                         yield LLMStreamEvent.tool_call_args_delta(
@@ -391,10 +421,23 @@ class ClaudeStreamProcessor:
                             len(current_tool_call["arguments"]),
                         )
                     elif current_provider_tool_call:
-                        current_provider_tool_call["arguments"] += event.delta.partial_json
+                        current_provider_tool_call[
+                            "arguments"
+                        ] += event.delta.partial_json
 
             # Handle content block stop (finalize tool call)
             elif event.type == "content_block_stop":
+                if current_thinking_block is not None:
+                    if current_thinking_block["type"] == "redacted_thinking":
+                        yield LLMStreamEvent.redacted_thinking_block_ready(
+                            current_thinking_block["data"]
+                        )
+                    else:
+                        yield LLMStreamEvent.thinking_block_ready(
+                            current_thinking_block["thinking"],
+                            current_thinking_block["signature"],
+                        )
+                    current_thinking_block = None
                 if current_tool_call:
                     yield LLMStreamEvent.tool_call_ready(
                         ToolCallRequest(
@@ -417,6 +460,7 @@ class ClaudeStreamProcessor:
                 usage = usage_extractor.extract_from_message_delta(event) or {}
                 stop_reason = getattr(event.delta, "stop_reason", None)
                 if stop_reason:
+                    usage["stop_reason"] = stop_reason
                     logger.info(
                         "[ClaudeStreamProcessor] stream stopped: reason=%s, "
                         "output_tokens=%s",
@@ -482,18 +526,18 @@ class GeminiStreamProcessor:
         # Use async for to properly iterate over async stream
         async for chunk in response:
             # Handle candidates (both text and function calls)
-            if hasattr(chunk, 'candidates') and chunk.candidates:
+            if hasattr(chunk, "candidates") and chunk.candidates:
                 for candidate in chunk.candidates:
-                    if hasattr(candidate, 'content') and candidate.content:
+                    if hasattr(candidate, "content") and candidate.content:
                         for part in candidate.content.parts:
                             # Handle text parts
-                            if hasattr(part, 'text') and part.text:
+                            if hasattr(part, "text") and part.text:
                                 yield LLMStreamEvent.text_delta(part.text)
 
                             # Handle function calls (Gemini's tool calling).
                             # Arguments travel only via TOOL_CALL_READY — a
                             # `content` arg is tool input, never chat text.
-                            if hasattr(part, 'function_call') and part.function_call:
+                            if hasattr(part, "function_call") and part.function_call:
                                 fc = part.function_call
 
                                 arguments = (
@@ -502,7 +546,7 @@ class GeminiStreamProcessor:
                                 # Gemini 3.x signs each function call; the
                                 # signature must be echoed when the call is
                                 # replayed or the next round is rejected.
-                                signature = getattr(part, 'thought_signature', None)
+                                signature = getattr(part, "thought_signature", None)
                                 yield LLMStreamEvent.tool_call_start("", fc.name)
                                 yield LLMStreamEvent.tool_call_ready(
                                     ToolCallRequest(
@@ -547,9 +591,7 @@ class StreamAggregator:
     """Utility for aggregating streaming responses into complete text."""
 
     @staticmethod
-    async def aggregate_stream(
-        stream: AsyncGenerator[LLMStreamEvent, None]
-    ) -> str:
+    async def aggregate_stream(stream: AsyncGenerator[LLMStreamEvent, None]) -> str:
         """
         Aggregate all text deltas from an event stream into a single string.
 

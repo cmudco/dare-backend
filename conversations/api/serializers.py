@@ -450,6 +450,7 @@ class MessageSerializer(serializers.ModelSerializer):
             "litellm_model_name",
             "input_tokens",
             "output_tokens",
+            "usage_details",
             "cost",
             "energy_wh",
             "carbon_g",
@@ -474,6 +475,7 @@ class MessageSerializer(serializers.ModelSerializer):
             "web_search_sources",
             "input_tokens",
             "output_tokens",
+            "usage_details",
             "cost",
             "energy_wh",
             "carbon_g",
@@ -510,9 +512,7 @@ class MessageSerializer(serializers.ModelSerializer):
         cache_attr = "_serialized_active_artifact_ids"
         artifact_ids = getattr(obj, cache_attr, None)
         if artifact_ids is None:
-            prefetched = getattr(obj, "_prefetched_objects_cache", {}).get(
-                "artifacts"
-            )
+            prefetched = getattr(obj, "_prefetched_objects_cache", {}).get("artifacts")
             if prefetched is not None:
                 artifacts = sorted(
                     (

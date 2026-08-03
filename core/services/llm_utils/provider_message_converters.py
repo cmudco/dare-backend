@@ -91,7 +91,10 @@ class ClaudeMessageConverter:
             _flush_tool_results()
 
             if role == "assistant" and message.get("tool_calls"):
-                blocks: List[Dict] = []
+                # Anthropic requires thinking blocks, including their opaque
+                # signatures, to be replayed unchanged when tool results
+                # continue the same assistant turn.
+                blocks: List[Dict] = list(message.get("provider_thinking_blocks") or [])
                 text = message.get("content")
                 if isinstance(text, str) and text.strip():
                     blocks.append({"type": "text", "text": text})
