@@ -80,10 +80,25 @@ See [docs/architecture.md](https://github.com/cmudco/dare-backend/blob/main/docs
 
 Fastest path — Docker brings up the whole stack (API, worker, Postgres, Redis, Weaviate):
 
+For local development, `scripts/dev-setup.sh --demo-user` does all of the below in one command
+(submodule init, env files, build, demo login) — see [INSTALL.md](INSTALL.md).
+
+Document generation is powered by
+[quillmark-mcp](https://github.com/tonguetoquill/quillmark-mcp) (Typst
+rendering over MCP), vendored as the `quillmark-mcp/` git submodule and run as
+a service in the compose stack.
+
 ```bash
-git clone https://github.com/cmudco/dare-backend.git
+# 1. Clone (with the quillmark-mcp submodule)
+git clone --recurse-submodules https://github.com/cmudco/dare-backend.git
 cd dare-backend
-cp .example.env .env      # set DJANGO_SECRET_KEY + one provider key (OPENAI_API_KEY / CLAUDE_API_KEY / GEMINI_API_KEY)
+
+# 2. Configure
+cp .example.env .env
+# Edit .env. At minimum, set DJANGO_SECRET_KEY and one provider key
+# such as OPENAI_API_KEY, CLAUDE_API_KEY, or GEMINI_API_KEY.
+
+# 3. Build and start the backend stack
 docker compose up --build -d
 docker compose exec web python manage.py createsuperuser
 docker compose exec web python manage.py collectstatic --noinput   # so the admin panel renders with its CSS/JS

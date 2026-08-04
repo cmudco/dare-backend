@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 from channels.db import database_sync_to_async
 
 from conversations.constants import RagMode
+from core.prompts.system_prompt import build_system_prompt
 from core.services.document_processor import DocumentProcessor
 from core.services.dtos import LLMQueryRequest
 from core.services.file_processor import FileProcessor
@@ -112,12 +113,14 @@ async def build_standard_messages(
     memory_context = []
     trace = ContextTraceRecorder()
 
-    # Add prompt if provided
+    # Build one authoritative system turn while preserving the context trace
+    # introduced on dev. Saved conversation prompts become custom instructions
+    # inside that system turn instead of masquerading as assistant history.
     with trace.stage("prompt") as stage:
         prompt = await get_prompt(request.generation.prompt_id)
-        if prompt and prompt.strip():
-            messages.append({"role": "assistant", "content": f"Prompt: {prompt}"})
-            stage["chars"] = len(prompt)
+        system_prompt = build_system_prompt(request, custom_instructions=prompt)
+        messages.append({"role": "system", "content": system_prompt})
+        stage["chars"] = len(system_prompt)
 
     # Add referenced conversation context
     if request.context.referenced_conversation_ids:
@@ -243,8 +246,9 @@ async def build_standard_messages(
             stage["turns"] = len(history_messages)
             stage["limit"] = request.context.history_limit
 
-    # Add current user message
-    messages.append({"role": "user", "content": f"User's message: {request.message}"})
+    # Add current user message (verbatim — labels like "User's message:" add
+    # nothing and pollute few-shot structure)
+    messages.append({"role": "user", "content": request.message})
 
     return MessageBuildResult(
         messages=messages,

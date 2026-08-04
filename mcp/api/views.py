@@ -433,3 +433,66 @@ class MCPGatewayView(APIView):
         if response is None:  # notification — no body
             return HttpResponse(status=202)
         return Response(response)
+
+
+class QuillmarkQuillsView(APIView):
+    """
+    List document templates ("quills") from the quillmark MCP server.
+
+    Feeds the chat composer's Documents picker: name, version, and an
+    LLM/user-facing description per quill. Results are cached briefly —
+    the catalog only changes when the quiver is edited.
+
+    GET /mcp/api/quillmark/quills/
+    """
+
+    permission_classes = [IsAuthenticated]
+
+    CACHE_KEY = "quillmark:quills"
+    CACHE_TTL_SECONDS = 600
+
+    def get(self, request):
+        from django.core.cache import cache
+
+        cached = cache.get(self.CACHE_KEY)
+        if cached is not None:
+            return Response({"quills": cached})
+
+        server = MCPServer.active_objects.filter(slug="quillmark").first()
+        if not server or not server.remote_url:
+            return Response({"quills": []})
+
+        try:
+            quills = async_to_sync(self._fetch_quills)(server.remote_url)
+        except Exception as e:
+            logger.warning(f"[QuillmarkQuills] list_quills failed: {e}")
+            return Response({"quills": []})
+
+        cache.set(self.CACHE_KEY, quills, self.CACHE_TTL_SECONDS)
+        return Response({"quills": quills})
+
+    async def _fetch_quills(self, remote_url: str):
+        from mcp.constants import MCP_REMOTE_REQUEST_TIMEOUT
+        from mcp.services.client_dtos import MCPConnectionConfig
+        from mcp.services.streamable_http_client import StreamableHTTPMCPClient
+
+        client = StreamableHTTPMCPClient(
+            remote_url,
+            MCPConnectionConfig(timeout=MCP_REMOTE_REQUEST_TIMEOUT),
+        )
+        try:
+            await client.initialize()
+            result = await client.call_tool("list_quills", {})
+        finally:
+            await client.close()
+
+        structured = result.get("structuredContent") or {}
+        quills = structured.get("quills")
+        if quills is None:
+            # Fallback: some server versions return JSON in the text block.
+            import json as _json
+
+            content = result.get("content") or []
+            text = content[0].get("text", "{}") if content else "{}"
+            quills = _json.loads(text).get("quills", [])
+        return quills

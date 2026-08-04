@@ -40,6 +40,7 @@ from dare_tools.services.registry import DareToolRegistry
 from dare_tools.services.result_formatters import format_dare_result_for_llm
 from dare_tools.services.retrieval_tool_executor import (
     RetrievalScope, retrieval_tool_executor)
+from mcp.services.artifact_bridge import maybe_create_pdf_artifact
 from mcp.services.mcp_tool_executor import (MCPToolExecutorError,
                                             mcp_tool_executor)
 
@@ -278,11 +279,62 @@ class ToolExecutionService:
             message=ctx.message,
             conversation=ctx.conversation,
         )
-        content = self._extract_mcp_result_text(raw_result)
+
+        # PDF-producing MCP servers return an internal artifact URL. Bridge
+        # the bytes into DARE's artifact lifecycle before the unified result
+        # event and persisted tool turn are built. Non-PDF results and bridge
+        # failures retain the normal MCP behavior.
+        bridged = await maybe_create_pdf_artifact(
+            raw_result,
+            message=ctx.message,
+            conversation=ctx.conversation,
+            arguments=arguments,
+            server_slug=server_slug,
+            tool_name=bare_tool_name,
+            send_callback=ctx.send_callback,
+        )
+        if bridged:
+            raw_result = self._sanitize_bridged_document_result(raw_result, bridged)
+            content = (
+                f"Document rendered successfully as PDF artifact "
+                f"'{bridged['title']}' (version {bridged['version']}). It is "
+                "already displayed to the user in the artifact panel with a "
+                "download button. Tell them it is ready and briefly summarize "
+                "its contents. Do not output any URL or link."
+            )
+        else:
+            content = self._extract_mcp_result_text(raw_result)
+
         raw_dict = (
             raw_result if isinstance(raw_result, dict) else {"result": raw_result}
         )
-        return raw_dict, content, False
+        is_error = bool(raw_dict.get("isError", False))
+        return raw_dict, content, is_error
+
+    @staticmethod
+    def _sanitize_bridged_document_result(result: Any, bridged: Dict) -> Any:
+        """Replace an internal PDF URL with the resulting DARE artifact."""
+        if not isinstance(result, dict):
+            return result
+
+        sanitized = dict(result)
+        sanitized["content"] = [
+            {
+                "type": "text",
+                "text": (
+                    f"Rendered PDF artifact '{bridged['title']}' "
+                    f"(version {bridged['version']})."
+                ),
+            }
+        ]
+        if "structuredContent" in sanitized:
+            sanitized["structuredContent"] = {
+                "artifactId": bridged["artifact_id"],
+                "title": bridged["title"],
+                "filename": bridged["filename"],
+                "mimeType": "application/pdf",
+            }
+        return sanitized
 
     @staticmethod
     def _extract_mcp_result_text(result: Any) -> str:

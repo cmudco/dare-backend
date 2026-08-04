@@ -45,3 +45,6 @@ static/
 
 # Node (MCP servers have their own Dockerfiles)
 node_modules/
+
+# Submodules with their own build contexts
+quillmark-mcp/
