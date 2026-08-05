@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, patch
 from django.test import SimpleTestCase
 
 from conversations.services.tool_execution_service import ToolExecutionService
+from mcp.services.artifact_bridge import BridgeResult, BridgeStatus
 
 
 class QuillmarkExecutionBridgeTests(SimpleTestCase):
@@ -44,7 +45,9 @@ class QuillmarkExecutionBridgeTests(SimpleTestCase):
             patch(
                 "conversations.services.tool_execution_service."
                 "maybe_create_pdf_artifact",
-                new=AsyncMock(return_value=bridged),
+                new=AsyncMock(
+                    return_value=BridgeResult(BridgeStatus.CREATED, artifact=bridged)
+                ),
             ) as bridge_mock,
         ):
             result, content, is_error = await service._execute_mcp(
@@ -82,8 +85,8 @@ class QuillmarkExecutionBridgeTests(SimpleTestCase):
             patch(
                 "conversations.services.tool_execution_service."
                 "maybe_create_pdf_artifact",
-                new=AsyncMock(return_value=None),
-            ),
+                new=AsyncMock(),
+            ) as bridge_mock,
         ):
             result, content, is_error = await service._execute_mcp(
                 "quillmark", "create_document", {}, ctx
@@ -92,3 +95,42 @@ class QuillmarkExecutionBridgeTests(SimpleTestCase):
         self.assertTrue(is_error)
         self.assertTrue(result["isError"])
         self.assertEqual(content, "Missing required subject")
+        bridge_mock.assert_not_awaited()
+
+    async def test_bridge_failure_is_safe_and_visible_to_the_loop(self):
+        service = ToolExecutionService()
+        ctx = SimpleNamespace(
+            user=SimpleNamespace(),
+            message=SimpleNamespace(),
+            conversation=SimpleNamespace(),
+            send_callback=AsyncMock(),
+        )
+        raw_result = {
+            "structuredContent": {
+                "url": "http://internal/artifact.pdf",
+                "mimeType": "application/pdf",
+            }
+        }
+        outcome = BridgeResult(
+            BridgeStatus.FAILED,
+            error="The rendered PDF could not be imported into DARE.",
+        )
+        with (
+            patch(
+                "conversations.services.tool_execution_service."
+                "mcp_tool_executor.execute_tool_call",
+                new=AsyncMock(return_value=raw_result),
+            ),
+            patch(
+                "conversations.services.tool_execution_service."
+                "maybe_create_pdf_artifact",
+                new=AsyncMock(return_value=outcome),
+            ),
+        ):
+            result, content, is_error = await service._execute_mcp(
+                "quillmark", "create_document", {}, ctx
+            )
+
+        self.assertTrue(is_error)
+        self.assertNotIn("http://internal", str(result))
+        self.assertEqual(content, outcome.error)

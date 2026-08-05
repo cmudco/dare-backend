@@ -2,6 +2,8 @@
 ViewSets for MCP API.
 """
 
+import json
+import logging
 import time
 
 from rest_framework import viewsets, status
@@ -37,6 +39,8 @@ from mcp.api.serializers import (
 from mcp.services.credential_service import MCPCredentialService
 from mcp.services.mcp_manager import mcp_manager, MCPManagerError
 from mcp.services.oauth_service import mcp_oauth_service, MCPOAuthError
+
+logger = logging.getLogger(__name__)
 
 
 class MCPServerViewSet(
@@ -440,59 +444,61 @@ class QuillmarkQuillsView(APIView):
     List document templates ("quills") from the quillmark MCP server.
 
     Feeds the chat composer's Documents picker: name, version, and an
-    LLM/user-facing description per quill. Results are cached briefly —
-    the catalog only changes when the quiver is edited.
+    LLM/user-facing description per quill. This is an optional UI convenience;
+    model tool discovery still comes from the selected MCP server itself.
 
     GET /mcp/api/quillmark/quills/
     """
 
     permission_classes = [IsAuthenticated]
 
-    CACHE_KEY = "quillmark:quills"
-    CACHE_TTL_SECONDS = 600
-
     def get(self, request):
-        from django.core.cache import cache
-
-        cached = cache.get(self.CACHE_KEY)
-        if cached is not None:
-            return Response({"quills": cached})
-
         server = MCPServer.active_objects.filter(slug="quillmark").first()
         if not server or not server.remote_url:
             return Response({"quills": []})
 
-        try:
-            quills = async_to_sync(self._fetch_quills)(server.remote_url)
-        except Exception as e:
-            logger.warning(f"[QuillmarkQuills] list_quills failed: {e}")
-            return Response({"quills": []})
+        connection = UserMCPConnection.active_objects.filter(
+            user=request.user,
+            server=server,
+        ).first()
+        if not connection or not _connection_has_auth(connection):
+            return Response(
+                {"error": "Connect the Quillmark MCP server first."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        cache.set(self.CACHE_KEY, quills, self.CACHE_TTL_SECONDS)
+        try:
+            credentials = _get_connection_credentials(connection)
+            result = async_to_sync(mcp_manager.call_tool)(
+                user=request.user,
+                server=server,
+                tool_name="list_quills",
+                arguments={},
+                credentials=credentials,
+            )
+            quills = self._extract_quills(result)
+        except Exception as e:
+            logger.warning("[QuillmarkQuills] list_quills failed: %s", e)
+            return Response(
+                {"error": "The Quillmark template catalog is unavailable."},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+
         return Response({"quills": quills})
 
-    async def _fetch_quills(self, remote_url: str):
-        from mcp.constants import MCP_REMOTE_REQUEST_TIMEOUT
-        from mcp.services.client_dtos import MCPConnectionConfig
-        from mcp.services.streamable_http_client import StreamableHTTPMCPClient
-
-        client = StreamableHTTPMCPClient(
-            remote_url,
-            MCPConnectionConfig(timeout=MCP_REMOTE_REQUEST_TIMEOUT),
-        )
-        try:
-            await client.initialize()
-            result = await client.call_tool("list_quills", {})
-        finally:
-            await client.close()
-
+    @staticmethod
+    def _extract_quills(result):
         structured = result.get("structuredContent") or {}
         quills = structured.get("quills")
         if quills is None:
-            # Fallback: some server versions return JSON in the text block.
-            import json as _json
-
             content = result.get("content") or []
-            text = content[0].get("text", "{}") if content else "{}"
-            quills = _json.loads(text).get("quills", [])
-        return quills
+            text_block = next(
+                (
+                    block
+                    for block in content
+                    if isinstance(block, dict) and isinstance(block.get("text"), str)
+                ),
+                {},
+            )
+            quills = json.loads(text_block.get("text", "{}")).get("quills", [])
+        return quills if isinstance(quills, list) else []

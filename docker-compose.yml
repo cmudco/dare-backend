@@ -185,7 +185,7 @@ services:
       QUILLMARK_QUIVER_DIR: /quiver
       QUILLMARK_OUTPUT_DIR: /data/artifacts
       # Consumed only by the DARE backend over the compose network.
-      QUILLMARK_BASE_URL: http://quillmark-mcp:8080/artifacts
+      QUILLMARK_BASE_URL: ${QUILLMARK_BASE_URL:-http://quillmark-mcp:8080/artifacts}
     restart: unless-stopped
 
 volumes:

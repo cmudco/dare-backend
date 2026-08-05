@@ -19,11 +19,12 @@ Browser ── Socket.IO ──> DARE web ── streamable-HTTP MCP ──> qui
   from the `quillmark-mcp/` git submodule. It loads document templates
   ("quills") from the in-repo `cmu-quiver/` directory, mounted read-only at
   `/quiver`. The browser never talks to it.
-- The server is registered in DARE's MCP catalog by migration
+- The server is initially registered in DARE's MCP catalog by migration
   `mcp/0012_seed_quillmark_server` (slug `quillmark`, transport
   `streamable_http`, auth `none`, URL `http://quillmark-mcp:8080/mcp`). Users
-  click **Connect** once on `/mcp` (no credentials) and select the server in
-  the chat composer.
+  Configure the deployment-specific URL with `manage.py configure_quillmark`,
+  then users click **Connect** once on `/mcp` (no credentials) and select the
+  server in the chat composer.
 - The LLM drives three MCP tools: `list_quills` → `get_spec` (returns an
   instruction + field blueprint per template) → `create_document` (a
   `~~~card-yaml` block opening with `$quill: <name>@<version>` and
@@ -38,7 +39,9 @@ rendered document, but the URL is compose-internal and served with
 1. Detects a PDF result **generically** (any MCP tool whose
    `structuredContent` or `resource_link` carries `application/pdf` + a URL —
    future PDF-producing servers ride for free).
-2. Fetches the bytes server-side (30 s timeout, 15 MB cap).
+2. Fetches the bytes server-side only from the configured MCP server's origin,
+   without redirects, using a streamed 30 s request and a 15 MB cap. It checks
+   both the response MIME type and PDF file signature.
 3. Stores them as a base64 data URI in `Artifact.content`
    (`ArtifactType.PDF`), so the artifact survives quillmark restarts, needs no
    auth to preview, and round-trips through the existing artifact APIs.
@@ -48,10 +51,11 @@ rendered document, but the URL is compose-internal and served with
 5. Emits the standard `artifact_created` / `artifact_updated` websocket
    events — the frontend needs no new socket wiring.
 
-The hook lives in `mcp/services/mcp_tool_handler.py::handle_tool_calls`; on a
+The hook lives in `conversations/services/tool_execution_service.py`; on a
 bridged result the websocket payload and the LLM-facing result text are
-rewritten so no dead internal URL ever reaches the user or the model. Bridge
-failures degrade silently to the old text-only behavior.
+rewritten so no dead internal URL ever reaches the user or the model. Import
+failures become explicit tool errors, allowing the model and UI to report and
+recover instead of claiming a document is ready when it is not.
 
 ## The agentic tool loop
 
@@ -75,20 +79,19 @@ requests more tool calls (executed and fed back) or produces the final text.
 |---|---|
 | PDF artifact type | `conversations/constants.py` (`ArtifactType.PDF`), migration `0079` |
 | PDF download | `conversations/api/views.py::_build_artifact_download_response` decodes the stored data URI (`?format=pdf`) |
-| Quill catalog API | `GET /mcp/api/quillmark/quills/` (`mcp/api/views.py::QuillmarkQuillsView`), 10-min cache — feeds the composer's Documents picker |
-| System prompt rules | `core/prompts/system_prompt.py` — document-flow guidance is injected when MCP tools are active |
+| Quill catalog API | `GET /mcp/api/quillmark/quills/` (`mcp/api/views.py::QuillmarkQuillsView`) — calls `list_quills` through the authenticated MCP connection and feeds the optional Documents picker |
+| Agent instructions | Advertised by Quillmark's server instructions and tool descriptions; `get_spec` returns the template-specific contract |
 
 ## Adding a document template
 
 Templates live in the `cmu-quiver/` directory (see its README for authoring). To
 add one: drop a `quills/<name>/<x.y.z>/` directory (Quill.yaml + plate.typ +
 example.md + vendored packages) and `docker compose restart quillmark-mcp`.
-No DARE code changes. Two caches to know about:
+No DARE code changes. One cache to know about:
 
 - Quillmark discovers quills at startup → restart the service after edits.
-- DARE caches MCP tool discovery in Redis (1 h) and the quill catalog
-  (10 min) → for instant pickup: `docker compose exec redis redis-cli flushdb`
-  (dev only — the DB is shared with channels/cache) or wait out the TTL.
+- DARE may cache MCP tool discovery in Redis. Reconnect the server or clear the
+  development cache if a changed tool schema is not picked up immediately.
 
 ## Verifying
 
