@@ -249,16 +249,19 @@ def run_document_search(
 ) -> List[str]:
     """Advanced-mode document retrieval: the library pipeline, pointed at files.
 
-    Same stages, same trace; only the retriever differs. The similarity
-    threshold keeps its legacy meaning (filter on the hybrid retrieval score,
-    before reranking).
+    Same stages, same trace; only the retriever differs. Advanced retrieval
+    deliberately skips the raw hybrid-score cutoff so the reranker sees the
+    full candidate pool. The pipeline still limits the final context to top-k.
+
+    ``similarity_threshold`` remains in the signature for compatibility with
+    callers shared with Naive RAG, where the threshold is still applied.
     """
     request = RetrievalRequest(
         query=query,
         top_k=max_context_snippets,
         file_ids=tuple(file_ids),
         user_id=user_id,
-        similarity_threshold=similarity_threshold,
+        similarity_threshold=0.0,
         trace=True,
     )
     pipeline = build_pipeline("document", document_processor.openai_client)

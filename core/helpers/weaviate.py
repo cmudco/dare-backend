@@ -125,12 +125,29 @@ class WeaviateClient:
         user_id: str,
         top_k: int = 5,
         query_text: str = "",
+        file_ids: Optional[List[str]] = None,
     ) -> List[Dict]:
         try:
             collection = self.client.collections.get(self.collection_name)
-            user_filter = weaviate.classes.query.Filter.by_property("user_id").equal(
+            query_filter = weaviate.classes.query.Filter.by_property("user_id").equal(
                 user_id
             )
+            if file_ids:
+                # Apply the selected-file scope before Weaviate chooses its
+                # top-k candidates. Filtering the returned top-k in Python can
+                # lose every candidate from a selected file when another file
+                # (including an unselected one) dominates the user's corpus.
+                file_filter = weaviate.classes.query.Filter.by_property(
+                    "file_id"
+                ).equal(str(file_ids[0]))
+                for file_id in file_ids[1:]:
+                    file_filter = (
+                        file_filter
+                        | weaviate.classes.query.Filter.by_property("file_id").equal(
+                            str(file_id)
+                        )
+                    )
+                query_filter = query_filter & file_filter
 
             if query_text:
                 # HYBRID: BM25 keyword + dense vector, fused with RELATIVE_SCORE so
@@ -141,7 +158,7 @@ class WeaviateClient:
                     vector=vector,
                     alpha=0.5,
                     limit=top_k,
-                    filters=user_filter,
+                    filters=query_filter,
                     fusion_type=weaviate.classes.query.HybridFusion.RELATIVE_SCORE,
                     return_metadata=weaviate.classes.query.MetadataQuery(score=True),
                 )
@@ -149,7 +166,7 @@ class WeaviateClient:
                 response = collection.query.near_vector(
                     near_vector=vector,
                     limit=top_k,
-                    filters=user_filter,
+                    filters=query_filter,
                     return_metadata=weaviate.classes.query.MetadataQuery(distance=True),
                 )
 
@@ -301,7 +318,11 @@ class WeaviateClient:
                 file_ids = [str(id) for id in filter["file_id"]["$in"]]
 
             results = self.query_documents(
-                vector=vector, user_id=user_id, top_k=top_k, query_text=query_text
+                vector=vector,
+                user_id=user_id,
+                top_k=top_k,
+                query_text=query_text,
+                file_ids=file_ids,
             )
 
             formatted_results = []

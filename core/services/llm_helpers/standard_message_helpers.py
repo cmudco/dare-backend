@@ -21,6 +21,7 @@ from .db_helpers import (
     get_prompt,
     get_referenced_conversations_context,
     get_referenced_summaries_context,
+    get_selected_file_names,
 )
 from .history_helpers import get_conversation_history
 from .memory_context_helpers import add_memory_context_to_messages
@@ -47,6 +48,44 @@ def append_saved_system_prompt(
         return 0
     messages.append({"role": "system", "content": content})
     return len(content)
+
+
+def append_document_access_status(
+    messages: List[Dict[str, str]],
+    *,
+    full_file_names: List[str],
+    embedding_file_names: List[str],
+    has_grouped_sources: bool,
+    has_library_sources: bool,
+) -> None:
+    """Tell the model what is searchable now versus merely present in history."""
+    selected_names = list(dict.fromkeys(full_file_names + embedding_file_names))
+    has_current_sources = bool(
+        selected_names or has_grouped_sources or has_library_sources
+    )
+
+    if has_current_sources:
+        lines = ["Current document access for this turn:"]
+        if selected_names:
+            lines.extend(f"- {name}" for name in selected_names)
+        if has_grouped_sources:
+            lines.append("- Additional documents selected through tags or folders")
+        if has_library_sources:
+            lines.append("- Selected shared libraries")
+        lines.append(
+            "These sources are available for this turn. Retrieved [S#] passages are "
+            "only the query-matched subset, so the absence of a passage from a source "
+            "does not mean that source is unavailable."
+        )
+    else:
+        lines = [
+            "Current document access for this turn: none selected.",
+            "Earlier chat messages may still contain information derived from files "
+            "that were selected on prior turns. You may use that visible conversation "
+            "history, but do not describe it as current access to those files.",
+        ]
+
+    messages.append({"role": "user", "content": "\n".join(lines)})
 
 
 def _retrieval_sources(message_obj: Optional[Any]) -> List[Dict[str, Any]]:
@@ -122,6 +161,7 @@ async def build_standard_messages(
     messages = []
     memory_context = []
     trace = ContextTraceRecorder()
+    full_file_names: List[str] = []
 
     # A saved conversation prompt is the user's system prompt. MCP-specific
     # instructions belong to each server's advertised instructions and tool
@@ -164,6 +204,7 @@ async def build_standard_messages(
             for file_content in file_contents:
                 messages.append({"role": "user", "content": file_content["content"]})
             if file_contents:
+                full_file_names = [item["name"] for item in file_contents]
                 stage["files"] = [
                     {"name": item["name"], "chars": len(item["content"])}
                     for item in file_contents
@@ -255,6 +296,23 @@ async def build_standard_messages(
         if history_messages:
             stage["turns"] = len(history_messages)
             stage["limit"] = request.context.history_limit
+
+    # Keep current source availability adjacent to the current question. This
+    # prevents the model from mistaking "one matched snippet" for "only one
+    # selected file", and makes deselection semantics explicit even while old
+    # file-derived answers remain in the conversation-history window.
+    embedding_file_names = await get_selected_file_names(
+        request.context.embedding_ids,
+        user_id,
+        request.context.file_owner_id,
+    )
+    append_document_access_status(
+        messages,
+        full_file_names=full_file_names,
+        embedding_file_names=embedding_file_names,
+        has_grouped_sources=bool(request.context.tag_ids or request.context.folder_ids),
+        has_library_sources=bool(request.context.library_ids),
+    )
 
     # Add current user message (verbatim — labels like "User's message:" add
     # nothing and pollute few-shot structure)

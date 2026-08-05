@@ -151,6 +151,25 @@ def get_files_from_folders(folder_ids: list, user_id: int) -> list:
 
 
 @database_sync_to_async
+def get_selected_file_names(
+    file_ids: list, user_id: Optional[int], file_owner_id: Optional[int] = None
+) -> list:
+    """Return selected file names in selection order, scoped to allowed owners."""
+    if not file_ids:
+        return []
+
+    allowed_owner_ids = {owner_id for owner_id in (user_id, file_owner_id) if owner_id}
+    if not allowed_owner_ids:
+        return []
+    files = File.active_objects.filter(id__in=file_ids, user_id__in=allowed_owner_ids)
+
+    names_by_id = {str(file.id): (file.name or file.file.name) for file in files}
+    return [
+        names_by_id[str(file_id)] for file_id in file_ids if str(file_id) in names_by_id
+    ]
+
+
+@database_sync_to_async
 def get_audio_or_video_files(media_ids: list) -> list:
     """Fetch audio/video File objects by IDs for transcription.
 
