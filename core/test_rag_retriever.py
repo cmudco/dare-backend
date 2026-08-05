@@ -1,7 +1,10 @@
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from django.test import SimpleTestCase
 
+from core.services.llm_helpers.semantic_context_helpers import \
+    run_document_search
 from core.services.rag.dtos import RetrievalRequest
 from core.services.rag.retriever import DocumentRetriever
 
@@ -45,3 +48,28 @@ class DocumentRetrieverResourceTests(SimpleTestCase):
             )
 
         service.close.assert_called_once_with()
+
+
+class AdvancedDocumentSearchTests(SimpleTestCase):
+    @patch("core.services.llm_helpers.semantic_context_helpers.build_pipeline")
+    def test_disables_similarity_filter_before_reranking(self, build_pipeline):
+        pipeline = MagicMock()
+        pipeline.run.return_value = SimpleNamespace(blocks=["context"], trace=None)
+        build_pipeline.return_value = pipeline
+        processor = MagicMock()
+
+        result = run_document_search(
+            processor,
+            query="facts from all selected files",
+            file_ids=[10, 20, 30],
+            user_id=7,
+            max_context_snippets=6,
+            similarity_threshold=0.85,
+            message_obj=None,
+        )
+
+        request = pipeline.run.call_args.args[0]
+        self.assertEqual(result, ["context"])
+        self.assertEqual(request.file_ids, (10, 20, 30))
+        self.assertEqual(request.top_k, 6)
+        self.assertEqual(request.similarity_threshold, 0.0)
