@@ -11,7 +11,6 @@ from typing import Any, Dict, List, Optional
 from channels.db import database_sync_to_async
 
 from conversations.constants import RagMode
-from core.prompts.system_prompt import build_system_prompt
 from core.services.document_processor import DocumentProcessor
 from core.services.dtos import LLMQueryRequest
 from core.services.file_processor import FileProcessor
@@ -37,6 +36,17 @@ class MessageBuildResult:
     messages: List[Dict[str, str]] = field(default_factory=list)
     memory_context: List[Dict[str, Any]] = field(default_factory=list)
     context_trace: Optional[Dict[str, Any]] = None
+
+
+def append_saved_system_prompt(
+    messages: List[Dict[str, str]], prompt: Optional[str]
+) -> int:
+    """Append the user's saved prompt as the sole system instruction."""
+    content = prompt.strip() if prompt else ""
+    if not content:
+        return 0
+    messages.append({"role": "system", "content": content})
+    return len(content)
 
 
 def _retrieval_sources(message_obj: Optional[Any]) -> List[Dict[str, Any]]:
@@ -113,14 +123,14 @@ async def build_standard_messages(
     memory_context = []
     trace = ContextTraceRecorder()
 
-    # Build one authoritative system turn while preserving the context trace
-    # introduced on dev. Saved conversation prompts become custom instructions
-    # inside that system turn instead of masquerading as assistant history.
+    # A saved conversation prompt is the user's system prompt. MCP-specific
+    # instructions belong to each server's advertised instructions and tool
+    # descriptions, not in a DARE-wide prompt injected into every conversation.
     with trace.stage("prompt") as stage:
         prompt = await get_prompt(request.generation.prompt_id)
-        system_prompt = build_system_prompt(request, custom_instructions=prompt)
-        messages.append({"role": "system", "content": system_prompt})
-        stage["chars"] = len(system_prompt)
+        prompt_chars = append_saved_system_prompt(messages, prompt)
+        if prompt_chars:
+            stage["chars"] = prompt_chars
 
     # Add referenced conversation context
     if request.context.referenced_conversation_ids:

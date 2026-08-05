@@ -9,6 +9,7 @@ from mcp.services.artifact_bridge import (
     _create_version,
     _detect_pdf_url,
     _extract_document_meta,
+    _validate_artifact_url,
 )
 from users.models import User
 
@@ -54,6 +55,26 @@ class DetectPdfUrlTests(SimpleTestCase):
                 }
             )
         )
+
+
+class ArtifactUrlValidationTests(SimpleTestCase):
+    def test_same_origin_is_allowed(self):
+        _validate_artifact_url(
+            "http://quillmark-mcp:8080/artifacts/a.pdf",
+            "http://quillmark-mcp:8080/mcp",
+        )
+
+    def test_cross_origin_and_non_http_urls_are_rejected(self):
+        with self.assertRaises(ValueError):
+            _validate_artifact_url(
+                "http://169.254.169.254/latest/meta-data",
+                "http://quillmark-mcp:8080/mcp",
+            )
+        with self.assertRaises(ValueError):
+            _validate_artifact_url(
+                "file:///etc/passwd",
+                "http://quillmark-mcp:8080/mcp",
+            )
 
 
 class CreateVersionTests(TestCase):
@@ -103,8 +124,7 @@ class ExtractDocumentMetaTests(SimpleTestCase):
 
     def test_legacy_frontmatter_is_still_parsed(self):
         content = (
-            "---\nQUILL: cmu_memo@0.1.0\n"
-            "subject: FY27 Funding Request\n---\n\nBody."
+            "---\nQUILL: cmu_memo@0.1.0\n" "subject: FY27 Funding Request\n---\n\nBody."
         )
         meta = _extract_document_meta({"content": content})
         self.assertEqual(meta["quill"], "cmu_memo@0.1.0")

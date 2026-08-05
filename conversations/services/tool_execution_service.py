@@ -30,8 +30,7 @@ from django.utils import timezone
 
 from conversations.constants import ToolCallOrigin
 from conversations.models import Conversation, Message, MessageToolCall
-from conversations.services.artifact_tool_executor import \
-    artifact_tool_executor
+from conversations.services.artifact_tool_executor import artifact_tool_executor
 from conversations.services.tool_event_service import ToolEventEmitter
 from core.services.dtos import ToolCallRequest, ToolCallResult
 from dare_tools.constants import ExecutionStatus
@@ -39,10 +38,11 @@ from dare_tools.models import DareTool, DareToolExecution
 from dare_tools.services.registry import DareToolRegistry
 from dare_tools.services.result_formatters import format_dare_result_for_llm
 from dare_tools.services.retrieval_tool_executor import (
-    RetrievalScope, retrieval_tool_executor)
-from mcp.services.artifact_bridge import maybe_create_pdf_artifact
-from mcp.services.mcp_tool_executor import (MCPToolExecutorError,
-                                            mcp_tool_executor)
+    RetrievalScope,
+    retrieval_tool_executor,
+)
+from mcp.services.artifact_bridge import BridgeStatus, maybe_create_pdf_artifact
+from mcp.services.mcp_tool_executor import MCPToolExecutorError, mcp_tool_executor
 
 logger = logging.getLogger(__name__)
 
@@ -280,11 +280,13 @@ class ToolExecutionService:
             conversation=ctx.conversation,
         )
 
-        # PDF-producing MCP servers return an internal artifact URL. Bridge
-        # the bytes into DARE's artifact lifecycle before the unified result
-        # event and persisted tool turn are built. Non-PDF results and bridge
-        # failures retain the normal MCP behavior.
-        bridged = await maybe_create_pdf_artifact(
+        raw_dict = (
+            raw_result if isinstance(raw_result, dict) else {"result": raw_result}
+        )
+        if raw_dict.get("isError", False):
+            return raw_dict, self._extract_mcp_result_text(raw_dict), True
+
+        bridge_result = await maybe_create_pdf_artifact(
             raw_result,
             message=ctx.message,
             conversation=ctx.conversation,
@@ -293,7 +295,8 @@ class ToolExecutionService:
             tool_name=bare_tool_name,
             send_callback=ctx.send_callback,
         )
-        if bridged:
+        if bridge_result.status == BridgeStatus.CREATED:
+            bridged = bridge_result.artifact or {}
             raw_result = self._sanitize_bridged_document_result(raw_result, bridged)
             content = (
                 f"Document rendered successfully as PDF artifact "
@@ -302,6 +305,12 @@ class ToolExecutionService:
                 "download button. Tell them it is ready and briefly summarize "
                 "its contents. Do not output any URL or link."
             )
+        elif bridge_result.status == BridgeStatus.FAILED:
+            content = bridge_result.error
+            raw_result = {
+                "isError": True,
+                "content": [{"type": "text", "text": content}],
+            }
         else:
             content = self._extract_mcp_result_text(raw_result)
 
@@ -341,8 +350,10 @@ class ToolExecutionService:
         """Extract the model-facing text from an MCP tool result."""
         if isinstance(result, dict):
             content = result.get("content", [])
-            if content and isinstance(content, list):
-                return content[0].get("text", str(result))
+            if isinstance(content, list):
+                for block in content:
+                    if isinstance(block, dict) and isinstance(block.get("text"), str):
+                        return block["text"]
             return str(result)
         return str(result)
 

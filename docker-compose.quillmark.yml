@@ -1,0 +1,31 @@
+services:
+  quillmark-mcp:
+    build:
+      context: ./quillmark-mcp
+      dockerfile: Dockerfile
+    image: quillmark-mcp:dev
+    container_name: dare-quillmark
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "127.0.0.1:${QUILLMARK_PORT:-8090}:8080"
+    volumes:
+      - ./cmu-quiver:/quiver:ro
+      - quillmark_artifacts:/data/artifacts
+    environment:
+      LOG_LEVEL: info
+      QUILLMARK_BIND: 0.0.0.0:8080
+      QUILLMARK_ENDPOINT: /mcp
+      QUILLMARK_QUIVER_DIR: /quiver
+      QUILLMARK_OUTPUT_DIR: /data/artifacts
+      QUILLMARK_BASE_URL: ${QUILLMARK_BASE_URL:-http://127.0.0.1:8090/artifacts}
+    restart: unless-stopped
+
+volumes:
+  quillmark_artifacts:

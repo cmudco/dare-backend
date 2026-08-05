@@ -8,8 +8,9 @@ from typing import Dict, Any, Callable, Optional
 
 from asgiref.sync import sync_to_async
 
-from conversations.models import Artifact, Message, Conversation, ArtifactGroup
+from conversations.models import Artifact, Message, Conversation
 from conversations.constants import ArtifactStatus, ArtifactType, ARTIFACT_CONTENT_TYPES
+from conversations.services.artifact_service import create_artifact
 from core.services.llm_utils.diagram_tool import json_to_mermaid
 from dare_tools.services.registry import execute_create_docx, execute_create_pptx
 
@@ -100,7 +101,7 @@ class ArtifactToolExecutor:
         content = json.dumps(chart_config, indent=2)
         
         # Create artifact group and artifact
-        artifact = await self._create_artifact(
+        artifact = await create_artifact(
             conversation=conversation,
             message=message,
             title=title,
@@ -159,7 +160,7 @@ class ArtifactToolExecutor:
         filename = f"{safe_title}.mmd"
         
         # Create artifact
-        artifact = await self._create_artifact(
+        artifact = await create_artifact(
             conversation=conversation,
             message=message,
             title=title,
@@ -215,7 +216,7 @@ class ArtifactToolExecutor:
         filename = f"{safe_title}.docx"
         content = json.dumps(doc_config, indent=2)
 
-        artifact = await self._create_artifact(
+        artifact = await create_artifact(
             conversation=conversation,
             message=message,
             title=title,
@@ -269,7 +270,7 @@ class ArtifactToolExecutor:
         filename = f"{safe_title}.pptx"
         content = json.dumps(ppt_config, indent=2)
 
-        artifact = await self._create_artifact(
+        artifact = await create_artifact(
             conversation=conversation,
             message=message,
             title=title,
@@ -340,7 +341,7 @@ class ArtifactToolExecutor:
         filename = f"{safe_title}.jsx"
 
         # Create artifact
-        artifact = await self._create_artifact(
+        artifact = await create_artifact(
             conversation=conversation,
             message=message,
             title=title,
@@ -390,48 +391,6 @@ class ArtifactToolExecutor:
 
         return any(pattern in code_stripped for pattern in patterns)
 
-    @sync_to_async
-    def _create_artifact(
-        self,
-        conversation: Conversation,
-        message: Message,
-        title: str,
-        content: str,
-        artifact_type: str,
-        filename: str,
-        content_type: str,
-        source_tool: str,
-        metadata: Dict[str, Any] = None,
-    ) -> Artifact:
-        """Create artifact and artifact group in database."""
-        # Create artifact group
-        group = ArtifactGroup.active_objects.create(
-            conversation=conversation,
-            base_title=title,
-        )
-        
-        # Create artifact using active_objects pattern
-        artifact = Artifact.active_objects.create(
-            conversation=conversation,
-            message=message,
-            artifact_group=group,
-            title=title,
-            content=content,
-            artifact_type=artifact_type,
-            filename=filename,
-            content_type=content_type,
-            source_tool=source_tool,
-            status=ArtifactStatus.COMPLETED,
-            metadata=metadata or {},
-            version=1,
-        )
-        
-        # Update group's latest version
-        group.latest_version = artifact
-        group.save(update_fields=['latest_version'])
-        
-        return artifact
-    
     async def _emit_artifact_created(
         self,
         send_callback: Callable,
