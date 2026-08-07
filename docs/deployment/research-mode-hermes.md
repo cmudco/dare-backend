@@ -283,11 +283,14 @@ clean upstream Hermes release and use the fallback correlation above until a
 generic end-to-end metadata contract is released upstream.
 
 **What that costs you, concretely.** The exact join needs a shared id on both
-sides. v0.19 supplies the stream half on its own — `tool.completed` carries
-`toolCallId` (verified: `toolu_…`). The gateway half, `GatewayFetch.call_id`,
-only gets set when Hermes forwards that id through MCP `_meta`, which is what
-the patch does. So an unpatched production Hermes matches by order and time
-window instead of by id, which is fine for a quiet single run and unreliable for
+sides, and a stock Hermes supplies **neither**. Verified against a clean
+checkout of `v2026.7.20`: the `tool.completed` callback is invoked without a
+`tool_call_id`, the SSE payload has no `toolCallId` field, and MCP carries no
+`_meta.dareCall` — so `GatewayFetch.call_id` is never populated either. All
+three come from the patch, which is why it has three hunks and not one.
+
+An unpatched Hermes therefore matches tool calls to their audit rows by order
+and time window. That is fine for a quiet single run and unreliable for
 concurrent runs or a re-fetched URL.
 
 You will not have to guess which one you are getting. DARE logs a warning
