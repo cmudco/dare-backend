@@ -81,6 +81,18 @@ class ResearchProject(BaseModel):
             "memory + the owner's tools). Blank uses the shared default gateway."
         ),
     )
+    hermes_model = models.CharField(
+        max_length=128,
+        blank=True,
+        default="",
+        help_text=(
+            "Model pinned into this project's Hermes profile, e.g. "
+            "'claude-haiku-4.5' for a cheap project or 'claude-sonnet-5' for a "
+            "demanding one. Blank uses settings.HERMES_PROFILE_MODEL. Never "
+            "leave the runtime to choose: an unpinned profile resolves to the "
+            "provider's flagship."
+        ),
+    )
 
     objects = models.Manager()
     active_objects = ActiveObjectsManager()
@@ -999,3 +1011,119 @@ class ResearchArtifact(BaseModel):
 
     def __str__(self):
         return f"{self.artifact_type} artifact ({self.project_id})"
+
+
+class ResearchAgentMemorySnapshot(BaseModel):
+    """
+    A point-in-time copy of a project's Hermes memory files.
+
+    The runtime rewrites MEMORY.md and USER.md in place, so on their own they can
+    only ever answer "what does the agent believe now" — the scholar cannot see
+    that a fact arrived on Tuesday, or that a preference was corrected. Keeping a
+    snapshot each time the contents change turns those files into a history the
+    workspace can show and the scholar can audit.
+
+    Cheap by construction: a snapshot is only written when the text actually
+    differs from the previous one, so an idle project stores nothing.
+    """
+
+    project = models.ForeignKey(
+        ResearchProject,
+        on_delete=models.CASCADE,
+        related_name="agent_memory_snapshots",
+        help_text="Project whose Hermes profile this snapshot came from.",
+    )
+    soul = models.TextField(
+        blank=True, default="", help_text="SOUL.md at the time of the snapshot."
+    )
+    memory = models.TextField(
+        blank=True, default="", help_text="memories/MEMORY.md at the time."
+    )
+    user = models.TextField(
+        blank=True, default="", help_text="memories/USER.md at the time."
+    )
+
+    objects = models.Manager()
+    active_objects = ActiveObjectsManager()
+
+    class Meta:
+        verbose_name = "Agent Memory Snapshot"
+        verbose_name_plural = "Agent Memory Snapshots"
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"Agent memory ({self.project_id}) @ {self.created_at:%Y-%m-%d %H:%M}"
+
+    @staticmethod
+    def entries(text):
+        """The runtime separates memory entries with '§'; split back into a list."""
+        return [part.strip() for part in (text or "").split("§") if part.strip()]
+
+    def matches(self, files):
+        """True when `files` is the same content this snapshot already holds."""
+        return (
+            self.soul == files.get("soul", "")
+            and self.memory == files.get("memory", "")
+            and self.user == files.get("user", "")
+        )
+
+
+class ResearcherProfile(BaseModel):
+    """
+    What DARE knows about a scholar — the person, not any one project.
+
+    The runtime keeps two memory files per profile, and they have different
+    natural owners: MEMORY.md is about a project, USER.md is about the person.
+    Because a Hermes profile holds both, scoping profiles per project (which
+    MEMORY.md needs) left USER.md re-learned from scratch in every new project.
+
+    So DARE owns the person. This record is rendered into the USER.md of every
+    profile the scholar owns, and anything the agent learns about them in one
+    project is absorbed back here and propagated to the rest. Learn once, known
+    everywhere — without merging the projects' memories, which must stay apart.
+    """
+
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="researcher_profile",
+        help_text="The scholar this describes.",
+    )
+    content = models.TextField(
+        blank=True,
+        default="",
+        help_text=(
+            "The scholar's durable facts, one per entry, in the runtime's own "
+            "'§'-separated form so it can be written to USER.md verbatim."
+        ),
+    )
+
+    objects = models.Manager()
+    active_objects = ActiveObjectsManager()
+
+    class Meta:
+        verbose_name = "Researcher Profile"
+        verbose_name_plural = "Researcher Profiles"
+
+    def __str__(self):
+        return f"Researcher profile ({self.user_id})"
+
+    def entries(self):
+        return [e.strip() for e in (self.content or "").split("§") if e.strip()]
+
+    def merge(self, incoming):
+        """Fold `incoming` entries in, keeping order and dropping duplicates.
+
+        Additive on purpose. A correction the agent makes in one project rewrites
+        that profile's USER.md, but we cannot tell from text alone whether a
+        missing entry was corrected or simply not mentioned — so removals stay a
+        deliberate act by the scholar rather than a side effect of one chat.
+        """
+        merged = self.entries()
+        for entry in incoming:
+            if entry and entry not in merged:
+                merged.append(entry)
+        changed = merged != self.entries()
+        if changed:
+            self.content = "\n§\n".join(merged)
+        return changed

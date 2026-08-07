@@ -7,6 +7,7 @@ from rest_framework.routers import DefaultRouter
 
 from research.api.views import (
     ResearchAgentMemoryView,
+    ResearchMemoryProposalReviewView,
     ResearchAgentRunCancelView,
     ResearchAgentRunView,
     ResearchArtifactGenerateView,
@@ -93,9 +94,14 @@ urlpatterns = [
         name="research-agent-run-cancel",
     ),
     path(
-        "agent-memory/",
+        "projects/<int:project_id>/agent-memory/",
         ResearchAgentMemoryView.as_view(),
         name="research-agent-memory",
+    ),
+    path(
+        "memory-proposals/<int:proposal_id>/review/",
+        ResearchMemoryProposalReviewView.as_view(),
+        name="research-memory-proposal-review",
     ),
     path("", include(router.urls)),
 ]

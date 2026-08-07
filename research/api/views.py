@@ -31,6 +31,8 @@ from research.constants import (
     AgentRunStatus,
     AgentToolCallStatus,
     ChatMessageRole,
+    MemoryProposalStatus,
+    ProjectMemorySource,
     ResearchSessionMode,
     SoulFileOrigin,
     StagingItemStatus,
@@ -39,7 +41,9 @@ from research.models import (
     ResearchAgentRun,
     ResearchChatMessage,
     ResearchKnowledgeItem,
+    ResearchAgentMemorySnapshot,
     ResearchProject,
+    ResearchMemoryProposal,
     ResearchProjectMemory,
     ResearchSession,
     ResearchStagingItem,
@@ -53,6 +57,11 @@ from research.services import (
     safe_hermes_usage,
 )
 from research.services.graph_service import build_evidence_graph
+from research.services.profile_service import (
+    absorb_user_memory,
+    forget_project_memory,
+    propose_project_memory,
+)
 from research.services.okf_service import (
     build_okf_bundle,
     build_okf_view,
@@ -148,9 +157,51 @@ CHAT_BRIEF = (
     "what failed and why (quota exhausted, auth, not found, blocked/paywalled) "
     "instead of guessing or blaming the wrong layer, and do not retry a tool "
     "that returned a quota or auth error — switch approaches or say what you need. "
-    "When you search or read the web, use mcp_dare_web_search and "
-    "mcp_dare_fetch_page only — DARE's own audited web search and reader; never a "
+    "When you search or read the web, use mcp__dare__web_search and "
+    "mcp__dare__fetch_page only (older runtimes name these mcp_dare_web_search / "
+    "mcp_dare_fetch_page) — DARE's own audited web search and reader; never a "
     "runtime-native web_search, web_extract, or browser tool."
+)
+
+# Memory discipline. The runtime keeps two operational files (MEMORY.md for the
+# project, USER.md for the person) that persist across sessions. They stayed
+# empty because the `memory` toolset was not in platform_toolsets.api_server —
+# the agent had no tool to write with. With it enabled, the agent still must not
+# use them as a back door around the review gate: a research CLAIM only becomes
+# durable when the scholar approves it into ResearchKnowledgeItem. These files
+# are for working context, not findings.
+MEMORY_BRIEF = (
+    "MEMORY DISCIPLINE. You have a `memory` tool with two durable stores that "
+    "outlive this session:\n"
+    "- project memory (MEMORY.md): stable facts about THIS project — its "
+    "corpus and where it lives, the working thesis, methodological choices and "
+    "protocol rules, decisions already taken and rejected directions, recurring "
+    "collaborators.\n"
+    "- user memory (USER.md): stable facts about THIS scholar — their name, "
+    "field and seniority, how they like answers delivered, tools and formats "
+    "they prefer, constraints such as deadlines.\n"
+    "USER.md is SHARED across every project this scholar owns, so only put a "
+    "fact there if it stays true in a project you know nothing about. Their "
+    "name and how they like answers travel; a collaborator, an advisor, a "
+    "deadline or a corpus belongs to the project that has it, even when the "
+    "sentence is phrased about the scholar. 'My advisor is Dr. X' in a project "
+    "means Dr. X advises THIS project — that is project memory, not user "
+    "memory. When in doubt, write it to the project: a fact in the wrong "
+    "project is noise, a fact in every project is noise everywhere.\n"
+    "Write when a fact is durable and would be expensive to re-derive next "
+    "session. Do NOT write transient chatter, anything already in the approved "
+    "knowledge base, or a research finding — findings become durable only "
+    "through the scholar's review gate, never by you writing them to memory. "
+    "Store ONE fact per entry. Never combine an identity fact, a preference and "
+    "a project fact in a single entry: `replace` swaps a whole matched entry, so "
+    "a combined entry silently loses its other facts the moment any one of them "
+    "changes. Name, affiliation, delivery preference and corpus size are four "
+    "entries, not one.\n"
+    "When the scholar contradicts something, replace only the entry that is "
+    "wrong, and re-add any other fact that entry happened to carry. After a "
+    "correction, confirm what is still remembered, not just what changed. "
+    "Never store secrets, credentials or personal data the scholar has not "
+    "chosen to share. Say in one short line what you saved."
 )
 
 
@@ -175,6 +226,7 @@ def _chat_instructions(project, soul_content, history=""):
     """Soul + chat framing + project context + the running conversation transcript."""
     parts = [soul_content] if soul_content else []
     parts.append(CHAT_BRIEF)
+    parts.append(MEMORY_BRIEF)
     context = []
     if project.question and project.question.strip():
         context.append(
@@ -502,6 +554,17 @@ class ResearchChatView(ResearchAPIView):
             )
             session.last_run_at = timezone.now()
             session.save(update_fields=["last_run_at", "updated_at"])
+            # Chat is where the agent most often learns something, and it does
+            # not go through tasks._finish — so raise the decision here too, or
+            # the Context badge would stay dark until someone went looking.
+            try:
+                propose_project_memory(project)
+            except Exception:  # noqa: BLE001 - never break a delivered reply
+                logger.warning(
+                    "Could not raise memory proposals for project %s",
+                    project.id,
+                    exc_info=True,
+                )
             yield _sse(
                 {
                     "type": "done",
@@ -853,16 +916,166 @@ class ResearchThesisSourceLinkDetailView(ResearchAPIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+def _record_and_diff_memory(project, files, keep=12):
+    """Snapshot this project's memory if it changed, and return its recent history.
+
+    The runtime edits MEMORY.md and USER.md in place, so without this the files
+    can only say what the agent believes *now*. Snapshotting on read is enough to
+    reconstruct how they got there, and it stays off the run path — a slow or
+    failing snapshot can never break a chat.
+
+    Each entry reports what changed against the snapshot before it, so the
+    workspace can show "the agent learned X on Tuesday" rather than a wall of
+    current text.
+    """
+    latest = (
+        ResearchAgentMemorySnapshot.active_objects.filter(project=project)
+        .order_by("-created_at")
+        .first()
+    )
+    if latest is None or not latest.matches(files):
+        # Only when the text actually moved, so an idle project stores nothing.
+        latest = ResearchAgentMemorySnapshot.objects.create(
+            project=project,
+            soul=files.get("soul", ""),
+            memory=files.get("memory", ""),
+            user=files.get("user", ""),
+        )
+
+    snaps = list(
+        ResearchAgentMemorySnapshot.active_objects.filter(project=project).order_by(
+            "-created_at"
+        )[:keep]
+    )
+    history = []
+    for index, snap in enumerate(snaps):
+        older = snaps[index + 1] if index + 1 < len(snaps) else None
+        entry = {"id": snap.id, "takenAt": snap.created_at}
+        for field in ("memory", "user"):
+            now = ResearchAgentMemorySnapshot.entries(getattr(snap, field))
+            before = (
+                ResearchAgentMemorySnapshot.entries(getattr(older, field))
+                if older
+                else []
+            )
+            entry[field] = {
+                "count": len(now),
+                "added": [e for e in now if e not in before],
+                "removed": [e for e in before if e not in now],
+            }
+        entry["isFirst"] = older is None
+        history.append(entry)
+    return history
+
+
 class ResearchAgentMemoryView(ResearchAPIView):
     """
-    GET /api/research/agent-memory/ — the Hermes profile's operational memory
-    files (SOUL.md, MEMORY.md, USER.md), read-only, for the Agent Memory view.
-    SOUL.md mirrors the project soul DARE provisions; MEMORY/USER are what Hermes
-    auto-writes as it learns.
+    GET /api/research/projects/{id}/agent-memory/ — the operational memory files
+    (SOUL.md, MEMORY.md, USER.md) of THIS project's Hermes profile, read-only.
+
+    Project-scoped on purpose. These files are per-profile, and each project owns
+    a profile, so answering without a project would hand back whichever profile
+    happened to be the default — which is how one scholar's USER.md became
+    visible to everyone.
     """
 
-    def get(self, request):
-        return Response(get_hermes_service().read_agent_memory())
+    def get(self, request, project_id):
+        project = get_object_or_404(
+            ResearchProject.active_objects, id=project_id, user=request.user
+        )
+        files = get_hermes_service(project).read_agent_memory()
+        # Anything the agent learned about the scholar here belongs to the
+        # scholar, not to this project — fold it into their DARE record and push
+        # it to their other projects, so the next one they open already knows
+        # them. The project's own MEMORY.md is untouched and stays private.
+        files["sharedTo"] = absorb_user_memory(project, files.get("user", ""))
+        propose_project_memory(project)
+        files["history"] = _record_and_diff_memory(project, files)
+        # What the scholar has already thrown out. A dropped entry otherwise
+        # reads as the agent forgetting on its own, when the usual cause is
+        # someone discarding it — the timeline should name which.
+        files["discarded"] = list(
+            ResearchMemoryProposal.active_objects.filter(
+                project=project, status=MemoryProposalStatus.REJECTED
+            ).values_list("content", flat=True)
+        )
+        return Response(files)
+
+
+def _memory_label(content, limit=48):
+    """A short title for a promoted memory.
+
+    Agents tend to write "Working thesis: ...", "Method decision: ...",
+    "Corpus: ..." — that leading clause is exactly the label a scholar would
+    have written, so use it when it is there and fall back to a trimmed opening
+    otherwise. Better a title taken from the fact than the same three words on
+    every row.
+    """
+    text = (content or "").strip()
+    head = text.split(":", 1)[0].strip() if ":" in text[:limit] else ""
+    if head and len(head) <= limit:
+        return head
+    return (text[: limit - 1] + "\u2026") if len(text) > limit else text or "Note"
+
+
+class ResearchMemoryProposalReviewView(ResearchAPIView):
+    """
+    Scholar review of something the agent wants to remember.
+
+    POST /api/research/memory-proposals/{id}/review/  body {decision}
+    - accept -> promoted to ResearchProjectMemory, which DARE owns and versions
+    - reject -> status rejected, and the entry is dropped from the profile's
+      MEMORY.md so the agent stops repeating it back
+
+    The agent writes project memory as it works, because a run that had to wait
+    for approval before remembering anything would be useless. This is the gate
+    on the other side: what the agent finds useful stays in its working memory,
+    and only what the scholar accepts becomes part of the project's record.
+    """
+
+    def post(self, request, proposal_id):
+        proposal = get_object_or_404(
+            ResearchMemoryProposal.objects.select_related("project"),
+            id=proposal_id,
+            project__user=request.user,
+        )
+        decision = (request.data or {}).get("decision", "")
+        if decision not in ("accept", "reject"):
+            return Response(
+                {"detail": "decision must be 'accept' or 'reject'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if proposal.status != MemoryProposalStatus.PROPOSED:
+            return Response(
+                {"detail": f"This proposal was already {proposal.status}."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        if decision == "accept":
+            ResearchProjectMemory.objects.create(
+                project=proposal.project,
+                added_by=request.user,
+                # Every promoted row said "From the agent", which the source
+                # field already records and which crowds out the labels that
+                # carry meaning — "Working thesis", "Decision", "Open question".
+                # Take the fact's own opening clause when it has one; the text
+                # is a better title than a constant.
+                label=_memory_label(proposal.content),
+                detail=proposal.content,
+                source=ProjectMemorySource.PROPOSAL,
+            )
+            proposal.status = MemoryProposalStatus.ACCEPTED
+            proposal.accepted_by = request.user
+            proposal.accepted_at = timezone.now()
+            proposal.save(update_fields=["status", "accepted_by", "accepted_at"])
+        else:
+            proposal.status = MemoryProposalStatus.REJECTED
+            proposal.save(update_fields=["status", "updated_at"])
+            # Rejecting has to reach the file, or the agent keeps believing it
+            # and proposes it again on the next read.
+            forget_project_memory(proposal.project, proposal.content)
+
+        return Response({"id": proposal.id, "status": proposal.status})
 
 
 class ResearchStagingItemReviewView(ResearchAPIView):
@@ -971,6 +1184,6 @@ class ResearchSoulFileView(ResearchAPIView):
             change_note=change_note,
             created_by=request.user,
         )
-        # Keep the Hermes profile SOUL.md in sync with the new version.
-        get_hermes_service().provision_soul(content)
+        # Keep THIS project's profile SOUL.md in sync with the new version.
+        get_hermes_service(project).provision_soul(content)
         return Response(self._serialize(soul))

@@ -28,8 +28,9 @@ Workflow — search first, then READ before you stage:
    are run for you inside DARE — when present, their results are already in your
    input. Use those first and PRIORITIZE peer-reviewed scholarly results over
    generic web snippets, drawing candidates from EVERY tool that returned
-   results. For coverage they lack, run `mcp_dare_web_search` (DARE's own web
-   search — it returns result links) AT MOST %(max_searches)d times. Do NOT use
+   results. For coverage they lack, run `mcp__dare__web_search` (older runtimes
+   name it `mcp_dare_web_search`; DARE's own web search — it returns result
+   links) AT MOST %(max_searches)d times. Do NOT use
    any runtime-native web_search / web_extract / browser tool, and do NOT try to
    call consensus__search or scite__search_literature directly — the scholarly
    tools run only server-side under the scholar's account, never from here.
@@ -41,7 +42,8 @@ Workflow — search first, then READ before you stage:
    is the authors' own summary, not a search snippet — and judge the evidence
    from it. Only fall to `evidenceLabel: "unverifiable"` with low confidence
    when you have neither fetched text nor an abstract. Fetch AT MOST
-   %(max_candidates)d pages, and read a page ONLY with `fetch_page` (mcp_dare_fetch_page)
+   %(max_candidates)d pages, and read a page ONLY with `fetch_page`
+   (`mcp__dare__fetch_page`, or `mcp_dare_fetch_page` on older runtimes)
    — never `web_extract` or a browser tool, which bypass DARE's audited gateway.
 3. Never fabricate — only include sources you actually found, with bibliographic
    details exactly as published, including `doi` whenever known.
@@ -80,7 +82,9 @@ def build_scout_instructions(soul_content, max_candidates=4, max_searches=4):
     # credential-free builtins. The scholar's research tools run server-side
     # (their results are injected into the input), so they aren't callable here.
     parts.append(
-        "TOOLS FOR THIS RUN: mcp_dare_web_search and mcp_dare_fetch_page only — "
+        "TOOLS FOR THIS RUN: mcp__dare__web_search and mcp__dare__fetch_page "
+        "only (older runtimes name these mcp_dare_web_search / "
+        "mcp_dare_fetch_page) — "
         "DARE's own web search and reader. Do NOT use any runtime-native "
         "web_search, web_extract, or browser tool. The scholar's research tools "
         "are not callable from here — their results are already in your input."

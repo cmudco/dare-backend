@@ -152,6 +152,51 @@ The API listens on `127.0.0.1:8642`. Keep it loopback-only (DARE and Hermes
 co-located) or front it with TLS + network policy — the bearer key grants the
 agent's full toolset.
 
+`API_SERVER_KEY` must be at least 16 characters. Hermes v0.19 rejects a shorter
+one and the gateway then refuses to bind, which presents as a gateway that
+starts and immediately exits.
+
+## 3.1 Enable multiplex profiles (required)
+
+Each research project gets its own Hermes profile, and a profile is nothing but
+its own `HERMES_HOME` directory — `SOUL.md`, `memories/MEMORY.md`,
+`memories/USER.md`, sessions and `.env` all resolve from that root. That is what
+makes one project's agent memory private to it by construction rather than by a
+naming convention.
+
+Multiplex mode is what keeps this cheap: one gateway process serves every
+profile from the single listener under `/p/<profile>/`, so N projects still
+means one process and one port.
+
+In `~/.hermes/config.yaml`:
+
+```yaml
+gateway:
+  multiplex_profiles: true
+```
+
+Restart the gateway, then confirm routing. A known profile answers and an
+unknown one is refused rather than silently falling back to the default:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' \
+  -H "Authorization: Bearer $API_SERVER_KEY" \
+  http://127.0.0.1:8642/p/dare-proj1/v1/models          # 200 once project 1 exists
+curl -s -o /dev/null -w '%{http_code}\n' \
+  -H "Authorization: Bearer $API_SERVER_KEY" \
+  http://127.0.0.1:8642/p/not-a-real-profile/v1/models  # 404
+```
+
+DARE provisions each profile lazily on first use — directory, `config.yaml`,
+and an owner-scoped token — so there is nothing to create by hand. Deleting a
+profile directory is safe; it is rebuilt on the project's next run, minus
+whatever the agent had remembered.
+
+If `multiplex_profiles` is off, every project falls back to the shared default
+profile and the isolation described here does not apply. Set
+`HERMES_PROFILE_PER_PROJECT=False` on the DARE side to make that fallback
+deliberate rather than accidental.
+
 ## 4. Scope the toolset (security — do not skip)
 
 The API platform must not expose host execution to a research agent:
@@ -237,6 +282,25 @@ already expose `toolCallId` in API streaming events; the DARE-specific MCP
 clean upstream Hermes release and use the fallback correlation above until a
 generic end-to-end metadata contract is released upstream.
 
+**What that costs you, concretely.** The exact join needs a shared id on both
+sides, and a stock Hermes supplies **neither**. Verified against a clean
+checkout of `v2026.7.20`: the `tool.completed` callback is invoked without a
+`tool_call_id`, the SSE payload has no `toolCallId` field, and MCP carries no
+`_meta.dareCall` — so `GatewayFetch.call_id` is never populated either. All
+three come from the patch, which is why it has three hunks and not one.
+
+An unpatched Hermes therefore matches tool calls to their audit rows by order
+and time window. That is fine for a quiet single run and unreliable for
+concurrent runs or a re-fetched URL.
+
+You will not have to guess which one you are getting. DARE logs a warning
+whenever a gateway tool call produces no row, and a separate one when the
+runtime named a `toolCallId` that did not match — grep `research.audit` in the
+worker logs. Silence means every call joined exactly.
+
+A patched local install is kept at `ops/hermes/0001-dare-toolcall-correlation.patch`
+and still applies cleanly to v0.19.
+
 Historical local patch recipe (diagnostic reference only):
 
 1. **`tools/mcp_tool.py`** — send the id on the MCP call (in the `_call()`
@@ -282,6 +346,35 @@ HERMES_SYNC_SOUL=true                       # provision SOUL.md per run
 HERMES_SOUL_PATH=/home/<user>/.hermes/SOUL.md
 GEMINI_API_KEY=...                          # fetch_page fallback reader (optional)
 ```
+
+Per-project profiles (see §3.1). Every one of these has a working default —
+set them only to move off it:
+
+```bash
+HERMES_PROFILE_PER_PROJECT=True             # False => shared default profile
+HERMES_PROFILES_ROOT=/home/<user>/.hermes/profiles
+HERMES_PROFILE_PREFIX=dare-proj             # profile name = <prefix><project id>
+HERMES_PROFILE_MODEL=claude-sonnet-5        # pinned into every project profile
+HERMES_PROFILE_MODEL_PROVIDER=anthropic
+HERMES_PROFILE_TOKEN_DAYS=365               # owner-scoped MCP token lifetime
+HERMES_STREAM_IDLE_SECONDS=180              # idle bound on a run's event stream
+DARE_MCP_GATEWAY_URL=http://127.0.0.1:8000/mcp/api/gateway/
+```
+
+Two of these are load-bearing and worth reading twice.
+
+**Never set `HERMES_PROFILE_MODEL_PROVIDER` with an empty
+`HERMES_PROFILE_MODEL`.** With a provider named and no model, Hermes falls
+through to entry `[0]` of that provider's curated list — for `anthropic` that is
+the flagship. It guards metered aggregators against this but not the direct
+providers, so a blank model bills the priciest model on every run, silently.
+DARE raises `ImproperlyConfigured` at provisioning time rather than let that
+ship, but the safe way to inherit is to name no provider at all.
+
+**`DARE_MCP_GATEWAY_URL` is resolved by the machine running Hermes,** not by the
+browser. It is written into each profile's `config.yaml`, so it must be reachable
+from the gateway host — `127.0.0.1` is right when Hermes and DARE are co-located,
+and wrong the moment they are not.
 
 Apply migrations first — the audit-attribution work adds
 `GatewayFetch.run_key` and `.call_id` (see §5.1):
@@ -350,16 +443,42 @@ HTTP reason — 403, 404, 429 — probed and reported, not guessed), **without**
 `isError` flag, so a run of dead links no longer trips Hermes's per-server
 circuit breaker and kills the run.
 
-## 9. Multi-project memory (current state)
+## 9. Multi-project memory
 
-One Hermes instance serves all projects. Isolation today: per-project session
-keys (`X-Hermes-Session-Key: dare-proj<id>`, Hermes's official scoping handle)
-+ per-run sessions for delegated work. The agent's `MEMORY.md`/`USER.md` files
-are instance-global (user-level in practice; bounded to ~2k chars by Hermes).
-Planned upgrades, in order: memory-provider scoping (Honcho) keyed by session
-key — per-project memory on one gateway; per-project gateway credentials for
-hard tool scoping. **Per-project Hermes profiles are deliberately not used**
-(one gateway process per project does not scale operationally).
+One Hermes process serves all projects, but each project gets its own profile
+directory (§3.1). The three files in it have three different owners and three
+different reaches — that distinction is the design, not an implementation
+detail:
+
+| File | Written by | Reaches |
+|---|---|---|
+| `SOUL.md` | DARE, versioned | this project |
+| `memories/MEMORY.md` | the agent, as it works | this project only |
+| `memories/USER.md` | the agent; DARE absorbs and re-renders | every project this scholar owns |
+
+`USER.md` is about the person rather than the project, so DARE folds it into a
+`ResearcherProfile` record and renders it into every profile that scholar owns.
+Teach one project your name and every project knows it, while the projects' own
+facts stay apart.
+
+Anything the agent writes to `MEMORY.md` is raised as a proposal the scholar
+accepts or rejects. Accepting copies it into `ResearchProjectMemory`, which DARE
+owns and injects into later runs; rejecting removes it from `MEMORY.md`, so the
+agent stops acting on a fact that was turned down.
+
+Hermes caps these files (`memory.memory_char_limit`, default 2200;
+`memory.user_char_limit`, default 1375) and **rejects** an entry that would
+exceed the cap rather than truncating — the agent is told to shorten or remove
+first. Rejecting proposals is the release valve.
+
+An external memory provider (Honcho, mem0, and the rest of
+`plugins/memory/`) is deliberately **not** used. Those providers ingest each
+turn automatically, which leaves nothing discrete to review and no derivation to
+inspect — the opposite of the gate above. `memory.provider` should stay empty.
+
+Verify all of this with `python ops/hermes/verify_multiplex.py`, which exits
+non-zero on failure and covers profile routing, model pinning, cross-profile
+recall, and tool scoping.
 
 ## Known limitations (tracked for v1.1)
 
@@ -368,5 +487,9 @@ hard tool scoping. **Per-project Hermes profiles are deliberately not used**
 - Structured output is prompt-contract + tolerant parsing. Automatic repair
   re-asks are disabled until child execution attempts have durable identity,
   usage aggregation, and fencing (Hermes has no native schema forcing yet).
-- `SOUL.md` file sync assumes runs from different projects don't overlap
-  in the same instant; per-run `instructions` always carry the soul as fallback.
+- `SOUL.md` sync is no longer a shared-file race — each project writes its own
+  profile's copy (§3.1) — but per-run `instructions` still carry the soul as a
+  fallback for the unprofiled path.
+- `USER.md` propagation is a write, not a lookup: if rendering into one sibling
+  profile fails, that profile keeps a stale copy and only a log line says so.
+  A reconciliation pass is not built yet.
