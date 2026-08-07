@@ -21,7 +21,26 @@ import urllib.request
 from pathlib import Path
 
 URL = os.environ.get("HERMES_URL", "http://127.0.0.1:8642").rstrip("/")
-KEY = os.environ.get("HERMES_KEY", "dev-spike-local-1")
+
+
+def _key_from_hermes_env():
+    """Read API_SERVER_KEY out of ~/.hermes/.env.
+
+    Defaulting to a literal key is how this script silently passed on one
+    laptop and reported every profile 'unreachable' everywhere else: the
+    requests were being rejected, not dropped. Read the box's own key instead.
+    """
+    path = Path(os.path.expanduser("~/.hermes/.env"))
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.startswith("API_SERVER_KEY="):
+                return line.split("=", 1)[1].strip()
+    except OSError:
+        pass
+    return ""
+
+
+KEY = os.environ.get("HERMES_KEY") or _key_from_hermes_env()
 PROFILES_ROOT = Path(
     os.environ.get("HERMES_PROFILES", os.path.expanduser("~/.hermes/profiles"))
 )
@@ -110,17 +129,30 @@ def main():
 
     # 2. Each profile is addressable; an unknown one must be rejected.
     reachable = []
+    refused = 0
     for name in profiles:
         try:
             status, _ = api(f"/p/{name}/v1/models")
             if status == 200:
                 reachable.append(name)
+        except urllib.error.HTTPError as exc:
+            # A rejected key looks identical to a dead route once it is
+            # swallowed, and that is exactly how a wrong key got read as
+            # "no profile is routable". Count it separately and say so.
+            if exc.code in (401, 403):
+                refused += 1
         except Exception:
             pass
+    detail = f"{len(reachable)}/{len(profiles)} reachable: {', '.join(reachable)}"
+    if refused:
+        detail += (
+            f" — {refused} rejected the API key (HTTP 401/403). "
+            "Set HERMES_KEY, or check API_SERVER_KEY in ~/.hermes/.env."
+        )
     record(
         "every profile answers on its own /p/<name>/ prefix",
         len(reachable) == len(profiles),
-        f"{len(reachable)}/{len(profiles)} reachable: {', '.join(reachable)}",
+        detail,
     )
 
     try:
@@ -135,12 +167,19 @@ def main():
             f"HTTP {exc.code} for /p/definitely-not-a-real-profile/",
         )
 
-    # 3. Models really do differ per profile.
+    # 3. No profile is left inheriting the runtime default.
+    #    Deliberately NOT asserting that the models differ: a real deployment
+    #    where every project runs the same pinned model is correct, and the
+    #    earlier "more than one distinct model" check failed it. What matters
+    #    is that each profile names its own, so `hermes model` on the box
+    #    cannot re-point every project at once.
     distinct = sorted({m for m in profiles.values() if m})
+    unpinned = [n for n, m in profiles.items() if not m]
     record(
         "profiles pin their own model, and none is left to the runtime",
-        all(profiles.values()) and len(distinct) > 1,
-        " · ".join(f"{n}={m or 'UNPINNED'}" for n, m in profiles.items()),
+        not unpinned,
+        " · ".join(f"{n}={m or 'UNPINNED'}" for n, m in profiles.items())
+        + f"  ({len(distinct)} distinct)",
     )
 
     # 4. The real test: does each profile know only its own memory?
