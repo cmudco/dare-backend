@@ -64,11 +64,22 @@ class ReadContext:
 
 
 def read_context(user, question: str) -> ReadContext:
-    """The three parallel reads, sharing one query embedding."""
+    """The three reads, sharing exactly one query embedding.
+
+    ``embed_query=False`` on both funnels: this is the only place the question
+    is embedded, so a failure here degrades the whole turn to lexical ranking
+    once rather than retrying per funnel.
+    """
     user_doc = read_user_doc(user)
     vector = embed_one(question)
 
-    facts = retrieve(user, question, kind=MemoryKind.FACT, query_vector=vector)
+    facts = retrieve(
+        user,
+        question,
+        kind=MemoryKind.FACT,
+        query_vector=vector,
+        embed_query=False,
+    )
 
     task = TaskContext(message=question)
     procedures = retrieve(
@@ -79,6 +90,7 @@ def read_context(user, question: str) -> ReadContext:
         floor=PROCEDURE_FLOOR,
         shortlist_limit=PROCEDURE_SHORTLIST_LIMIT,
         query_vector=vector,
+        embed_query=False,
     )
 
     procedure_block = format_procedures([item.record for item in procedures.chosen])

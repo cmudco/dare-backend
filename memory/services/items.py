@@ -61,11 +61,34 @@ def profile_items(document: Optional[UserMemoryDocument]) -> List[Dict[str, Any]
     return items
 
 
+def behavior_content(key: str, text: str) -> str:
+    """A rule with its trigger restored, for display.
+
+    The archive stores a rule's trigger in its key and the rule alone in its
+    text — "Use type hints", not "When writing Python, use type hints" — so
+    two rules under one trigger can coexist. But a rule shown without its
+    trigger reads as a global instruction, and the Memory page's card looks
+    for the trigger inside the content to highlight it. So the trigger is
+    composed back in here, in exactly the shape the prompt uses.
+    """
+    trigger = trigger_of(key)
+    if not trigger or trigger == key or text.lower().startswith("when "):
+        return text
+    return f"When {trigger}: {text}"
+
+
+def behavior_tag(key: str) -> str:
+    """The trigger as a hyphenated tag, matching how fact keys read."""
+    if not key.startswith("when:"):
+        return key
+    return key[5:].split(":")[0]
+
+
 def record_item(record: MemoryRecord, score: Optional[float] = None) -> Dict[str, Any]:
     """One archive row as a compat item."""
     if record.kind == "procedure":
         memory_type = BEHAVIOR
-        categories = [trigger_of(record.key)]
+        categories = [behavior_tag(record.key)]
     else:
         memory_type = KNOWLEDGE
         categories = [part for part in record.key.split(":") if part] or [record.kind]
@@ -77,7 +100,11 @@ def record_item(record: MemoryRecord, score: Optional[float] = None) -> Dict[str
     item: Dict[str, Any] = {
         "id": str(record.id),
         "memory_type": memory_type,
-        "content": record.text,
+        "content": (
+            behavior_content(record.key, record.text)
+            if memory_type == BEHAVIOR
+            else record.text
+        ),
         "categories": categories,
         "created_at": _iso(record.created_at),
         "updated_at": _iso(record.updated_at),
@@ -91,7 +118,7 @@ def row_item(row, score: Optional[float] = None) -> Dict[str, Any]:
     """A retrieval-layer MemoryRow as a compat item (dates already ISO)."""
     if row.kind == "procedure":
         memory_type = BEHAVIOR
-        categories = [trigger_of(row.key)]
+        categories = [behavior_tag(row.key)]
     else:
         memory_type = KNOWLEDGE
         categories = [part for part in row.key.split(":") if part] or [row.kind]
@@ -101,7 +128,9 @@ def row_item(row, score: Optional[float] = None) -> Dict[str, Any]:
     item: Dict[str, Any] = {
         "id": row.id,
         "memory_type": memory_type,
-        "content": row.text,
+        "content": (
+            behavior_content(row.key, row.text) if memory_type == BEHAVIOR else row.text
+        ),
         "categories": categories,
         "created_at": row.created_at or None,
     }
