@@ -15,9 +15,9 @@ unmeasured regression until the scorecard exists on this side. Resist editing.
 
 import logging
 from datetime import datetime, timezone
-from typing import List, Literal, Optional
+from typing import Dict, List, Literal, Optional
 
-from openai import OpenAI
+from openai import BadRequestError, OpenAI
 from pydantic import BaseModel, Field
 
 from config.env import MEMORY_WRITER_MODEL, OPENAI_API_KEY
@@ -293,6 +293,19 @@ _REPAIR_NOTE = (
     "every `text` filled in."
 )
 
+# Parameter dialects across OpenAI chat-model generations, oldest first.
+# gpt-4o takes temperature+max_tokens; gpt-5.x requires max_completion_tokens;
+# the 5.6 family additionally rejects any non-default temperature (so those
+# models run at default temperature — the only dialect they accept). Probed
+# once per model per process and cached, so a new family adapts without a
+# code change.
+_PARAM_STYLES = (
+    {"temperature": 0, "max_tokens": 900},
+    {"temperature": 0, "max_completion_tokens": 900},
+    {"max_completion_tokens": 900},
+)
+_style_by_model: Dict[str, int] = {}
+
 
 def propose_decisions(
     user_doc: str,
@@ -355,14 +368,25 @@ PERSON: {user_message}
 ASSISTANT: {assistant_message or "(no reply captured)"}{explicit_block}"""
 
     def ask(messages) -> Optional[WriterResponse]:
-        completion = client.chat.completions.parse(
-            model=model,
-            messages=messages,
-            response_format=WriterResponse,
-            temperature=0,
-            max_tokens=900,
-        )
-        return completion.choices[0].message.parsed
+        start = _style_by_model.get(model, 0)
+        last_error: Optional[BadRequestError] = None
+        for index in range(start, len(_PARAM_STYLES)):
+            try:
+                completion = client.chat.completions.parse(
+                    model=model,
+                    messages=messages,
+                    response_format=WriterResponse,
+                    **_PARAM_STYLES[index],
+                )
+            except BadRequestError as exc:
+                text = str(exc)
+                if "max_tokens" in text or "temperature" in text:
+                    last_error = exc
+                    continue
+                raise
+            _style_by_model[model] = index
+            return completion.choices[0].message.parsed
+        raise last_error  # every dialect refused — a real config problem
 
     base_messages = [
         {"role": "system", "content": SYSTEM},
