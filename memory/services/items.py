@@ -87,6 +87,29 @@ def record_item(record: MemoryRecord, score: Optional[float] = None) -> Dict[str
     return item
 
 
+def row_item(row, score: Optional[float] = None) -> Dict[str, Any]:
+    """A retrieval-layer MemoryRow as a compat item (dates already ISO)."""
+    if row.kind == "procedure":
+        memory_type = BEHAVIOR
+        categories = [trigger_of(row.key)]
+    else:
+        memory_type = KNOWLEDGE
+        categories = [part for part in row.key.split(":") if part] or [row.kind]
+        if row.state == MemoryState.SUPERSEDED:
+            categories.append("no-longer-current")
+
+    item: Dict[str, Any] = {
+        "id": row.id,
+        "memory_type": memory_type,
+        "content": row.text,
+        "categories": categories,
+        "created_at": row.created_at or None,
+    }
+    if score is not None:
+        item["score"] = round(min(1.0, max(0.0, score)), 4)
+    return item
+
+
 def listed_records(user) -> List[MemoryRecord]:
     """Archive rows the compat list shows: active and held, newest first.
 
