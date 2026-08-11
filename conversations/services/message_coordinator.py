@@ -266,6 +266,26 @@ class MessageCoordinator:
             update_fields=["memory_context_data"]
         )
 
+    async def _enqueue_memory_writer(self, message_obj: "Message") -> None:
+        """Queue the post-reply memory writer for this finished turn.
+
+        `.delay` is a Redis RPUSH — cheap, but still off the event loop. The
+        job itself re-derives everything from the message id and is idempotent
+        (ledger check), so a duplicate enqueue is harmless.
+        """
+        from memory.tasks import run_memory_writer
+
+        try:
+            await database_sync_to_async(run_memory_writer.delay)(message_obj.id)
+        except Exception:
+            # A full Redis or a down broker must not take down a delivered
+            # reply; the transcript is saved, only this turn's extraction is
+            # lost.
+            logger.exception(
+                "[MessageCoordinator] failed to enqueue memory writer for mid=%s",
+                message_obj.id,
+            )
+
     async def _mark_as_regenerated(self, message: "Message") -> None:
         """Mark a message as regenerated if applicable."""
         message.is_regenerated = True
@@ -678,6 +698,17 @@ class MessageCoordinator:
                     token_usage=token_usage,
                     regenerate=regenerate,
                 )
+
+                # The post-reply memory writer. Gated on use_memory so a user
+                # who disabled memory is never written about (the read gate's
+                # privacy stance, applied to writes); skipped on regenerate
+                # because the user message was already ingested once.
+                if (
+                    not regenerate
+                    and self.user is not None
+                    and request.context.use_memory
+                ):
+                    await self._enqueue_memory_writer(message_obj)
 
                 # Run learning progress assessment (Socratic only, sequential after AI response)
                 if not regenerate and should_run_learning_progress(
