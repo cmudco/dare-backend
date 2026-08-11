@@ -202,6 +202,7 @@ class ConversationSerializer(serializers.ModelSerializer):
             "image_generation_enabled",
             "audio_transcription_enabled",
             "artifacts_enabled",
+            "memory_enabled",
             "selected_model",
             "selected_media_ids",
             "prompt",
