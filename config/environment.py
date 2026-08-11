@@ -28,8 +28,6 @@ VALID_ENVIRONMENTS = ("local", "dare-staging", "dare-production", "gt-production
 class FeatureFlags:
     """Backend feature flags, toggled per environment."""
 
-    # Memory extraction scheduler (runs every 12 hours)
-    enable_memory_extraction_scheduler: bool = False
     # Wallet topup scheduler (runs daily)
     enable_wallet_topup_scheduler: bool = False
 
@@ -63,31 +61,26 @@ def _get_feature_flags(environment: str) -> FeatureFlags:
 
     if environment == "local":
         return FeatureFlags(
-            enable_memory_extraction_scheduler=True,
             enable_wallet_topup_scheduler=True,
         )
 
     elif environment == "dare-staging":
         return FeatureFlags(
-            enable_memory_extraction_scheduler=True,
             enable_wallet_topup_scheduler=True,
         )
 
     elif environment == "dare-production":
         return FeatureFlags(
-            enable_memory_extraction_scheduler=True,
             enable_wallet_topup_scheduler=True,
         )
 
     elif environment == "gt-production":
         return FeatureFlags(
-            enable_memory_extraction_scheduler=True,
             enable_wallet_topup_scheduler=True,
         )
 
     # Default: conservative
     return FeatureFlags(
-        enable_memory_extraction_scheduler=False,
         enable_wallet_topup_scheduler=True,
     )
 

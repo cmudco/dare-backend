@@ -1,10 +1,20 @@
-"""Helpers for injecting memory context into LLM messages via semantic search."""
+"""Injecting memory context into LLM messages.
+
+This is the read-path seam: build_standard_messages calls this once per turn,
+gated on ``request.context.use_memory`` and an authenticated user. The return
+shape (``{content, memory_type, categories}`` per item) feeds
+``Message.memory_context_data`` and the frontend's per-message memory panel,
+so it must not change.
+
+Wired to the layered store's read path (USER.md + facts + rules) in the
+read-path phase; until then it injects nothing, which is exactly how the
+system behaves for a user with an empty memory.
+"""
 
 import logging
-from typing import List, Dict, Any
+from typing import Any, Dict, List
 
 from config.env import USE_POSTGRES
-from memory.services import get_memu_service
 
 logger = logging.getLogger(__name__)
 
@@ -15,19 +25,16 @@ async def add_memory_context_to_messages(
     user_id: int,
 ) -> List[Dict[str, Any]]:
     """
-    Search user's memory store and append matching items as context.
-
-    Uses the user's message as a semantic search query against their
-    personal memory store. Skips gracefully when USE_POSTGRES is False.
+    Read the user's memory layers and append the framed context blocks.
 
     Args:
         messages: LLM message list to append to (modified in place)
-        query: The user's message text used as the search query
+        query: The user's message text used as the retrieval query
         user_id: Authenticated user's integer ID
 
     Returns:
         List of memory item dicts used as context (for display on frontend).
-        Each dict has: content, memoryType, categories.
+        Each dict has: content, memory_type, categories.
     """
     if not query or not query.strip():
         return []
@@ -36,48 +43,5 @@ async def add_memory_context_to_messages(
         logger.debug("Memory context injection skipped: USE_POSTGRES is False")
         return []
 
-    service = get_memu_service()
-    try:
-        result = await service.search(str(user_id), query.strip())
-    except Exception as exc:
-        logger.warning(
-            "Failed to search memory for context injection for user %s: %s",
-            user_id,
-            exc,
-        )
-        return []
-
-    items = result.get("items", []) if isinstance(result, dict) else []
-    fetched_contents: List[str] = []
-    used_items: List[Dict[str, Any]] = []
-
-    for item in items:
-        if hasattr(item, "model_dump"):
-            item = item.model_dump()
-        elif hasattr(item, "__dict__") and not isinstance(item, (str, dict)):
-            item = vars(item)
-
-        if isinstance(item, dict):
-            content = (item.get("content") or item.get("summary") or "").strip()
-        else:
-            content = str(item).strip()
-            item = {"content": content}
-
-        if content:
-            fetched_contents.append(content)
-            used_items.append({
-                "content": content,
-                "memory_type": item.get("memory_type", ""),
-                "categories": item.get("categories", []),
-            })
-
-    if not fetched_contents:
-        return []
-
-    formatted = "\n".join(f"- {entry}" for entry in fetched_contents)
-    context_block = (
-        "Relevant memories from the user's personal memory store:\n" + formatted
-    )
-    messages.append({"role": "user", "content": context_block})
-
-    return used_items
+    # Read path lands with memory/services/context.py — nothing to inject yet.
+    return []
