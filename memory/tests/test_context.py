@@ -80,6 +80,34 @@ class ReadContextTests(TestCase):
         for item in context.items:
             self.assertEqual(set(item.keys()), {"content", "memory_type", "categories"})
 
+    def test_the_question_is_embedded_exactly_once_per_turn(self):
+        with patch(
+            "memory.services.context.embed_one", return_value=[0.0] * 8
+        ) as context_embed, patch(
+            "memory.services.retrieval.embed_one"
+        ) as retrieval_embed:
+            read_context(self.user, "where do I live and how should I commit")
+
+        self.assertEqual(context_embed.call_count, 1)
+        # The funnels must reuse that vector, never embed again.
+        retrieval_embed.assert_not_called()
+
+    def test_a_failed_embedding_is_not_retried_by_each_funnel(self):
+        # None is ambiguous — "nobody embedded yet" vs "embedding failed".
+        # Without embed_query=False, a failed embed on a flaky network fires
+        # two more calls on the same turn.
+        with patch(
+            "memory.services.context.embed_one", return_value=None
+        ) as context_embed, patch(
+            "memory.services.retrieval.embed_one"
+        ) as retrieval_embed:
+            context = read_context(self.user, "where do I live")
+
+        self.assertEqual(context_embed.call_count, 1)
+        retrieval_embed.assert_not_called()
+        # And the turn still works, ranked on words and importance alone.
+        self.assertIn("Lives in Lahore.", context.block)
+
     def test_an_empty_store_yields_an_empty_block(self):
         stranger = get_user_model().objects.create_user(
             email="empty-store@example.com", password="x"

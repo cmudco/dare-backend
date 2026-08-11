@@ -51,11 +51,12 @@ class CompatListTests(MemoryApiTestCase):
             key="health:peanut",
             text="Allergic to peanuts.",
         )
+        # The writer stores the rule alone; the trigger lives in the key.
         MemoryRecord.objects.create(
             user=self.user,
             kind="procedure",
             key="when:writing-commit-messages:never-use-emoji",
-            text="When writing commit messages, never use emoji.",
+            text="Never use emoji.",
         )
         # Superseded rows stay out of the flat list; held rows appear tagged.
         MemoryRecord.objects.create(
@@ -106,8 +107,15 @@ class CompatListTests(MemoryApiTestCase):
         )
         self.assertIn("held", held["categories"])
 
+        # A rule's trigger lives in its key, but a rule shown without its
+        # trigger reads as a global instruction — so the card gets it back,
+        # in the "When <trigger>: <rule>" shape the page highlights.
         behavior = by_type["behavior"][0]
-        self.assertEqual(behavior["categories"], ["writing commit messages"])
+        self.assertEqual(behavior["categories"], ["writing-commit-messages"])
+        self.assertEqual(
+            behavior["content"],
+            "When writing commit messages: Never use emoji.",
+        )
 
     def test_another_users_memory_is_invisible(self):
         record = MemoryRecord.objects.create(

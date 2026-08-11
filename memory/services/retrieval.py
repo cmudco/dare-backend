@@ -37,12 +37,19 @@ def retrieve(
     shortlist_limit: int = SHORTLIST_LIMIT,
     now: Optional[str] = None,
     query_vector: Optional[List[float]] = None,
+    embed_query: bool = True,
 ) -> Recall:
     """Run the funnel for one query.
 
     ``query_vector`` lets a caller that already embedded the question (the
-    read path runs facts and procedures against one embedding) skip the second
-    network call; passing None embeds here.
+    read path scores facts and procedures against one embedding) reuse it.
+
+    ``embed_query=False`` says that vector is final even when it is None —
+    the caller already tried and the embedding failed. Without the flag a
+    None vector is ambiguous: "nobody embedded yet" and "embedding failed"
+    look identical, so a failed embed on the read path silently fires two
+    more embedding calls, one per funnel, on a turn where the network is
+    already misbehaving.
     """
     started = time.monotonic()
     if not query or not query.strip():
@@ -51,7 +58,9 @@ def retrieve(
     moment = now or datetime.now(timezone.utc).isoformat()
 
     candidates = shortlist(user, query, kind=kind, limit=shortlist_limit, now=moment)
-    vector = query_vector if query_vector is not None else embed_one(query)
+    if query_vector is None and embed_query:
+        query_vector = embed_one(query)
+    vector = query_vector
 
     result: RankResult = rank(
         candidates, query_vector=vector, now=moment, top_k=top_k, floor=floor
