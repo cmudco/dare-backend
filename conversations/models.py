@@ -574,6 +574,16 @@ class Conversation(BaseModel):
     artifacts_enabled = models.BooleanField(
         default=False, help_text="Enable artifact generation for long-form content."
     )
+    memory_enabled = models.BooleanField(
+        default=False,
+        help_text=(
+            "Enable cross-conversation memory. Gates BOTH halves of the "
+            "pipeline: retrieved memories are injected into this "
+            "conversation's prompts, and its completed turns are read by the "
+            "memory writer. Off means nothing is recalled and nothing is "
+            "written down."
+        ),
+    )
     selected_model = models.ForeignKey(
         LLM,
         on_delete=models.SET_NULL,
