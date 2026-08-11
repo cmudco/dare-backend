@@ -62,6 +62,20 @@ nohup python manage.py rqworker default --worker-class rq.SimpleWorker -v 2 \
 tail -f /tmp/dare-worker.log
 ```
 
+## The memory queue — exactly ONE worker, ever
+
+The post-reply memory writer runs on its own `memory` queue (needs `USE_POSTGRES=True`):
+
+```bash
+nohup python manage.py rqworker memory --worker-class rq.SimpleWorker -v 2 \
+  > /tmp/dare-memory-worker.log 2>&1 & disown
+```
+
+**Never start a second `memory` worker.** One user's turns must be ingested in order — turn N's
+collision checks read turn N-1's rows — and a single worker is global FIFO, which is that
+guarantee with no locking. A second worker silently breaks ordering; the damage is bounded to
+spurious supersedes, but bounded is not correct.
+
 ## Related
 
 - `run-backend` — start the API first; the worker shares its venv and `.env`.
