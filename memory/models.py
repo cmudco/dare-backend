@@ -23,13 +23,8 @@ from pgvector.django import VectorField
 
 from common.managers import ActiveObjectsManager
 from common.models import BaseModel
-from memory.constants import (
-    EMBED_DIMS,
-    MemoryKind,
-    MemoryState,
-    Sensitivity,
-    WriterAction,
-)
+from memory.constants import (EMBED_DIMS, MemoryKind, MemoryState, Sensitivity,
+                              WriterAction)
 
 
 class MemoryRecord(BaseModel):

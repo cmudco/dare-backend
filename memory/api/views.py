@@ -16,20 +16,12 @@ from rest_framework.response import Response
 from memory.constants import WriterAction
 from memory.domain.user_doc import parse_user_doc, render_user_doc
 from memory.models import MemoryLedgerEntry, MemoryRecord, UserMemoryDocument
-from memory.services.items import (
-    DOC_ID_PREFIX,
-    doc_line_id,
-    listed_records,
-    profile_items,
-    record_item,
-)
+from memory.services.items import (DOC_ID_PREFIX, doc_line_id, listed_records,
+                                   profile_items, record_item)
 
-from .serializers import (
-    ClearResponseSerializer,
-    MemoryItemSerializer,
-    MemorySearchRequestSerializer,
-    MemorySearchResponseSerializer,
-)
+from .serializers import (ClearResponseSerializer, MemoryItemSerializer,
+                          MemorySearchRequestSerializer,
+                          MemorySearchResponseSerializer)
 
 logger = logging.getLogger(__name__)
 

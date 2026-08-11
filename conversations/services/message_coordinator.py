@@ -22,43 +22,29 @@ from django.utils import timezone
 from djangorestframework_camel_case.util import camelize
 
 from conversations.api.serializers import ArtifactListSerializer
-from conversations.constants import (
-    DEFAULT_AI_SENDER_NAME,
-    DEFAULT_CONVERSATION_TITLE,
-    ArtifactStatus,
-    ErrorCode,
-    ErrorMessage,
-    SenderType,
-    ToolCallOrigin,
-    ToolCallStatus,
-)
-from conversations.models import (
-    LLM,
-    Artifact,
-    Conversation,
-    Message,
-    MessageToolCall,
-    Snippet,
-    WebSearchSource,
-)
-from conversations.services.image_generation_service import ImageGenerationService
+from conversations.constants import (DEFAULT_AI_SENDER_NAME,
+                                     DEFAULT_CONVERSATION_TITLE,
+                                     ArtifactStatus, ErrorCode, ErrorMessage,
+                                     SenderType, ToolCallOrigin,
+                                     ToolCallStatus)
+from conversations.models import (LLM, Artifact, Conversation, Message,
+                                  MessageToolCall, Snippet, WebSearchSource)
+from conversations.services.image_generation_service import \
+    ImageGenerationService
 from conversations.services.message_helpers import (  # Database helpers; Learning progress helpers; Billing helpers; Finalization helpers; Regeneration helpers
-    build_generated_image_data,
-    build_transcription_data,
-    fetch_preceding_user_message,
-    finalize_message,
-    get_ai_message_by_id,
-    get_conversation_default_descriptor,
-    handle_insufficient_balance,
-    parse_model_id,
-    prepare_regeneration_data,
-    run_learning_progress_stream,
-    should_generate_title,
-)
-from conversations.services.message_validation_service import MessageValidationService
-from conversations.services.tool_loop_service import ToolLoopResult, ToolLoopService
-from conversations.services.web_search_source_service import WebSearchSourceService
-from conversations.services.websocket_response_service import WebSocketResponseService
+    build_generated_image_data, build_transcription_data,
+    fetch_preceding_user_message, finalize_message, get_ai_message_by_id,
+    get_conversation_default_descriptor, handle_insufficient_balance,
+    parse_model_id, prepare_regeneration_data, run_learning_progress_stream,
+    should_generate_title)
+from conversations.services.message_validation_service import \
+    MessageValidationService
+from conversations.services.tool_loop_service import (ToolLoopResult,
+                                                      ToolLoopService)
+from conversations.services.web_search_source_service import \
+    WebSearchSourceService
+from conversations.services.websocket_response_service import \
+    WebSocketResponseService
 from core.services.billing_service import BillingService
 from core.services.conversation_service import ConversationService
 from core.services.dtos import LLMDescriptor, LLMQueryRequestBuilder
@@ -278,6 +264,26 @@ class MessageCoordinator:
         await database_sync_to_async(message_obj.save)(
             update_fields=["memory_context_data"]
         )
+
+    async def _enqueue_memory_writer(self, message_obj: "Message") -> None:
+        """Queue the post-reply memory writer for this finished turn.
+
+        `.delay` is a Redis RPUSH — cheap, but still off the event loop. The
+        job itself re-derives everything from the message id and is idempotent
+        (ledger check), so a duplicate enqueue is harmless.
+        """
+        from memory.tasks import run_memory_writer
+
+        try:
+            await database_sync_to_async(run_memory_writer.delay)(message_obj.id)
+        except Exception:
+            # A full Redis or a down broker must not take down a delivered
+            # reply; the transcript is saved, only this turn's extraction is
+            # lost.
+            logger.exception(
+                "[MessageCoordinator] failed to enqueue memory writer for mid=%s",
+                message_obj.id,
+            )
 
     async def _mark_as_regenerated(self, message: "Message") -> None:
         """Mark a message as regenerated if applicable."""
@@ -686,6 +692,17 @@ class MessageCoordinator:
                     token_usage=token_usage,
                     regenerate=regenerate,
                 )
+
+                # The post-reply memory writer. Gated on use_memory so a user
+                # who disabled memory is never written about (the read gate's
+                # privacy stance, applied to writes); skipped on regenerate
+                # because the user message was already ingested once.
+                if (
+                    not regenerate
+                    and self.user is not None
+                    and request.context.use_memory
+                ):
+                    await self._enqueue_memory_writer(message_obj)
 
                 # Run learning progress assessment (Socratic only, sequential after AI response)
                 if not regenerate and should_run_learning_progress(
