@@ -14,42 +14,46 @@ from dare_tools.api.serializers import DareToolSerializer, DareToolExecutionSeri
 class DareToolViewSet(viewsets.ReadOnlyModelViewSet):
     """
     ViewSet for listing and retrieving DARE tools.
-    
+
     list: Get all active DARE tools
     retrieve: Get a specific DARE tool by ID
     """
+
     serializer_class = DareToolSerializer
     permission_classes = [IsAuthenticated]
-    lookup_field = 'slug'
-    
+    lookup_field = "slug"
+
     def get_queryset(self):
         return DareTool.active_objects.filter(is_active=True)
-    
-    @action(detail=False, methods=['get'])
+
+    @action(detail=False, methods=["get"])
     def by_category(self, request):
         """Get tools grouped by category."""
         tools = self.get_queryset()
         categories = {}
-        
+
         for tool in tools:
             if tool.category not in categories:
                 categories[tool.category] = []
             categories[tool.category].append(DareToolSerializer(tool).data)
-        
+
         return Response(categories)
 
 
 class DareToolExecutionViewSet(viewsets.ReadOnlyModelViewSet):
     """
     ViewSet for listing tool execution history.
-    
+
     list: Get user's tool execution history
     retrieve: Get a specific execution by ID
     """
+
     serializer_class = DareToolExecutionSerializer
     permission_classes = [IsAuthenticated]
-    
+
     def get_queryset(self):
-        return DareToolExecution.active_objects.filter(
-            user=self.request.user
-        ).select_related('tool').order_by('-created_at')
+        return (
+            DareToolExecution.active_objects.filter(user=self.request.user)
+            .select_related("tool")
+            .order_by("-created_at")
+        )

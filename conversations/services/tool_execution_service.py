@@ -65,6 +65,12 @@ ARTIFACT_TOOLS = frozenset(
 # DARE tools that retrieve document context — routed to RetrievalToolExecutor.
 RETRIEVAL_TOOLS = frozenset({"search_documents"})
 
+# Memory tools need the authenticated user (scope comes from the server, never
+# from model arguments) and async ORM access, so they route through
+# _execute_dare rather than a registry executor.
+MEMORY_TOOLS = frozenset({"search_sessions"})
+
+
 
 @dataclass(frozen=True)
 class ToolExecutionContext:
@@ -226,6 +232,12 @@ class ToolExecutionService:
                 arguments=arguments,
                 target=ctx.store.retrieval_target,
                 scope=ctx.retrieval_scope,
+            )
+        elif tool_name in MEMORY_TOOLS:
+            from memory.services.session_search import search_sessions_for_user
+
+            raw_result = await sync_to_async(search_sessions_for_user)(
+                ctx.user, str(arguments.get("query", ""))
             )
         elif tool_name in ARTIFACT_TOOLS:
             if ctx.artifact_host is None or not ctx.artifact_host.can_create:
