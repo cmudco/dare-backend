@@ -60,6 +60,9 @@ class WriterAction(models.TextChoices):
     IGNORE = "ignore", _("Ignore")
     SEARCH_SESSIONS = "search_sessions", _("Search sessions")
     CONSOLIDATE = "consolidate", _("Consolidate")
+    # Not in the prototype's vocabulary: DARE's UI has a per-item "Forget",
+    # and pretending a user deletion is an "ignore" would falsify the ledger.
+    FORGET = "forget", _("Forget")
 
 
 # --- Keys -------------------------------------------------------------------

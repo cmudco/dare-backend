@@ -1,7 +1,6 @@
-"""
-Memory API URL Configuration
-"""
-from django.urls import path, include
+"""Memory API URL configuration."""
+
+from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
 from memory.api.views import MemoryViewSet
@@ -14,5 +13,4 @@ urlpatterns = [
     # Explicit paths for custom actions that need simpler URLs
     path("search/", MemoryViewSet.as_view({"post": "search"}), name="memory-search"),
     path("clear/", MemoryViewSet.as_view({"delete": "clear"}), name="memory-clear"),
-    path("seed/", MemoryViewSet.as_view({"post": "seed"}), name="memory-seed"),
 ]

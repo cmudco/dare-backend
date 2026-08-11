@@ -55,7 +55,7 @@ python-pptx~=1.0.2
 # Pinecone
 pinecone~=6.0.1
 
-# OpenAI (2.8+ required for memu-py compatibility)
+# OpenAI (also used by the memory writer + text-embedding-3-small)
 openai>=2.8.0
 tiktoken~=0.8.0
 
@@ -87,7 +87,7 @@ sentence-transformers~=5.6.0
 #email
 resend~=2.7.0
 
-# Text splitting (updated to support langchain-core 1.x required by memu-py)
+# Text splitting (document chunking in core/services/document_processor.py)
 langchain-text-splitters>=0.4.0
 
 # Spreadsheet processing
@@ -100,12 +100,9 @@ opencv-python~=4.10.0
 Pillow~=11.1.0
 ffmpeg-python~=0.2.0
 
-# Cross-conversation memory layer (requires Python 3.13+)
-# Pinned to 1.2.x — v1.3.0 has a SQLAlchemy bug (duplicate 'url' column on resources table)
-memu-py~=1.2.0
-# Python pgvector client required by memu-py for Postgres vector support
+# Cross-conversation memory layer: pgvector column type on MemoryRecord
 pgvector~=0.3.6
-# memu-py with PostgreSQL uses postgresql+psycopg:// (requires psycopg3, not psycopg2)
+# Postgres driver (psycopg3)
 psycopg[binary]~=3.2.0
 
 # Energy/environmental impact tracking for LLM calls
