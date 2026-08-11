@@ -18,10 +18,7 @@ from asgiref.sync import sync_to_async
 
 from core.services.document_processor import DocumentProcessor
 from core.services.llm_helpers.semantic_context_helpers import (
-    collect_embedding_file_ids,
-    run_document_search,
-    run_library_search,
-)
+    collect_embedding_file_ids, run_document_search, run_library_search)
 
 logger = logging.getLogger(__name__)
 

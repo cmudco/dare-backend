@@ -5,7 +5,6 @@ DARE Tools constants.
 
 class ToolCategory:
     """Categories for organizing DARE tools."""
-
     VISUALIZATION = "visualization"
     ANALYSIS = "analysis"
     UTILITY = "utility"
@@ -21,7 +20,6 @@ class ToolCategory:
 
 class ExecutionStatus:
     """Status of a tool execution."""
-
     PENDING = "pending"
     RUNNING = "running"
     COMPLETED = "completed"

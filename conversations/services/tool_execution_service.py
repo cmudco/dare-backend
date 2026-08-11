@@ -71,7 +71,6 @@ RETRIEVAL_TOOLS = frozenset({"search_documents"})
 MEMORY_TOOLS = frozenset({"search_sessions"})
 
 
-
 @dataclass(frozen=True)
 class ToolExecutionContext:
     """Everything a round of tool execution needs from the host turn.
