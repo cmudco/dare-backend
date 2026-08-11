@@ -277,6 +277,23 @@ assert set(TOPICS) == set(
 ), "TopicLiteral must mirror memory.constants.TOPICS"
 
 
+def _is_malformed(decision: "Decision") -> bool:
+    """A non-ignore decision with no statement cannot be applied — the gate
+    will refuse it, and refusing a safety fact loses it. Caught in a live
+    E2E: gpt-4o returned a perfect allergy decision (topic, sensitivity,
+    importance 1.0) with ``text: null``."""
+    return decision.action != "ignore" and not (decision.text or "").strip()
+
+
+_REPAIR_NOTE = (
+    "Your previous response included a decision whose `text` field was null "
+    "or empty. Every decision except `ignore` MUST carry its complete "
+    "standalone statement in `text` — a decision without one cannot be "
+    "stored and the fact is lost. Re-emit the full set of decisions with "
+    "every `text` filled in."
+)
+
+
 def propose_decisions(
     user_doc: str,
     archive: List[MemoryRow],
@@ -286,7 +303,12 @@ def propose_decisions(
     now: Optional[str] = None,
     model: Optional[str] = None,
 ) -> List[WriterDecision]:
-    """Ask the model what to do. Nothing is written here."""
+    """Ask the model what to do. Nothing is written here.
+
+    One in-job repair retry when a decision arrives with an empty statement.
+    This cannot violate the queue's ordering guarantee — nothing has been
+    persisted yet; it is the same turn asking its question twice.
+    """
     client = OpenAI(api_key=OPENAI_API_KEY)
     model = model or MEMORY_WRITER_MODEL
     moment = now or datetime.now(timezone.utc).isoformat()
@@ -332,17 +354,31 @@ THE TURN
 PERSON: {user_message}
 ASSISTANT: {assistant_message or "(no reply captured)"}{explicit_block}"""
 
-    completion = client.chat.completions.parse(
-        model=model,
-        messages=[
-            {"role": "system", "content": SYSTEM},
-            {"role": "user", "content": prompt},
-        ],
-        response_format=WriterResponse,
-        temperature=0,
-        max_tokens=900,
-    )
-    parsed = completion.choices[0].message.parsed
+    def ask(messages) -> Optional[WriterResponse]:
+        completion = client.chat.completions.parse(
+            model=model,
+            messages=messages,
+            response_format=WriterResponse,
+            temperature=0,
+            max_tokens=900,
+        )
+        return completion.choices[0].message.parsed
+
+    base_messages = [
+        {"role": "system", "content": SYSTEM},
+        {"role": "user", "content": prompt},
+    ]
+    parsed = ask(base_messages)
+    if parsed is not None and any(_is_malformed(d) for d in parsed.decisions):
+        logger.warning(
+            "[memory] writer emitted a decision with empty text; retrying once"
+        )
+        retried = ask(base_messages + [{"role": "user", "content": _REPAIR_NOTE}])
+        if retried is not None and not any(_is_malformed(d) for d in retried.decisions):
+            parsed = retried
+        # Otherwise keep the original: the gate refuses the malformed halves
+        # with a ledger entry, which is at least visible.
+
     if parsed is None:
         logger.warning("[memory] writer returned no parseable decisions")
         return []

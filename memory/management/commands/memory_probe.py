@@ -61,12 +61,16 @@ class Command(BaseCommand):
         )
 
     def _ingest(self, user, text, assistant_text):
+        import uuid
+
         from conversations.constants import SenderType
         from conversations.models import Conversation, Message
         from memory.services.ingest import ingest_turn
 
         conversation = Conversation.active_objects.create(
-            user=user, conversation_id=f"memory-probe-{user.id}", title="memory probe"
+            user=user,
+            conversation_id=f"memory-probe-{uuid.uuid4().hex[:12]}",
+            title="memory probe",
         )
         user_message = Message.active_objects.create(
             conversation=conversation,

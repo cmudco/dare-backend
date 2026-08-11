@@ -15,10 +15,12 @@ ENVIRONMENT = os.getenv("ENVIRONMENT", "local")
 SITE_ID = int(os.getenv("SITE_ID", 1))
 
 ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "127.0.0.1,localhost").split(",")
-CORS_ALLOWED_ORIGINS = os.getenv("CORS_ALLOWED_ORIGINS", "https://dare-front.hss.cmu.edu").split(
-    ","
-)
-CSRF_TRUSTED_ORIGINS = os.getenv("CSRF_TRUSTED_ORIGINS", "https://dare-front.hss.cmu.edu").split(",")
+CORS_ALLOWED_ORIGINS = os.getenv(
+    "CORS_ALLOWED_ORIGINS", "https://dare-front.hss.cmu.edu"
+).split(",")
+CSRF_TRUSTED_ORIGINS = os.getenv(
+    "CSRF_TRUSTED_ORIGINS", "https://dare-front.hss.cmu.edu"
+).split(",")
 
 # database
 DB_NAME = os.getenv("DB_NAME")
@@ -33,8 +35,8 @@ EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER")
 EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD")
 EMAIL_FROM = os.getenv("EMAIL_FROM")
 
-EMAIL_USE_TLS = env.bool('EMAIL_USE_TLS', default=False)
-EMAIL_USE_SSL = env.bool('EMAIL_USE_SSL', default=False)
+EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=False)
+EMAIL_USE_SSL = env.bool("EMAIL_USE_SSL", default=False)
 
 # sentry
 SENTRY_DSN = os.getenv("SENTRY_DSN")
@@ -53,15 +55,18 @@ SOCRATIC_BOTS_FRONTEND_URL = os.getenv("SOCRATIC_BOTS_FRONTEND_URL")
 DARE_BACKEND_URL = os.getenv("DARE_BACKEND_URL")
 SOCRATIC_BOTS_BACKEND_URL = os.getenv("SOCRATIC_BOTS_BACKEND_URL")
 
-PINECONE_API_KEY = env('PINECONE_API_KEY')
-PINECONE_INDEX_NAME = env('PINECONE_INDEX_NAME')
-OPENAI_API_KEY = env('OPENAI_API_KEY')
-# The post-reply memory writer's model (cheap, structured-output-capable)
-MEMORY_WRITER_MODEL = os.getenv("MEMORY_WRITER_MODEL", "gpt-4o-mini")
-CLAUDE_API_KEY = env('CLAUDE_API_KEY')
-GEMINI_API_KEY = env('GEMINI_API_KEY')
-OLLAMA_HOST = env('OLLAMA_HOST', default='http://localhost:11434')
-ELEVENLABS_API_KEY = env('ELEVENLABS_API_KEY', default='')
+PINECONE_API_KEY = env("PINECONE_API_KEY")
+PINECONE_INDEX_NAME = env("PINECONE_INDEX_NAME")
+OPENAI_API_KEY = env("OPENAI_API_KEY")
+# The post-reply memory writer's model. gpt-4o over gpt-4o-mini on live
+# evidence: same turn, mini filed "prefers concise answers" under the `diet`
+# topic (a misfiling that later deletes a real diet fact) while 4o split and
+# keyed both facts correctly. One bounded call per memory-enabled turn.
+MEMORY_WRITER_MODEL = os.getenv("MEMORY_WRITER_MODEL", "gpt-4o")
+CLAUDE_API_KEY = env("CLAUDE_API_KEY")
+GEMINI_API_KEY = env("GEMINI_API_KEY")
+OLLAMA_HOST = env("OLLAMA_HOST", default="http://localhost:11434")
+ELEVENLABS_API_KEY = env("ELEVENLABS_API_KEY", default="")
 
 # redis
 REDIS_HOST = os.getenv("REDIS_HOST")
@@ -78,7 +83,9 @@ WEAVIATE_PORT = int(os.getenv("WEAVIATE_PORT", "8080"))
 WEAVIATE_GRPC_PORT = int(os.getenv("WEAVIATE_GRPC_PORT", "50051"))
 WEAVIATE_COLLECTION_NAME = os.getenv("WEAVIATE_COLLECTION_NAME", "Document")
 WEAVIATE_SKIP_INIT_CHECKS = os.getenv("WEAVIATE_SKIP_INIT_CHECKS", "True") == "True"
-WEAVIATE_AUTOSCHEMA_ENABLED = os.getenv("WEAVIATE_AUTOSCHEMA_ENABLED", "False") == "True"
+WEAVIATE_AUTOSCHEMA_ENABLED = (
+    os.getenv("WEAVIATE_AUTOSCHEMA_ENABLED", "False") == "True"
+)
 
 # MCP Docker Configuration
 MCP_USE_DOCKER = os.getenv("MCP_USE_DOCKER", "False") == "True"
@@ -88,7 +95,9 @@ HERMES_GATEWAY_URL = os.getenv("HERMES_GATEWAY_URL", "http://127.0.0.1:8642")
 HERMES_API_KEY = os.getenv("HERMES_API_KEY", "dev-spike-local")
 # DARE writes its canonical soul into the gateway profile's SOUL.md (the anchor).
 HERMES_SYNC_SOUL = os.getenv("HERMES_SYNC_SOUL", "True") == "True"
-HERMES_SOUL_PATH = os.getenv("HERMES_SOUL_PATH", os.path.expanduser("~/.hermes/SOUL.md"))
+HERMES_SOUL_PATH = os.getenv(
+    "HERMES_SOUL_PATH", os.path.expanduser("~/.hermes/SOUL.md")
+)
 # One project = one Hermes profile. A profile is its own HERMES_HOME directory,
 # so its SOUL.md and memories/{MEMORY,USER}.md are isolated by construction
 # rather than by convention. The gateway serves every profile from the single
