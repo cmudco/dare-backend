@@ -63,6 +63,10 @@ class WriterAction(models.TextChoices):
     # Not in the prototype's vocabulary: DARE's UI has a per-item "Forget",
     # and pretending a user deletion is an "ignore" would falsify the ledger.
     FORGET = "forget", _("Forget")
+    # Likewise honest names for the privacy gate's two hand-operated moves
+    # (the prototype logged these as ignore/add_fact, which read as lies).
+    HOLD = "hold", _("Hold")
+    RELEASE = "release", _("Release")
 
 
 # --- Keys -------------------------------------------------------------------

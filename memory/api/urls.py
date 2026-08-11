@@ -1,4 +1,8 @@
-"""Memory API URL configuration."""
+"""Memory API URL configuration.
+
+The compat surface (items / search / clear) keeps the round-1 frontend
+working unchanged; the v2 surface exposes the layered store for round 2.
+"""
 
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
@@ -13,4 +17,25 @@ urlpatterns = [
     # Explicit paths for custom actions that need simpler URLs
     path("search/", MemoryViewSet.as_view({"post": "search"}), name="memory-search"),
     path("clear/", MemoryViewSet.as_view({"delete": "clear"}), name="memory-clear"),
+    # v2 — the layered surface
+    path(
+        "v2/document/",
+        MemoryViewSet.as_view({"get": "document", "put": "document"}),
+        name="memory-v2-document",
+    ),
+    path(
+        "v2/ledger/",
+        MemoryViewSet.as_view({"get": "ledger"}),
+        name="memory-v2-ledger",
+    ),
+    path(
+        "v2/hold/",
+        MemoryViewSet.as_view({"post": "hold"}),
+        name="memory-v2-hold",
+    ),
+    path(
+        "v2/recall/",
+        MemoryViewSet.as_view({"get": "recall"}),
+        name="memory-v2-recall",
+    ),
 ]
