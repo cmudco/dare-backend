@@ -60,9 +60,11 @@ class WriterAction(models.TextChoices):
     IGNORE = "ignore", _("Ignore")
     SEARCH_SESSIONS = "search_sessions", _("Search sessions")
     CONSOLIDATE = "consolidate", _("Consolidate")
-    # Not in the prototype's vocabulary: DARE's UI has a per-item "Forget",
-    # and pretending a user deletion is an "ignore" would falsify the ledger.
+    # Not in the prototype's vocabulary: DARE's UI has a per-item "Forget"
+    # and an inline edit, and pretending a user's own action is an "ignore"
+    # or an "add_fact" would falsify the ledger.
     FORGET = "forget", _("Forget")
+    EDIT = "edit", _("Edit")
     # Likewise honest names for the privacy gate's two hand-operated moves
     # (the prototype logged these as ignore/add_fact, which read as lies).
     HOLD = "hold", _("Hold")

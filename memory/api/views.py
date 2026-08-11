@@ -15,9 +15,11 @@ from rest_framework.response import Response
 
 from memory.constants import (TOKEN_BUDGET, TOKEN_WARNING, MemoryState,
                               WriterAction)
-from memory.domain.user_doc import (estimate_tokens, normalize_user_doc,
-                                    parse_user_doc, render_user_doc)
+from memory.domain.user_doc import (estimate_tokens, normalize_line,
+                                    normalize_user_doc, parse_user_doc,
+                                    render_user_doc)
 from memory.models import MemoryLedgerEntry, MemoryRecord, UserMemoryDocument
+from memory.services.edit import edit_doc_line, edit_record
 from memory.services.items import (DOC_ID_PREFIX, doc_line_id, listed_records,
                                    profile_items, record_item, row_item)
 from memory.services.retrieval import retrieve, summarize_recall
@@ -57,6 +59,45 @@ class MemoryViewSet(viewsets.ViewSet):
         record = MemoryRecord.visible(request.user).filter(pk=pk).first()
         if record is None:
             return Response(status=status.HTTP_404_NOT_FOUND)
+        return Response(MemoryItemSerializer(record_item(record)).data)
+
+    def partial_update(self, request, pk=None):
+        """Rewrite one memory by hand.
+
+        A correction, not a supersede: there is no second truth to keep on a
+        timeline, so the row is fixed in place — re-embedded so it is findable
+        by what it now says, re-keyed if a rule's trigger changed, and logged.
+        """
+        content = request.data.get("content")
+        if content is None:
+            return Response(
+                {"detail": "A content field is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if pk and pk.startswith(DOC_ID_PREFIX):
+            result = edit_doc_line(request.user, pk, str(content))
+            if result.not_found:
+                return Response(status=status.HTTP_404_NOT_FOUND)
+            if not result.ok:
+                return Response(
+                    {"detail": result.reason}, status=status.HTTP_400_BAD_REQUEST
+                )
+            for item in profile_items(self._document()):
+                if item["content"] == normalize_line(str(content)):
+                    return Response(MemoryItemSerializer(item).data)
+            return Response(status=status.HTTP_204_NO_CONTENT)
+
+        record = MemoryRecord.visible(request.user).filter(pk=pk).first()
+        if record is None:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+
+        result = edit_record(request.user, record, str(content))
+        if not result.ok:
+            return Response(
+                {"detail": result.reason}, status=status.HTTP_400_BAD_REQUEST
+            )
+        record.refresh_from_db()
         return Response(MemoryItemSerializer(record_item(record)).data)
 
     def destroy(self, request, pk=None):
