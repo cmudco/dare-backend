@@ -15,7 +15,8 @@ match, which the API reports as 404 rather than deleting the wrong line.
 """
 
 import hashlib
-from typing import Any, Dict, List, Optional
+import re
+from typing import Any, Dict, List, Optional, Tuple
 
 from memory.constants import MemoryState
 from memory.domain.procedural import trigger_of
@@ -82,6 +83,21 @@ def behavior_tag(key: str) -> str:
     if not key.startswith("when:"):
         return key
     return key[5:].split(":")[0]
+
+
+def parse_behavior_content(content: str) -> Tuple[Optional[str], str]:
+    """The inverse of :func:`behavior_content` — split an edited rule back into
+    its trigger and the rule itself.
+
+    A person editing a card sees "When writing python: Use type hints" and may
+    change either half. The trigger belongs in the key and the rule in the
+    text, so the two are separated again on the way in rather than storing the
+    whole sentence and letting the key drift from what it says.
+    """
+    match = re.match(r"^\s*when\s+(.+?)\s*[,:]\s*(.+)$", content, re.IGNORECASE)
+    if not match:
+        return None, content.strip()
+    return match.group(1).strip(), match.group(2).strip()
 
 
 def record_item(record: MemoryRecord, score: Optional[float] = None) -> Dict[str, Any]:
