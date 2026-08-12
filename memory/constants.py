@@ -182,6 +182,12 @@ SHORTLIST_LEXICAL_SHARE = 0.6
 SHORTLIST_IMPORTANCE_SHARE = 0.25
 SHORTLIST_RECENT_SHARE = 0.25
 
+# How many existing keys the writer is shown. Keys are the collision domain —
+# reusing one is what lets a new fact retire an old one — so the writer has to
+# see the slots that exist, not just the rows retrieval happened to surface.
+# A key costs about four tokens, so this cap is generous on purpose.
+KEY_SPACE_LIMIT = 300
+
 # The writer's own retrieval casts wider than the read path: recall thrown away
 # before the collision check can never come back.
 WRITER_RETRIEVE_TOP_K = 12

@@ -39,8 +39,9 @@ from memory.domain.types import ApplyInput, ApplyResult, LedgerDraft, MemoryRow
 from memory.models import MemoryLedgerEntry, MemoryRecord
 from memory.services.embeddings import embed_texts
 from memory.services.retrieval import retrieve
-from memory.services.store import (find_by_ids, find_by_keys, parse_iso_date,
-                                   read_user_doc, write_user_doc)
+from memory.services.store import (active_keys, find_by_ids, find_by_keys,
+                                   parse_iso_date, read_user_doc,
+                                   write_user_doc)
 from memory.services.writer import propose_decisions
 
 logger = logging.getLogger(__name__)
@@ -100,6 +101,7 @@ def ingest_turn(
         explicit=explicit,
         now=now,
         model=model,
+        keys_in_use=active_keys(user),
     )
     if not decisions:
         return _skip("writer proposed nothing")

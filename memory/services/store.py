@@ -20,7 +20,8 @@ from typing import Dict, List, Optional, Sequence
 
 from django.db import connection
 
-from memory.constants import (HISTORICAL_RE, SHORTLIST_IMPORTANCE_SHARE,
+from memory.constants import (HISTORICAL_RE, KEY_SPACE_LIMIT,
+                              SHORTLIST_IMPORTANCE_SHARE,
                               SHORTLIST_LEXICAL_SHARE, SHORTLIST_LIMIT,
                               SHORTLIST_RECENT_SHARE, MemoryState)
 from memory.domain.rank import Candidate
@@ -161,6 +162,27 @@ def find_by_keys(user, keys: List[str]) -> List[MemoryRow]:
         user=user, state=MemoryState.ACTIVE, key__in=keys
     )
     return [row_from_record(record) for record in records]
+
+
+def active_keys(user, limit: int = KEY_SPACE_LIMIT) -> List[str]:
+    """Every slot this person's archive currently occupies.
+
+    Keys only, no text: the writer needs to know a slot EXISTS so it can reuse
+    it, and the row's contents are already covered by the retrieved block. A
+    key averages about four tokens, so a store of several hundred memories
+    still fits in a fraction of what a dozen full rows cost.
+
+    Ordered by importance so that if a very large store ever exceeds the cap,
+    what falls off the end is the least consequential — losing a key here does
+    not lose the memory, it only risks a duplicate slot for that one subject.
+    """
+    return list(
+        MemoryRecord.active_objects.filter(user=user, state=MemoryState.ACTIVE)
+        .exclude(key="")
+        .order_by("-importance", "-created_at")
+        .values_list("key", flat=True)
+        .distinct()[:limit]
+    )
 
 
 def find_by_ids(user, ids: List[str]) -> List[MemoryRow]:

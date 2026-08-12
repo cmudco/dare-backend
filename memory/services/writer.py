@@ -324,6 +324,7 @@ def propose_decisions(
     explicit: bool,
     now: Optional[str] = None,
     model: Optional[str] = None,
+    keys_in_use: Optional[List[str]] = None,
 ) -> List[WriterDecision]:
     """Ask the model what to do. Nothing is written here.
 
@@ -354,6 +355,13 @@ def propose_decisions(
         else "(empty)"
     )
     known_block = "\n".join(known) if known else "(nothing yet)"
+
+    # The keys, separately from the rows. ALREADY KNOWN is whatever retrieval
+    # judged related to THIS turn, so a colliding row that scored below the
+    # floor never reaches the writer and it mints a fresh key — after which
+    # the two facts can never retire one another. Keys are three words each,
+    # so the whole namespace fits where a dozen rows would not.
+    keys_block = ", ".join(keys_in_use) if keys_in_use else "(none yet)"
     explicit_block = (
         "\n\nThe person explicitly asked for something to be remembered. That "
         "is consent in their own words, so a profile line is allowed here if "
@@ -371,6 +379,10 @@ USER.md — {tokens} of {TOKEN_BUDGET} tokens used{
 
 ALREADY KNOWN — the memories most related to this turn. Do not record any of them again.
 {known_block}
+
+KEYS IN USE — every slot this person's archive already has.
+If this turn is about the same thing as one of these, reuse that key EXACTLY, even when the memory itself is not shown above. A key is a slot: reusing one lets the new fact replace the old, while a near-miss spelling creates a second slot and both versions survive forever with nothing to say which is current. Match on the subject, not the wording — a new phone belongs in the key the old phone is in.
+{keys_block}
 
 THE TURN
 PERSON: {user_message}
