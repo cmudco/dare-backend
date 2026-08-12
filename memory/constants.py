@@ -127,9 +127,38 @@ RANK_WEIGHTS = {
 SCORE_FLOOR = 0.3
 
 # The row must actually be ABOUT something related: relevance qualifies,
-# importance only ranks. Measured: a correct match scored 0.32 on meaning,
-# wrong ones 0.10-0.21 — separation the score-floor alone crushed and swamped.
-RELEVANCE_FLOOR = 0.12
+# importance only ranks. A row can be important, recent and certain and still
+# have nothing to do with what was asked.
+#
+# Benched against a labelled query set on a real store (18 queries, 22 facts):
+# true matches score 0.26-0.67 on meaning, unrelated rows 0.02-0.24. At 0.12
+# precision was 0.36 and every turn carried 1.7 irrelevant memories — a code
+# review pulled in a bouldering habit. 0.28 is where F1 peaks (0.73) and noise
+# falls to 0.17 per turn.
+RELEVANCE_FLOOR = 0.28
+
+# Safety rows keep the old, looser bar: nothing was relaxed for them, the rest
+# was tightened around them. The asymmetry is the point — failing to recall a
+# bouldering habit costs nothing, failing to recall a peanut allergy on "book
+# me a restaurant" is the hazard the archive exists to prevent, and that pair
+# benches at 0.16 while the ordinary floor now sits at 0.28.
+#
+# Measured against the stored allergy vector: turns that risk food score
+# 0.13-0.18 (restaurant .162, dinner tonight .132, cafe .180), turns that do
+# not score 0.11 and below. A narrow margin, so it is deliberately set at the
+# bottom of the true range rather than the middle — on this gate a false
+# positive is a wasted line and a false negative is the whole failure.
+SAFETY_RELEVANCE_FLOOR = 0.12
+
+# Lexical rank is normalised against the best candidate in the batch so it can
+# be weighed against the other signals — which means the best row in a batch
+# always reads as a perfect 1.0, however bad it is in absolute terms. That is
+# fine for ranking and wrong for qualifying: "explain how TCP handshakes work"
+# matched an unrelated fact on the single stem "work" at ts_rank 0.015, was
+# normalised to 1.0, and sailed through the gate. Real matches measured 0.06
+# and up, junk an order of magnitude below, so qualification reads the raw
+# score and only ranking sees the normalised one.
+LEXICAL_RELEVANCE_MIN = 0.05
 
 TOP_K = 3
 RECENCY_HALF_LIFE_DAYS = 90
@@ -140,6 +169,12 @@ RECENCY_HALF_LIFE_DAYS = 90
 PROCEDURE_FLOOR = 0.22
 PROCEDURE_TOP_K = 5
 PROCEDURE_SHORTLIST_LIMIT = 24
+
+# Same reasoning one notch looser: a rule that misses costs a repeated mistake,
+# so procedures keep casting wider than facts here too. It still has to bite —
+# at the old 0.12 a request to review a Python function pulled in the rule
+# about formatting paper summaries.
+PROCEDURE_RELEVANCE_FLOOR = 0.22
 
 # Stage-one shortlist cap and its split between the three unioned sources.
 SHORTLIST_LIMIT = 50

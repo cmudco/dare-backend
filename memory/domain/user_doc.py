@@ -42,6 +42,16 @@ _RENAMED = {
 
 _HEADING_RE = re.compile(r"^#{1,6}\s+(.*)$")
 
+# Below this, one line containing another says nothing about whether they mean
+# the same thing — "Uses vim." sits inside plenty of sentences it does not
+# restate.
+_RESTATEMENT_MIN = 16
+
+
+def _contains(longer: str, shorter: str) -> bool:
+    """Whether one line restates another, ignoring case and end punctuation."""
+    return shorter.lower().rstrip(".;,") in longer.lower()
+
 
 def key_of(heading: str) -> str:
     """``Working preferences`` → ``working-preferences``. The inverse of a heading."""
@@ -183,6 +193,28 @@ def patch_user_doc(
     )
     if duplicate:
         return PatchResult(ok=False, reason="USER.md already says this.")
+
+    # Exact matching is not enough: a line that restates an existing one and
+    # adds to it reads as new and lands beside it, leaving the document saying
+    # the same thing twice. Seen live — "Goes by Farhat (he/they)." acquired a
+    # neighbour reading "Goes by Farhat (he/they); do not call them Farhat
+    # Abbas." Keep whichever says more, and only one of them.
+    if not replacement:
+        for lines in doc.values():
+            for index, existing in enumerate(lines):
+                shorter, longer = sorted([existing, normalized], key=len)
+                if len(shorter) < _RESTATEMENT_MIN or not _contains(longer, shorter):
+                    continue
+                if longer == existing:
+                    return PatchResult(
+                        ok=False,
+                        reason="USER.md already says this, and says more of it.",
+                    )
+                lines.pop(index)
+                note = f'Rewrote "{existing}"'
+                break
+            if note:
+                break
 
     doc[canonical_key].append(normalized)
     rendered = render_user_doc(doc)

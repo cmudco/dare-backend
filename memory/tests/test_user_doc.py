@@ -82,6 +82,48 @@ class UserDocTests(SimpleTestCase):
         self.assertFalse(result.ok)
         self.assertIn("already says this", result.reason)
 
+    def test_a_line_that_says_more_replaces_the_one_it_restates(self):
+        # Live: an explicit "call me Farhat, not Farhat Abbas" landed beside
+        # the existing name line instead of replacing it, and USER.md paid for
+        # the same fact twice on every turn thereafter.
+        result = patch_user_doc(
+            DOC,
+            key="identity",
+            line="Preferred name: Farhat, never Farhat Abbas",
+        )
+        self.assertTrue(result.ok)
+        doc = parse_user_doc(result.markdown)
+        self.assertEqual(
+            doc["identity"], ["Preferred name: Farhat, never Farhat Abbas."]
+        )
+        self.assertIn("Rewrote", result.note or "")
+
+    def test_a_line_that_says_less_than_one_already_there_is_refused(self):
+        richer = patch_user_doc(
+            DOC, key="identity", line="Preferred name: Farhat, never Farhat Abbas"
+        ).markdown
+
+        result = patch_user_doc(richer, key="identity", line="Preferred name: Farhat")
+
+        self.assertFalse(result.ok)
+        self.assertIn("says more of it", result.reason)
+
+    def test_a_short_line_inside_a_longer_one_is_not_a_restatement(self):
+        # Containment alone means nothing at short lengths — this must still
+        # be two separate lines.
+        result = patch_user_doc(DOC, key="background", line="Uses vim")
+        self.assertTrue(result.ok)
+        result = patch_user_doc(
+            result.markdown,
+            key="background",
+            line="Uses vim keybindings in every editor",
+        )
+        self.assertTrue(result.ok)
+        self.assertEqual(
+            parse_user_doc(result.markdown)["background"],
+            ["Uses vim.", "Uses vim keybindings in every editor."],
+        )
+
     def test_refuses_a_write_that_would_cross_the_token_ceiling(self):
         full = over_budget_doc()
         self.assertGreater(estimate_tokens(full), TOKEN_BUDGET)

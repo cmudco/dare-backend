@@ -11,7 +11,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from memory.constants import SCORE_FLOOR, SHORTLIST_LIMIT, TOP_K
+from memory.constants import (RELEVANCE_FLOOR, SCORE_FLOOR, SHORTLIST_LIMIT,
+                              TOP_K)
 from memory.domain.rank import RankResult, Scored, format_recall, rank
 from memory.services.embeddings import embed_one
 from memory.services.store import shortlist
@@ -38,6 +39,7 @@ def retrieve(
     now: Optional[str] = None,
     query_vector: Optional[List[float]] = None,
     embed_query: bool = True,
+    relevance_floor: float = RELEVANCE_FLOOR,
 ) -> Recall:
     """Run the funnel for one query.
 
@@ -63,7 +65,12 @@ def retrieve(
     vector = query_vector
 
     result: RankResult = rank(
-        candidates, query_vector=vector, now=moment, top_k=top_k, floor=floor
+        candidates,
+        query_vector=vector,
+        now=moment,
+        top_k=top_k,
+        floor=floor,
+        relevance_floor=relevance_floor,
     )
 
     return Recall(
