@@ -104,6 +104,14 @@ QUALIFIED_TOPICS = frozenset(
 # the store with NO answer at all, which is strictly worse than a stale one.
 NEVER_EXPIRES = frozenset({"location", "occupation", "industry", "name"})
 
+# USER.md headings that hold instructions rather than disclosures — how to
+# address someone and how to answer them. These reach the profile without an
+# explicit request, because their whole value is applying to the next turn
+# and every turn after, and a preference that only surfaces when a question
+# happens to sound like it is a preference the person has to keep repeating.
+# Everything else about a person's life still needs to be asked for.
+ADDRESSING_HEADINGS = frozenset({"communication", "identity"})
+
 # --- USER.md ----------------------------------------------------------------
 
 # Roughly 500 tokens. The whole file is injected on every single turn.

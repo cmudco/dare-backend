@@ -881,3 +881,47 @@ class CommunicationInstructionTests(SimpleTestCase):
 
         self.assertNotIn("aim2balance", result.user_doc)
         self.assertEqual(result.entries[0].action, "add_fact")
+
+
+class IdentityExemptionTests(SimpleTestCase):
+    """Identity reaches USER.md as a form of address, never as a life fact.
+
+    "Call me Farhat" is an instruction and belongs in the file read on every
+    turn. "Lives in Lahore" happens to arrive under the same heading and must
+    not: a profile line has no key, so it cannot be retired when they move,
+    and the store ends up holding two live answers to one question.
+    """
+
+    def test_what_to_call_someone_reaches_the_profile_unasked(self):
+        result = apply_decisions(
+            make_input(explicit=False),
+            [
+                decision(
+                    action="patch_user",
+                    key="identity",
+                    topic_key="name",
+                    text="Goes by Farhat, never Farhat Abbas.",
+                    reason="Said what to call them.",
+                )
+            ],
+        )
+
+        self.assertIn("Goes by Farhat", result.user_doc)
+        self.assertEqual(result.entries[0].action, "patch_user")
+
+    def test_a_life_fact_under_the_same_heading_still_goes_to_the_archive(self):
+        result = apply_decisions(
+            make_input(explicit=False),
+            [
+                decision(
+                    action="patch_user",
+                    key="identity",
+                    topic_key="location",
+                    text="Lives in Lahore.",
+                    reason="Mentioned where they live.",
+                )
+            ],
+        )
+
+        self.assertNotIn("Lahore", result.user_doc)
+        self.assertEqual(result.created[0].key, "location")

@@ -19,8 +19,8 @@ system you cannot audit is just a text file that grows.
 import re
 from typing import List, Optional
 
-from memory.constants import (NEVER_EXPIRES, MemoryKind, MemoryState,
-                              Sensitivity)
+from memory.constants import (ADDRESSING_HEADINGS, NEVER_EXPIRES, MemoryKind,
+                              MemoryState, Sensitivity)
 from memory.domain.keys import downgraded_key
 from memory.domain.types import (ApplyInput, ApplyResult, LedgerDraft,
                                  MemoryRow, WriterDecision)
@@ -215,7 +215,19 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
         # turn after. Sent to the archive it only arrives when a question
         # happens to sound like it: measured on a real conversation, an
         # instruction given twice reached 1 turn in 6.
-        instruction = decision.key == "communication"
+        # Identity earns the same exemption for the same reason: what to call
+        # someone is how to address them, not a disclosure about their life,
+        # and it is wrong on every turn it fails to reach.
+        #
+        # But the heading also holds where someone lives, and a profile line
+        # cannot be superseded — it has no key to collide on. Pinned there,
+        # "lives in Lahore" survives the move to Islamabad and the archive ends
+        # up with two live answers to the same question. So identity only
+        # qualifies when it is not carrying a life fact: no topic, or the one
+        # topic that IS a form of address.
+        instruction = decision.key in ADDRESSING_HEADINGS
+        if instruction and decision.key == "identity":
+            instruction = (decision.topic_key or "").split(":")[0] in ("", "name")
         if (
             action == "patch_user"
             and not input.explicit
