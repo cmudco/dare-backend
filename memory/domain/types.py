@@ -58,6 +58,10 @@ class WriterDecision:
     valid_until: Optional[str] = None
     supersedes_id: Optional[str] = None
     replaces_line: Optional[str] = None
+    # For ignore: the row the person just restated. Repetition is the only
+    # durability signal the store ever gets, so an ignore that names its cause
+    # is worth more than one that does not.
+    reinforces_id: Optional[str] = None
 
     def as_dict(self) -> Dict[str, Any]:
         return asdict(self)
