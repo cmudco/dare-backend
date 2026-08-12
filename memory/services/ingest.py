@@ -206,6 +206,7 @@ def _persist(
                 confidence=row.confidence,
                 provenance=row.provenance,
                 reinforced=row.reinforced,
+                pinned_to=row.pinned_to,
                 embedding=vector if store_vectors else None,
             )
 

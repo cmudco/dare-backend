@@ -91,7 +91,13 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
             )
         )
 
-    def build(decision: WriterDecision, kind: str, text: str, key: str) -> MemoryRow:
+    def build(
+        decision: WriterDecision,
+        kind: str,
+        text: str,
+        key: str,
+        pinned_to: str = "",
+    ) -> MemoryRow:
         occurred = _iso_date(decision.occurred_at)
         return MemoryRow(
             id=input.new_id(),
@@ -139,6 +145,7 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
             sensitivity=decision.sensitivity or Sensitivity.NONE,
             provenance=input.user_message[:400],
             reinforced=0,
+            pinned_to=pinned_to,
         )
 
     def file_row(row: MemoryRow) -> None:
@@ -154,29 +161,18 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
         to be retrieved, and it does not wait for the budget either: gate for
         privacy, where staying silent is free, never for safety, where silence
         is the hazard.
-        """
-        nonlocal user_doc, user_doc_changed
 
+        Pinning sets a flag on the row rather than copying its text into the
+        document. The same sentence in two places drifts the moment one of
+        them is edited.
+        """
         if row.sensitivity != Sensitivity.SAFETY:
             return
 
-        patched = patch_user_doc(user_doc, key="constraints", line=row.text, force=True)
-
-        if not patched.ok:
-            # Already there is the usual reason, and it is not a problem.
-            log(
-                action="patch_user",
-                proposed_action="add_fact",
-                reason=reason,
-                note=f"Not pinned to USER.md: {patched.reason}",
-                applied=False,
-                record_id=row.id,
-                detail=row.text,
-            )
+        if row.pinned_to:
             return
 
-        user_doc = patched.markdown
-        user_doc_changed = True
+        row.pinned_to = "constraints"
         log(
             action="patch_user",
             proposed_action="add_fact",
@@ -213,6 +209,7 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
         text = (decision.text or "").strip()
         action = decision.action
         key = decision.key
+        pinned_to = ""
 
         # Rule 1. USER.md is injected into every conversation, so a line there
         # costs tokens forever. Consolidation promotes what proves durable; a
@@ -299,6 +296,20 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
             )
             continue
 
+        # An earned profile line is stored as a FACT pinned to its heading,
+        # never as a line of markdown. USER.md renders from what is pinned, so
+        # the row keeps its key, its dates and its supersession — "lives in
+        # Islamabad" can sit in the profile AND still retire itself when they
+        # move, which a bullet with no key never could.
+        #
+        # The document itself is left to lines a person wrote by hand. Nothing
+        # the writer produces edits markdown any more, so the two can never
+        # disagree about the same fact.
+        if action == "patch_user" and text:
+            pinned_to = key or "identity"
+            key = decision.topic_key or downgraded_key(pinned_to, text)
+            action = "add_fact"
+
         if action == "patch_user":
             if not key or not text:
                 log(
@@ -376,7 +387,13 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
             same_subject = not key or not target or target.key == key
 
             if target and same_subject:
-                row = build(decision, target.kind, text, key or target.key)
+                row = build(
+                    decision,
+                    target.kind,
+                    text,
+                    key or target.key,
+                    pinned_to or target.pinned_to,
+                )
                 retire(target, row)
                 file_row(row)
                 log(
@@ -503,10 +520,13 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
             # Same key, different words. Two facts under one key cannot both be
             # true, which is exactly the rule that makes "she moved" a
             # retirement instead of a second opinion sitting next to the first.
-            row = build(decision, kind, text, fact_key)
+            row = build(decision, kind, text, fact_key, pinned_to)
             # A restated rule is still the same rule being insisted on, so the
             # replacement inherits the history rather than starting from zero.
             row.reinforced = collision.reinforced + 1
+            # And it keeps the predecessor's place in the profile: a pinned
+            # fact restated should update the line, not quietly unpin it.
+            row.pinned_to = row.pinned_to or collision.pinned_to
             # And it inherits the end date, unless it states its own. An update
             # to a temporary fact is still about something temporary — without
             # this, "the ankle is improving" made the injury permanent again.
@@ -529,7 +549,7 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
             pin_safety(row, decision.reason)
             continue
 
-        row = build(decision, kind, text, fact_key)
+        row = build(decision, kind, text, fact_key, pinned_to)
         file_row(row)
         log(
             action="add_procedure" if kind == MemoryKind.PROCEDURE else "add_fact",

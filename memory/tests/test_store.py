@@ -14,11 +14,18 @@ from django.test import TestCase
 
 from conversations.constants import SenderType
 from conversations.models import Conversation, Message
-from memory.constants import MemoryState
+from memory.constants import TOKEN_BUDGET, MemoryState
 from memory.domain.types import WriterDecision
+from memory.domain.user_doc import estimate_tokens
 from memory.models import MemoryLedgerEntry, MemoryRecord, UserMemoryDocument
 from memory.services.ingest import ingest_turn
-from memory.services.store import active_keys, find_by_keys, shortlist
+from memory.services.store import (
+    active_keys,
+    find_by_keys,
+    read_user_doc,
+    row_from_record,
+    shortlist,
+)
 from memory.services.writer import WriterProposal
 
 
@@ -195,9 +202,10 @@ class IngestTests(TestCase):
             ],
         )
 
-        document = UserMemoryDocument.objects.get(user=self.user)
-        self.assertIn("## Constraints", document.content)
-        self.assertIn("- Has a severe peanut allergy.", document.content)
+        # Pinned, not copied: the row carries its place in the profile, and
+        # the document renders from it.
+        self.assertIn("## Constraints", read_user_doc(self.user))
+        self.assertIn("- Has a severe peanut allergy.", read_user_doc(self.user))
         record = MemoryRecord.objects.get(user=self.user)
         self.assertEqual(record.state, MemoryState.ACTIVE)
 
@@ -360,3 +368,128 @@ class ActiveKeysTests(TestCase):
 
     def test_caps_a_very_large_store(self):
         self.assertLessEqual(len(active_keys(self.user, limit=2)), 2)
+
+
+class ProfileRenderTests(TestCase):
+    """USER.md is a view of what is pinned, not a second copy of it.
+
+    The reason the profile can now hold a life fact at all: the row keeps its
+    key and its timeline, so "lives in Islamabad" sits in the file read on
+    every turn AND still retires itself when they move. A markdown bullet had
+    no key and could do neither.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = get_user_model().objects.create_user(
+            email="profile-render@example.com", password="x"
+        )
+
+    def pin(self, key, text, heading="identity", **kwargs):
+        return MemoryRecord.objects.create(
+            user=self.user, kind="fact", key=key, text=text, pinned_to=heading, **kwargs
+        )
+
+    def test_a_pinned_fact_renders_under_its_heading(self):
+        self.pin("location", "Lives in Islamabad.")
+        doc = read_user_doc(self.user)
+        self.assertIn("## Identity", doc)
+        self.assertIn("- Lives in Islamabad.", doc)
+
+    def test_retiring_the_fact_takes_its_profile_line_with_it(self):
+        old = self.pin("location", "Lives in Islamabad.")
+        self.assertIn("Islamabad", read_user_doc(self.user))
+
+        new = self.pin("location", "Lives in Lahore.")
+        old.state = MemoryState.SUPERSEDED
+        old.superseded_by = new
+        old.save(update_fields=["state", "superseded_by"])
+
+        doc = read_user_doc(self.user)
+        self.assertIn("- Lives in Lahore.", doc)
+        self.assertNotIn("Islamabad", doc)
+
+    def test_a_replacement_inherits_its_predecessors_place(self):
+        # The pin lives on the row, so it has to survive the round trip
+        # through the database. It did not at first: row_from_record dropped
+        # it, the replacement came back unpinned, and moving city removed the
+        # location from USER.md instead of updating it.
+        self.ingest_move()
+        doc = read_user_doc(self.user)
+        self.assertIn("- Lives in Lahore.", doc)
+        self.assertNotIn("Islamabad", doc)
+
+    def ingest_move(self):
+        old = self.pin("location", "Lives in Islamabad.")
+        row = row_from_record(old)
+        self.assertEqual(row.pinned_to, "identity")
+
+        new = self.pin("location", "Lives in Lahore.")
+        old.state = MemoryState.SUPERSEDED
+        old.superseded_by = new
+        old.save(update_fields=["state", "superseded_by"])
+
+    def test_an_unpinned_fact_stays_out_of_the_profile(self):
+        MemoryRecord.objects.create(
+            user=self.user, kind="fact", key="note:bank", text="Banks with UBL."
+        )
+        self.assertNotIn("UBL", read_user_doc(self.user))
+
+    def test_an_authored_line_survives_alongside_pinned_facts(self):
+        UserMemoryDocument.objects.create(
+            user=self.user,
+            content="# User\n\n## Background\n- Wrote this by hand.\n",
+        )
+        self.pin("location", "Lives in Islamabad.")
+
+        doc = read_user_doc(self.user)
+        self.assertIn("- Wrote this by hand.", doc)
+        self.assertIn("- Lives in Islamabad.", doc)
+
+    def test_an_authored_duplicate_of_a_pinned_fact_is_dropped(self):
+        # Both would render the same sentence twice, and only the pinned one
+        # can ever be superseded.
+        UserMemoryDocument.objects.create(
+            user=self.user,
+            content="# User\n\n## Identity\n- Lives in Islamabad.\n",
+        )
+        self.pin("location", "Lives in Islamabad.")
+
+        self.assertEqual(read_user_doc(self.user).count("Islamabad"), 1)
+
+    def test_an_empty_profile_renders_as_nothing_at_all(self):
+        # Not a bare "# User" heading injected into every prompt saying nothing.
+        self.assertEqual(read_user_doc(self.user), "")
+
+    def test_the_budget_drops_the_least_important_line_not_the_newest(self):
+        for index in range(60):
+            self.pin(
+                f"note:filler-{index}",
+                f"A reasonably long standing preference number {index}.",
+                heading="working-preferences",
+                importance=0.4,
+            )
+        self.pin("name", "Goes by Farhat.", importance=0.9)
+
+        doc = read_user_doc(self.user)
+        self.assertIn("Goes by Farhat.", doc)
+        self.assertLess(estimate_tokens(doc), TOKEN_BUDGET * 1.5)
+
+    def test_a_safety_line_is_never_dropped_by_the_budget(self):
+        # The ceiling is the cheaper thing to break.
+        for index in range(60):
+            self.pin(
+                f"note:filler-{index}",
+                f"A reasonably long standing preference number {index}.",
+                heading="working-preferences",
+                importance=0.9,
+            )
+        self.pin(
+            "diet_avoid:peanut",
+            "Severely allergic to peanuts.",
+            heading="constraints",
+            sensitivity="safety",
+            importance=1.0,
+        )
+
+        self.assertIn("Severely allergic to peanuts.", read_user_doc(self.user))

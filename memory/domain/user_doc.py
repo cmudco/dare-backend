@@ -12,7 +12,7 @@ gets crossed on an ordinary Tuesday and then it is decoration.
 import math
 import re
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from memory.constants import TOKEN_BUDGET
 
@@ -128,6 +128,45 @@ def render_user_doc(doc: Dict[str, List[str]]) -> str:
         bullets = "\n".join(f"- {line}" for line in lines)
         blocks.append(f"## {heading_for(key)}\n{bullets}")
     return "\n\n".join(blocks) + "\n"
+
+
+def merge_pinned(markdown: str, pinned: List[Tuple[str, str]]) -> str:
+    """Render the document a turn actually sees: authored lines plus the facts
+    pinned to each heading.
+
+    USER.md is a VIEW. The archive holds the truth — key, dates, supersession —
+    and pinned rows are projected into it on read, so a fact that retires
+    itself takes its profile line with it and nothing has to be edited. A
+    pinned line that also exists as an authored line is dropped from the
+    authored side, because the pinned row is the one that can be corrected.
+    """
+    if not markdown.strip() and not pinned:
+        # Nothing authored and nothing pinned is an absent profile, not an
+        # empty one — a bare "# User" heading would be injected into every
+        # prompt saying nothing.
+        return ""
+
+    doc = parse_user_doc(markdown)
+
+    lines_by_heading: Dict[str, List[str]] = {}
+    for key, text in pinned:
+        line = normalize_line(text)
+        if line:
+            lines_by_heading.setdefault(key_of(key) or "identity", []).append(line)
+
+    # Drop the authored copy first. Both would render the same sentence twice,
+    # and only the pinned one can be superseded, so the authored one is the
+    # copy that goes.
+    pinned_lines = {
+        line.lower() for lines in lines_by_heading.values() for line in lines
+    }
+    for key, lines in doc.items():
+        doc[key] = [line for line in lines if line.lower() not in pinned_lines]
+
+    for key, lines in lines_by_heading.items():
+        doc.setdefault(key, []).extend(lines)
+
+    return render_user_doc(doc)
 
 
 def normalize_user_doc(markdown: str) -> str:

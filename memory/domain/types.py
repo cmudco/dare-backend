@@ -31,6 +31,9 @@ class MemoryRow:
     sensitivity: str = "none"
     provenance: str = ""
     reinforced: int = 0
+    # USER.md heading this fact renders under, or empty. The document is a
+    # view of what is pinned, so a pinned row keeps its key and its timeline.
+    pinned_to: str = ""
     source_conversation_id: Optional[Any] = None
     source_message_id: Optional[Any] = None
 

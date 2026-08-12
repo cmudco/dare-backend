@@ -50,6 +50,21 @@ def edit_record(user, record: MemoryRecord, content: str) -> EditResult:
     before = record.text
     key = record.key
 
+    # Rewriting a safety fact into something unrelated is the one edit that
+    # loses information silently: it stays in the archive, but it stops being
+    # carried into every turn, and the turn where it matters is the one that
+    # never mentions it.
+    if record.sensitivity == Sensitivity.SAFETY and not _still_covers(record, text):
+        return EditResult(
+            ok=False,
+            reason=(
+                f'"{record.text}" is marked as a safety fact, so it travels '
+                f"with every message. Reword it however you like as long as "
+                f"it still says what to avoid — or forget it outright if it "
+                f"is no longer true."
+            ),
+        )
+
     if record.kind == MemoryKind.PROCEDURE:
         trigger, rule = parse_behavior_content(text)
         if not rule:
