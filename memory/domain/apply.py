@@ -207,9 +207,19 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
         # Rule 1. USER.md is injected into every conversation, so a line there
         # costs tokens forever. Consolidation promotes what proves durable; a
         # single turn does not get to.
+        #
+        # Consent is the right gate for facts ABOUT someone and the wrong one
+        # for instructions about how to ANSWER them. "Keep answers short" is
+        # not information to be stored pending permission — it is a request,
+        # and its whole value is that it applies to the next turn and every
+        # turn after. Sent to the archive it only arrives when a question
+        # happens to sound like it: measured on a real conversation, an
+        # instruction given twice reached 1 turn in 6.
+        instruction = decision.key == "communication"
         if (
             action == "patch_user"
             and not input.explicit
+            and not instruction
             and decision.sensitivity != Sensitivity.SAFETY
         ):
             action = "add_fact"
