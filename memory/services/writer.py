@@ -90,7 +90,12 @@ class Decision(BaseModel):
     text: Optional[str] = Field(
         description=(
             "patch_user: the bullet, one short sentence. add_fact: a short "
-            "third-person statement. add_procedure: the rule alone, as an "
+            "third-person statement — write \"the person\" or \"they\", never "
+            "their name. Every memory in this store is already about them, so "
+            "the name adds nothing and costs twice: it makes every fact match "
+            "any message that says their name, and it goes stale the day they "
+            "ask to be called something else. add_procedure: the rule alone, "
+            "as an "
             "imperative, with the trigger left out of it — 'use pnpm', not "
             "'when installing packages, use pnpm'. supersede: the new "
             "statement replacing the old one."
