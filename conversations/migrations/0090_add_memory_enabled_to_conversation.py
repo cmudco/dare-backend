@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('conversations', '0088_add_pdf_artifact_type'),
+        ('conversations', '0089_model_card_data_streams_and_reasoning_level'),
     ]
 
     operations = [
