@@ -15,8 +15,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Sequence
 
-from memory.constants import (RANK_WEIGHTS, RECENCY_HALF_LIFE_DAYS,
-                              RELEVANCE_FLOOR, SCORE_FLOOR, TOP_K)
+from memory.constants import (LEXICAL_RELEVANCE_MIN, RANK_WEIGHTS,
+                              RECENCY_HALF_LIFE_DAYS, RELEVANCE_FLOOR,
+                              SAFETY_RELEVANCE_FLOOR, SCORE_FLOOR, TOP_K,
+                              Sensitivity)
 from memory.domain.types import MemoryRow
 
 
@@ -85,6 +87,7 @@ def rank(
     now: str,
     top_k: int = TOP_K,
     floor: float = SCORE_FLOOR,
+    relevance_floor: float = RELEVANCE_FLOOR,
 ) -> RankResult:
     trace: List[str] = []
 
@@ -120,6 +123,9 @@ def rank(
                 else 0.0
             ),
             "lexical": candidate.lexical / best_lexical if best_lexical > 0 else 0.0,
+            # Kept alongside the normalised one because the gate needs an
+            # absolute reading and the score needs a relative one.
+            "lexical_raw": candidate.lexical,
             "importance": candidate.record.importance,
             "recency": _recency_score(candidate.record, now),
             "confidence": candidate.record.confidence,
@@ -144,10 +150,38 @@ def rank(
     # good is this?"; the relevance gate asks "is this even about the same
     # thing?". A row can be important, recent and certain — and still have
     # nothing to do with what was asked.
-    def relevant(item: Scored) -> bool:
-        return max(item.parts["semantic"], item.parts["lexical"]) >= RELEVANCE_FLOOR
+    #
+    # The bar depends on what forgetting would cost. A safety row clears on far
+    # weaker similarity, because "severely allergic to peanuts" scores 0.16
+    # against "book me a restaurant" — under the ordinary floor, and precisely
+    # the turn where the archive has to speak.
+    def bar(item: Scored) -> float:
+        if item.record.sensitivity == Sensitivity.SAFETY:
+            return min(relevance_floor, SAFETY_RELEVANCE_FLOOR)
+        return relevance_floor
 
-    chosen = [item for item in scored if item.score >= floor and relevant(item)][:top_k]
+    # The absolute lexical minimum only applies when meaning is also available
+    # to qualify a row. With no query embedding, words are the only signal
+    # there is, and holding them to a bar meant as a second opinion turns a
+    # degraded retrieval into no retrieval at all.
+    lexical_min = LEXICAL_RELEVANCE_MIN if query_vector is not None else 0.0
+
+    def relevant(item: Scored) -> bool:
+        lexical = (
+            item.parts["lexical"] if item.parts["lexical_raw"] >= lexical_min else 0.0
+        )
+        return max(item.parts["semantic"], lexical) >= bar(item)
+
+    passed = [item for item in scored if item.score >= floor and relevant(item)]
+    chosen = passed[:top_k]
+
+    # A safety row that qualified never loses its place to three ordinary rows
+    # that merely scored better — the top-k is a budget for relevance, and this
+    # is not a relevance decision.
+    for item in passed[top_k:]:
+        if item.record.sensitivity == Sensitivity.SAFETY:
+            chosen.append(item)
+
     for item in chosen:
         item.chosen = True
 

@@ -10,7 +10,8 @@ from typing import List, Optional, Sequence
 
 from django.test import SimpleTestCase
 
-from memory.constants import EMBED_DIMS, RELEVANCE_FLOOR, SCORE_FLOOR
+from memory.constants import (EMBED_DIMS, RELEVANCE_FLOOR,
+                              SAFETY_RELEVANCE_FLOOR, SCORE_FLOOR)
 from memory.domain.rank import Candidate, format_recall, rank, similarity
 from memory.domain.types import MemoryRow
 
@@ -336,10 +337,9 @@ class RelevanceGateTests(SimpleTestCase):
 
     def test_a_weak_but_real_connection_is_still_a_connection(self):
         # Measured: "book me somewhere nice for dinner" against a stored
-        # shellfish allergy scores about 0.16 on meaning. The gate has to sit
-        # below that — this is the exact case the whole design turns on. If
-        # this test fails, RELEVANCE_FLOOR has been raised too far and safety
-        # facts are being filtered out of the turns that need them.
+        # shellfish allergy scores about 0.16 on meaning. This is the exact
+        # case the whole design turns on. If this test fails, safety facts are
+        # being filtered out of the turns that need them most.
         result = rank(
             candidates=[
                 candidate(
@@ -359,8 +359,63 @@ class RelevanceGateTests(SimpleTestCase):
 
         self.assertEqual(len(result.chosen), 1)
         self.assertLess(
-            RELEVANCE_FLOOR, 0.16, "the gate must stay below a real weak match"
+            SAFETY_RELEVANCE_FLOOR,
+            0.16,
+            "the safety gate must stay below a real weak match",
         )
+
+    def test_an_ordinary_row_that_weak_does_not_get_in(self):
+        # Same 0.16, no safety marking: this one IS noise, and admitting it is
+        # what put a bouldering habit into a code review. The asymmetry between
+        # this test and the one above is the entire point — the bar is set by
+        # what forgetting costs, not by similarity alone.
+        result = rank(
+            candidates=[
+                candidate(
+                    rec=record(
+                        key="habit:bouldering",
+                        text="Goes bouldering on Thursdays.",
+                        importance=0.95,
+                        valid_from=NOW[:10],
+                    ),
+                    vector=blend(0, 1, 0.16),
+                )
+            ],
+            query_vector=axis(0),
+            now=NOW,
+        )
+
+        self.assertEqual(result.chosen, [])
+
+    def test_a_safety_row_never_loses_its_place_to_the_top_k(self):
+        # Three ordinary rows outscoring an allergy is not a reason to drop the
+        # allergy: top_k is a budget for relevance, and this is not a relevance
+        # decision.
+        strong = [
+            candidate(
+                rec=record(key=f"note:n{index}", text=f"Fact {index}"),
+                vector=axis(0),
+            )
+            for index in range(3)
+        ]
+        allergy = candidate(
+            rec=record(
+                key="diet_avoid:peanut",
+                text="Severely allergic to peanuts.",
+                importance=1.0,
+                sensitivity="safety",
+                valid_from=NOW[:10],
+            ),
+            vector=blend(0, 1, 0.16),
+        )
+
+        result = rank(
+            candidates=strong + [allergy], query_vector=axis(0), now=NOW, top_k=3
+        )
+
+        texts = [item.record.text for item in result.chosen]
+        self.assertIn("Severely allergic to peanuts.", texts)
+        self.assertEqual(len(texts), 4)
 
     def test_an_exact_word_match_passes_the_gate_with_no_embedding(self):
         # Lexical counts as relevance too: a certificate number or an account
@@ -378,3 +433,23 @@ class RelevanceGateTests(SimpleTestCase):
             now=NOW,
         )
         self.assertEqual(len(result.chosen), 1)
+
+    def test_the_best_lexical_hit_in_a_weak_batch_is_not_a_relevant_one(self):
+        # Lexical rank is normalised against the batch, so the best row always
+        # reads 1.0 — including when the whole batch is junk. Found live:
+        # "explain how TCP handshakes work" matched an unrelated fact on the
+        # stem "work" at ts_rank 0.015 and was normalised into a perfect
+        # relevance score. Qualification has to read the raw number.
+        result = rank(
+            candidates=[
+                candidate(
+                    rec=record(key="occupation", text="Works on pedagogy."),
+                    vector=None,
+                    lexical=0.015,
+                )
+            ],
+            query_vector=axis(0),
+            now=NOW,
+        )
+        self.assertEqual(result.chosen, [])
+        self.assertEqual(result.considered[0].parts["lexical"], 1.0)

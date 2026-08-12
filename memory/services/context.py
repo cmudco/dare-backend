@@ -16,8 +16,9 @@ the same convention every other context layer here follows.
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from memory.constants import (PROCEDURE_FLOOR, PROCEDURE_SHORTLIST_LIMIT,
-                              PROCEDURE_TOP_K, MemoryKind, MemoryState)
+from memory.constants import (PROCEDURE_FLOOR, PROCEDURE_RELEVANCE_FLOOR,
+                              PROCEDURE_SHORTLIST_LIMIT, PROCEDURE_TOP_K,
+                              MemoryKind, MemoryState)
 from memory.domain.procedural import (TaskContext, format_procedures,
                                       task_query, trigger_of)
 from memory.domain.user_doc import user_doc_lines
@@ -91,6 +92,7 @@ def read_context(user, question: str) -> ReadContext:
         shortlist_limit=PROCEDURE_SHORTLIST_LIMIT,
         query_vector=vector,
         embed_query=False,
+        relevance_floor=PROCEDURE_RELEVANCE_FLOOR,
     )
 
     procedure_block = format_procedures([item.record for item in procedures.chosen])
