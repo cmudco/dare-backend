@@ -228,6 +228,7 @@ def shortlist(
     kind: Optional[str] = None,
     limit: int = SHORTLIST_LIMIT,
     now: Optional[str] = None,
+    exclude_pinned: bool = False,
 ) -> List[Candidate]:
     """Stage one: the whole archive → ~50 candidates, indexes only.
 
@@ -235,6 +236,11 @@ def shortlist(
     ("used to", "before", "no longer"...) — and NEVER held, whatever the
     phrasing. Dropping the state filter entirely was the bug that let
     historical questions reach medical disclosures.
+
+    ``exclude_pinned`` is for the read path: a pinned fact is already in the
+    prompt, rendered into USER.md, so retrieving it again spends one of three
+    fact slots repeating something the model has read twice. The writer's own
+    retrieval leaves them in — it has to see a pinned fact to supersede it.
     """
     include_retired = bool(HISTORICAL_RE.search(query or ""))
     states = (
@@ -247,6 +253,8 @@ def shortlist(
     base = MemoryRecord.active_objects.filter(user=user, state__in=states)
     if kind:
         base = base.filter(kind=kind)
+    if exclude_pinned:
+        base = base.filter(pinned_to="")
     if not include_retired:
         # An expired fact is not current, and current questions get current
         # answers. Historical phrasing lifts this along with the state filter.
