@@ -96,12 +96,10 @@ class UserDocRoutingTests(SimpleTestCase):
             ],
         )
 
-        self.assertTrue(result.user_doc_changed)
-        self.assertIn(
-            "## Communication\n- Prefers direct explanations.\n- Prefers short answers.",
-            result.user_doc,
-        )
-        self.assertEqual(result.entries[0].action, "patch_user")
+        # Pinned to the heading it named. The document is rendered from this
+        # row rather than having the sentence copied into it.
+        self.assertEqual(result.created[0].pinned_to, "communication")
+        self.assertEqual(result.created[0].text, "Prefers short answers")
         self.assertTrue(result.entries[0].applied)
 
     def test_an_unrequested_profile_line_is_downgraded_with_the_rule_recorded(self):
@@ -145,8 +143,7 @@ class UserDocRoutingTests(SimpleTestCase):
             ],
         )
 
-        self.assertTrue(result.user_doc_changed)
-        self.assertIn("## Constraints\n- Severe peanut allergy.", result.user_doc)
+        self.assertEqual(result.created[0].pinned_to, "constraints")
         self.assertTrue(result.entries[0].applied)
 
     def test_a_safety_fact_is_pinned_even_when_filed_as_a_plain_fact(self):
@@ -168,9 +165,9 @@ class UserDocRoutingTests(SimpleTestCase):
 
         self.assertEqual(len(result.created), 1)
         self.assertEqual(result.created[0].sensitivity, "safety")
-        # Both places: searchable, and present on every turn.
-        self.assertTrue(result.user_doc_changed)
-        self.assertIn("## Constraints\n- Has a severe peanut allergy.", result.user_doc)
+        # Both places: searchable, and rendered into the profile every turn —
+        # one row, pinned, rather than the same sentence stored twice.
+        self.assertEqual(result.created[0].pinned_to, "constraints")
 
         pin = next(entry for entry in result.entries if entry.action == "patch_user")
         self.assertTrue(pin.applied)
@@ -190,8 +187,7 @@ class UserDocRoutingTests(SimpleTestCase):
             ],
         )
 
-        self.assertTrue(result.user_doc_changed)
-        self.assertIn("- Anaphylactic to shellfish.", result.user_doc)
+        self.assertEqual(result.created[0].pinned_to, "constraints")
 
     def test_a_non_safety_fact_is_never_pinned_to_user_md(self):
         result = apply_decisions(
@@ -268,7 +264,7 @@ class PrivacyGateTests(SimpleTestCase):
         )
 
         self.assertEqual(result.created[0].state, "active")
-        self.assertTrue(result.user_doc_changed)
+        self.assertEqual(result.created[0].pinned_to, "constraints")
 
     def test_an_ordinary_fact_is_unaffected_by_the_gate(self):
         result = apply_decisions(
@@ -536,7 +532,11 @@ class SupersedeTests(SimpleTestCase):
 
 
 class BudgetTests(SimpleTestCase):
-    def test_the_budget_refuses_a_profile_write_with_a_reason(self):
+    def test_a_full_document_no_longer_refuses_the_write(self):
+        # The budget moved. A pinned fact is a row, not a line of markdown, so
+        # there is nothing to overflow at write time — the ceiling is applied
+        # when the profile is rendered, where it can drop the least important
+        # line instead of losing the newest one. See ProfileRenderTests.
         result = apply_decisions(
             make_input(explicit=True, user_doc=over_budget_doc()),
             [
@@ -549,9 +549,8 @@ class BudgetTests(SimpleTestCase):
             ],
         )
 
-        self.assertFalse(result.user_doc_changed)
-        self.assertFalse(result.entries[0].applied)
-        self.assertIn("ceiling", result.entries[0].note or "")
+        self.assertTrue(result.entries[0].applied)
+        self.assertEqual(result.created[0].pinned_to, "communication")
 
 
 class DowngradedKeyTests(SimpleTestCase):
@@ -620,8 +619,7 @@ class DowngradedKeyTests(SimpleTestCase):
             ],
         )
 
-        self.assertTrue(result.user_doc_changed)
-        self.assertIn("## Current focus\n- Building a memory system.", result.user_doc)
+        self.assertEqual(result.created[0].pinned_to, "current-focus")
 
     def test_a_downgraded_line_keeps_its_topic_key_so_it_can_be_retired(self):
         # Found at three thousand rows: "I moved to Lahore" was proposed as a
@@ -860,10 +858,11 @@ class CommunicationInstructionTests(SimpleTestCase):
             ],
         )
 
-        self.assertIn("Prefers short answers.", result.user_doc)
-        self.assertTrue(result.user_doc_changed)
-        self.assertEqual(result.entries[0].action, "patch_user")
-        self.assertTrue(result.entries[0].applied)
+        # Pinned to Communication as a style fact, not copied into markdown:
+        # it keeps its key, so restating it later updates the same line.
+        self.assertEqual(result.created[0].pinned_to, "communication")
+        self.assertEqual(result.created[0].key, "style:length")
+        self.assertEqual(result.entries[0].action, "add_fact")
 
     def test_a_life_fact_still_needs_consent(self):
         result = apply_decisions(
@@ -906,8 +905,8 @@ class IdentityExemptionTests(SimpleTestCase):
             ],
         )
 
-        self.assertIn("Goes by Farhat", result.user_doc)
-        self.assertEqual(result.entries[0].action, "patch_user")
+        self.assertEqual(result.created[0].pinned_to, "identity")
+        self.assertEqual(result.created[0].key, "name")
 
     def test_a_life_fact_under_the_same_heading_still_goes_to_the_archive(self):
         result = apply_decisions(

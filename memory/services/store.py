@@ -27,10 +27,13 @@ from memory.constants import (
     SHORTLIST_LEXICAL_SHARE,
     SHORTLIST_LIMIT,
     SHORTLIST_RECENT_SHARE,
+    TOKEN_BUDGET,
     MemoryState,
+    Sensitivity,
 )
 from memory.domain.rank import Candidate
 from memory.domain.types import MemoryRow
+from memory.domain.user_doc import estimate_tokens, merge_pinned
 from memory.models import MemoryRecord, UserMemoryDocument
 
 # Words too common to narrow a shortlist. Mirrors the prototype's query-side
@@ -122,6 +125,7 @@ def row_from_record(record: MemoryRecord) -> MemoryRow:
         sensitivity=record.sensitivity,
         provenance=record.provenance,
         reinforced=record.reinforced,
+        pinned_to=record.pinned_to,
         source_conversation_id=record.source_conversation_id,
         source_message_id=record.source_message_id,
     )
@@ -335,7 +339,39 @@ def _lexical_fallback(base, terms: List[str], limit: int):
     return records, scores
 
 
+def pinned_lines(user) -> List[tuple]:
+    """(heading, text) for every active fact pinned into the profile.
+
+    Ordered by importance so the budget, when it bites, drops the least
+    consequential line rather than an arbitrary one. Safety is never dropped:
+    the whole point of pinning an allergy is that it does not wait to be
+    retrieved, and a token ceiling is the cheaper thing to break.
+    """
+    rows = (
+        MemoryRecord.active_objects.filter(user=user, state=MemoryState.ACTIVE)
+        .exclude(pinned_to="")
+        .order_by("-importance", "created_at")
+    )
+
+    kept: List[tuple] = []
+    budget = 0
+    for row in rows:
+        cost = estimate_tokens(row.text)
+        if row.sensitivity != Sensitivity.SAFETY and budget + cost > TOKEN_BUDGET:
+            continue
+        kept.append((row.pinned_to, row.text))
+        budget += cost
+    return kept
+
+
 def read_user_doc(user) -> str:
+    """The profile as a turn sees it: authored lines plus whatever is pinned."""
+    document = UserMemoryDocument.objects.filter(user=user).first()
+    return merge_pinned(document.content if document else "", pinned_lines(user))
+
+
+def read_authored_doc(user) -> str:
+    """Only the hand-written half, for editing and for the document endpoint."""
     document = UserMemoryDocument.objects.filter(user=user).first()
     return document.content if document else ""
 

@@ -27,12 +27,13 @@ from memory.services.items import (
     DOC_ID_PREFIX,
     doc_line_id,
     listed_records,
+    pinned_records,
     profile_items,
     record_item,
     row_item,
 )
 from memory.services.retrieval import retrieve, summarize_recall
-from memory.services.store import tokenize
+from memory.services.store import read_user_doc, tokenize
 
 from .serializers import (
     ClearResponseSerializer,
@@ -70,13 +71,15 @@ class MemoryViewSet(viewsets.ViewSet):
                 ).data
             )
 
-        items = profile_items(self._document())
+        items = profile_items(self._document(), pinned_records(self.request.user))
         items.extend(record_item(record) for record in listed_records(request.user))
         return Response(MemoryItemSerializer(items, many=True).data)
 
     def retrieve(self, request, pk=None):
         if pk and pk.startswith(DOC_ID_PREFIX):
-            for item in profile_items(self._document()):
+            for item in profile_items(
+                self._document(), pinned_records(self.request.user)
+            ):
                 if item["id"] == pk:
                     return Response(MemoryItemSerializer(item).data)
             return Response(status=status.HTTP_404_NOT_FOUND)
@@ -108,7 +111,9 @@ class MemoryViewSet(viewsets.ViewSet):
                 return Response(
                     {"detail": result.reason}, status=status.HTTP_400_BAD_REQUEST
                 )
-            for item in profile_items(self._document()):
+            for item in profile_items(
+                self._document(), pinned_records(self.request.user)
+            ):
                 if item["content"] == normalize_line(str(content)):
                     return Response(MemoryItemSerializer(item).data)
             return Response(status=status.HTTP_204_NO_CONTENT)
@@ -195,7 +200,9 @@ class MemoryViewSet(viewsets.ViewSet):
         # USER.md lines never carry embeddings, so they join by token overlap.
         query_terms = set(tokenize(query))
         if query_terms:
-            for item in profile_items(self._document()):
+            for item in profile_items(
+                self._document(), pinned_records(self.request.user)
+            ):
                 line_terms = set(tokenize(item["content"]))
                 overlap = len(query_terms & line_terms)
                 if overlap:
@@ -246,7 +253,11 @@ class MemoryViewSet(viewsets.ViewSet):
         """
         if request.method.lower() == "get":
             document = self._document()
-            markdown = document.content if document else ""
+            # The rendered profile, not the authored half: this is what a turn
+            # actually carries, so it is what the budget has to be measured
+            # against. A PUT still edits only the authored lines — pinned
+            # facts are corrected by editing the fact.
+            markdown = read_user_doc(request.user)
             updated = document.updated_at.isoformat() if document else None
             return Response(
                 {

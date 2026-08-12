@@ -39,16 +39,36 @@ def _iso(value) -> Optional[str]:
     return value.isoformat() if value is not None else None
 
 
-def profile_items(document: Optional[UserMemoryDocument]) -> List[Dict[str, Any]]:
-    """USER.md bullets as compat items, in the document's render order."""
-    if document is None or not document.content.strip():
-        return []
+def profile_items(
+    document: Optional[UserMemoryDocument],
+    pinned: Optional[List[MemoryRecord]] = None,
+) -> List[Dict[str, Any]]:
+    """The profile as items: pinned facts first, then hand-authored lines.
 
+    A pinned fact keeps its real id, so editing or forgetting a profile line
+    goes through the same record path as any other memory — which is what
+    makes a profile line correctable at all. Authored lines have no row behind
+    them and keep the synthetic content-hash id.
+    """
     items: List[Dict[str, Any]] = []
+
+    for record in pinned or []:
+        items.append(record_item(record))
+
+    if document is None or not document.content.strip():
+        return items
+
     created = _iso(document.created_at)
     updated = _iso(document.updated_at)
+    pinned_text = {(record.text or "").strip().lower() for record in pinned or []}
     for key, lines in parse_user_doc(document.content).items():
         for line in lines:
+            # The pinned row already represents this sentence, and it is the
+            # copy that can be superseded.
+            if line.strip().rstrip(".").lower() in {
+                text.rstrip(".") for text in pinned_text
+            }:
+                continue
             items.append(
                 {
                     "id": doc_line_id(key, line),
@@ -101,8 +121,19 @@ def parse_behavior_content(content: str) -> Tuple[Optional[str], str]:
 
 
 def record_item(record: MemoryRecord, score: Optional[float] = None) -> Dict[str, Any]:
-    """One archive row as a compat item."""
-    if record.kind == "procedure":
+    """One archive row as a compat item.
+
+    A pinned row reads as a profile line wherever it appears — the list, a
+    search hit, the response to an edit. Reporting it as knowledge in one
+    place and profile in another would move the card between layers the
+    moment someone touched it.
+    """
+    if record.pinned_to:
+        memory_type = PROFILE
+        categories = [record.pinned_to] + [
+            part for part in record.key.split(":") if part
+        ]
+    elif record.kind == "procedure":
         memory_type = BEHAVIOR
         categories = [behavior_tag(record.key)]
     else:
@@ -165,6 +196,16 @@ def row_item(row, score: Optional[float] = None) -> Dict[str, Any]:
     return item
 
 
+def pinned_records(user) -> List[MemoryRecord]:
+    """Active facts pinned into the profile, in the order they render."""
+    return list(
+        MemoryRecord.visible(user)
+        .filter(state=MemoryState.ACTIVE)
+        .exclude(pinned_to="")
+        .order_by("-importance", "created_at")
+    )
+
+
 def listed_records(user, include_retired: bool = False) -> List[MemoryRecord]:
     """Archive rows the list shows: active and held, newest first.
 
@@ -174,11 +215,17 @@ def listed_records(user, include_retired: bool = False) -> List[MemoryRecord]:
     view, where being past IS the subject and the supersession is the point.
     """
     states = [MemoryState.ACTIVE, MemoryState.HELD]
+    rows = MemoryRecord.visible(user)
     if include_retired:
         states = [MemoryState.SUPERSEDED]
+    else:
+        # An ACTIVE pinned fact is shown as a profile line, so listing it here
+        # too would put one memory on the page twice under two layers. A
+        # RETIRED one is not shown anywhere else — the archive is the only
+        # place a replaced profile line can still be seen.
+        rows = rows.filter(pinned_to="")
     return list(
-        MemoryRecord.visible(user)
-        .filter(state__in=states)
+        rows.filter(state__in=states)
         .select_related("superseded_by")
         .order_by("-created_at")
     )

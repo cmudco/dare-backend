@@ -13,6 +13,7 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 from memory.models import MemoryLedgerEntry, MemoryRecord, UserMemoryDocument
+from memory.services.edit import edit_record
 
 DOC = """# User
 
@@ -204,3 +205,47 @@ class EditProfileLineTests(EditTestCase):
         )
         self.assertEqual(response.status_code, 400)
         self.assertIn("ceiling", response.json()["detail"])
+
+
+class PinnedSafetyEditTests(TestCase):
+    """A pinned safety fact can be reworded, not repurposed.
+
+    Under the projection model a profile line IS its record, so this guard
+    lives on the record edit. Found live on the old markdown path: editing the
+    Constraints line replaced a peanut allergy with an unrelated food
+    preference, and nothing looked broken because the fact survived in the
+    archive — it had simply stopped being carried into every turn.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = get_user_model().objects.create_user(
+            email="pinned-safety@example.com", password="x"
+        )
+
+    def record(self):
+        return MemoryRecord.objects.create(
+            user=self.user,
+            kind="fact",
+            key="diet_avoid:peanut",
+            text="Severely allergic to peanuts.",
+            sensitivity="safety",
+            pinned_to="constraints",
+            importance=1.0,
+        )
+
+    def test_rewording_is_allowed(self):
+        record = self.record()
+        result = edit_record(self.user, record, "No peanuts, not even traces.")
+        self.assertTrue(result.ok)
+        record.refresh_from_db()
+        self.assertEqual(record.text, "No peanuts, not even traces.")
+        self.assertEqual(record.pinned_to, "constraints")
+
+    def test_dropping_the_subject_is_refused(self):
+        record = self.record()
+        result = edit_record(self.user, record, "Avoids desi food.")
+        self.assertFalse(result.ok)
+        self.assertIn("safety fact", result.reason)
+        record.refresh_from_db()
+        self.assertEqual(record.text, "Severely allergic to peanuts.")

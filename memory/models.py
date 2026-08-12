@@ -141,6 +141,19 @@ class MemoryRecord(BaseModel):
             "durability signal there is; consolidation promotes on it."
         ),
     )
+    pinned_to = models.CharField(
+        max_length=40,
+        blank=True,
+        default="",
+        help_text=_(
+            "USER.md heading this fact is shown under, or empty. USER.md is a "
+            "VIEW of the facts pinned into it, never a second copy: the row "
+            "keeps the key, the dates and the supersession, and the document "
+            "renders from whatever is pinned. So a pinned fact still retires "
+            "itself when a newer one arrives, and the profile follows without "
+            "anyone editing markdown."
+        ),
+    )
     # Storage plus stage-2 scoring only: stage 1 narrows by SQL indexes, then
     # ~50 vectors are scored in Python. No ANN index needed at per-user scale;
     # adding one later is a single additive CREATE INDEX.
