@@ -19,11 +19,21 @@ system you cannot audit is just a text file that grows.
 import re
 from typing import List, Optional
 
-from memory.constants import (ADDRESSING_HEADINGS, NEVER_EXPIRES, MemoryKind,
-                              MemoryState, Sensitivity)
+from memory.constants import (
+    ADDRESSING_HEADINGS,
+    NEVER_EXPIRES,
+    MemoryKind,
+    MemoryState,
+    Sensitivity,
+)
 from memory.domain.keys import downgraded_key
-from memory.domain.types import (ApplyInput, ApplyResult, LedgerDraft,
-                                 MemoryRow, WriterDecision)
+from memory.domain.types import (
+    ApplyInput,
+    ApplyResult,
+    LedgerDraft,
+    MemoryRow,
+    WriterDecision,
+)
 from memory.domain.user_doc import heading_for, patch_user_doc
 
 _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")

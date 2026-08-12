@@ -31,17 +31,26 @@ from typing import List, Optional
 from django.db import connection, transaction
 from django.db.models import F
 
-from memory.constants import (WRITER_RETRIEVE_FLOOR,
-                              WRITER_RETRIEVE_SHORTLIST_LIMIT,
-                              WRITER_RETRIEVE_TOP_K, MemoryKind, MemoryState)
+from memory.constants import (
+    WRITER_RETRIEVE_FLOOR,
+    WRITER_RETRIEVE_SHORTLIST_LIMIT,
+    WRITER_RETRIEVE_TOP_K,
+    MemoryKind,
+    MemoryState,
+)
 from memory.domain.apply import apply_decisions
 from memory.domain.types import ApplyInput, ApplyResult, LedgerDraft, MemoryRow
 from memory.models import MemoryLedgerEntry, MemoryRecord
 from memory.services.embeddings import embed_texts
 from memory.services.retrieval import retrieve
-from memory.services.store import (active_keys, find_by_ids, find_by_keys,
-                                   parse_iso_date, read_user_doc,
-                                   write_user_doc)
+from memory.services.store import (
+    active_keys,
+    find_by_ids,
+    find_by_keys,
+    parse_iso_date,
+    read_user_doc,
+    write_user_doc,
+)
 from memory.services.writer import propose_decisions
 
 logger = logging.getLogger(__name__)

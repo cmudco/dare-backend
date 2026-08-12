@@ -24,6 +24,7 @@ from django.db.models import Q
 from conversations.constants import SenderType
 from conversations.models import Message
 from memory.constants import WriterAction
+from memory.models import MemoryLedgerEntry
 from memory.services.store import tokenize
 
 logger = logging.getLogger(__name__)
@@ -154,8 +155,6 @@ def _render_hit(hit: Dict[str, Any]) -> str:
 
 
 def _log_search(user, query: str, found: int) -> None:
-    from memory.models import MemoryLedgerEntry
-
     try:
         MemoryLedgerEntry.objects.create(
             user=user,
