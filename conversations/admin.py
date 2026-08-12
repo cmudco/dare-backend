@@ -17,7 +17,7 @@ from core.helpers.admin_utils import (
     render_tooltip_span,
     truncate_text,
 )
-from .models import LLM, Conversation, Message, ModelGroup, ProviderAPIKey, Feedback, ModelCardData, PublicFeedbackSourceCluster, PublicFeedbackSource
+from .models import LLM, Conversation, Message, ModelGroup, ProviderAPIKey, Feedback, ModelCardData, PublicFeedbackSourceCluster, PublicFeedbackSource, Benchmark
 from .proxy_models import MessageWithFeedback
 
 User = get_user_model()
@@ -59,6 +59,7 @@ class LLMAdmin(admin.ModelAdmin):
         ("Capabilities", {
             "fields": (
                 "is_reasoning",
+                "reasoning_level",
                 "supports_vision",
                 "supports_temperature",
                 "supports_effort",
@@ -470,3 +471,12 @@ class PublicFeedbackSourceAdmin(admin.ModelAdmin):
     list_filter = ['source_type', 'cluster__model_card']
     search_fields = ['title', 'url', 'snippet']
     readonly_fields = ['created_at']
+
+
+@admin.register(Benchmark)
+class BenchmarkAdmin(admin.ModelAdmin):
+    list_display = ('name', 'slug', 'display_name', 'category', 'scale', 'higher_is_better', 'updated_at')
+    list_filter = ('category', 'higher_is_better', 'scale')
+    search_fields = ('name', 'slug', 'display_name', 'description')
+    readonly_fields = ('created_at', 'updated_at')
+    prepopulated_fields = {'slug': ('name',)}
