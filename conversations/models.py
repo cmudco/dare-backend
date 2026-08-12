@@ -1006,6 +1006,17 @@ class Message(BaseModel):
         blank=True,
         help_text="Memory items used as context for this message. List of {content, memory_type, categories}.",
     )
+    memory_write_data = models.JSONField(
+        null=True,
+        blank=True,
+        help_text=(
+            "What the memory writer decided after this turn: counts plus every "
+            "ledger entry including refusals. Written by the background job "
+            "after the reply is finished, so it arrives later than the rest of "
+            "the message — and is stored rather than only pushed, so the panel "
+            "survives a reload."
+        ),
+    )
     retrieval_trace = models.JSONField(
         null=True,
         blank=True,

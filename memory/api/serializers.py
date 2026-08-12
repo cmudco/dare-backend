@@ -17,6 +17,9 @@ class MemoryItemSerializer(serializers.Serializer):
     created_at = serializers.CharField(read_only=True, required=False, allow_null=True)
     updated_at = serializers.CharField(read_only=True, required=False, allow_null=True)
     score = serializers.FloatField(read_only=True, required=False)
+    state = serializers.CharField(read_only=True, required=False, allow_null=True)
+    valid_until = serializers.CharField(read_only=True, required=False, allow_null=True)
+    replaced_by = serializers.CharField(read_only=True, required=False, allow_null=True)
 
 
 class MemorySearchRequestSerializer(serializers.Serializer):

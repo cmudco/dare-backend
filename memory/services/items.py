@@ -113,6 +113,9 @@ def record_item(record: MemoryRecord, score: Optional[float] = None) -> Dict[str
             # say so without a dedicated field in the round-1 contract.
             categories.append("held")
 
+    if record.state == MemoryState.SUPERSEDED:
+        categories.append("no-longer-current")
+
     item: Dict[str, Any] = {
         "id": str(record.id),
         "memory_type": memory_type,
@@ -124,6 +127,13 @@ def record_item(record: MemoryRecord, score: Optional[float] = None) -> Dict[str
         "categories": categories,
         "created_at": _iso(record.created_at),
         "updated_at": _iso(record.updated_at),
+        "state": record.state,
+        # When it stopped being true, which is a different date from either
+        # timestamp above: those say when we found out.
+        "valid_until": record.valid_until.isoformat() if record.valid_until else None,
+        # What took its place. A retired fact with no visible successor reads
+        # as data loss rather than as a correction.
+        "replaced_by": (record.superseded_by.text if record.superseded_by_id else None),
     }
     if score is not None:
         item["score"] = round(min(1.0, max(0.0, score)), 4)
@@ -155,14 +165,20 @@ def row_item(row, score: Optional[float] = None) -> Dict[str, Any]:
     return item
 
 
-def listed_records(user) -> List[MemoryRecord]:
-    """Archive rows the compat list shows: active and held, newest first.
+def listed_records(user, include_retired: bool = False) -> List[MemoryRecord]:
+    """Archive rows the list shows: active and held, newest first.
 
-    Superseded rows are deliberately absent — in a flat list they read as
-    contradictory duplicates. They surface through the v2 ledger instead.
+    Retired rows are excluded by default — mixed into a flat list they read as
+    contradictory duplicates, one saying Pittsburgh and one saying Boston with
+    nothing to say which is current. Asked for explicitly they are their own
+    view, where being past IS the subject and the supersession is the point.
     """
+    states = [MemoryState.ACTIVE, MemoryState.HELD]
+    if include_retired:
+        states = [MemoryState.SUPERSEDED]
     return list(
         MemoryRecord.visible(user)
-        .filter(state__in=[MemoryState.ACTIVE, MemoryState.HELD])
+        .filter(state__in=states)
+        .select_related("superseded_by")
         .order_by("-created_at")
     )
