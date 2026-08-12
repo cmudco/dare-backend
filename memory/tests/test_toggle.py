@@ -11,6 +11,7 @@ toggle reset to off on the next page load, with the pipeline quietly going
 with it.
 """
 
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -18,6 +19,7 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 from conversations.models import Conversation
+from core.services.dtos.builder import LLMQueryRequestBuilder
 
 
 class MemoryToggleTests(TestCase):
@@ -94,3 +96,51 @@ class MemoryGateTests(TestCase):
 
         self.assertFalse(ContextConfig().use_memory)
         self.assertTrue(ContextConfig(use_memory=True).use_memory)
+
+
+class EpisodicToolGateTests(TestCase):
+    """The transcript-search tool follows the memory toggle and nothing else.
+
+    It used to be an independent checkbox in the tool drawer, which meant
+    memory could be off while the model still searched the user's past
+    conversations word for word — the one thing the toggle's own copy promises
+    it will not do.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = get_user_model().objects.create_user(
+            email="episodic-tool@example.com", password="x"
+        )
+        cls.conversation = Conversation.active_objects.create(
+            user=cls.user, conversation_id="episodic-conv", title="episodic"
+        )
+
+    def slugs(self, use_memory, selected=()):
+        request = LLMQueryRequestBuilder.from_message_data(
+            message="what did we decide about the database?",
+            user=self.user,
+            message_data={
+                "use_memory": use_memory,
+                "dare_tool_slugs": list(selected),
+            },
+            conversation=self.conversation,
+            llm=SimpleNamespace(provider="claude", name="test-model"),
+        )
+        return request.dare_tool_slugs
+
+    def test_memory_on_adds_the_tool_without_anyone_choosing_it(self):
+        self.assertIn("search_sessions", self.slugs(use_memory=True))
+
+    def test_memory_off_leaves_it_out(self):
+        self.assertNotIn("search_sessions", self.slugs(use_memory=False))
+
+    def test_memory_off_strips_it_even_when_it_was_already_selected(self):
+        # A conversation saved before the tool moved behind the toggle can
+        # still carry the slug. Off has to mean off.
+        slugs = self.slugs(use_memory=False, selected=("search_sessions",))
+        self.assertNotIn("search_sessions", slugs)
+
+    def test_other_selected_tools_are_untouched(self):
+        slugs = self.slugs(use_memory=False, selected=("create_docx",))
+        self.assertIn("create_docx", slugs)
