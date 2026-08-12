@@ -19,21 +19,11 @@ system you cannot audit is just a text file that grows.
 import re
 from typing import List, Optional
 
-from memory.constants import (
-    ADDRESSING_HEADINGS,
-    NEVER_EXPIRES,
-    MemoryKind,
-    MemoryState,
-    Sensitivity,
-)
+from memory.constants import (ADDRESSING_HEADINGS, NEVER_EXPIRES, MemoryKind,
+                              MemoryState, Sensitivity)
 from memory.domain.keys import downgraded_key
-from memory.domain.types import (
-    ApplyInput,
-    ApplyResult,
-    LedgerDraft,
-    MemoryRow,
-    WriterDecision,
-)
+from memory.domain.types import (ApplyInput, ApplyResult, LedgerDraft,
+                                 MemoryRow, WriterDecision)
 from memory.domain.user_doc import heading_for, patch_user_doc
 
 _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -146,6 +136,7 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
             provenance=input.user_message[:400],
             reinforced=0,
             pinned_to=pinned_to,
+            applies_when=(decision.applies_when or "")[:300],
         )
 
     def file_row(row: MemoryRow) -> None:
@@ -210,6 +201,15 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
         action = decision.action
         key = decision.key
         pinned_to = ""
+
+        # Wanting a place in the profile is a property of the CONTENT, not of
+        # which action the writer happened to choose. The same sentence came
+        # back as patch_user on one run and add_fact on the next, and only the
+        # first was ever pinned — so a fact that asks to be pinned is routed
+        # through exactly the same gate a profile line faces.
+        if action == "add_fact" and decision.pin_to_profile:
+            action = "patch_user"
+            key = decision.profile_key or "identity"
 
         # Rule 1. USER.md is injected into every conversation, so a line there
         # costs tokens forever. Consolidation promotes what proves durable; a

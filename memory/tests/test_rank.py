@@ -10,12 +10,8 @@ from typing import List, Optional, Sequence
 
 from django.test import SimpleTestCase
 
-from memory.constants import (
-    EMBED_DIMS,
-    RELEVANCE_FLOOR,
-    SAFETY_RELEVANCE_FLOOR,
-    SCORE_FLOOR,
-)
+from memory.constants import (EMBED_DIMS, RELEVANCE_FLOOR,
+                              SAFETY_RELEVANCE_FLOOR, SCORE_FLOOR)
 from memory.domain.rank import Candidate, format_recall, rank, similarity
 from memory.domain.types import MemoryRow
 

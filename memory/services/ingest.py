@@ -31,25 +31,17 @@ from typing import List, Optional
 from django.db import connection, transaction
 from django.db.models import F
 
-from memory.constants import (
-    WRITER_RETRIEVE_FLOOR,
-    WRITER_RETRIEVE_SHORTLIST_LIMIT,
-    WRITER_RETRIEVE_TOP_K,
-    MemoryState,
-)
+from memory.constants import (WRITER_RETRIEVE_FLOOR,
+                              WRITER_RETRIEVE_SHORTLIST_LIMIT,
+                              WRITER_RETRIEVE_TOP_K, MemoryKind, MemoryState)
 from memory.domain.apply import apply_decisions
 from memory.domain.types import ApplyInput, ApplyResult, LedgerDraft, MemoryRow
 from memory.models import MemoryLedgerEntry, MemoryRecord
 from memory.services.embeddings import embed_texts
 from memory.services.retrieval import retrieve
-from memory.services.store import (
-    active_keys,
-    find_by_ids,
-    find_by_keys,
-    parse_iso_date,
-    read_user_doc,
-    write_user_doc,
-)
+from memory.services.store import (active_keys, find_by_ids, find_by_keys,
+                                   parse_iso_date, read_user_doc,
+                                   write_user_doc)
 from memory.services.writer import propose_decisions
 
 logger = logging.getLogger(__name__)
@@ -142,7 +134,11 @@ def ingest_turn(
     # Embed at write time, never at read time. This is the expensive path
     # already — it runs after the reply was delivered — so the cost lands
     # where nobody is waiting, and retrieval never embeds a stored fact.
-    vectors = embed_texts([f"{row.key} {row.text}" for row in result.created])
+    # A rule is embedded by the situations it fires in, a fact by what it
+    # says. Measured: the terse form of a code-review rule scored 0.17 against
+    # "here's my function, take a look" and lost to an unrelated SQL rule;
+    # described properly it scores 0.35 and wins.
+    vectors = embed_texts([_embedding_text(row) for row in result.created])
 
     _persist(user, conversation, user_message, archive, result, vectors)
 
@@ -160,6 +156,12 @@ def ingest_turn(
         decisions=len(decisions),
         trace=recall.trace,
     )
+
+
+def _embedding_text(row: MemoryRow) -> str:
+    if row.kind == MemoryKind.PROCEDURE and row.applies_when:
+        return f"{row.applies_when} {row.text}"
+    return f"{row.key} {row.text}"
 
 
 def _skip(reason: str) -> IngestReport:
@@ -207,6 +209,7 @@ def _persist(
                 provenance=row.provenance,
                 reinforced=row.reinforced,
                 pinned_to=row.pinned_to,
+                applies_when=row.applies_when,
                 embedding=vector if store_vectors else None,
             )
 

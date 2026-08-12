@@ -79,9 +79,8 @@ class MemoryGateTests(TestCase):
         # MessageValidationService → ContextConfig.use_memory, which is what
         # the read gate (build_standard_messages) and the write gate
         # (MessageCoordinator's writer enqueue) both branch on.
-        from conversations.services.message_validation_service import (
-            MessageValidationService,
-        )
+        from conversations.services.message_validation_service import \
+            MessageValidationService
 
         parsed_on = MessageValidationService.validate_and_parse(
             {"message": "hi", "use_memory": True}

@@ -11,7 +11,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
-from memory.constants import RELEVANCE_FLOOR, SCORE_FLOOR, SHORTLIST_LIMIT, TOP_K
+from memory.constants import (RELEVANCE_FLOOR, SCORE_FLOOR, SHORTLIST_LIMIT,
+                              TOP_K)
 from memory.domain.rank import RankResult, Scored, format_recall, rank
 from memory.services.embeddings import embed_one
 from memory.services.store import shortlist

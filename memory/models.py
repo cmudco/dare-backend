@@ -23,13 +23,8 @@ from pgvector.django import VectorField
 
 from common.managers import ActiveObjectsManager
 from common.models import BaseModel
-from memory.constants import (
-    EMBED_DIMS,
-    MemoryKind,
-    MemoryState,
-    Sensitivity,
-    WriterAction,
-)
+from memory.constants import (EMBED_DIMS, MemoryKind, MemoryState, Sensitivity,
+                              WriterAction)
 
 
 class MemoryRecord(BaseModel):
@@ -139,6 +134,19 @@ class MemoryRecord(BaseModel):
         help_text=_(
             "How many times the person restated it verbatim — the only "
             "durability signal there is; consolidation promotes on it."
+        ),
+    )
+    applies_when = models.CharField(
+        max_length=300,
+        blank=True,
+        default="",
+        help_text=_(
+            "For a rule: the situations it fires in, written out. This is what "
+            "the rule is embedded as, because a trigger key plus a four-word "
+            "imperative has almost no semantic surface — measured, "
+            "'when:reviewing-code Be blunt' scored 0.17 against 'here is my "
+            "function, take a look' and lost to an unrelated SQL rule at 0.28. "
+            "Described properly the same rule scores 0.35 and wins."
         ),
     )
     pinned_to = models.CharField(
