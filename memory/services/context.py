@@ -89,6 +89,11 @@ def read_context(user, question: str) -> ReadContext:
         kind=MemoryKind.FACT,
         query_vector=vector,
         embed_query=False,
+        # Pinned facts are already above, inside USER.md. Retrieving them
+        # again spent a fact slot restating something the model had just
+        # read — and the panel showed the same sentence twice, once as
+        # profile and once as knowledge.
+        exclude_pinned=True,
     )
 
     task = TaskContext(message=question)

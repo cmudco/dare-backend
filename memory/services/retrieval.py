@@ -39,6 +39,7 @@ def retrieve(
     query_vector: Optional[List[float]] = None,
     embed_query: bool = True,
     relevance_floor: float = RELEVANCE_FLOOR,
+    exclude_pinned: bool = False,
 ) -> Recall:
     """Run the funnel for one query.
 
@@ -58,7 +59,14 @@ def retrieve(
 
     moment = now or datetime.now(timezone.utc).isoformat()
 
-    candidates = shortlist(user, query, kind=kind, limit=shortlist_limit, now=moment)
+    candidates = shortlist(
+        user,
+        query,
+        kind=kind,
+        limit=shortlist_limit,
+        now=moment,
+        exclude_pinned=exclude_pinned,
+    )
     if query_vector is None and embed_query:
         query_vector = embed_one(query)
     vector = query_vector
