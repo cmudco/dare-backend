@@ -18,7 +18,8 @@ from typing import Optional
 
 from django.db import connection, transaction
 
-from memory.constants import TOKEN_BUDGET, MemoryKind, WriterAction
+from memory.constants import (TOKEN_BUDGET, MemoryKind, Sensitivity,
+                              WriterAction)
 from memory.domain.keys import procedure_key
 from memory.domain.user_doc import (estimate_tokens, normalize_line,
                                     parse_user_doc, render_user_doc)
@@ -103,6 +104,36 @@ def edit_record(user, record: MemoryRecord, content: str) -> EditResult:
     return EditResult(ok=True)
 
 
+def _safety_pin_for(user, line: str) -> Optional[MemoryRecord]:
+    """The active safety record this USER.md line was pinned from, if any.
+
+    The gate writes a safety fact's text into Constraints verbatim, so an exact
+    match is the link — USER.md itself carries no per-line metadata.
+    """
+    return (
+        MemoryRecord.usable(user)
+        .filter(kind=MemoryKind.FACT, sensitivity=Sensitivity.SAFETY, text=line)
+        .first()
+    )
+
+
+def _still_covers(record: MemoryRecord, text: str) -> bool:
+    """Whether a rewritten line still names what the safety fact is about.
+
+    The subject comes from the qualified key (``diet_avoid:peanut`` → peanut),
+    which is the one token the rewrite must keep. Rewording is fine; dropping
+    the subject is not.
+    """
+    qualifier = record.key.split(":")[-1] if ":" in record.key else ""
+    subjects = [word for word in qualifier.replace("-", " ").split() if len(word) > 2]
+    if not subjects:
+        # Nothing reliable to check for, so fall back to the strict reading:
+        # only an edit that keeps the original wording is safe.
+        return record.text.lower() in text.lower()
+    lowered = text.lower()
+    return any(subject in lowered for subject in subjects)
+
+
 def edit_doc_line(user, item_id: str, content: str) -> EditResult:
     """Rewrite one USER.md bullet, keeping it under the budget.
 
@@ -134,6 +165,23 @@ def edit_doc_line(user, item_id: str, content: str) -> EditResult:
                 for other in other_lines
             ):
                 return EditResult(ok=False, reason="USER.md already says this.")
+
+            # Rewriting a safety line into something unrelated is the one edit
+            # that loses information silently: the fact stays in the archive,
+            # but it stops being carried into every turn, and the turn where it
+            # matters is the one that never mentions it.
+            pinned = _safety_pin_for(user, existing)
+            if pinned is not None and not _still_covers(pinned, line):
+                return EditResult(
+                    ok=False,
+                    reason=(
+                        f'This line is pinned here because "{pinned.text}" is '
+                        f"marked as a safety fact, so it travels with every "
+                        f"message. Reword it however you like as long as it "
+                        f"still says what to avoid — or delete the underlying "
+                        f"memory first if it is no longer true."
+                    ),
+                )
 
             lines[index] = line
             rendered = render_user_doc(doc)
