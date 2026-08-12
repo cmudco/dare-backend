@@ -33,6 +33,10 @@ ARTIFACT_TOOL_SLUGS = frozenset(
 )
 ARTIFACT_MIN_MAX_TOKENS = 8000
 
+# Tools that belong to the memory feature and are switched by its toggle
+# rather than chosen from the tool drawer.
+MEMORY_TOOL_SLUGS = frozenset({"search_sessions"})
+
 
 class LLMQueryRequestBuilder:
     """Builder pattern for constructing LLMQueryRequest from dictionaries.
@@ -197,6 +201,16 @@ class LLMQueryRequestBuilder:
                 selected_slugs.add("search_documents")
             else:
                 context = replace(context, rag_mode=RagMode.ADVANCED)
+
+        # Episodic memory follows the memory switch, and only the memory
+        # switch. Searching someone's past conversations word for word is the
+        # same promise the toggle already makes, so it should not also need a
+        # checkbox in a drawer — and with memory off it must not happen at
+        # all, whatever a stale selection still says.
+        if context.use_memory:
+            selected_slugs |= MEMORY_TOOL_SLUGS
+        else:
+            selected_slugs -= MEMORY_TOOL_SLUGS
 
         dare_tool_slugs = tuple(selected_slugs)
 
