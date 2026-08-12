@@ -563,7 +563,7 @@ class DowngradedKeyTests(SimpleTestCase):
             [
                 decision(
                     action="patch_user",
-                    key="communication",
+                    key="working-preferences",
                     text="Prefers short answers.",
                     reason="Stated a preference.",
                 )
@@ -575,7 +575,7 @@ class DowngradedKeyTests(SimpleTestCase):
             [
                 decision(
                     action="patch_user",
-                    key="communication",
+                    key="working-preferences",
                     text="Prefers tables over prose.",
                     reason="Stated another preference.",
                 )
@@ -587,7 +587,7 @@ class DowngradedKeyTests(SimpleTestCase):
             len([row for row in second.archive if row.state == "active"]), 2
         )
         self.assertNotEqual(first.created[0].key, second.created[0].key)
-        self.assertTrue(first.created[0].key.startswith("communication:"))
+        self.assertTrue(first.created[0].key.startswith("working-preferences:"))
 
     def test_a_downgraded_line_is_keyed_by_heading_and_content(self):
         result = apply_decisions(
@@ -678,7 +678,7 @@ class DowngradedKeyTests(SimpleTestCase):
             [
                 decision(
                     action="patch_user",
-                    key="communication",
+                    key="working-preferences",
                     topic_key=None,
                     text="Prefers bullet points.",
                     reason="Stated a preference.",
@@ -686,7 +686,7 @@ class DowngradedKeyTests(SimpleTestCase):
             ],
         )
 
-        self.assertTrue(result.created[0].key.startswith("communication:"))
+        self.assertTrue(result.created[0].key.startswith("working-preferences:"))
 
 
 class UnknownActionTests(SimpleTestCase):
@@ -835,3 +835,49 @@ class ExpiryTests(SimpleTestCase):
             ],
         )
         self.assertEqual(result.created[0].valid_until, "2026-12-31")
+
+
+class CommunicationInstructionTests(SimpleTestCase):
+    """How to answer someone reaches USER.md without asking permission.
+
+    Consent gates facts ABOUT a person. An instruction about how to talk to
+    them is a request, not a disclosure — and sent to the archive it only
+    arrives when a question happens to sound like it. Measured on a real
+    conversation, "keep answers short" said twice reached 1 turn in 6.
+    """
+
+    def test_a_communication_line_lands_in_user_md_unasked(self):
+        result = apply_decisions(
+            make_input(user_doc=DOC, explicit=False),
+            [
+                WriterDecision(
+                    action="patch_user",
+                    reason="They asked for short answers.",
+                    text="Prefers short answers.",
+                    key="communication",
+                    topic_key="style:length",
+                )
+            ],
+        )
+
+        self.assertIn("Prefers short answers.", result.user_doc)
+        self.assertTrue(result.user_doc_changed)
+        self.assertEqual(result.entries[0].action, "patch_user")
+        self.assertTrue(result.entries[0].applied)
+
+    def test_a_life_fact_still_needs_consent(self):
+        result = apply_decisions(
+            make_input(user_doc=DOC, explicit=False),
+            [
+                WriterDecision(
+                    action="patch_user",
+                    reason="They mentioned where they work.",
+                    text="Works at aim2balance.ai.",
+                    key="background",
+                    topic_key="occupation",
+                )
+            ],
+        )
+
+        self.assertNotIn("aim2balance", result.user_doc)
+        self.assertEqual(result.entries[0].action, "add_fact")
