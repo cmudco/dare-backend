@@ -34,6 +34,8 @@ class MemoryRow:
     # USER.md heading this fact renders under, or empty. The document is a
     # view of what is pinned, so a pinned row keeps its key and its timeline.
     pinned_to: str = ""
+    # For a rule: the situations it fires in, and what it is embedded as.
+    applies_when: str = ""
     source_conversation_id: Optional[Any] = None
     source_message_id: Optional[Any] = None
 
@@ -54,6 +56,14 @@ class WriterDecision:
     key: Optional[str] = None
     topic_key: Optional[str] = None
     trigger: Optional[str] = None
+    applies_when: Optional[str] = None
+    # The USER.md heading, kept separately from `key` so a fact can be pinned
+    # without having been proposed as a profile line.
+    profile_key: Optional[str] = None
+    # Whether this belongs on every turn. Independent of the action: the same
+    # sentence was proposed as patch_user on one run and add_fact on the next,
+    # and only the first ever reached the profile.
+    pin_to_profile: bool = False
     importance: Optional[float] = None
     confidence: Optional[float] = None
     sensitivity: Optional[str] = None

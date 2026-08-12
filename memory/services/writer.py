@@ -25,7 +25,8 @@ from config.env import MEMORY_WRITER_MODEL, OPENAI_API_KEY
 from memory.constants import TOKEN_BUDGET, TOPICS
 from memory.domain.keys import key_for, procedure_key
 from memory.domain.types import MemoryRow, WriterDecision
-from memory.domain.user_doc import PROFILE_HEADINGS, estimate_tokens, user_doc_lines
+from memory.domain.user_doc import (PROFILE_HEADINGS, estimate_tokens,
+                                    user_doc_lines)
 
 logger = logging.getLogger(__name__)
 
@@ -87,10 +88,22 @@ class Decision(BaseModel):
             f"else."
         )
     )
+    pin_to_profile: bool = Field(
+        description=(
+            "Should this be carried into EVERY future conversation, rather "
+            "than looked up when a question reaches for it? True for what to "
+            "call them, how they want answers written, a hard constraint like "
+            "an allergy, and where they live — the handful of things that "
+            "change an answer whatever the subject. False for everything they "
+            "merely told you, however interesting: a fact is found when it is "
+            "needed and costs nothing in between. Judge the content, not "
+            "whether they asked — permission is decided separately."
+        )
+    )
     text: Optional[str] = Field(
         description=(
             "patch_user: the bullet, one short sentence. add_fact: a short "
-            "third-person statement — write \"the person\" or \"they\", never "
+            'third-person statement — write "the person" or "they", never '
             "their name. Every memory in this store is already about them, so "
             "the name adds nothing and costs twice: it makes every fact match "
             "any message that says their name, and it goes stale the day they "
@@ -111,6 +124,18 @@ class Decision(BaseModel):
             "rather than combining them into a sentence — 'no emoji' and "
             "'subject under 50 characters' are two procedures that share a "
             "trigger, not one."
+        )
+    )
+    applies_when: Optional[str] = Field(
+        description=(
+            "REQUIRED for add_procedure, ignored otherwise. One sentence "
+            "naming the situations this rule fires in, written the way those "
+            "moments actually arrive: 'Reviewing code they share — a "
+            "function, a diff, a pull request, a snippet they want feedback "
+            "on.' The rule is FOUND by this sentence, not by its wording, and "
+            "the turn it applies to will rarely use the same words the rule "
+            "does — someone says 'take a look at this' and means review my "
+            "code. Name the artefacts and the phrasings, not the lesson."
         )
     )
     topic: Optional[TopicLiteral] = Field(
@@ -277,6 +302,7 @@ Facts — the searchable archive, read only when a question needs them.
 Procedures — rules about HOW to do a thing, fetched when that thing is about to happen.
   Use "add_procedure" for a standing instruction with a situation attached: a correction they gave you, a convention they want followed, a tool or approach they want used or avoided. "Always run the tests before you say you are done." "Never use emoji in commit messages." "When I share SQL, check the joins first."
   The test that separates a procedure from a fact: a fact answers a QUESTION, a procedure fires during a TASK. "I use pnpm" is a fact — it answers "what package manager do I use". "When installing packages, use pnpm and never npm" is a procedure, because the turn where it matters will not mention package managers at all.
+  One sentence is often BOTH, and then it needs BOTH decisions. "We use pnpm at work, npm breaks our lockfile" states what they use AND tells you what to do — emit the fact and the procedure. Choosing only the procedure is the more damaging half to lose: rules are fetched by the task and never by a question, so the fact becomes unanswerable and "which package manager do we use?" returns nothing.
   The test that separates a procedure from a profile line: a profile line is about how to TALK to them and applies to every turn. A procedure applies only in its situation. "Keep answers short" is a profile line. "When reviewing my code, be blunt" is a procedure.
   Prefer a procedure whenever the person is correcting you or telling you how they want something done.
 
@@ -477,6 +503,9 @@ Set `explicit_request` from what the PERSON asked for in this message, not from 
                     else None
                 ),
                 trigger=decision.trigger,
+                applies_when=decision.applies_when,
+                profile_key=decision.profile_key,
+                pin_to_profile=decision.pin_to_profile,
                 importance=decision.importance,
                 confidence=decision.confidence,
                 sensitivity=decision.sensitivity,

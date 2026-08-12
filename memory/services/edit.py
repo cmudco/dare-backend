@@ -18,14 +18,11 @@ from typing import Optional
 
 from django.db import connection, transaction
 
-from memory.constants import TOKEN_BUDGET, MemoryKind, Sensitivity, WriterAction
+from memory.constants import (TOKEN_BUDGET, MemoryKind, Sensitivity,
+                              WriterAction)
 from memory.domain.keys import procedure_key
-from memory.domain.user_doc import (
-    estimate_tokens,
-    normalize_line,
-    parse_user_doc,
-    render_user_doc,
-)
+from memory.domain.user_doc import (estimate_tokens, normalize_line,
+                                    parse_user_doc, render_user_doc)
 from memory.models import MemoryLedgerEntry, MemoryRecord, UserMemoryDocument
 from memory.services.embeddings import embed_texts
 from memory.services.items import doc_line_id, parse_behavior_content
@@ -95,10 +92,16 @@ def edit_record(user, record: MemoryRecord, content: str) -> EditResult:
         return EditResult(ok=True)
 
     # An edited statement means something new, so it has to be findable by
-    # what it now says rather than by what it used to.
+    # what it now says rather than by what it used to. A rule is still found
+    # by the situations it fires in, so editing one must not quietly drop it
+    # back to the terse form that loses to unrelated rules.
     vector = None
     if connection.vendor == "postgresql":
-        vector = embed_texts([f"{key} {text}"])[0]
+        if record.kind == MemoryKind.PROCEDURE and record.applies_when:
+            embed_source = f"{record.applies_when} {text}"
+        else:
+            embed_source = f"{key} {text}"
+        vector = embed_texts([embed_source])[0]
 
     with transaction.atomic():
         record.text = text

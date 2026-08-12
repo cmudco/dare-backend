@@ -20,17 +20,11 @@ from typing import Dict, List, Optional, Sequence
 
 from django.db import connection
 
-from memory.constants import (
-    HISTORICAL_RE,
-    KEY_SPACE_LIMIT,
-    SHORTLIST_IMPORTANCE_SHARE,
-    SHORTLIST_LEXICAL_SHARE,
-    SHORTLIST_LIMIT,
-    SHORTLIST_RECENT_SHARE,
-    TOKEN_BUDGET,
-    MemoryState,
-    Sensitivity,
-)
+from memory.constants import (HISTORICAL_RE, KEY_SPACE_LIMIT,
+                              SHORTLIST_IMPORTANCE_SHARE,
+                              SHORTLIST_LEXICAL_SHARE, SHORTLIST_LIMIT,
+                              SHORTLIST_RECENT_SHARE, TOKEN_BUDGET,
+                              MemoryState, Sensitivity)
 from memory.domain.rank import Candidate
 from memory.domain.types import MemoryRow
 from memory.domain.user_doc import estimate_tokens, merge_pinned
@@ -126,6 +120,7 @@ def row_from_record(record: MemoryRecord) -> MemoryRow:
         provenance=record.provenance,
         reinforced=record.reinforced,
         pinned_to=record.pinned_to,
+        applies_when=record.applies_when,
         source_conversation_id=record.source_conversation_id,
         source_message_id=record.source_message_id,
     )

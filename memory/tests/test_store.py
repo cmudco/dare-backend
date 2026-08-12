@@ -19,13 +19,8 @@ from memory.domain.types import WriterDecision
 from memory.domain.user_doc import estimate_tokens
 from memory.models import MemoryLedgerEntry, MemoryRecord, UserMemoryDocument
 from memory.services.ingest import ingest_turn
-from memory.services.store import (
-    active_keys,
-    find_by_keys,
-    read_user_doc,
-    row_from_record,
-    shortlist,
-)
+from memory.services.store import (active_keys, find_by_keys, read_user_doc,
+                                   row_from_record, shortlist)
 from memory.services.writer import WriterProposal
 
 

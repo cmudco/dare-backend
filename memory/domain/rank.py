@@ -15,16 +15,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Sequence
 
-from memory.constants import (
-    LEXICAL_RELEVANCE_MIN,
-    RANK_WEIGHTS,
-    RECENCY_HALF_LIFE_DAYS,
-    RELEVANCE_FLOOR,
-    SAFETY_RELEVANCE_FLOOR,
-    SCORE_FLOOR,
-    TOP_K,
-    Sensitivity,
-)
+from memory.constants import (LEXICAL_RELEVANCE_MIN, RANK_WEIGHTS,
+                              RECENCY_HALF_LIFE_DAYS, RELEVANCE_FLOOR,
+                              SAFETY_RELEVANCE_FLOOR, SCORE_FLOOR, TOP_K,
+                              Sensitivity)
 from memory.domain.types import MemoryRow
 
 

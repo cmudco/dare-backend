@@ -16,20 +16,11 @@ the same convention every other context layer here follows.
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from memory.constants import (
-    PROCEDURE_FLOOR,
-    PROCEDURE_RELEVANCE_FLOOR,
-    PROCEDURE_SHORTLIST_LIMIT,
-    PROCEDURE_TOP_K,
-    MemoryKind,
-    MemoryState,
-)
-from memory.domain.procedural import (
-    TaskContext,
-    format_procedures,
-    task_query,
-    trigger_of,
-)
+from memory.constants import (PROCEDURE_FLOOR, PROCEDURE_RELEVANCE_FLOOR,
+                              PROCEDURE_SHORTLIST_LIMIT, PROCEDURE_TOP_K,
+                              MemoryKind, MemoryState)
+from memory.domain.procedural import (TaskContext, format_procedures,
+                                      task_query, trigger_of)
 from memory.domain.user_doc import user_doc_lines
 from memory.services.embeddings import embed_one
 from memory.services.retrieval import Recall, retrieve

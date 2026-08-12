@@ -13,34 +13,22 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from memory.constants import TOKEN_BUDGET, TOKEN_WARNING, MemoryState, WriterAction
-from memory.domain.user_doc import (
-    estimate_tokens,
-    normalize_line,
-    normalize_user_doc,
-    parse_user_doc,
-    render_user_doc,
-)
+from memory.constants import (TOKEN_BUDGET, TOKEN_WARNING, MemoryState,
+                              WriterAction)
+from memory.domain.user_doc import (estimate_tokens, normalize_line,
+                                    normalize_user_doc, parse_user_doc,
+                                    render_user_doc)
 from memory.models import MemoryLedgerEntry, MemoryRecord, UserMemoryDocument
 from memory.services.edit import edit_doc_line, edit_record
-from memory.services.items import (
-    DOC_ID_PREFIX,
-    doc_line_id,
-    listed_records,
-    pinned_records,
-    profile_items,
-    record_item,
-    row_item,
-)
+from memory.services.items import (DOC_ID_PREFIX, doc_line_id, listed_records,
+                                   pinned_records, profile_items, record_item,
+                                   row_item)
 from memory.services.retrieval import retrieve, summarize_recall
 from memory.services.store import read_user_doc, tokenize
 
-from .serializers import (
-    ClearResponseSerializer,
-    MemoryItemSerializer,
-    MemorySearchRequestSerializer,
-    MemorySearchResponseSerializer,
-)
+from .serializers import (ClearResponseSerializer, MemoryItemSerializer,
+                          MemorySearchRequestSerializer,
+                          MemorySearchResponseSerializer)
 
 logger = logging.getLogger(__name__)
 
