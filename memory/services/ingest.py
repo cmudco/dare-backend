@@ -31,17 +31,25 @@ from typing import List, Optional
 from django.db import connection, transaction
 from django.db.models import F
 
-from memory.constants import (EXPLICIT_RE, WRITER_RETRIEVE_FLOOR,
-                              WRITER_RETRIEVE_SHORTLIST_LIMIT,
-                              WRITER_RETRIEVE_TOP_K, MemoryState)
+from memory.constants import (
+    WRITER_RETRIEVE_FLOOR,
+    WRITER_RETRIEVE_SHORTLIST_LIMIT,
+    WRITER_RETRIEVE_TOP_K,
+    MemoryState,
+)
 from memory.domain.apply import apply_decisions
 from memory.domain.types import ApplyInput, ApplyResult, LedgerDraft, MemoryRow
 from memory.models import MemoryLedgerEntry, MemoryRecord
 from memory.services.embeddings import embed_texts
 from memory.services.retrieval import retrieve
-from memory.services.store import (active_keys, find_by_ids, find_by_keys,
-                                   parse_iso_date, read_user_doc,
-                                   write_user_doc)
+from memory.services.store import (
+    active_keys,
+    find_by_ids,
+    find_by_keys,
+    parse_iso_date,
+    read_user_doc,
+    write_user_doc,
+)
 from memory.services.writer import propose_decisions
 
 logger = logging.getLogger(__name__)
@@ -78,7 +86,6 @@ def ingest_turn(
         return _skip("empty user message")
 
     now = datetime.now(timezone.utc).isoformat()
-    explicit = bool(EXPLICIT_RE.search(user_text))
 
     # Pass one: what is relevant to this turn. A wider net than the read path,
     # because writing wrongly is more expensive than reading wrongly.
@@ -93,16 +100,22 @@ def ingest_turn(
     )
     archive: List[MemoryRow] = [item.record for item in recall.chosen]
 
-    decisions = propose_decisions(
+    # Whether the person asked for something to be kept is the writer's call
+    # now, not a phrase list's. A regex knew "remember" and "don't forget" and
+    # missed "keep this in mind" — and the thing it gates, a line in the file
+    # read on every future turn, is exactly the judgement worth spending a
+    # good model on.
+    proposal = propose_decisions(
         user_doc=user_doc,
         archive=archive,
         user_message=user_text,
         assistant_message=assistant_text,
-        explicit=explicit,
         now=now,
         model=model,
         keys_in_use=active_keys(user),
     )
+    decisions = proposal.decisions
+    explicit = proposal.explicit
     if not decisions:
         return _skip("writer proposed nothing")
 

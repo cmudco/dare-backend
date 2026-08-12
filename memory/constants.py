@@ -206,10 +206,6 @@ WRITER_RETRIEVE_SHORTLIST_LIMIT = 60
 
 # "Remember that..." is consent in the person's own words — the only thing that
 # lets a plain preference reach USER.md directly.
-EXPLICIT_RE = re.compile(
-    r"\b(remember|note this|keep track|don'?t forget|make a note)\b", re.IGNORECASE
-)
-
 # Historical phrasing widens retrieval to superseded rows — and only to
 # superseded rows. Held rows are never candidates, whatever the phrasing.
 HISTORICAL_RE = re.compile(

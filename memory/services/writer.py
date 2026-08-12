@@ -14,6 +14,7 @@ unmeasured regression until the scorecard exists on this side. Resist editing.
 """
 
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Dict, List, Literal, Optional
 
@@ -24,8 +25,7 @@ from config.env import MEMORY_WRITER_MODEL, OPENAI_API_KEY
 from memory.constants import TOKEN_BUDGET, TOPICS
 from memory.domain.keys import key_for, procedure_key
 from memory.domain.types import MemoryRow, WriterDecision
-from memory.domain.user_doc import (PROFILE_HEADINGS, estimate_tokens,
-                                    user_doc_lines)
+from memory.domain.user_doc import PROFILE_HEADINGS, estimate_tokens, user_doc_lines
 
 logger = logging.getLogger(__name__)
 
@@ -229,6 +229,19 @@ class Decision(BaseModel):
 
 
 class WriterResponse(BaseModel):
+    explicit_request: bool = Field(
+        description=(
+            "Did the PERSON ask for something to be remembered in this "
+            "message? True for any wording that asks you to keep something — "
+            '"remember that…", "keep this in mind", "note this down", "always '
+            'call me…", "don\'t forget…". False when they merely stated '
+            "something, however important it sounds. This is about what THEY "
+            "asked for, never about whether you judge it worth keeping: a "
+            "fact you consider valuable is still False if they did not ask. "
+            "It decides whether a line may be written into the file that is "
+            "read on every future turn, so guessing yes is expensive."
+        )
+    )
     decisions: List[Decision] = Field(
         description=(
             "One entry per thing worth deciding about — one MESSAGE often "
@@ -316,16 +329,24 @@ _PARAM_STYLES = (
 _style_by_model: Dict[str, int] = {}
 
 
+@dataclass
+class WriterProposal:
+    """What the writer came back with: the decisions, and whether the person
+    asked for anything to be kept."""
+
+    decisions: List[WriterDecision]
+    explicit: bool = False
+
+
 def propose_decisions(
     user_doc: str,
     archive: List[MemoryRow],
     user_message: str,
     assistant_message: str,
-    explicit: bool,
     now: Optional[str] = None,
     model: Optional[str] = None,
     keys_in_use: Optional[List[str]] = None,
-) -> List[WriterDecision]:
+) -> WriterProposal:
     """Ask the model what to do. Nothing is written here.
 
     One in-job repair retry when a decision arrives with an empty statement.
@@ -362,14 +383,6 @@ def propose_decisions(
     # the two facts can never retire one another. Keys are three words each,
     # so the whole namespace fits where a dozen rows would not.
     keys_block = ", ".join(keys_in_use) if keys_in_use else "(none yet)"
-    explicit_block = (
-        "\n\nThe person explicitly asked for something to be remembered. That "
-        "is consent in their own words, so a profile line is allowed here if "
-        "the content genuinely belongs in USER.md."
-        if explicit
-        else ""
-    )
-
     prompt = f"""TODAY: {moment[:10]}
 
 USER.md — {tokens} of {TOKEN_BUDGET} tokens used{
@@ -386,7 +399,9 @@ If this turn is about the same thing as one of these, reuse that key EXACTLY, ev
 
 THE TURN
 PERSON: {user_message}
-ASSISTANT: {assistant_message or "(no reply captured)"}{explicit_block}"""
+ASSISTANT: {assistant_message or "(no reply captured)"}
+
+Set `explicit_request` from what the PERSON asked for in this message, not from how useful the content looks to you. It decides whether anything may be written into USER.md, which is read on every future turn."""
 
     def ask(messages) -> Optional[WriterResponse]:
         start = _style_by_model.get(model, 0)
@@ -426,7 +441,7 @@ ASSISTANT: {assistant_message or "(no reply captured)"}{explicit_block}"""
 
     if parsed is None:
         logger.warning("[memory] writer returned no parseable decisions")
-        return []
+        return WriterProposal(decisions=[])
 
     decisions: List[WriterDecision] = []
     for decision in parsed.decisions:
@@ -467,4 +482,4 @@ ASSISTANT: {assistant_message or "(no reply captured)"}{explicit_block}"""
                 reinforces_id=decision.reinforces_id,
             )
         )
-    return decisions
+    return WriterProposal(decisions=decisions, explicit=parsed.explicit_request)
