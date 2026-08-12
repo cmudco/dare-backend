@@ -45,6 +45,19 @@ class MemoryViewSet(viewsets.ViewSet):
     def list(self, request):
         # The page computes layer counts and filters client-side, so this is
         # the complete unpaginated set: profile lines first, then the archive.
+        #
+        # ?state=retired swaps it for the archive of retired rows instead of
+        # adding them, because the two are read for different reasons: the
+        # default list answers "what does it know", and this one answers "what
+        # did it used to think".
+        if request.query_params.get("state") == "retired":
+            records = listed_records(request.user, include_retired=True)
+            return Response(
+                MemoryItemSerializer(
+                    [record_item(record) for record in records], many=True
+                ).data
+            )
+
         items = profile_items(self._document())
         items.extend(record_item(record) for record in listed_records(request.user))
         return Response(MemoryItemSerializer(items, many=True).data)

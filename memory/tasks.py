@@ -33,6 +33,7 @@ def run_memory_writer(ai_message_id: int) -> None:
     from conversations.models import Message
     from memory.models import MemoryLedgerEntry
     from memory.services.ingest import ingest_turn
+    from memory.services.notify import announce_write, summarize_report
 
     if not USE_POSTGRES:
         logger.debug("[memory] writer skipped: USE_POSTGRES is False")
@@ -80,6 +81,18 @@ def run_memory_writer(ai_message_id: int) -> None:
     if report.skipped:
         logger.info("[memory] turn %s skipped: %s", user_message.id, report.skipped)
         return
+
+    # The reply is long finished by now, so this arrives as a late note on a
+    # closed turn rather than a step inside it. Recorded even when nothing was
+    # stored: "considered and declined" is the honest answer, and it is the one
+    # that makes the gate visible instead of merely trustworthy.
+    #
+    # Stored before it is sent, so a client that missed the event or reloads
+    # the conversation still sees what happened.
+    summary = summarize_report(report, report.entries)
+    ai_message.memory_write_data = summary
+    ai_message.save(update_fields=["memory_write_data", "updated_at"])
+    announce_write(conversation.id, ai_message.id, summary)
 
     logger.info(
         "[memory] turn %s: %d decisions → %d created, %d retired, %d reinforced, "

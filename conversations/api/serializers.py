@@ -464,6 +464,7 @@ class MessageSerializer(serializers.ModelSerializer):
             "content_type",
             "content_metadata",
             "memory_context_data",
+            "memory_write_data",
             "retrieval_trace",
             "context_trace",
         ]
@@ -489,6 +490,7 @@ class MessageSerializer(serializers.ModelSerializer):
             "content_type",
             "content_metadata",
             "memory_context_data",
+            "memory_write_data",
             "retrieval_trace",
             "context_trace",
         ]
