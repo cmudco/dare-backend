@@ -7,9 +7,13 @@ crossed on an ordinary Tuesday and then it is decoration.
 from django.test import SimpleTestCase
 
 from memory.constants import TOKEN_BUDGET
-from memory.domain.user_doc import (estimate_tokens, normalize_user_doc,
-                                    parse_user_doc, patch_user_doc,
-                                    render_user_doc)
+from memory.domain.user_doc import (
+    estimate_tokens,
+    normalize_user_doc,
+    parse_user_doc,
+    patch_user_doc,
+    render_user_doc,
+)
 
 DOC = """# User
 

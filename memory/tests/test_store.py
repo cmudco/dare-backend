@@ -19,6 +19,7 @@ from memory.domain.types import WriterDecision
 from memory.models import MemoryLedgerEntry, MemoryRecord, UserMemoryDocument
 from memory.services.ingest import ingest_turn
 from memory.services.store import active_keys, find_by_keys, shortlist
+from memory.services.writer import WriterProposal
 
 
 def make_turn(user, text, reply="Understood."):
@@ -51,10 +52,13 @@ class IngestTests(TestCase):
             email="mem-tester@example.com", password="x"
         )
 
-    def ingest(self, text, decisions, reply="Understood."):
+    def ingest(self, text, decisions, reply="Understood.", explicit=False):
         conversation, user_message, ai_message = make_turn(self.user, text, reply)
         with (
-            patch("memory.services.ingest.propose_decisions", return_value=decisions),
+            patch(
+                "memory.services.ingest.propose_decisions",
+                return_value=WriterProposal(decisions=decisions, explicit=explicit),
+            ),
             patch("memory.services.ingest.embed_texts", side_effect=no_vectors),
             patch("memory.services.retrieval.embed_one", return_value=None),
         ):
@@ -210,7 +214,10 @@ class IngestTests(TestCase):
             )
         ]
         with (
-            patch("memory.services.ingest.propose_decisions", return_value=decisions),
+            patch(
+                "memory.services.ingest.propose_decisions",
+                return_value=WriterProposal(decisions=decisions),
+            ),
             patch("memory.services.ingest.embed_texts", side_effect=no_vectors),
             patch("memory.services.retrieval.embed_one", return_value=None),
         ):

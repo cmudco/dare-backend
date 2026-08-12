@@ -20,10 +20,15 @@ from typing import Dict, List, Optional, Sequence
 
 from django.db import connection
 
-from memory.constants import (HISTORICAL_RE, KEY_SPACE_LIMIT,
-                              SHORTLIST_IMPORTANCE_SHARE,
-                              SHORTLIST_LEXICAL_SHARE, SHORTLIST_LIMIT,
-                              SHORTLIST_RECENT_SHARE, MemoryState)
+from memory.constants import (
+    HISTORICAL_RE,
+    KEY_SPACE_LIMIT,
+    SHORTLIST_IMPORTANCE_SHARE,
+    SHORTLIST_LEXICAL_SHARE,
+    SHORTLIST_LIMIT,
+    SHORTLIST_RECENT_SHARE,
+    MemoryState,
+)
 from memory.domain.rank import Candidate
 from memory.domain.types import MemoryRow
 from memory.models import MemoryRecord, UserMemoryDocument
