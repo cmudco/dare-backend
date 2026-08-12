@@ -22,6 +22,10 @@ from django_rq import job
 
 from config.env import USE_POSTGRES
 from conversations.constants import SenderType
+from conversations.models import Message
+from memory.models import MemoryLedgerEntry
+from memory.services.ingest import ingest_turn
+from memory.services.notify import announce_write, summarize_report
 
 logger = logging.getLogger(__name__)
 
@@ -30,11 +34,6 @@ MEMORY_QUEUE = "memory"
 
 @job(MEMORY_QUEUE)
 def run_memory_writer(ai_message_id: int) -> None:
-    from conversations.models import Message
-    from memory.models import MemoryLedgerEntry
-    from memory.services.ingest import ingest_turn
-    from memory.services.notify import announce_write, summarize_report
-
     if not USE_POSTGRES:
         logger.debug("[memory] writer skipped: USE_POSTGRES is False")
         return

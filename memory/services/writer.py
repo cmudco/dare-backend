@@ -25,8 +25,7 @@ from config.env import MEMORY_WRITER_MODEL, OPENAI_API_KEY
 from memory.constants import TOKEN_BUDGET, TOPICS
 from memory.domain.keys import key_for, procedure_key
 from memory.domain.types import MemoryRow, WriterDecision
-from memory.domain.user_doc import (PROFILE_HEADINGS, estimate_tokens,
-                                    user_doc_lines)
+from memory.domain.user_doc import PROFILE_HEADINGS, estimate_tokens, user_doc_lines
 
 logger = logging.getLogger(__name__)
 

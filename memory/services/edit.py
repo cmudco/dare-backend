@@ -18,11 +18,14 @@ from typing import Optional
 
 from django.db import connection, transaction
 
-from memory.constants import (TOKEN_BUDGET, MemoryKind, Sensitivity,
-                              WriterAction)
+from memory.constants import TOKEN_BUDGET, MemoryKind, Sensitivity, WriterAction
 from memory.domain.keys import procedure_key
-from memory.domain.user_doc import (estimate_tokens, normalize_line,
-                                    parse_user_doc, render_user_doc)
+from memory.domain.user_doc import (
+    estimate_tokens,
+    normalize_line,
+    parse_user_doc,
+    render_user_doc,
+)
 from memory.models import MemoryLedgerEntry, MemoryRecord, UserMemoryDocument
 from memory.services.embeddings import embed_texts
 from memory.services.items import doc_line_id, parse_behavior_content

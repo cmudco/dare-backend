@@ -19,8 +19,12 @@ and file paths go — and nothing else in this module changes.
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
-from memory.constants import (PROCEDURE_FLOOR, PROCEDURE_SHORTLIST_LIMIT,
-                              PROCEDURE_TOP_K, MemoryKind)
+from memory.constants import (
+    PROCEDURE_FLOOR,
+    PROCEDURE_SHORTLIST_LIMIT,
+    PROCEDURE_TOP_K,
+    MemoryKind,
+)
 from memory.domain.types import MemoryRow
 
 

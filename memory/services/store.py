@@ -19,12 +19,19 @@ from datetime import date, datetime, timezone
 from typing import Dict, List, Optional, Sequence
 
 from django.db import connection
+from django.db.models import Q
 
-from memory.constants import (HISTORICAL_RE, KEY_SPACE_LIMIT,
-                              SHORTLIST_IMPORTANCE_SHARE,
-                              SHORTLIST_LEXICAL_SHARE, SHORTLIST_LIMIT,
-                              SHORTLIST_RECENT_SHARE, TOKEN_BUDGET,
-                              MemoryState, Sensitivity)
+from memory.constants import (
+    HISTORICAL_RE,
+    KEY_SPACE_LIMIT,
+    SHORTLIST_IMPORTANCE_SHARE,
+    SHORTLIST_LEXICAL_SHARE,
+    SHORTLIST_LIMIT,
+    SHORTLIST_RECENT_SHARE,
+    TOKEN_BUDGET,
+    MemoryState,
+    Sensitivity,
+)
 from memory.domain.rank import Candidate
 from memory.domain.types import MemoryRow
 from memory.domain.user_doc import estimate_tokens, merge_pinned
@@ -332,8 +339,6 @@ def _lexical_fallback(base, terms: List[str], limit: int):
     Local-dev degradation only — ordering within the lexical branch is lost,
     which stage two's batch normalisation absorbs.
     """
-    from django.db.models import Q
-
     condition = Q()
     for term in terms:
         condition |= Q(text__icontains=term) | Q(key__icontains=term)
