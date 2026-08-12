@@ -18,7 +18,7 @@ from memory.constants import MemoryState
 from memory.domain.types import WriterDecision
 from memory.models import MemoryLedgerEntry, MemoryRecord, UserMemoryDocument
 from memory.services.ingest import ingest_turn
-from memory.services.store import find_by_keys, shortlist
+from memory.services.store import active_keys, find_by_keys, shortlist
 
 
 def make_turn(user, text, reply="Understood."):
@@ -293,3 +293,63 @@ class ShortlistTests(TestCase):
         candidates = shortlist(self.user, "what do I do for work")
         states = {candidate.record.state for candidate in candidates}
         self.assertNotIn(MemoryState.SUPERSEDED, states)
+
+
+class ActiveKeysTests(TestCase):
+    """The key space handed to the writer.
+
+    Keys are the collision domain: a fact can only retire another one that
+    shares its key. Retrieval alone shows the writer rows related to the
+    current turn, so an upgrade phrased unlike the original ("upgraded to the
+    17 pro" against "owns an iPhone 15 Pro Max") never surfaces its own slot
+    and a second one gets minted.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = get_user_model().objects.create_user(
+            email="keyspace@example.com", password="x"
+        )
+        MemoryRecord.objects.create(
+            user=cls.user, kind="fact", key="location", text="Lives in Islamabad."
+        )
+        MemoryRecord.objects.create(
+            user=cls.user,
+            kind="fact",
+            key="note:device-phone",
+            text="Owns an iPhone 15 Pro Max.",
+            importance=0.9,
+        )
+        MemoryRecord.objects.create(
+            user=cls.user,
+            kind="fact",
+            key="note:retired-thing",
+            text="Used to own a Pixel.",
+            state=MemoryState.SUPERSEDED,
+        )
+        MemoryRecord.objects.create(
+            user=cls.user,
+            kind="fact",
+            key="health:migraines",
+            text="Gets migraines.",
+            state=MemoryState.HELD,
+        )
+
+    def test_lists_active_keys_most_important_first(self):
+        keys = active_keys(self.user)
+        self.assertEqual(keys[0], "note:device-phone")
+        self.assertIn("location", keys)
+
+    def test_leaves_out_retired_and_held_rows(self):
+        keys = active_keys(self.user)
+        self.assertNotIn("note:retired-thing", keys)
+        self.assertNotIn("health:migraines", keys)
+
+    def test_never_leaks_another_users_key_space(self):
+        other = get_user_model().objects.create_user(
+            email="keyspace-other@example.com", password="x"
+        )
+        self.assertEqual(active_keys(other), [])
+
+    def test_caps_a_very_large_store(self):
+        self.assertLessEqual(len(active_keys(self.user, limit=2)), 2)
