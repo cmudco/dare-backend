@@ -234,13 +234,35 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
             )
 
         if action == "ignore":
+            # An ignore that names what was repeated is not a no-op. Nothing is
+            # written, but the row it points at just earned the only evidence
+            # this system ever gets that it still matters, and consolidation
+            # promotes on exactly that count.
+            repeated = next(
+                (
+                    row
+                    for row in archive
+                    if decision.reinforces_id
+                    and row.id == decision.reinforces_id
+                    and row.state == MemoryState.ACTIVE
+                ),
+                None,
+            )
+            if repeated is not None:
+                repeated.reinforced += 1
+                reinforced_ids.append(repeated.id)
             log(
                 action="ignore",
                 proposed_action=decision.action,
                 reason=decision.reason,
-                note=None,
+                note=(
+                    f'Said again — "{repeated.text}" now stands on '
+                    f"{repeated.reinforced + 1} tellings."
+                    if repeated is not None
+                    else None
+                ),
                 applied=True,
-                record_id=None,
+                record_id=repeated.id if repeated is not None else None,
                 detail=text,
             )
             continue

@@ -217,6 +217,15 @@ class Decision(BaseModel):
             "replace."
         )
     )
+    reinforces_id: Optional[str] = Field(
+        description=(
+            "For ignore only, and only when the reason for ignoring is that "
+            "the person restated something ALREADY KNOWN. The exact id of the "
+            "memory they repeated. Repetition is the only evidence that a "
+            "memory still matters, so saying which one was repeated is worth "
+            "more than the ignore itself."
+        )
+    )
 
 
 class WriterResponse(BaseModel):
@@ -267,7 +276,7 @@ Rules that keep the store honest:
 - If the person corrects themselves mid-message, record only the correction.
 - Never write down something the assistant said unless the person confirmed it.
 - Telling you not to remember something means store nothing. It is not an instruction to delete anything.
-- Do not restate something already in USER.md or ALREADY KNOWN. Say ignore, and say that is why.
+- Do not restate something already in USER.md or ALREADY KNOWN. Say ignore, say that is why, and put the id of the memory they repeated in `reinforces_id`.
 - Two facts sharing a topic and qualifier are the same fact, and the newer retires the older. Qualify anything that can be true twice over.
 - Choosing a topic is choosing what this fact will DELETE later. An unqualified topic — name, diet, location, occupation, industry — holds exactly one fact, so filing something under the wrong one silently destroys the right one the next time that topic is used. If a statement is not squarely about the topic, use "note" with a qualifier instead. "note" deletes nothing it should not.
 - When in doubt between a profile line and a fact, choose the fact. A fact can be promoted later; a wrong profile line costs tokens on every future turn and has no topic to collide with, so it can never be corrected by a supersede."""
@@ -443,6 +452,7 @@ ASSISTANT: {assistant_message or "(no reply captured)"}{explicit_block}"""
                 valid_until=decision.valid_until,
                 supersedes_id=decision.supersedes_id,
                 replaces_line=decision.replaces_line,
+                reinforces_id=decision.reinforces_id,
             )
         )
     return decisions
