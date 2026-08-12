@@ -92,7 +92,10 @@ def run_memory_writer(ai_message_id: int) -> None:
     summary = summarize_report(report, report.entries)
     ai_message.memory_write_data = summary
     ai_message.save(update_fields=["memory_write_data", "updated_at"])
-    announce_write(conversation.id, ai_message.id, summary)
+    # The room is keyed by the PUBLIC conversation id, which is what clients
+    # subscribe with — the numeric pk addresses a room nobody is in, and the
+    # emit succeeds into the void.
+    announce_write(conversation.conversation_id, ai_message.id, summary)
 
     logger.info(
         "[memory] turn %s: %d decisions → %d created, %d retired, %d reinforced, "

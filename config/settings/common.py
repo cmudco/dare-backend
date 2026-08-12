@@ -366,6 +366,17 @@ RQ_QUEUES = {
         'DB': REDIS_DB,
         'PASSWORD': REDIS_PASSWORD if REDIS_PASSWORD else None,
         'DEFAULT_TIMEOUT': 300,
+        # This queue is idle most of the time — one job per memory-enabled
+        # turn, and nothing between. An idle socket was rotting and taking the
+        # worker with it ("Redis connection timeout, quitting"), after which
+        # memory silently stopped being written with no signal anywhere: the
+        # chat still worked, jobs still queued, and nothing drained them.
+        # Keepalives plus a periodic health check make redis-py reconnect
+        # instead of letting the connection die.
+        'REDIS_CLIENT_KWARGS': {
+            'socket_keepalive': True,
+            'health_check_interval': 30,
+        },
     },
 }
 
