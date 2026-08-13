@@ -107,7 +107,7 @@ async def run_learning_progress_stream(
                         await send_callback(error_payload)
                         return
 
-            if chunk and chunk.strip():
+            if chunk:
                 progress_accumulator += chunk
                 progress_payload = WebSocketResponseService.format_progress_chunk(
                     conversation_id=str(conversation.id),

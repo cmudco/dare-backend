@@ -246,7 +246,7 @@ class DareToolHandler:
         ai_response_accumulator = ""
 
         async for chunk, usage in llm_service.query(request):
-            if chunk and chunk.strip():
+            if chunk:
                 ai_response_accumulator += chunk
                 payload = WebSocketResponseService.format_streaming_chunk(
                     message_id=message_obj.id,
