@@ -38,6 +38,10 @@ EMAIL_USE_SSL = env.bool('EMAIL_USE_SSL', default=False)
 
 # sentry
 SENTRY_DSN = os.getenv("SENTRY_DSN")
+# Tags every event so dev and production are separable in the Sentry UI.
+# Without it the SDK reports everything as "production".
+SENTRY_ENVIRONMENT = os.getenv("SENTRY_ENVIRONMENT", "development")
+SENTRY_TRACES_SAMPLE_RATE = float(os.getenv("SENTRY_TRACES_SAMPLE_RATE", "0.1"))
 
 # frontend
 FRONTEND_CONFIRM_EMAIL_URL = os.getenv("FRONTEND_CONFIRM_EMAIL_URL")
