@@ -8,6 +8,7 @@ Uses django-rq for background job processing.
 import logging
 from datetime import timedelta
 
+from django.db import close_old_connections
 from django.db.models import Count
 from django.utils import timezone
 from django_rq import job
@@ -46,6 +47,11 @@ def process_memory_extraction():
     Returns:
         dict: Stats about the extraction run
     """
+    # The worker is long-lived and idles between scheduled runs, so Postgres
+    # may have dropped the connection it still holds. Discard unusable ones
+    # before the first query rather than failing on it.
+    close_old_connections()
+
     stats = {
         "total_checked": 0,
         "eligible": 0,
@@ -55,7 +61,7 @@ def process_memory_extraction():
         "skipped_recently_extracted": 0,
         "skipped_no_new_messages": 0,
     }
-    
+
     try:
         memu_service = get_memu_service()
         # Initialize once before batch; fail fast if memu-py/config is broken
