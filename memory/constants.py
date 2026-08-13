@@ -152,6 +152,35 @@ TOKEN_WARNING = round(TOKEN_BUDGET * 0.8)
 # suggestion.
 MERGE_SIMILARITY = 0.74
 
+# The bar when the two keys' qualifiers share nothing. Disjoint qualifiers
+# are a designed claim that these are two different things, so overriding
+# that claim takes more than the ordinary threshold: at 0.74, a 281-row
+# sweep proposed merging Zohaib with Fahad because both "work on security
+# with them" (0.806), and two games, two recipes and two style rules for the
+# same reason — every one a template echo, none the same fact. Measured:
+# those pairs top out at 0.816; genuine respelled-slot duplicates run
+# 0.834-0.934. The 0.85 bar plus the named-entity check in _mergeable is
+# what separates them, not either signal alone.
+MERGE_DISJOINT_SIMILARITY = 0.85
+
+# Above this, a NEW key arriving at write time is the same fact as an
+# existing row, and the write is snapped into that row's slot so the normal
+# collision path can retire the old wording — automatically.
+#
+# The failure this closes was produced on demand: hide a key from the
+# writer's shown key space (the >300-key future) and the same fact mints a
+# fresh slot — "note:backend-technologies" beside "note:backend-stack" — and
+# the two never collide again. Measured on the actual minted texts, embedded
+# exactly as stored: same-fact splits score 0.755-0.889, distinct same-topic
+# pairs 0.395-0.652 here and at most 0.720 on the merge bench's hardest
+# look-alikes. 0.80 sits 0.08 above every distinct pair ever measured.
+#
+# Deliberately ABOVE MERGE_SIMILARITY: the sweep only ever proposes, so 0.74
+# is allowed to be thin; this acts on its own, and an automatic action does
+# not get to guess. The 0.74-0.80 band is left split on disk, where the
+# sweep sees it and a person decides.
+SNAP_SIMILARITY = 0.80
+
 # Tellings before a fact is offered a permanent seat in the profile. One is a
 # mention. Two is the person making sure you heard, which is the only durable
 # signal this system ever gets.
@@ -192,12 +221,18 @@ SCORE_FLOOR = 0.3
 # importance only ranks. A row can be important, recent and certain and still
 # have nothing to do with what was asked.
 #
-# Benched against a labelled query set on a real store (18 queries, 22 facts):
-# true matches score 0.26-0.67 on meaning, unrelated rows 0.02-0.24. At 0.12
-# precision was 0.36 and every turn carried 1.7 irrelevant memories — a code
-# review pulled in a bouldering habit. 0.28 is where F1 peaks (0.73) and noise
-# falls to 0.17 per turn.
-RELEVANCE_FLOOR = 0.28
+# Benched twice, because the answer changed with scale. On a 22-fact store,
+# true matches scored 0.26-0.67 and unrelated rows 0.02-0.24, and 0.28 was
+# where F1 peaked. On a 281-row store the unrelated distribution grew a fat
+# tail into the 0.30s — "write a commit message" pulled in the blog, the
+# editor and a podcast, all at 0.28-0.35 — while every primary answer
+# (passport 0.70, bank 0.61, deadline 0.48, car 0.49) sat at 0.43 and above.
+# Swept 0.28→0.45 on 25 labelled queries: recall held at every step while
+# precision rose 0.43→0.70. Set under the primary-answer cluster with margin
+# rather than at the sweep's edge, so a paraphrase with no token overlap
+# still clears; rows below it with a REAL word match still pass through the
+# lexical route, which is absolute (raw ts_rank), not batch-relative.
+RELEVANCE_FLOOR = 0.40
 
 # Safety rows keep the old, looser bar: nothing was relaxed for them, the rest
 # was tightened around them. The asymmetry is the point — failing to recall a
@@ -238,11 +273,23 @@ PROCEDURE_SHORTLIST_LIMIT = 24
 # about formatting paper summaries.
 PROCEDURE_RELEVANCE_FLOOR = 0.22
 
-# Stage-one shortlist cap and its split between the three unioned sources.
+# Stage-one shortlist cap and its split between the unioned sources.
 SHORTLIST_LIMIT = 50
 SHORTLIST_LEXICAL_SHARE = 0.6
 SHORTLIST_IMPORTANCE_SHARE = 0.25
 SHORTLIST_RECENT_SHARE = 0.25
+
+# The semantic arm: nearest stored vectors by cosine, exact scan — no ANN
+# index at per-user scale. Found at 281 rows: "what subscriptions am I paying
+# for?" never reached stage 2, because Postgres stems subscriptionS and
+# subscribE to different prefixes (no lexical hit), the row's importance was
+# 0.3 (not in the top 13) and it was months old (not recent) — so the one
+# signal that DID match, meaning, was never consulted. At 9 rows every row
+# shortlists and the gap is invisible; at scale the shortlist IS recall.
+# The share is the largest because meaning is the dominant rank weight (0.5):
+# a candidate the ranker would score highest must not be missing from the
+# candidates.
+SHORTLIST_SEMANTIC_SHARE = 0.5
 
 # How many existing keys the writer is shown. Keys are the collision domain —
 # reusing one is what lets a new fact retire an old one — so the writer has to

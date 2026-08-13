@@ -331,13 +331,30 @@ class RelevanceGateTests(SimpleTestCase):
             candidates=[
                 candidate(
                     rec=record(importance=0.4, valid_from=NOW[:10]),
-                    vector=blend(0, 1, 0.32),
+                    vector=blend(0, 1, 0.45),
                 )
             ],
             query_vector=axis(0),
             now=NOW,
         )
         self.assertEqual(len(result.chosen), 1)
+
+    def test_mid_similarity_without_a_word_match_is_the_noise_band(self):
+        """0.28-0.35 on meaning alone is exactly what a 281-row store injects
+        as noise — "write a commit message" pulled the blog at 0.28, the
+        podcast at 0.34. The old 22-row floor called this related; the scale
+        bench says it is not, unless the query's actual words matched too."""
+        result = rank(
+            candidates=[
+                candidate(
+                    rec=record(importance=0.9, valid_from=NOW[:10]),
+                    vector=blend(0, 1, 0.34),
+                )
+            ],
+            query_vector=axis(0),
+            now=NOW,
+        )
+        self.assertEqual(len(result.chosen), 0)
 
     def test_a_weak_but_real_connection_is_still_a_connection(self):
         # Measured: "book me somewhere nice for dinner" against a stored

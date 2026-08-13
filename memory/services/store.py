@@ -20,6 +20,7 @@ from typing import Dict, List, Optional, Sequence
 
 from django.db import connection
 from django.db.models import Q
+from pgvector.django import CosineDistance
 
 from memory.constants import (
     HISTORICAL_RE,
@@ -28,6 +29,7 @@ from memory.constants import (
     SHORTLIST_LEXICAL_SHARE,
     SHORTLIST_LIMIT,
     SHORTLIST_RECENT_SHARE,
+    SHORTLIST_SEMANTIC_SHARE,
     TOKEN_BUDGET,
     MemoryState,
     Sensitivity,
@@ -187,13 +189,25 @@ def active_keys(user, limit: int = KEY_SPACE_LIMIT) -> List[str]:
     what falls off the end is the least consequential — losing a key here does
     not lose the memory, it only risks a duplicate slot for that one subject.
     """
-    return list(
+    # Deduplicated in Python, not with .distinct(): combined with order_by,
+    # Django adds the ordering columns to the SELECT and DISTINCT quietly
+    # applies to the (key, importance, created_at) triple — so repeats of a
+    # key could each burn one slot of the cap.
+    seen = set()
+    keys: List[str] = []
+    for key in (
         MemoryRecord.active_objects.filter(user=user, state=MemoryState.ACTIVE)
         .exclude(key="")
         .order_by("-importance", "-created_at")
         .values_list("key", flat=True)
-        .distinct()[:limit]
-    )
+    ):
+        if key in seen:
+            continue
+        seen.add(key)
+        keys.append(key)
+        if len(keys) >= limit:
+            break
+    return keys
 
 
 def find_by_ids(user, ids: List[str]) -> List[MemoryRow]:
@@ -231,6 +245,7 @@ def shortlist(
     limit: int = SHORTLIST_LIMIT,
     now: Optional[str] = None,
     exclude_pinned: bool = False,
+    query_vector: Optional[Sequence[float]] = None,
 ) -> List[Candidate]:
     """Stage one: the whole archive → ~50 candidates, indexes only.
 
@@ -302,7 +317,31 @@ def shortlist(
     recent_limit = math.ceil(limit * SHORTLIST_RECENT_SHARE)
     absorb(base.order_by("-created_at")[:recent_limit], {}, via="recent")
 
-    return list(merged.values())[:limit]
+    # (d) semantic — the nearest stored vectors, so a row that matches only
+    # by MEANING can reach the ranker at all. The other three arms are what
+    # made stage one cheap, and at small scale they were also complete; past
+    # a couple hundred rows they become the recall ceiling, because the
+    # ranker's dominant signal was never allowed to nominate candidates.
+    # Exact scan by cosine distance — per-user row counts stay in the
+    # thousands, so this is milliseconds without an ANN index, and the day
+    # that stops being true the fix is one additive CREATE INDEX.
+    if query_vector is not None and connection.vendor == "postgresql":
+        semantic_limit = math.ceil(limit * SHORTLIST_SEMANTIC_SHARE)
+        absorb(
+            base.exclude(embedding__isnull=True).order_by(
+                CosineDistance("embedding", list(query_vector))
+            )[:semantic_limit],
+            {},
+            via="semantic",
+        )
+
+    # No positional slice. Each arm is already capped, so the union is
+    # bounded by construction (~80 worst case, when no arm overlaps another),
+    # and stage two is dot products — scoring thirty extra candidates costs
+    # microseconds. A hard [:limit] here would truncate whichever arm
+    # happened to absorb last: with four arms that is no longer hypothetical,
+    # and the arm being dropped could be the one holding the allergy.
+    return list(merged.values())
 
 
 def _lexical_postgres(base, terms: List[str], limit: int):

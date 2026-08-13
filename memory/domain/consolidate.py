@@ -22,6 +22,7 @@ from typing import Callable, Dict, List, Optional, Sequence
 from memory.constants import (
     MAX_PER_KIND,
     MAX_PROPOSALS,
+    MERGE_DISJOINT_SIMILARITY,
     MERGE_SIMILARITY,
     PROMOTE_AFTER_TELLINGS,
     TOKEN_BUDGET,
@@ -84,6 +85,73 @@ def _words(text: str) -> set:
     return {word.strip(".,;:").lower() for word in text.split() if len(word) > 2}
 
 
+def _specifics(text: str) -> set:
+    """The tokens that name WHO or WHAT a sentence is about: proper nouns
+    (capitalized past the first word) and numbers, lowercased for compare."""
+    tokens = [word.strip(".,;:!?()\"'") for word in text.split()]
+    return {
+        token.lower()
+        for position, token in enumerate(tokens)
+        if token
+        and (token[0].isupper() and position > 0 or any(c.isdigit() for c in token))
+    }
+
+
+def _qualifiers_compatible(a: str, b: str) -> bool:
+    """Do two keys plausibly name the same slot?
+
+    A qualifier is a claim of identity — person:zohaib and person:fahad are
+    two people BY CONSTRUCTION, however alike their sentences read. But the
+    same slot also gets spelled twice ("backend-stack" / "backend-tech-stack",
+    "migraine" / "migraines").
+
+    The test is SUBSET, not overlap: a respelled slot differs in one
+    direction only (every token of one spelling appears in the other,
+    prefix-tolerantly), while two subjects differ in both directions
+    (zohaib / fahad). Overlap was the first attempt and it failed on its own
+    bench — "zohaib-coworker" and "fahad-coworker" share the categorical
+    token "coworker", and every templated family (game-*, recipe-*) shares
+    its prefix, so the guard passed exactly the pairs it existed to block.
+    """
+    qa, qb = _qualifier(a), _qualifier(b)
+    if not qa or not qb:
+        return True
+    # No length filter here, unlike prose tokens: qualifiers are slugs where
+    # every piece is load-bearing — dropping "ok" from album-ok made it a
+    # subset of album-random, and two albums merged.
+    ta = set(qa.replace("-", " ").split())
+    tb = set(qb.replace("-", " ").split())
+    if not ta or not tb:
+        return True
+    a_extra = {t for t in ta if not _mentions(t, tb)}
+    b_extra = {t for t in tb if not _mentions(t, ta)}
+    return not (a_extra and b_extra)
+
+
+def _mergeable(row, other, score: float) -> bool:
+    """Whether a similar-looking pair may be PROPOSED as one fact.
+
+    Similarity alone cannot make this call — measured: true duplicates with
+    differently-spelled qualifiers score 0.834-0.934, while different
+    subjects wearing the same sentence template ("Zohaib works on security" /
+    "Fahad works on security") reach 0.816. The populations overlap, so the
+    disjoint-qualifier route demands two extra things similarity cannot fake:
+    a 0.85 score, and no named entity present on one side and absent on the
+    other. The one measured casualty (macbook/laptop at 0.834) is the class
+    the write-time snap now prevents from forming at all.
+    """
+    if _qualifiers_compatible(row.key, other.key):
+        return score >= MERGE_SIMILARITY
+    topic_a, topic_b = row.key.split(":")[0], other.key.split(":")[0]
+    if topic_a == "person" or topic_b == "person":
+        return False
+    if score < MERGE_DISJOINT_SIMILARITY:
+        return False
+    mine, theirs = _specifics(row.text), _specifics(other.text)
+    differs_both_ways = (mine - theirs) and (theirs - mine)
+    return not differs_both_ways
+
+
 def _mentions(word: str, words: set) -> bool:
     """Does the text use this word, allowing for how English inflects?
 
@@ -144,7 +212,7 @@ def sweep(
                 continue
             if row.id in spoken_for or other.id in spoken_for:
                 continue
-            if similarity(row, other) < MERGE_SIMILARITY:
+            if not _mergeable(row, other, similarity(row, other)):
                 continue
             # A safety fact is never quietly folded into another row. Two
             # allergies that read alike are still two allergies.
