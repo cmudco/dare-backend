@@ -16,6 +16,7 @@ writes.
 """
 
 import logging
+from datetime import date, datetime
 from typing import Any, Dict, List, Optional
 
 from django.db import connection
@@ -35,12 +36,21 @@ SNIPPET_CHARS = 700
 
 
 def search_sessions_for_user(
-    user, query: str, limit: int = DEFAULT_LIMIT
+    user,
+    query: str = "",
+    limit: int = DEFAULT_LIMIT,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Search one user's transcript; returns the executor-shaped result dict.
 
     Scope comes from the server-side user object, never from model arguments —
-    a hallucinated argument must not be able to widen the search.
+    a hallucinated argument must not be able to widen the search. The date
+    bounds only ever NARROW, so the same holds for them.
+
+    Before these existed, "what did we discuss last week" could only be asked
+    by searching for the words "last week", which matched whenever someone had
+    typed that phrase and never the week itself.
     """
     if user is None:
         return {
@@ -48,12 +58,13 @@ def search_sessions_for_user(
             "error": "Memory is unavailable for this conversation.",
         }
 
+    start, end = parse_day(since), parse_day(until)
     terms = tokenize(query or "")
-    if not terms:
+    if not terms and start is None and end is None:
         return {"success": True, "query": query, "found": 0, "transcript": ""}
 
     try:
-        hits = _search(user, terms, limit)
+        hits = _search(user, terms, limit, start, end)
         blocks = [_render_hit(hit) for hit in hits]
     except Exception as exc:
         logger.exception("[memory] search_sessions failed for user %s", user.id)
@@ -64,35 +75,73 @@ def search_sessions_for_user(
     return {
         "success": True,
         "query": query,
+        "since": start.isoformat() if start else None,
+        "until": end.isoformat() if end else None,
         "found": len(hits),
         "transcript": "\n\n".join(blocks),
     }
 
 
-def _base_queryset(user):
-    return Message.active_objects.filter(
+def _base_queryset(user, since: Optional[date] = None, until: Optional[date] = None):
+    queryset = Message.active_objects.filter(
         conversation__user=user,
         sender_type__in=[SenderType.PLAYER, SenderType.AI_ASSISTANT],
     ).exclude(message="")
+    if since is not None:
+        queryset = queryset.filter(created_at__date__gte=since)
+    if until is not None:
+        queryset = queryset.filter(created_at__date__lte=until)
+    return queryset
 
 
-def _search(user, terms: List[str], limit: int) -> List[Dict[str, Any]]:
-    if connection.vendor == "postgresql":
-        matched = _search_postgres(user, terms, limit)
+def parse_day(value: Optional[str]) -> Optional[date]:
+    """YYYY-MM-DD, or nothing. A malformed bound is dropped rather than
+    guessed at — a search silently narrowed to the wrong week is worse than
+    one that ignored a bad argument."""
+    if not value:
+        return None
+    try:
+        return datetime.strptime(str(value)[:10], "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        logger.warning("[memory] search_sessions ignored a bad date: %r", value)
+        return None
+
+
+def _search(
+    user,
+    terms: List[str],
+    limit: int,
+    since: Optional[date] = None,
+    until: Optional[date] = None,
+) -> List[Dict[str, Any]]:
+    if not terms:
+        # A date range with no words is a real search: "what did we talk about
+        # last Tuesday" has nothing to match on but is perfectly answerable.
+        matched = list(
+            _base_queryset(user, since, until).order_by("-created_at")[:limit]
+        )
+    elif connection.vendor == "postgresql":
+        matched = _search_postgres(user, terms, limit, since, until)
     else:
-        matched = _search_fallback(user, terms, limit)
+        matched = _search_fallback(user, terms, limit, since, until)
 
     return [
         {
             "message": message,
-            "before": _neighbor(message, older=True),
-            "after": _neighbor(message, older=False),
+            "before": _neighbor(message, True, since, until),
+            "after": _neighbor(message, False, since, until),
         }
         for message in matched
     ]
 
 
-def _search_postgres(user, terms: List[str], limit: int) -> List[Message]:
+def _search_postgres(
+    user,
+    terms: List[str],
+    limit: int,
+    since: Optional[date] = None,
+    until: Optional[date] = None,
+) -> List[Message]:
     """FTS with prefix-or terms, ranked.
 
     The tsvector expression matches memory/migrations/0004's GIN index over
@@ -101,7 +150,7 @@ def _search_postgres(user, terms: List[str], limit: int) -> List[Message]:
     """
     tsquery = " | ".join(f"{term}:*" for term in terms)
     queryset = (
-        _base_queryset(user)
+        _base_queryset(user, since, until)
         .extra(
             select={
                 "fts_rank": (
@@ -118,22 +167,46 @@ def _search_postgres(user, terms: List[str], limit: int) -> List[Message]:
     return list(queryset)
 
 
-def _search_fallback(user, terms: List[str], limit: int) -> List[Message]:
+def _search_fallback(
+    user,
+    terms: List[str],
+    limit: int,
+    since: Optional[date] = None,
+    until: Optional[date] = None,
+) -> List[Message]:
     """SQLite local dev: LIKE over the body, newest first."""
     condition = Q()
     for term in terms:
         condition |= Q(message__icontains=term)
-    return list(_base_queryset(user).filter(condition).order_by("-created_at")[:limit])
+    return list(
+        _base_queryset(user, since, until)
+        .filter(condition)
+        .order_by("-created_at")[:limit]
+    )
 
 
-def _neighbor(message: Message, older: bool) -> Optional[Message]:
+def _neighbor(
+    message: Message,
+    older: bool,
+    since: Optional[date] = None,
+    until: Optional[date] = None,
+) -> Optional[Message]:
     """The adjacent turn, by pk order within the conversation.
 
     A matched line alone is usually unreadable — "yeah let's do that" needs
     its question. DARE messages have no sequence column; ids are allocated in
     insert order, which is turn order within a conversation.
+
+    Neighbours obey the date bounds too. The block is rendered under ONE date
+    header, so a neighbour from outside the window is presented as though it
+    happened inside it — asking about last week and being shown something from
+    six weeks ago, dated last week.
     """
     queryset = Message.active_objects.filter(conversation_id=message.conversation_id)
+    if since is not None:
+        queryset = queryset.filter(created_at__date__gte=since)
+    if until is not None:
+        queryset = queryset.filter(created_at__date__lte=until)
     if older:
         return queryset.filter(id__lt=message.id).order_by("-id").first()
     return queryset.filter(id__gt=message.id).order_by("id").first()

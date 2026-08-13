@@ -223,6 +223,20 @@ class Decision(BaseModel):
             "or becomes true."
         )
     )
+    is_snapshot: bool = Field(
+        description=(
+            "Is this a MEASURED VALUE that will be a different number later? "
+            "A portfolio balance, a follower count, a weight, a salary, a "
+            "step count, an age. True for those. False for facts that stay "
+            "put until something replaces them — where they live, what they "
+            "do, what they are allergic to.\n"
+            'When true, write the date INTO the statement: "Their portfolio '
+            'was 8M in August 2026", never "their portfolio is 8M". '
+            "Today's date is at the top of this prompt. Said without a date, "
+            "a measurement is read a year later as though it were still true, "
+            "and nothing in the store can tell that it went stale."
+        )
+    )
     valid_until: Optional[str] = Field(
         description=(
             "YYYY-MM-DD, only when the message says when this STOPS being "
@@ -509,6 +523,7 @@ Set `explicit_request` from what the PERSON asked for in this message, not from 
                 confidence=decision.confidence,
                 sensitivity=decision.sensitivity,
                 occurred_at=decision.occurred_at,
+                is_snapshot=decision.is_snapshot,
                 valid_until=decision.valid_until,
                 supersedes_id=decision.supersedes_id,
                 replaces_line=decision.replaces_line,

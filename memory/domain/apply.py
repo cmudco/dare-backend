@@ -49,6 +49,39 @@ def _iso_date(value: Optional[str]) -> Optional[str]:
     return value if value and _ISO_DATE_RE.match(value) else None
 
 
+_MONTHS = (
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+)
+
+
+def _dated(text: str, iso_day: str) -> str:
+    """Make sure a measured value says when it was measured.
+
+    Left alone if the sentence already carries the month or the year — the
+    writer usually phrases it well, and rewriting good prose into "8M (as of
+    August 2026) (as of August 2026)" is its own bug.
+    """
+    try:
+        year, month, _ = iso_day.split("-")
+        stamp = f"{_MONTHS[int(month) - 1]} {year}"
+    except (ValueError, IndexError):
+        return text
+    if stamp.lower() in text.lower() or year in text:
+        return text
+    return f"{text.rstrip('.')} (as of {stamp})."
+
+
 def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> ApplyResult:
     now = input.now
     entries: List[LedgerDraft] = []
@@ -99,6 +132,13 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
         pinned_to: str = "",
     ) -> MemoryRow:
         occurred = _iso_date(decision.occurred_at)
+        if decision.is_snapshot:
+            # A measurement is only true on the day it was taken. Stamping it
+            # is not enough on its own — the date has to be IN the sentence,
+            # because the sentence is what gets read back into a prompt a year
+            # later. The writer is asked to phrase it; this makes sure.
+            occurred = occurred or now[:10]
+            text = _dated(text, occurred)
         return MemoryRow(
             id=input.new_id(),
             kind=kind,

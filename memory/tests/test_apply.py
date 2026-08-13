@@ -924,3 +924,54 @@ class IdentityExemptionTests(SimpleTestCase):
 
         self.assertNotIn("Lahore", result.user_doc)
         self.assertEqual(result.created[0].key, "location")
+
+
+class SnapshotTests(SimpleTestCase):
+    """A measured value carries the day it was measured.
+
+    "My portfolio is 8M right now" is true in August and wrong in October, but
+    stored as a standing sentence nothing can tell it went stale — it just
+    keeps being read back into prompts as though it were current.
+    """
+
+    def snapshot(self, text, **overrides):
+        fields = dict(
+            action="add_fact",
+            key="note:portfolio",
+            text=text,
+            is_snapshot=True,
+            reason="They said what it is worth today.",
+        )
+        fields.update(overrides)
+        return apply_decisions(make_input(), [decision(**fields)])
+
+    def test_an_undated_measurement_is_dated(self):
+        result = self.snapshot("Their portfolio is worth 8M")
+        self.assertEqual(
+            result.created[0].text, "Their portfolio is worth 8M (as of July 2026)."
+        )
+
+    def test_it_is_stamped_with_when_it_was_measured(self):
+        result = self.snapshot("Their portfolio is worth 8M")
+        self.assertEqual(result.created[0].occurred_at, "2026-07-31")
+
+    def test_a_sentence_that_already_says_when_is_left_alone(self):
+        # The writer usually phrases it. Rewriting good prose into "(as of
+        # July 2026) (as of July 2026)" is its own bug.
+        text = "Their portfolio was 8M in July 2026."
+        self.assertEqual(self.snapshot(text).created[0].text, text)
+
+    def test_a_stated_date_wins_over_today(self):
+        result = self.snapshot(
+            "Their portfolio was 6M at the end of the quarter",
+            occurred_at="2026-06-30",
+        )
+        self.assertEqual(result.created[0].occurred_at, "2026-06-30")
+        self.assertIn("June 2026", result.created[0].text)
+
+    def test_an_ordinary_fact_is_never_dated(self):
+        result = apply_decisions(
+            make_input(),
+            [decision(action="add_fact", key="location", text="Lives in Lahore.")],
+        )
+        self.assertEqual(result.created[0].text, "Lives in Lahore.")

@@ -69,6 +69,9 @@ class WriterDecision:
     sensitivity: Optional[str] = None
     occurred_at: Optional[str] = None
     valid_until: Optional[str] = None
+    # A measured value that will read as stale later — a balance, a count, a
+    # weight. Stamped and dated rather than stored as a standing truth.
+    is_snapshot: bool = False
     supersedes_id: Optional[str] = None
     replaces_line: Optional[str] = None
     # For ignore: the row the person just restated. Repetition is the only
