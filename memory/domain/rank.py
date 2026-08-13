@@ -173,10 +173,23 @@ def rank(
     lexical_min = LEXICAL_RELEVANCE_MIN if query_vector is not None else 0.0
 
     def relevant(item: Scored) -> bool:
-        lexical = (
-            item.parts["lexical"] if item.parts["lexical_raw"] >= lexical_min else 0.0
-        )
-        return max(item.parts["semantic"], lexical) >= bar(item)
+        # Two independent routes in, each absolute:
+        #   words — the query's actual tokens matched, at a raw rank real
+        #   matches produce (junk measures an order of magnitude lower);
+        #   meaning — similarity clears the floor.
+        # The earlier form compared the BATCH-NORMALISED lexical score
+        # against the floor, which made relevance depend on what else was in
+        # the shortlist: the best lexical row in any batch read as a perfect
+        # 1.0 however weak it was, and the same row passed or failed on
+        # different turns. Absolute signals only.
+        if item.parts["lexical_raw"] >= lexical_min and lexical_min > 0:
+            return True
+        if query_vector is None and item.parts["lexical"] > 0:
+            # Degraded turn (no embedding): words are the only signal there
+            # is, and holding them to a second-opinion bar would turn a
+            # degraded retrieval into no retrieval at all.
+            return True
+        return item.parts["semantic"] >= bar(item)
 
     passed = [item for item in scored if item.score >= floor and relevant(item)]
     chosen = passed[:top_k]

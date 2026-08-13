@@ -30,8 +30,10 @@ from typing import List, Optional
 
 from django.db import connection, transaction
 from django.db.models import F
+from pgvector.django import CosineDistance
 
 from memory.constants import (
+    SNAP_SIMILARITY,
     WRITER_RETRIEVE_FLOOR,
     WRITER_RETRIEVE_SHORTLIST_LIMIT,
     WRITER_RETRIEVE_TOP_K,
@@ -96,6 +98,12 @@ def ingest_turn(
         user_text,
         top_k=WRITER_RETRIEVE_TOP_K,
         floor=WRITER_RETRIEVE_FLOOR,
+        # Explicit, not the read path's default: the read path tightened its
+        # relevance gate for prompt precision, and inheriting that here
+        # silently shrank the writer's net — measured as reuse misses the
+        # moment a key was also outside the shown key space. Recall dropped
+        # before the collision check never comes back.
+        relevance_floor=WRITER_RETRIEVE_FLOOR,
         shortlist_limit=WRITER_RETRIEVE_SHORTLIST_LIMIT,
         now=now,
     )
@@ -106,6 +114,7 @@ def ingest_turn(
     # missed "keep this in mind" — and the thing it gates, a line in the file
     # read on every future turn, is exactly the judgement worth spending a
     # good model on.
+    keys_in_use = active_keys(user)
     proposal = propose_decisions(
         user_doc=user_doc,
         archive=archive,
@@ -113,10 +122,11 @@ def ingest_turn(
         assistant_message=assistant_text,
         now=now,
         model=model,
-        keys_in_use=active_keys(user),
+        keys_in_use=keys_in_use,
     )
     decisions = proposal.decisions
     explicit = proposal.explicit
+    snap_to_existing_slots(user, decisions, keys_in_use)
     if not decisions:
         return _skip("writer proposed nothing")
 
@@ -171,6 +181,63 @@ def _embedding_text(row: MemoryRow) -> str:
     if row.kind == MemoryKind.PROCEDURE and row.applies_when:
         return f"{row.applies_when} {row.text}"
     return f"{row.key} {row.text}"
+
+
+def snap_to_existing_slots(user, decisions, keys_in_use) -> None:
+    """Route a brand-new key into an existing slot when it is the SAME fact.
+
+    The reuse machinery is the shown key space, and it measures clean — but
+    only for keys the writer can see. A key past the 300 cap is invisible,
+    and the same fact then mints a fresh slot beside the old one; different
+    keys never collide, so both versions live forever. Reproduced at will by
+    hiding the key: "note:backend-technologies" minted beside a hidden
+    "note:backend-stack".
+
+    So a new key's text is compared against the nearest stored fact by
+    meaning, and at SNAP_SIMILARITY and above the decision's key is rewritten
+    to the existing slot BEFORE the gate runs — the ordinary collision path
+    then supersedes or reinforces with all of its rules and its ledger trail.
+    No new destructive machinery: this changes where a write lands, never
+    what happens when it lands. Below the threshold both rows stay, where
+    the tidy-up sweep proposes and a person decides.
+    """
+    if connection.vendor != "postgresql":
+        return
+    known = set(keys_in_use)
+    candidates = [
+        d for d in decisions if d.action == "add_fact" and d.key and d.key not in known
+    ]
+    if not candidates:
+        return
+
+    vectors = embed_texts([f"{d.key} {d.text}" for d in candidates])
+    for decision, vector in zip(candidates, vectors):
+        if vector is None:
+            continue
+        neighbor = (
+            MemoryRecord.usable(user)
+            .filter(kind=MemoryKind.FACT)
+            .exclude(embedding__isnull=True)
+            .annotate(distance=CosineDistance("embedding", vector))
+            .order_by("distance")
+            .first()
+        )
+        if neighbor is None:
+            continue
+        similarity = 1.0 - float(neighbor.distance)
+        if similarity < SNAP_SIMILARITY or neighbor.key == decision.key:
+            continue
+        logger.info(
+            "[memory] snap: %r -> existing slot %r (%.3f)",
+            decision.key,
+            neighbor.key,
+            similarity,
+        )
+        decision.reason = (
+            f"{decision.reason} [slot: filed under existing key "
+            f"'{neighbor.key}' — same fact by meaning, {similarity:.2f}]"
+        )
+        decision.key = neighbor.key
 
 
 def _skip(reason: str) -> IngestReport:

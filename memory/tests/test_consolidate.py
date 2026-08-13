@@ -83,14 +83,77 @@ class MergeTests(SimpleTestCase):
     def test_the_more_repeated_row_is_the_one_kept(self):
         result = sweep(
             [
-                row(id="quiet", key="note:a", text="Owns a MacBook.", reinforced=0),
-                row(id="said-twice", key="note:b", text="Owns a Mac.", reinforced=2),
+                # Respelled slot (mac ⊂ mac-laptop), so the ordinary 0.74
+                # route applies and the assertion stays about the tiebreak.
+                row(id="quiet", key="note:mac", text="Owns a MacBook.", reinforced=0),
+                row(
+                    id="said-twice",
+                    key="note:mac-laptop",
+                    text="Owns a MacBook laptop.",
+                    reinforced=2,
+                ),
             ],
             pairwise(0.98),
         )
         proposal = result.proposals[0]
         self.assertEqual(proposal.record_id, "said-twice")
         self.assertEqual(proposal.other_id, "quiet")
+
+    def test_two_people_wearing_one_template_are_never_merged(self):
+        """Measured 0.806 on a real sweep: "Zohaib works on security with
+        them" against "Fahad works on security with them". Approving that
+        merge deletes a person. A person-topic pair with different
+        qualifiers is two people by construction, at ANY similarity."""
+        result = sweep(
+            [
+                row(
+                    id="a",
+                    key="person:zohaib-coworker",
+                    text="Zohaib works on security with them.",
+                ),
+                row(
+                    id="b",
+                    key="person:fahad-coworker",
+                    text="Fahad works on security with them.",
+                ),
+            ],
+            pairwise(0.98),
+        )
+        self.assertEqual(result.proposals, [])
+
+    def test_a_respelled_slot_clears_the_disjoint_bar_on_shared_specifics(self):
+        # Measured 0.916: the same Civic filed under two names. The
+        # qualifiers share nothing, but every specific (2019, Honda, Civic)
+        # appears on both sides — which is what a rephrasing looks like.
+        result = sweep(
+            [
+                row(id="a", key="note:vehicle", text="They drive a 2019 Honda Civic."),
+                row(id="b", key="note:car", text="Their car is a 2019 Honda Civic."),
+            ],
+            pairwise(0.916),
+        )
+        self.assertEqual(kinds(result), [MERGE])
+
+    def test_similarity_alone_cannot_merge_two_different_subjects(self):
+        # Two games in one sentence template. Even placed ABOVE the disjoint
+        # bar, each side names a thing the other does not — that asymmetry is
+        # the tell that these are two facts, not two spellings.
+        result = sweep(
+            [
+                row(
+                    id="a",
+                    key="note:game-age",
+                    text="They play Age of Empires II to unwind.",
+                ),
+                row(
+                    id="b",
+                    key="note:game-stardew",
+                    text="They play Stardew Valley to unwind.",
+                ),
+            ],
+            pairwise(0.90),
+        )
+        self.assertEqual(result.proposals, [])
 
     def test_rows_under_one_key_are_never_merged(self):
         # Two active rows cannot share a key — the write gate saw to that — so

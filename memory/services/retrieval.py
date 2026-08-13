@@ -59,6 +59,12 @@ def retrieve(
 
     moment = now or datetime.now(timezone.utc).isoformat()
 
+    # Embedded before the shortlist, not after: the vector is a stage-one
+    # signal now, nominating the candidates the ranker would score highest.
+    if query_vector is None and embed_query:
+        query_vector = embed_one(query)
+    vector = query_vector
+
     candidates = shortlist(
         user,
         query,
@@ -66,10 +72,8 @@ def retrieve(
         limit=shortlist_limit,
         now=moment,
         exclude_pinned=exclude_pinned,
+        query_vector=vector,
     )
-    if query_vector is None and embed_query:
-        query_vector = embed_one(query)
-    vector = query_vector
 
     result: RankResult = rank(
         candidates,
