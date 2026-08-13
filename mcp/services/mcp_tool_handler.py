@@ -289,7 +289,7 @@ class MCPToolHandler:
 
         # Stream the follow-up response
         async for chunk, usage in llm_service.query(request):
-            if chunk and chunk.strip():
+            if chunk:
                 response_accumulator += chunk
                 payload = WebSocketResponseService.format_streaming_chunk(
                     message_id=bot_message_id,
