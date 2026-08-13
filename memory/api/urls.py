@@ -34,6 +34,11 @@ urlpatterns = [
         name="memory-v2-hold",
     ),
     path(
+        "v2/consolidate/",
+        MemoryViewSet.as_view({"get": "consolidate", "post": "consolidate"}),
+        name="memory-v2-consolidate",
+    ),
+    path(
         "v2/recall/",
         MemoryViewSet.as_view({"get": "recall"}),
         name="memory-v2-recall",

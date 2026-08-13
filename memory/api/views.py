@@ -22,6 +22,7 @@ from memory.domain.user_doc import (
     render_user_doc,
 )
 from memory.models import MemoryLedgerEntry, MemoryRecord, UserMemoryDocument
+from memory.services import consolidation
 from memory.services.edit import edit_doc_line, edit_record
 from memory.services.items import (
     DOC_ID_PREFIX,
@@ -298,6 +299,31 @@ class MemoryViewSet(viewsets.ViewSet):
                 "budget": self._budget(normalized),
             }
         )
+
+    def consolidate(self, request):
+        """The tidy-up sweep: GET to see what it would change, POST to approve one.
+
+        Nothing is applied by a GET, and a POST applies exactly the proposal it
+        was given. A sweep that tidied on its own would be a process quietly
+        rewriting someone's memory — every rule in it is a judgement that will
+        sometimes be wrong, so the person decides.
+        """
+        if request.method.lower() == "get":
+            return Response(consolidation.propose(request.user))
+
+        proposal = request.data or {}
+        if not proposal.get("kind") or not proposal.get("record_id"):
+            return Response(
+                {"detail": "A proposal needs a kind and a record_id."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        result = consolidation.apply(request.user, proposal)
+        if not result.ok:
+            return Response(
+                {"detail": result.reason}, status=status.HTTP_400_BAD_REQUEST
+            )
+        return Response({"detail": result.detail})
 
     def ledger(self, request):
         """The decision audit: every write, applied or refused, with the raw
