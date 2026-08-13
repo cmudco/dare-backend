@@ -118,6 +118,46 @@ ADDRESSING_HEADINGS = frozenset({"communication", "identity"})
 TOKEN_BUDGET = 500
 TOKEN_WARNING = round(TOKEN_BUDGET * 0.8)
 
+# --- Consolidation ----------------------------------------------------------
+#
+# The tidy-up sweep. Every number here decides whether a memory survives, so
+# each one is set where a wrong call is cheap and reversible: the sweep only
+# ever PROPOSES, and nothing moves until the person says so.
+
+# Two facts are the same fact above this.
+#
+# Benched on 22 labelled pairs, embedded exactly as the store embeds them:
+# genuine duplicates score 0.745-0.930, pairs that merely look alike top out
+# at 0.720. At 0.74 all ten duplicates are caught and none of the twelve
+# distinct pairs are. The prototype's 0.94 was carried over untested and
+# caught NOTHING on this embedding model — the rule was dead code.
+#
+# The margin is thin (0.025), and two things make that acceptable rather than
+# reckless: nothing merges without the person approving it, and a merge
+# retires the duplicate rather than deleting it. The worst case is a rejected
+# suggestion.
+MERGE_SIMILARITY = 0.74
+
+# Tellings before a fact is offered a permanent seat in the profile. One is a
+# mention. Two is the person making sure you heard, which is the only durable
+# signal this system ever gets.
+PROMOTE_AFTER_TELLINGS = 2
+
+# A pinned line is offered up for eviction once the profile is over budget and
+# the line has never been repeated. Importance breaks the tie, and safety is
+# never offered at all.
+EVICT_WHEN_OVER_BUDGET = True
+
+# How many proposals one sweep may raise. A tidy-up that returns forty things
+# to review is not a tidy-up, it is a second inbox.
+MAX_PROPOSALS = 12
+
+# And how many of any ONE kind. Found in a probe: thirty near-identical rows
+# raised twelve merge proposals between themselves and buried every promote,
+# rekey and evict behind them. A sweep should show a spread of what is wrong,
+# not the loudest thing repeatedly.
+MAX_PER_KIND = 4
+
 # --- Retrieval --------------------------------------------------------------
 
 # How much each signal counts. Meaning dominates because it is the only signal
