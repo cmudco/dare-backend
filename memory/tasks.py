@@ -18,6 +18,7 @@ and nothing else; it lands in RQ's failed registry and is logged loudly.
 
 import logging
 
+from django.db import close_old_connections
 from django_rq import job
 
 from config.env import USE_POSTGRES
@@ -34,6 +35,12 @@ MEMORY_QUEUE = "memory"
 
 @job(MEMORY_QUEUE)
 def run_memory_writer(ai_message_id: int) -> None:
+    # The worker is long-lived and this queue idles between turns, so Postgres
+    # may have closed the connection it still holds — the same failure that
+    # killed the old extraction job on dev (1a12da8). Discard unusable ones
+    # before the first query rather than dying on it.
+    close_old_connections()
+
     if not USE_POSTGRES:
         logger.debug("[memory] writer skipped: USE_POSTGRES is False")
         return
