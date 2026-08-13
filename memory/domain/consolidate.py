@@ -84,6 +84,22 @@ def _words(text: str) -> set:
     return {word.strip(".,;:").lower() for word in text.split() if len(word) > 2}
 
 
+def _mentions(word: str, words: set) -> bool:
+    """Does the text use this word, allowing for how English inflects?
+
+    Exact set membership is too strict to decide a key is stale: the key
+    "diet_avoid:peanut" against "severely allergic to peanuts" shares no exact
+    token, and the sweep offered to rename a slot that was already right. A
+    prefix match either way covers plural, possessive and participle without
+    pulling in a stemmer, and the cost of being generous here is only a stale
+    key left alone — while being strict proposes renaming a correct one.
+    """
+    return any(
+        other == word or other.startswith(word) or word.startswith(other)
+        for other in words
+    )
+
+
 def sweep(
     rows: Sequence[MemoryRow],
     similarity: Callable[[MemoryRow, MemoryRow], float],
@@ -187,7 +203,8 @@ def sweep(
         parts = {part for part in qualifier.replace("-", " ").split() if len(part) > 2}
         if not parts:
             continue
-        if parts & _words(row.text):
+        said = _words(row.text)
+        if any(_mentions(part, said) for part in parts):
             continue
         proposals.append(
             Proposal(
