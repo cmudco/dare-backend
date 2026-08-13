@@ -235,8 +235,13 @@ class ToolExecutionService:
         elif tool_name in MEMORY_TOOLS:
             from memory.services.session_search import search_sessions_for_user
 
+            # Scope stays server-side; the dates only ever narrow, so they
+            # are safe to take from the model.
             raw_result = await sync_to_async(search_sessions_for_user)(
-                ctx.user, str(arguments.get("query", ""))
+                ctx.user,
+                str(arguments.get("query", "")),
+                since=arguments.get("since"),
+                until=arguments.get("until"),
             )
         elif tool_name in ARTIFACT_TOOLS:
             if ctx.artifact_host is None or not ctx.artifact_host.can_create:

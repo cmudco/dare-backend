@@ -6,7 +6,7 @@ definitions and executors.
 """
 
 import logging
-from typing import Dict, List, Optional, Any, Callable
+from typing import Any, Callable, Dict, List, Optional
 
 from core.services.llm_utils.diagram_tool import (get_diagram_tool_claude,
                                                   get_diagram_tool_openai,
@@ -738,9 +738,29 @@ def get_search_sessions_tool_openai() -> Dict:
                         "type": "string",
                         "description": (
                             "Keywords likely to appear in the messages "
-                            "themselves, not a question."
+                            "themselves, not a question. Leave empty when the "
+                            "person is asking about a period rather than a "
+                            "topic, and use the dates alone."
                         ),
-                    }
+                    },
+                    "since": {
+                        "type": "string",
+                        "description": (
+                            "YYYY-MM-DD. Only search on or after this day. "
+                            "Work it out from today's date: 'last week', "
+                            "'in June', 'a couple of months ago'. Do NOT put "
+                            "the period in `query` — searching for the words "
+                            "'last week' finds messages that happen to say "
+                            "'last week', not messages from last week."
+                        ),
+                    },
+                    "until": {
+                        "type": "string",
+                        "description": (
+                            "YYYY-MM-DD. Only search on or before this day. "
+                            "Pair it with `since` to bound a period."
+                        ),
+                    },
                 },
                 "required": ["query"],
             },

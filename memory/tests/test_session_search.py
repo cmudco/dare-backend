@@ -5,8 +5,11 @@ hallucinated argument cannot widen it), and every execution lands in the
 ledger so reads share the audit timeline with writes.
 """
 
+from datetime import timedelta
+
 from django.contrib.auth import get_user_model
 from django.test import TestCase
+from django.utils import timezone
 
 from conversations.constants import SenderType
 from conversations.models import Conversation, Message
@@ -82,3 +85,73 @@ class SessionSearchTests(TestCase):
         result = search_sessions_for_user(None, "anything")
         self.assertFalse(result["success"])
         self.assertIn("unavailable", result["error"])
+
+
+class DateBoundTests(TestCase):
+    """ "What did we discuss last week" is a real question about a period.
+
+    Without bounds it could only be asked by searching for the words "last
+    week", which matches messages that happen to SAY "last week" and never
+    messages FROM last week.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = get_user_model().objects.create_user(
+            email="dated-search@example.com", password="x"
+        )
+        cls.conversation = Conversation.active_objects.create(
+            user=cls.user, conversation_id="dated-conv"
+        )
+        cls.old = cls.message("We settled on Postgres for the archive.", days_ago=40)
+        cls.recent = cls.message("We settled on Redis for the queue.", days_ago=2)
+
+    @classmethod
+    def message(cls, text, days_ago):
+        record = Message.active_objects.create(
+            conversation=cls.conversation,
+            sender_type=SenderType.PLAYER,
+            message=text,
+        )
+        # created_at is auto_now_add, so the age has to be written after.
+        stamp = timezone.now() - timedelta(days=days_ago)
+        Message.active_objects.filter(pk=record.pk).update(created_at=stamp)
+        record.refresh_from_db()
+        return record
+
+    def search(self, query="", **bounds):
+        return search_sessions_for_user(self.user, query, **bounds)
+
+    def test_a_since_bound_hides_what_came_before_it(self):
+        recent_day = (timezone.now() - timedelta(days=7)).date().isoformat()
+        result = self.search("settled", since=recent_day)
+        self.assertIn("Redis", result["transcript"])
+        self.assertNotIn("Postgres", result["transcript"])
+
+    def test_an_until_bound_hides_what_came_after_it(self):
+        cutoff = (timezone.now() - timedelta(days=30)).date().isoformat()
+        result = self.search("settled", until=cutoff)
+        self.assertIn("Postgres", result["transcript"])
+        self.assertNotIn("Redis", result["transcript"])
+
+    def test_a_period_can_be_asked_for_with_no_words_at_all(self):
+        result = self.search(
+            since=(timezone.now() - timedelta(days=7)).date().isoformat()
+        )
+        self.assertTrue(result["success"])
+        self.assertIn("Redis", result["transcript"])
+
+    def test_the_bounds_come_back_so_the_answer_can_say_what_it_searched(self):
+        day = (timezone.now() - timedelta(days=7)).date().isoformat()
+        self.assertEqual(self.search("settled", since=day)["since"], day)
+
+    def test_a_malformed_date_is_ignored_rather_than_guessed_at(self):
+        # A search silently narrowed to the wrong week is worse than one that
+        # dropped a bad argument.
+        result = self.search("settled", since="last tuesday")
+        self.assertTrue(result["success"])
+        self.assertIsNone(result["since"])
+        self.assertIn("Postgres", result["transcript"])
+
+    def test_no_words_and_no_dates_is_still_nothing(self):
+        self.assertEqual(self.search("")["found"], 0)
