@@ -21,8 +21,8 @@ you to look. Nothing here needs the terminal.
 
 ## Step 0 — start empty
 
-Memory page → **Clear all**. Profile empty, no cards. Now turn the **Memory**
-toggle **on** in a new conversation.
+Memory page → **Forget everything**. Profile empty, no cards. Now turn the
+**Memory** toggle **on** in a new conversation.
 
 Everything below happens in that one conversation.
 
@@ -113,10 +113,15 @@ is fetched by the situation, not by matching words. The reply should be blunt.
 
 > book me somewhere nice for dinner tonight
 
-**Expect:** the reply already knows about the peanut allergy, without you
-mentioning food restrictions. This is why safety facts go into the profile
-instead of waiting to be searched — the turn where an allergy matters is
+**Expect:** open the chip — the allergy is in the memories the reply was given,
+without you mentioning food restrictions. This is why safety facts go into the
+profile instead of waiting to be searched: the turn where an allergy matters is
 exactly the turn that doesn't mention it.
+
+Whether the reply *says so* is up to the model, not the memory system. On a
+run with Haiku 4.5 it suggested two Lahore restaurants and never raised the
+allergy, even with it in the prompt. The chip is the honest check — it shows
+what the model was handed, which is the only part this system controls.
 
 ---
 
