@@ -22,6 +22,7 @@ from typing import List, Optional
 from memory.constants import (
     ADDRESSING_HEADINGS,
     NEVER_EXPIRES,
+    PINNED_TOPICS,
     MemoryKind,
     MemoryState,
     Sensitivity,
@@ -261,6 +262,30 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
             action = "patch_user"
             key = decision.profile_key or "identity"
 
+        # And two topics do not get to depend on the writer agreeing. What to
+        # call someone and where they are are single-slot facts whose whole
+        # value is being present before anyone asks — the turn that needs a
+        # name is never the turn that sounds like it is about names. Measured
+        # over three identical runs of the same conversation, the writer
+        # pinned "call me Abbas" twice and left it in the archive once, so
+        # USER.md had no Identity section at all on that run. The judgement is
+        # a property of the topic, not of the sentence, which makes it the
+        # gate's to make rather than the model's.
+        # The topic this fact collides on, kept aside before the routing below
+        # overwrites `key` with a heading. Losing it here would cost the whole
+        # point of pinning a fact rather than writing a bullet: a profile line
+        # whose key became "identity" can never be retired by the next move.
+        # Read from the topic and not from `key`, because `key` is already a
+        # heading whenever the writer proposed a profile line — which is
+        # exactly when the same sentence needs recognising.
+        topic_key = decision.topic_key or (
+            decision.key if decision.action == "add_fact" else None
+        )
+        pinned_topic = (topic_key or "").split(":")[0] in PINNED_TOPICS
+        if action == "add_fact" and pinned_topic:
+            action = "patch_user"
+            key = "identity"
+
         # Rule 1. USER.md is injected into every conversation, so a line there
         # costs tokens forever. Consolidation promotes what proves durable; a
         # single turn does not get to.
@@ -276,15 +301,20 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
         # someone is how to address them, not a disclosure about their life,
         # and it is wrong on every turn it fails to reach.
         #
-        # But the heading also holds where someone lives, and a profile line
-        # cannot be superseded — it has no key to collide on. Pinned there,
-        # "lives in Lahore" survives the move to Islamabad and the archive ends
-        # up with two live answers to the same question. So identity only
-        # qualifies when it is not carrying a life fact: no topic, or the one
-        # topic that IS a form of address.
-        instruction = decision.key in ADDRESSING_HEADINGS
-        if instruction and decision.key == "identity":
-            instruction = (decision.topic_key or "").split(":")[0] in ("", "name")
+        # The heading itself is still refused a life fact, though, because a
+        # hand-written profile line has no key to collide on: written straight
+        # into the document, "lives in Lahore" survives the move to Islamabad
+        # and the store ends up with two live answers to one question. A
+        # PINNED fact is the way a life fact reaches the profile safely — it
+        # keeps its topic key and retires normally — which is what the rule
+        # above does and what this one does not.
+        instruction = pinned_topic or decision.key in ADDRESSING_HEADINGS
+        if instruction and decision.key == "identity" and not pinned_topic:
+            # Identity is a broad heading and a writer will file an occupation
+            # or a project under it. Without a topic there is nothing to
+            # collide on, which is fine for a form of address and wrong for a
+            # life fact — those go to the archive, where they can be retired.
+            instruction = not (decision.topic_key or "")
         if (
             action == "patch_user"
             and not input.explicit
@@ -297,7 +327,7 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
             # `identity:lives-lahore` — so the fact can still collide with, and
             # be retired by, the same fact stated later. Falling back to the
             # heading only keeps two downgraded lines under one heading apart.
-            key = decision.topic_key or downgraded_key(decision.key or "note", text)
+            key = topic_key or downgraded_key(decision.key or "note", text)
             log(
                 action=action,
                 proposed_action="patch_user",
@@ -357,7 +387,7 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
         # disagree about the same fact.
         if action == "patch_user" and text:
             pinned_to = key or "identity"
-            key = decision.topic_key or downgraded_key(pinned_to, text)
+            key = topic_key or downgraded_key(pinned_to, text)
             action = "add_fact"
 
         if action == "patch_user":

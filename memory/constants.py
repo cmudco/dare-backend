@@ -112,6 +112,20 @@ NEVER_EXPIRES = frozenset({"location", "occupation", "industry", "name"})
 # Everything else about a person's life still needs to be asked for.
 ADDRESSING_HEADINGS = frozenset({"communication", "identity"})
 
+# Topics that always earn a profile line, whatever the writer proposed. Both
+# are single-slot, both are one short sentence, and both are wrong on every
+# turn they fail to reach: the turn that needs to know what to call someone,
+# or roughly where they are, almost never sounds like it is asking. Left to
+# the writer's judgement the same conversation pinned the name on two runs
+# out of three.
+#
+# Safe to pin because a pinned fact is a projection, not a copy — it keeps
+# its topic key, so "lives in Lahore" is still retired by "lives in
+# Islamabad" and the profile follows without anyone editing markdown. That
+# was NOT true of a hand-written profile line, which is why the heading
+# itself still refuses life facts.
+PINNED_TOPICS = frozenset({"name", "location"})
+
 # --- USER.md ----------------------------------------------------------------
 
 # Roughly 500 tokens. The whole file is injected on every single turn.

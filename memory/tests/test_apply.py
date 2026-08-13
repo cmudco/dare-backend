@@ -883,12 +883,14 @@ class CommunicationInstructionTests(SimpleTestCase):
 
 
 class IdentityExemptionTests(SimpleTestCase):
-    """Identity reaches USER.md as a form of address, never as a life fact.
+    """What to call someone, and where they are, reach the profile unasked.
 
-    "Call me Farhat" is an instruction and belongs in the file read on every
-    turn. "Lives in Lahore" happens to arrive under the same heading and must
-    not: a profile line has no key, so it cannot be retired when they move,
-    and the store ends up holding two live answers to one question.
+    Both are single-slot and both are wrong on every turn they fail to reach —
+    the turn that needs a name never sounds like it is about names. They reach
+    it as PINNED FACTS rather than as markdown, which is what keeps them
+    correctable: the row keeps its topic key, so "lives in Lahore" is still
+    retired by "lives in Islamabad" and the profile follows. A hand-written
+    bullet has no key and could never do that.
     """
 
     def test_what_to_call_someone_reaches_the_profile_unasked(self):
@@ -908,7 +910,7 @@ class IdentityExemptionTests(SimpleTestCase):
         self.assertEqual(result.created[0].pinned_to, "identity")
         self.assertEqual(result.created[0].key, "name")
 
-    def test_a_life_fact_under_the_same_heading_still_goes_to_the_archive(self):
+    def test_where_they_live_is_pinned_but_keeps_the_key_that_retires_it(self):
         result = apply_decisions(
             make_input(explicit=False),
             [
@@ -922,8 +924,33 @@ class IdentityExemptionTests(SimpleTestCase):
             ],
         )
 
-        self.assertNotIn("Lahore", result.user_doc)
+        self.assertEqual(result.created[0].pinned_to, "identity")
         self.assertEqual(result.created[0].key, "location")
+        # Pinned, not written: the document holds only what a person typed,
+        # so the two can never disagree about the same fact.
+        self.assertNotIn("Lahore", result.user_doc)
+
+    def test_the_topic_decides_it_even_when_the_writer_proposed_a_plain_fact(self):
+        """The same sentence came back as patch_user on two runs of one
+        conversation and as add_fact on the third, and only the first two were
+        pinned — so that run had no Identity section at all. The topic is what
+        decides, not which action the writer reached for."""
+        result = apply_decisions(
+            make_input(explicit=False),
+            [
+                decision(
+                    action="add_fact",
+                    key="name",
+                    topic_key="name",
+                    pin_to_profile=False,
+                    text="They are called Abbas.",
+                    reason="Said what to call them.",
+                )
+            ],
+        )
+
+        self.assertEqual(result.created[0].pinned_to, "identity")
+        self.assertEqual(result.created[0].key, "name")
 
 
 class SnapshotTests(SimpleTestCase):

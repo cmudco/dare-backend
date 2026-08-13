@@ -76,9 +76,10 @@ class ReadContext:
 def read_context(user, question: str) -> ReadContext:
     """The three reads, sharing exactly one query embedding.
 
-    ``embed_query=False`` on both funnels: this is the only place the question
-    is embedded, so a failure here degrades the whole turn to lexical ranking
-    once rather than retrying per funnel.
+    ``embed_query=False`` on both funnels: embedding happens here and nowhere
+    below, so a failure degrades the whole turn to lexical ranking once rather
+    than retrying per funnel. Usually that is one embedding shared by both;
+    a message with a pasted body costs a second, for the reason below.
     """
     user_doc = read_user_doc(user)
     vector = embed_one(question)
@@ -96,15 +97,22 @@ def read_context(user, question: str) -> ReadContext:
         exclude_pinned=True,
     )
 
+    # Procedures are reached by the request, so a pasted body is dropped from
+    # their query. That only matters if it is dropped from the VECTOR too —
+    # the shared embedding above is of the whole message, and semantic carries
+    # 0.5 of the score against lexical's 0.2. Re-embedded only when stripping
+    # actually removed something, so the ordinary turn still pays for one.
     task = TaskContext(message=question)
+    task_text = task_query(task)
+    task_vector = vector if task_text == question.strip() else embed_one(task_text)
     procedures = retrieve(
         user,
-        task_query(task),
+        task_text,
         kind=MemoryKind.PROCEDURE,
         top_k=PROCEDURE_TOP_K,
         floor=PROCEDURE_FLOOR,
         shortlist_limit=PROCEDURE_SHORTLIST_LIMIT,
-        query_vector=vector,
+        query_vector=task_vector,
         embed_query=False,
         relevance_floor=PROCEDURE_RELEVANCE_FLOOR,
     )

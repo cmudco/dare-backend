@@ -85,6 +85,13 @@ def search_sessions_for_user(
 def _base_queryset(user, since: Optional[date] = None, until: Optional[date] = None):
     queryset = Message.active_objects.filter(
         conversation__user=user,
+        # Deleting a conversation has to mean the transcript stops answering
+        # for it. Message rows are not touched when a conversation is
+        # deleted, so filtering only on the message flags leaves every word
+        # of a deleted conversation searchable — which reads to the person as
+        # the delete not having worked.
+        conversation__is_deleted=False,
+        conversation__is_active=True,
         sender_type__in=[SenderType.PLAYER, SenderType.AI_ASSISTANT],
     ).exclude(message="")
     if since is not None:
@@ -125,14 +132,22 @@ def _search(
     else:
         matched = _search_fallback(user, terms, limit, since, until)
 
-    return [
-        {
-            "message": message,
-            "before": _neighbor(message, True, since, until),
-            "after": _neighbor(message, False, since, until),
-        }
-        for message in matched
-    ]
+    # A hit is shown with the turn either side of it, so two matches one apart
+    # — which is the common case, since the person says a thing and the reply
+    # quotes it back — render two windows over almost the same three messages.
+    # Read back, the same exchange appears twice and looks like it happened
+    # twice. A message already inside an earlier window is dropped: it is not
+    # a second answer, it is the same one.
+    shown: set = set()
+    hits: List[Dict[str, Any]] = []
+    for message in matched:
+        if message.id in shown:
+            continue
+        before = _neighbor(message, True, since, until)
+        after = _neighbor(message, False, since, until)
+        hits.append({"message": message, "before": before, "after": after})
+        shown.update(item.id for item in (before, message, after) if item is not None)
+    return hits
 
 
 def _search_postgres(

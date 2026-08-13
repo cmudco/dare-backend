@@ -236,3 +236,23 @@ class ProcedurePromptTests(SimpleTestCase):
             ),
             "can you clean this up git commit README.md",
         )
+
+    def test_a_pasted_body_is_dropped_because_the_request_is_the_situation(self):
+        """Measured against a stored code-review rule: with the body attached
+        this message scores 0.157 and falls under the 0.22 relevance gate;
+        without it, 0.340."""
+        self.assertEqual(
+            task_query(
+                TaskContext(
+                    message=(
+                        "here's a function I wrote, take a look:\n\n"
+                        "def parse(x):\n    return x.split(',')[1]"
+                    )
+                )
+            ),
+            "here's a function I wrote, take a look:",
+        )
+
+    def test_a_message_that_is_only_code_keeps_the_code(self):
+        code = "def parse(x):\n    return x.split(',')[1]"
+        self.assertEqual(task_query(TaskContext(message=code)), code)

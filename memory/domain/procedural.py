@@ -16,6 +16,7 @@ is what matters: the moment the loop has tools, ``about`` is where tool names
 and file paths go — and nothing else in this module changes.
 """
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
@@ -37,8 +38,39 @@ class TaskContext:
     about: List[str] = field(default_factory=list)
 
 
+_FENCED = re.compile(r"```.*?```", re.DOTALL)
+_CODE_LINE = re.compile(
+    r"^\s{2,}\S"
+    r"|^\s*(def|class|import|from|return|if|for|while|const|let|var|function"
+    r"|public|private|SELECT|INSERT|UPDATE|#include)\b"
+    r"|[{};]\s*$"
+)
+
+
+def _asked(message: str) -> str:
+    """The request, with any pasted payload taken out.
+
+    A procedure is retrieved by the situation, and the situation is what the
+    person SAID — "take a look at this" — not the forty lines they pasted
+    under it. Measured against a stored code-review rule: "here's a function
+    I wrote, take a look:" with the body attached scores 0.157 and falls under
+    the 0.22 relevance gate; the same message with the body removed scores
+    0.340 and retrieves. Four other phrasings of that request, none of which
+    pasted anything, all retrieved it — the body was the whole difference.
+
+    If a message is nothing but code, the code is the request and it is kept.
+    """
+    prose = " ".join(
+        line
+        for line in _FENCED.sub(" ", message).splitlines()
+        if line.strip() and not _CODE_LINE.search(line)
+    ).strip()
+    return prose or message.strip()
+
+
 def task_query(context: TaskContext) -> str:
-    return " ".join(part for part in [context.message, *context.about] if part).strip()
+    parts = [_asked(context.message), *context.about]
+    return " ".join(part for part in parts if part).strip()
 
 
 def procedure_query(task: TaskContext) -> Dict[str, Any]:
