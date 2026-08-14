@@ -54,6 +54,11 @@ urlpatterns = [
         name="memory-v2-import",
     ),
     path(
+        "v2/import/foreign/",
+        MemoryViewSet.as_view({"post": "import_foreign"}),
+        name="memory-v2-import-foreign",
+    ),
+    path(
         "v2/sessions/",
         MemoryViewSet.as_view({"get": "sessions"}),
         name="memory-v2-sessions",
