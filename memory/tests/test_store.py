@@ -81,7 +81,6 @@ class IngestTests(TestCase):
                     reason="Stated where they live.",
                     text="Lives in Pittsburgh.",
                     key="location",
-                    topic_key="location",
                 )
             ],
         )
@@ -136,12 +135,7 @@ class IngestTests(TestCase):
         self.assertEqual(new.state, MemoryState.ACTIVE)
         # Retired on the day the replacement arrived.
 
-    def test_the_exact_seek_covers_the_topic_a_profile_line_lands_on(self):
-        """A patch_user decision carries a HEADING in `key`; the gate reroutes
-        the write onto `topic_key`. Seeking only the heading missed a live
-        occupation row — "add this to my profile: I'm a PhD student" left
-        "backend engineer" active beside it, two answers to a one-slot topic.
-        """
+    def test_the_exact_seek_covers_a_fact_that_is_also_pinned(self):
         self.ingest(
             "I'm a backend engineer.",
             [
@@ -150,7 +144,6 @@ class IngestTests(TestCase):
                     reason="Stated.",
                     text="They are a backend engineer.",
                     key="occupation",
-                    topic_key="occupation",
                 )
             ],
         )
@@ -158,13 +151,11 @@ class IngestTests(TestCase):
             "add this to my profile: I'm a PhD student at CMU",
             [
                 WriterDecision(
-                    action="patch_user",
+                    action="add_fact",
                     reason="They asked for it in their profile.",
                     text="They are a PhD student at CMU.",
-                    key="background",
-                    topic_key="occupation",
-                    profile_key="background",
-                    pin_to_profile=True,
+                    key="occupation",
+                    pinned_to="background",
                 )
             ],
             explicit=True,
@@ -212,6 +203,37 @@ class IngestTests(TestCase):
         self.assertEqual(
             MemoryRecord.objects.filter(user=self.user, key="diet").count(), 1
         )
+
+    def test_an_explicit_pin_updates_an_identical_existing_fact(self):
+        self.ingest(
+            "I run Project Atlas.",
+            [
+                WriterDecision(
+                    action="add_fact",
+                    reason="Stated.",
+                    text="Runs Project Atlas.",
+                    key="project:atlas",
+                )
+            ],
+        )
+        report, _ = self.ingest(
+            "Remember in my profile that I run Project Atlas.",
+            [
+                WriterDecision(
+                    action="add_fact",
+                    reason="Explicitly requested.",
+                    text="Runs Project Atlas.",
+                    key="project:atlas",
+                    pinned_to="background",
+                )
+            ],
+            explicit=True,
+        )
+
+        record = MemoryRecord.objects.get(user=self.user, key="project:atlas")
+        self.assertEqual(record.pinned_to, "background")
+        self.assertEqual(record.reinforced, 1)
+        self.assertTrue(report.profile_changed)
 
     def test_a_health_mention_is_held_and_never_usable(self):
         self.ingest(

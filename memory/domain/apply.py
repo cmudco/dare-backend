@@ -1,18 +1,17 @@
 """Apply writer proposals through deterministic memory rules."""
 
 import re
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from memory.constants import (
-    ADDRESSING_HEADINGS,
     NEVER_EXPIRES,
-    PINNED_TOPICS,
+    PINNED_TOPIC_HEADINGS,
     TOKEN_BUDGET,
     MemoryKind,
     MemoryState,
     Sensitivity,
 )
-from memory.domain.guards import demands_override, looks_like_secret
+from memory.domain.guards import inspect_write
 from memory.domain.keys import distinguishing_key, downgraded_key
 from memory.domain.types import (
     ApplyInput,
@@ -71,15 +70,14 @@ def _dated(text: str, iso_day: str) -> str:
 
 def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> ApplyResult:
     now = input.now
-    turn_has_secret = looks_like_secret(input.user_message or "")
-    turn_is_override = demands_override(input.user_message or "")
+    turn_policy = inspect_write(input.user_message or "")
     entries: List[LedgerDraft] = []
     created: List[MemoryRow] = []
     reinforced_ids: List[str] = []
+    profile_updates: Dict[str, str] = {}
 
     user_doc = input.user_doc
     profile_changed = False
-    retired = False
 
     # Decisions in the same turn must see each other's writes.
     archive = [MemoryRow(**vars(row)) for row in input.archive]
@@ -96,7 +94,7 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
         detail: str,
         redact: bool = False,
     ) -> None:
-        sensitive = redact or turn_has_secret
+        sensitive = redact or turn_policy.credential
         entries.append(
             LedgerDraft(
                 id=input.new_id(),
@@ -125,6 +123,9 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
         pinned_to: str = "",
     ) -> MemoryRow:
         occurred = _iso_date(decision.occurred_at)
+        sensitivity = decision.sensitivity or Sensitivity.NONE
+        if key.split(":")[0] == "person" and sensitivity != Sensitivity.SAFETY:
+            sensitivity = Sensitivity.THIRD_PARTY
         if decision.is_snapshot:
             occurred = occurred or now[:10]
             text = _dated(text, occurred)
@@ -147,10 +148,9 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
             replaces=None,
             state=(
                 MemoryState.HELD
-                if decision.sensitivity != Sensitivity.SAFETY
+                if sensitivity != Sensitivity.SAFETY
                 and (
-                    decision.sensitivity
-                    in (Sensitivity.HEALTH, Sensitivity.THIRD_PARTY)
+                    sensitivity in (Sensitivity.HEALTH, Sensitivity.THIRD_PARTY)
                     or key.startswith("health")
                 )
                 else MemoryState.ACTIVE
@@ -160,7 +160,7 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
                 0.7 if kind == MemoryKind.PROCEDURE else 0.5,
             ),
             confidence=_clamp01(decision.confidence, 0.9),
-            sensitivity=decision.sensitivity or Sensitivity.NONE,
+            sensitivity=sensitivity,
             provenance=input.user_message[:400],
             reinforced=0,
             pinned_to=pinned_to,
@@ -173,32 +173,8 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
         archive.append(row)
         profile_changed = profile_changed or bool(row.pinned_to)
 
-    def pin_safety(row: MemoryRow, reason: str) -> None:
-        """Pin a safety fact so it never depends on retrieval."""
-        nonlocal profile_changed
-        if row.sensitivity != Sensitivity.SAFETY:
-            return
-
-        if row.pinned_to:
-            return
-
-        row.pinned_to = "constraints"
-        profile_changed = True
-        log(
-            action="patch_user",
-            proposed_action="add_fact",
-            reason=reason,
-            note=(
-                "Pinned to USER.md as well. A safety fact cannot wait to be "
-                "retrieved, and it is not held behind the token budget."
-            ),
-            applied=True,
-            record_id=row.id,
-            detail=f"[Constraints] {row.text}",
-        )
-
     def retire(target: MemoryRow, replacement: MemoryRow) -> None:
-        nonlocal profile_changed, retired
+        nonlocal profile_changed
         replacement.replaces = target.id
         target.state = MemoryState.SUPERSEDED
         target.superseded_by = replacement.id
@@ -211,7 +187,6 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
             else replacement.valid_from
         )
         profile_changed = profile_changed or bool(target.pinned_to)
-        retired = True
 
     # Budget pins together, not one proposal at a time.
     pins_this_pass: List[tuple] = []
@@ -224,7 +199,7 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
         pinned_to = ""
         pin_refused = False
 
-        if turn_is_override and action != "ignore":
+        if turn_policy.override and action != "ignore":
             log(
                 action="ignore",
                 proposed_action=action,
@@ -240,7 +215,7 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
             )
             continue
 
-        if turn_has_secret and action != "ignore":
+        if turn_policy.credential and action != "ignore":
             log(
                 action="ignore",
                 proposed_action=action,
@@ -257,7 +232,8 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
             continue
 
         # Also guard against a writer inventing a secret absent from the turn.
-        if action != "ignore" and looks_like_secret(text):
+        proposal_policy = inspect_write(text)
+        if action != "ignore" and proposal_policy.credential:
             log(
                 action="ignore",
                 proposed_action=action,
@@ -275,7 +251,7 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
             continue
 
         # Reject prompt injection in a proposed row even when the turn was safe.
-        if action != "ignore" and demands_override(text):
+        if action != "ignore" and proposal_policy.override:
             log(
                 action="ignore",
                 proposed_action=action,
@@ -291,60 +267,6 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
                 detail=text,
             )
             continue
-
-        # Pinning is content policy, independent of the writer's chosen action.
-        if action == "add_fact" and decision.pin_to_profile:
-            action = "patch_user"
-            key = decision.profile_key or "identity"
-
-        # Keep the collision key when a profile proposal replaces it with a heading.
-        topic_key = decision.topic_key or (
-            decision.key if decision.action == "add_fact" else None
-        )
-        pinned_topic = (topic_key or "").split(":")[0] in PINNED_TOPICS
-        if action == "add_fact" and pinned_topic:
-            action = "patch_user"
-            key = "identity"
-
-        if action == "patch_user" and (not key or not text):
-            log(
-                action="ignore",
-                proposed_action="patch_user",
-                reason=decision.reason,
-                note="Dropped: a profile line needs a heading and a sentence.",
-                applied=False,
-                record_id=None,
-                detail=text,
-            )
-            continue
-
-        # Instructions may pin immediately; ordinary life facts require consent.
-        instruction = pinned_topic or decision.key in ADDRESSING_HEADINGS
-        if instruction and decision.key == "identity" and not pinned_topic:
-            # Only an unqualified identity line is a form of address.
-            instruction = not (decision.topic_key or "")
-        if (
-            action == "patch_user"
-            and not input.explicit
-            and not instruction
-            and decision.sensitivity != Sensitivity.SAFETY
-        ):
-            action = "add_fact"
-            # Archive facts keep their topic key so later corrections collide.
-            key = topic_key or downgraded_key(decision.key or "note", text)
-            log(
-                action=action,
-                proposed_action="patch_user",
-                reason=decision.reason,
-                note=(
-                    "Sent to the archive instead. USER.md is read on every "
-                    "turn, so a line there needs an explicit request or a "
-                    "safety fact behind it."
-                ),
-                applied=False,
-                record_id=None,
-                detail=text,
-            )
 
         if action == "ignore":
             # A named repetition reinforces the existing row.
@@ -377,12 +299,42 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
             )
             continue
 
-        # Machine-written profile lines are facts projected into USER.md.
-        if action == "patch_user":
-            pinned_to = key or "identity"
-            key = topic_key or downgraded_key(pinned_to, text)
-            action = "add_fact"
+        topic = (key or "").split(":")[0]
+        automatic_heading = PINNED_TOPIC_HEADINGS.get(topic, "")
+        requested_heading = decision.pinned_to or automatic_heading
+        if decision.sensitivity == Sensitivity.SAFETY:
+            requested_heading = requested_heading or "constraints"
 
+        if requested_heading and action in ("add_fact", "supersede"):
+            key = key or downgraded_key(requested_heading, text)
+            instruction = (
+                bool(automatic_heading) or requested_heading == "communication"
+            )
+            if requested_heading == "identity" and key in (None, "name"):
+                instruction = True
+
+            if (
+                not input.explicit
+                and not instruction
+                and decision.sensitivity != Sensitivity.SAFETY
+            ):
+                log(
+                    action=action,
+                    proposed_action=decision.action,
+                    reason=decision.reason,
+                    note=(
+                        "Filed without a profile pin. USER.md travels with "
+                        "every turn, so pinning requires an explicit request, "
+                        "an addressing preference, or a safety fact."
+                    ),
+                    applied=False,
+                    record_id=None,
+                    detail=text,
+                )
+            else:
+                pinned_to = requested_heading
+
+        if pinned_to:
             # Budget against the rendered document; a replacement is a swap.
             if decision.sensitivity != Sensitivity.SAFETY:
                 outgoing = next(
@@ -406,7 +358,7 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
                 ):
                     log(
                         action="add_fact",
-                        proposed_action="patch_user",
+                        proposed_action=decision.action,
                         reason=decision.reason,
                         note=(
                             f"Filed in the archive, not the profile: USER.md "
@@ -472,7 +424,6 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
                     record_id=row.id,
                     detail=text,
                 )
-                pin_safety(row, decision.reason)
                 continue
 
             # Refuse the destructive half but keep the new statement.
@@ -565,6 +516,11 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
             if collision.text.strip().lower() == text.lower():
                 collision.reinforced += 1
                 reinforced_ids.append(collision.id)
+                newly_pinned = bool(pinned_to and collision.pinned_to != pinned_to)
+                if newly_pinned:
+                    collision.pinned_to = pinned_to
+                    profile_updates[collision.id] = pinned_to
+                    profile_changed = True
                 said = (
                     "twice"
                     if collision.reinforced == 1
@@ -575,11 +531,18 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
                     proposed_action=decision.action,
                     reason=decision.reason,
                     note=(
-                        f"Already stored under {fact_key}. Said {said} now — "
-                        f"counted, because repetition is the evidence "
-                        f"consolidation promotes on."
+                        f"Already stored under {fact_key}. "
+                        + (
+                            f"Pinned to {heading_for(pinned_to)} and counted "
+                            f"the repetition ({said} total)."
+                            if newly_pinned
+                            else (
+                                f"Said {said} now — counted, because repetition "
+                                f"is the evidence consolidation promotes on."
+                            )
+                        )
                     ),
-                    applied=False,
+                    applied=newly_pinned,
                     record_id=collision.id,
                     detail=text,
                 )
@@ -609,7 +572,6 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
                 record_id=row.id,
                 detail=text,
             )
-            pin_safety(row, decision.reason)
             continue
 
         row = build(decision, kind, text, fact_key, pinned_to)
@@ -642,13 +604,11 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
             record_id=row.id,
             detail=f"{fact_key} · {text}",
         )
-        pin_safety(row, decision.reason)
-
     return ApplyResult(
         entries=entries,
         profile_changed=profile_changed,
         archive=archive,
         created=created,
-        retired=retired,
         reinforced_ids=reinforced_ids,
+        profile_updates=profile_updates,
     )

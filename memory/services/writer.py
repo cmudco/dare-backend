@@ -16,13 +16,17 @@ unmeasured regression until the scorecard exists on this side. Resist editing.
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Dict, List, Literal, Optional
+from typing import List, Literal, Optional
 
-from openai import BadRequestError, OpenAI
+from asgiref.sync import async_to_sync
 from pydantic import BaseModel, Field
 
-from config.env import MEMORY_WRITER_MODEL, OPENAI_API_KEY
-from memory.constants import TOKEN_BUDGET, TOPICS
+from config.env import MEMORY_WRITER_MODEL
+from conversations.models import LLM
+from core.services.api_key_service import get_provider_api_key_sync
+from core.services.billing_service import BillingService
+from core.services.openai_service import OpenAIService
+from memory.constants import TOKEN_BUDGET, TOPICS, Sensitivity
 from memory.domain.keys import key_for, procedure_key
 from memory.domain.types import MemoryRow, WriterDecision
 from memory.domain.user_doc import PROFILE_HEADINGS, estimate_tokens, user_doc_lines
@@ -33,33 +37,10 @@ _PROFILE_KEY_GLOSS = ", ".join(
     f"{key} ({heading})" for key, heading in PROFILE_HEADINGS.items()
 )
 
-ActionLiteral = Literal[
-    "patch_user", "add_fact", "add_procedure", "supersede", "ignore"
-]
-ProfileKeyLiteral = Literal[
-    "identity",
-    "background",
-    "communication",
-    "working-preferences",
-    "constraints",
-    "boundaries",
-]
-TopicLiteral = Literal[
-    "name",
-    "style",
-    "diet",
-    "diet_avoid",
-    "schedule",
-    "location",
-    "occupation",
-    "industry",
-    "habit",
-    "health",
-    "person",
-    "project",
-    "note",
-]
-SensitivityLiteral = Literal["none", "health", "safety", "third-party"]
+ActionLiteral = Literal["add_fact", "add_procedure", "supersede", "ignore"]
+ProfileKeyLiteral = Literal[*tuple(PROFILE_HEADINGS)]
+TopicLiteral = Literal[*TOPICS]
+SensitivityLiteral = Literal[*tuple(Sensitivity.values)]
 
 
 class Decision(BaseModel):
@@ -71,29 +52,16 @@ class Decision(BaseModel):
             "ignore."
         )
     )
-    # Required, not nullable. Left optional the model returns patch_user with
-    # no heading about half the time, and a write that should have landed is
-    # dropped. Other actions ignore the value, so forcing a choice costs
-    # nothing.
-    profile_key: ProfileKeyLiteral = Field(
+    pinned_to: Optional[ProfileKeyLiteral] = Field(
         description=(
-            f"For patch_user: the USER.md heading this line goes under, as a "
-            f"key — one of {_PROFILE_KEY_GLOSS}. identity is what to call them "
+            f"The USER.md heading when this fact must travel into every future "
+            f"conversation, otherwise null. Choose from {_PROFILE_KEY_GLOSS}. "
+            f"identity is what to call them "
             f"and where they are; background is durable history; communication "
             f"is how they want answers written; working-preferences is how "
             f"they like to work; constraints are hard limits, including "
             f"allergies; boundaries are rules about what may be remembered. "
-            f"Only read for patch_user — pick the closest fit for anything "
-            f"else."
-        )
-    )
-    pin_to_profile: bool = Field(
-        description=(
-            "Should this be carried into EVERY future conversation, rather "
-            "than looked up when a question reaches for it? True for what to "
-            "call them, how they want answers written, a hard constraint like "
-            "an allergy, and where they live — the handful of things that "
-            "change an answer whatever the subject. False for everything they "
+            "Use null for everything they "
             "merely told you, however interesting: a fact is found when it is "
             "needed and costs nothing in between. Judge the content, not "
             "whether they asked — permission is decided separately."
@@ -101,8 +69,8 @@ class Decision(BaseModel):
     )
     text: Optional[str] = Field(
         description=(
-            "patch_user: the bullet, one short sentence. add_fact: a short "
-            'third-person statement — write "the person" or "they", never '
+            'add_fact: a short third-person statement — write "the person" '
+            'or "they", never '
             "their name. Every memory in this store is already about them, so "
             "the name adds nothing and costs twice: it makes every fact match "
             "any message that says their name, and it goes stale the day they "
@@ -139,11 +107,8 @@ class Decision(BaseModel):
     )
     topic: Optional[TopicLiteral] = Field(
         description=(
-            "What this is about. Required for add_fact and supersede. Fill it "
-            "in for patch_user too whenever the statement has a natural topic, "
-            "because a profile line that is refused becomes a fact and needs "
-            "somewhere to live.\n"
-            "The wrong choice retires a fact that never changed.\n"
+            "What this is about. Required for add_fact and supersede. The "
+            "wrong choice retires a fact that never changed.\n"
             "name: the one thing they want to be called. style: an aspect of "
             "how they want answers written, with which aspect in the qualifier "
             "('length', 'format', 'tone'). diet: their one overall eating "
@@ -163,7 +128,9 @@ class Decision(BaseModel):
             "qualifier; an intention is not a habit and a preference is not a "
             "habit. person: another named individual. health: anything "
             "medical, with what it concerns in the qualifier. project: a named "
-            "piece of ongoing work. note: any durable fact that fits nothing "
+            "piece of ongoing work. boundaries: a standing rule about what "
+            "memory may store, with its subject in the qualifier. note: any "
+            "durable fact that fits nothing "
             "above — an account, a certificate, a reference number, a document "
             "format. Put what it is ABOUT in the qualifier, because two notes "
             "are almost never the same fact."
@@ -172,7 +139,7 @@ class Decision(BaseModel):
     qualifier: Optional[str] = Field(
         description=(
             "REQUIRED for person, health, habit, project, schedule, "
-            "diet_avoid, note and style. Empty for name, diet, location, "
+            "diet_avoid, boundaries, note and style. Empty for name, diet, location, "
             "occupation and industry, where only one thing can be true at a "
             "time. It is what distinguishes two facts under the same topic: "
             "the person's name ('sam-okafor' vs 'sam-sister'), what a health "
@@ -298,7 +265,7 @@ You are looking at ONE completed turn. Decide what, if anything, should be writt
 You do NOT need to record what happened. The full transcript of every conversation is kept verbatim and is searchable, so a summary of an event would only be a lossy copy of something already held perfectly. Record what is TRUE, not what occurred.
 
 USER.md — the sticky document, injected into every single conversation.
-  Use "patch_user" ONLY for what shapes how you should TALK to this person: what to call them, how they want answers written, a hard constraint you could hurt them by ignoring, a rule about what may be remembered. It is capped at {TOKEN_BUDGET} tokens, so a line has to earn permanent residence in every future prompt.
+  Set `pinned_to` ONLY for what shapes how you should TALK to this person: what to call them, how they want answers written, a hard constraint you could hurt them by ignoring, a rule about what may be remembered. It is capped at {TOKEN_BUDGET} tokens, so a line has to earn permanent residence in every future prompt.
   These are NOT profile lines, no matter how durable they are — they are facts: where someone lives, what they do for work, who they know, what they are working on, an account, a certificate, a date. If it has a natural topic below, it is a fact.
   One turn is weak evidence that something is stable. If you are unsure a preference will still hold next month, it is a fact, not a profile line.
 
@@ -331,10 +298,6 @@ Rules that keep the store honest:
 - Choosing a topic is choosing what this fact will DELETE later. An unqualified topic — name, diet, location, occupation, industry — holds exactly one fact, so filing something under the wrong one silently destroys the right one the next time that topic is used. If a statement is not squarely about the topic, use "note" with a qualifier instead. "note" deletes nothing it should not.
 - When in doubt between a profile line and a fact, choose the fact. A fact can be promoted later; a wrong profile line costs tokens on every future turn and has no topic to collide with, so it can never be corrected by a supersede."""
 
-assert set(TOPICS) == set(
-    TopicLiteral.__args__
-), "TopicLiteral must mirror memory.constants.TOPICS"
-
 
 def _is_malformed(decision: "Decision") -> bool:
     """A non-ignore decision with no statement cannot be applied — the gate
@@ -352,26 +315,7 @@ _REPAIR_NOTE = (
     "every `text` filled in."
 )
 
-# Parameter dialects across OpenAI chat-model generations, oldest first.
-# gpt-4o takes temperature+max_tokens; gpt-5.x requires max_completion_tokens;
-# the 5.6 family additionally rejects any non-default temperature (so those
-# models run at default temperature — the only dialect they accept). Probed
-# once per model per process and cached, so a new family adapts without a
-# code change.
-#
-# The completion budgets differ on purpose. 900 fits the decision JSON with
-# room to spare on a non-reasoning model — but the max_completion_tokens
-# dialects belong to REASONING models, and their reasoning tokens come out of
-# the same budget. Found in production: with a ~7k prompt (281 keys in use
-# plus retrieved rows), gpt-5.6-luna spent all 900 tokens reasoning, emitted
-# zero output, and every writer job died on a parse error — silently, in the
-# failed registry, turn after turn.
-_PARAM_STYLES = (
-    {"temperature": 0, "max_tokens": 900},
-    {"temperature": 0, "max_completion_tokens": 4000},
-    {"max_completion_tokens": 4000},
-)
-_style_by_model: Dict[str, int] = {}
+WRITER_MAX_TOKENS = 4000
 
 
 @dataclass
@@ -384,6 +328,8 @@ class WriterProposal:
 
 
 def propose_decisions(
+    user,
+    source_message_id: int,
     user_doc: str,
     archive: List[MemoryRow],
     user_message: str,
@@ -398,8 +344,13 @@ def propose_decisions(
     This cannot violate the queue's ordering guarantee — nothing has been
     persisted yet; it is the same turn asking its question twice.
     """
-    client = OpenAI(api_key=OPENAI_API_KEY)
     model = model or MEMORY_WRITER_MODEL
+    llm = LLM.objects.get(identifier=model, is_active=True)
+    service = OpenAIService(
+        llm=llm,
+        api_key=get_provider_api_key_sync(llm.provider),
+    )
+    billing = BillingService()
     moment = now or datetime.now(timezone.utc).isoformat()
 
     # What the retriever thought was relevant to this turn — not the most
@@ -448,55 +399,39 @@ ASSISTANT: {assistant_message or "(no reply captured)"}
 
 Set `explicit_request` from what the PERSON asked for in this message, not from how useful the content looks to you. It decides whether anything may be written into USER.md, which is read on every future turn."""
 
-    def ask(messages) -> Optional[WriterResponse]:
-        start = _style_by_model.get(model, 0)
-        last_error: Optional[BadRequestError] = None
-        for index in range(start, len(_PARAM_STYLES)):
-            try:
-                completion = client.chat.completions.parse(
-                    model=model,
-                    messages=messages,
-                    response_format=WriterResponse,
-                    **_PARAM_STYLES[index],
-                )
-            except BadRequestError as exc:
-                text = str(exc)
-                if "max_tokens" in text or "temperature" in text:
-                    last_error = exc
-                    continue
-                raise
-            _style_by_model[model] = index
-            return completion.choices[0].message.parsed
-        raise last_error  # every dialect refused — a real config problem
+    def ask(messages) -> WriterResponse:
+        parsed, usage = async_to_sync(service.parse_structured_output)(
+            messages=messages,
+            response_model=WriterResponse,
+            max_tokens=WRITER_MAX_TOKENS,
+        )
+        billing.record_service_usage(
+            user=user,
+            llm=llm,
+            input_tokens=usage["input_tokens"],
+            output_tokens=usage["output_tokens"],
+            description=f"Memory writer for message {source_message_id}",
+        )
+        return parsed
 
     base_messages = [
         {"role": "system", "content": SYSTEM},
         {"role": "user", "content": prompt},
     ]
     parsed = ask(base_messages)
-    if parsed is not None and any(_is_malformed(d) for d in parsed.decisions):
+    if any(_is_malformed(d) for d in parsed.decisions):
         logger.warning(
             "[memory] writer emitted a decision with empty text; retrying once"
         )
         retried = ask(base_messages + [{"role": "user", "content": _REPAIR_NOTE}])
-        if retried is not None and not any(_is_malformed(d) for d in retried.decisions):
+        if not any(_is_malformed(d) for d in retried.decisions):
             parsed = retried
         # Otherwise keep the original: the gate refuses the malformed halves
         # with a ledger entry, which is at least visible.
 
-    if parsed is None:
-        logger.warning("[memory] writer returned no parseable decisions")
-        return WriterProposal(decisions=[])
-
     decisions: List[WriterDecision] = []
     for decision in parsed.decisions:
-        # One routing field. A profile line is keyed by its heading; a
-        # procedure by WHEN it fires; a fact by its qualified topic. All
-        # answer the same question — where does this go, and what does it
-        # collide with.
-        if decision.action == "patch_user":
-            key = decision.profile_key
-        elif decision.action == "add_procedure":
+        if decision.action == "add_procedure":
             key = procedure_key(decision.trigger, decision.text)
         elif decision.topic:
             key = key_for(decision.topic, decision.qualifier, decision.text)
@@ -509,16 +444,8 @@ Set `explicit_request` from what the PERSON asked for in this message, not from 
                 reason=decision.reason,
                 text=decision.text,
                 key=key,
-                # Read only on the patch_user→add_fact downgrade, so a refused
-                # profile line still collides with the same fact stated later.
-                topic_key=(
-                    key_for(decision.topic, decision.qualifier, decision.text)
-                    if decision.topic
-                    else None
-                ),
                 applies_when=decision.applies_when,
-                profile_key=decision.profile_key,
-                pin_to_profile=decision.pin_to_profile,
+                pinned_to=decision.pinned_to,
                 importance=decision.importance,
                 confidence=decision.confidence,
                 sensitivity=decision.sensitivity,

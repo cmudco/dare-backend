@@ -19,7 +19,9 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 from conversations.models import Conversation
+from conversations.services.message_validation_service import MessageValidationService
 from core.services.dtos.builder import LLMQueryRequestBuilder
+from core.services.dtos.context_dto import ContextConfig
 
 
 class MemoryToggleTests(TestCase):
@@ -79,10 +81,6 @@ class MemoryGateTests(TestCase):
         # MessageValidationService → ContextConfig.use_memory, which is what
         # the read gate (build_standard_messages) and the write gate
         # (MessageCoordinator's writer enqueue) both branch on.
-        from conversations.services.message_validation_service import (
-            MessageValidationService,
-        )
-
         parsed_on = MessageValidationService.validate_and_parse(
             {"message": "hi", "use_memory": True}
         )
@@ -93,8 +91,6 @@ class MemoryGateTests(TestCase):
         self.assertFalse(parsed_off["use_memory"])
 
     def test_an_off_toggle_means_no_memory_context_is_requested(self):
-        from core.services.dtos.context_dto import ContextConfig
-
         self.assertFalse(ContextConfig().use_memory)
         self.assertTrue(ContextConfig(use_memory=True).use_memory)
 

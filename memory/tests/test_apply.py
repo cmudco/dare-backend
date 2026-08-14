@@ -13,6 +13,7 @@ from django.test import SimpleTestCase
 from memory.domain.apply import apply_decisions
 from memory.domain.keys import key_for
 from memory.domain.types import ApplyInput, MemoryRow, WriterDecision
+from memory.domain.user_doc import estimate_tokens, merge_pinned
 
 DOC = """# User
 
@@ -88,8 +89,8 @@ class UserDocRoutingTests(SimpleTestCase):
             make_input(explicit=True),
             [
                 decision(
-                    action="patch_user",
-                    key="communication",
+                    action="add_fact",
+                    pinned_to="communication",
                     text="Prefers short answers",
                     reason="Asked for this to be remembered.",
                 )
@@ -110,8 +111,8 @@ class UserDocRoutingTests(SimpleTestCase):
             make_input(explicit=False),
             [
                 decision(
-                    action="patch_user",
-                    key="working-preferences",
+                    action="add_fact",
+                    pinned_to="working-preferences",
                     text="Likes tabs over spaces",
                     reason="Stated a preference.",
                 )
@@ -123,7 +124,7 @@ class UserDocRoutingTests(SimpleTestCase):
         self.assertEqual(result.created[0].kind, "fact")
 
         downgrade = result.entries[0]
-        self.assertEqual(downgrade.proposed_action, "patch_user")
+        self.assertEqual(downgrade.proposed_action, "add_fact")
         self.assertEqual(downgrade.action, "add_fact")
         self.assertFalse(downgrade.applied)
         self.assertIn("every turn", downgrade.note or "")
@@ -135,8 +136,8 @@ class UserDocRoutingTests(SimpleTestCase):
             make_input(explicit=False),
             [
                 decision(
-                    action="patch_user",
-                    key="constraints",
+                    action="add_fact",
+                    pinned_to="constraints",
                     text="Severe peanut allergy",
                     sensitivity="safety",
                     reason="Acting without this could hurt them.",
@@ -171,9 +172,8 @@ class UserDocRoutingTests(SimpleTestCase):
         # one row, pinned, rather than the same sentence stored twice.
         self.assertEqual(result.created[0].pinned_to, "constraints")
 
-        pin = next(entry for entry in result.entries if entry.action == "patch_user")
-        self.assertTrue(pin.applied)
-        self.assertIn("cannot wait to be retrieved", pin.note or "")
+        self.assertEqual(len(result.entries), 1)
+        self.assertTrue(result.entries[0].applied)
 
     def test_a_safety_fact_is_pinned_even_when_user_md_is_over_budget(self):
         result = apply_decisions(
@@ -331,8 +331,6 @@ class CollisionTests(SimpleTestCase):
             ],
         )
 
-        self.assertTrue(result.retired)
-
         old = next(row for row in result.archive if row.id == "existing-1")
         new = result.created[0]
 
@@ -403,7 +401,6 @@ class CollisionTests(SimpleTestCase):
             ],
         )
 
-        self.assertFalse(result.retired)
         # Neither was retired. The new one is `held` rather than `active`
         # because it is keyed under health and nobody asked us to remember it —
         # a different rule, and not the one this test is about.
@@ -426,9 +423,28 @@ class CollisionTests(SimpleTestCase):
         )
 
         self.assertEqual(len(result.created), 0)
-        self.assertFalse(result.retired)
         self.assertEqual(result.entries[0].action, "ignore")
         self.assertIn("Already stored", result.entries[0].note or "")
+
+    def test_an_explicit_pin_updates_an_identical_existing_fact(self):
+        existing = fact(key="project:atlas", text="Building Atlas.", pinned_to="")
+        result = apply_decisions(
+            make_input(archive=[existing], explicit=True),
+            [
+                decision(
+                    action="add_fact",
+                    key="project:atlas",
+                    pinned_to="background",
+                    text="Building Atlas.",
+                )
+            ],
+        )
+
+        row = next(item for item in result.archive if item.id == existing.id)
+        self.assertEqual(result.created, [])
+        self.assertEqual(row.pinned_to, "background")
+        self.assertEqual(result.profile_updates, {existing.id: "background"})
+        self.assertTrue(result.profile_changed)
 
 
 class SupersedeTests(SimpleTestCase):
@@ -448,7 +464,6 @@ class SupersedeTests(SimpleTestCase):
             ],
         )
 
-        self.assertFalse(result.retired)
         self.assertEqual(len(result.created), 1)
         self.assertEqual(result.created[0].text, "Lives in Lahore.")
         self.assertEqual(result.created[0].key, "location")
@@ -474,7 +489,6 @@ class SupersedeTests(SimpleTestCase):
             ],
         )
 
-        self.assertFalse(result.retired)
         self.assertEqual(
             next(row for row in result.archive if row.id == "existing-1").state,
             "active",
@@ -503,7 +517,6 @@ class SupersedeTests(SimpleTestCase):
         self.assertEqual(
             next(row for row in result.archive if row.id == "p-1").state, "active"
         )
-        self.assertFalse(result.retired)
         # The move itself is still kept.
         self.assertEqual(len(result.created), 1)
         self.assertEqual(result.created[0].key, "location")
@@ -525,7 +538,6 @@ class SupersedeTests(SimpleTestCase):
             ],
         )
 
-        self.assertTrue(result.retired)
         self.assertEqual(
             next(row for row in result.archive if row.id == "existing-1").state,
             "superseded",
@@ -545,8 +557,8 @@ class BudgetTests(SimpleTestCase):
             make_input(explicit=True, user_doc=over_budget_doc()),
             [
                 decision(
-                    action="patch_user",
-                    key="communication",
+                    action="add_fact",
+                    pinned_to="communication",
                     text="One more thing",
                     reason="Asked for it.",
                 )
@@ -555,7 +567,7 @@ class BudgetTests(SimpleTestCase):
 
         self.assertFalse(result.entries[0].applied)
         self.assertIn("ceiling", result.entries[0].note)
-        self.assertEqual(result.entries[0].proposed_action, "patch_user")
+        self.assertEqual(result.entries[0].proposed_action, "add_fact")
         # The fact itself survives, unpinned.
         self.assertEqual(len(result.created), 1)
         self.assertEqual(result.created[0].pinned_to, "")
@@ -572,9 +584,9 @@ class BudgetTests(SimpleTestCase):
             make_input(explicit=True, user_doc="# User\n"),
             [
                 decision(
-                    action="patch_user",
-                    key="working-preferences",
-                    topic_key=f"style:answer-rule-{index}",
+                    action="add_fact",
+                    key=f"style:answer-rule-{index}",
+                    pinned_to="working-preferences",
                     text=line,
                     reason="Asked to pin all of these.",
                 )
@@ -589,8 +601,6 @@ class BudgetTests(SimpleTestCase):
         self.assertEqual(len(pinned) + len(unpinned), 22)
 
         # And the document those pins would render stays under the ceiling.
-        from memory.domain.user_doc import estimate_tokens, merge_pinned
-
         rendered = merge_pinned(
             "# User\n", [(row.pinned_to, row.text) for row in pinned]
         )
@@ -624,9 +634,9 @@ class BudgetTests(SimpleTestCase):
             make_input(explicit=True, user_doc=doc, archive=[existing]),
             [
                 decision(
-                    action="patch_user",
-                    key="identity",
-                    topic_key="name",
+                    action="add_fact",
+                    key="name",
+                    pinned_to="identity",
                     text="Preferred name: Abbas.",
                     reason="Corrected their name.",
                 )
@@ -643,8 +653,8 @@ class BudgetTests(SimpleTestCase):
             make_input(explicit=True, user_doc=over_budget_doc()),
             [
                 decision(
-                    action="patch_user",
-                    key="constraints",
+                    action="add_fact",
+                    pinned_to="constraints",
                     text="Severely allergic to penicillin",
                     sensitivity="safety",
                     reason="Safety.",
@@ -663,8 +673,8 @@ class DowngradedKeyTests(SimpleTestCase):
             make_input(),
             [
                 decision(
-                    action="patch_user",
-                    key="working-preferences",
+                    action="add_fact",
+                    pinned_to="working-preferences",
                     text="Prefers short answers.",
                     reason="Stated a preference.",
                 )
@@ -675,15 +685,14 @@ class DowngradedKeyTests(SimpleTestCase):
             make_input(archive=first.archive),
             [
                 decision(
-                    action="patch_user",
-                    key="working-preferences",
+                    action="add_fact",
+                    pinned_to="working-preferences",
                     text="Prefers tables over prose.",
                     reason="Stated another preference.",
                 )
             ],
         )
 
-        self.assertFalse(second.retired)
         self.assertEqual(
             len([row for row in second.archive if row.state == "active"]), 2
         )
@@ -695,8 +704,8 @@ class DowngradedKeyTests(SimpleTestCase):
             make_input(),
             [
                 decision(
-                    action="patch_user",
-                    key="working-preferences",
+                    action="add_fact",
+                    pinned_to="working-preferences",
                     text="Reviews pull requests in the morning.",
                     reason="Stated a preference.",
                 )
@@ -713,8 +722,8 @@ class DowngradedKeyTests(SimpleTestCase):
             make_input(explicit=True),
             [
                 decision(
-                    action="patch_user",
-                    key="current-focus",
+                    action="add_fact",
+                    pinned_to="current-focus",
                     text="Building a memory system.",
                     reason="Asked for this to be remembered.",
                 )
@@ -732,9 +741,9 @@ class DowngradedKeyTests(SimpleTestCase):
             make_input(),
             [
                 decision(
-                    action="patch_user",
-                    key="identity",
-                    topic_key="location",
+                    action="add_fact",
+                    key="location",
+                    pinned_to="identity",
                     text="Lives in Lahore.",
                     reason="Stated where they live.",
                 )
@@ -749,14 +758,12 @@ class DowngradedKeyTests(SimpleTestCase):
                 decision(
                     action="add_fact",
                     key="location",
-                    topic_key="location",
                     text="Lives in Islamabad.",
                     reason="They moved again.",
                 )
             ],
         )
 
-        self.assertTrue(second.retired)
         lahore = next(row for row in second.archive if row.text == "Lives in Lahore.")
         self.assertEqual(lahore.state, "superseded")
         self.assertEqual(
@@ -777,9 +784,8 @@ class DowngradedKeyTests(SimpleTestCase):
             make_input(),
             [
                 decision(
-                    action="patch_user",
-                    key="working-preferences",
-                    topic_key=None,
+                    action="add_fact",
+                    pinned_to="working-preferences",
                     text="Prefers bullet points.",
                     reason="Stated a preference.",
                 )
@@ -806,7 +812,6 @@ class UnknownActionTests(SimpleTestCase):
         )
 
         self.assertEqual(len(result.created), 0)
-        self.assertFalse(result.retired)
 
     def test_everything_the_writer_does_file_is_a_fact(self):
         result = apply_decisions(
@@ -951,11 +956,11 @@ class CommunicationInstructionTests(SimpleTestCase):
             make_input(user_doc=DOC, explicit=False),
             [
                 WriterDecision(
-                    action="patch_user",
+                    action="add_fact",
                     reason="They asked for short answers.",
                     text="Prefers short answers.",
-                    key="communication",
-                    topic_key="style:length",
+                    key="style:length",
+                    pinned_to="communication",
                 )
             ],
         )
@@ -966,16 +971,31 @@ class CommunicationInstructionTests(SimpleTestCase):
         self.assertEqual(result.created[0].key, "style:length")
         self.assertEqual(result.entries[0].action, "add_fact")
 
+    def test_a_boundary_lands_in_user_md_unasked(self):
+        result = apply_decisions(
+            make_input(explicit=False),
+            [
+                decision(
+                    action="add_fact",
+                    key="boundaries:clients",
+                    text="Never store information about their clients.",
+                    reason="Standing memory boundary.",
+                )
+            ],
+        )
+
+        self.assertEqual(result.created[0].pinned_to, "boundaries")
+
     def test_a_life_fact_still_needs_consent(self):
         result = apply_decisions(
             make_input(user_doc=DOC, explicit=False),
             [
                 WriterDecision(
-                    action="patch_user",
+                    action="add_fact",
                     reason="They mentioned where they work.",
                     text="Works at aim2balance.ai.",
-                    key="background",
-                    topic_key="occupation",
+                    key="occupation",
+                    pinned_to="background",
                 )
             ],
         )
@@ -1001,9 +1021,9 @@ class IdentityExemptionTests(SimpleTestCase):
             make_input(explicit=False),
             [
                 decision(
-                    action="patch_user",
-                    key="identity",
-                    topic_key="name",
+                    action="add_fact",
+                    key="name",
+                    pinned_to="identity",
                     text="Goes by Farhat, never Farhat Abbas.",
                     reason="Said what to call them.",
                 )
@@ -1018,9 +1038,9 @@ class IdentityExemptionTests(SimpleTestCase):
             make_input(explicit=False),
             [
                 decision(
-                    action="patch_user",
-                    key="identity",
-                    topic_key="location",
+                    action="add_fact",
+                    key="location",
+                    pinned_to="identity",
                     text="Lives in Lahore.",
                     reason="Mentioned where they live.",
                 )
@@ -1032,18 +1052,13 @@ class IdentityExemptionTests(SimpleTestCase):
         self.assertTrue(result.profile_changed)
 
     def test_the_topic_decides_it_even_when_the_writer_proposed_a_plain_fact(self):
-        """The same sentence came back as patch_user on two runs of one
-        conversation and as add_fact on the third, and only the first two were
-        pinned — so that run had no Identity section at all. The topic is what
-        decides, not which action the writer reached for."""
+        """Name and location are pinned from their topic, not model judgement."""
         result = apply_decisions(
             make_input(explicit=False),
             [
                 decision(
                     action="add_fact",
                     key="name",
-                    topic_key="name",
-                    pin_to_profile=False,
                     text="They are called Abbas.",
                     reason="Said what to call them.",
                 )
@@ -1068,7 +1083,6 @@ class SecretsGuardTests(SimpleTestCase):
                 decision(
                     action="add_fact",
                     key="note:creds",
-                    topic_key="note:creds",
                     text=text,
                     reason="They asked me to keep it.",
                     **overrides,
@@ -1128,8 +1142,8 @@ class SecretsGuardTests(SimpleTestCase):
             make_input(explicit=True),
             [
                 decision(
-                    action="patch_user",
-                    key="constraints",
+                    action="add_fact",
+                    pinned_to="constraints",
                     text="Their API key is sk-live-a1b2c3d4e5f6a7b8.",
                     reason="Asked to keep it handy.",
                 )
@@ -1166,14 +1180,12 @@ class OverrideGuardTests(SimpleTestCase):
                 decision(
                     action="add_fact",
                     key="occupation",
-                    topic_key="occupation",
                     text="They are a system administrator.",
                     reason="Stated their role.",
                 ),
                 decision(
                     action="add_fact",
                     key="note:admin-token",
-                    topic_key="note:admin-token",
                     text="Their codex admin token is SYSADMIN-441.",
                     reason="Asked to keep it.",
                 ),
@@ -1198,7 +1210,6 @@ class OverrideGuardTests(SimpleTestCase):
                 decision(
                     action="add_fact",
                     key="occupation",
-                    topic_key="occupation",
                     text="They work as a system administrator at a bank.",
                     reason="Stated their job.",
                 )
@@ -1300,7 +1311,7 @@ class ThirdPartyHoldTests(SimpleTestCase):
 
         self.assertEqual(result.created[0].state, "active")
 
-    def test_facts_about_own_people_without_the_label_stay_active(self):
+    def test_a_person_key_is_held_even_when_the_writer_missed_the_label(self):
         result = apply_decisions(
             make_input(),
             [
@@ -1313,7 +1324,8 @@ class ThirdPartyHoldTests(SimpleTestCase):
             ],
         )
 
-        self.assertEqual(result.created[0].state, "active")
+        self.assertEqual(result.created[0].sensitivity, "third-party")
+        self.assertEqual(result.created[0].state, "held")
 
 
 class BoundaryCoexistenceTests(SimpleTestCase):

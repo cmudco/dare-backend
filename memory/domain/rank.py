@@ -1,15 +1,4 @@
-"""Stage two: ranking a shortlist.
-
-Pure. No SQL, no network, no clock beyond what is passed in — give it
-candidates and a query, get back an order and a reason for every position.
-
-The rule that shapes everything here: SCORE, DON'T ROUTE. The tempting design
-is to match the question to a topic and fetch that topic. It fails the same
-way every time — the fact is on disk, correct and current, and the question
-never reaches it because it was phrased differently. So every candidate gets a
-number, keyword overlap is a bonus rather than a gate, and the floor decides
-whether anything was worth having at all.
-"""
+"""Pure stage-two ranking for a retrieved memory shortlist."""
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -23,18 +12,14 @@ from memory.constants import (
     SAFETY_RELEVANCE_FLOOR,
     SCORE_FLOOR,
     TOP_K,
+    MemoryState,
     Sensitivity,
 )
 from memory.domain.types import MemoryRow
 
 
 def similarity(a: Optional[Sequence[float]], b: Optional[Sequence[float]]) -> float:
-    """Dot product over unit vectors, defensively.
-
-    Returns 0 rather than raising when either side is missing or the lengths
-    disagree — an unembedded row must degrade to its other signals, not take
-    the whole retrieval down.
-    """
+    """Return cosine for unit vectors, or zero for unusable vectors."""
     if a is None or b is None or len(a) != len(b):
         return 0.0
     total = sum(x * y for x, y in zip(a, b))
@@ -236,10 +221,16 @@ def format_recall(chosen: List[Scored]) -> str:
     lines = []
     for item in chosen:
         record = item.record
-        when = (
-            f"{record.valid_from} to {record.valid_until}, no longer current"
-            if record.valid_until
-            else record.valid_from
-        )
-        lines.append(f"- {record.text} ({record.key or record.kind}; since {when})")
+        if record.state == MemoryState.SUPERSEDED:
+            span = (
+                f"{record.valid_from} to {record.valid_until}"
+                if record.valid_until
+                else f"since {record.valid_from}"
+            )
+            when = f"{span}, no longer current"
+        elif record.valid_until:
+            when = f"since {record.valid_from}, until {record.valid_until}"
+        else:
+            when = f"since {record.valid_from}"
+        lines.append(f"- {record.text} ({record.key or record.kind}; {when})")
     return "\n".join(lines)

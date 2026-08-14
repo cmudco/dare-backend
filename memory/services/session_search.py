@@ -1,19 +1,4 @@
-"""The transcript layer: word-for-word search over past conversations.
-
-There is no memory table behind this — the episodic record IS the existing
-``conversations.Message`` rows, kept verbatim by the chat pipeline. Keyword
-search, deliberately not semantic: this is the layer where you want the exact
-phrasing back ("what did we decide about the schema in March?"), not
-something close to it.
-
-Exposed to the model as the ``search_sessions`` tool, not prefetched. The
-rule the whole read path follows: prefetch what the model CANNOT know it
-needs (an allergy behind "book me somewhere nice"); give it a tool for what
-it can ("what did we decide" is obviously a lookup).
-
-Every execution appends a ledger row — reads share the audit timeline with
-writes.
-"""
+"""Search a user's conversation transcript by words and date range."""
 
 import logging
 from datetime import date, datetime
@@ -25,7 +10,7 @@ from django.db.models import Q
 from conversations.constants import SenderType
 from conversations.models import Message
 from memory.constants import WriterAction
-from memory.models import MemoryLedgerEntry
+from memory.services.ledger import LedgerEvent, record_event
 from memory.services.store import tokenize
 
 logger = logging.getLogger(__name__)
@@ -42,16 +27,7 @@ def search_sessions_for_user(
     since: Optional[str] = None,
     until: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Search one user's transcript; returns the executor-shaped result dict.
-
-    Scope comes from the server-side user object, never from model arguments —
-    a hallucinated argument must not be able to widen the search. The date
-    bounds only ever NARROW, so the same holds for them.
-
-    Before these existed, "what did we discuss last week" could only be asked
-    by searching for the words "last week", which matched whenever someone had
-    typed that phrase and never the week itself.
-    """
+    """Search one user's transcript and return the tool result shape."""
     if user is None:
         return {
             "success": False,
@@ -64,9 +40,6 @@ def search_sessions_for_user(
         return {"success": False, "error": str(exc)}
     terms = tokenize(query or "")
     if not terms and start is None and end is None:
-        # An empty call is a mistake worth correcting, not an empty result:
-        # answered with found=0, the model concluded "we never talked" and
-        # said so. Told what the tool needs, it retries properly.
         return {
             "success": False,
             "error": (
@@ -78,9 +51,9 @@ def search_sessions_for_user(
     try:
         hits = _search(user, terms, limit, start, end)
         blocks = [_render_hit(hit) for hit in hits]
-    except Exception as exc:
+    except Exception:
         logger.exception("[memory] search_sessions failed for user %s", user.id)
-        return {"success": False, "error": f"Transcript search failed: {exc}"}
+        return {"success": False, "error": "Transcript search failed."}
 
     _log_search(user, query, len(hits))
 
@@ -98,11 +71,7 @@ def _base_queryset(user, since: Optional[date] = None, until: Optional[date] = N
     queryset = (
         Message.active_objects.filter(
             conversation__user=user,
-            # Deleting a conversation has to mean the transcript stops answering
-            # for it. Message rows are not touched when a conversation is
-            # deleted, so filtering only on the message flags leaves every word
-            # of a deleted conversation searchable — which reads to the person as
-            # the delete not having worked.
+            # Deleted conversations never participate in transcript search.
             conversation__is_deleted=False,
             conversation__is_active=True,
             sender_type__in=[SenderType.PLAYER, SenderType.AI_ASSISTANT],
@@ -118,12 +87,7 @@ def _base_queryset(user, since: Optional[date] = None, until: Optional[date] = N
 
 
 def parse_day(value: Optional[str]) -> Optional[date]:
-    """YYYY-MM-DD, or nothing — or a readable refusal.
-
-    The first version dropped a malformed bound and searched on. Red-teamed,
-    that read as a lie: ?since=not-a-date returned HTTP 200 with the whole
-    history, presenting an unbounded search as the bounded one that was
-    asked for. In a privacy-adjacent search, a typo must fail loudly."""
+    """Parse YYYY-MM-DD or raise a readable refusal."""
     if not value:
         return None
     try:
@@ -168,12 +132,7 @@ def _search(
     else:
         matched = _search_fallback(user, terms, limit, since, until)
 
-    # A hit is shown with the turn either side of it, so two matches one apart
-    # — which is the common case, since the person says a thing and the reply
-    # quotes it back — render two windows over almost the same three messages.
-    # Read back, the same exchange appears twice and looks like it happened
-    # twice. A message already inside an earlier window is dropped: it is not
-    # a second answer, it is the same one.
+    # Include adjacent turns and suppress overlapping windows.
     shown: set = set()
     hits: List[Dict[str, Any]] = []
     for message in matched:
@@ -193,12 +152,7 @@ def _search_postgres(
     since: Optional[date] = None,
     until: Optional[date] = None,
 ) -> List[Message]:
-    """FTS with prefix-or terms, ranked.
-
-    The tsvector expression matches memory/migrations/0004's GIN index over
-    ``conversations_message (message)`` byte-for-byte; terms come from
-    tokenize(), which strips to [a-z0-9] and is therefore tsquery-safe.
-    """
+    """Run ranked Postgres FTS with prefix terms."""
     tsquery = " | ".join(f"{term}:*" for term in terms)
     queryset = (
         _base_queryset(user, since, until)
@@ -263,9 +217,9 @@ def search_sessions_hits(
 
     try:
         raw = _search(user, terms, limit, start, end)
-    except Exception as exc:
+    except Exception:
         logger.exception("[memory] session hits failed for user %s", user.id)
-        return {"success": False, "error": f"Transcript search failed: {exc}"}
+        return {"success": False, "error": "Transcript search failed."}
 
     _log_search(user, query or f"{since or ''}..{until or ''}", len(raw))
 
@@ -349,15 +303,18 @@ def _render_hit(hit: Dict[str, Any]) -> str:
 
 def _log_search(user, query: str, found: int) -> None:
     try:
-        MemoryLedgerEntry.objects.create(
-            user=user,
-            action=WriterAction.SEARCH_SESSIONS,
-            proposed_action=WriterAction.SEARCH_SESSIONS,
-            reason=f'The model searched the transcript for "{query[:200]}".',
-            note=None if found else "Nothing in the transcript matched those words.",
-            applied=found > 0,
-            detail=f"{query[:200]} — {found} hit{'s' if found != 1 else ''}",
-            source_text=query[:400],
+        record_event(
+            user,
+            LedgerEvent(
+                action=WriterAction.SEARCH_SESSIONS,
+                reason="The model searched the conversation transcript.",
+                note=(
+                    None if found else "Nothing in the transcript matched those words."
+                ),
+                applied=found > 0,
+                detail=f"{query[:200]} — {found} hit{'s' if found != 1 else ''}",
+                source_text=query[:400],
+            ),
         )
     except Exception:
         # A failed audit line must not fail the search itself.

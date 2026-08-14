@@ -1,20 +1,4 @@
-"""The tidy-up sweep: what the store would like to fix about itself.
-
-Pure. Give it rows and a similarity function, get back proposals. It never
-writes, and that is the design rather than an implementation detail — a
-process that silently rewrites someone's memory is one they cannot trust,
-and every rule here is a judgement call that will sometimes be wrong.
-
-Four things go wrong in a store that only ever appends:
-
-    duplicates   two rows saying one thing, because a key was spelled twice
-    cold truths  a fact repeated until it clearly belongs in the profile
-    stale keys   a slot named for what it used to hold
-    crowding     a profile past its budget with lines nobody repeats
-
-Each proposal carries the reason and the rows it touches, so the person
-approving it is deciding, not guessing.
-"""
+"""Pure consolidation proposals for duplicates, pins, keys, and crowding."""
 
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Sequence
@@ -31,7 +15,7 @@ from memory.constants import (
     Sensitivity,
 )
 from memory.domain.types import MemoryRow
-from memory.domain.user_doc import estimate_tokens
+from memory.domain.user_doc import estimate_tokens, merge_pinned
 
 MERGE = "merge"
 PROMOTE = "promote"
@@ -86,8 +70,7 @@ def _words(text: str) -> set:
 
 
 def _specifics(text: str) -> set:
-    """The tokens that name WHO or WHAT a sentence is about: proper nouns
-    (capitalized past the first word) and numbers, lowercased for compare."""
+    """Extract proper nouns and numbers used to distinguish subjects."""
     tokens = [word.strip(".,;:!?()\"'") for word in text.split()]
     return {
         token.lower()
@@ -98,21 +81,7 @@ def _specifics(text: str) -> set:
 
 
 def _qualifiers_compatible(a: str, b: str) -> bool:
-    """Do two keys plausibly name the same slot?
-
-    A qualifier is a claim of identity — person:zohaib and person:fahad are
-    two people BY CONSTRUCTION, however alike their sentences read. But the
-    same slot also gets spelled twice ("backend-stack" / "backend-tech-stack",
-    "migraine" / "migraines").
-
-    The test is SUBSET, not overlap: a respelled slot differs in one
-    direction only (every token of one spelling appears in the other,
-    prefix-tolerantly), while two subjects differ in both directions
-    (zohaib / fahad). Overlap was the first attempt and it failed on its own
-    bench — "zohaib-coworker" and "fahad-coworker" share the categorical
-    token "coworker", and every templated family (game-*, recipe-*) shares
-    its prefix, so the guard passed exactly the pairs it existed to block.
-    """
+    """Return whether two qualifiers can name the same slot."""
     qa, qb = _qualifier(a), _qualifier(b)
     if not qa or not qb:
         return True
@@ -129,17 +98,7 @@ def _qualifiers_compatible(a: str, b: str) -> bool:
 
 
 def _mergeable(row, other, score: float) -> bool:
-    """Whether a similar-looking pair may be PROPOSED as one fact.
-
-    Similarity alone cannot make this call — measured: true duplicates with
-    differently-spelled qualifiers score 0.834-0.934, while different
-    subjects wearing the same sentence template ("Zohaib works on security" /
-    "Fahad works on security") reach 0.816. The populations overlap, so the
-    disjoint-qualifier route demands two extra things similarity cannot fake:
-    a 0.85 score, and no named entity present on one side and absent on the
-    other. The one measured casualty (macbook/laptop at 0.834) is the class
-    the write-time snap now prevents from forming at all.
-    """
+    """Decide whether two similar rows may be proposed as duplicates."""
     if _qualifiers_compatible(row.key, other.key):
         return score >= MERGE_SIMILARITY
     topic_a, topic_b = row.key.split(":")[0], other.key.split(":")[0]
@@ -153,15 +112,7 @@ def _mergeable(row, other, score: float) -> bool:
 
 
 def _mentions(word: str, words: set) -> bool:
-    """Does the text use this word, allowing for how English inflects?
-
-    Exact set membership is too strict to decide a key is stale: the key
-    "diet_avoid:peanut" against "severely allergic to peanuts" shares no exact
-    token, and the sweep offered to rename a slot that was already right. A
-    prefix match either way covers plural, possessive and participle without
-    pulling in a stemmer, and the cost of being generous here is only a stale
-    key left alone — while being strict proposes renaming a correct one.
-    """
+    """Match a word with simple prefix-based inflection tolerance."""
     return any(
         other == word or other.startswith(word) or word.startswith(other)
         for other in words
@@ -172,24 +123,16 @@ def sweep(
     rows: Sequence[MemoryRow],
     similarity: Callable[[MemoryRow, MemoryRow], float],
     profile_markdown: str = "",
+    authored_markdown: str = "",
 ) -> SweepResult:
-    """Look over an archive and say what could be tidied.
-
-    ``similarity`` is injected so this module stays free of embeddings; the
-    service passes one that reads the stored vectors.
-
-    Crowding is judged on what is PINNED, not on the document that gets
-    rendered. The renderer already drops the least important lines to stay
-    under the ceiling, so measuring its output asks "is the cap working?"
-    — to which the answer is always yes — instead of "is more pinned than
-    fits?", which is the question a person can act on.
-    """
+    """Return reviewable changes without mutating the archive."""
     active = [
         row
         for row in rows
         if row.state == MemoryState.ACTIVE and row.kind == MemoryKind.FACT
     ]
-    pinned_demand = sum(estimate_tokens(row.text) for row in active if row.pinned_to)
+    all_pins = [(row.pinned_to, row.text) for row in active if row.pinned_to]
+    pinned_demand = estimate_tokens(merge_pinned(authored_markdown, all_pins))
     result = SweepResult(
         examined=len(active),
         profile_tokens=estimate_tokens(profile_markdown),
@@ -321,9 +264,15 @@ def sweep(
     for proposal in merges + proposals:
         by_kind.setdefault(proposal.kind, []).append(proposal)
 
+    queues = {
+        kind: by_kind.get(kind, [])[:MAX_PER_KIND]
+        for kind in (MERGE, PROMOTE, REKEY, EVICT)
+    }
     ordered: List[Proposal] = []
-    for kind in (MERGE, PROMOTE, REKEY, EVICT):
-        ordered.extend(by_kind.get(kind, [])[:MAX_PER_KIND])
+    while len(ordered) < MAX_PROPOSALS and any(queues.values()):
+        for kind in (MERGE, PROMOTE, REKEY, EVICT):
+            if queues[kind] and len(ordered) < MAX_PROPOSALS:
+                ordered.append(queues[kind].pop(0))
 
-    result.proposals = ordered[:MAX_PROPOSALS]
+    result.proposals = ordered
     return result

@@ -3,6 +3,7 @@
 import math
 import re
 from collections import Counter
+from dataclasses import dataclass
 
 _ZERO_WIDTH_RE = re.compile("[\u200b\u200c\u200d\u2060\ufeff]")
 _SPACED_RUN_RE = re.compile(r"\b(?:[A-Za-z0-9][ .\-_]){3,}[A-Za-z0-9]\b")
@@ -26,6 +27,11 @@ _CREDENTIAL_ASSIGN_RE = re.compile(
     r"['\"]?[A-Za-z0-9_\-]*\d[A-Za-z0-9_\-]*['\"]?",
     re.IGNORECASE,
 )
+_PERSONAL_CREDENTIAL_RE = re.compile(
+    r"\b(my|our)\s+(password|passcode|passphrase|api[ _-]?key|secret|token)\b"
+    r"[^.\n]{0,20}?(is|was|[:=])\s*\S+",
+    re.IGNORECASE,
+)
 _OVERRIDE_RE = re.compile(
     r"\b(ignore|disregard|forget|override)\b[^.\n]{0,40}\b(instructions?"
     r"|guidelines|rules|system prompt|previous (instructions?|prompts?))\b"
@@ -40,6 +46,16 @@ _AUTHORITY_DEMAND_RE = re.compile(
     r"\b(filters?|safeguards?|safety|restrictions?|guardrails?|guidelines)\b",
     re.IGNORECASE,
 )
+
+
+@dataclass(frozen=True)
+class WritePolicy:
+    credential: bool = False
+    override: bool = False
+
+    @property
+    def allowed(self) -> bool:
+        return not (self.credential or self.override)
 
 
 def deobfuscate(text: str) -> str:
@@ -77,6 +93,7 @@ def looks_like_secret(text: str) -> bool:
         if (
             _SECRET_SHAPE_RE.search(candidate)
             or _CREDENTIAL_ASSIGN_RE.search(candidate)
+            or _PERSONAL_CREDENTIAL_RE.search(candidate)
             or _reads_like_key_material(candidate)
         ):
             return True
@@ -89,3 +106,11 @@ def demands_override(text: str) -> bool:
         if _OVERRIDE_RE.search(candidate) or _AUTHORITY_DEMAND_RE.search(candidate):
             return True
     return False
+
+
+def inspect_write(text: str) -> WritePolicy:
+    """Return every deterministic reason this text cannot enter memory."""
+    return WritePolicy(
+        credential=looks_like_secret(text),
+        override=demands_override(text),
+    )

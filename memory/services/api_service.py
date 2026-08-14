@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 from django.db import transaction
 
 from memory.constants import TOKEN_BUDGET, TOKEN_WARNING, MemoryState, WriterAction
+from memory.domain.guards import inspect_write
 from memory.domain.user_doc import (
     estimate_tokens,
     normalize_line,
@@ -25,6 +26,7 @@ from memory.services.items import (
     record_item,
     row_item,
 )
+from memory.services.ledger import LedgerEvent, record_event
 from memory.services.retrieval import retrieve, summarize_recall
 from memory.services.session_search import search_sessions_hits
 from memory.services.store import read_user_doc, tokenize
@@ -123,14 +125,15 @@ def forget_item(user, item_id: str) -> None:
 
     with transaction.atomic():
         record.soft_delete()
-        MemoryLedgerEntry.objects.create(
-            user=user,
-            action=WriterAction.FORGET,
-            proposed_action=WriterAction.FORGET,
-            reason="The user asked for this memory to be forgotten.",
-            applied=True,
-            record=record,
-            detail=record.text,
+        record_event(
+            user,
+            LedgerEvent(
+                action=WriterAction.FORGET,
+                reason="The user asked for this memory to be forgotten.",
+                applied=True,
+                record=record,
+                detail=record.text,
+            ),
         )
 
 
@@ -148,13 +151,14 @@ def _forget_doc_line(user, item_id: str) -> None:
                 lines.remove(line)
                 document.content = render_user_doc(parsed)
                 document.save(update_fields=["content", "updated_at"])
-                MemoryLedgerEntry.objects.create(
-                    user=user,
-                    action=WriterAction.FORGET,
-                    proposed_action=WriterAction.FORGET,
-                    reason="The user removed a USER.md line.",
-                    applied=True,
-                    detail=f"[{key}] {line}",
+                record_event(
+                    user,
+                    LedgerEvent(
+                        action=WriterAction.FORGET,
+                        reason="The user removed a USER.md line.",
+                        applied=True,
+                        detail=f"[{key}] {line}",
+                    ),
                 )
             return
 
@@ -215,6 +219,11 @@ def save_document(user, markdown: Any) -> Dict[str, Any]:
         raise MemoryInvalid("A markdown body is required. To erase, use clear/.")
 
     normalized = normalize_user_doc(str(markdown))
+    policy = inspect_write(normalized)
+    if policy.credential:
+        raise MemoryInvalid("Credentials cannot be stored in USER.md.")
+    if policy.override:
+        raise MemoryInvalid("USER.md cannot override the assistant's instructions.")
     tokens = estimate_tokens(normalized)
     if tokens > TOKEN_BUDGET:
         raise MemoryInvalid(
@@ -294,18 +303,19 @@ def set_hold(user, record_id: Any, held: Any) -> Dict[str, Any]:
             record.state = target
             record.save(update_fields=["state", "updated_at"])
             action = WriterAction.HOLD if held else WriterAction.RELEASE
-            MemoryLedgerEntry.objects.create(
-                user=user,
-                action=action,
-                proposed_action=action,
-                reason=(
-                    "The user gated this memory by hand."
-                    if held
-                    else "The user released this memory by hand."
+            record_event(
+                user,
+                LedgerEvent(
+                    action=action,
+                    reason=(
+                        "The user gated this memory by hand."
+                        if held
+                        else "The user released this memory by hand."
+                    ),
+                    applied=True,
+                    record=record,
+                    detail=record.text,
                 ),
-                applied=True,
-                record=record,
-                detail=record.text,
             )
 
     return record_item(record)

@@ -1,16 +1,4 @@
-"""Editing a memory by hand.
-
-The writer proposes and the gate disposes — but the person whose memory this
-is gets the last word, and that word goes through the same machinery: a
-rewritten statement is re-embedded (an edit that kept its old vector would be
-findable only by its old wording), a rewritten rule is re-keyed if its trigger
-changed, and every edit lands in the ledger like any other decision.
-
-What an edit deliberately does NOT do is supersede. A supersede means "this
-was true, now something else is" and keeps both halves on a timeline. An edit
-means "this was never quite right" — there is no second truth to keep, so the
-row is corrected in place and the ledger carries the before and after.
-"""
+"""Correct memory records and authored profile lines in place."""
 
 import logging
 from dataclasses import dataclass
@@ -19,6 +7,7 @@ from typing import Optional
 from django.db import connection, transaction
 
 from memory.constants import TOKEN_BUDGET, MemoryKind, Sensitivity, WriterAction
+from memory.domain.guards import inspect_write
 from memory.domain.keys import procedure_key
 from memory.domain.user_doc import (
     estimate_tokens,
@@ -26,9 +15,10 @@ from memory.domain.user_doc import (
     parse_user_doc,
     render_user_doc,
 )
-from memory.models import MemoryLedgerEntry, MemoryRecord, UserMemoryDocument
+from memory.models import MemoryRecord, UserMemoryDocument
 from memory.services.embeddings import embed_texts
 from memory.services.items import doc_line_id, parse_behavior_content
+from memory.services.ledger import LedgerEvent, record_event
 
 logger = logging.getLogger(__name__)
 
@@ -47,8 +37,18 @@ def edit_record(user, record: MemoryRecord, content: str) -> EditResult:
     if not text:
         return EditResult(ok=False, reason="A memory needs some text.")
 
+    policy = inspect_write(text)
+    if policy.credential:
+        return EditResult(ok=False, reason="Credentials cannot be stored in memory.")
+    if policy.override:
+        return EditResult(
+            ok=False,
+            reason="A memory cannot override the assistant's instructions.",
+        )
+
     before = record.text
     key = record.key
+    applies_when = record.applies_when
 
     # Rewriting a safety fact into something unrelated is the one edit that
     # loses information silently: it stays in the archive, but it stops being
@@ -75,6 +75,7 @@ def edit_record(user, record: MemoryRecord, content: str) -> EditResult:
             # to a new key — and that key must be free, or the edit would
             # silently retire someone else's rule.
             key = procedure_key(trigger, rule)
+            applies_when = trigger
             clash = (
                 MemoryRecord.usable(user)
                 .filter(kind=MemoryKind.PROCEDURE, key=key)
@@ -100,8 +101,8 @@ def edit_record(user, record: MemoryRecord, content: str) -> EditResult:
     # back to the terse form that loses to unrelated rules.
     vector = None
     if connection.vendor == "postgresql":
-        if record.kind == MemoryKind.PROCEDURE and record.applies_when:
-            embed_source = f"{record.applies_when} {text}"
+        if record.kind == MemoryKind.PROCEDURE and applies_when:
+            embed_source = f"{applies_when} {text}"
         else:
             embed_source = f"{key} {text}"
         vector = embed_texts([embed_source])[0]
@@ -109,45 +110,29 @@ def edit_record(user, record: MemoryRecord, content: str) -> EditResult:
     with transaction.atomic():
         record.text = text
         record.key = key
-        fields = ["text", "key", "updated_at"]
+        record.applies_when = applies_when
+        fields = ["text", "key", "applies_when", "updated_at"]
         if vector is not None:
             record.embedding = vector
             fields.append("embedding")
         record.save(update_fields=fields)
 
-        MemoryLedgerEntry.objects.create(
-            user=user,
-            action=WriterAction.EDIT,
-            proposed_action=WriterAction.EDIT,
-            reason="The user rewrote this memory.",
-            note=f'Was: "{before}"',
-            applied=True,
-            record=record,
-            detail=f"{key} · {text}",
+        record_event(
+            user,
+            LedgerEvent(
+                action=WriterAction.EDIT,
+                reason="The user rewrote this memory.",
+                note=f'Was: "{before}"',
+                applied=True,
+                record=record,
+                detail=f"{key} · {text}",
+            ),
         )
     return EditResult(ok=True)
 
 
-def _safety_pin_for(user, line: str) -> Optional[MemoryRecord]:
-    """The active safety record this USER.md line was pinned from, if any.
-
-    The gate writes a safety fact's text into Constraints verbatim, so an exact
-    match is the link — USER.md itself carries no per-line metadata.
-    """
-    return (
-        MemoryRecord.usable(user)
-        .filter(kind=MemoryKind.FACT, sensitivity=Sensitivity.SAFETY, text=line)
-        .first()
-    )
-
-
 def _still_covers(record: MemoryRecord, text: str) -> bool:
-    """Whether a rewritten line still names what the safety fact is about.
-
-    The subject comes from the qualified key (``diet_avoid:peanut`` → peanut),
-    which is the one token the rewrite must keep. Rewording is fine; dropping
-    the subject is not.
-    """
+    """Require a safety edit to retain the key's subject."""
     qualifier = record.key.split(":")[-1] if ":" in record.key else ""
     subjects = [word for word in qualifier.replace("-", " ").split() if len(word) > 2]
     if not subjects:
@@ -159,15 +144,19 @@ def _still_covers(record: MemoryRecord, text: str) -> bool:
 
 
 def edit_doc_line(user, item_id: str, content: str) -> EditResult:
-    """Rewrite one USER.md bullet, keeping it under the budget.
-
-    The line is found by the same content hash the list handed out, so an
-    edit against a stale view fails to match rather than overwriting whatever
-    now sits in that position.
-    """
+    """Rewrite one authored USER.md line within the budget."""
     text = (content or "").strip()
     if not text:
         return EditResult(ok=False, reason="A profile line needs some text.")
+
+    policy = inspect_write(text)
+    if policy.credential:
+        return EditResult(ok=False, reason="Credentials cannot be stored in USER.md.")
+    if policy.override:
+        return EditResult(
+            ok=False,
+            reason="USER.md cannot override the assistant's instructions.",
+        )
 
     document = UserMemoryDocument.objects.filter(user=user).first()
     if document is None:
@@ -190,23 +179,6 @@ def edit_doc_line(user, item_id: str, content: str) -> EditResult:
             ):
                 return EditResult(ok=False, reason="USER.md already says this.")
 
-            # Rewriting a safety line into something unrelated is the one edit
-            # that loses information silently: the fact stays in the archive,
-            # but it stops being carried into every turn, and the turn where it
-            # matters is the one that never mentions it.
-            pinned = _safety_pin_for(user, existing)
-            if pinned is not None and not _still_covers(pinned, line):
-                return EditResult(
-                    ok=False,
-                    reason=(
-                        f'This line is pinned here because "{pinned.text}" is '
-                        f"marked as a safety fact, so it travels with every "
-                        f"message. Reword it however you like as long as it "
-                        f"still says what to avoid — or delete the underlying "
-                        f"memory first if it is no longer true."
-                    ),
-                )
-
             lines[index] = line
             rendered = render_user_doc(doc)
             tokens = estimate_tokens(rendered)
@@ -222,14 +194,15 @@ def edit_doc_line(user, item_id: str, content: str) -> EditResult:
             with transaction.atomic():
                 document.content = rendered
                 document.save(update_fields=["content", "updated_at"])
-                MemoryLedgerEntry.objects.create(
-                    user=user,
-                    action=WriterAction.EDIT,
-                    proposed_action=WriterAction.EDIT,
-                    reason="The user rewrote a USER.md line.",
-                    note=f'Was: "{existing}"',
-                    applied=True,
-                    detail=f"[{key}] {line}",
+                record_event(
+                    user,
+                    LedgerEvent(
+                        action=WriterAction.EDIT,
+                        reason="The user rewrote a USER.md line.",
+                        note=f'Was: "{existing}"',
+                        applied=True,
+                        detail=f"[{key}] {line}",
+                    ),
                 )
             return EditResult(ok=True)
 
