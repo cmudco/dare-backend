@@ -14,6 +14,7 @@ the same convention every other context layer here follows.
 """
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from memory.constants import (
@@ -61,6 +62,7 @@ _PROCEDURES_PREAMBLE = (
     "corrected once. Follow them silently."
 )
 
+
 # The one standing rule about the transcript, present on every memory-enabled
 # turn — including a turn where nothing else was worth injecting, because a
 # person with an empty store asking "what did we discuss yesterday" is
@@ -69,16 +71,23 @@ _PROCEDURES_PREAMBLE = (
 # the model searched ONCE and improvised the other eleven answers from
 # whatever memories happened to be in context — including invented
 # specifics presented as quotes.
-_TOOLING_NOTE = (
-    "<memory_tools>\n"
-    "Questions about past conversations — what was said, discussed or "
-    'decided, a particular day or period, "did I ever mention…", or an '
-    "exact quote — are answered with the search_sessions tool, never from "
-    "memory and never from recall. Any memories shown here are distilled "
-    "summaries; they are not the person's words, and they are not a record "
-    "of any conversation.\n"
-    "</memory_tools>"
-)
+def _tooling_note(today: str) -> str:
+    # Today's date is in here because "what did we talk about yesterday?"
+    # was answered with a dateless tool call and then "we haven't talked" —
+    # the model had no way to turn yesterday into a YYYY-MM-DD bound, since
+    # nothing else in the chat context says what day it is.
+    return (
+        "<memory_tools>\n"
+        f"Today is {today}.\n"
+        "Questions about past conversations — what was said, discussed or "
+        'decided, a particular day or period, "did I ever mention…", or an '
+        "exact quote — are answered with the search_sessions tool, never "
+        "from memory and never from recall. Work date ranges out from "
+        "today's date above. Any memories shown here are distilled "
+        "summaries; they are not the person's words, and they are not a "
+        "record of any conversation.\n"
+        "</memory_tools>"
+    )
 
 
 @dataclass
@@ -150,7 +159,7 @@ def read_context(user, question: str) -> ReadContext:
         parts.append(
             f"{_PROCEDURES_PREAMBLE}\n\n<procedures>\n{procedure_block}\n</procedures>"
         )
-    parts.append(_TOOLING_NOTE)
+    parts.append(_tooling_note(datetime.now(timezone.utc).date().isoformat()))
 
     return ReadContext(
         user_doc=user_doc,

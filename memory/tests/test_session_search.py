@@ -160,5 +160,10 @@ class DateBoundTests(TestCase):
         self.assertFalse(result["success"])
         self.assertIn("reversed", result["error"])
 
-    def test_no_words_and_no_dates_is_still_nothing(self):
-        self.assertEqual(self.search("")["found"], 0)
+    def test_an_empty_call_is_corrected_rather_than_answered(self):
+        """found=0 for an empty call taught the model "we never talked" —
+        it had asked about yesterday with no dates and no words, got a
+        clean zero, and reported the conversation history as empty."""
+        result = self.search("")
+        self.assertFalse(result["success"])
+        self.assertIn("since/until", result["error"])
