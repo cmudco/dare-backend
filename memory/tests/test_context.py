@@ -79,6 +79,17 @@ class ReadContextTests(TestCase):
         self.assertEqual(types, {"profile", "knowledge", "behavior"})
         for item in context.items:
             self.assertEqual(set(item.keys()), {"content", "memory_type", "categories"})
+        behavior = next(
+            item for item in context.items if item["memory_type"] == "behavior"
+        )
+        self.assertEqual(
+            behavior,
+            {
+                "content": "When writing commit messages: Never use emoji.",
+                "memory_type": "behavior",
+                "categories": ["writing-commit-messages"],
+            },
+        )
 
     def test_the_question_is_embedded_exactly_once_per_turn(self):
         with patch(
@@ -91,6 +102,15 @@ class ReadContextTests(TestCase):
         self.assertEqual(context_embed.call_count, 1)
         # The funnels must reuse that vector, never embed again.
         retrieval_embed.assert_not_called()
+
+    def test_multiline_prose_reuses_the_question_embedding(self):
+        question = "Review this carefully.\n\nFocus on error handling and naming."
+        with patch(
+            "memory.services.context.embed_one", return_value=[0.0] * 8
+        ) as context_embed:
+            read_context(self.user, question)
+
+        self.assertEqual(context_embed.call_count, 1)
 
     def test_a_failed_embedding_is_not_retried_by_each_funnel(self):
         # None is ambiguous — "nobody embedded yet" vs "embedding failed".
@@ -108,20 +128,13 @@ class ReadContextTests(TestCase):
         # And the turn still works, ranked on words and importance alone.
         self.assertIn("Lives in Lahore.", context.block)
 
-    def test_an_empty_store_still_carries_the_tool_guidance(self):
-        """No memories does not mean no block: the transcript exists from the
-        first conversation onward, and a person with an empty store asking
-        "what did we discuss yesterday" is exactly who needs the model told
-        to search rather than improvise. Measured without this: 12 questions
-        about past conversations, 1 search, 11 improvised answers."""
+    def test_an_empty_store_still_carries_the_current_date(self):
         stranger = get_user_model().objects.create_user(
             email="empty-store@example.com", password="x"
         )
         with patch("memory.services.context.embed_one", return_value=None):
             context = read_context(stranger, "anything at all")
-        self.assertIn("<memory_tools>", context.block)
-        self.assertIn("search_sessions", context.block)
-        # And nothing else — no empty layer frames around it.
+        self.assertIn("<current_date>", context.block)
         self.assertNotIn("<user_md>", context.block)
         self.assertNotIn("<retrieved_memories>", context.block)
         self.assertEqual(context.items, [])

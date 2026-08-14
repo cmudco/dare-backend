@@ -11,7 +11,7 @@ from django.test import SimpleTestCase
 
 from memory.domain.apply import apply_decisions
 from memory.domain.keys import procedure_key
-from memory.domain.procedural import TaskContext, format_procedures, task_query
+from memory.domain.procedural import format_procedures, task_query
 from memory.domain.types import ApplyInput, MemoryRow, WriterDecision
 
 DOC = """# USER.md
@@ -227,32 +227,35 @@ class ProcedurePromptTests(SimpleTestCase):
         # purpose.
         self.assertEqual(block, "- When installing packages: Use pnpm, never npm.")
 
-    def test_the_task_query_folds_in_what_the_assistant_is_about_to_do(self):
+    def test_an_ordinary_message_is_the_task_query(self):
         self.assertEqual(
-            task_query(
-                TaskContext(
-                    message="can you clean this up", about=["git commit", "README.md"]
-                )
-            ),
-            "can you clean this up git commit README.md",
+            task_query("can you clean this up"),
+            "can you clean this up",
         )
 
     def test_a_pasted_body_is_dropped_because_the_request_is_the_situation(self):
-        """Measured against a stored code-review rule: with the body attached
-        this message scores 0.157 and falls under the 0.22 relevance gate;
-        without it, 0.340."""
         self.assertEqual(
             task_query(
-                TaskContext(
-                    message=(
-                        "here's a function I wrote, take a look:\n\n"
-                        "def parse(x):\n    return x.split(',')[1]"
-                    )
-                )
+                "here's a function I wrote, take a look:\n\n"
+                "def parse(x):\n    return x.split(',')[1]"
             ),
             "here's a function I wrote, take a look:",
         )
 
+    def test_fenced_code_is_dropped(self):
+        self.assertEqual(
+            task_query("review this function\n\n```python\ndef run():\n    pass\n```"),
+            "review this function",
+        )
+
+    def test_multiple_prose_paragraphs_are_preserved(self):
+        message = "Review this carefully.\n\nFocus on error handling and naming."
+        self.assertEqual(task_query(message), message)
+
+    def test_prose_that_looks_like_a_keyword_is_preserved(self):
+        message = "Give me options.\n\nLet me decide which approach is best."
+        self.assertEqual(task_query(message), message)
+
     def test_a_message_that_is_only_code_keeps_the_code(self):
         code = "def parse(x):\n    return x.split(',')[1]"
-        self.assertEqual(task_query(TaskContext(message=code)), code)
+        self.assertEqual(task_query(code), code)
