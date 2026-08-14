@@ -365,10 +365,18 @@ _REPAIR_NOTE = (
 # models run at default temperature — the only dialect they accept). Probed
 # once per model per process and cached, so a new family adapts without a
 # code change.
+#
+# The completion budgets differ on purpose. 900 fits the decision JSON with
+# room to spare on a non-reasoning model — but the max_completion_tokens
+# dialects belong to REASONING models, and their reasoning tokens come out of
+# the same budget. Found in production: with a ~7k prompt (281 keys in use
+# plus retrieved rows), gpt-5.6-luna spent all 900 tokens reasoning, emitted
+# zero output, and every writer job died on a parse error — silently, in the
+# failed registry, turn after turn.
 _PARAM_STYLES = (
     {"temperature": 0, "max_tokens": 900},
-    {"temperature": 0, "max_completion_tokens": 900},
-    {"max_completion_tokens": 900},
+    {"temperature": 0, "max_completion_tokens": 4000},
+    {"max_completion_tokens": 4000},
 )
 _style_by_model: Dict[str, int] = {}
 
