@@ -725,11 +725,17 @@ def get_search_sessions_tool_openai() -> Dict:
             "name": "search_sessions",
             "description": (
                 "Search the full transcript of this person's past "
-                "conversations, word for word. Use it when they refer to "
-                "something said earlier that is not in the context you "
-                "already have — a past decision, a name, an exact phrasing. "
-                "Do not use it for what is true about them now; that is "
-                "already provided."
+                "conversations, word for word. ALWAYS use it when they ask "
+                "about a past conversation in any form: what was said, "
+                "discussed or decided; a rundown of a day or period ('what "
+                "did we talk about yesterday / last week'); 'did I ever "
+                "mention…'; or an exact quote ('what were my words'). The "
+                "memories in your context are distilled summaries — they are "
+                "NEVER the person's exact words and never a record of a "
+                "specific conversation, so answering those questions without "
+                "this search means guessing, and a wrong guess about their "
+                "own words is worse than a moment's delay. Do not use it for "
+                "what is true about them now; that is already provided."
             ),
             "parameters": {
                 "type": "object",

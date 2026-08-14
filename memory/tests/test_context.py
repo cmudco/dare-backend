@@ -108,11 +108,20 @@ class ReadContextTests(TestCase):
         # And the turn still works, ranked on words and importance alone.
         self.assertIn("Lives in Lahore.", context.block)
 
-    def test_an_empty_store_yields_an_empty_block(self):
+    def test_an_empty_store_still_carries_the_tool_guidance(self):
+        """No memories does not mean no block: the transcript exists from the
+        first conversation onward, and a person with an empty store asking
+        "what did we discuss yesterday" is exactly who needs the model told
+        to search rather than improvise. Measured without this: 12 questions
+        about past conversations, 1 search, 11 improvised answers."""
         stranger = get_user_model().objects.create_user(
             email="empty-store@example.com", password="x"
         )
         with patch("memory.services.context.embed_one", return_value=None):
             context = read_context(stranger, "anything at all")
-        self.assertEqual(context.block, "")
+        self.assertIn("<memory_tools>", context.block)
+        self.assertIn("search_sessions", context.block)
+        # And nothing else — no empty layer frames around it.
+        self.assertNotIn("<user_md>", context.block)
+        self.assertNotIn("<retrieved_memories>", context.block)
         self.assertEqual(context.items, [])
