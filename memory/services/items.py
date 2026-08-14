@@ -16,11 +16,12 @@ match, which the API reports as 404 rather than deleting the wrong line.
 
 import hashlib
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from memory.constants import MemoryState
 from memory.domain.procedural import trigger_of
-from memory.domain.user_doc import parse_user_doc
+from memory.domain.types import MemoryRow
+from memory.domain.user_doc import parse_user_doc, user_doc_lines
 from memory.models import MemoryRecord, UserMemoryDocument
 
 PROFILE = "profile"
@@ -194,6 +195,28 @@ def row_item(row, score: Optional[float] = None) -> Dict[str, Any]:
     if score is not None:
         item["score"] = round(min(1.0, max(0.0, score)), 4)
     return item
+
+
+def context_items(user_doc: str, rows: Iterable[MemoryRow]) -> List[Dict[str, Any]]:
+    """Return the items shown in a message's memory context panel."""
+    items = [
+        {
+            "content": line["line"],
+            "memory_type": PROFILE,
+            "categories": [line["key"]],
+        }
+        for line in user_doc_lines(user_doc)
+    ]
+    for row in rows:
+        item = row_item(row)
+        items.append(
+            {
+                "content": item["content"],
+                "memory_type": item["memory_type"],
+                "categories": item["categories"],
+            }
+        )
+    return items
 
 
 def pinned_records(user) -> List[MemoryRecord]:
