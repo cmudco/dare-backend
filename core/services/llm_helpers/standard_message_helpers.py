@@ -270,6 +270,27 @@ async def build_standard_messages(
             )
             if memory_context:
                 stage["count"] = len(memory_context)
+    elif user_id:
+        # Memory OFF is not just "inject nothing" — left unsaid, the model
+        # improvises. Red-teamed: asked to remember a code with the toggle
+        # off, it answered "I've noted that" and later "I've updated my
+        # notes", while nothing was written anywhere. The model cannot know
+        # the toggle exists unless it is told, so the one honest line rides
+        # every memory-off turn for a signed-in user.
+        messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "<memory_status>\nMemory is OFF for this conversation: "
+                    "nothing said here is remembered across chats, and "
+                    "nothing can be recalled from other chats. If the person "
+                    "asks you to remember something, say plainly that memory "
+                    "is off for this conversation and that they can turn it "
+                    "on from the conversation context menu — never claim to "
+                    "have noted or saved anything.\n</memory_status>"
+                ),
+            }
+        )
 
     # Add conversation history
     with trace.stage("history") as stage:
