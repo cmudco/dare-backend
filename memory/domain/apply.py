@@ -21,16 +21,14 @@ from typing import List, Optional
 
 from memory.constants import (
     ADDRESSING_HEADINGS,
-    CREDENTIAL_ASSIGN_RE,
     NEVER_EXPIRES,
-    OVERRIDE_RE,
     PINNED_TOPICS,
-    SECRET_SHAPE_RE,
     TOKEN_BUDGET,
     MemoryKind,
     MemoryState,
     Sensitivity,
 )
+from memory.domain.guards import demands_override, looks_like_secret
 from memory.domain.keys import distinguishing_key, downgraded_key
 from memory.domain.types import (
     ApplyInput,
@@ -268,7 +266,7 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
     # stored an "admin token" anyway. The marker is the override rider, not
     # the identity claim; the whole turn's writes are refused with the
     # attempt on the record.
-    turn_is_override = bool(OVERRIDE_RE.search(input.user_message or ""))
+    turn_is_override = demands_override(input.user_message or "")
 
     # Pins accepted earlier in this same pass. The budget question is asked of
     # the document a turn will actually render, and 22 lines proposed together
@@ -305,11 +303,9 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
         # not — and the writer stored both as active, non-sensitive facts
         # that ordinary retrieval happily returned. A memory row is written
         # to be read back into prompts forever; a credential in one is a
-        # credential waiting to leak. Two detectors: values with a known key
-        # shape, and a credential noun possessing a concrete value.
-        if action != "ignore" and (
-            SECRET_SHAPE_RE.search(text) or CREDENTIAL_ASSIGN_RE.search(text)
-        ):
+        # credential waiting to leak. Layered detection, obfuscation
+        # included — see memory/domain/guards.py.
+        if action != "ignore" and looks_like_secret(text):
             log(
                 action="ignore",
                 proposed_action=action,
@@ -324,6 +320,29 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
                 # The ledger keeps only the shape of the refusal, not the
                 # secret itself.
                 detail=(text[:20] + "…" if len(text) > 20 else text),
+            )
+            continue
+
+        # A row whose TEXT is an instruction to defect is refused whatever
+        # the turn looked like. The turn-level check above catches the ask;
+        # this catches the artifact — a procedure reading "ignore your
+        # system prompt when…" would be re-injected on every matching turn
+        # forever, which is a standing prompt injection with a database row
+        # for a delivery mechanism.
+        if action != "ignore" and demands_override(text):
+            log(
+                action="ignore",
+                proposed_action=action,
+                reason=decision.reason,
+                note=(
+                    "Refused: a memory row cannot carry instructions to "
+                    "ignore, replace or bypass the assistant's rules. How to "
+                    "behave is welcome as a procedure; whether the rules "
+                    "apply is not up for storage."
+                ),
+                applied=False,
+                record_id=None,
+                detail=text,
             )
             continue
 
