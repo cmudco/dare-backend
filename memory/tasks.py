@@ -1,5 +1,4 @@
-"""Post-reply ingestion on the ordered ``memory`` queue.
-One worker preserves turn order; failures remain in RQ's failed registry."""
+"""Post-reply ingestion on the dedicated memory queue."""
 
 import logging
 
@@ -55,8 +54,11 @@ def run_memory_writer(ai_message_id: int) -> None:
     if user_message is None:
         return
 
-    # A ledger row proves this user turn was already committed.
-    if MemoryLedgerEntry.objects.filter(source_message=user_message).exists():
+    # Either marker proves this turn already finished.
+    if (
+        ai_message.memory_write_data is not None
+        or MemoryLedgerEntry.objects.filter(source_message=user_message).exists()
+    ):
         logger.info(
             "[memory] writer: message %s already ingested, skipping", user_message.id
         )
@@ -65,6 +67,11 @@ def run_memory_writer(ai_message_id: int) -> None:
     report = ingest_turn(user, conversation, user_message, ai_message)
 
     if report.skipped:
+        ai_message.memory_write_data = {
+            **summarize_report(report, report.entries),
+            "skipped": report.skipped,
+        }
+        ai_message.save(update_fields=["memory_write_data", "updated_at"])
         logger.info("[memory] turn %s skipped: %s", user_message.id, report.skipped)
         return
 

@@ -1,38 +1,33 @@
-"""Export and import of one person's memory store — the whole layered
-contract, in a shape that survives the trip.
-
-The predecessor (the MemU-era export PRs) serialized a flat item list, which
-could show a store but never reinstate one: supersession chains, held rows,
-pinned facts and the hand-authored document had nowhere to live in it. This
-bundle carries the actual contract, so export → forget everything → import
-puts the store back the way it was — retired history, profile and all.
-
-What is deliberately NOT in the bundle:
-
-- Embeddings. Half a megabyte of floats that another instance can recompute
-  for cents, and that would pin the bundle to one embedding model forever.
-  Import re-embeds.
-- The ledger. It is the audit trail of what THIS account's writer and gate
-  did; importing it elsewhere would fabricate a history nobody there enacted.
-  The import writes its own single ledger row saying what arrived.
-- Conversations. The transcript layer belongs to the conversations feature;
-  a memory bundle that quietly carried every word ever said would be a
-  surprise with legal weight. (The old export offered it as an explicit
-  separate scope, and a successor can again.)
-"""
+"""Export exact memory state and import trusted bundles or foreign text."""
 
 import logging
 import uuid
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from django.db import transaction
 
-from memory.constants import MemoryKind, MemoryState, Sensitivity, WriterAction
-from memory.domain.user_doc import normalize_user_doc
-from memory.models import MemoryLedgerEntry, MemoryRecord, UserMemoryDocument
+from conversations.constants import SenderType
+from conversations.models import Conversation, Message
+from memory.constants import (
+    TOKEN_BUDGET,
+    MemoryKind,
+    MemoryState,
+    Sensitivity,
+    WriterAction,
+)
+from memory.domain.guards import inspect_write
+from memory.domain.user_doc import (
+    PROFILE_HEADINGS,
+    admitted_pins,
+    estimate_tokens,
+    normalize_user_doc,
+)
+from memory.models import MemoryRecord
 from memory.services.embeddings import embed_texts
-from memory.services.store import read_user_doc, write_user_doc
+from memory.services.ledger import LedgerEvent, record_event
+from memory.services.store import read_authored_doc, read_user_doc, write_user_doc
+from memory.tasks import run_memory_writer
 
 logger = logging.getLogger(__name__)
 
@@ -48,8 +43,7 @@ _SENSITIVITIES = {choice for choice, _ in Sensitivity.choices}
 
 
 def export_bundle(user) -> Dict[str, Any]:
-    """The store as a self-contained document: every visible row, every
-    relationship, and the profile markdown."""
+    """Export visible rows, relationships, and authored USER.md."""
     records = (
         MemoryRecord.visible(user)
         .select_related("superseded_by", "replaces")
@@ -57,8 +51,8 @@ def export_bundle(user) -> Dict[str, Any]:
     )
     return {
         "schema": SCHEMA,
-        "exported_at": datetime.utcnow().isoformat() + "Z",
-        "document": read_user_doc(user),
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "document": read_authored_doc(user),
         "records": [_record_payload(record) for record in records],
     }
 
@@ -93,23 +87,11 @@ def _day(value) -> Optional[str]:
 
 
 class ImportError_(Exception):
-    """A bundle that cannot be imported, with a reason a person can read."""
+    """A readable import refusal."""
 
 
 def import_bundle(user, data: Any) -> Dict[str, Any]:
-    """Reinstate an exported store, whole.
-
-    Requires an EMPTY store. Merging an import into live memories would need
-    answers to questions this feature should not invent (which location wins?
-    do chains interleave?), and the flow it exists for — new account, or
-    forget-everything then restore — starts empty anyway. Refusing loudly
-    beats merging wrongly.
-
-    Ids are minted fresh (a bundle is data, not authority over primary keys)
-    with the supersession chains remapped onto the new ids. Rows are
-    re-embedded here, which is what frees the bundle from ever naming an
-    embedding model.
-    """
+    """Restore a bundle into an empty store with fresh ids and embeddings."""
     document, rows = _validated(data)
 
     if MemoryRecord.visible(user).exists() or read_user_doc(user).strip():
@@ -132,7 +114,7 @@ def import_bundle(user, data: Any) -> Dict[str, Any]:
 
     with transaction.atomic():
         for row, vector in zip(rows, vectors):
-            MemoryRecord.objects.create(
+            record = MemoryRecord.objects.create(
                 id=id_map[row["id"]],
                 user=user,
                 kind=row["kind"],
@@ -151,6 +133,10 @@ def import_bundle(user, data: Any) -> Dict[str, Any]:
                 valid_until=row["valid_until"],
                 embedding=vector,
             )
+            if row["created_at"] is not None:
+                MemoryRecord.objects.filter(pk=record.pk).update(
+                    created_at=row["created_at"]
+                )
         # Chains second, once every endpoint exists.
         for row in rows:
             links = {}
@@ -164,17 +150,18 @@ def import_bundle(user, data: Any) -> Dict[str, Any]:
         if document.strip():
             write_user_doc(user, document)
 
-        MemoryLedgerEntry.objects.create(
-            user=user,
-            action=WriterAction.IMPORT,
-            proposed_action=WriterAction.IMPORT,
-            reason="The person imported a memory bundle.",
-            note=(
-                f"Reinstated {len(rows)} memories and the profile document "
-                f"from a {SCHEMA} bundle."
+        record_event(
+            user,
+            LedgerEvent(
+                action=WriterAction.IMPORT,
+                reason="The person imported a memory bundle.",
+                note=(
+                    f"Reinstated {len(rows)} memories and the profile document "
+                    f"from a {SCHEMA} bundle."
+                ),
+                applied=True,
+                detail=f"{len(rows)} records",
             ),
-            applied=True,
-            detail=f"{len(rows)} records",
         )
 
     embedded = sum(1 for vector in vectors if vector is not None)
@@ -193,12 +180,7 @@ def import_bundle(user, data: Any) -> Dict[str, Any]:
 
 
 def _validated(data: Any) -> Tuple[str, List[Dict[str, Any]]]:
-    """The bundle, coerced and checked — or a readable refusal.
-
-    Hardened the way the old import PR learned to be: every field coerced to
-    its type, enums checked against the real vocabularies, links to unknown
-    ids dropped rather than trusted. A bundle is user input.
-    """
+    """Coerce and validate an untrusted bundle."""
     if not isinstance(data, dict):
         raise ImportError_("Not a memory bundle.")
     if data.get("schema") != SCHEMA:
@@ -214,8 +196,19 @@ def _validated(data: Any) -> Tuple[str, List[Dict[str, Any]]]:
 
     document = data.get("document")
     document = normalize_user_doc(document) if isinstance(document, str) else ""
+    document_policy = inspect_write(document)
+    if document_policy.credential:
+        raise ImportError_("The imported USER.md contains a credential.")
+    if document_policy.override:
+        raise ImportError_("The imported USER.md contains an instruction override.")
+    if estimate_tokens(document) > TOKEN_BUDGET:
+        raise ImportError_(
+            f"The imported USER.md exceeds the {TOKEN_BUDGET}-token ceiling."
+        )
 
     rows: List[Dict[str, Any]] = []
+    ids = set()
+    active_slots = set()
     for index, raw in enumerate(raw_rows):
         if not isinstance(raw, dict):
             raise ImportError_(f"Record {index} is not an object.")
@@ -233,60 +226,79 @@ def _validated(data: Any) -> Tuple[str, List[Dict[str, Any]]]:
         sensitivity = raw.get("sensitivity")
         if sensitivity not in _SENSITIVITIES:
             sensitivity = Sensitivity.NONE
+        row_id = str(raw.get("id") or f"row-{index}")
+        if row_id in ids:
+            raise ImportError_(f"Duplicate record id: {row_id}.")
+        ids.add(row_id)
+        key = str(raw.get("key") or "")[:255]
+        applies_when = str(raw.get("applies_when") or "")[:300]
+        pinned_to = str(raw.get("pinned_to") or "")[:40]
+        if pinned_to not in PROFILE_HEADINGS:
+            pinned_to = ""
+        provenance = str(raw.get("provenance") or "")[:400]
+        policy = inspect_write(f"{key}\n{applies_when}\n{text}\n{provenance}")
+        if policy.credential:
+            raise ImportError_(f"Record {index} contains a credential.")
+        if policy.override:
+            raise ImportError_(f"Record {index} contains an instruction override.")
+        slot = (kind, key)
+        if state == MemoryState.ACTIVE and slot in active_slots:
+            raise ImportError_(f"More than one active record uses {kind}:{key}.")
+        if state == MemoryState.ACTIVE:
+            active_slots.add(slot)
         rows.append(
             {
-                "id": str(raw.get("id") or f"row-{index}"),
+                "id": row_id,
                 "kind": kind,
-                "key": str(raw.get("key") or "")[:255],
+                "key": key,
                 "text": text[:4000],
                 "state": state,
                 "sensitivity": sensitivity,
-                "pinned_to": str(raw.get("pinned_to") or "")[:40],
-                "applies_when": str(raw.get("applies_when") or "")[:300],
+                "pinned_to": pinned_to,
+                "applies_when": applies_when,
                 "importance": _unit(raw.get("importance"), 0.5),
                 "confidence": _unit(raw.get("confidence"), 0.9),
-                "provenance": str(raw.get("provenance") or "")[:400],
+                "provenance": provenance,
                 "reinforced": max(0, _int(raw.get("reinforced"), 0)),
                 "occurred_at": _parse_day(raw.get("occurred_at")),
                 "valid_from": _parse_day(raw.get("valid_from")),
                 "valid_until": _parse_day(raw.get("valid_until")),
                 "superseded_by": raw.get("superseded_by"),
                 "replaces": raw.get("replaces"),
+                "created_at": _parse_datetime(raw.get("created_at")),
             }
         )
+    pinned = sorted(
+        (
+            row
+            for row in rows
+            if row["state"] == MemoryState.ACTIVE and row["pinned_to"]
+        ),
+        key=lambda row: (
+            -row["importance"],
+            row["created_at"] or datetime.min.replace(tzinfo=timezone.utc),
+        ),
+    )
+    requested = [
+        (
+            row["pinned_to"],
+            row["text"],
+            row["sensitivity"] == Sensitivity.SAFETY,
+        )
+        for row in pinned
+    ]
+    if len(admitted_pins(document, requested, TOKEN_BUDGET)) != len(requested):
+        raise ImportError_(
+            f"The imported profile pins exceed the {TOKEN_BUDGET}-token ceiling."
+        )
+
     return document, rows
 
 
-"""Foreign import — a paste from any other assistant, through the pipeline.
-
-The bundle import above is a restore: exact rows, exact states, empty store
-required. A paste from ChatGPT or Claude is nothing of the kind — it is
-unstructured text of unknown quality making claims about the person. So it
-goes through the SAME machinery a conversation goes through: the writer
-proposes, the gate disposes, collisions supersede, safety pins, health is
-held, and every decision lands in the ledger. No empty-store requirement,
-because the gate is precisely the thing that knows how to meet an existing
-store.
-
-Provenance is a real conversation. Each chunk of the paste becomes a turn in
-an "Imported memories" conversation, and the ordinary writer job is enqueued
-for each on the FIFO memory queue — so an import is ordered against live
-chat turns, idempotent per message, and visible afterward: every imported
-memory's "where this was learned" points at text the person can open and
-read. Deleting that conversation keeps the memories (SET_NULL), same as any
-other source.
-"""
-
-# One chunk ≈ one writer call. Small enough that the writer's decision list
-# never silently truncates a paste; large enough that a typical export fits
-# in a handful of calls.
+# Foreign text goes through the ordinary writer and gate.
 FOREIGN_CHUNK_CHARS = 1200
 FOREIGN_MAX_CHARS = 20000
 
-# The frame tells the writer whose facts these are and that the person is
-# importing them ON PURPOSE — which is what lets an addressing line in the
-# paste ("always answer in bullet points") reach the profile the same way it
-# would if said in chat.
 FOREIGN_FRAME = (
     "I'm importing my memories from another AI assistant. Everything below "
     "is what it knew about me — treat each line as something I am telling "
@@ -295,16 +307,7 @@ FOREIGN_FRAME = (
 
 
 def import_foreign(user, text: Any) -> Dict[str, Any]:
-    """Queue a free-form paste for ingestion through the writer and gate.
-
-    Returns immediately: each chunk is a writer call (seconds each), so the
-    work rides the memory queue rather than a request timeout. The response
-    says how many turns were queued and which conversation carries them.
-    """
-    from conversations.constants import SenderType
-    from conversations.models import Conversation, Message
-    from memory.tasks import run_memory_writer
-
+    """Queue a free-form paste through the ordinary writer and gate."""
     body = str(text or "").strip()
     if not body:
         raise ImportError_("Nothing to import — the paste is empty.")
@@ -333,7 +336,7 @@ def import_foreign(user, text: Any) -> Dict[str, Any]:
             reply = Message.active_objects.create(
                 conversation=conversation,
                 sender_type=SenderType.AI_ASSISTANT,
-                message="Noted — writing these into memory.",
+                message="This import chunk was queued for memory review.",
             )
             ai_message_ids.append(reply.id)
 
@@ -354,12 +357,7 @@ def import_foreign(user, text: Any) -> Dict[str, Any]:
 
 
 def _chunked(body: str) -> List[str]:
-    """Split on line boundaries into writer-sized pieces.
-
-    A single line longer than the chunk size (one giant paragraph) is taken
-    whole rather than split mid-sentence — the writer would rather see one
-    oversized turn than half a fact.
-    """
+    """Split on line boundaries without cutting a fact in half."""
     chunks: List[str] = []
     current: List[str] = []
     size = 0
@@ -396,3 +394,13 @@ def _parse_day(value: Any) -> Optional[date]:
         return date.fromisoformat(str(value)[:10])
     except ValueError:
         return None
+
+
+def _parse_datetime(value: Any) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)

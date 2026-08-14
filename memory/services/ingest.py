@@ -1,30 +1,8 @@
-"""One completed turn, all the way through the write path.
-
-There is exactly one function, and every caller — the RQ job, the probe
-management command, a future evaluation harness — is thin. An evaluation that
-runs a COPY of the write path measures the copy; every drift between the two
-would show up as a score the real system never earns.
-
-The archive handed to the writer is assembled in two passes, because the two
-questions it answers want different lookups:
-
-    before — "what do we already know that is near this?"  → retrieval
-    after  — "does anything already claim these keys?"     → exact index seek
-
-The first is fuzzy and keeps the writer from repeating itself. The second is
-precise and is what makes a supersede correct. Doing only the first would miss
-a collision the shortlist happened not to surface; doing only the second would
-leave the writer blind to everything it did not already name.
-
-Unlike the prototype there is no appendTurn here: DARE's chat pipeline already
-persisted both messages before this job ever runs, which is exactly the
-"transcript must not depend on an extraction working" property, provided by
-construction.
-"""
+"""Run one completed turn through the memory write pipeline."""
 
 import logging
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import List, Optional
 
@@ -44,6 +22,7 @@ from memory.domain.apply import apply_decisions
 from memory.domain.types import ApplyInput, ApplyResult, LedgerDraft, MemoryRow
 from memory.models import MemoryLedgerEntry, MemoryRecord
 from memory.services.embeddings import embed_texts
+from memory.services.ledger import model_from_draft
 from memory.services.retrieval import retrieve
 from memory.services.store import (
     active_keys,
@@ -65,9 +44,7 @@ class IngestReport:
     reinforced: int
     profile_changed: bool
     decisions: int = 0
-    model: str = ""
     skipped: Optional[str] = None
-    trace: List[str] = field(default_factory=list)
 
 
 def ingest_turn(
@@ -77,11 +54,7 @@ def ingest_turn(
     ai_message,
     model: Optional[str] = None,
 ) -> IngestReport:
-    """Run the writer over one completed turn and persist what survives the gate.
-
-    Synchronous — this belongs on the single-worker ``memory`` queue, where
-    turn N committing before turn N+1 starts is what makes collisions correct.
-    """
+    """Propose, gate, embed, and persist one completed turn."""
     user_text = (user_message.message or "").strip()
     assistant_text = (ai_message.message or "").strip()
     if not user_text:
@@ -89,32 +62,23 @@ def ingest_turn(
 
     now = datetime.now(timezone.utc).isoformat()
 
-    # Pass one: what is relevant to this turn. A wider net than the read path,
-    # because writing wrongly is more expensive than reading wrongly.
+    # Pass one gives the writer relevant context.
     user_doc = read_user_doc(user)
     recall = retrieve(
         user,
         user_text,
         top_k=WRITER_RETRIEVE_TOP_K,
         floor=WRITER_RETRIEVE_FLOOR,
-        # Explicit, not the read path's default: the read path tightened its
-        # relevance gate for prompt precision, and inheriting that here
-        # silently shrank the writer's net — measured as reuse misses the
-        # moment a key was also outside the shown key space. Recall dropped
-        # before the collision check never comes back.
         relevance_floor=WRITER_RETRIEVE_FLOOR,
         shortlist_limit=WRITER_RETRIEVE_SHORTLIST_LIMIT,
         now=now,
     )
     archive: List[MemoryRow] = [item.record for item in recall.chosen]
 
-    # Whether the person asked for something to be kept is the writer's call
-    # now, not a phrase list's. A regex knew "remember" and "don't forget" and
-    # missed "keep this in mind" — and the thing it gates, a line in the file
-    # read on every future turn, is exactly the judgement worth spending a
-    # good model on.
     keys_in_use = active_keys(user)
     proposal = propose_decisions(
+        user=user,
+        source_message_id=user_message.id,
         user_doc=user_doc,
         archive=archive,
         user_message=user_text,
@@ -129,17 +93,8 @@ def ingest_turn(
     if not decisions:
         return _skip("writer proposed nothing")
 
-    # Pass two: now that the writer has named its keys, look them up exactly.
-    # This is the seek the qualified keys were designed for.
-    #
-    # topic_key is sought as well as the routed key, because they diverge on
-    # exactly the decisions where the collision matters most: a patch_user
-    # carries a HEADING in `key` while the gate reroutes the write onto the
-    # topic. Seeking only the heading missed a live `occupation` row, and
-    # "add this to my profile: I'm a PhD student" produced a second active
-    # occupation instead of retiring "backend engineer".
+    # Pass two adds exact key and supersede targets.
     seek = {d.key for d in decisions if d.key}
-    seek |= {d.topic_key for d in decisions if d.topic_key}
     for row in find_by_keys(user, sorted(seek)) + find_by_ids(
         user, [d.supersedes_id for d in decisions if d.supersedes_id]
     ):
@@ -158,13 +113,7 @@ def ingest_turn(
     )
     result = apply_decisions(apply_input, decisions)
 
-    # Embed at write time, never at read time. This is the expensive path
-    # already — it runs after the reply was delivered — so the cost lands
-    # where nobody is waiting, and retrieval never embeds a stored fact.
-    # A rule is embedded by the situations it fires in, a fact by what it
-    # says. Measured: the terse form of a code-review rule scored 0.17 against
-    # "here's my function, take a look" and lost to an unrelated SQL rule;
-    # described properly it scores 0.35 and wins.
+    # Rules embed by trigger; facts embed by key and statement.
     vectors = embed_texts([_embedding_text(row) for row in result.created])
 
     _persist(user, conversation, user_message, archive, result, vectors)
@@ -181,7 +130,6 @@ def ingest_turn(
         reinforced=len(result.reinforced_ids),
         profile_changed=result.profile_changed,
         decisions=len(decisions),
-        trace=recall.trace,
     )
 
 
@@ -192,39 +140,13 @@ def _embedding_text(row: MemoryRow) -> str:
 
 
 def snap_to_existing_slots(user, decisions, keys_in_use) -> None:
-    """Route a brand-new key into an existing slot when it is the SAME fact.
-
-    The reuse machinery is the shown key space, and it measures clean — but
-    only for keys the writer can see. A key past the 300 cap is invisible,
-    and the same fact then mints a fresh slot beside the old one; different
-    keys never collide, so both versions live forever. Reproduced at will by
-    hiding the key: "note:backend-technologies" minted beside a hidden
-    "note:backend-stack".
-
-    So a new key's text is compared against the nearest stored fact by
-    meaning, and at SNAP_SIMILARITY and above the decision's key is rewritten
-    to the existing slot BEFORE the gate runs — the ordinary collision path
-    then supersedes or reinforces with all of its rules and its ledger trail.
-    No new destructive machinery: this changes where a write lands, never
-    what happens when it lands. Below the threshold both rows stay, where
-    the tidy-up sweep proposes and a person decides.
-    """
+    """Snap a new key into a semantically identical existing fact slot."""
     if connection.vendor != "postgresql":
         return
     known = set(keys_in_use)
 
-    # A patch_user decision is a fact wearing a heading: the gate reroutes it
-    # onto its topic_key, so THAT is the key that can drift. Inspecting only
-    # add_fact here let an imported "severely allergic to peanuts" — proposed
-    # as patch_user with topic diet_avoid:peanutS — mint a plural slot beside
-    # diet_avoid:peanut, invisible to the snap because its action was wrong
-    # and to the key block because the writer never saw the singular.
     def slot_of(decision):
-        if decision.action == "add_fact":
-            return decision.key
-        if decision.action == "patch_user":
-            return decision.topic_key
-        return None
+        return decision.key if decision.action == "add_fact" else None
 
     candidates = [
         d for d in decisions if slot_of(d) and slot_of(d) not in known and d.text
@@ -259,10 +181,7 @@ def snap_to_existing_slots(user, decisions, keys_in_use) -> None:
             f"{decision.reason} [slot: filed under existing key "
             f"'{neighbor.key}' — same fact by meaning, {similarity:.2f}]"
         )
-        if decision.action == "patch_user":
-            decision.topic_key = neighbor.key
-        else:
-            decision.key = neighbor.key
+        decision.key = neighbor.key
 
 
 def _skip(reason: str) -> IngestReport:
@@ -279,9 +198,7 @@ def _skip(reason: str) -> IngestReport:
 def _persist(
     user, conversation, user_message, archive_before, result: ApplyResult, vectors
 ) -> None:
-    """Everything or nothing: one transaction, so a ledger row's existence
-    proves the whole turn landed — which is what the job's idempotency check
-    reads."""
+    """Persist records, state changes, and ledger entries atomically."""
     store_vectors = connection.vendor == "postgresql"
 
     with transaction.atomic():
@@ -334,28 +251,17 @@ def _persist(
                 ),
             )
 
-        # Nothing was written for these, and that is the point: the person
-        # restated something the store already held. The count is what
-        # consolidation promotes on.
+        # Restatements only update their durability count.
         for record_id in result.reinforced_ids:
             MemoryRecord.objects.filter(pk=record_id, user=user).update(
                 reinforced=F("reinforced") + 1
             )
 
-        MemoryLedgerEntry.objects.bulk_create(
-            MemoryLedgerEntry(
-                id=uuid.UUID(entry.id),
-                user=user,
-                action=entry.action,
-                proposed_action=entry.proposed_action,
-                reason=entry.reason,
-                note=entry.note,
-                applied=entry.applied,
-                record_id=uuid.UUID(entry.record_id) if entry.record_id else None,
-                detail=entry.detail,
-                source_text=entry.source_text,
-                source_message=user_message,
-                proposal=entry.proposal,
+        for record_id, heading in result.profile_updates.items():
+            MemoryRecord.objects.filter(pk=record_id, user=user).update(
+                pinned_to=heading
             )
-            for entry in result.entries
+
+        MemoryLedgerEntry.objects.bulk_create(
+            model_from_draft(user, entry, user_message) for entry in result.entries
         )

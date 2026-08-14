@@ -1,17 +1,4 @@
-"""Storage operations for the memory archive.
-
-The only module (with sessions search) that runs SQL against the memory
-tables. Everything that decides is in memory/domain; everything here fetches,
-converts, and persists.
-
-Stage-one retrieval lives here: a three-way union that narrows the archive to
-~50 candidates using indexes only — lexical (FTS), importance-ordered, and
-recency-ordered — because each source fails differently alone. Text nails
-exact words and is blind to paraphrase; importance keeps an allergy reachable
-from a question that never says it; recency covers what has not earned
-importance yet. Deliberately generous: stage two is cheap arithmetic, and
-recall thrown away here can never come back.
-"""
+"""Database reads and projections for the memory archive."""
 
 import math
 import re
@@ -36,7 +23,7 @@ from memory.constants import (
 )
 from memory.domain.rank import Candidate
 from memory.domain.types import MemoryRow
-from memory.domain.user_doc import estimate_tokens, merge_pinned
+from memory.domain.user_doc import admitted_pins, merge_pinned
 from memory.models import MemoryRecord, UserMemoryDocument
 
 # Words too common to narrow a shortlist. Mirrors the prototype's query-side
@@ -387,34 +374,17 @@ def _lexical_fallback(base, terms: List[str], limit: int):
 
 
 def pinned_lines(user, authored: str = "") -> List[tuple]:
-    """(heading, text) for every active fact pinned into the profile.
-
-    Ordered by importance so the budget, when it bites, drops the least
-    consequential line rather than an arbitrary one. Safety is never dropped:
-    the whole point of pinning an allergy is that it does not wait to be
-    retrieved, and a token ceiling is the cheaper thing to break.
-
-    The budget is measured on the RENDERED document — authored lines,
-    headings and bullets included — because that is what gets injected.
-    Counting bare line text let 22 individually-cheap pins render a 572-token
-    file under a 500-token ceiling.
-    """
+    """Return admitted profile pins, highest importance first."""
     rows = (
         MemoryRecord.active_objects.filter(user=user, state=MemoryState.ACTIVE)
         .exclude(pinned_to="")
         .order_by("-importance", "created_at")
     )
 
-    kept: List[tuple] = []
-    for row in rows:
-        candidate = kept + [(row.pinned_to, row.text)]
-        if (
-            row.sensitivity != Sensitivity.SAFETY
-            and estimate_tokens(merge_pinned(authored, candidate)) > TOKEN_BUDGET
-        ):
-            continue
-        kept = candidate
-    return kept
+    pins = [
+        (row.pinned_to, row.text, row.sensitivity == Sensitivity.SAFETY) for row in rows
+    ]
+    return admitted_pins(authored, pins, TOKEN_BUDGET)
 
 
 def read_user_doc(user) -> str:

@@ -5,11 +5,15 @@ most are the ones asserting it stays quiet — a sweep that suggests merging
 two different facts is worse than one that suggests nothing at all.
 """
 
-from django.test import SimpleTestCase
+from django.contrib.auth import get_user_model
+from django.test import SimpleTestCase, TestCase
 
 from memory.constants import MERGE_SIMILARITY, TOKEN_BUDGET
 from memory.domain.consolidate import EVICT, MERGE, PROMOTE, REKEY, sweep
 from memory.domain.types import MemoryRow
+from memory.domain.user_doc import estimate_tokens
+from memory.models import MemoryRecord, UserMemoryDocument
+from memory.services import consolidation
 
 
 def row(**overrides) -> MemoryRow:
@@ -330,3 +334,47 @@ class MergeThresholdTests(SimpleTestCase):
             pairwise(0.99),
         )
         self.assertNotIn(MERGE, kinds(result))
+
+
+class ConsolidationApplyTests(TestCase):
+    def test_promotion_refuses_a_profile_that_has_no_room(self):
+        user = get_user_model().objects.create_user(
+            email="consolidation-budget@example.com", password="x"
+        )
+        lines = []
+        while True:
+            candidate = lines + [
+                f"- A durable authored profile preference number {len(lines)}."
+            ]
+            markdown = "# User\n\n## Working preferences\n" + "\n".join(candidate)
+            if estimate_tokens(markdown) > 480:
+                break
+            lines = candidate
+        UserMemoryDocument.objects.create(
+            user=user,
+            content="# User\n\n## Working preferences\n" + "\n".join(lines),
+        )
+        record = MemoryRecord.objects.create(
+            user=user,
+            kind="fact",
+            key="note:large-preference",
+            text=(
+                "A very long additional working preference that cannot fit in "
+                "the remaining profile budget without exceeding the ceiling."
+            ),
+            reinforced=2,
+        )
+
+        result = consolidation.apply(
+            user,
+            {
+                "kind": PROMOTE,
+                "record_id": str(record.id),
+                "heading": "working-preferences",
+            },
+        )
+
+        self.assertFalse(result.ok)
+        self.assertIn("ceiling", result.reason)
+        record.refresh_from_db()
+        self.assertEqual(record.pinned_to, "")

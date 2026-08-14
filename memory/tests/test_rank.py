@@ -256,6 +256,27 @@ class RankTests(SimpleTestCase):
         self.assertEqual(len(result.chosen), 1)
         self.assertIn("no longer current", format_recall(result.chosen))
 
+    def test_an_active_temporary_memory_is_labelled_with_its_end_date(self):
+        result = rank(
+            candidates=[
+                candidate(
+                    rec=record(
+                        text="Uses crutches.",
+                        valid_from="2026-07-01",
+                        valid_until="2026-09-11",
+                        importance=0.9,
+                    ),
+                    vector=blend(0, 1, 0.95),
+                )
+            ],
+            query_vector=axis(0),
+            now=NOW,
+        )
+
+        recall = format_recall(result.chosen)
+        self.assertIn("until 2026-09-11", recall)
+        self.assertNotIn("no longer current", recall)
+
     def test_an_empty_shortlist_is_reported_rather_than_crashing(self):
         result = rank(candidates=[], query_vector=axis(0), now=NOW)
         self.assertEqual(result.chosen, [])

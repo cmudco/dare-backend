@@ -130,6 +130,24 @@ def merge_pinned(markdown: str, pinned: List[Tuple[str, str]]) -> str:
     return render_user_doc(doc)
 
 
+def admitted_pins(
+    markdown: str,
+    pins: List[Tuple[str, str, bool]],
+    token_budget: int,
+) -> List[Tuple[str, str]]:
+    """Keep pins in priority order while respecting the rendered budget."""
+    kept: List[Tuple[str, str]] = []
+    for heading, text, is_safety in pins:
+        candidate = kept + [(heading, text)]
+        if (
+            not is_safety
+            and estimate_tokens(merge_pinned(markdown, candidate)) > token_budget
+        ):
+            continue
+        kept = candidate
+    return kept
+
+
 def without_line(markdown: str, line: str) -> str:
     """Remove one rendered line while budgeting a pin replacement."""
     doc = parse_user_doc(markdown)

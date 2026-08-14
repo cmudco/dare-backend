@@ -5,9 +5,11 @@ ordinary sentences that must NOT be — a guard with false positives gets
 worked around in practice, which is the same as not having one.
 """
 
-from django.test import SimpleTestCase
+from django.contrib.auth import get_user_model
+from django.test import SimpleTestCase, TestCase
 
-from memory.domain.guards import deobfuscate, demands_override, looks_like_secret
+from memory.domain.guards import demands_override, deobfuscate, looks_like_secret
+from memory.services.ledger import REDACTED_CREDENTIAL, LedgerEvent, record_event
 
 
 class DeobfuscationTests(SimpleTestCase):
@@ -34,6 +36,7 @@ class SecretDetectionTests(SimpleTestCase):
 
     def test_labeled_credential_values(self):
         self.assertTrue(looks_like_secret("my password is Codex-Pass-7721"))
+        self.assertTrue(looks_like_secret("my password is sunshine"))
         self.assertTrue(looks_like_secret("the admin token is SYSADMIN-441"))
 
     def test_spaced_out_credentials_still_fail(self):
@@ -81,3 +84,27 @@ class OverrideDetectionTests(SimpleTestCase):
             "I removed the old filters from the aquarium",
         ]:
             self.assertFalse(demands_override(text), text)
+
+
+class LedgerRedactionTests(TestCase):
+    def test_every_free_text_field_is_redacted_together(self):
+        user = get_user_model().objects.create_user(
+            email="ledger-redaction@example.com", password="x"
+        )
+        entry = record_event(
+            user,
+            LedgerEvent(
+                action="ignore",
+                reason="The password is Codex-Pass-7721.",
+                note="Codex-Pass-7721",
+                detail="Codex-Pass-7721",
+                source_text="My password is Codex-Pass-7721.",
+                applied=False,
+                proposal={"text": "Codex-Pass-7721"},
+            ),
+        )
+
+        self.assertEqual(entry.note, REDACTED_CREDENTIAL)
+        self.assertEqual(entry.detail, REDACTED_CREDENTIAL)
+        self.assertEqual(entry.source_text, REDACTED_CREDENTIAL)
+        self.assertIsNone(entry.proposal)

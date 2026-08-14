@@ -1,8 +1,12 @@
+import logging
 from decimal import Decimal
 from typing import Dict
-from django.db import transaction as db_transaction
-from django.core.exceptions import ValidationError
+
 from channels.db import database_sync_to_async
+from django.core.exceptions import ValidationError
+from django.db import transaction as db_transaction
+
+from api_keys.constants import BillingModeChoice
 from billing.constants import TransactionSourceChoice, TransactionTypeChoice
 from billing.exceptions import PaymentRequiredError
 from billing.models import Transaction, Wallet
@@ -15,13 +19,9 @@ from billing.wallet_router import (
 )
 from conversations.models import LLM, Message
 from core.services.energy_service import compute_impact
-from workflows.models import Workflow, WorkflowRun, WorkflowNode
-from api_keys.constants import BillingModeChoice
 from users.constants import AuthSourceChoice
-
-import logging
-
 from users.models import User
+from workflows.models import Workflow, WorkflowNode, WorkflowRun
 
 logger = logging.getLogger(__name__)
 
@@ -304,9 +304,7 @@ class BillingService:
         # name the user gave the proxy, e.g. "testing server") — never the
         # internal UUID, which is meaningless to the user and would be a
         # surface for a key-id leak if scraped from the FE.
-        key_label = (
-            getattr(message_obj.litellm_key, "label", None) or "LiteLLM proxy"
-        )
+        key_label = getattr(message_obj.litellm_key, "label", None) or "LiteLLM proxy"
         Transaction.objects.create(
             user=conversation.user,
             amount=Decimal("0.00"),
@@ -691,6 +689,31 @@ class BillingService:
     ) -> Decimal:
         """Calculate actual cost based on token usage."""
         return self._calculate_estimated_cost(llm, input_tokens, output_tokens)
+
+    def record_service_usage(
+        self,
+        user: "User",
+        llm: LLM,
+        input_tokens: int,
+        output_tokens: int,
+        description: str,
+        platform: str = AuthSourceChoice.DARE,
+    ) -> Transaction:
+        """Record one platform-funded LLM call."""
+        cost = self._calculate_cost(llm, input_tokens, output_tokens)
+
+        return Transaction.objects.create(
+            user=user,
+            amount=cost,
+            llm=llm,
+            type=TransactionTypeChoice.DEBIT,
+            source=TransactionSourceChoice.USAGE,
+            message=description,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            billing_mode=BillingModeChoice.WALLET,
+            platform=platform,
+        )
 
     async def _get_user_wallet(self, user: "User") -> "Wallet":
         """Fetch user wallet, creating one if it doesn't exist."""

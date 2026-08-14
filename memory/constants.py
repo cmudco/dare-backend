@@ -1,58 +1,33 @@
-"""Constants for the layered memory system.
-
-The numbers here are not tunables to revisit casually: every floor, weight and
-threshold was set by a measured failure in the reference prototype
-(memory-explore/memory-app) and is asserted by the test suite. Change them with
-an evaluation run, not an opinion.
-"""
+"""Shared vocabulary and measured thresholds for memory."""
 
 import re
 
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 
+# Records and ledger
+
 
 class MemoryKind(models.TextChoices):
-    """What a memory row is: a fact about the person, or a rule for a situation."""
-
     FACT = "fact", _("Fact")
     PROCEDURE = "procedure", _("Procedure")
 
 
 class MemoryState(models.TextChoices):
-    """The system's lifecycle for a row.
-
-    Orthogonal to BaseModel soft-deletion: ``state`` is what the *system* did
-    (retired by a newer fact, gated for privacy); ``is_deleted`` is what the
-    *user* did (asked to forget it). Retrieval requires both ``is_deleted=False``
-    and ``state=ACTIVE``.
-    """
-
     ACTIVE = "active", _("Active")
     SUPERSEDED = "superseded", _("Superseded")
-    # Written down and visible to the user, but never retrieved into an answer.
-    # Medical facts mentioned in passing land here; releasing one is a hand act.
     HELD = "held", _("Held")
 
 
 class Sensitivity(models.TextChoices):
     NONE = "none", _("None")
-    # Gate for privacy, where staying silent is free...
     HEALTH = "health", _("Health")
-    # ...never for safety, where silence is the hazard. An allergy in an
-    # approval queue is a system that books the seafood restaurant.
     SAFETY = "safety", _("Safety")
     THIRD_PARTY = "third-party", _("Third party")
 
 
 class WriterAction(models.TextChoices):
-    """Everything that can appear in the ledger's action column.
-
-    The writer model may only *emit* the first five; ``search_sessions`` and
-    ``consolidate`` are logged by the application when those events happen, so
-    reads and sweeps share one auditable timeline with writes.
-    """
-
+    # PATCH_USER remains for historical ledger rows.
     PATCH_USER = "patch_user", _("Patch USER.md")
     ADD_FACT = "add_fact", _("Add fact")
     ADD_PROCEDURE = "add_procedure", _("Add procedure")
@@ -60,25 +35,15 @@ class WriterAction(models.TextChoices):
     IGNORE = "ignore", _("Ignore")
     SEARCH_SESSIONS = "search_sessions", _("Search sessions")
     CONSOLIDATE = "consolidate", _("Consolidate")
-    # Not in the prototype's vocabulary: DARE's UI has a per-item "Forget"
-    # and an inline edit, and pretending a user's own action is an "ignore"
-    # or an "add_fact" would falsify the ledger.
     FORGET = "forget", _("Forget")
     EDIT = "edit", _("Edit")
-    # Likewise honest names for the privacy gate's two hand-operated moves
-    # (the prototype logged these as ignore/add_fact, which read as lies).
     HOLD = "hold", _("Hold")
     RELEASE = "release", _("Release")
-    # A whole store arriving from a bundle — one row for the event, because
-    # replaying the source account's ledger here would fabricate history.
     IMPORT = "import", _("Import")
 
 
-# --- Keys -------------------------------------------------------------------
+# Keys
 
-# What a fact can be about. An enum, not free text: left open, a model files a
-# report deadline under "schedule" and a restaurant's neighbourhood under
-# "location", and both retire a fact that never changed.
 TOPICS = (
     "name",
     "style",
@@ -92,122 +57,51 @@ TOPICS = (
     "health",
     "person",
     "project",
+    "boundaries",
     "note",
 )
 
-# Topics where two things can be true at once, so the key carries a qualifier.
-# Every entry was found by a real collision (a certificate retiring a bank
-# account under bare `note`; answer length retiring answer format under `style`).
+# These topics need qualifiers because multiple values may coexist.
 QUALIFIED_TOPICS = frozenset(
-    {"person", "health", "habit", "project", "schedule", "diet_avoid", "note", "style"}
+    {
+        "person",
+        "health",
+        "habit",
+        "project",
+        "schedule",
+        "diet_avoid",
+        "boundaries",
+        "note",
+        "style",
+    }
 )
-
-# Topics where a person always has exactly one answer, so the fact never
-# expires — it only ever gets replaced. An expiry on a slot like this leaves
-# the store with NO answer at all, which is strictly worse than a stale one.
 NEVER_EXPIRES = frozenset({"location", "occupation", "industry", "name"})
+PINNED_TOPIC_HEADINGS = {
+    "name": "identity",
+    "location": "identity",
+    "boundary": "boundaries",
+    "boundaries": "boundaries",
+}
 
-# USER.md headings that hold instructions rather than disclosures — how to
-# address someone and how to answer them. These reach the profile without an
-# explicit request, because their whole value is applying to the next turn
-# and every turn after, and a preference that only surfaces when a question
-# happens to sound like it is a preference the person has to keep repeating.
-# Everything else about a person's life still needs to be asked for.
-ADDRESSING_HEADINGS = frozenset({"communication", "identity"})
 
-# Topics that always earn a profile line, whatever the writer proposed. Both
-# are single-slot, both are one short sentence, and both are wrong on every
-# turn they fail to reach: the turn that needs to know what to call someone,
-# or roughly where they are, almost never sounds like it is asking. Left to
-# the writer's judgement the same conversation pinned the name on two runs
-# out of three.
-#
-# Safe to pin because a pinned fact is a projection, not a copy — it keeps
-# its topic key, so "lives in Lahore" is still retired by "lives in
-# Islamabad" and the profile follows without anyone editing markdown. That
-# was NOT true of a hand-written profile line, which is why the heading
-# itself still refuses life facts.
-PINNED_TOPICS = frozenset({"name", "location"})
+# USER.md
 
-# --- USER.md ----------------------------------------------------------------
-
-# Roughly 500 tokens. The whole file is injected on every single turn.
 TOKEN_BUDGET = 500
 TOKEN_WARNING = round(TOKEN_BUDGET * 0.8)
 
-# --- Consolidation ----------------------------------------------------------
-#
-# The tidy-up sweep. Every number here decides whether a memory survives, so
-# each one is set where a wrong call is cheap and reversible: the sweep only
-# ever PROPOSES, and nothing moves until the person says so.
 
-# Two facts are the same fact above this.
-#
-# Benched on 22 labelled pairs, embedded exactly as the store embeds them:
-# genuine duplicates score 0.745-0.930, pairs that merely look alike top out
-# at 0.720. At 0.74 all ten duplicates are caught and none of the twelve
-# distinct pairs are. The prototype's 0.94 was carried over untested and
-# caught NOTHING on this embedding model — the rule was dead code.
-#
-# The margin is thin (0.025), and two things make that acceptable rather than
-# reckless: nothing merges without the person approving it, and a merge
-# retires the duplicate rather than deleting it. The worst case is a rejected
-# suggestion.
+# Consolidation
+
 MERGE_SIMILARITY = 0.74
-
-# The bar when the two keys' qualifiers share nothing. Disjoint qualifiers
-# are a designed claim that these are two different things, so overriding
-# that claim takes more than the ordinary threshold: at 0.74, a 281-row
-# sweep proposed merging Zohaib with Fahad because both "work on security
-# with them" (0.806), and two games, two recipes and two style rules for the
-# same reason — every one a template echo, none the same fact. Measured:
-# those pairs top out at 0.816; genuine respelled-slot duplicates run
-# 0.834-0.934. The 0.85 bar plus the named-entity check in _mergeable is
-# what separates them, not either signal alone.
 MERGE_DISJOINT_SIMILARITY = 0.85
-
-# Above this, a NEW key arriving at write time is the same fact as an
-# existing row, and the write is snapped into that row's slot so the normal
-# collision path can retire the old wording — automatically.
-#
-# The failure this closes was produced on demand: hide a key from the
-# writer's shown key space (the >300-key future) and the same fact mints a
-# fresh slot — "note:backend-technologies" beside "note:backend-stack" — and
-# the two never collide again. Measured on the actual minted texts, embedded
-# exactly as stored: same-fact splits score 0.755-0.889, distinct same-topic
-# pairs 0.395-0.652 here and at most 0.720 on the merge bench's hardest
-# look-alikes. 0.80 sits 0.08 above every distinct pair ever measured.
-#
-# Deliberately ABOVE MERGE_SIMILARITY: the sweep only ever proposes, so 0.74
-# is allowed to be thin; this acts on its own, and an automatic action does
-# not get to guess. The 0.74-0.80 band is left split on disk, where the
-# sweep sees it and a person decides.
 SNAP_SIMILARITY = 0.80
-
-# Tellings before a fact is offered a permanent seat in the profile. One is a
-# mention. Two is the person making sure you heard, which is the only durable
-# signal this system ever gets.
 PROMOTE_AFTER_TELLINGS = 2
-
-# A pinned line is offered up for eviction once the profile is over budget and
-# the line has never been repeated. Importance breaks the tie, and safety is
-# never offered at all.
-EVICT_WHEN_OVER_BUDGET = True
-
-# How many proposals one sweep may raise. A tidy-up that returns forty things
-# to review is not a tidy-up, it is a second inbox.
 MAX_PROPOSALS = 12
-
-# And how many of any ONE kind. Found in a probe: thirty near-identical rows
-# raised twelve merge proposals between themselves and buried every promote,
-# rekey and evict behind them. A sweep should show a spread of what is wrong,
-# not the loudest thing repeatedly.
 MAX_PER_KIND = 4
 
-# --- Retrieval --------------------------------------------------------------
 
-# How much each signal counts. Meaning dominates because it is the only signal
-# that survives paraphrase; lexical is the only one that nails exact tokens.
+# Retrieval
+
 RANK_WEIGHTS = {
     "semantic": 0.5,
     "lexical": 0.2,
@@ -216,102 +110,29 @@ RANK_WEIGHTS = {
     "confidence": 0.05,
 }
 
-# Below this, we inject nothing. Returning nothing is a correct answer that a
-# top-k with no floor can never give.
 SCORE_FLOOR = 0.3
-
-# The row must actually be ABOUT something related: relevance qualifies,
-# importance only ranks. A row can be important, recent and certain and still
-# have nothing to do with what was asked.
-#
-# Benched twice, because the answer changed with scale. On a 22-fact store,
-# true matches scored 0.26-0.67 and unrelated rows 0.02-0.24, and 0.28 was
-# where F1 peaked. On a 281-row store the unrelated distribution grew a fat
-# tail into the 0.30s — "write a commit message" pulled in the blog, the
-# editor and a podcast, all at 0.28-0.35 — while every primary answer
-# (passport 0.70, bank 0.61, deadline 0.48, car 0.49) sat at 0.43 and above.
-# Swept 0.28→0.45 on 25 labelled queries: recall held at every step while
-# precision rose 0.43→0.70. Set under the primary-answer cluster with margin
-# rather than at the sweep's edge, so a paraphrase with no token overlap
-# still clears; rows below it with a REAL word match still pass through the
-# lexical route, which is absolute (raw ts_rank), not batch-relative.
 RELEVANCE_FLOOR = 0.40
-
-# Safety rows keep the old, looser bar: nothing was relaxed for them, the rest
-# was tightened around them. The asymmetry is the point — failing to recall a
-# bouldering habit costs nothing, failing to recall a peanut allergy on "book
-# me a restaurant" is the hazard the archive exists to prevent, and that pair
-# benches at 0.16 while the ordinary floor now sits at 0.28.
-#
-# Measured against the stored allergy vector: turns that risk food score
-# 0.13-0.18 (restaurant .162, dinner tonight .132, cafe .180), turns that do
-# not score 0.11 and below. A narrow margin, so it is deliberately set at the
-# bottom of the true range rather than the middle — on this gate a false
-# positive is a wasted line and a false negative is the whole failure.
 SAFETY_RELEVANCE_FLOOR = 0.12
-
-# Lexical rank is normalised against the best candidate in the batch so it can
-# be weighed against the other signals — which means the best row in a batch
-# always reads as a perfect 1.0, however bad it is in absolute terms. That is
-# fine for ranking and wrong for qualifying: "explain how TCP handshakes work"
-# matched an unrelated fact on the single stem "work" at ts_rank 0.015, was
-# normalised to 1.0, and sailed through the gate. Real matches measured 0.06
-# and up, junk an order of magnitude below, so qualification reads the raw
-# score and only ranking sees the normalised one.
 LEXICAL_RELEVANCE_MIN = 0.05
-
 TOP_K = 3
 RECENCY_HALF_LIFE_DAYS = 90
 
-# Procedures are few and cheap to include, so cast wider than for facts. One
-# extra rule is a line the model can ignore; one missing rule is repeating a
-# mistake the person already corrected.
 PROCEDURE_FLOOR = 0.22
 PROCEDURE_TOP_K = 5
 PROCEDURE_SHORTLIST_LIMIT = 24
-
-# Same reasoning one notch looser: a rule that misses costs a repeated mistake,
-# so procedures keep casting wider than facts here too. It still has to bite —
-# at the old 0.12 a request to review a Python function pulled in the rule
-# about formatting paper summaries.
 PROCEDURE_RELEVANCE_FLOOR = 0.22
 
-# Stage-one shortlist cap and its split between the unioned sources.
 SHORTLIST_LIMIT = 50
 SHORTLIST_LEXICAL_SHARE = 0.6
 SHORTLIST_IMPORTANCE_SHARE = 0.25
 SHORTLIST_RECENT_SHARE = 0.25
-
-# The semantic arm: nearest stored vectors by cosine, exact scan — no ANN
-# index at per-user scale. Found at 281 rows: "what subscriptions am I paying
-# for?" never reached stage 2, because Postgres stems subscriptionS and
-# subscribE to different prefixes (no lexical hit), the row's importance was
-# 0.3 (not in the top 13) and it was months old (not recent) — so the one
-# signal that DID match, meaning, was never consulted. At 9 rows every row
-# shortlists and the gap is invisible; at scale the shortlist IS recall.
-# The share is the largest because meaning is the dominant rank weight (0.5):
-# a candidate the ranker would score highest must not be missing from the
-# candidates.
 SHORTLIST_SEMANTIC_SHARE = 0.5
 
-# How many existing keys the writer is shown. Keys are the collision domain —
-# reusing one is what lets a new fact retire an old one — so the writer has to
-# see the slots that exist, not just the rows retrieval happened to surface.
-# A key costs about four tokens, so this cap is generous on purpose.
 KEY_SPACE_LIMIT = 300
-
-# The writer's own retrieval casts wider than the read path: recall thrown away
-# before the collision check can never come back.
 WRITER_RETRIEVE_TOP_K = 12
 WRITER_RETRIEVE_FLOOR = 0.2
 WRITER_RETRIEVE_SHORTLIST_LIMIT = 60
 
-# --- Regexes ----------------------------------------------------------------
-
-# "Remember that..." is consent in the person's own words — the only thing that
-# lets a plain preference reach USER.md directly.
-# Historical phrasing widens retrieval to superseded rows — and only to
-# superseded rows. Held rows are never candidates, whatever the phrasing.
 HISTORICAL_RE = re.compile(
     r"\b(used to|previously|before|back then|originally|no longer|last year"
     r"|in the past|history|ever lived|anywhere else|anyone else|anything else"
@@ -319,8 +140,8 @@ HISTORICAL_RE = re.compile(
     re.IGNORECASE,
 )
 
-# --- Embeddings -------------------------------------------------------------
+
+# Embeddings
 
 EMBED_MODEL = "text-embedding-3-small"
-# Truncated from 1536: ~97% retrieval quality at a third of the storage.
 EMBED_DIMS = 512

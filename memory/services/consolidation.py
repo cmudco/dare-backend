@@ -16,13 +16,15 @@ from typing import Dict, List, Optional
 import numpy as np
 from django.db import transaction
 
-from memory.constants import MemoryState, Sensitivity, WriterAction
-from memory.domain.consolidate import EVICT, MERGE, PROMOTE, REKEY, Proposal
+from memory.constants import TOKEN_BUDGET, MemoryState, Sensitivity, WriterAction
+from memory.domain.consolidate import EVICT, MERGE, PROMOTE, REKEY
 from memory.domain.consolidate import sweep as run_sweep
 from memory.domain.keys import key_for
 from memory.domain.types import MemoryRow
-from memory.models import MemoryLedgerEntry, MemoryRecord
-from memory.services.store import read_user_doc, row_from_record
+from memory.domain.user_doc import estimate_tokens, merge_pinned
+from memory.models import MemoryRecord
+from memory.services.ledger import LedgerEvent, record_event
+from memory.services.store import read_authored_doc, read_user_doc, row_from_record
 
 logger = logging.getLogger(__name__)
 
@@ -63,7 +65,12 @@ def propose(user) -> Dict[str, object]:
             return 0.0
         return float(np.dot(a, b))
 
-    result = run_sweep(rows, similarity, profile_markdown=read_user_doc(user))
+    result = run_sweep(
+        rows,
+        similarity,
+        profile_markdown=read_user_doc(user),
+        authored_markdown=read_authored_doc(user),
+    )
     return {
         "proposals": [item.as_dict() for item in result.proposals],
         "examined": result.examined,
@@ -98,15 +105,16 @@ def apply(user, proposal: Dict[str, object]) -> AppliedResult:
 
 
 def _log(user, record, note: str, detail: str) -> None:
-    MemoryLedgerEntry.objects.create(
-        user=user,
-        action=WriterAction.CONSOLIDATE,
-        proposed_action=WriterAction.CONSOLIDATE,
-        reason="Tidy-up, approved by the person whose memory this is.",
-        note=note,
-        applied=True,
-        record=record,
-        detail=detail,
+    record_event(
+        user,
+        LedgerEvent(
+            action=WriterAction.CONSOLIDATE,
+            reason="Tidy-up, approved by the person whose memory this is.",
+            note=note,
+            applied=True,
+            record=record,
+            detail=detail,
+        ),
     )
 
 
@@ -143,6 +151,17 @@ def _promote(user, record, proposal) -> AppliedResult:
     if record.pinned_to:
         return AppliedResult(ok=False, reason="That is already in your profile.")
     heading = str(proposal.get("heading") or "") or _heading_for(record)
+    tokens = estimate_tokens(
+        merge_pinned(read_user_doc(user), [(heading, record.text)])
+    )
+    if record.sensitivity != Sensitivity.SAFETY and tokens > TOKEN_BUDGET:
+        return AppliedResult(
+            ok=False,
+            reason=(
+                f"That would push USER.md to {tokens} tokens, past the "
+                f"{TOKEN_BUDGET} ceiling."
+            ),
+        )
     with transaction.atomic():
         record.pinned_to = heading
         record.save(update_fields=["pinned_to", "updated_at"])

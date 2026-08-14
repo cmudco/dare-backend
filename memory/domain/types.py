@@ -39,11 +39,8 @@ class WriterDecision:
     reason: str = ""
     text: Optional[str] = None
     key: Optional[str] = None
-    topic_key: Optional[str] = None
     applies_when: Optional[str] = None
-    # Heading requested when a fact should also render in USER.md.
-    profile_key: Optional[str] = None
-    pin_to_profile: bool = False
+    pinned_to: Optional[str] = None
     importance: Optional[float] = None
     confidence: Optional[float] = None
     sensitivity: Optional[str] = None
@@ -95,5 +92,5 @@ class ApplyResult:
     profile_changed: bool
     archive: List[MemoryRow]
     created: List[MemoryRow]
-    retired: bool
     reinforced_ids: List[str] = field(default_factory=list)
+    profile_updates: Dict[str, str] = field(default_factory=dict)

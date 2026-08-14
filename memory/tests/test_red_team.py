@@ -255,9 +255,9 @@ class PinFloodTests(SimpleTestCase):
             make_input(explicit=True, user_doc="# User\n"),
             [
                 decision(
-                    action="patch_user",
-                    key="working-preferences",
-                    topic_key=f"style:flood-rule-{index}",
+                    action="add_fact",
+                    key=f"style:flood-rule-{index}",
+                    pinned_to="working-preferences",
                     text=(
                         f"Flood rule {index}: a reasonably long standing "
                         f"preference about how every answer must be written "

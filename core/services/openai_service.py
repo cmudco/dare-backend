@@ -9,9 +9,10 @@ import base64
 import json
 import logging
 from decimal import Decimal
-from typing import AsyncGenerator, Dict, List, Optional, Tuple
+from typing import AsyncGenerator, Dict, List, Optional, Tuple, Type, TypeVar
 
 from openai import AsyncOpenAI
+from pydantic import BaseModel
 
 from config import env
 from conversations.models import LLM
@@ -21,6 +22,7 @@ from core.services.llm_utils import (
     OpenAIErrorHandler,
     OpenAIMessageFormatter,
     OpenAIStreamProcessor,
+    OpenAIUsageExtractor,
     OpenAIVisionHandler,
     OpenAIWebSearchTools,
     SchemaTransformer,
@@ -29,6 +31,8 @@ from core.services.llm_utils import (
 from core.services.model_capabilities import ModelCapabilities
 
 logger = logging.getLogger(__name__)
+
+StructuredModel = TypeVar("StructuredModel", bound=BaseModel)
 
 
 class OpenAIService:
@@ -286,6 +290,36 @@ class OpenAIService:
         except Exception as e:
             logger.exception(f"[OpenAI] generate_structured_output error: {str(e)}")
             raise ValueError(f"Structured output generation failed: {str(e)}")
+
+    async def parse_structured_output(
+        self,
+        messages: List[Dict[str, str]],
+        response_model: Type[StructuredModel],
+        max_tokens: int = 2000,
+    ) -> Tuple[StructuredModel, Dict[str, int]]:
+        """Return a validated Pydantic response and its token usage."""
+        params = {
+            "model": self.model,
+            "messages": messages,
+            "response_format": response_model,
+        }
+        if self._uses_max_completion_tokens():
+            params["max_completion_tokens"] = max_tokens
+        else:
+            params["max_tokens"] = max_tokens
+
+        self.capabilities.apply_sampling_params(params, 0.0)
+        response = await self.client.chat.completions.parse(**params)
+        parsed = response.choices[0].message.parsed
+        if parsed is None:
+            raise ValueError("Empty structured response from OpenAI")
+
+        usage = OpenAIUsageExtractor.extract_from_chat_completion(response) or {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+        }
+        return parsed, usage
 
     # ==================== Private Methods ====================
 

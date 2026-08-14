@@ -14,9 +14,14 @@ has real sources to point at; it exercises the exact ``ingest_turn`` the RQ
 job calls.
 """
 
+import uuid
+
 from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand, CommandError
 
+from conversations.constants import SenderType
+from conversations.models import Conversation, Message
+from memory.services.ingest import ingest_turn
 from memory.services.retrieval import retrieve, summarize_recall
 
 
@@ -61,12 +66,6 @@ class Command(BaseCommand):
         )
 
     def _ingest(self, user, text, assistant_text):
-        import uuid
-
-        from conversations.constants import SenderType
-        from conversations.models import Conversation, Message
-        from memory.services.ingest import ingest_turn
-
         conversation = Conversation.active_objects.create(
             user=user,
             conversation_id=f"memory-probe-{uuid.uuid4().hex[:12]}",
