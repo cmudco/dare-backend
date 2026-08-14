@@ -93,7 +93,7 @@ def _base_queryset(user, since: Optional[date] = None, until: Optional[date] = N
         conversation__is_deleted=False,
         conversation__is_active=True,
         sender_type__in=[SenderType.PLAYER, SenderType.AI_ASSISTANT],
-    ).exclude(message="")
+    ).select_related("conversation").exclude(message="")
     if since is not None:
         queryset = queryset.filter(created_at__date__gte=since)
     if until is not None:
@@ -198,6 +198,72 @@ def _search_fallback(
         .filter(condition)
         .order_by("-created_at")[:limit]
     )
+
+
+def search_sessions_hits(
+    user,
+    query: str = "",
+    limit: int = DEFAULT_LIMIT,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+) -> Dict[str, Any]:
+    """The same search, shaped for a page instead of a prompt.
+
+    The tool flattens hits into one transcript block because a model reads
+    text; the Memory page needs each hit as a thing that can be clicked —
+    which conversation, what was said around it, and where to go. Same
+    matching, same windows, same scoping; only the shape differs.
+    """
+    if user is None:
+        return {"success": False, "error": "Memory is unavailable."}
+
+    start, end = parse_day(since), parse_day(until)
+    terms = tokenize(query or "")
+    if not terms and start is None and end is None:
+        return {"success": True, "query": query, "found": 0, "hits": []}
+
+    try:
+        raw = _search(user, terms, limit, start, end)
+    except Exception as exc:
+        logger.exception("[memory] session hits failed for user %s", user.id)
+        return {"success": False, "error": f"Transcript search failed: {exc}"}
+
+    _log_search(user, query or f"{since or ''}..{until or ''}", len(raw))
+
+    hits = []
+    for hit in raw:
+        message = hit["message"]
+        conversation = message.conversation
+        hits.append(
+            {
+                "conversation_id": conversation.conversation_id,
+                "conversation_title": conversation.title or "Untitled conversation",
+                "message_id": message.id,
+                "date": (
+                    message.created_at.date().isoformat()
+                    if message.created_at
+                    else None
+                ),
+                "exchange": [
+                    {
+                        "role": _role(neighbor),
+                        "text": neighbor.message[:SNIPPET_CHARS],
+                        "matched": neighbor.id == message.id,
+                    }
+                    for neighbor in (hit["before"], message, hit["after"])
+                    if neighbor is not None and neighbor.message
+                ],
+            }
+        )
+
+    return {
+        "success": True,
+        "query": query,
+        "since": start.isoformat() if start else None,
+        "until": end.isoformat() if end else None,
+        "found": len(hits),
+        "hits": hits,
+    }
 
 
 def _neighbor(

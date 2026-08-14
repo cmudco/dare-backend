@@ -34,6 +34,7 @@ from memory.services.items import (
     row_item,
 )
 from memory.services.retrieval import retrieve, summarize_recall
+from memory.services.session_search import search_sessions_hits
 from memory.services.store import read_user_doc, tokenize
 
 from .serializers import (
@@ -405,6 +406,32 @@ class MemoryViewSet(viewsets.ViewSet):
                 )
 
         return Response(MemoryItemSerializer(record_item(record)).data)
+
+    def sessions(self, request):
+        """The transcript layer, searchable from the Memory page.
+
+        The same search the model reaches through the search_sessions tool,
+        returned as clickable hits (conversation, date, exchange) rather than
+        a flat transcript block. Words, a date range, or both — all bounds
+        only ever narrow, and scope comes from request.user alone.
+        """
+        query = (request.query_params.get("q") or "").strip()[:2000]
+        since = (request.query_params.get("since") or "").strip() or None
+        until = (request.query_params.get("until") or "").strip() or None
+        if not query and not since and not until:
+            return Response(
+                {"detail": "Pass ?q=<words>, ?since=YYYY-MM-DD, or both."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        result = search_sessions_hits(
+            request.user, query=query, since=since, until=until
+        )
+        if not result.get("success"):
+            return Response(
+                {"detail": result.get("error", "Search failed.")},
+                status=status.HTTP_502_BAD_GATEWAY,
+            )
+        return Response(result)
 
     def recall(self, request):
         """The probe: run the ranking by hand without spending a turn.
