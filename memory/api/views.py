@@ -22,7 +22,7 @@ from memory.domain.user_doc import (
     render_user_doc,
 )
 from memory.models import MemoryLedgerEntry, MemoryRecord, UserMemoryDocument
-from memory.services import consolidation
+from memory.services import consolidation, portability
 from memory.services.edit import edit_doc_line, edit_record
 from memory.services.items import (
     DOC_ID_PREFIX,
@@ -439,6 +439,24 @@ class MemoryViewSet(viewsets.ViewSet):
                 ),
             )
         return Response(result)
+
+    def export(self, request):
+        """The whole store as one self-contained bundle — the layered
+        contract, not a flat list, so an import can reinstate it exactly."""
+        return Response(portability.export_bundle(request.user))
+
+    def import_bundle(self, request):
+        """Reinstate an exported bundle into an EMPTY store.
+
+        Refuses a non-empty store rather than inventing merge semantics —
+        the flow this serves (fresh account, or forget-then-restore) starts
+        empty by construction.
+        """
+        try:
+            result = portability.import_bundle(request.user, request.data)
+        except portability.ImportError_ as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(result, status=status.HTTP_201_CREATED)
 
     def recall(self, request):
         """The probe: run the ranking by hand without spending a turn.
