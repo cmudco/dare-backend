@@ -1,63 +1,14 @@
-"""Fact keys.
-
-Two facts sharing a key cannot both be true. That single rule is what turns
-"she moved" into a retirement rather than a second opinion — and it is why
-getting the key wrong is the most expensive mistake in the whole system.
-
-The rule cuts both ways, asymmetrically. A key too narrow costs a duplicate
-row: visible, harmless. A key too broad costs a deletion, and that failure is
-quiet — the fact is simply gone the next time you look.
-"""
+"""Canonical keys for facts and procedures."""
 
 import re
 from typing import Optional
 
 from memory.constants import QUALIFIED_TOPICS
 
-# Words too common to tell two facts apart.
 _STOPWORDS = frozenset(
-    {
-        "the",
-        "a",
-        "an",
-        "and",
-        "or",
-        "but",
-        "is",
-        "are",
-        "was",
-        "were",
-        "has",
-        "have",
-        "had",
-        "with",
-        "for",
-        "from",
-        "that",
-        "this",
-        "their",
-        "they",
-        "his",
-        "her",
-        "its",
-        "in",
-        "on",
-        "at",
-        "of",
-        "to",
-        "by",
-        "as",
-        "it",
-        "user",
-        "he",
-        "she",
-        "will",
-        "be",
-        "been",
-        "prefers",
-        "likes",
-        "uses",
-    }
+    "a an and are as at be been but by for from had has have he her his in "
+    "is it its likes of on or prefers she that the their they this to user "
+    "uses was were will with".split()
 )
 
 
@@ -67,12 +18,7 @@ def slugify(value: Optional[str]) -> str:
 
 
 def qualifier_from_statement(statement: Optional[str]) -> str:
-    """Build a qualifier out of the statement when the model did not supply one.
-
-    Without this a qualified topic with a missing qualifier collapses onto the
-    bare topic — ``note`` — and every unrelated note collides again. Two or
-    three distinctive words is enough to keep separate things separate.
-    """
+    """Derive a short qualifier when the writer omitted one."""
     words = [
         word
         for word in slugify(statement).split("-")
@@ -82,27 +28,18 @@ def qualifier_from_statement(statement: Optional[str]) -> str:
 
 
 def downgraded_key(profile_key: str, statement: Optional[str] = None) -> str:
-    """The key for a profile line that was sent to the archive instead.
-
-    It keeps its heading as a namespace and is qualified by its own words, so
-    two preferences downgraded under the same heading do not retire one another.
-    """
+    """Key a refused profile line without colliding with its neighbours."""
     slug = qualifier_from_statement(statement)
     return f"{profile_key}:{slug}" if slug else profile_key
 
 
 def distinguishing_key(key: str, statement: Optional[str]) -> str:
-    """A collision-escaping key: qualified by the statement's own words.
-
-    Only words the key does not already contain are used — boundaries all
-    begin "never store", so qualifying by the first words of the sentence
-    minted the same suffix for every one of them and they collided again one
-    level down.
-    """
+    """Extend an occupied additive key using fresh words from the statement."""
+    key_words = set(slugify(key).split("-"))
     words = [
         word
         for word in slugify(statement).split("-")
-        if len(word) > 2 and word not in _STOPWORDS and word not in key
+        if len(word) > 2 and word not in _STOPWORDS and word not in key_words
     ]
     slug = "-".join(words[:3]) or "more"
     return f"{key}:{slug}"
@@ -124,19 +61,13 @@ def key_for(
 
 
 def procedure_key(trigger: Optional[str], rule: Optional[str] = None) -> str:
-    """The key for a procedure: its trigger, qualified by the rule.
-
-    The trigger is the namespace and the rule is the qualifier — keyed on the
-    trigger alone, "never use emoji and keep the subject under 50 characters"
-    had the second rule retire the first on the way in. Namespaced under
-    ``when:`` so a procedure can never collide with a fact.
-    """
-    # The namespace already says "when", and the model reliably says it too —
-    # without the strip, "when reviewing my code" reads back as
-    # "When when reviewing my code".
-    situation = re.sub(
-        r"^(when|while|whenever|during|for|if)-", "", slugify(trigger)
-    ) or qualifier_from_statement(rule)
+    """Key a procedure by its trigger and rule."""
+    situation = slugify(trigger)
+    for prefix in ("when-", "while-", "whenever-", "during-", "for-", "if-"):
+        if situation.startswith(prefix):
+            situation = situation.removeprefix(prefix)
+            break
+    situation = situation or qualifier_from_statement(rule)
     if not situation:
         return "when:general"
 

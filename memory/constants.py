@@ -306,54 +306,6 @@ WRITER_RETRIEVE_TOP_K = 12
 WRITER_RETRIEVE_FLOOR = 0.2
 WRITER_RETRIEVE_SHORTLIST_LIMIT = 60
 
-# --- Refusals the model does not get a vote on ------------------------------
-#
-# Both found by a red-team pass, and both are gate rules rather than prompt
-# rules because the failure mode was precisely that the MODEL agreed and the
-# writer did it anyway: the assistant said "I can't store those credentials"
-# in the chat while the writer stored the password and the API key as active,
-# non-sensitive facts, retrievable by an ordinary search.
-
-# A statement that carries a secret. Two routes in: a value with a known
-# credential shape (vendor key prefixes, bearer tokens, long key-like blobs),
-# or a credential noun possessing a concrete value ("password is X", "api key:
-# Y"). Ordinary sentences about passwords ("They forgot their password") have
-# no value attached and pass.
-SECRET_SHAPE_RE = re.compile(
-    r"(sk-[A-Za-z0-9_\-]{8,}"  # OpenAI-style
-    r"|AKIA[0-9A-Z]{16}"  # AWS access key
-    r"|gh[pousr]_[A-Za-z0-9]{20,}"  # GitHub tokens
-    r"|xox[baprs]-[A-Za-z0-9\-]{10,}"  # Slack
-    r"|AIza[0-9A-Za-z_\-]{20,}"  # Google API
-    r"|-----BEGIN [A-Z ]*PRIVATE KEY-----"
-    r"|eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{5,})"  # JWT
-)
-CREDENTIAL_ASSIGN_RE = re.compile(
-    r"\b(password|passcode|passphrase|api[ _-]?key|access[ _-]?key"
-    r"|secret|auth[ _-]?token|access[ _-]?token|admin[ _-]?token"
-    r"|token|private[ _-]?key|credentials?)\b"
-    r"[^.\n]{0,40}?"
-    r"(is|was|are|[:=])\s*"
-    r"['\"]?[A-Za-z0-9_\-]*\d[A-Za-z0-9_\-]*['\"]?",
-    re.IGNORECASE,
-)
-
-# A user message that tries to rewrite the assistant's standing rules. The
-# marker is the override rider, not the identity claim — a person may well BE
-# a system administrator, but "ignore your instructions" travelling in the
-# same message is what turned that claim into a poisoned occupation slot, a
-# retired legitimate fact, and a stored "admin token". A turn wearing this is
-# not trusted to write ANYTHING; the whole turn's proposals are refused, and
-# the refusals go in the ledger where the person can see the attempt.
-OVERRIDE_RE = re.compile(
-    r"\b(ignore|disregard|forget|override)\b[^.\n]{0,40}\b(instructions?"
-    r"|guidelines|rules|system prompt|previous (instructions?|prompts?))\b"
-    r"|\byou (are|will) (now|no longer)\b"
-    r"|\bpretend (you are|to be)\b"
-    r"|\bnew (system )?(prompt|instructions?)\b",
-    re.IGNORECASE,
-)
-
 # --- Regexes ----------------------------------------------------------------
 
 # "Remember that..." is consent in the person's own words — the only thing that

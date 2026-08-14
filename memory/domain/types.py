@@ -1,11 +1,4 @@
-"""Data shapes shared by the pure memory modules.
-
-``MemoryRow`` mirrors the ``MemoryRecord`` model field-for-field but stays a
-plain dataclass so the gate and the ranker can run without a database — apply
-mutates rows in place (retire, reinforce) and persistence diffs the result.
-Dates travel as ISO strings here (``YYYY-MM-DD``), which compare correctly with
-plain ``<`` and keep the pure layer free of timezone decisions.
-"""
+"""Typed data passed between pure memory modules."""
 
 from dataclasses import asdict, dataclass, field
 from typing import Any, Callable, Dict, List, Optional
@@ -31,10 +24,8 @@ class MemoryRow:
     sensitivity: str = "none"
     provenance: str = ""
     reinforced: int = 0
-    # USER.md heading this fact renders under, or empty. The document is a
-    # view of what is pinned, so a pinned row keeps its key and its timeline.
+    # USER.md heading this row renders under, or empty.
     pinned_to: str = ""
-    # For a rule: the situations it fires in, and what it is embedded as.
     applies_when: str = ""
     source_conversation_id: Optional[Any] = None
     source_message_id: Optional[Any] = None
@@ -42,41 +33,25 @@ class MemoryRow:
 
 @dataclass
 class WriterDecision:
-    """One decision as it leaves the writer, keys already routed.
-
-    ``key`` is a profile heading for ``patch_user`` and a qualified topic key
-    otherwise; ``topic_key`` preserves the topic-derived key so a refused
-    profile line can still collide with — and later be retired by — the same
-    fact stated plainly.
-    """
+    """A writer proposal with its storage keys already resolved."""
 
     action: str
     reason: str = ""
     text: Optional[str] = None
     key: Optional[str] = None
     topic_key: Optional[str] = None
-    trigger: Optional[str] = None
     applies_when: Optional[str] = None
-    # The USER.md heading, kept separately from `key` so a fact can be pinned
-    # without having been proposed as a profile line.
+    # Heading requested when a fact should also render in USER.md.
     profile_key: Optional[str] = None
-    # Whether this belongs on every turn. Independent of the action: the same
-    # sentence was proposed as patch_user on one run and add_fact on the next,
-    # and only the first ever reached the profile.
     pin_to_profile: bool = False
     importance: Optional[float] = None
     confidence: Optional[float] = None
     sensitivity: Optional[str] = None
     occurred_at: Optional[str] = None
     valid_until: Optional[str] = None
-    # A measured value that will read as stale later — a balance, a count, a
-    # weight. Stamped and dated rather than stored as a standing truth.
     is_snapshot: bool = False
     supersedes_id: Optional[str] = None
-    replaces_line: Optional[str] = None
-    # For ignore: the row the person just restated. Repetition is the only
-    # durability signal the store ever gets, so an ignore that names its cause
-    # is worth more than one that does not.
+    # Existing row repeated by an ignore decision.
     reinforces_id: Optional[str] = None
 
     def as_dict(self) -> Dict[str, Any]:
@@ -85,12 +60,7 @@ class WriterDecision:
 
 @dataclass
 class LedgerDraft:
-    """One ledger line, ready to persist.
-
-    ``action`` is what the application actually did; ``proposed_action`` is
-    what the model asked for. The pairs where they differ are the audit trail's
-    entire value.
-    """
+    """One auditable gate decision, ready to persist."""
 
     id: str
     at: str
@@ -107,13 +77,11 @@ class LedgerDraft:
 
 @dataclass
 class ApplyInput:
-    """Everything the disposal gate needs, with the clock and ids injected so
-    the result is deterministic and the tests can assert on it."""
+    """Gate inputs with injected time and IDs for deterministic execution."""
 
     user_doc: str
     archive: List[MemoryRow]
     user_message: str
-    # True when the person said "remember that..." — consent, in their own words.
     explicit: bool
     now: str  # ISO timestamp
     new_id: Callable[[], str]
@@ -124,15 +92,8 @@ class ApplyInput:
 @dataclass
 class ApplyResult:
     entries: List[LedgerDraft]
-    user_doc: str
-    user_doc_changed: bool
-    # The full archive after the pass, including rows this pass retired.
+    profile_changed: bool
     archive: List[MemoryRow]
-    # Only the rows created this pass.
     created: List[MemoryRow]
-    # True when an existing row changed state, so storage must update it.
     retired: bool
-    # Rows the person restated word for word this turn. Nothing was written for
-    # these, but repetition is the only durability signal the system ever gets,
-    # and consolidation promotes on it.
     reinforced_ids: List[str] = field(default_factory=list)

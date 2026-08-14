@@ -1,47 +1,39 @@
-"""Deterministic policy guards, shared by both sides of a turn.
-
-The gate refuses what these detect, and the read path announces the same
-verdict in the same turn — so what the assistant says and what the writer
-later does come from one authority instead of two. Red-teamed: the assistant
-told the user it would not store their credentials while the background
-writer stored both, because the promise and the decision were made by
-different components reading different rules.
-
-Pure functions over text. The model gets no vote in any of them, which is
-the point: the failures these close all began with a model agreeing.
-
-Detection is layered rather than clever:
-
-    known shapes    sk-…, AKIA…, ghp_…, JWTs, private keys
-    labeled values  a credential noun possessing a concrete value
-    entropy         an unlabeled dump that reads like key material
-    defection       instructions to ignore, replace or bypass the rules
-
-and every layer runs twice — once on the text as written and once
-de-obfuscated, so "P a s s w o r d" and zero-width padding fail the same
-way the plain form does. Instructions about how to BEHAVE ("answer in
-Urdu", "keep it short") are procedures and welcome; what the defection
-lexicon names is instructions to stop following the rules.
-"""
+"""Deterministic write guards shared by the reply and memory gate."""
 
 import math
 import re
 from collections import Counter
 
-from memory.constants import CREDENTIAL_ASSIGN_RE, OVERRIDE_RE, SECRET_SHAPE_RE
-
 _ZERO_WIDTH_RE = re.compile("[\u200b\u200c\u200d\u2060\ufeff]")
-
-# "C o d e x - P a s s - 7 7 2 1": four or more single characters kept apart
-# by spaces, dots, dashes or underscores is a word being smuggled past a
-# matcher, not prose.
 _SPACED_RUN_RE = re.compile(r"\b(?:[A-Za-z0-9][ .\-_]){3,}[A-Za-z0-9]\b")
-
 _ENTROPY_TOKEN_RE = re.compile(r"[A-Za-z0-9_\-+/=]{20,}")
 
-# "Disable your safety filters" carries no credential and no explicit
-# "ignore your instructions", and still only exists to make the rules stop
-# applying.
+_SECRET_SHAPE_RE = re.compile(
+    r"(sk-[A-Za-z0-9_\-]{8,}"
+    r"|AKIA[0-9A-Z]{16}"
+    r"|gh[pousr]_[A-Za-z0-9]{20,}"
+    r"|xox[baprs]-[A-Za-z0-9\-]{10,}"
+    r"|AIza[0-9A-Za-z_\-]{20,}"
+    r"|-----BEGIN [A-Z ]*PRIVATE KEY-----"
+    r"|eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{5,})"
+)
+_CREDENTIAL_ASSIGN_RE = re.compile(
+    r"\b(password|passcode|passphrase|api[ _-]?key|access[ _-]?key"
+    r"|secret|auth[ _-]?token|access[ _-]?token|admin[ _-]?token"
+    r"|token|private[ _-]?key|credentials?)\b"
+    r"[^.\n]{0,40}?"
+    r"(is|was|are|[:=])\s*"
+    r"['\"]?[A-Za-z0-9_\-]*\d[A-Za-z0-9_\-]*['\"]?",
+    re.IGNORECASE,
+)
+_OVERRIDE_RE = re.compile(
+    r"\b(ignore|disregard|forget|override)\b[^.\n]{0,40}\b(instructions?"
+    r"|guidelines|rules|system prompt|previous (instructions?|prompts?))\b"
+    r"|\byou (are|will) (now|no longer)\b"
+    r"|\bpretend (you are|to be)\b"
+    r"|\bnew (system )?(prompt|instructions?)\b",
+    re.IGNORECASE,
+)
 _AUTHORITY_DEMAND_RE = re.compile(
     r"\b(disable|deactivate|bypass|turn off|remove|drop)\b[^.\n]{0,30}"
     r"\b(your|the|all|any)\b[^.\n]{0,30}"
@@ -51,11 +43,7 @@ _AUTHORITY_DEMAND_RE = re.compile(
 
 
 def deobfuscate(text: str) -> str:
-    """The text with its disguises removed, for detection only.
-
-    Never stored and never shown — collapsing "U S A" to "USA" would mangle
-    real prose, which is fine in a copy that only a matcher reads.
-    """
+    """Remove spacing tricks from a copy used only for detection."""
     plain = _ZERO_WIDTH_RE.sub("", text)
     return _SPACED_RUN_RE.sub(
         lambda match: re.sub(r"[ .\-_]", "", match.group()), plain
@@ -69,18 +57,15 @@ def _bits_per_char(token: str) -> float:
 
 
 def _reads_like_key_material(text: str) -> bool:
-    """An unlabeled secret: long, mixed, high-entropy, digits interleaved.
-
-    The interleaving requirement is what keeps ordinary long identifiers out —
-    "convertUserProfileToJson2" and "my-very-long-page-slug-2026" put their
-    digits at the end, key material scatters them throughout.
-    """
+    """Detect long, mixed, high-entropy tokens with interleaved digits."""
     for raw in _ENTROPY_TOKEN_RE.findall(text):
         token = re.sub(r"[\-_/+=]", "", raw)
         if len(token) < 20 or token.isalpha() or token.isdigit():
             continue
         transitions = sum(
-            1 for a, b in zip(token, token[1:]) if a.isalpha() != b.isalpha()
+            1
+            for left, right in zip(token, token[1:])
+            if left.isalpha() != right.isalpha()
         )
         if transitions >= 4 and _bits_per_char(token) >= 3.0:
             return True
@@ -90,8 +75,8 @@ def _reads_like_key_material(text: str) -> bool:
 def looks_like_secret(text: str) -> bool:
     for candidate in (text, deobfuscate(text)):
         if (
-            SECRET_SHAPE_RE.search(candidate)
-            or CREDENTIAL_ASSIGN_RE.search(candidate)
+            _SECRET_SHAPE_RE.search(candidate)
+            or _CREDENTIAL_ASSIGN_RE.search(candidate)
             or _reads_like_key_material(candidate)
         ):
             return True
@@ -99,14 +84,8 @@ def looks_like_secret(text: str) -> bool:
 
 
 def demands_override(text: str) -> bool:
-    """Whether the text asks for the assistant's rules to stop applying.
-
-    Used on the TURN, where it refuses every write, and on a proposed row's
-    TEXT, where it keeps the archive from carrying an instruction to defect —
-    a poisoned procedure would otherwise be re-injected on every matching
-    turn forever.
-    """
+    """Return whether the text asks for the assistant's rules to stop applying."""
     for candidate in (text, deobfuscate(text)):
-        if OVERRIDE_RE.search(candidate) or _AUTHORITY_DEMAND_RE.search(candidate):
+        if _OVERRIDE_RE.search(candidate) or _AUTHORITY_DEMAND_RE.search(candidate):
             return True
     return False
