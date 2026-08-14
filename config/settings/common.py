@@ -349,30 +349,14 @@ RQ_QUEUES = {
         'DB': REDIS_DB,
         'PASSWORD': REDIS_PASSWORD if REDIS_PASSWORD else None,
     },
-    'simple_queue': {
-        'HOST': REDIS_HOST,
-        'PORT': REDIS_PORT,
-        'DB': REDIS_DB,
-        'PASSWORD': REDIS_PASSWORD if REDIS_PASSWORD else None,
-        'DEFAULT_TIMEOUT': 3600,
-    },
-    # Post-reply memory writer. DEPLOYMENT INVARIANT: drained by exactly ONE
-    # worker — a single worker is global FIFO, and one user's turns must land
-    # in order (turn N's collision checks read turn N-1's rows). Never scale
-    # this queue past one worker.
+    # Use one worker until memory writes are serialized per user.
     'memory': {
         'HOST': REDIS_HOST,
         'PORT': REDIS_PORT,
         'DB': REDIS_DB,
         'PASSWORD': REDIS_PASSWORD if REDIS_PASSWORD else None,
         'DEFAULT_TIMEOUT': 300,
-        # This queue is idle most of the time — one job per memory-enabled
-        # turn, and nothing between. An idle socket was rotting and taking the
-        # worker with it ("Redis connection timeout, quitting"), after which
-        # memory silently stopped being written with no signal anywhere: the
-        # chat still worked, jobs still queued, and nothing drained them.
-        # Keepalives plus a periodic health check make redis-py reconnect
-        # instead of letting the connection die.
+        # Keep idle Redis connections healthy.
         'REDIS_CLIENT_KWARGS': {
             'socket_keepalive': True,
             'health_check_interval': 30,
@@ -382,10 +366,8 @@ RQ_QUEUES = {
 
 RQ_SHOW_ADMIN_LINK = True
 
-# Shared cache. The default LocMemCache is per-process, so cached values aren't
-# shared across uvicorn workers; Redis makes them visible to all. Shares the
-# Channels/RQ DB, namespaced via KEY_PREFIX — avoid cache.clear() here, which
-# FLUSHDBs the shared DB; delete specific keys instead.
+# Share cache across processes. Delete specific keys because cache.clear()
+# flushes the shared Redis database.
 CACHES = {
     "default": {
         "BACKEND": "django.core.cache.backends.redis.RedisCache",

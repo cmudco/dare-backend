@@ -30,8 +30,7 @@ from django.utils import timezone
 
 from conversations.constants import ToolCallOrigin
 from conversations.models import Conversation, Message, MessageToolCall
-from conversations.services.artifact_tool_executor import \
-    artifact_tool_executor
+from conversations.services.artifact_tool_executor import artifact_tool_executor
 from conversations.services.tool_event_service import ToolEventEmitter
 from core.services.dtos import ToolCallRequest, ToolCallResult
 from dare_tools.constants import ExecutionStatus
@@ -39,11 +38,12 @@ from dare_tools.models import DareTool, DareToolExecution
 from dare_tools.services.registry import DareToolRegistry
 from dare_tools.services.result_formatters import format_dare_result_for_llm
 from dare_tools.services.retrieval_tool_executor import (
-    RetrievalScope, retrieval_tool_executor)
-from mcp.services.artifact_bridge import (BridgeStatus,
-                                          maybe_create_pdf_artifact)
-from mcp.services.mcp_tool_executor import (MCPToolExecutorError,
-                                            mcp_tool_executor)
+    RetrievalScope,
+    retrieval_tool_executor,
+)
+from mcp.services.artifact_bridge import BridgeStatus, maybe_create_pdf_artifact
+from mcp.services.mcp_tool_executor import MCPToolExecutorError, mcp_tool_executor
+from memory.services.session_search import search_sessions_for_user
 
 logger = logging.getLogger(__name__)
 
@@ -65,9 +65,7 @@ ARTIFACT_TOOLS = frozenset(
 # DARE tools that retrieve document context — routed to RetrievalToolExecutor.
 RETRIEVAL_TOOLS = frozenset({"search_documents"})
 
-# Memory tools need the authenticated user (scope comes from the server, never
-# from model arguments) and async ORM access, so they route through
-# _execute_dare rather than a registry executor.
+# Memory tools are scoped to the authenticated user by the server.
 MEMORY_TOOLS = frozenset({"search_sessions"})
 
 MAX_PERSISTED_RESULT_CHARS = 5000
@@ -254,13 +252,9 @@ class ToolExecutionService:
                 scope=ctx.retrieval_scope,
             )
         elif tool_name in MEMORY_TOOLS:
-            from memory.services.session_search import search_sessions_for_user
-
-            # Scope stays server-side; the dates only ever narrow, so they
-            # are safe to take from the model.
             raw_result = await sync_to_async(search_sessions_for_user)(
                 ctx.user,
-                str(arguments.get("query", "")),
+                arguments["query"],
                 since=arguments.get("since"),
                 until=arguments.get("until"),
             )

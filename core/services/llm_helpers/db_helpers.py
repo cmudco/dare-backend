@@ -327,20 +327,24 @@ def get_referenced_conversations_context(
 
 
 @database_sync_to_async
-def get_referenced_summaries_context(summary_ids: List[int]) -> str:
+def get_referenced_summaries_context(
+    summary_ids: List[int], user_id: Optional[int]
+) -> str:
     """Fetch context from selected conversation summaries.
 
     Args:
         summary_ids: List of ConversationSummary primary keys
+        user_id: Current user ID for ownership filtering
 
     Returns:
         Formatted context string with the selected summaries
     """
-    if not summary_ids:
+    if not summary_ids or user_id is None:
         return ""
 
     summaries = ConversationSummary.active_objects.filter(
-        id__in=summary_ids
+        id__in=summary_ids,
+        conversation__user_id=user_id,
     ).select_related("conversation")
 
     context_parts = []

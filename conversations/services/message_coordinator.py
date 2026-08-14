@@ -67,6 +67,7 @@ from core.services.learning_progress_service import LearningProgressService
 from core.services.llm_service import LLMService
 from core.services.sb_client import SocraticBooksClient
 from dare_tools.services.retrieval_tool_executor import RetrievalScope
+from memory.tasks import run_memory_writer
 from users.utils import should_run_learning_progress
 
 logger = logging.getLogger(__name__)
@@ -280,20 +281,11 @@ class MessageCoordinator:
         )
 
     async def _enqueue_memory_writer(self, message_obj: "Message") -> None:
-        """Queue the post-reply memory writer for this finished turn.
-
-        `.delay` is a Redis RPUSH — cheap, but still off the event loop. The
-        job itself re-derives everything from the message id and is idempotent
-        (ledger check), so a duplicate enqueue is harmless.
-        """
-        from memory.tasks import run_memory_writer
-
+        """Queue memory processing after a completed reply."""
         try:
             await database_sync_to_async(run_memory_writer.delay)(message_obj.id)
         except Exception:
-            # A full Redis or a down broker must not take down a delivered
-            # reply; the transcript is saved, only this turn's extraction is
-            # lost.
+            # A queue failure must not discard an already delivered reply.
             logger.exception(
                 "[MessageCoordinator] failed to enqueue memory writer for mid=%s",
                 message_obj.id,
@@ -707,10 +699,7 @@ class MessageCoordinator:
                     regenerate=regenerate,
                 )
 
-                # The post-reply memory writer. Gated on use_memory so a user
-                # who disabled memory is never written about (the read gate's
-                # privacy stance, applied to writes); skipped on regenerate
-                # because the user message was already ingested once.
+                # Write only new, memory-enabled turns from authenticated users.
                 if (
                     not regenerate
                     and self.user is not None
