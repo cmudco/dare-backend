@@ -132,7 +132,16 @@ def ingest_turn(
 
     # Pass two: now that the writer has named its keys, look them up exactly.
     # This is the seek the qualified keys were designed for.
-    for row in find_by_keys(user, [d.key for d in decisions if d.key]) + find_by_ids(
+    #
+    # topic_key is sought as well as the routed key, because they diverge on
+    # exactly the decisions where the collision matters most: a patch_user
+    # carries a HEADING in `key` while the gate reroutes the write onto the
+    # topic. Seeking only the heading missed a live `occupation` row, and
+    # "add this to my profile: I'm a PhD student" produced a second active
+    # occupation instead of retiring "backend engineer".
+    seek = {d.key for d in decisions if d.key}
+    seek |= {d.topic_key for d in decisions if d.topic_key}
+    for row in find_by_keys(user, sorted(seek)) + find_by_ids(
         user, [d.supersedes_id for d in decisions if d.supersedes_id]
     ):
         if not any(existing.id == row.id for existing in archive):
