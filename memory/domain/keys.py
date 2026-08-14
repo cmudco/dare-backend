@@ -91,6 +91,23 @@ def downgraded_key(profile_key: str, statement: Optional[str] = None) -> str:
     return f"{profile_key}:{slug}" if slug else profile_key
 
 
+def distinguishing_key(key: str, statement: Optional[str]) -> str:
+    """A collision-escaping key: qualified by the statement's own words.
+
+    Only words the key does not already contain are used — boundaries all
+    begin "never store", so qualifying by the first words of the sentence
+    minted the same suffix for every one of them and they collided again one
+    level down.
+    """
+    words = [
+        word
+        for word in slugify(statement).split("-")
+        if len(word) > 2 and word not in _STOPWORDS and word not in key
+    ]
+    slug = "-".join(words[:3]) or "more"
+    return f"{key}:{slug}"
+
+
 def key_for(
     topic: str,
     qualifier: Optional[str] = None,

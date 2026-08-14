@@ -1326,6 +1326,41 @@ class BoundaryCoexistenceTests(SimpleTestCase):
         self.assertTrue(new_row.key.startswith("boundaries:never-store-anything:"))
         self.assertIn("separate protections", result.entries[0].note)
 
+    def test_a_third_boundary_does_not_retire_the_second(self):
+        # The escape key is qualified by words the key does not already
+        # contain — boundaries all begin "never store", and qualifying by the
+        # sentence's first words minted the same suffix for every one of
+        # them, so the third collided with the second one level down.
+        client = fact(
+            id="boundary-1",
+            key="boundaries:never-store-information",
+            text="Never store information about their clients.",
+        )
+        # Sitting exactly where the first escape hop lands, so the new
+        # boundary has to escape TWICE to find a free slot.
+        garden = fact(
+            id="boundary-2",
+            key="boundaries:never-store-information:finances",
+            text="Never store information about their gardening or plants.",
+        )
+        result = apply_decisions(
+            make_input(explicit=True, archive=[client, garden]),
+            [
+                decision(
+                    action="add_fact",
+                    key="boundaries:never-store-information",
+                    text="Never store information about their finances.",
+                    reason="A third standing boundary.",
+                )
+            ],
+        )
+
+        for row_id in ("boundary-1", "boundary-2"):
+            row = next(row for row in result.archive if row.id == row_id)
+            self.assertEqual(row.state, "active")
+        self.assertEqual(result.created[0].state, "active")
+        self.assertNotIn(result.created[0].key, {client.key, garden.key})
+
     def test_a_boundary_restated_word_for_word_reinforces(self):
         client = fact(
             id="boundary-1",
