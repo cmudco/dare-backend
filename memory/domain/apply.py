@@ -31,7 +31,7 @@ from memory.constants import (
     MemoryState,
     Sensitivity,
 )
-from memory.domain.keys import downgraded_key
+from memory.domain.keys import distinguishing_key, downgraded_key
 from memory.domain.types import (
     ApplyInput,
     ApplyResult,
@@ -702,14 +702,14 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
         # different words is re-keyed by its own words and kept alongside;
         # retiring a boundary stays possible, but only by naming its id.
         boundary_note = None
-        if (
+        while (
             collision
             and kind == MemoryKind.FACT
             and fact_key.split(":", 1)[0] in ("boundary", "boundaries")
             and collision.text.strip().lower() != text.lower()
         ):
-            fact_key = downgraded_key(fact_key, text)
-            boundary_note = (
+            fact_key = distinguishing_key(fact_key, text)
+            boundary_note = boundary_note or (
                 f'Kept alongside "{collision.text}" — two boundaries are '
                 f"separate protections, so neither retires the other."
             )
