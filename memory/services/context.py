@@ -61,6 +61,25 @@ _PROCEDURES_PREAMBLE = (
     "corrected once. Follow them silently."
 )
 
+# The one standing rule about the transcript, present on every memory-enabled
+# turn — including a turn where nothing else was worth injecting, because a
+# person with an empty store asking "what did we discuss yesterday" is
+# exactly who needs it. Measured before this existed: asked 12 questions
+# about past conversations (quotes, day rundowns, "did I ever mention"),
+# the model searched ONCE and improvised the other eleven answers from
+# whatever memories happened to be in context — including invented
+# specifics presented as quotes.
+_TOOLING_NOTE = (
+    "<memory_tools>\n"
+    "Questions about past conversations — what was said, discussed or "
+    'decided, a particular day or period, "did I ever mention…", or an '
+    "exact quote — are answered with the search_sessions tool, never from "
+    "memory and never from recall. Any memories shown here are distilled "
+    "summaries; they are not the person's words, and they are not a record "
+    "of any conversation.\n"
+    "</memory_tools>"
+)
+
 
 @dataclass
 class ReadContext:
@@ -131,6 +150,7 @@ def read_context(user, question: str) -> ReadContext:
         parts.append(
             f"{_PROCEDURES_PREAMBLE}\n\n<procedures>\n{procedure_block}\n</procedures>"
         )
+    parts.append(_TOOLING_NOTE)
 
     return ReadContext(
         user_doc=user_doc,
