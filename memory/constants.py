@@ -69,6 +69,9 @@ class WriterAction(models.TextChoices):
     # (the prototype logged these as ignore/add_fact, which read as lies).
     HOLD = "hold", _("Hold")
     RELEASE = "release", _("Release")
+    # A whole store arriving from a bundle — one row for the event, because
+    # replaying the source account's ledger here would fabricate history.
+    IMPORT = "import", _("Import")
 
 
 # --- Keys -------------------------------------------------------------------

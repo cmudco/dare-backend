@@ -44,6 +44,16 @@ urlpatterns = [
         name="memory-v2-recall",
     ),
     path(
+        "v2/export/",
+        MemoryViewSet.as_view({"get": "export"}),
+        name="memory-v2-export",
+    ),
+    path(
+        "v2/import/",
+        MemoryViewSet.as_view({"post": "import_bundle"}),
+        name="memory-v2-import",
+    ),
+    path(
         "v2/sessions/",
         MemoryViewSet.as_view({"get": "sessions"}),
         name="memory-v2-sessions",
