@@ -64,7 +64,16 @@ def search_sessions_for_user(
         return {"success": False, "error": str(exc)}
     terms = tokenize(query or "")
     if not terms and start is None and end is None:
-        return {"success": True, "query": query, "found": 0, "transcript": ""}
+        # An empty call is a mistake worth correcting, not an empty result:
+        # answered with found=0, the model concluded "we never talked" and
+        # said so. Told what the tool needs, it retries properly.
+        return {
+            "success": False,
+            "error": (
+                "Nothing to search: give keywords, a date range "
+                "(since/until as YYYY-MM-DD), or both."
+            ),
+        }
 
     try:
         hits = _search(user, terms, limit, start, end)
