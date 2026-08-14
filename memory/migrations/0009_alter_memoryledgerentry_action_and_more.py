@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("memory", "0007_embed_rules_by_situation"),
+        ("memory", "0008_hold_existing_third_party"),
     ]
 
     operations = [
