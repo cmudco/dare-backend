@@ -532,11 +532,13 @@ class SupersedeTests(SimpleTestCase):
 
 
 class BudgetTests(SimpleTestCase):
-    def test_a_full_document_no_longer_refuses_the_write(self):
-        # The budget moved. A pinned fact is a row, not a line of markdown, so
-        # there is nothing to overflow at write time — the ceiling is applied
-        # when the profile is rendered, where it can drop the least important
-        # line instead of losing the newest one. See ProfileRenderTests.
+    def test_a_pin_past_the_ceiling_is_downgraded_to_the_archive(self):
+        # Red-teamed: 22 pins in one turn, each cheap on its own, rendered a
+        # 572-token file under a 500-token ceiling — and the ledger claimed
+        # all 22 were applied. A pin is a line in the file read on every turn,
+        # so it faces the same ceiling a hand-written line does; past it, the
+        # fact is kept and retrievable but does not reach the profile, and the
+        # refusal is on the record.
         result = apply_decisions(
             make_input(explicit=True, user_doc=over_budget_doc()),
             [
@@ -549,8 +551,105 @@ class BudgetTests(SimpleTestCase):
             ],
         )
 
-        self.assertTrue(result.entries[0].applied)
-        self.assertEqual(result.created[0].pinned_to, "communication")
+        self.assertFalse(result.entries[0].applied)
+        self.assertIn("ceiling", result.entries[0].note)
+        self.assertEqual(result.entries[0].proposed_action, "patch_user")
+        # The fact itself survives, unpinned.
+        self.assertEqual(len(result.created), 1)
+        self.assertEqual(result.created[0].pinned_to, "")
+
+    def test_pins_in_one_pass_are_budgeted_together(self):
+        # Each line alone fits; together they do not. The document a turn
+        # renders is all of them at once, so that is what the ceiling reads.
+        lines = [
+            f"Rule {index}: a reasonably long standing preference about how "
+            f"answers should be written, structured and formatted for them."
+            for index in range(22)
+        ]
+        result = apply_decisions(
+            make_input(explicit=True, user_doc="# User\n"),
+            [
+                decision(
+                    action="patch_user",
+                    key="working-preferences",
+                    topic_key=f"style:answer-rule-{index}",
+                    text=line,
+                    reason="Asked to pin all of these.",
+                )
+                for index, line in enumerate(lines)
+            ],
+        )
+
+        pinned = [row for row in result.created if row.pinned_to]
+        unpinned = [row for row in result.created if not row.pinned_to]
+        self.assertGreater(len(pinned), 0)
+        self.assertGreater(len(unpinned), 0)
+        self.assertEqual(len(pinned) + len(unpinned), 22)
+
+        # And the document those pins would render stays under the ceiling.
+        from memory.domain.user_doc import estimate_tokens, merge_pinned
+
+        rendered = merge_pinned(
+            "# User\n", [(row.pinned_to, row.text) for row in pinned]
+        )
+        self.assertLessEqual(estimate_tokens(rendered), 500)
+
+        # The refusals are disclosed, one ledger entry each.
+        refused = [
+            entry
+            for entry in result.entries
+            if not entry.applied and "ceiling" in (entry.note or "")
+        ]
+        self.assertEqual(len(refused), len(unpinned))
+
+    def test_a_swap_of_a_pinned_fact_passes_even_over_the_ceiling(self):
+        # A document already past the budget must still be repairable: a
+        # restatement of an already-pinned fact replaces its line rather than
+        # adding one, so it is judged as the swap it is.
+        filler = over_budget_doc()
+        pinned_line = "Preferred name: Farhat."
+        existing = fact(
+            id="pinned-1",
+            key="name",
+            text=pinned_line,
+            pinned_to="identity",
+        )
+        doc = filler.replace(
+            "## Working preferences",
+            f"## Identity\n- {pinned_line}\n\n## Working preferences",
+        )
+        result = apply_decisions(
+            make_input(explicit=True, user_doc=doc, archive=[existing]),
+            [
+                decision(
+                    action="patch_user",
+                    key="identity",
+                    topic_key="name",
+                    text="Preferred name: Abbas.",
+                    reason="Corrected their name.",
+                )
+            ],
+        )
+
+        self.assertEqual(result.created[0].pinned_to, "identity")
+        old = next(row for row in result.archive if row.id == "pinned-1")
+        self.assertEqual(old.state, "superseded")
+
+    def test_a_safety_pin_ignores_the_ceiling(self):
+        result = apply_decisions(
+            make_input(explicit=True, user_doc=over_budget_doc()),
+            [
+                decision(
+                    action="patch_user",
+                    key="constraints",
+                    text="Severely allergic to penicillin",
+                    sensitivity="safety",
+                    reason="Safety.",
+                )
+            ],
+        )
+
+        self.assertEqual(result.created[0].pinned_to, "constraints")
 
 
 class DowngradedKeyTests(SimpleTestCase):
@@ -1134,3 +1233,139 @@ class SnapshotTests(SimpleTestCase):
             [decision(action="add_fact", key="location", text="Lives in Lahore.")],
         )
         self.assertEqual(result.created[0].text, "Lives in Lahore.")
+
+
+class ThirdPartyHoldTests(SimpleTestCase):
+    def test_third_party_facts_are_held_not_active(self):
+        # Red-teamed: an unrelated doctor's address and birth date — declared
+        # not the user, not a client, not a relative — went in as active rows
+        # that ordinary retrieval returned. The person consenting is not the
+        # person the fact is about, so third-party data is held: visible,
+        # never retrieved into an answer until released by hand.
+        result = apply_decisions(
+            make_input(explicit=True),
+            [
+                decision(
+                    action="add_fact",
+                    key="person:zenith-quill",
+                    text="Dr. Zenith Quill lives at 77 Lantern Way.",
+                    sensitivity="third-party",
+                    reason="Asked to remember it.",
+                )
+            ],
+        )
+
+        self.assertEqual(result.created[0].state, "held")
+        self.assertTrue(result.entries[0].applied)
+        self.assertIn("another person", result.entries[0].note)
+
+    def test_a_third_party_safety_fact_stays_active(self):
+        # "My daughter is severely allergic to peanuts" is about someone else
+        # AND it is exactly the fact that must not wait to be retrieved.
+        result = apply_decisions(
+            make_input(),
+            [
+                decision(
+                    action="add_fact",
+                    key="person:daughter",
+                    text="Their daughter is severely allergic to peanuts.",
+                    sensitivity="safety",
+                    reason="Safety.",
+                )
+            ],
+        )
+
+        self.assertEqual(result.created[0].state, "active")
+
+    def test_facts_about_own_people_without_the_label_stay_active(self):
+        result = apply_decisions(
+            make_input(),
+            [
+                decision(
+                    action="add_fact",
+                    key="person:sister",
+                    text="Their sister lives in Karachi.",
+                    reason="Family context.",
+                )
+            ],
+        )
+
+        self.assertEqual(result.created[0].state, "active")
+
+
+class BoundaryCoexistenceTests(SimpleTestCase):
+    def test_a_second_boundary_does_not_retire_the_first(self):
+        # Red-teamed: "never store gardening details" was filed under the
+        # client boundary's key, and the collision rule retired the client
+        # protection with "two facts under one key cannot both be true".
+        # Boundaries are additive rules — both ARE true.
+        client = fact(
+            id="boundary-1",
+            key="boundaries:never-store-anything",
+            text="Never store details about their clients.",
+            pinned_to="boundaries",
+            importance=0.9,
+        )
+        result = apply_decisions(
+            make_input(explicit=True, archive=[client]),
+            [
+                decision(
+                    action="add_fact",
+                    key="boundaries:never-store-anything",
+                    text="Never store gardening, plants or harvest details.",
+                    reason="A second standing boundary.",
+                )
+            ],
+        )
+
+        old = next(row for row in result.archive if row.id == "boundary-1")
+        self.assertEqual(old.state, "active")
+        new_row = result.created[0]
+        self.assertEqual(new_row.state, "active")
+        self.assertNotEqual(new_row.key, client.key)
+        self.assertTrue(new_row.key.startswith("boundaries:never-store-anything:"))
+        self.assertIn("separate protections", result.entries[0].note)
+
+    def test_a_boundary_restated_word_for_word_reinforces(self):
+        client = fact(
+            id="boundary-1",
+            key="boundaries:never-store-anything",
+            text="Never store details about their clients.",
+            reinforced=0,
+        )
+        result = apply_decisions(
+            make_input(archive=[client]),
+            [
+                decision(
+                    action="add_fact",
+                    key="boundaries:never-store-anything",
+                    text="Never store details about their clients.",
+                    reason="Said again.",
+                )
+            ],
+        )
+
+        self.assertEqual(result.created, [])
+        self.assertEqual(result.reinforced_ids, ["boundary-1"])
+
+    def test_a_boundary_can_still_be_retired_by_naming_its_id(self):
+        client = fact(
+            id="boundary-1",
+            key="boundaries:never-store-anything",
+            text="Never store details about their clients.",
+        )
+        result = apply_decisions(
+            make_input(archive=[client]),
+            [
+                decision(
+                    action="supersede",
+                    supersedes_id="boundary-1",
+                    key="boundaries:never-store-anything",
+                    text="Client details may be stored again.",
+                    reason="They lifted the boundary.",
+                )
+            ],
+        )
+
+        old = next(row for row in result.archive if row.id == "boundary-1")
+        self.assertEqual(old.state, "superseded")

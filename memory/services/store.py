@@ -386,13 +386,18 @@ def _lexical_fallback(base, terms: List[str], limit: int):
     return records, scores
 
 
-def pinned_lines(user) -> List[tuple]:
+def pinned_lines(user, authored: str = "") -> List[tuple]:
     """(heading, text) for every active fact pinned into the profile.
 
     Ordered by importance so the budget, when it bites, drops the least
     consequential line rather than an arbitrary one. Safety is never dropped:
     the whole point of pinning an allergy is that it does not wait to be
     retrieved, and a token ceiling is the cheaper thing to break.
+
+    The budget is measured on the RENDERED document — authored lines,
+    headings and bullets included — because that is what gets injected.
+    Counting bare line text let 22 individually-cheap pins render a 572-token
+    file under a 500-token ceiling.
     """
     rows = (
         MemoryRecord.active_objects.filter(user=user, state=MemoryState.ACTIVE)
@@ -401,20 +406,22 @@ def pinned_lines(user) -> List[tuple]:
     )
 
     kept: List[tuple] = []
-    budget = 0
     for row in rows:
-        cost = estimate_tokens(row.text)
-        if row.sensitivity != Sensitivity.SAFETY and budget + cost > TOKEN_BUDGET:
+        candidate = kept + [(row.pinned_to, row.text)]
+        if (
+            row.sensitivity != Sensitivity.SAFETY
+            and estimate_tokens(merge_pinned(authored, candidate)) > TOKEN_BUDGET
+        ):
             continue
-        kept.append((row.pinned_to, row.text))
-        budget += cost
+        kept = candidate
     return kept
 
 
 def read_user_doc(user) -> str:
     """The profile as a turn sees it: authored lines plus whatever is pinned."""
     document = UserMemoryDocument.objects.filter(user=user).first()
-    return merge_pinned(document.content if document else "", pinned_lines(user))
+    authored = document.content if document else ""
+    return merge_pinned(authored, pinned_lines(user, authored))
 
 
 def read_authored_doc(user) -> str:

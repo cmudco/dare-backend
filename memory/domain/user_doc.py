@@ -169,6 +169,19 @@ def merge_pinned(markdown: str, pinned: List[Tuple[str, str]]) -> str:
     return render_user_doc(doc)
 
 
+def without_line(markdown: str, line: str) -> str:
+    """The document minus one bullet, for simulating a swap.
+
+    A pinned fact restated retires its predecessor, so the budget question is
+    never "does the new line fit beside the old one" — the old one is leaving.
+    """
+    doc = parse_user_doc(markdown)
+    target = normalize_line(line).lower()
+    for key in doc:
+        doc[key] = [existing for existing in doc[key] if existing.lower() != target]
+    return render_user_doc(doc)
+
+
 def normalize_user_doc(markdown: str) -> str:
     """Drop empty headings and fold legacy names into the canonical keys.
 

@@ -26,6 +26,7 @@ from memory.constants import (
     OVERRIDE_RE,
     PINNED_TOPICS,
     SECRET_SHAPE_RE,
+    TOKEN_BUDGET,
     MemoryKind,
     MemoryState,
     Sensitivity,
@@ -38,7 +39,13 @@ from memory.domain.types import (
     MemoryRow,
     WriterDecision,
 )
-from memory.domain.user_doc import heading_for, patch_user_doc
+from memory.domain.user_doc import (
+    estimate_tokens,
+    heading_for,
+    merge_pinned,
+    patch_user_doc,
+    without_line,
+)
 
 _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
@@ -163,16 +170,21 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
             ),
             superseded_by=None,
             replaces=None,
-            # Held, not active, when it is medical and nobody asked us to keep
-            # it. The KEY counts as well as the declared sensitivity: a privacy
-            # rule the model can opt out of by being cheerful is not a rule.
-            # `safety` is deliberately excluded — an allergy in an approval
-            # queue is a system that books the restaurant.
+            # Held, not active, when it is medical or about someone who is not
+            # in the room. The KEY counts as well as the declared sensitivity:
+            # a privacy rule the model can opt out of by being cheerful is not
+            # a rule. Third-party is held even on an explicit "remember this" —
+            # the person consenting is not the person the fact is about.
+            # Red-teamed: an unrelated doctor's address and birth date went in
+            # as active rows that ordinary retrieval returned. `safety` is
+            # deliberately excluded — an allergy in an approval queue is a
+            # system that books the restaurant.
             state=(
                 MemoryState.HELD
                 if decision.sensitivity != Sensitivity.SAFETY
                 and (
-                    decision.sensitivity == Sensitivity.HEALTH
+                    decision.sensitivity
+                    in (Sensitivity.HEALTH, Sensitivity.THIRD_PARTY)
                     or key.startswith("health")
                 )
                 else MemoryState.ACTIVE
@@ -258,12 +270,19 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
     # attempt on the record.
     turn_is_override = bool(OVERRIDE_RE.search(input.user_message or ""))
 
+    # Pins accepted earlier in this same pass. The budget question is asked of
+    # the document a turn will actually render, and 22 lines proposed together
+    # are 22 lines rendered together — red-teamed: each pin was cheap on its
+    # own and the file landed at 572 tokens.
+    pins_this_pass: List[tuple] = []
+
     for decision in decisions:
         proposal = decision
         text = (decision.text or "").strip()
         action = decision.action
         key = decision.key
         pinned_to = ""
+        pin_refused = False
 
         if turn_is_override and action != "ignore":
             log(
@@ -445,6 +464,55 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
             key = topic_key or downgraded_key(pinned_to, text)
             action = "add_fact"
 
+            # A pin is a line in the file read on every turn, so it faces the
+            # same ceiling a hand-written line does. `input.user_doc` is the
+            # merged render — authored lines plus everything already pinned —
+            # which is exactly the document the ceiling is a ceiling ON.
+            # A restatement of an already-pinned fact is a swap, not an
+            # addition: the old line leaves when the collision rule retires
+            # its row, so it is subtracted before the question is asked.
+            if decision.sensitivity != Sensitivity.SAFETY:
+                outgoing = next(
+                    (
+                        row
+                        for row in archive
+                        if row.kind == MemoryKind.FACT
+                        and row.key == key
+                        and row.state == MemoryState.ACTIVE
+                        and row.pinned_to
+                    ),
+                    None,
+                )
+                base = without_line(user_doc, outgoing.text) if outgoing else user_doc
+                tokens = estimate_tokens(
+                    merge_pinned(base, pins_this_pass + [(pinned_to, text)])
+                )
+                # A swap that leaves the file no larger than it already was is
+                # allowed even over the ceiling — a document already past the
+                # budget must still be repairable, line by line.
+                if tokens > TOKEN_BUDGET and not (
+                    outgoing and tokens <= estimate_tokens(user_doc)
+                ):
+                    log(
+                        action="add_fact",
+                        proposed_action="patch_user",
+                        reason=decision.reason,
+                        note=(
+                            f"Filed in the archive, not the profile: USER.md "
+                            f"would reach {tokens} tokens, past the "
+                            f"{TOKEN_BUDGET} ceiling. The fact is kept and "
+                            f"retrievable — replace or remove a profile line "
+                            f"to make room."
+                        ),
+                        applied=False,
+                        record_id=None,
+                        detail=f"[{heading_for(pinned_to)}] {text}",
+                    )
+                    pinned_to = ""
+                    pin_refused = True
+            if pinned_to:
+                pins_this_pass.append((pinned_to, text))
+
         if action == "patch_user":
             if not key or not text:
                 log(
@@ -527,7 +595,7 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
                     target.kind,
                     text,
                     key or target.key,
-                    pinned_to or target.pinned_to,
+                    pinned_to or ("" if pin_refused else target.pinned_to),
                 )
                 retire(target, row)
                 file_row(row)
@@ -612,16 +680,40 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
         # namespaces procedures away from facts, but relying on a string prefix
         # to keep two layers apart is the kind of thing that holds until
         # someone adds a topic called "when".
-        collision = next(
-            (
-                row
-                for row in archive
-                if row.kind == kind
-                and row.key == fact_key
-                and row.state == MemoryState.ACTIVE
-            ),
-            None,
-        )
+        def seek_collision(candidate_key: str) -> Optional[MemoryRow]:
+            return next(
+                (
+                    row
+                    for row in archive
+                    if row.kind == kind
+                    and row.key == candidate_key
+                    and row.state == MemoryState.ACTIVE
+                ),
+                None,
+            )
+
+        collision = seek_collision(fact_key)
+
+        # Boundaries are additive rules, not rival answers to one question —
+        # "never store client data" and "never store gardening details" are
+        # both true at once. Red-teamed: the writer filed a second boundary
+        # under the first one's key and the collision rule below retired the
+        # client protection. So a boundary that lands on an occupied slot with
+        # different words is re-keyed by its own words and kept alongside;
+        # retiring a boundary stays possible, but only by naming its id.
+        boundary_note = None
+        if (
+            collision
+            and kind == MemoryKind.FACT
+            and fact_key.split(":", 1)[0] in ("boundary", "boundaries")
+            and collision.text.strip().lower() != text.lower()
+        ):
+            fact_key = downgraded_key(fact_key, text)
+            boundary_note = (
+                f'Kept alongside "{collision.text}" — two boundaries are '
+                f"separate protections, so neither retires the other."
+            )
+            collision = seek_collision(fact_key)
 
         if collision:
             # Same key, same words: nothing was written. But the person said it
@@ -660,8 +752,12 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
             # replacement inherits the history rather than starting from zero.
             row.reinforced = collision.reinforced + 1
             # And it keeps the predecessor's place in the profile: a pinned
-            # fact restated should update the line, not quietly unpin it.
-            row.pinned_to = row.pinned_to or collision.pinned_to
+            # fact restated should update the line, not quietly unpin it —
+            # unless the budget gate above just refused this text a pin, in
+            # which case inheriting one would overrule the refusal.
+            row.pinned_to = row.pinned_to or (
+                "" if pin_refused else collision.pinned_to
+            )
             # And it inherits the end date, unless it states its own. An update
             # to a temporary fact is still about something temporary — without
             # this, "the ankle is improving" made the injury permanent again.
@@ -692,13 +788,23 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
             reason=decision.reason,
             note=(
                 (
-                    "Held, not stored. Medical, and nobody asked for it to be "
-                    "remembered — it is written down and visible, but it will "
-                    "never be retrieved into an answer until it is released by "
-                    "hand."
+                    (
+                        "Held, not stored. This is about another person, and "
+                        "the one consenting is not the one it concerns — it "
+                        "is written down and visible, but it will never be "
+                        "retrieved into an answer until it is released by "
+                        "hand."
+                    )
+                    if row.sensitivity == Sensitivity.THIRD_PARTY
+                    else (
+                        "Held, not stored. Medical, and nobody asked for it "
+                        "to be remembered — it is written down and visible, "
+                        "but it will never be retrieved into an answer until "
+                        "it is released by hand."
+                    )
                 )
                 if row.state == MemoryState.HELD
-                else None
+                else boundary_note
             ),
             applied=True,
             record_id=row.id,
