@@ -77,11 +77,11 @@ def run_memory_writer(ai_message_id: int) -> None:
 
     logger.info(
         "[memory] turn %s: %d decisions → %d created, %d retired, %d reinforced, "
-        "doc_changed=%s",
+        "profile_changed=%s",
         user_message.id,
         report.decisions,
         len(report.created),
         report.retired,
         report.reinforced,
-        report.user_doc_changed,
+        report.profile_changed,
     )

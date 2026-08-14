@@ -25,9 +25,14 @@ from memory.tests.test_apply import decision, fact, make_input
 
 
 def no_stored_payload(result, needle: str) -> bool:
-    """The payload appears in no created row and no ledger detail."""
+    """The payload appears in no memory or ledger field."""
     in_rows = any(needle in row.text for row in result.created)
-    in_ledger = any(needle in entry.detail for entry in result.entries)
+    in_ledger = any(
+        needle in entry.detail
+        or needle in entry.source_text
+        or needle in str(entry.proposal)
+        for entry in result.entries
+    )
     return not in_rows and not in_ledger
 
 

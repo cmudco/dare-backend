@@ -253,13 +253,6 @@ class Decision(BaseModel):
             "no longer current."
         )
     )
-    replaces_line: Optional[str] = Field(
-        description=(
-            "For patch_user only, and only when USER.md is near its budget. "
-            "The existing bullet, copied exactly, that this line should "
-            "replace."
-        )
-    )
     reinforces_id: Optional[str] = Field(
         description=(
             "For ignore only, and only when the reason for ignoring is that "
@@ -523,7 +516,6 @@ Set `explicit_request` from what the PERSON asked for in this message, not from 
                     if decision.topic
                     else None
                 ),
-                trigger=decision.trigger,
                 applies_when=decision.applies_when,
                 profile_key=decision.profile_key,
                 pin_to_profile=decision.pin_to_profile,
@@ -534,7 +526,6 @@ Set `explicit_request` from what the PERSON asked for in this message, not from 
                 is_snapshot=decision.is_snapshot,
                 valid_until=decision.valid_until,
                 supersedes_id=decision.supersedes_id,
-                replaces_line=decision.replaces_line,
                 reinforces_id=decision.reinforces_id,
             )
         )

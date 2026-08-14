@@ -51,7 +51,6 @@ from memory.services.store import (
     find_by_keys,
     parse_iso_date,
     read_user_doc,
-    write_user_doc,
 )
 from memory.services.writer import propose_decisions
 
@@ -64,7 +63,7 @@ class IngestReport:
     created: List[MemoryRow]
     retired: int
     reinforced: int
-    user_doc_changed: bool
+    profile_changed: bool
     decisions: int = 0
     model: str = ""
     skipped: Optional[str] = None
@@ -180,7 +179,7 @@ def ingest_turn(
             and any(b.id == row.id and b.state == MemoryState.ACTIVE for b in archive)
         ),
         reinforced=len(result.reinforced_ids),
-        user_doc_changed=result.user_doc_changed,
+        profile_changed=result.profile_changed,
         decisions=len(decisions),
         trace=recall.trace,
     )
@@ -213,6 +212,7 @@ def snap_to_existing_slots(user, decisions, keys_in_use) -> None:
     if connection.vendor != "postgresql":
         return
     known = set(keys_in_use)
+
     # A patch_user decision is a fact wearing a heading: the gate reroutes it
     # onto its topic_key, so THAT is the key that can drift. Inspecting only
     # add_fact here let an imported "severely allergic to peanuts" — proposed
@@ -271,7 +271,7 @@ def _skip(reason: str) -> IngestReport:
         created=[],
         retired=0,
         reinforced=0,
-        user_doc_changed=False,
+        profile_changed=False,
         skipped=reason,
     )
 
@@ -341,9 +341,6 @@ def _persist(
             MemoryRecord.objects.filter(pk=record_id, user=user).update(
                 reinforced=F("reinforced") + 1
             )
-
-        if result.user_doc_changed:
-            write_user_doc(user, result.user_doc)
 
         MemoryLedgerEntry.objects.bulk_create(
             MemoryLedgerEntry(

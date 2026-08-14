@@ -100,6 +100,7 @@ class UserDocRoutingTests(SimpleTestCase):
         # row rather than having the sentence copied into it.
         self.assertEqual(result.created[0].pinned_to, "communication")
         self.assertEqual(result.created[0].text, "Prefers short answers")
+        self.assertTrue(result.profile_changed)
         self.assertTrue(result.entries[0].applied)
 
     def test_an_unrequested_profile_line_is_downgraded_with_the_rule_recorded(self):
@@ -117,7 +118,7 @@ class UserDocRoutingTests(SimpleTestCase):
             ],
         )
 
-        self.assertFalse(result.user_doc_changed)
+        self.assertFalse(result.profile_changed)
         self.assertEqual(len(result.created), 1)
         self.assertEqual(result.created[0].kind, "fact")
 
@@ -144,6 +145,7 @@ class UserDocRoutingTests(SimpleTestCase):
         )
 
         self.assertEqual(result.created[0].pinned_to, "constraints")
+        self.assertTrue(result.profile_changed)
         self.assertTrue(result.entries[0].applied)
 
     def test_a_safety_fact_is_pinned_even_when_filed_as_a_plain_fact(self):
@@ -203,7 +205,7 @@ class UserDocRoutingTests(SimpleTestCase):
             ],
         )
 
-        self.assertFalse(result.user_doc_changed)
+        self.assertFalse(result.profile_changed)
         self.assertEqual(len(result.created), 1)
 
 
@@ -288,7 +290,7 @@ class LedgerTests(SimpleTestCase):
         )
 
         self.assertEqual(len(result.created), 0)
-        self.assertFalse(result.user_doc_changed)
+        self.assertFalse(result.profile_changed)
         self.assertEqual(len(result.entries), 1)
         self.assertEqual(result.entries[0].action, "ignore")
         self.assertIn("Transient weather", result.entries[0].reason)
@@ -632,6 +634,7 @@ class BudgetTests(SimpleTestCase):
         )
 
         self.assertEqual(result.created[0].pinned_to, "identity")
+        self.assertTrue(result.profile_changed)
         old = next(row for row in result.archive if row.id == "pinned-1")
         self.assertEqual(old.state, "superseded")
 
@@ -977,7 +980,8 @@ class CommunicationInstructionTests(SimpleTestCase):
             ],
         )
 
-        self.assertNotIn("aim2balance", result.user_doc)
+        self.assertEqual(result.created[0].pinned_to, "")
+        self.assertFalse(result.profile_changed)
         self.assertEqual(result.entries[0].action, "add_fact")
 
 
@@ -1025,9 +1029,7 @@ class IdentityExemptionTests(SimpleTestCase):
 
         self.assertEqual(result.created[0].pinned_to, "identity")
         self.assertEqual(result.created[0].key, "location")
-        # Pinned, not written: the document holds only what a person typed,
-        # so the two can never disagree about the same fact.
-        self.assertNotIn("Lahore", result.user_doc)
+        self.assertTrue(result.profile_changed)
 
     def test_the_topic_decides_it_even_when_the_writer_proposed_a_plain_fact(self):
         """The same sentence came back as patch_user on two runs of one
@@ -1082,8 +1084,29 @@ class SecretsGuardTests(SimpleTestCase):
         self.assertEqual(entry.action, "ignore")
         self.assertFalse(entry.applied)
         self.assertIn("credential", entry.note)
-        # The ledger keeps the shape of the refusal, never the secret.
-        self.assertNotIn("Codex-Pass-7721", entry.detail)
+        self.assertEqual(entry.detail, "[redacted: credential]")
+        self.assertEqual(entry.source_text, "[redacted: credential]")
+        self.assertIsNone(entry.proposal)
+
+    def test_a_credential_turn_cannot_store_a_sanitized_side_fact(self):
+        result = apply_decisions(
+            make_input(
+                explicit=True,
+                user_message="Remember my password is Codex-Pass-7721.",
+            ),
+            [
+                decision(
+                    action="add_fact",
+                    key="style:length",
+                    text="They prefer concise answers.",
+                    reason="A preference from the same turn.",
+                )
+            ],
+        )
+
+        self.assertEqual(result.created, [])
+        self.assertEqual(result.entries[0].source_text, "[redacted: credential]")
+        self.assertIsNone(result.entries[0].proposal)
 
     def test_a_vendor_shaped_key_is_refused_even_without_the_word_key(self):
         result = self.refusal_for("Their favourite string is sk-codex-5f1a9b2c3d4e.")
@@ -1113,7 +1136,7 @@ class SecretsGuardTests(SimpleTestCase):
             ],
         )
         self.assertEqual(result.created, [])
-        self.assertNotIn("sk-live", result.user_doc)
+        self.assertFalse(result.profile_changed)
 
 
 class OverrideGuardTests(SimpleTestCase):

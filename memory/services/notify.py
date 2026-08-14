@@ -87,7 +87,7 @@ def summarize_report(report, ledger_entries: List[Any]) -> Dict[str, Any]:
         "created": len(report.created),
         "retired": report.retired,
         "reinforced": report.reinforced,
-        "profileChanged": report.user_doc_changed,
+        "profileChanged": report.profile_changed,
         "considered": report.decisions,
         "changes": changes,
     }

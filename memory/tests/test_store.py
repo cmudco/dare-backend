@@ -154,7 +154,7 @@ class IngestTests(TestCase):
                 )
             ],
         )
-        self.ingest(
+        report, _ = self.ingest(
             "add this to my profile: I'm a PhD student at CMU",
             [
                 WriterDecision(
@@ -180,6 +180,7 @@ class IngestTests(TestCase):
         # heading the person named.
         self.assertEqual(new.pinned_to, "background")
         self.assertEqual(old.valid_until, new.valid_from)
+        self.assertTrue(report.profile_changed)
 
     def test_a_verbatim_restatement_reinforces_instead_of_writing(self):
         self.ingest(
@@ -232,7 +233,7 @@ class IngestTests(TestCase):
         self.assertEqual(MemoryRecord.visible(self.user).count(), 1)
 
     def test_a_safety_fact_is_pinned_into_the_document(self):
-        self.ingest(
+        report, _ = self.ingest(
             "Careful — I'm severely allergic to peanuts.",
             [
                 WriterDecision(
@@ -252,6 +253,7 @@ class IngestTests(TestCase):
         self.assertIn("- Has a severe peanut allergy.", read_user_doc(self.user))
         record = MemoryRecord.objects.get(user=self.user)
         self.assertEqual(record.state, MemoryState.ACTIVE)
+        self.assertTrue(report.profile_changed)
 
     def test_ingest_is_idempotent_per_user_message(self):
         conversation, user_message, ai_message = make_turn(

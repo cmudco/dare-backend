@@ -95,7 +95,7 @@ class Command(BaseCommand):
             self.style.SUCCESS(
                 f"{report.decisions} decisions → {len(report.created)} created, "
                 f"{report.retired} retired, {report.reinforced} reinforced, "
-                f"doc_changed={report.user_doc_changed}"
+                f"profile_changed={report.profile_changed}"
             )
         )
         for entry in report.entries:

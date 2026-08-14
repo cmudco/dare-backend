@@ -120,7 +120,6 @@ class ProcedureApplyTests(SimpleTestCase):
                     action="add_procedure",
                     text="Use pnpm, never npm.",
                     key=procedure_key("installing packages"),
-                    trigger="installing packages",
                 )
             ],
         )
@@ -154,7 +153,6 @@ class ProcedureApplyTests(SimpleTestCase):
                     action="add_procedure",
                     text="Use conventional commits.",
                     key="when:writing-commit-messages",
-                    trigger="writing commit messages",
                 )
             ],
         )

@@ -1,25 +1,10 @@
-"""USER.md — the sticky layer.
-
-One short document per user, always injected, never searched. Deliberately
-plain: no ids, no dates, no validity — a line is either true of the person or
-it does not belong in a file read on every single turn. Everything that needs
-a timeline lives in the archive.
-
-The budget is enforced rather than suggested. A ceiling with no eviction rule
-gets crossed on an ordinary Tuesday and then it is decoration.
-"""
+"""Parse and render the always-injected USER.md view."""
 
 import math
 import re
-from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
-from memory.constants import TOKEN_BUDGET
-
-# The headings, keyed. A key is what the writer returns and a heading is what
-# gets written, so this table is the only place either is defined. Defaults,
-# not an ontology: empty headings are dropped on render, and a heading someone
-# adds by hand survives untouched.
+# Canonical headings in render order. Custom headings are preserved.
 PROFILE_HEADINGS: Dict[str, str] = {
     "identity": "Identity",
     "background": "Background",
@@ -29,10 +14,6 @@ PROFILE_HEADINGS: Dict[str, str] = {
     "boundaries": "Boundaries",
 }
 
-# Canonical keys, in render order.
-PROFILE_KEYS = list(PROFILE_HEADINGS)
-
-# Keys older writers used, and where they belong now.
 _RENAMED = {
     "user-profile": "identity",
     "durable-preferences": "working-preferences",
@@ -41,16 +22,6 @@ _RENAMED = {
 }
 
 _HEADING_RE = re.compile(r"^#{1,6}\s+(.*)$")
-
-# Below this, one line containing another says nothing about whether they mean
-# the same thing — "Uses vim." sits inside plenty of sentences it does not
-# restate.
-_RESTATEMENT_MIN = 16
-
-
-def _contains(longer: str, shorter: str) -> bool:
-    """Whether one line restates another, ignoring case and end punctuation."""
-    return shorter.lower().rstrip(".;,") in longer.lower()
 
 
 def key_of(heading: str) -> str:
@@ -72,17 +43,16 @@ def heading_for(key: str) -> str:
 
 
 def estimate_tokens(text: str) -> int:
-    """Characters per token, near enough. A real tokenizer is a dependency;
-    this is within a few percent for English prose, and the budget is a soft
-    target with a hard edge rather than an accounting figure."""
+    """Estimate English tokens without adding a tokenizer dependency."""
     return math.ceil(len(text.strip()) / 4)
 
 
 def normalize_line(text: str) -> str:
     """Normalize a bullet: no leading dash, one trailing period, single spaces."""
-    body = re.sub(r"^[-*+]\s*", "", text)
-    body = re.sub(r"\s+", " ", body)
-    body = re.sub(r"[.\s]+$", "", body).strip()
+    body = text.strip()
+    if body[:1] in "-*+":
+        body = body[1:].lstrip()
+    body = " ".join(body.split()).rstrip(". ")
     return f"{body}." if body else ""
 
 
@@ -92,7 +62,7 @@ def parse_user_doc(markdown: str) -> Dict[str, List[str]]:
     Canonical keys are seeded first so they render in a stable order; anything
     a human added lands after them, in the order it was found.
     """
-    doc: Dict[str, List[str]] = {key: [] for key in PROFILE_KEYS}
+    doc: Dict[str, List[str]] = {key: [] for key in PROFILE_HEADINGS}
     current: Optional[List[str]] = None
 
     for raw_line in markdown.split("\n"):
@@ -104,7 +74,7 @@ def parse_user_doc(markdown: str) -> Dict[str, List[str]]:
         if heading_match:
             key = key_of(heading_match.group(1))
             # `# User` is the document title, not a section.
-            if re.match(r"^#\s", line) and key not in PROFILE_HEADINGS:
+            if line.startswith("# ") and key not in PROFILE_HEADINGS:
                 current = None
                 continue
             current = doc.setdefault(key, [])
@@ -131,19 +101,8 @@ def render_user_doc(doc: Dict[str, List[str]]) -> str:
 
 
 def merge_pinned(markdown: str, pinned: List[Tuple[str, str]]) -> str:
-    """Render the document a turn actually sees: authored lines plus the facts
-    pinned to each heading.
-
-    USER.md is a VIEW. The archive holds the truth — key, dates, supersession —
-    and pinned rows are projected into it on read, so a fact that retires
-    itself takes its profile line with it and nothing has to be edited. A
-    pinned line that also exists as an authored line is dropped from the
-    authored side, because the pinned row is the one that can be corrected.
-    """
+    """Render authored lines and pinned facts as one document."""
     if not markdown.strip() and not pinned:
-        # Nothing authored and nothing pinned is an absent profile, not an
-        # empty one — a bare "# User" heading would be injected into every
-        # prompt saying nothing.
         return ""
 
     doc = parse_user_doc(markdown)
@@ -151,12 +110,14 @@ def merge_pinned(markdown: str, pinned: List[Tuple[str, str]]) -> str:
     lines_by_heading: Dict[str, List[str]] = {}
     for key, text in pinned:
         line = normalize_line(text)
-        if line:
-            lines_by_heading.setdefault(key_of(key) or "identity", []).append(line)
+        if not line:
+            continue
+        heading = key_of(key) or "identity"
+        lines = lines_by_heading.setdefault(heading, [])
+        if line not in lines:
+            lines.append(line)
 
-    # Drop the authored copy first. Both would render the same sentence twice,
-    # and only the pinned one can be superseded, so the authored one is the
-    # copy that goes.
+    # The pinned copy is correctable, so it wins over an authored duplicate.
     pinned_lines = {
         line.lower() for lines in lines_by_heading.values() for line in lines
     }
@@ -170,11 +131,7 @@ def merge_pinned(markdown: str, pinned: List[Tuple[str, str]]) -> str:
 
 
 def without_line(markdown: str, line: str) -> str:
-    """The document minus one bullet, for simulating a swap.
-
-    A pinned fact restated retires its predecessor, so the budget question is
-    never "does the new line fit beside the old one" — the old one is leaving.
-    """
+    """Remove one rendered line while budgeting a pin replacement."""
     doc = parse_user_doc(markdown)
     target = normalize_line(line).lower()
     for key in doc:
@@ -183,114 +140,8 @@ def without_line(markdown: str, line: str) -> str:
 
 
 def normalize_user_doc(markdown: str) -> str:
-    """Drop empty headings and fold legacy names into the canonical keys.
-
-    Hand edits go through this exact normalizer too, so a machine write and a
-    human write can never disagree about what the same line looks like.
-    """
+    """Drop empty headings and fold legacy names into canonical keys."""
     return render_user_doc(parse_user_doc(markdown))
-
-
-@dataclass
-class PatchResult:
-    ok: bool
-    markdown: Optional[str] = None
-    note: Optional[str] = None
-    reason: Optional[str] = None
-
-
-def patch_user_doc(
-    markdown: str,
-    key: str,
-    line: str,
-    replaces_line: Optional[str] = None,
-    force: bool = False,
-) -> PatchResult:
-    """Append one line under one heading, creating the heading if it is new.
-
-    Refuses rather than silently overflowing. ``replaces_line`` is how a write
-    gets in when the document is already full: swap a line, do not add one.
-    ``force`` writes past the ceiling and is reserved for safety facts, where
-    the budget is the cheaper thing to break.
-    """
-    normalized = normalize_line(line)
-    if not normalized:
-        return PatchResult(ok=False, reason="The proposed line was empty.")
-
-    canonical_key = key_of(key)
-    if not canonical_key:
-        return PatchResult(ok=False, reason="The proposed heading was empty.")
-
-    doc = parse_user_doc(markdown)
-    doc.setdefault(canonical_key, [])
-
-    note: Optional[str] = None
-
-    replacement = normalize_line(replaces_line) if replaces_line else None
-    if replacement:
-        for lines in doc.values():
-            for index, existing in enumerate(lines):
-                if existing.lower() == replacement.lower():
-                    lines.pop(index)
-                    note = f'Replaced "{replacement}"'
-                    break
-            if note:
-                break
-
-    # A line that already says this — under any heading — is not worth a copy.
-    duplicate = any(
-        existing.lower() == normalized.lower()
-        for lines in doc.values()
-        for existing in lines
-    )
-    if duplicate:
-        return PatchResult(ok=False, reason="USER.md already says this.")
-
-    # Exact matching is not enough: a line that restates an existing one and
-    # adds to it reads as new and lands beside it, leaving the document saying
-    # the same thing twice. Seen live — "Goes by Farhat (he/they)." acquired a
-    # neighbour reading "Goes by Farhat (he/they); do not call them Farhat
-    # Abbas." Keep whichever says more, and only one of them.
-    if not replacement:
-        for lines in doc.values():
-            for index, existing in enumerate(lines):
-                shorter, longer = sorted([existing, normalized], key=len)
-                if len(shorter) < _RESTATEMENT_MIN or not _contains(longer, shorter):
-                    continue
-                if longer == existing:
-                    return PatchResult(
-                        ok=False,
-                        reason="USER.md already says this, and says more of it.",
-                    )
-                lines.pop(index)
-                note = f'Rewrote "{existing}"'
-                break
-            if note:
-                break
-
-    doc[canonical_key].append(normalized)
-    rendered = render_user_doc(doc)
-    tokens = estimate_tokens(rendered)
-
-    # Over the ceiling is normally a refusal. The exceptions are a safety fact,
-    # and a swap that leaves the file no larger than it already was — a
-    # hand-edited file can end up over budget, and refusing every repair would
-    # strand it there.
-    if (
-        tokens > TOKEN_BUDGET
-        and not force
-        and not (note and tokens <= estimate_tokens(markdown))
-    ):
-        return PatchResult(
-            ok=False,
-            reason=(
-                f"USER.md would reach {tokens} tokens, past the {TOKEN_BUDGET} "
-                f"ceiling. Replace an existing line with a shorter one, or "
-                f"leave this to the archive."
-            ),
-        )
-
-    return PatchResult(ok=True, markdown=rendered, note=note)
 
 
 def user_doc_lines(markdown: str) -> List[Dict[str, str]]:
