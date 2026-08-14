@@ -131,11 +131,9 @@ Conventional-ish: `<type>: <summary>` where type is one of `feat`, `fix`, `refac
 Example:
 
 ```
-feat: add streaming TTS support to /chat namespace
+feat: refresh conversation summaries in the background
 
-Wires ElevenLabs into AIService.stream_chat_completion via an
-optional `tts=True` flag. Audio chunks are emitted as base64
-on a new `audio_chunk` Socket.IO event.
+Queues a summary refresh after every fifth completed response.
 
 Closes #482.
 ```

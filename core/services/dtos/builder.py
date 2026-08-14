@@ -211,11 +211,7 @@ class LLMQueryRequestBuilder:
 
         context = resolve_agentic_rag(context, llm, selected_slugs)
 
-        # Episodic memory follows the memory switch, and only the memory
-        # switch. Searching someone's past conversations word for word is the
-        # same promise the toggle already makes, so it should not also need a
-        # checkbox in a drawer — and with memory off it must not happen at
-        # all, whatever a stale selection still says.
+        # The memory toggle controls access to conversation search.
         if context.use_memory:
             selected_slugs |= MEMORY_TOOL_SLUGS
         else:

@@ -58,19 +58,10 @@ SOCRATIC_BOTS_BACKEND_URL = os.getenv("SOCRATIC_BOTS_BACKEND_URL")
 PINECONE_API_KEY = env("PINECONE_API_KEY")
 PINECONE_INDEX_NAME = env("PINECONE_INDEX_NAME")
 OPENAI_API_KEY = env("OPENAI_API_KEY")
-# The post-reply memory writer's model, chosen on a graded trap-scenario
-# bench (scratch writer_bench, 2026-08-11): gpt-5.6-luna 69/69 checks over
-# three passes with zero malformed emissions, matching gpt-4o (23/23, but
-# needed the empty-text repair twice) at ~2.5x lower cost; gpt-4o-mini
-# misfiled topics and gpt-5.4-mini failed the delta-statement trap
-# (superseded a location with "lives elsewhere now"). One bounded call per
-# memory-enabled turn. Note: the 5.6 family rejects non-default temperature,
-# so this runs at temperature 1 — the bench showed no stability cost.
 MEMORY_WRITER_MODEL = os.getenv("MEMORY_WRITER_MODEL", "gpt-5.6-luna")
 CLAUDE_API_KEY = env("CLAUDE_API_KEY")
 GEMINI_API_KEY = env("GEMINI_API_KEY")
 OLLAMA_HOST = env("OLLAMA_HOST", default="http://localhost:11434")
-ELEVENLABS_API_KEY = env("ELEVENLABS_API_KEY", default="")
 
 # Docling enrichment; the model resolves from DARE's LLM catalog so billing stays consistent.
 DOCUMENT_ENRICHMENT_ENABLED = env.bool("DOCUMENT_ENRICHMENT_ENABLED", default=True)

@@ -1,23 +1,13 @@
-"""Injecting memory context into LLM messages.
-
-The read-path seam: build_standard_messages calls this once per turn, gated
-on ``request.context.use_memory`` and an authenticated user. The three memory
-layers (USER.md, retrieved facts, standing procedures) arrive as ONE appended
-user-role message with per-layer framing; the return value (``{content,
-memory_type, categories}`` per item) feeds ``Message.memory_context_data`` and
-the frontend's per-message memory panel, and its shape must not change.
-
-Latency: two DB round-trips plus one 512-dim embedding call (~tens of ms),
-run off the event loop. Any failure degrades to "no memory context" — a
-broken memory read must never take a conversation down.
-"""
+"""Attach the current memory layers to a model request."""
 
 import logging
 from typing import Any, Dict, List
 
 from channels.db import database_sync_to_async
+from django.contrib.auth import get_user_model
 
 from config.env import USE_POSTGRES
+from memory.services.context import ReadContext, read_context
 
 logger = logging.getLogger(__name__)
 
@@ -63,11 +53,7 @@ async def add_memory_context_to_messages(
     return context.items
 
 
-def _read_context_for_user(user_id: int, query: str):
-    from django.contrib.auth import get_user_model
-
-    from memory.services.context import read_context
-
+def _read_context_for_user(user_id: int, query: str) -> ReadContext | None:
     user = get_user_model().objects.filter(pk=user_id).first()
     if user is None:
         return None
