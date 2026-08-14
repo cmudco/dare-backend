@@ -213,13 +213,26 @@ def snap_to_existing_slots(user, decisions, keys_in_use) -> None:
     if connection.vendor != "postgresql":
         return
     known = set(keys_in_use)
+    # A patch_user decision is a fact wearing a heading: the gate reroutes it
+    # onto its topic_key, so THAT is the key that can drift. Inspecting only
+    # add_fact here let an imported "severely allergic to peanuts" — proposed
+    # as patch_user with topic diet_avoid:peanutS — mint a plural slot beside
+    # diet_avoid:peanut, invisible to the snap because its action was wrong
+    # and to the key block because the writer never saw the singular.
+    def slot_of(decision):
+        if decision.action == "add_fact":
+            return decision.key
+        if decision.action == "patch_user":
+            return decision.topic_key
+        return None
+
     candidates = [
-        d for d in decisions if d.action == "add_fact" and d.key and d.key not in known
+        d for d in decisions if slot_of(d) and slot_of(d) not in known and d.text
     ]
     if not candidates:
         return
 
-    vectors = embed_texts([f"{d.key} {d.text}" for d in candidates])
+    vectors = embed_texts([f"{slot_of(d)} {d.text}" for d in candidates])
     for decision, vector in zip(candidates, vectors):
         if vector is None:
             continue
@@ -234,11 +247,11 @@ def snap_to_existing_slots(user, decisions, keys_in_use) -> None:
         if neighbor is None:
             continue
         similarity = 1.0 - float(neighbor.distance)
-        if similarity < SNAP_SIMILARITY or neighbor.key == decision.key:
+        if similarity < SNAP_SIMILARITY or neighbor.key == slot_of(decision):
             continue
         logger.info(
             "[memory] snap: %r -> existing slot %r (%.3f)",
-            decision.key,
+            slot_of(decision),
             neighbor.key,
             similarity,
         )
@@ -246,7 +259,10 @@ def snap_to_existing_slots(user, decisions, keys_in_use) -> None:
             f"{decision.reason} [slot: filed under existing key "
             f"'{neighbor.key}' — same fact by meaning, {similarity:.2f}]"
         )
-        decision.key = neighbor.key
+        if decision.action == "patch_user":
+            decision.topic_key = neighbor.key
+        else:
+            decision.key = neighbor.key
 
 
 def _skip(reason: str) -> IngestReport:
