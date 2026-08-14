@@ -257,6 +257,124 @@ def _validated(data: Any) -> Tuple[str, List[Dict[str, Any]]]:
     return document, rows
 
 
+"""Foreign import — a paste from any other assistant, through the pipeline.
+
+The bundle import above is a restore: exact rows, exact states, empty store
+required. A paste from ChatGPT or Claude is nothing of the kind — it is
+unstructured text of unknown quality making claims about the person. So it
+goes through the SAME machinery a conversation goes through: the writer
+proposes, the gate disposes, collisions supersede, safety pins, health is
+held, and every decision lands in the ledger. No empty-store requirement,
+because the gate is precisely the thing that knows how to meet an existing
+store.
+
+Provenance is a real conversation. Each chunk of the paste becomes a turn in
+an "Imported memories" conversation, and the ordinary writer job is enqueued
+for each on the FIFO memory queue — so an import is ordered against live
+chat turns, idempotent per message, and visible afterward: every imported
+memory's "where this was learned" points at text the person can open and
+read. Deleting that conversation keeps the memories (SET_NULL), same as any
+other source.
+"""
+
+# One chunk ≈ one writer call. Small enough that the writer's decision list
+# never silently truncates a paste; large enough that a typical export fits
+# in a handful of calls.
+FOREIGN_CHUNK_CHARS = 1200
+FOREIGN_MAX_CHARS = 20000
+
+# The frame tells the writer whose facts these are and that the person is
+# importing them ON PURPOSE — which is what lets an addressing line in the
+# paste ("always answer in bullet points") reach the profile the same way it
+# would if said in chat.
+FOREIGN_FRAME = (
+    "I'm importing my memories from another AI assistant. Everything below "
+    "is what it knew about me — treat each line as something I am telling "
+    "you about myself, in my own words:\n\n"
+)
+
+
+def import_foreign(user, text: Any) -> Dict[str, Any]:
+    """Queue a free-form paste for ingestion through the writer and gate.
+
+    Returns immediately: each chunk is a writer call (seconds each), so the
+    work rides the memory queue rather than a request timeout. The response
+    says how many turns were queued and which conversation carries them.
+    """
+    from conversations.constants import SenderType
+    from conversations.models import Conversation, Message
+    from memory.tasks import run_memory_writer
+
+    body = str(text or "").strip()
+    if not body:
+        raise ImportError_("Nothing to import — the paste is empty.")
+    if len(body) > FOREIGN_MAX_CHARS:
+        raise ImportError_(
+            f"That paste is too large ({len(body)} characters; the limit is "
+            f"{FOREIGN_MAX_CHARS}). Split it and import in parts."
+        )
+
+    chunks = _chunked(body)
+
+    with transaction.atomic():
+        conversation = Conversation.active_objects.create(
+            user=user,
+            conversation_id=f"import-{uuid.uuid4().hex[:10]}",
+            title="Imported memories",
+            memory_enabled=True,
+        )
+        ai_message_ids = []
+        for chunk in chunks:
+            Message.active_objects.create(
+                conversation=conversation,
+                sender_type=SenderType.PLAYER,
+                message=FOREIGN_FRAME + chunk,
+            )
+            reply = Message.active_objects.create(
+                conversation=conversation,
+                sender_type=SenderType.AI_ASSISTANT,
+                message="Noted — writing these into memory.",
+            )
+            ai_message_ids.append(reply.id)
+
+    for message_id in ai_message_ids:
+        run_memory_writer.delay(message_id)
+
+    logger.info(
+        "[memory] foreign import for user %s: %d chars in %d chunks -> %s",
+        user.id,
+        len(body),
+        len(chunks),
+        conversation.conversation_id,
+    )
+    return {
+        "queued_chunks": len(chunks),
+        "conversation_id": conversation.conversation_id,
+    }
+
+
+def _chunked(body: str) -> List[str]:
+    """Split on line boundaries into writer-sized pieces.
+
+    A single line longer than the chunk size (one giant paragraph) is taken
+    whole rather than split mid-sentence — the writer would rather see one
+    oversized turn than half a fact.
+    """
+    chunks: List[str] = []
+    current: List[str] = []
+    size = 0
+    for line in body.splitlines():
+        line_size = len(line) + 1
+        if current and size + line_size > FOREIGN_CHUNK_CHARS:
+            chunks.append("\n".join(current))
+            current, size = [], 0
+        current.append(line)
+        size += line_size
+    if current:
+        chunks.append("\n".join(current))
+    return chunks
+
+
 def _unit(value: Any, fallback: float) -> float:
     try:
         return min(1.0, max(0.0, float(value)))

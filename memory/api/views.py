@@ -458,6 +458,20 @@ class MemoryViewSet(viewsets.ViewSet):
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(result, status=status.HTTP_201_CREATED)
 
+    def import_foreign(self, request):
+        """Free-form paste from any other assistant, through the pipeline.
+
+        Not a restore: the text goes through the writer and the gate like
+        conversation turns, so it works against a full store — collisions
+        supersede, safety pins, health is held, and the ledger records all
+        of it. Returns as soon as the turns are queued.
+        """
+        try:
+            result = portability.import_foreign(request.user, request.data.get("text"))
+        except portability.ImportError_ as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(result, status=status.HTTP_202_ACCEPTED)
+
     def recall(self, request):
         """The probe: run the ranking by hand without spending a turn.
 

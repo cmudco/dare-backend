@@ -163,6 +163,38 @@ class PortabilityTests(TestCase):
         self.assertEqual(coerced.importance, 0.5)
         self.assertIsNone(coerced.superseded_by_id)
 
+    def test_foreign_paste_becomes_queued_writer_turns(self):
+        from conversations.models import Conversation, Message
+
+        from memory.services.portability import FOREIGN_FRAME, import_foreign
+
+        paste = "\n".join(f"- Durable fact number {i}." for i in range(80))
+        with patch("memory.tasks.run_memory_writer.delay") as delay:
+            result = import_foreign(self.other, paste)
+
+        conversation = Conversation.active_objects.get(
+            conversation_id=result["conversation_id"]
+        )
+        self.assertEqual(conversation.user, self.other)
+        self.assertTrue(conversation.memory_enabled)
+        turns = Message.active_objects.filter(conversation=conversation)
+        # One user+assistant pair per chunk; every assistant message queued
+        # on the SAME writer job live turns use — order and idempotency come
+        # from the queue, not from new machinery.
+        self.assertEqual(turns.count(), result["queued_chunks"] * 2)
+        self.assertEqual(delay.call_count, result["queued_chunks"])
+        self.assertGreater(result["queued_chunks"], 1)
+        first = turns.order_by("id").first()
+        self.assertTrue(first.message.startswith(FOREIGN_FRAME))
+
+    def test_foreign_paste_refuses_empty_and_oversized(self):
+        from memory.services.portability import FOREIGN_MAX_CHARS, import_foreign
+
+        with self.assertRaises(ImportError_):
+            import_foreign(self.other, "   ")
+        with self.assertRaises(ImportError_):
+            import_foreign(self.other, "x" * (FOREIGN_MAX_CHARS + 1))
+
     def test_export_scope_is_the_user_alone(self):
         self.seed()
         MemoryRecord.objects.create(
