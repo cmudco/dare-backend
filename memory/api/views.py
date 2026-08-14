@@ -427,9 +427,16 @@ class MemoryViewSet(viewsets.ViewSet):
             request.user, query=query, since=since, until=until
         )
         if not result.get("success"):
+            # A malformed or reversed date bound is the CALLER's error, and it
+            # must never degrade into an unbounded search of the whole
+            # history — 400, loudly, with the reason.
             return Response(
                 {"detail": result.get("error", "Search failed.")},
-                status=status.HTTP_502_BAD_GATEWAY,
+                status=(
+                    status.HTTP_400_BAD_REQUEST
+                    if result.get("bad_request")
+                    else status.HTTP_502_BAD_GATEWAY
+                ),
             )
         return Response(result)
 

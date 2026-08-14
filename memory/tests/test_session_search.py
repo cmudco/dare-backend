@@ -145,13 +145,20 @@ class DateBoundTests(TestCase):
         day = (timezone.now() - timedelta(days=7)).date().isoformat()
         self.assertEqual(self.search("settled", since=day)["since"], day)
 
-    def test_a_malformed_date_is_ignored_rather_than_guessed_at(self):
-        # A search silently narrowed to the wrong week is worse than one that
-        # dropped a bad argument.
+    def test_a_malformed_date_refuses_rather_than_widening(self):
+        """The first contract silently dropped a bad bound and searched on —
+        red-teamed, ?since=not-a-date returned the WHOLE history dressed as
+        the bounded search that was asked for. A typo in a privacy-adjacent
+        search must fail loudly, with the reason readable by both the model
+        (tool result) and a person (400 at the API)."""
         result = self.search("settled", since="last tuesday")
-        self.assertTrue(result["success"])
-        self.assertIsNone(result["since"])
-        self.assertIn("Postgres", result["transcript"])
+        self.assertFalse(result["success"])
+        self.assertIn("YYYY-MM-DD", result["error"])
+
+    def test_a_reversed_range_is_refused(self):
+        result = self.search("settled", since="2026-08-14", until="2026-08-13")
+        self.assertFalse(result["success"])
+        self.assertIn("reversed", result["error"])
 
     def test_no_words_and_no_dates_is_still_nothing(self):
         self.assertEqual(self.search("")["found"], 0)

@@ -58,7 +58,10 @@ def search_sessions_for_user(
             "error": "Memory is unavailable for this conversation.",
         }
 
-    start, end = parse_day(since), parse_day(until)
+    try:
+        start, end = parse_bounds(since, until)
+    except BadBounds as exc:
+        return {"success": False, "error": str(exc)}
     terms = tokenize(query or "")
     if not terms and start is None and end is None:
         return {"success": True, "query": query, "found": 0, "transcript": ""}
@@ -83,17 +86,21 @@ def search_sessions_for_user(
 
 
 def _base_queryset(user, since: Optional[date] = None, until: Optional[date] = None):
-    queryset = Message.active_objects.filter(
-        conversation__user=user,
-        # Deleting a conversation has to mean the transcript stops answering
-        # for it. Message rows are not touched when a conversation is
-        # deleted, so filtering only on the message flags leaves every word
-        # of a deleted conversation searchable — which reads to the person as
-        # the delete not having worked.
-        conversation__is_deleted=False,
-        conversation__is_active=True,
-        sender_type__in=[SenderType.PLAYER, SenderType.AI_ASSISTANT],
-    ).select_related("conversation").exclude(message="")
+    queryset = (
+        Message.active_objects.filter(
+            conversation__user=user,
+            # Deleting a conversation has to mean the transcript stops answering
+            # for it. Message rows are not touched when a conversation is
+            # deleted, so filtering only on the message flags leaves every word
+            # of a deleted conversation searchable — which reads to the person as
+            # the delete not having worked.
+            conversation__is_deleted=False,
+            conversation__is_active=True,
+            sender_type__in=[SenderType.PLAYER, SenderType.AI_ASSISTANT],
+        )
+        .select_related("conversation")
+        .exclude(message="")
+    )
     if since is not None:
         queryset = queryset.filter(created_at__date__gte=since)
     if until is not None:
@@ -102,16 +109,36 @@ def _base_queryset(user, since: Optional[date] = None, until: Optional[date] = N
 
 
 def parse_day(value: Optional[str]) -> Optional[date]:
-    """YYYY-MM-DD, or nothing. A malformed bound is dropped rather than
-    guessed at — a search silently narrowed to the wrong week is worse than
-    one that ignored a bad argument."""
+    """YYYY-MM-DD, or nothing — or a readable refusal.
+
+    The first version dropped a malformed bound and searched on. Red-teamed,
+    that read as a lie: ?since=not-a-date returned HTTP 200 with the whole
+    history, presenting an unbounded search as the bounded one that was
+    asked for. In a privacy-adjacent search, a typo must fail loudly."""
     if not value:
         return None
     try:
         return datetime.strptime(str(value)[:10], "%Y-%m-%d").date()
     except (ValueError, TypeError):
-        logger.warning("[memory] search_sessions ignored a bad date: %r", value)
-        return None
+        raise BadBounds(
+            f"Unrecognized date {str(value)[:24]!r} — dates are YYYY-MM-DD."
+        )
+
+
+def parse_bounds(
+    since: Optional[str], until: Optional[str]
+) -> "tuple[Optional[date], Optional[date]]":
+    start, end = parse_day(since), parse_day(until)
+    if start is not None and end is not None and start > end:
+        raise BadBounds(
+            f"The range is reversed: since={start.isoformat()} is after "
+            f"until={end.isoformat()}."
+        )
+    return start, end
+
+
+class BadBounds(ValueError):
+    """A date bound that must stop the search, in words a person can read."""
 
 
 def _search(
@@ -217,7 +244,10 @@ def search_sessions_hits(
     if user is None:
         return {"success": False, "error": "Memory is unavailable."}
 
-    start, end = parse_day(since), parse_day(until)
+    try:
+        start, end = parse_bounds(since, until)
+    except BadBounds as exc:
+        return {"success": False, "error": str(exc), "bad_request": True}
     terms = tokenize(query or "")
     if not terms and start is None and end is None:
         return {"success": True, "query": query, "found": 0, "hits": []}
