@@ -43,4 +43,9 @@ urlpatterns = [
         MemoryViewSet.as_view({"get": "recall"}),
         name="memory-v2-recall",
     ),
+    path(
+        "v2/sessions/",
+        MemoryViewSet.as_view({"get": "sessions"}),
+        name="memory-v2-sessions",
+    ),
 ]
