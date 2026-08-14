@@ -135,6 +135,50 @@ class IngestTests(TestCase):
         self.assertEqual(new.replaces_id, old.id)
         self.assertEqual(new.state, MemoryState.ACTIVE)
         # Retired on the day the replacement arrived.
+
+    def test_the_exact_seek_covers_the_topic_a_profile_line_lands_on(self):
+        """A patch_user decision carries a HEADING in `key`; the gate reroutes
+        the write onto `topic_key`. Seeking only the heading missed a live
+        occupation row — "add this to my profile: I'm a PhD student" left
+        "backend engineer" active beside it, two answers to a one-slot topic.
+        """
+        self.ingest(
+            "I'm a backend engineer.",
+            [
+                WriterDecision(
+                    action="add_fact",
+                    reason="Stated.",
+                    text="They are a backend engineer.",
+                    key="occupation",
+                    topic_key="occupation",
+                )
+            ],
+        )
+        self.ingest(
+            "add this to my profile: I'm a PhD student at CMU",
+            [
+                WriterDecision(
+                    action="patch_user",
+                    reason="They asked for it in their profile.",
+                    text="They are a PhD student at CMU.",
+                    key="background",
+                    topic_key="occupation",
+                    profile_key="background",
+                    pin_to_profile=True,
+                )
+            ],
+            explicit=True,
+        )
+
+        rows = MemoryRecord.objects.filter(user=self.user, key="occupation")
+        self.assertEqual(rows.count(), 2)
+        old = rows.get(text="They are a backend engineer.")
+        new = rows.get(text="They are a PhD student at CMU.")
+        self.assertEqual(old.state, MemoryState.SUPERSEDED)
+        self.assertEqual(new.state, MemoryState.ACTIVE)
+        # And the profile line survived the collision: pinned, under the
+        # heading the person named.
+        self.assertEqual(new.pinned_to, "background")
         self.assertEqual(old.valid_until, new.valid_from)
 
     def test_a_verbatim_restatement_reinforces_instead_of_writing(self):
