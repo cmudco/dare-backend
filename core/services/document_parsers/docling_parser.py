@@ -15,6 +15,7 @@ real text and is therefore worse than recovering nothing. Scanned pages are
 routed to ``FileStatus.NEEDS_OCR`` instead and handled by the vision layer.
 """
 
+import hashlib
 import io
 import logging
 import re
@@ -25,9 +26,10 @@ from docling.datamodel.base_models import DocumentStream, InputFormat
 from docling.datamodel.pipeline_options import PdfPipelineOptions
 from docling.document_converter import DocumentConverter, PdfFormatOption
 
-from core.config.document_parsing import (MAX_STORED_ELEMENTS,
-                                          MIN_CHARS_PER_PAGE, ElementKind,
-                                          ElementLabel)
+from core.config.document_parsing import (HEADING_CONTEXT_LIMIT,
+                                          MIN_CHARS_PER_PAGE,
+                                          PICTURE_CLASSIFICATION_TOP_K,
+                                          ElementKind, ElementLabel)
 from core.services.document_parsers.base import BaseDocumentParser
 from core.services.document_parsers.constants import (DOCLING_EXTENSIONS,
                                                       PARSER_DOCLING)
@@ -51,6 +53,8 @@ class DoclingDocumentParser(BaseDocumentParser):
 
     def __init__(self, converter: Optional[DocumentConverter] = None):
         self._converter = converter
+        self._converter_was_injected = converter is not None
+        self._classification_fallback_converter: Optional[DocumentConverter] = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -63,14 +67,31 @@ class DoclingDocumentParser(BaseDocumentParser):
         """Convert raw bytes into a ParsedDocument."""
         started = time.time()
         source = DocumentStream(name=filename, stream=io.BytesIO(data))
-        document = self._get_converter().convert(source).document
+        try:
+            document = self._get_converter().convert(source).document
+        except Exception as error:
+            if self._converter_was_injected:
+                raise
+            # Figure classification is useful routing, not a reason to lose
+            # the entire Docling structure when its optional model cannot load
+            # (for example, a first worker boot without Hugging Face access).
+            logger.warning(
+                "Docling conversion with figure classification failed for %s; "
+                "retrying structure-only: %s",
+                filename,
+                error,
+            )
+            retry_source = DocumentStream(name=filename, stream=io.BytesIO(data))
+            document = self._get_classification_fallback_converter().convert(
+                retry_source
+            ).document
 
         elements = self._build_elements(document)
         structure = self._build_structure(document, elements)
 
         return ParsedDocument(
             text=self._clean_markdown(document.export_to_markdown()),
-            elements=tuple(elements[:MAX_STORED_ELEMENTS]),
+            elements=tuple(elements),
             structure=structure,
             parser=self.name,
             duration_seconds=time.time() - started,
@@ -103,15 +124,20 @@ class DoclingDocumentParser(BaseDocumentParser):
         """
         elements: List[ParsedElement] = []
         section: Optional[str] = None
+        headings: List[Dict[str, Any]] = []
         order = 0
 
-        for item, _level in document.iterate_items():
+        for item, tree_depth in document.iterate_items():
             order += 1
             label = str(getattr(item, "label", "") or ElementLabel.TEXT)
             page_no, bbox = self._provenance(item, document)
 
             if label in (ElementLabel.TITLE, ElementLabel.SECTION_HEADER):
                 section = (getattr(item, "text", "") or "").strip() or section
+                if section:
+                    headings.append(
+                        {"order": order, "page_no": page_no, "text": section}
+                    )
 
             kind = self._kind_of(item)
             elements.append(
@@ -125,6 +151,10 @@ class DoclingDocumentParser(BaseDocumentParser):
                     caption=self._caption_of(item, document),
                     table_markdown=self._table_markdown(item, document, kind),
                     bbox=bbox,
+                    tree_depth=tree_depth,
+                    heading_context=tuple(headings[-HEADING_CONTEXT_LIMIT:]),
+                    classifications=self._classifications_of(item),
+                    content_sha256=self._content_sha256(item, document, kind),
                 )
             )
 
@@ -186,6 +216,40 @@ class DoclingDocumentParser(BaseDocumentParser):
                 logger.debug(f"Could not resolve caption reference: {error}")
         joined = " ".join(text for text in texts if text).strip()
         return joined or None
+
+    @staticmethod
+    def _classifications_of(item: Any) -> Tuple[Dict[str, Any], ...]:
+        """Top local Docling figure-classifier predictions, highest first."""
+        classification = getattr(getattr(item, "meta", None), "classification", None)
+        predictions = getattr(classification, "predictions", None) or []
+        ordered = sorted(
+            predictions,
+            key=lambda prediction: getattr(prediction, "confidence", 0.0) or 0.0,
+            reverse=True,
+        )
+        return tuple(
+            {
+                "label": str(getattr(prediction, "class_name", "unknown")),
+                "confidence": round(float(prediction.confidence), 4),
+            }
+            for prediction in ordered[:PICTURE_CLASSIFICATION_TOP_K]
+            if getattr(prediction, "confidence", None) is not None
+        )
+
+    @staticmethod
+    def _content_sha256(item: Any, document: Any, kind: str) -> Optional[str]:
+        """Stable hash of a classified crop, used by the enrichment cache."""
+        if kind != ElementKind.PICTURE:
+            return None
+        try:
+            image = item.get_image(document).convert("RGB")
+        except (AttributeError, TypeError, ValueError):
+            return None
+
+        digest = hashlib.sha256(usedforsecurity=False)
+        digest.update(f"{image.width}x{image.height}:RGB".encode("ascii"))
+        digest.update(image.tobytes())
+        return digest.hexdigest()
 
     @staticmethod
     def _table_markdown(item: Any, document: Any, kind: str) -> Optional[str]:
@@ -273,14 +337,31 @@ class DoclingDocumentParser(BaseDocumentParser):
             )
         return self._converter
 
+    def _get_classification_fallback_converter(self) -> DocumentConverter:
+        if self._classification_fallback_converter is None:
+            self._classification_fallback_converter = DocumentConverter(
+                format_options={
+                    InputFormat.PDF: PdfFormatOption(
+                        pipeline_options=self._pdf_options(classify_pictures=False)
+                    )
+                }
+            )
+        return self._classification_fallback_converter
+
     @staticmethod
-    def _pdf_options() -> PdfPipelineOptions:
+    def _pdf_options(classify_pictures: bool = True) -> PdfPipelineOptions:
         options = PdfPipelineOptions()
         options.do_ocr = False
         options.do_table_structure = True
         options.table_structure_options.do_cell_matching = True
-        # Picture pixels are not needed to build the document model; the vision
-        # layer re-crops them on demand from the stored bbox.
-        options.generate_picture_images = False
+        options.do_picture_description = False
+        options.do_picture_classification = classify_pictures
+        options.picture_classification_options.engine_options.top_k = (
+            PICTURE_CLASSIFICATION_TOP_K
+        )
+        # Persist crop pixels only for the lifetime of conversion so the local
+        # classifier can run and we can derive a stable content hash. Pixels are
+        # not written to the database; paid vision calls re-render on demand.
+        options.generate_picture_images = classify_pictures
         options.generate_page_images = False
         return options

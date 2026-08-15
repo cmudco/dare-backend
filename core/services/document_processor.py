@@ -10,6 +10,7 @@ from core.config.processing import (BATCH_SIZE, CHUNK_SIZE,
                                     DEFAULT_TOP_K, OVERLAP_SIZE)
 from core.config.vector_db import get_user_namespace
 from core.helpers.openai import OpenAIWrapper
+from core.services.document_enrichment_service import DocumentEnrichmentService
 from core.services.document_parsing_service import DocumentParsingService
 from core.services.dtos.parsed_document_dto import ParsedDocument
 from core.services.embedding_service import EmbeddingService
@@ -30,6 +31,7 @@ class DocumentProcessor:
         file_processor=None,
         user_id=None,
         parsing_service=None,
+        enrichment_service=None,
     ):
         self.openai_client = openai_client or OpenAIWrapper()
         self.user_id = user_id
@@ -38,6 +40,7 @@ class DocumentProcessor:
             self.openai_client
         )
         self.parsing_service = parsing_service or DocumentParsingService()
+        self.enrichment_service = enrichment_service or DocumentEnrichmentService()
         self.file_processor = file_processor or FileProcessor(self.parsing_service)
 
     def _ensure_vector_service(self):
@@ -63,7 +66,13 @@ class DocumentProcessor:
         try:
             self.update_vector_service(file.user.id)
 
-            content = self.parse_file(file).embeddable_text
+            parsed = self.parse_file(file)
+            file.processing_stage = "enriching"
+            file.save(update_fields=["processing_stage"])
+            content = self.enrichment_service.enrich(file, parsed).text
+
+            file.processing_stage = "embedding"
+            file.save(update_fields=["processing_stage"])
 
             user_chunk_size = getattr(file.user, "chunk_size", CHUNK_SIZE)
             user_overlap_size = getattr(file.user, "overlap_size", OVERLAP_SIZE)

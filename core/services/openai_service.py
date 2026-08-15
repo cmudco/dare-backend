@@ -17,15 +17,11 @@ from config import env
 from conversations.models import LLM
 from core.services.api_key_service import get_provider_api_key
 from core.services.dtos.stream_event_dto import LLMStreamEvent
-from core.services.llm_utils import (
-    OpenAIErrorHandler,
-    OpenAIMessageFormatter,
-    OpenAIStreamProcessor,
-    OpenAIVisionHandler,
-    OpenAIWebSearchTools,
-    SchemaTransformer,
-    StreamAggregator,
-)
+from core.services.llm_utils import (OpenAIErrorHandler,
+                                     OpenAIMessageFormatter,
+                                     OpenAIStreamProcessor,
+                                     OpenAIVisionHandler, OpenAIWebSearchTools,
+                                     SchemaTransformer, StreamAggregator)
 from core.services.model_capabilities import ModelCapabilities
 
 logger = logging.getLogger(__name__)
@@ -226,6 +222,24 @@ class OpenAIService:
         Raises:
             ValueError: If schema validation fails or no response returned
         """
+        result, _usage = await self.generate_structured_output_with_usage(
+            messages=messages,
+            response_schema=response_schema,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            effort=effort,
+        )
+        return result
+
+    async def generate_structured_output_with_usage(
+        self,
+        messages: List[Dict[str, str]],
+        response_schema: Dict,
+        max_tokens: int = 2000,
+        temperature: float = 0.7,
+        effort: Optional[str] = None,
+    ) -> Tuple[Dict, Dict[str, int]]:
+        """Structured output plus normalized token usage for service billing."""
         logger.info(
             f"[OpenAI] generate_structured_output with schema: {list(response_schema.get('properties', {}).keys())}"
         )
@@ -259,7 +273,11 @@ class OpenAIService:
             if not content:
                 raise ValueError("Empty response from OpenAI structured output")
 
-            return json.loads(content)
+            usage = getattr(response, "usage", None)
+            return json.loads(content), {
+                "input_tokens": int(getattr(usage, "prompt_tokens", 0) or 0),
+                "output_tokens": int(getattr(usage, "completion_tokens", 0) or 0),
+            }
 
         except Exception as e:
             logger.exception(f"[OpenAI] generate_structured_output error: {str(e)}")

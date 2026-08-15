@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from core.config.document_parsing import (CAPTION_LIMIT, ELEMENT_TEXT_LIMIT,
                                           FURNITURE_LABELS, HEADING_LABELS,
+                                          MAX_STORED_ELEMENTS,
                                           MIN_CONTENT_CHARS, SECTION_LIMIT,
                                           TABLE_MARKDOWN_LIMIT, ElementKind,
                                           ElementLabel)
@@ -57,6 +58,10 @@ class ParsedElement:
     caption: Optional[str] = None
     table_markdown: Optional[str] = None
     bbox: Optional[BoundingBox] = None
+    tree_depth: int = 0
+    heading_context: Tuple[Dict[str, Any], ...] = ()
+    classifications: Tuple[Dict[str, Any], ...] = ()
+    content_sha256: Optional[str] = None
 
     @property
     def is_furniture(self) -> bool:
@@ -85,6 +90,14 @@ class ParsedElement:
             payload["table_markdown"] = self.table_markdown[:TABLE_MARKDOWN_LIMIT]
         if self.bbox:
             payload["bbox"] = self.bbox.to_dict()
+        if self.tree_depth:
+            payload["tree_depth"] = self.tree_depth
+        if self.heading_context:
+            payload["heading_context"] = list(self.heading_context)
+        if self.classifications:
+            payload["classifications"] = list(self.classifications)
+        if self.content_sha256:
+            payload["content_sha256"] = self.content_sha256
         return payload
 
 
@@ -175,7 +188,10 @@ class ParsedDocument:
             "parser": self.parser,
             "duration_seconds": round(self.duration_seconds, 3),
             "counts": self.structure.to_dict(),
-            "elements": [element.to_dict() for element in self.elements],
+            "elements": [
+                element.to_dict() for element in self.elements[:MAX_STORED_ELEMENTS]
+            ],
+            "elements_truncated": len(self.elements) > MAX_STORED_ELEMENTS,
         }
 
 

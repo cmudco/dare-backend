@@ -41,6 +41,7 @@ class FileSerializer(serializers.ModelSerializer):
             "tags",
             "job_id",
             "status",
+            "processing_stage",
             "vector_db_source",
             "error_message",
             "is_media",
@@ -57,8 +58,8 @@ class FileSerializer(serializers.ModelSerializer):
             "pages_without_text",
             "parser_name",
             "structure_counts",
-            'created_at',
-            'updated_at',
+            "created_at",
+            "updated_at",
         ]
 
     def get_structure_counts(self, obj):
@@ -102,6 +103,8 @@ class FileStructureSerializer(serializers.ModelSerializer):
     elements = serializers.SerializerMethodField()
     has_text = serializers.SerializerMethodField()
     needs_ocr = serializers.SerializerMethodField()
+    enrichment = serializers.SerializerMethodField()
+    page_enrichments = serializers.SerializerMethodField()
 
     class Meta:
         model = File
@@ -117,6 +120,8 @@ class FileStructureSerializer(serializers.ModelSerializer):
             "elements",
             "has_text",
             "needs_ocr",
+            "enrichment",
+            "page_enrichments",
         ]
 
     def get_counts(self, obj):
@@ -147,7 +152,7 @@ class FileStructureSerializer(serializers.ModelSerializer):
         Read from the parse rather than from ``extracted_text`` so it stays
         true regardless of how a caller happens to have populated the column.
         """
-        return bool(self.get_counts(obj).get("content_chars"))
+        return bool(self.get_counts(obj).get("content_chars") or obj.extracted_text)
 
     def get_needs_ocr(self, obj):
         """Every page is a scan awaiting transcription.
@@ -157,7 +162,30 @@ class FileStructureSerializer(serializers.ModelSerializer):
         """
         if obj.status == FileStatus.NEEDS_OCR:
             return True
+        enrichment = (obj.document_model or {}).get("enrichment", {})
+        if enrichment.get("transcribed_pages", 0) >= obj.pages_without_text:
+            return False
         return bool(obj.page_count) and obj.pages_without_text >= obj.page_count
+
+    def get_enrichment(self, obj):
+        return (obj.document_model or {}).get("enrichment", {})
+
+    def get_page_enrichments(self, obj):
+        rows = (obj.document_model or {}).get("page_enrichments", [])
+        page_no = self.context.get("page_no")
+        if page_no is None:
+            # The all-pages overview needs routing/status/summary, not tens of
+            # thousands of transcription characters. Fetching a specific page
+            # returns its complete Markdown below.
+            return [
+                {
+                    key: value
+                    for key, value in row.items()
+                    if key != "transcription_markdown"
+                }
+                for row in rows
+            ]
+        return [row for row in rows if row.get("page_no") == page_no]
 
     @staticmethod
     def _elements(obj):

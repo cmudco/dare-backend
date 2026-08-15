@@ -61,6 +61,15 @@ GEMINI_API_KEY = env('GEMINI_API_KEY')
 OLLAMA_HOST = env('OLLAMA_HOST', default='http://localhost:11434')
 ELEVENLABS_API_KEY = env('ELEVENLABS_API_KEY', default='')
 
+# Context-aware Docling enrichment. The model is resolved from DARE's LLM
+# catalog so pricing and wallet routing stay consistent with normal calls.
+DOCUMENT_ENRICHMENT_ENABLED = env.bool("DOCUMENT_ENRICHMENT_ENABLED", default=True)
+DOCUMENT_ENRICHMENT_MODEL = env(
+    "DOCUMENT_ENRICHMENT_MODEL", default="gemini-3.1-flash-lite"
+)
+DOCUMENT_ENRICHMENT_MAX_FIGURES = env.int("DOCUMENT_ENRICHMENT_MAX_FIGURES", default=40)
+DOCUMENT_ENRICHMENT_MAX_PAGES = env.int("DOCUMENT_ENRICHMENT_MAX_PAGES", default=100)
+
 # redis
 REDIS_HOST = os.getenv("REDIS_HOST")
 REDIS_PORT = os.getenv("REDIS_PORT")
