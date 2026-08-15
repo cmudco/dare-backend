@@ -17,11 +17,15 @@ from config import env
 from conversations.models import LLM
 from core.services.api_key_service import get_provider_api_key
 from core.services.dtos.stream_event_dto import LLMStreamEvent
-from core.services.llm_utils import (OpenAIErrorHandler,
-                                     OpenAIMessageFormatter,
-                                     OpenAIStreamProcessor,
-                                     OpenAIVisionHandler, OpenAIWebSearchTools,
-                                     SchemaTransformer, StreamAggregator)
+from core.services.llm_utils import (
+    OpenAIErrorHandler,
+    OpenAIMessageFormatter,
+    OpenAIStreamProcessor,
+    OpenAIVisionHandler,
+    OpenAIWebSearchTools,
+    SchemaTransformer,
+    StreamAggregator,
+)
 from core.services.model_capabilities import ModelCapabilities
 
 logger = logging.getLogger(__name__)
