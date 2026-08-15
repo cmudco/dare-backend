@@ -28,6 +28,10 @@ from memory.domain.user_doc import (
 )
 
 _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_QUESTION_STARTS = frozenset(
+    "what when where who why how which do does did is are am was were can could "
+    "would should will have has had".split()
+)
 
 
 def _clamp01(value: Optional[float], fallback: float) -> float:
@@ -66,6 +70,30 @@ def _dated(text: str, iso_day: str) -> str:
     if stamp.lower() in text.lower() or year in text:
         return text
     return f"{text.rstrip('.')} (as of {stamp})."
+
+
+def _words(text: str) -> List[str]:
+    return [word.strip(".,;:!?()\"'") for word in text.split() if word]
+
+
+def _supports_repetition(message: str, stored_text: str) -> bool:
+    """Require the user to restate some identifying content from the fact."""
+    message_words = _words(message)
+    if (
+        not message_words
+        or "?" in message
+        or message_words[0].lower() in _QUESTION_STARTS
+    ):
+        return False
+    stored_words = _words(stored_text)
+    anchors = {
+        word.lower()
+        for position, word in enumerate(stored_words)
+        if word
+        and (any(char.isdigit() for char in word) or position and word[0].isupper())
+    }
+    candidates = anchors or {word.lower() for word in stored_words if len(word) > 3}
+    return bool(candidates & {word.lower() for word in message_words})
 
 
 def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> ApplyResult:
@@ -280,7 +308,10 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
                 ),
                 None,
             )
-            if repeated is not None:
+            user_repeated = repeated is not None and _supports_repetition(
+                input.user_message, repeated.text
+            )
+            if user_repeated:
                 repeated.reinforced += 1
                 reinforced_ids.append(repeated.id)
             log(
@@ -288,10 +319,16 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
                 proposed_action=decision.action,
                 reason=decision.reason,
                 note=(
-                    f'Said again — "{repeated.text}" now stands on '
-                    f"{repeated.reinforced + 1} tellings."
-                    if repeated is not None
-                    else None
+                    None
+                    if repeated is None
+                    else (
+                        (
+                            f'Said again — "{repeated.text}" now stands on '
+                            f"{repeated.reinforced + 1} tellings."
+                        )
+                        if user_repeated
+                        else "Already stored; a question does not count as another telling."
+                    )
                 ),
                 applied=True,
                 record_id=repeated.id if repeated is not None else None,
@@ -514,8 +551,10 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
         if collision:
             # Repetition is durability evidence, not a duplicate write.
             if collision.text.strip().lower() == text.lower():
-                collision.reinforced += 1
-                reinforced_ids.append(collision.id)
+                user_repeated = _supports_repetition(input.user_message, collision.text)
+                if user_repeated:
+                    collision.reinforced += 1
+                    reinforced_ids.append(collision.id)
                 newly_pinned = bool(pinned_to and collision.pinned_to != pinned_to)
                 if newly_pinned:
                     collision.pinned_to = pinned_to
@@ -526,23 +565,26 @@ def apply_decisions(input: ApplyInput, decisions: List[WriterDecision]) -> Apply
                     if collision.reinforced == 1
                     else f"{collision.reinforced + 1} times"
                 )
+                if newly_pinned and user_repeated:
+                    repetition_note = (
+                        f"Pinned to {heading_for(pinned_to)} and counted "
+                        f"the repetition ({said} total)."
+                    )
+                elif newly_pinned:
+                    repetition_note = f"Pinned to {heading_for(pinned_to)}."
+                elif user_repeated:
+                    repetition_note = (
+                        f"Said {said} now — counted, because repetition is "
+                        "the evidence consolidation promotes on."
+                    )
+                else:
+                    repetition_note = "A question does not count as another telling."
                 log(
                     action="ignore",
                     proposed_action=decision.action,
                     reason=decision.reason,
-                    note=(
-                        f"Already stored under {fact_key}. "
-                        + (
-                            f"Pinned to {heading_for(pinned_to)} and counted "
-                            f"the repetition ({said} total)."
-                            if newly_pinned
-                            else (
-                                f"Said {said} now — counted, because repetition "
-                                f"is the evidence consolidation promotes on."
-                            )
-                        )
-                    ),
-                    applied=newly_pinned,
+                    note=f"Already stored under {fact_key}. {repetition_note}",
+                    applied=newly_pinned or user_repeated,
                     record_id=collision.id,
                     detail=text,
                 )

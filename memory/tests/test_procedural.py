@@ -21,12 +21,15 @@ DOC = """# USER.md
 """
 
 
-def make_input(archive: Optional[List[MemoryRow]] = None) -> ApplyInput:
+def make_input(
+    archive: Optional[List[MemoryRow]] = None,
+    user_message: str = "the message that caused this",
+) -> ApplyInput:
     counter = iter(range(1, 1000))
     return ApplyInput(
         user_doc=DOC,
         archive=archive or [],
-        user_message="the message that caused this",
+        user_message=user_message,
         explicit=False,
         now="2026-07-31T10:00:00.000Z",
         new_id=lambda: f"id-{next(counter)}",
@@ -186,7 +189,10 @@ class ProcedureApplyTests(SimpleTestCase):
     def test_restating_a_rule_word_for_word_counts_it(self):
         existing = procedure(reinforced=1)
         result = apply_decisions(
-            make_input(archive=[existing]),
+            make_input(
+                archive=[existing],
+                user_message="Use the imperative mood.",
+            ),
             [
                 decision(
                     action="add_procedure",
@@ -199,6 +205,7 @@ class ProcedureApplyTests(SimpleTestCase):
         self.assertEqual(len(result.created), 0)
         self.assertEqual(result.reinforced_ids, ["existing-1"])
         self.assertEqual(result.archive[0].reinforced, 2)
+        self.assertTrue(result.entries[0].applied)
 
     def test_a_replacement_rule_inherits_the_history_of_the_one_it_replaces(self):
         existing = procedure(reinforced=3)

@@ -87,6 +87,28 @@ class OverrideDetectionTests(SimpleTestCase):
 
 
 class LedgerRedactionTests(TestCase):
+    def test_structural_uuid_does_not_redact_ledger_evidence(self):
+        user = get_user_model().objects.create_user(
+            email="ledger-uuid@example.com", password="x"
+        )
+        entry = record_event(
+            user,
+            LedgerEvent(
+                action="supersede",
+                reason="The person supplied a new release marker.",
+                detail="Cobalt Finch 815.",
+                source_text="Remember my release marker is Cobalt Finch 815.",
+                applied=True,
+                proposal={
+                    "text": "Cobalt Finch 815.",
+                    "supersedes_id": "f02c674b-7b4f-447b-aa46-7fefe18f13e0",
+                },
+            ),
+        )
+
+        self.assertEqual(entry.reason, "The person supplied a new release marker.")
+        self.assertEqual(entry.proposal["text"], "Cobalt Finch 815.")
+
     def test_every_free_text_field_is_redacted_together(self):
         user = get_user_model().objects.create_user(
             email="ledger-redaction@example.com", password="x"

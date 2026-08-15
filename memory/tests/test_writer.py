@@ -60,6 +60,7 @@ class StructuredWriterServiceTests(TestCase):
                 {"input_tokens": 7000, "output_tokens": 300, "total_tokens": 7300},
             )
         )
+        service.close = AsyncMock()
 
         with patch(
             "memory.services.writer.get_provider_api_key_sync",
@@ -88,6 +89,7 @@ class StructuredWriterServiceTests(TestCase):
             output_tokens=300,
             description="Memory writer for message 42",
         )
+        service.close.assert_awaited_once()
 
     def test_service_usage_creates_a_costed_transaction(self):
         wallet = Wallet.objects.get(user=self.user)
