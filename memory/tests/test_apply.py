@@ -1404,7 +1404,10 @@ class BoundaryCoexistenceTests(SimpleTestCase):
             reinforced=0,
         )
         result = apply_decisions(
-            make_input(archive=[client]),
+            make_input(
+                archive=[client],
+                user_message="Never store details about my clients.",
+            ),
             [
                 decision(
                     action="add_fact",
@@ -1417,6 +1420,7 @@ class BoundaryCoexistenceTests(SimpleTestCase):
 
         self.assertEqual(result.created, [])
         self.assertEqual(result.reinforced_ids, ["boundary-1"])
+        self.assertTrue(result.entries[0].applied)
 
     def test_a_boundary_can_still_be_retired_by_naming_its_id(self):
         client = fact(

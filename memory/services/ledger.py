@@ -27,7 +27,7 @@ class LedgerEvent:
 
 
 def _safe_fields(event: LedgerEvent) -> Dict[str, Any]:
-    proposal_text = json.dumps(event.proposal, default=str) if event.proposal else ""
+    proposal_text = json.dumps(_proposal_content(event.proposal), default=str)
     payload = "\n".join(
         (event.reason, event.note or "", event.detail, event.source_text, proposal_text)
     )
@@ -46,6 +46,19 @@ def _safe_fields(event: LedgerEvent) -> Dict[str, Any]:
         "source_text": REDACTED_CREDENTIAL,
         "proposal": None,
     }
+
+
+def _proposal_content(value: Any) -> Any:
+    """Remove structural IDs before scanning proposal text for credentials."""
+    if isinstance(value, dict):
+        return {
+            key: _proposal_content(item)
+            for key, item in value.items()
+            if not key.endswith("_id")
+        }
+    if isinstance(value, list):
+        return [_proposal_content(item) for item in value]
+    return value
 
 
 def record_event(user, event: LedgerEvent) -> MemoryLedgerEntry:

@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import List, Literal, Optional
 
-from asgiref.sync import async_to_sync
+from asgiref.sync import async_to_sync, sync_to_async
 from pydantic import BaseModel, Field
 
 from config.env import MEMORY_WRITER_MODEL
@@ -399,13 +399,13 @@ ASSISTANT: {assistant_message or "(no reply captured)"}
 
 Set `explicit_request` from what the PERSON asked for in this message, not from how useful the content looks to you. It decides whether anything may be written into USER.md, which is read on every future turn."""
 
-    def ask(messages) -> WriterResponse:
-        parsed, usage = async_to_sync(service.parse_structured_output)(
+    async def ask(messages):
+        parsed, usage = await service.parse_structured_output(
             messages=messages,
             response_model=WriterResponse,
             max_tokens=WRITER_MAX_TOKENS,
         )
-        billing.record_service_usage(
+        await sync_to_async(billing.record_service_usage, thread_sensitive=True)(
             user=user,
             llm=llm,
             input_tokens=usage["input_tokens"],
@@ -414,20 +414,27 @@ Set `explicit_request` from what the PERSON asked for in this message, not from 
         )
         return parsed
 
+    async def run_writer(messages):
+        try:
+            parsed = await ask(messages)
+            if any(_is_malformed(decision) for decision in parsed.decisions):
+                logger.warning(
+                    "[memory] writer emitted a decision with empty text; retrying once"
+                )
+                retried = await ask(
+                    messages + [{"role": "user", "content": _REPAIR_NOTE}]
+                )
+                if not any(_is_malformed(decision) for decision in retried.decisions):
+                    parsed = retried
+            return parsed
+        finally:
+            await service.close()
+
     base_messages = [
         {"role": "system", "content": SYSTEM},
         {"role": "user", "content": prompt},
     ]
-    parsed = ask(base_messages)
-    if any(_is_malformed(d) for d in parsed.decisions):
-        logger.warning(
-            "[memory] writer emitted a decision with empty text; retrying once"
-        )
-        retried = ask(base_messages + [{"role": "user", "content": _REPAIR_NOTE}])
-        if not any(_is_malformed(d) for d in retried.decisions):
-            parsed = retried
-        # Otherwise keep the original: the gate refuses the malformed halves
-        # with a ledger entry, which is at least visible.
+    parsed = async_to_sync(run_writer)(base_messages)
 
     decisions: List[WriterDecision] = []
     for decision in parsed.decisions:

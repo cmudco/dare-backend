@@ -204,6 +204,51 @@ class IngestTests(TestCase):
             MemoryRecord.objects.filter(user=self.user, key="diet").count(), 1
         )
 
+    def test_a_recall_question_does_not_reinforce_its_answer(self):
+        self.ingest(
+            "My release marker is Cobalt Finch 815.",
+            [
+                WriterDecision(
+                    action="add_fact",
+                    reason="Stated.",
+                    text="The release marker is Cobalt Finch 815.",
+                    key="note:release-marker",
+                )
+            ],
+        )
+        record = MemoryRecord.objects.get(user=self.user, key="note:release-marker")
+
+        report, _ = self.ingest(
+            "What is my release marker?",
+            [
+                WriterDecision(
+                    action="ignore",
+                    reason="Already known.",
+                    reinforces_id=str(record.id),
+                )
+            ],
+        )
+
+        record.refresh_from_db()
+        self.assertEqual(report.reinforced, 0)
+        self.assertEqual(record.reinforced, 0)
+
+        report, _ = self.ingest(
+            "Tell me my release marker.",
+            [
+                WriterDecision(
+                    action="add_fact",
+                    reason="Already known.",
+                    text="The release marker is Cobalt Finch 815.",
+                    key="note:release-marker",
+                )
+            ],
+        )
+
+        record.refresh_from_db()
+        self.assertEqual(report.reinforced, 0)
+        self.assertEqual(record.reinforced, 0)
+
     def test_an_explicit_pin_updates_an_identical_existing_fact(self):
         self.ingest(
             "I run Project Atlas.",

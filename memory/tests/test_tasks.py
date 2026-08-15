@@ -38,9 +38,9 @@ class MemoryWriterTaskTests(TestCase):
             skipped="writer proposed nothing",
         )
 
-        with patch("memory.tasks.USE_POSTGRES", True), patch(
-            "memory.tasks.ingest_turn", return_value=report
-        ) as ingest:
+        with patch("memory.tasks.close_old_connections"), patch(
+            "memory.tasks.USE_POSTGRES", True
+        ), patch("memory.tasks.ingest_turn", return_value=report) as ingest:
             run_memory_writer(reply.id)
             run_memory_writer(reply.id)
 

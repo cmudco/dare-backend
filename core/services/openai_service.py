@@ -299,6 +299,17 @@ class OpenAIService:
         }
         return parsed, usage
 
+    async def close(self) -> None:
+        """Close this service's lazily-created client."""
+        if self._client is None:
+            return
+        try:
+            await self._client.close()
+        except Exception:
+            logger.warning("[OpenAI] Failed to close async client", exc_info=True)
+        finally:
+            self._client = None
+
     # ==================== Private Methods ====================
 
     def _prepare_messages(
