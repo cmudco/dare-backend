@@ -5,15 +5,20 @@ from channels.db import database_sync_to_async
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from conversations.models import Snippet
-from core.config.processing import (BATCH_SIZE, CHUNK_SIZE,
-                                    DEFAULT_SIMILARITY_THRESHOLD,
-                                    DEFAULT_TOP_K, OVERLAP_SIZE)
+from core.config.processing import (
+    BATCH_SIZE,
+    CHUNK_SIZE,
+    DEFAULT_SIMILARITY_THRESHOLD,
+    DEFAULT_TOP_K,
+    OVERLAP_SIZE,
+)
 from core.config.vector_db import get_user_namespace
 from core.helpers.openai import OpenAIWrapper
 from core.services.document_enrichment_service import DocumentEnrichmentService
 from core.services.document_parsing_service import DocumentParsingService
 from core.services.dtos.parsed_document_dto import ParsedDocument
 from core.services.embedding_service import EmbeddingService
+from core.services.file_processing_journey import FileProcessingJourney
 from core.services.file_processor import FileProcessor
 from core.services.vector_service import get_vector_service
 from files.models import File
@@ -55,7 +60,11 @@ class DocumentProcessor:
             self.vector_service = get_vector_service(user_id)
 
     def create_file_embeddings(
-        self, file: File, chunk_size=None, overlap_size=None
+        self,
+        file: File,
+        chunk_size=None,
+        overlap_size=None,
+        journey: Optional[FileProcessingJourney] = None,
     ) -> int:
         """Process a single file and create embeddings.
 
@@ -63,17 +72,12 @@ class DocumentProcessor:
         a file that carries no text — an image-only PDF — and the caller is
         responsible for reporting that honestly rather than as success.
         """
+        owns_journey = journey is None
+        journey = journey or FileProcessingJourney(file)
+        if owns_journey:
+            journey.begin_attempt()
+
         try:
-            self.update_vector_service(file.user.id)
-
-            parsed = self.parse_file(file)
-            file.processing_stage = "enriching"
-            file.save(update_fields=["processing_stage"])
-            content = self.enrichment_service.enrich(file, parsed).text
-
-            file.processing_stage = "embedding"
-            file.save(update_fields=["processing_stage"])
-
             user_chunk_size = getattr(file.user, "chunk_size", CHUNK_SIZE)
             user_overlap_size = getattr(file.user, "overlap_size", OVERLAP_SIZE)
 
@@ -95,12 +99,76 @@ class DocumentProcessor:
                 overlap_size if overlap_size is not None else user_overlap_size
             )
 
-            vectors = self._process_chunks(
-                content, file, effective_chunk_size, effective_overlap_size
-            )
-            self._store_vectors(vectors, file.user.id)
+            with journey.stage("parsing") as stage:
+                parsed = self.parse_file(file)
+                classified_pictures = sum(
+                    1
+                    for element in parsed.elements
+                    if element.kind == "picture" and element.classifications
+                )
+                stage.add_details(
+                    parser=parsed.parser,
+                    pages=parsed.structure.pages,
+                    elements=len(parsed.elements),
+                    sections=parsed.structure.sections,
+                    tables=parsed.structure.tables,
+                    pictures=parsed.structure.pictures,
+                    classified_pictures=classified_pictures,
+                    parser_reported_seconds=round(parsed.duration_seconds, 3),
+                )
+
+            with journey.stage("enriching") as stage:
+                enrichment = self.enrichment_service.enrich(file, parsed)
+                content = enrichment.text
+                summary = enrichment.document_model.get("enrichment", {})
+                details = {
+                    "outcome": summary.get("status", "not_needed"),
+                    "model": summary.get("model"),
+                    "attempted_calls": enrichment.attempted_calls,
+                    "described_figures": enrichment.described_figures,
+                    "transcribed_pages": enrichment.transcribed_pages,
+                    "failed_calls": enrichment.failed_calls,
+                }
+                if summary.get("status") == "not_needed":
+                    stage.skip("No visual content required enrichment.", **details)
+                elif summary.get("status") in {"partial", "unavailable"}:
+                    stage.partial(
+                        summary.get("reason")
+                        or "Some visual content could not be enriched.",
+                        **details,
+                    )
+                else:
+                    stage.add_details(**details)
+
+            with journey.stage("embedding") as stage:
+                vectors = self._process_chunks(
+                    content, file, effective_chunk_size, effective_overlap_size
+                )
+                stage.add_details(
+                    text_characters=len(content),
+                    chunks=len(vectors),
+                    chunk_size=effective_chunk_size,
+                    overlap_size=effective_overlap_size,
+                )
+
+            with journey.stage("indexing") as stage:
+                # Delay the vector-backend connection until parsing and visual
+                # enrichment are finished. If Weaviate is unavailable, the
+                # journey now points at indexing instead of falsely blaming
+                # Docling.
+                self.update_vector_service(file.user.id)
+                self._store_vectors(vectors, file.user.id)
+                backend_name = type(self.vector_service).__name__.removesuffix(
+                    "VectorService"
+                )
+                stage.add_details(backend=backend_name, vectors=len(vectors))
+
+            if owns_journey:
+                journey.complete_attempt()
             return len(vectors)
         except Exception as e:
+            if owns_journey:
+                journey.fail_attempt(e)
             raise Exception(f"Error processing file: {str(e)}")
 
     def parse_file(self, file: File) -> ParsedDocument:

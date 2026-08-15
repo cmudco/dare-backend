@@ -7,6 +7,7 @@ from django.contrib.auth import get_user_model
 from django_rq import job
 
 from core.services.document_processor import DocumentProcessor
+from core.services.file_processing_journey import FileProcessingJourney
 from core.services.vector_service import get_vector_service
 from core.storage.constants import StorageBackendChoice
 from users.constants import VectorDBChoice
@@ -69,13 +70,17 @@ def process_file_embeddings(file_id, chunk_size=None, overlap_size=None):
         return
 
     try:
+        journey = FileProcessingJourney(file)
+        journey.begin_attempt()
         file.status = FileStatus.PROCESSING
         file.processing_stage = FileProcessingStage.PARSING
         file.error_message = None
         file.save(update_fields=["status", "processing_stage", "error_message"])
 
         processor = DocumentProcessor()
-        vector_count = processor.create_file_embeddings(file, chunk_size, overlap_size)
+        vector_count = processor.create_file_embeddings(
+            file, chunk_size, overlap_size, journey=journey
+        )
 
         # Record the user's current vector DB preference with the file
         file.vector_db_source = file.user.vector_db
@@ -89,6 +94,7 @@ def process_file_embeddings(file_id, chunk_size=None, overlap_size=None):
                 "error_message",
             ]
         )
+        journey.complete_attempt(outcome=file.get_status_display().lower())
 
         elapsed_time = time.time() - start_time
 
@@ -97,6 +103,8 @@ def process_file_embeddings(file_id, chunk_size=None, overlap_size=None):
         error_message = str(e)
 
         try:
+            if "journey" in locals():
+                journey.fail_attempt(error_message)
             file.status = FileStatus.FAILED
             file.error_message = error_message
             file.save(update_fields=["status", "error_message"])

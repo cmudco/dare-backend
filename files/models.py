@@ -109,6 +109,14 @@ class File(BaseModel):
         default=FileProcessingStage.PARSING,
         help_text="Current ingestion phase shown while the background job runs",
     )
+    processing_journey = models.JSONField(
+        blank=True,
+        default=dict,
+        help_text=(
+            "Versioned processing attempts with stage timings, metrics, and "
+            "failure attribution"
+        ),
+    )
     vector_db_source = models.IntegerField(
         choices=VectorDBChoice.choices,
         null=True,

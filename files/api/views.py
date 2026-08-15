@@ -39,6 +39,7 @@ from syftbox.services.syftbox_permission_service import (
 from ..constants import ALLOWED_FILES, FileStatus
 from ..models import File, FileShare, Folder, Tag
 from .serializers import (
+    FileProcessingJourneySerializer,
     FileSerializer,
     FileShareSerializer,
     FileStructureSerializer,
@@ -546,6 +547,12 @@ class FileViewSet(viewsets.ModelViewSet):
             raise ValidationError({"page_no": "Must be an integer."})
 
         serializer = FileStructureSerializer(file_obj, context={"page_no": page_no})
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["get"], url_path="processing-journey")
+    def processing_journey(self, request, pk=None):
+        """Return persisted attempts, stage timings, and failure attribution."""
+        serializer = FileProcessingJourneySerializer(self.get_object())
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["get"], url_path="element-image")

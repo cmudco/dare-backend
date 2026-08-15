@@ -44,5 +44,6 @@ class FileStatus(models.IntegerChoices):
 class FileProcessingStage(models.TextChoices):
     PARSING = "parsing", "Analyzing document"
     ENRICHING = "enriching", "Describing visuals"
-    EMBEDDING = "embedding", "Creating search index"
+    EMBEDDING = "embedding", "Creating embeddings"
+    INDEXING = "indexing", "Storing search index"
     COMPLETE = "complete", "Complete"

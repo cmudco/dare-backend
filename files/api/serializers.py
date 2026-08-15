@@ -192,6 +192,37 @@ class FileStructureSerializer(serializers.ModelSerializer):
         return (obj.document_model or {}).get("elements", [])
 
 
+class FileProcessingJourneySerializer(serializers.ModelSerializer):
+    """Compact metadata for the file viewer's processing timeline."""
+
+    status_label = serializers.CharField(source="get_status_display", read_only=True)
+    stage_label = serializers.CharField(
+        source="get_processing_stage_display", read_only=True
+    )
+    journey = serializers.SerializerMethodField()
+
+    class Meta:
+        model = File
+        fields = [
+            "id",
+            "name",
+            "status",
+            "status_label",
+            "processing_stage",
+            "stage_label",
+            "error_message",
+            "parser_name",
+            "page_count",
+            "journey",
+            "created_at",
+            "updated_at",
+        ]
+
+    @staticmethod
+    def get_journey(obj):
+        return obj.processing_journey or {"version": 1, "attempts": []}
+
+
 class TagSerializer(serializers.ModelSerializer):
     file_count = serializers.IntegerField(read_only=True)
 
