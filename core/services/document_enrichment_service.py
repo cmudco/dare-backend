@@ -90,11 +90,23 @@ class EnrichmentResult:
     described_figures: int = 0
     transcribed_pages: int = 0
     attempted_calls: int = 0
+    provider_requests: int = 0
+    cache_hits: int = 0
     failed_calls: int = 0
 
     @property
     def recovered_text(self) -> bool:
         return bool(self.text.strip())
+
+
+@dataclass
+class EnrichmentTelemetry:
+    """Counts local work separately from paid vision-provider requests."""
+
+    visual_operations: int = 0
+    provider_requests: int = 0
+    cache_hits: int = 0
+    failed_operations: int = 0
 
 
 class DocumentEnrichmentService:
@@ -144,18 +156,17 @@ class DocumentEnrichmentService:
         }
         page_results: Dict[int, Dict[str, Any]] = {}
         element_results: Dict[int, Dict[str, Any]] = {}
-        attempted = 0
-        failures = 0
+        telemetry = EnrichmentTelemetry()
 
         max_pages = max(int(env.DOCUMENT_ENRICHMENT_MAX_PAGES), 0)
         for page_no in sorted(textless_pages)[:max_pages]:
-            attempted += 1
+            telemetry.visual_operations += 1
             try:
                 page_results[page_no] = self._transcribe_page(
-                    file, page_no, model, credentials, ai_service
+                    file, page_no, model, credentials, ai_service, telemetry
                 )
             except Exception as error:
-                failures += 1
+                telemetry.failed_operations += 1
                 logger.warning(
                     "Page enrichment failed for file %s page %s: %s",
                     file.id,
@@ -190,7 +201,7 @@ class DocumentEnrichmentService:
                 continue
 
             considered += 1
-            attempted += 1
+            telemetry.visual_operations += 1
             try:
                 result = self._describe_figure(
                     file,
@@ -200,12 +211,13 @@ class DocumentEnrichmentService:
                     model,
                     credentials,
                     ai_service,
+                    telemetry,
                 )
                 element_results[element.order] = result
                 if result.get("status") == "complete":
                     described += 1
             except Exception as error:
-                failures += 1
+                telemetry.failed_operations += 1
                 logger.warning(
                     "Figure enrichment failed for file %s order %s: %s",
                     file.id,
@@ -225,15 +237,25 @@ class DocumentEnrichmentService:
         transcribed = sum(
             1 for result in page_results.values() if result.get("status") == "complete"
         )
-        status = self._summary_status(attempted, failures, described + transcribed)
+        status = self._summary_status(
+            telemetry.visual_operations,
+            telemetry.failed_operations,
+            described + transcribed,
+        )
         model_payload["enrichment"] = {
             "status": status,
             "model": model.identifier,
             "prompt_version": PROMPT_VERSION,
             "described_figures": described,
             "transcribed_pages": transcribed,
-            "attempted_calls": attempted,
-            "failed_calls": failures,
+            # Keep attempted_calls for older API clients while exposing the
+            # distinction that matters operationally: local cache work versus
+            # a fresh request to the configured vision provider.
+            "attempted_calls": telemetry.visual_operations,
+            "visual_operations": telemetry.visual_operations,
+            "provider_requests": telemetry.provider_requests,
+            "cache_hits": telemetry.cache_hits,
+            "failed_calls": telemetry.failed_operations,
             "duration_seconds": round(time.time() - started, 3),
             "completed_at": timezone.now().isoformat(),
             "provenance": "machine_generated",
@@ -242,7 +264,7 @@ class DocumentEnrichmentService:
             {
                 "described_figures": described,
                 "transcribed_pages": transcribed,
-                "enrichment_failures": failures,
+                "enrichment_failures": telemetry.failed_operations,
             }
         )
 
@@ -253,8 +275,10 @@ class DocumentEnrichmentService:
             document_model=model_payload,
             described_figures=described,
             transcribed_pages=transcribed,
-            attempted_calls=attempted,
-            failed_calls=failures,
+            attempted_calls=telemetry.visual_operations,
+            provider_requests=telemetry.provider_requests,
+            cache_hits=telemetry.cache_hits,
+            failed_calls=telemetry.failed_operations,
         )
 
     @staticmethod
@@ -293,6 +317,7 @@ class DocumentEnrichmentService:
         model: LLM,
         credentials,
         ai_service,
+        telemetry: EnrichmentTelemetry,
     ) -> Dict[str, Any]:
         image = self.crop_service.crop_element(file, element.order)
         previous_text = self._nearest_text(elements, index, -1, element.caption)
@@ -326,6 +351,7 @@ class DocumentEnrichmentService:
             ai_service=ai_service,
             output_limit=900,
             kind="figure_description",
+            telemetry=telemetry,
         )
         return {
             "status": "complete",
@@ -343,7 +369,13 @@ class DocumentEnrichmentService:
         }
 
     def _transcribe_page(
-        self, file: File, page_no: int, model: LLM, credentials, ai_service
+        self,
+        file: File,
+        page_no: int,
+        model: LLM,
+        credentials,
+        ai_service,
+        telemetry: EnrichmentTelemetry,
     ) -> Dict[str, Any]:
         image = self.crop_service.render_page(file, page_no)
         context = {
@@ -363,6 +395,7 @@ class DocumentEnrichmentService:
             ai_service=ai_service,
             output_limit=8000,
             kind="page_transcription",
+            telemetry=telemetry,
         )
         transcription = self._clean(
             result.get("transcription_markdown"), TRANSCRIPTION_OUTPUT_LIMIT
@@ -399,6 +432,7 @@ class DocumentEnrichmentService:
         ai_service,
         output_limit: int,
         kind: str,
+        telemetry: EnrichmentTelemetry,
     ) -> Tuple[Dict[str, Any], bool]:
         content_hash = (
             content_sha256 or hashlib.sha256(image, usedforsecurity=False).hexdigest()
@@ -415,6 +449,7 @@ class DocumentEnrichmentService:
             prompt_version=PROMPT_VERSION,
         ).first()
         if cache:
+            telemetry.cache_hits += 1
             return dict(cache.result), True
 
         self._check_credit(model, file, credentials, output_limit)
@@ -428,6 +463,7 @@ class DocumentEnrichmentService:
                 ],
             }
         ]
+        telemetry.provider_requests += 1
         result, usage = async_to_sync(ai_service.generate_structured_output_with_usage)(
             messages=messages,
             response_schema=schema,

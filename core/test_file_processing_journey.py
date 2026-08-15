@@ -88,6 +88,8 @@ class DocumentProcessorJourneyTests(SimpleTestCase):
             text="Useful document text",
             document_model={"enrichment": {"status": "not_needed"}},
             attempted_calls=0,
+            provider_requests=0,
+            cache_hits=0,
             described_figures=0,
             transcribed_pages=0,
             failed_calls=0,

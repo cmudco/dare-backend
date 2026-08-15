@@ -124,7 +124,9 @@ class DocumentProcessor:
                 details = {
                     "outcome": summary.get("status", "not_needed"),
                     "model": summary.get("model"),
-                    "attempted_calls": enrichment.attempted_calls,
+                    "visual_operations": enrichment.attempted_calls,
+                    "provider_requests": enrichment.provider_requests,
+                    "cache_hits": enrichment.cache_hits,
                     "described_figures": enrichment.described_figures,
                     "transcribed_pages": enrichment.transcribed_pages,
                     "failed_calls": enrichment.failed_calls,

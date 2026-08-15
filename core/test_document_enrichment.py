@@ -1,15 +1,20 @@
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from django.test import SimpleTestCase
 
 from core.config.document_parsing import ElementKind, ElementLabel
-from core.services.document_enrichment_service import DocumentEnrichmentService
+from core.services.document_enrichment_service import (
+    DocumentEnrichmentService,
+    EnrichmentTelemetry,
+)
 from core.services.document_parsers.docling_parser import DoclingDocumentParser
-from core.services.dtos.parsed_document_dto import (BoundingBox,
-                                                    DocumentStructure,
-                                                    ParsedDocument,
-                                                    ParsedElement)
+from core.services.dtos.parsed_document_dto import (
+    BoundingBox,
+    DocumentStructure,
+    ParsedDocument,
+    ParsedElement,
+)
 from core.services.gemini_service import GeminiService
 from files.api.serializers import FileStructureSerializer
 
@@ -54,6 +59,80 @@ class DocumentEnrichmentRoutingTests(SimpleTestCase):
             DocumentEnrichmentService._picture_decision(self.picture(), set()),
             "describe",
         )
+
+
+class DocumentEnrichmentTelemetryTests(SimpleTestCase):
+    def setUp(self):
+        self.file = SimpleNamespace(
+            id=7,
+            name="article.pdf",
+            file=SimpleNamespace(name="files/article.pdf"),
+            user=SimpleNamespace(id=3),
+        )
+        self.model = SimpleNamespace(identifier="gemini-test")
+        self.credentials = SimpleNamespace()
+        self.service = DocumentEnrichmentService()
+
+    @patch("core.services.document_enrichment_service.DocumentEnrichmentCache")
+    def test_cache_hit_is_not_counted_as_provider_request(self, cache_model):
+        cache_model.objects.filter.return_value.first.return_value = SimpleNamespace(
+            result={"description": "cached"}
+        )
+        telemetry = EnrichmentTelemetry()
+        ai_service = SimpleNamespace(generate_structured_output_with_usage=AsyncMock())
+
+        result, cache_hit = self.service._generate_cached(
+            file=self.file,
+            image=b"image",
+            content_sha256="a" * 64,
+            context={"page_no": 1},
+            prompt="Describe",
+            schema={"type": "object"},
+            model=self.model,
+            credentials=self.credentials,
+            ai_service=ai_service,
+            output_limit=100,
+            kind="figure_description",
+            telemetry=telemetry,
+        )
+
+        self.assertTrue(cache_hit)
+        self.assertEqual(result, {"description": "cached"})
+        self.assertEqual(telemetry.cache_hits, 1)
+        self.assertEqual(telemetry.provider_requests, 0)
+        ai_service.generate_structured_output_with_usage.assert_not_called()
+
+    @patch("core.services.document_enrichment_service.DocumentEnrichmentCache")
+    def test_fresh_request_is_counted_before_provider_execution(self, cache_model):
+        cache_model.objects.filter.return_value.first.return_value = None
+        telemetry = EnrichmentTelemetry()
+        ai_service = SimpleNamespace(
+            generate_structured_output_with_usage=AsyncMock(
+                side_effect=RuntimeError("provider unavailable")
+            )
+        )
+
+        with (
+            patch.object(self.service, "_check_credit"),
+            self.assertRaisesRegex(RuntimeError, "provider unavailable"),
+        ):
+            self.service._generate_cached(
+                file=self.file,
+                image=b"image",
+                content_sha256="a" * 64,
+                context={"page_no": 1},
+                prompt="Describe",
+                schema={"type": "object"},
+                model=self.model,
+                credentials=self.credentials,
+                ai_service=ai_service,
+                output_limit=100,
+                kind="figure_description",
+                telemetry=telemetry,
+            )
+
+        self.assertEqual(telemetry.cache_hits, 0)
+        self.assertEqual(telemetry.provider_requests, 1)
 
 
 class DocumentEnrichmentReadingOrderTests(SimpleTestCase):
