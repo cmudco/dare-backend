@@ -154,10 +154,7 @@ class DocumentProcessor:
                 )
 
             with journey.stage("indexing") as stage:
-                # Delay the vector-backend connection until parsing and visual
-                # enrichment are finished. If Weaviate is unavailable, the
-                # journey now points at indexing instead of falsely blaming
-                # Docling.
+                # Connect the vector backend late so its failures blame indexing, not parsing.
                 self.update_vector_service(file.user.id)
                 self._store_vectors(vectors, file.user.id)
                 backend_name = type(self.vector_service).__name__.removesuffix(

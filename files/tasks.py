@@ -27,8 +27,7 @@ def _resolve_status(file: File, vector_count: int) -> Tuple[int, Optional[str]]:
     layer can pick it up later; otherwise we surface it as a failure rather
     than leaving the user with a library entry that answers nothing.
     """
-    # Enrichment can turn a fully scanned document into real vectors. Only call
-    # it NEEDS_OCR when no embeddable text survived the complete pipeline.
+    # NEEDS_OCR only applies when no embeddable text survived the whole pipeline.
     if vector_count > 0:
         return FileStatus.PROCESSED, None
 

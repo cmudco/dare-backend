@@ -18,18 +18,14 @@ class ElementKind:
     PICTURE = "picture"
 
 
-# Figure enrichment policy. The 5% floor and ignored classes were validated
-# against DARE's sample corpus: all 135 NTSB picture regions fell below this
-# threshold, while the substantive newsletter/article figures survived it.
+# Figure enrichment policy: the 5% floor and skipped classes were validated on the sample corpus.
 MIN_PICTURE_AREA_RATIO = 0.05
 PICTURE_CLASSIFICATION_TOP_K = 5
 SKIPPED_PICTURE_CLASSES = frozenset(
     {"logo", "icon", "stamp", "page_thumbnail", "qr_code", "bar_code"}
 )
 
-# Context sent with a crop. ``heading_context`` deliberately stores candidates
-# rather than claiming Docling's latest section header is always the semantic
-# parent (bylines and photo credits are frequently labelled as headings).
+# Crop context: heading_context stores candidates because Docling mislabels bylines as headings.
 HEADING_CONTEXT_LIMIT = 3
 NEIGHBOR_TEXT_LIMIT = 300
 

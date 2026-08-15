@@ -257,18 +257,23 @@ class File(BaseModel):
                 logger.warning(f"Failed to delete file from storage: {e}")
         super().delete(*args, **kwargs)
 
+    @property
+    def needs_ocr(self) -> bool:
+        """Derived from the parse as well as status, so views stay honest mid-ingest."""
+        if self.status == FileStatus.NEEDS_OCR:
+            return True
+        enrichment = (self.document_model or {}).get("enrichment", {})
+        if enrichment.get("transcribed_pages", 0) >= self.pages_without_text:
+            return False
+        return bool(self.page_count) and self.pages_without_text >= self.page_count
+
     def __str__(self):
         return self.name if self.name else self.file.name
 
 
 class DocumentEnrichmentCache(TimeStampMixin):
-    """Per-user cache for deterministic crop/page enrichment results.
-
-    The image hash alone is not enough because context changes the useful
-    description. The context hash covers headings, caption and neighboring
-    text; model and prompt version make intentional prompt/model changes miss
-    the cache instead of silently reusing stale output.
-    """
+    """Per-user enrichment cache keyed by image, context, model and prompt version,
+    so context or prompt changes miss the cache instead of reusing stale output."""
 
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,

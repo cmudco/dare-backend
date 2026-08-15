@@ -1,18 +1,7 @@
-"""
-Docling Document Parser
+"""Parse PDF, Office and HTML documents into a ``ParsedDocument`` using Docling.
 
-Parses PDF, Office and HTML documents into a ``ParsedDocument`` using Docling.
-
-Docling returns a structured document rather than a string, which is what
-makes the rest of the pipeline possible: tables survive as markdown grids
-instead of collapsing into word soup, running heads are labelled so they can be
-dropped before chunking, and every picture arrives with its page, its position
-in reading order and the caption Docling linked to it.
-
-OCR is deliberately off. On the archival scans in the client corpus every local
-OCR engine returns confident nonsense, which chunks and embeds exactly like
-real text and is therefore worse than recovering nothing. Scanned pages are
-routed to ``FileStatus.NEEDS_OCR`` instead and handled by the vision layer.
+OCR is deliberately off: local OCR misreads archival scans as confident
+nonsense, so scanned pages route to NEEDS_OCR and the vision layer instead.
 """
 
 import hashlib
@@ -26,22 +15,25 @@ from docling.datamodel.base_models import DocumentStream, InputFormat
 from docling.datamodel.pipeline_options import PdfPipelineOptions
 from docling.document_converter import DocumentConverter, PdfFormatOption
 
-from core.config.document_parsing import (HEADING_CONTEXT_LIMIT,
-                                          MIN_CHARS_PER_PAGE,
-                                          PICTURE_CLASSIFICATION_TOP_K,
-                                          ElementKind, ElementLabel)
+from core.config.document_parsing import (
+    HEADING_CONTEXT_LIMIT,
+    MIN_CHARS_PER_PAGE,
+    PICTURE_CLASSIFICATION_TOP_K,
+    ElementKind,
+    ElementLabel,
+)
 from core.services.document_parsers.base import BaseDocumentParser
-from core.services.document_parsers.constants import (DOCLING_EXTENSIONS,
-                                                      PARSER_DOCLING)
-from core.services.dtos.parsed_document_dto import (BoundingBox,
-                                                    DocumentStructure,
-                                                    ParsedDocument,
-                                                    ParsedElement)
+from core.services.document_parsers.constants import DOCLING_EXTENSIONS, PARSER_DOCLING
+from core.services.dtos.parsed_document_dto import (
+    BoundingBox,
+    DocumentStructure,
+    ParsedDocument,
+    ParsedElement,
+)
 
 logger = logging.getLogger(__name__)
 
-# Docling's picture marker in the markdown export, and the blank runs that
-# removing it leaves behind.
+# Docling's picture marker in markdown, and the blank runs its removal leaves.
 IMAGE_PLACEHOLDER_PATTERN = re.compile(r"^[ \t]*<!--\s*image\s*-->[ \t]*$\n?", re.M)
 BLANK_RUN_PATTERN = re.compile(r"\n{3,}")
 
@@ -72,9 +64,7 @@ class DoclingDocumentParser(BaseDocumentParser):
         except Exception as error:
             if self._converter_was_injected:
                 raise
-            # Figure classification is useful routing, not a reason to lose
-            # the entire Docling structure when its optional model cannot load
-            # (for example, a first worker boot without Hugging Face access).
+            # An unloadable classifier model must not cost the whole parse.
             logger.warning(
                 "Docling conversion with figure classification failed for %s; "
                 "retrying structure-only: %s",
@@ -82,9 +72,11 @@ class DoclingDocumentParser(BaseDocumentParser):
                 error,
             )
             retry_source = DocumentStream(name=filename, stream=io.BytesIO(data))
-            document = self._get_classification_fallback_converter().convert(
-                retry_source
-            ).document
+            document = (
+                self._get_classification_fallback_converter()
+                .convert(retry_source)
+                .document
+            )
 
         elements = self._build_elements(document)
         structure = self._build_structure(document, elements)
@@ -99,15 +91,7 @@ class DoclingDocumentParser(BaseDocumentParser):
 
     @staticmethod
     def _clean_markdown(markdown: str) -> str:
-        """Strip picture placeholders out of the text we embed.
-
-        Docling marks every picture with an ``<!-- image -->`` comment. That is
-        useful as a position marker, but the position already lives in the
-        document model, and leaving the comments in means an NTSB report whose
-        first page carries four logos opens its first chunk with four
-        placeholders and no content. The vision layer will fill these positions
-        with real descriptions later.
-        """
+        """Strip ``<!-- image -->`` placeholders; positions live in the document model."""
         without_placeholders = IMAGE_PLACEHOLDER_PATTERN.sub("", markdown)
         return BLANK_RUN_PATTERN.sub("\n\n", without_placeholders).strip()
 
@@ -116,12 +100,7 @@ class DoclingDocumentParser(BaseDocumentParser):
     # ------------------------------------------------------------------
 
     def _build_elements(self, document: Any) -> List[ParsedElement]:
-        """Walk the document in reading order, one ParsedElement per item.
-
-        Tracks the most recent heading so that every element knows which
-        section it belongs to — that is what lets a picture description carry
-        "under 'How awake brain mapping works'" as context.
-        """
+        """Walk reading order, tracking headings so each element knows its section."""
         elements: List[ParsedElement] = []
         section: Optional[str] = None
         headings: List[Dict[str, Any]] = []
@@ -173,12 +152,7 @@ class DoclingDocumentParser(BaseDocumentParser):
     def _provenance(
         item: Any, document: Any
     ) -> Tuple[Optional[int], Optional[BoundingBox]]:
-        """Page number and page-relative bounding box for one item.
-
-        Docling reports boxes bottom-left origin in absolute points; the
-        frontend overlays them on a top-left origin image, so they are
-        converted and normalised here rather than in three call sites later.
-        """
+        """Page number and bbox, normalised to the frontend's top-left origin here."""
         provenance = getattr(item, "prov", None) or []
         if not provenance:
             return None, None
@@ -288,12 +262,7 @@ class DoclingDocumentParser(BaseDocumentParser):
 
     @staticmethod
     def _element_content_length(element: ParsedElement) -> int:
-        """Characters of real content one element contributes.
-
-        Table content lives in the markdown grid rather than in ``text``, so a
-        spreadsheet — where every sheet is one big table and no text elements
-        exist at all — would otherwise read as entirely blank.
-        """
+        """Content length; tables count their markdown, else spreadsheets read blank."""
         if element.table_markdown:
             return len(element.table_markdown.strip())
         return len(element.text.strip())
@@ -302,11 +271,7 @@ class DoclingDocumentParser(BaseDocumentParser):
     def _content_chars_by_page(
         cls, pages: Dict[int, Any], elements: List[ParsedElement]
     ) -> Dict[int, int]:
-        """Content characters per page.
-
-        A stray glyph from a stamp or a margin note is not content, so callers
-        compare against a per-page threshold rather than "any text at all".
-        """
+        """Content characters per page; callers threshold this, stray glyphs aren't content."""
         if not pages:
             return {}
 
@@ -321,12 +286,7 @@ class DoclingDocumentParser(BaseDocumentParser):
     # ------------------------------------------------------------------
 
     def _get_converter(self) -> DocumentConverter:
-        """Build the converter once and reuse it.
-
-        Docling loads a layout model on first conversion (~20s); holding the
-        converter on the parser instance keeps that cost to once per worker
-        process rather than once per file.
-        """
+        """Reuse one converter: the ~20s layout-model load happens once per worker."""
         if self._converter is None:
             self._converter = DocumentConverter(
                 format_options={
@@ -359,9 +319,7 @@ class DoclingDocumentParser(BaseDocumentParser):
         options.picture_classification_options.engine_options.top_k = (
             PICTURE_CLASSIFICATION_TOP_K
         )
-        # Persist crop pixels only for the lifetime of conversion so the local
-        # classifier can run and we can derive a stable content hash. Pixels are
-        # not written to the database; paid vision calls re-render on demand.
+        # Crop pixels live only for the conversion (classifier + content hash); never stored.
         options.generate_picture_images = classify_pictures
         options.generate_page_images = False
         return options

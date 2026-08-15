@@ -1,16 +1,7 @@
 """Context-aware figure description and scanned-page transcription.
 
-This is the seam between Docling parsing and chunking. It deliberately has two
-lanes:
-
-* text-bearing pages: describe only substantive figures, using the crop plus
-  headings, caption and neighboring text;
-* textless pages: transcribe the complete rendered page once, ignoring the
-  internal picture regions Docling may have detected inside that scan.
-
-The service is best-effort for mixed documents: text recovered by Docling is
-still embedded if vision is unavailable. A fully scanned document remains in
-NEEDS_OCR only when page transcription could not recover embeddable text.
+Two lanes: text-bearing pages get per-figure descriptions; textless pages get
+one full-page transcription. Best-effort — Docling text still embeds if vision fails.
 """
 
 import base64
@@ -158,8 +149,7 @@ class DocumentEnrichmentService:
         element_results: Dict[int, Dict[str, Any]] = {}
         telemetry = EnrichmentTelemetry()
 
-        max_pages = max(int(env.DOCUMENT_ENRICHMENT_MAX_PAGES), 0)
-        for page_no in sorted(textless_pages)[:max_pages]:
+        for page_no in sorted(textless_pages):
             telemetry.visual_operations += 1
             try:
                 page_results[page_no] = self._transcribe_page(
@@ -248,9 +238,7 @@ class DocumentEnrichmentService:
             "prompt_version": PROMPT_VERSION,
             "described_figures": described,
             "transcribed_pages": transcribed,
-            # Keep attempted_calls for older API clients while exposing the
-            # distinction that matters operationally: local cache work versus
-            # a fresh request to the configured vision provider.
+            # attempted_calls is kept for older API clients; visual_operations supersedes it.
             "attempted_calls": telemetry.visual_operations,
             "visual_operations": telemetry.visual_operations,
             "provider_requests": telemetry.provider_requests,

@@ -1,9 +1,6 @@
-"""Persist an inspectable processing history for each uploaded file.
+"""Persist an inspectable per-attempt processing history for each uploaded file.
 
-The current ``processing_stage`` remains the cheap value used by file lists.
-This service owns the richer audit trail shown in the file viewer: every retry
-is an attempt, and every attempt records the phase, wall-clock duration,
-useful counts, and the exact phase where an exception occurred.
+``processing_stage`` stays the cheap list value; this owns the file-viewer audit trail.
 """
 
 from __future__ import annotations

@@ -18,14 +18,17 @@ from config import env
 from conversations.models import LLM
 from core.services.api_key_service import get_provider_api_key
 from core.services.dtos.stream_event_dto import LLMStreamEvent
-from core.services.llm_utils import (GeminiErrorHandler,
-                                     GeminiMessageFormatter,
-                                     GeminiStreamProcessor,
-                                     GeminiUrlContextTools,
-                                     GeminiVisionHandler, GeminiWebSearchTools,
-                                     SchemaTransformer, StreamAggregator)
-from core.services.llm_utils.provider_message_converters import \
-    GeminiMessageConverter
+from core.services.llm_utils import (
+    GeminiErrorHandler,
+    GeminiMessageFormatter,
+    GeminiStreamProcessor,
+    GeminiUrlContextTools,
+    GeminiVisionHandler,
+    GeminiWebSearchTools,
+    SchemaTransformer,
+    StreamAggregator,
+)
+from core.services.llm_utils.provider_message_converters import GeminiMessageConverter
 from core.services.model_capabilities import ModelCapabilities
 
 logger = logging.getLogger(__name__)
@@ -240,12 +243,7 @@ class GeminiService:
 
     @classmethod
     def _sanitize_response_schema(cls, value):
-        """Remove JSON Schema keywords Gemini's response schema rejects.
-
-        OpenAI strict schemas require ``additionalProperties: false``; Gemini's
-        API returns INVALID_ARGUMENT for that keyword. Keep the shared schema
-        strict for OpenAI/LiteLLM and strip only at this provider boundary.
-        """
+        """Strip ``additionalProperties`` (OpenAI-strict) which Gemini rejects as INVALID_ARGUMENT."""
         if isinstance(value, dict):
             return {
                 key: cls._sanitize_response_schema(item)

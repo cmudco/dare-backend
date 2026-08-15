@@ -147,25 +147,11 @@ class FileStructureSerializer(serializers.ModelSerializer):
         return [element for element in elements if element.get("page_no") == page_no]
 
     def get_has_text(self, obj):
-        """Whether real content was recovered.
-
-        Read from the parse rather than from ``extracted_text`` so it stays
-        true regardless of how a caller happens to have populated the column.
-        """
+        """Whether any embeddable content was recovered, parsed or transcribed."""
         return bool(self.get_counts(obj).get("content_chars") or obj.extracted_text)
 
     def get_needs_ocr(self, obj):
-        """Every page is a scan awaiting transcription.
-
-        Derived from the parse as well as the status, so the structure view is
-        honest even for a file whose ingest has not finished writing a status.
-        """
-        if obj.status == FileStatus.NEEDS_OCR:
-            return True
-        enrichment = (obj.document_model or {}).get("enrichment", {})
-        if enrichment.get("transcribed_pages", 0) >= obj.pages_without_text:
-            return False
-        return bool(obj.page_count) and obj.pages_without_text >= obj.page_count
+        return obj.needs_ocr
 
     def get_enrichment(self, obj):
         return (obj.document_model or {}).get("enrichment", {})
@@ -174,9 +160,7 @@ class FileStructureSerializer(serializers.ModelSerializer):
         rows = (obj.document_model or {}).get("page_enrichments", [])
         page_no = self.context.get("page_no")
         if page_no is None:
-            # The all-pages overview needs routing/status/summary, not tens of
-            # thousands of transcription characters. Fetching a specific page
-            # returns its complete Markdown below.
+            # Overview omits full transcriptions; a page_no fetch returns the complete Markdown.
             return [
                 {
                     key: value
