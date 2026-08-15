@@ -7,6 +7,9 @@ by Claude Code through the import in `CLAUDE.md`.
 Task-specific procedures — running the server, running workers, pre-PR checks — live as skills in
 `.agents/skills/`. See `.agents/README.md` for how that directory works.
 
+Before changing backend code, read and follow `rules.md`. Its feature architecture and definition
+of done are mandatory for new work and touched code.
+
 ## Project Architecture
 
 This is a Django REST API backend for an AI-powered research and conversation platform with multi-LLM support, real-time WebSocket communication, and vector database integration.

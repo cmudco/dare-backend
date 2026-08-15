@@ -1,620 +1,205 @@
-# DARE Backend Code Quality Rules
+# DARE Backend Engineering Rules
 
-This document defines coding standards and patterns for the DARE backend. Follow these rules to maintain code quality, readability, and developer experience.
+These rules are the default for new work and touched code. Exceptions need a concrete reason in the PR.
 
----
+## 1. Start with the contract
 
-## 1. DTOs & Data Transfer
+Before implementation, define:
 
-### Use Typed DTOs Instead of Parameter Sprawl
+- request, response, and socket-event shapes;
+- the owner of each field and default;
+- authorization and tenant boundaries;
+- domain invariants and state transitions;
+- failure, retry, and idempotency behavior;
+- migrations, rollout, and compatibility needs.
 
-**Bad** - Function with 18+ parameters:
-```python
-async def build_standard_messages(
-    request_message: str,
-    conversation: Optional[Any],
-    document_processor: DocumentProcessor,
-    file_processor: FileProcessor,
-    prompt_id: Optional[str],
-    referenced_conversation_ids: Optional[List[str]],
-    file_ids: Optional[List[int]],
-    embedding_ids: Optional[List[int]],
-    tag_ids: Optional[List[int]],
-    folder_ids: Optional[List[int]],
-    user_id: Optional[int],
-    file_owner_id: Optional[int],
-    is_socratic_mode: bool,
-    similarity_threshold: float,
-    max_context_snippets: int,
-    history_limit: int,
-    message_obj: Optional[Any] = None,
-    workflow_run_step_obj: Optional[Any] = None,
-) -> List[Dict[str, str]]:
+Do not start by adding helpers. Start with the shortest valid data flow.
+
+```text
+transport -> validation -> request DTO -> service -> domain -> persistence/integration
+                                                               -> response serializer/event
 ```
 
-**Good** - Clean DTO-based signature:
-```python
-async def build_standard_messages(
-    request: LLMQueryRequest,
-    document_processor: DocumentProcessor,
-    file_processor: FileProcessor,
-) -> List[Dict[str, str]]:
+Each field is validated, transformed, and defaulted in one named place.
+
+## 2. Keep dependencies one-way
+
+A Django feature may use these layers when they add real value:
+
+```text
+<app>/api/          authentication, serializers, thin views
+<app>/services/     use-case orchestration, transactions, I/O
+<app>/domain/       pure decisions, types, and invariants
+<app>/models.py     persistence shape and model-level constraints
+<app>/tasks.py      small queue entrypoints that call services
+<app>/tests/        unit, contract, integration, and task tests
 ```
 
-### DTO Design Principles
+- Views and consumers validate, authorize, call one service, and serialize.
+- Services coordinate repositories, providers, transactions, and domain functions.
+- Domain code is deterministic and has no ORM, network, queue, or socket access.
+- Models describe persisted state; they do not orchestrate workflows.
+- Tasks accept stable IDs, reload state, and delegate to a service.
+- Lower layers never import API views or transport concerns.
+- Do not create every layer mechanically. A layer must own a distinct responsibility.
 
-1. **Use frozen dataclasses** for immutability:
-```python
-@dataclass(frozen=True)
-class LLMQueryRequest:
-    message: str
-    user: Optional[Any] = None
-    context: ContextConfig = field(default_factory=ContextConfig)
-```
+## 3. One typed request flow
 
-2. **Group related fields** into nested configs:
-```python
-@dataclass(frozen=True)
-class LLMQueryRequest:
-    context: ContextConfig      # Document/history context
-    generation: GenerationConfig # Temperature, tokens, etc.
-    media: MediaConfig          # Images and media files
-    socratic: SocraticConfig    # Teaching mode config
-```
+- Build one canonical DTO at the backend boundary.
+- Normal sends, regeneration, retries, and background continuations reuse that DTO or an explicit variant.
+- Validate and cast once. Downstream code trusts the validated type.
+- Do not repeatedly call `str()`, `int()`, `.get()`, or apply fallback defaults to validated fields.
+- Prefer frozen dataclasses or Pydantic models over parameter sprawl and `Dict[str, Any]`.
+- Do not create pass-through DTOs that merely rename or copy another DTO.
+- Keep snake_case internally; the DRF camel-case integration owns wire conversion.
 
-3. **Add helper methods** for common queries:
-```python
-def is_socratic_mode(self) -> bool:
-    return self.socratic.enabled
+Responses and events must have explicit serializers or schemas. Never make the frontend infer a shape from a generic `result`, JSON string, or union of unrelated payloads.
 
-def requires_web_search(self) -> bool:
-    return self.generation.web_search_enabled
-```
+## 4. One source of truth
 
-4. **No redundant DTOs** - Don't create intermediate DTOs that just extract fields from another DTO.
+- A rule, threshold, mapping, or state transition has one owner.
+- Derived state is computed, not stored in parallel representations.
+- Shared policy used by read and write paths lives in one pure module.
+- Compatibility code must be an isolated adapter with a documented removal condition.
+- Do not duplicate old and new architectures throughout the feature.
+- If a feature has never shipped, remove obsolete schema and code instead of carrying permanent compatibility.
 
----
+## 5. Persistence and ownership
 
-## 2. Separation of Concerns
+- Scope every user-owned query by the authenticated user in the service or queryset.
+- Cross-user identifiers return 404; unauthenticated access returns 401.
+- Use transactions for multi-row invariants and state transitions.
+- Make lifecycle states explicit. Do not encode retirement, deletion, and privacy in one ambiguous flag.
+- Prefer soft retirement when history or auditability matters; deletion remains an explicit user action.
+- Add database constraints and indexes for invariants that must survive concurrency.
+- Never add and immediately undo a migration in the same undeployed feature. Replace or squash it when safe.
+- Deployed migrations are history: follow them with a new migration and a rollback/data plan.
 
-### Module Organization
+## 6. LLM and external-service boundaries
 
-Reference: `core/services/vector_service.py`
+- Use the shared provider/service layer so billing, usage, retries, and observability remain intact.
+- Use structured output with an explicit schema for machine decisions.
+- Treat model output as untrusted input. A deterministic gate owns irreversible policy decisions.
+- Keep authorization and security policy outside prompts.
+- Regex is acceptable for bounded syntax and known security signals, not broad natural-language classification.
+- Every security detector needs adversarial positives and nearby legitimate negatives.
+- Record every paid model call, including repair calls, immediately after it succeeds.
+- Close async clients in the same event-loop lifecycle that created them.
+- Bound retries and make each attempt visible in logs and billing.
 
-```
-core/services/
-├── vector_service.py      # Service layer (orchestration)
-├── document_processor.py  # Domain logic
-├── llm_service.py         # LLM orchestration
-├── llm_helpers/           # Helper modules
-│   ├── db_helpers.py          # Database operations
-│   ├── socratic_helpers.py    # Socratic message building
-│   ├── standard_message_helpers.py  # Standard message building
-│   └── semantic_context_helpers.py  # Vector search helpers
-└── dtos/                  # Data transfer objects
-    ├── request_dto.py
-    ├── context_dto.py
-    └── ...
-```
+## 7. Background work and concurrency
 
-### Abstract Base Classes for Extensibility
+- A job must be safe to retry and must have a persisted idempotency key or completion marker.
+- Define the ordering scope explicitly: global, per user, per conversation, or per record key.
+- Scale workers only when the ordering invariant remains true under parallel execution.
+- Enqueue stable IDs, not large mutable objects.
+- Queue configuration must name a real workload. Remove unused queues, workers, and schedulers.
+- A worker failure must leave enough persisted evidence to retry or diagnose the turn.
 
-**Good** - Abstract base with multiple implementations:
-```python
-class BaseVectorService(ABC):
-    """Abstract base class for vector database services."""
+## 8. Errors and defensive code
 
-    @abstractmethod
-    def upsert_vectors(self, vectors: List[Tuple], namespace: Optional[str] = None) -> bool:
-        pass
+- Catch specific exceptions at the layer that can add context or recover.
+- Do not catch `Exception` and silently choose a default.
+- A fallback must be intentional, observable, tested, and behaviorally safe.
+- Invalid or impossible states fail at the boundary instead of widening a query or guessing.
+- Never log credentials, private payloads, or unredacted provider errors.
+- User-facing errors are stable and actionable; logs retain technical context.
 
-    @abstractmethod
-    def query_vectors(self, vector: List[float], top_k: int = 5) -> List[Dict]:
-        pass
+## 9. Keep the code small
 
+- Imports belong at module scope. Inline imports require an unavoidable cycle or startup constraint and a short explanation.
+- A function operates at one abstraction level and has one reason to change.
+- Do not extract a wrapper used once unless it names a real concept or removes branching.
+- Add an interface or abstract base only when multiple implementations or a tested boundary exist.
+- Delete dead branches, unused constants, stale flags, and obsolete comments while touching their path.
+- Do not refactor unrelated areas under a feature commit; record larger cleanup separately.
+- Comments explain why, an invariant, or a non-obvious constraint in one or two lines.
+- Do not preserve benchmarks, review history, or implementation diaries in source comments.
+- Docstrings are for public contracts and non-obvious behavior, not a narration of the code.
+- New environment settings should normally be one declaration plus validation where required.
 
-class PineconeVectorService(BaseVectorService):
-    """Pinecone implementation."""
-    def __init__(self):
-        self.client = PineconeClient()
+## 10. Tests are part of the feature
 
-    def upsert_vectors(self, vectors, namespace=None):
-        return self.client.upsert_vectors(vectors, namespace)
+Use the cheapest layer that proves the behavior:
 
+- pure unit tests for domain decisions and boundary cases;
+- API tests for validation, response shape, 401, 404, and tenant isolation;
+- integration tests for ORM constraints, transactions, and serializers;
+- task tests for retry, idempotency, and ordering;
+- fresh-session end-to-end journeys for socket and LLM behavior.
 
-class WeaviateVectorService(BaseVectorService):
-    """Weaviate implementation."""
-    def __init__(self):
-        self.client = WeaviateClient()
-```
+Further rules:
 
-### Factory Functions for Service Selection
+- Pair every rejection/security case with a legitimate negative case.
+- Freeze model-behavior corpora; do not rely only on ad-hoc prompts.
+- Automated tests mock paid providers unless the test is explicitly marked as a live integration test.
+- Tests must not depend on wall-clock delays, connection age, execution order, or shared seeded state.
+- A reply is not proof of persistence. Verify the authoritative database row, audit record, and emitted metadata.
+- Regeneration and duplicate delivery require explicit idempotency tests.
 
-```python
-def get_vector_service(user_id: Optional[int] = None) -> BaseVectorService:
-    """Factory function to get the appropriate vector service."""
-    if user_id is None:
-        return WeaviateVectorService()
+## 11. Micro-examples
 
-    user = User.objects.get(id=user_id)
-    if user.vector_db == VectorDBChoice.PINECONE:
-        return PineconeVectorService()
-    return WeaviateVectorService()
-```
+Examples clarify a rule; they are not templates to copy blindly.
 
----
-
-## 3. Import Rules
-
-### No Inline Imports
-
-**Bad** - Inline imports inside functions:
-```python
-def process_data():
-    from core.services.document_processor import DocumentProcessor  # NO!
-    processor = DocumentProcessor()
-```
-
-**Good** - All imports at module top:
-```python
-from core.services.document_processor import DocumentProcessor
-
-def process_data():
-    processor = DocumentProcessor()
-```
-
-### Import Order
-
-1. Standard library imports
-2. Third-party imports
-3. Local application imports
+### Validate once
 
 ```python
-# Standard library
-import logging
-from typing import List, Dict, Optional, Any
-from dataclasses import dataclass, field
-from abc import ABC, abstractmethod
+# Bad: every caller guesses the type and default.
+query = str(arguments.get("query", ""))
 
-# Third-party
-from django.conf import settings
-from asgiref.sync import sync_to_async
-
-# Local application
-from core.services.dtos import LLMQueryRequest
-from core.services.document_processor import DocumentProcessor
+# Good: the boundary validates; the service receives a string.
+serializer.is_valid(raise_exception=True)
+service.search(query=serializer.validated_data["query"])
 ```
 
-### Export Explicitly with `__all__`
+### Keep transport thin
 
 ```python
-# dtos/__init__.py
-from .context_dto import ContextConfig
-from .generation_dto import GenerationConfig
-from .request_dto import LLMQueryRequest, LLMQueryChunk
-
-__all__ = [
-    "ContextConfig",
-    "GenerationConfig",
-    "LLMQueryRequest",
-    "LLMQueryChunk",
-]
+def hold(self, request):
+    command = HoldMemoryRequest.from_validated(request.data)
+    item = memory_service.set_hold(request.user, command)
+    return Response(MemorySerializer(item).data)
 ```
 
----
-
-## 4. Type Hints & Readability
-
-### Strong Typing
-
-**Bad** - Ambiguous types:
-```python
-def process(data, options):
-    pass
-```
-
-**Good** - Explicit types:
-```python
-def process(data: LLMQueryRequest, options: Dict[str, Any]) -> List[Dict[str, str]]:
-    pass
-```
-
-### Avoid `Any` Unless Necessary
-
-Use `Any` only when:
-- Avoiding circular imports (document in comments)
-- Working with truly dynamic data
+### Fail visibly
 
 ```python
-# Using Any to avoid circular imports
-user: Optional[Any] = None  # User model
+# Bad: a provider outage looks like a valid empty result.
+except Exception:
+    return []
+
+# Good: translate only the failure this layer understands.
+except ProviderTimeout as error:
+    raise MemoryUnavailable("Provider timed out.") from error
 ```
 
-### Type Aliases for Complex Types
+### Keep tasks as entrypoints
 
 ```python
-MessageList = List[Dict[str, str]]
-VectorTuple = Tuple[str, List[float], Dict]
-
-def build_messages(request: LLMQueryRequest) -> MessageList:
-    pass
+@job("memory")
+def ingest_memory(message_id: int) -> None:
+    memory_service.ingest_message(message_id)
 ```
 
----
-
-## 5. Error Handling
-
-### Decorator Pattern for Consistent Error Handling
-
-```python
-def client_operation(func):
-    """Decorator for standardized error handling in vector client operations."""
-    def wrapper(*args, **kwargs):
-        try:
-            return func(*args, **kwargs)
-        except Exception as e:
-            operation_name = func.__name__
-            raise Exception(f"Error in {operation_name}: {str(e)}")
-    return wrapper
-
-
-class WeaviateVectorService(BaseVectorService):
-    @client_operation
-    def upsert_vectors(self, vectors, namespace=None):
-        return self.client.upsert_vectors(vectors, namespace)
-```
-
-### Graceful Fallbacks
-
-```python
-async def get_vector_service_async(user_id: Optional[int] = None) -> BaseVectorService:
-    if user_id is None:
-        return WeaviateVectorService()
-
-    try:
-        user = await sync_to_async(lambda: User.objects.get(id=user_id))()
-        if user.vector_db == VectorDBChoice.PINECONE:
-            try:
-                return PineconeVectorService()
-            except Exception:
-                return WeaviateVectorService()  # Fallback
-        return WeaviateVectorService()
-    except Exception:
-        return WeaviateVectorService()  # Default fallback
-```
-
----
-
-## 6. Documentation
-
-### Module-Level Docstrings
-
-```python
-"""
-Socratic Message Builders
-
-Complete message construction for SocraticBooks classic and advanced modes.
-These functions handle all logging, history retrieval, vector service init,
-document context retrieval, and prompt assembly.
-"""
-```
-
-### Function Docstrings with Args/Returns
-
-```python
-async def build_classic_socratic_messages(
-    request: LLMQueryRequest,
-    document_processor: DocumentProcessor,
-) -> List[Dict[str, str]]:
-    """
-    Build complete message array for classic SocraticBooks mode.
-
-    The classic format establishes the AI as a "living Socratic book" that helps
-    students learn through dialogue.
-
-    Args:
-        request: LLMQueryRequest containing all query parameters
-        document_processor: DocumentProcessor for vector similarity search
-
-    Returns:
-        List of message dicts ready for LLM API: [system_message, user_message]
-    """
-```
-
-### Section Comments for Large Files
-
-```python
-# ============================================================================
-# Public API - These are the only exports
-# ============================================================================
-
-async def build_classic_socratic_messages(...):
-    pass
-
-# ============================================================================
-# Private Helpers - Internal to this module
-# ============================================================================
-
-def _format_transcript(history: List[Dict[str, str]]) -> str:
-    pass
-```
-
----
-
-## 7. Async Patterns
-
-### Sync-to-Async for Django ORM
-
-```python
-from asgiref.sync import sync_to_async
-
-# Wrap ORM calls
-user = await sync_to_async(lambda: User.objects.get(id=user_id))()
-```
-
-### Async Factory Functions
-
-Provide both sync and async versions when needed:
-
-```python
-def get_vector_service(user_id: Optional[int] = None) -> BaseVectorService:
-    """Sync version."""
-    pass
-
-async def get_vector_service_async(user_id: Optional[int] = None) -> BaseVectorService:
-    """Async version with connection testing."""
-    pass
-```
-
----
-
-## 8. Code Smells to Avoid
-
-| Smell | Solution |
-|-------|----------|
-| 5+ parameters | Use a DTO |
-| Inline imports | Move to top of file |
-| Repeated field extraction | Pass the DTO directly |
-| `Dict[str, Any]` everywhere | Create typed dataclasses |
-| Copy-paste code | Extract to helper functions |
-| Giant functions | Split into smaller, focused functions |
-| Mixed abstraction levels | Separate high-level orchestration from low-level details |
-
----
-
-## 9. File Naming Conventions
-
-| Type | Convention | Example |
-|------|------------|---------|
-| DTOs | `*_dto.py` | `request_dto.py`, `context_dto.py` |
-| Services | `*_service.py` | `llm_service.py`, `vector_service.py` |
-| Helpers | `*_helpers.py` | `db_helpers.py`, `socratic_helpers.py` |
-| Constants | `constants.py` | `conversations/constants.py` |
-| Models | `models.py` | Standard Django convention |
-
----
-
-## 10. Reference Implementations
-
-### Clean Service Layer
-See: `core/services/vector_service.py`
-- Abstract base class
-- Multiple implementations
-- Factory function
-- Consistent error handling
-
-### Clean DTO Structure
-See: `core/services/dtos/`
-- Frozen dataclasses
-- Nested configs
-- Helper methods
-- Explicit exports
-
-### Clean Helper Modules
-See: `core/services/llm_helpers/socratic_helpers.py`
-- Clear public/private separation
-- Focused functions
-- Good documentation
-- Consistent patterns
-
----
-
-## Summary
-
-1. **DTOs over parameter lists** - If a function has 5+ params, use a DTO
-2. **Imports at top** - Never inline imports
-3. **Strong typing** - Use type hints everywhere
-4. **Abstract bases** - For extensible service layers
-5. **Factory functions** - For service instantiation
-6. **Consistent error handling** - Use decorators
-7. **Clear documentation** - Module, class, and function docstrings
-8. **Separation of concerns** - Helpers, services, DTOs in separate modules
-
----
-
-## 11. Data Schema Design (BE-FE Contracts)
-
-### Separate Fields for Different Data Types
-
-When a field can contain different data structures based on context, **use separate named fields** instead of union types or generic fields.
-
-**Bad** - Ambiguous field that requires FE to guess:
-```python
-# FE doesn't know what shape result is
-"toolCall": {
-    "id": tool_call_id,
-    "result": tc.get("result"),  # Could be anything!
-}
-```
-
-**Good** - Separate fields for each data type:
-```python
-# FE knows exactly which field to check based on serverSlug
-"toolCall": {
-    "id": tool_call_id,
-    "serverSlug": server_slug,
-    "dareResult": parsed_result if server_slug == "dare" else None,
-    "mcpResult": parsed_result if server_slug != "dare" else None,
-}
-```
-
-### Parse and Camelize Before Sending
-
-Never send raw JSON strings to FE. Parse and camelize all nested data.
-
-**Bad** - Sending JSON string:
-```python
-"result": json.dumps(tool_result)  # FE has to JSON.parse()
-```
-
-**Good** - Sending parsed, camelized object:
-```python
-def _parse_tool_result(self, result: str):
-    if not result:
-        return None
-    try:
-        parsed = json.loads(result)
-        return camelize(parsed)
-    except (json.JSONDecodeError, TypeError):
-        return result
-
-# Usage
-"dareResult": self._parse_tool_result(tc.get("result"))
-```
-
-### Route to Correct Fields Based on Context
-
-Use helper methods to build payloads with proper field routing.
-
-```python
-def _build_tool_call_payload(self, tc: dict) -> dict:
-    """Route result to the correct typed field based on context."""
-    server_slug = tc["server_slug"]
-    parsed_result = self._parse_tool_result(tc.get("result"))
-    
-    payload = {
-        "id": tc["tool_call_id"],
-        "toolName": tc["tool_name"],
-        "serverSlug": server_slug,
-        "status": tc["status"],
-        "error": tc.get("error"),
-    }
-    
-    # Route to correct field based on server type
-    if server_slug == "dare":
-        payload["dareResult"] = parsed_result
-    else:
-        payload["mcpResult"] = parsed_result
-        
-    return payload
-```
-
-### Reference Implementation
-
-See: `core/services/conversation_service.py`
-- `_build_tool_call_payload()` - Routes to correct field
-- `_parse_tool_result()` - Parses JSON and camelizes
-
-This ensures:
-- **Zero confusion** on FE about data shape
-- **Type-safe** interfaces on FE
-- **No parsing** needed on FE
-- **10/10 readability** - clear what each field contains
-
----
-
-## 12. Mermaid Diagram Syntax Rules
-
-### Supported Diagram Types
-
-The `create_diagram` DARE tool supports these Mermaid diagram types:
-
-| Type | Mermaid Directive | Use Case |
-|------|-------------------|----------|
-| `flowchart` | `flowchart TD` | Process flows, workflows, decision trees |
-| `sequence` | `sequenceDiagram` | API calls, user interactions, message flows |
-| `mindmap` | `mindmap` | Brainstorming, hierarchical concepts |
-| `pie` | `pie showData` | Data distribution, percentages |
-| `state` | `stateDiagram-v2` | State machines, lifecycle diagrams |
-| `class` | `classDiagram` | UML class diagrams, simple entity relations |
-| `er` | `erDiagram` | Entity Relationship Diagrams, database schemas |
-
-### Syntax Rules by Diagram Type
-
-#### Flowchart (Default)
-
-```mermaid
-flowchart TD
-    %% Title goes in comment
-    start["Start Process"]
-    decision{"Is Valid?"}
-    node_end["Complete"]
-    start-->decision
-    decision-->|Yes|node_end
-```
-
-**Rules:**
-- Node IDs: Use alphanumeric only (`step1`, `validate`, `process`)
-- Reserved words (`end`, `graph`, `style`, `class`) must be prefixed: `node_end`
-- Labels: Use quoted strings `["Label"]` for special characters
-- Edge labels: Use `-->|label|` format
-
-#### Entity Relationship Diagram
-
-```mermaid
-erDiagram
-    %% Title
-    User ||--o{ Conversation : "has"
-    Conversation ||--o{ Message : "contains"
-```
-
-**Rules:**
-- Entity names: Simple alphanumeric, no spaces
-- Relationship labels: Must be quoted `"label"`
-- Cardinality notation: `||--o{` (one-to-many), `||--||` (one-to-one)
-- No parentheses in labels - use underscores
-
-#### Class Diagram
-
-```mermaid
-classDiagram
-    %% Title
-    class User
-    class Conversation
-    User --> Conversation : owns
-```
-
-**Rules:**
-- Class names: Simple alphanumeric
-- Relationship labels: After `:` with space
-- No shape syntax - classes are always rectangles
-
-### Reserved Keywords
-
-Never use these as node IDs (auto-prefixed with `node_` in backend):
-
-```python
-MERMAID_RESERVED_KEYWORDS = {
-    'end', 'graph', 'subgraph', 'direction', 'click', 'style', 'classDef',
-    'class', 'linkStyle', 'callback', 'note', 'participant', 'actor',
-    'loop', 'alt', 'else', 'opt', 'par', 'and', 'rect', 'state'
-}
-```
-
-### Label Escaping
-
-| Character | Replacement |
-|-----------|-------------|
-| `"` | `'` |
-| `(` | `[` (unquoted) or kept (quoted) |
-| `)` | `]` (unquoted) or kept (quoted) |
-| `{` | `[` (unquoted) |
-| `}` | `]` (unquoted) |
-| `\n` | ` ` (space) |
-
-### Reference Implementation
-
-See: `core/services/llm_utils/diagram_tool.py`
-- `_sanitize_node_id()` - Handles reserved keywords and special chars
-- `_escape_label()` - Escapes labels for Mermaid syntax
-- `_build_*_diagram()` - Type-specific diagram builders
+## 12. Definition of done
+
+A feature is ready only when:
+
+- the request-to-response flow has one clear owner at every step;
+- no unused config, migration, queue, flag, endpoint, or compatibility branch was introduced;
+- authorization, tenant isolation, failure, and retry paths are tested;
+- provider calls are billed and observable;
+- formatting, import order, static checks, and relevant tests pass;
+- migrations and rollout assumptions are documented;
+- the diff contains no unrelated user work;
+- comments and docs describe the final design, not how the patch evolved.
+
+Leave touched code cleaner than you found it, but keep cleanup evidence-driven and inside the feature's path.
+
+## Project conventions
+
+- Format with Black and check imports with isort using the Black profile.
+- Use `ActiveObjectsManager` for live rows and the unfiltered manager only intentionally.
+- Add `help_text`, meaningful `related_name` values, and useful `__str__` methods to models.
+- Wrap user-facing strings with Django translation utilities.
+- Mermaid diagrams use alphanumeric node IDs, quoted labels with punctuation, and prefixed reserved words such as `node_end`.
