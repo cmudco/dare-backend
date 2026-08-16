@@ -39,3 +39,11 @@ class FileStatus(models.IntegerChoices):
     # text to embed. Distinct from FAILED (nothing went wrong) and from
     # PROCESSED (the file cannot answer questions yet).
     NEEDS_OCR = 3, "Needs OCR"
+
+
+class FileProcessingStage(models.TextChoices):
+    PARSING = "parsing", "Analyzing document"
+    ENRICHING = "enriching", "Describing visuals"
+    EMBEDDING = "embedding", "Creating embeddings"
+    INDEXING = "indexing", "Storing search index"
+    COMPLETE = "complete", "Complete"

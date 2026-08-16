@@ -10,7 +10,7 @@ from core.storage.constants import StorageBackendChoice
 from core.storage.fields import DynamicStorageFileField
 from users.constants import VectorDBChoice
 
-from .constants import FileStatus
+from .constants import FileProcessingStage, FileStatus
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +102,20 @@ class File(BaseModel):
         choices=FileStatus.choices,
         default=FileStatus.PROCESSING,
         help_text="Processing status of the file",
+    )
+    processing_stage = models.CharField(
+        max_length=20,
+        choices=FileProcessingStage.choices,
+        default=FileProcessingStage.PARSING,
+        help_text="Current ingestion phase shown while the background job runs",
+    )
+    processing_journey = models.JSONField(
+        blank=True,
+        default=dict,
+        help_text=(
+            "Versioned processing attempts with stage timings, metrics, and "
+            "failure attribution"
+        ),
     )
     vector_db_source = models.IntegerField(
         choices=VectorDBChoice.choices,
@@ -243,8 +257,54 @@ class File(BaseModel):
                 logger.warning(f"Failed to delete file from storage: {e}")
         super().delete(*args, **kwargs)
 
+    @property
+    def needs_ocr(self) -> bool:
+        """Derived from the parse as well as status, so views stay honest mid-ingest."""
+        if self.status == FileStatus.NEEDS_OCR:
+            return True
+        enrichment = (self.document_model or {}).get("enrichment", {})
+        if enrichment.get("transcribed_pages", 0) >= self.pages_without_text:
+            return False
+        return bool(self.page_count) and self.pages_without_text >= self.page_count
+
     def __str__(self):
         return self.name if self.name else self.file.name
+
+
+class DocumentEnrichmentCache(TimeStampMixin):
+    """Per-user enrichment cache keyed by image, context, model and prompt version,
+    so context or prompt changes miss the cache instead of reusing stale output."""
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="document_enrichment_cache_entries",
+    )
+    content_sha256 = models.CharField(max_length=64)
+    context_sha256 = models.CharField(max_length=64)
+    model_identifier = models.CharField(max_length=255)
+    prompt_version = models.CharField(max_length=32)
+    result = models.JSONField()
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=[
+                    "user",
+                    "content_sha256",
+                    "context_sha256",
+                    "model_identifier",
+                    "prompt_version",
+                ],
+                name="unique_document_enrichment_cache_entry",
+            )
+        ]
+        indexes = [
+            models.Index(
+                fields=["user", "content_sha256"],
+                name="doc_enrich_user_hash_idx",
+            )
+        ]
 
 
 class FileShare(TimeStampMixin):

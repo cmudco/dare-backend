@@ -18,6 +18,18 @@ class ElementKind:
     PICTURE = "picture"
 
 
+# Figure enrichment policy: the 5% floor and skipped classes were validated on the sample corpus.
+MIN_PICTURE_AREA_RATIO = 0.05
+PICTURE_CLASSIFICATION_TOP_K = 5
+SKIPPED_PICTURE_CLASSES = frozenset(
+    {"logo", "icon", "stamp", "page_thumbnail", "qr_code", "bar_code"}
+)
+
+# Crop context: heading_context stores candidates because Docling mislabels bylines as headings.
+HEADING_CONTEXT_LIMIT = 3
+NEIGHBOR_TEXT_LIMIT = 300
+
+
 class ElementLabel:
     """Semantic role of a text element, mirroring Docling's label vocabulary."""
 

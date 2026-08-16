@@ -61,6 +61,9 @@ sequenceDiagram
     participant API as REST API
     participant DB as Database
     participant RQ as RQ Worker
+    participant DL as Docling
+    participant VE as Visual Enrichment
+    participant GM as Gemini Vision
     participant DP as DocumentProcessor
     participant ES as EmbeddingService
     participant VDB as Vector DB
@@ -73,10 +76,26 @@ sequenceDiagram
     FE-->>User: Show "Processing..." status
 
     Note over RQ: Background processing begins
-    RQ->>DB: Load file content
-    RQ->>DP: extract_text(file)
-    DP-->>RQ: Raw text
-    RQ->>DP: chunk_text(text, chunk_size, overlap)
+    RQ->>DB: Set stage=parsing
+    RQ->>DL: Parse file once
+    DL-->>RQ: Reading-order elements, pages, boxes, captions, figure classes
+    RQ->>DB: Persist source text + document model
+
+    RQ->>DB: Set stage=enriching
+    alt Text-bearing page with substantive figure
+        RQ->>VE: Crop + heading/caption/neighbor context
+        VE->>GM: Context-aware figure description
+        GM-->>VE: Description + visible text + uncertainty
+    else Textless scanned page
+        RQ->>VE: Render complete page
+        VE->>GM: Full-page transcription + visual summary
+        GM-->>VE: Markdown + summary + uncertainty
+    end
+    VE->>DB: Cache by user/image/context/model/prompt
+    VE-->>RQ: Rebuilt text in original reading order
+
+    RQ->>DB: Set stage=embedding
+    RQ->>DP: chunk_text(enriched_text, chunk_size, overlap)
     DP-->>RQ: Text chunks[]
 
     loop For each chunk
@@ -85,7 +104,7 @@ sequenceDiagram
         RQ->>VDB: upsert(embedding, metadata)
     end
 
-    RQ->>DB: Update UserFile (status=COMPLETED)
+    RQ->>DB: Update UserFile (status=PROCESSED, stage=complete)
 
     FE->>API: POST /api/files/job-statuses/ (polling)
     API-->>FE: {status: COMPLETED}
@@ -94,8 +113,9 @@ sequenceDiagram
 
 **Key services involved:**
 - `files/api/views.py` — Upload endpoint
-- `core/services/file_processor.py` — Background processing pipeline
-- `core/services/document_processor.py` — Text extraction and chunking
+- `core/services/document_parsers/docling_parser.py` — Structured parse and local figure classification
+- `core/services/document_enrichment_service.py` — Figure/page routing, vision, cache, billing, and reading-order rebuild
+- `core/services/document_processor.py` — Parse → enrich → chunk orchestration
 - `core/services/embedding_service.py` — Vector embedding generation
 - `core/services/vector_service.py` — Pinecone/Weaviate storage
 

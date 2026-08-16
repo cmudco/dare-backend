@@ -87,6 +87,15 @@ class DocumentCropService:
 
         return self._render(data, page_no, bbox)
 
+    def render_page(self, file: File, page_no: int) -> bytes:
+        """Render a complete PDF page for the scanned-page transcription lane."""
+        if not (file.file.name or "").lower().endswith(".pdf"):
+            raise ElementNotFound("Only PDF documents can be rendered")
+
+        with file.file.open("rb") as handle:
+            data = handle.read()
+        return self._render_page(data, page_no)
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
@@ -123,6 +132,19 @@ class DocumentCropService:
                 document.close()
 
         return cls._encode(image.crop(cls._box(image.size, bbox)))
+
+    @classmethod
+    def _render_page(cls, data: bytes, page_no: int) -> bytes:
+        """Rasterise a full page under the same pdfium safety lock as crops."""
+        with _PDFIUM_LOCK:
+            document = pdfium.PdfDocument(io.BytesIO(data))
+            try:
+                if page_no < 1 or page_no > len(document):
+                    raise ElementNotFound(f"Page {page_no} is outside this document")
+                image = document[page_no - 1].render(scale=RENDER_SCALE).to_pil().copy()
+            finally:
+                document.close()
+        return cls._encode(image)
 
     @staticmethod
     def _box(

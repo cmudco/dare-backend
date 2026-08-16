@@ -6,10 +6,10 @@ Gemini AI models, including support for streaming, vision, web search, and
 structured outputs.
 """
 
-import logging
 import asyncio
 import json
-from typing import AsyncGenerator, Dict, List, Tuple, Optional
+import logging
+from typing import AsyncGenerator, Dict, List, Optional, Tuple
 
 from google import genai
 from google.genai import types
@@ -18,17 +18,17 @@ from config import env
 from conversations.models import LLM
 from core.services.api_key_service import get_provider_api_key
 from core.services.dtos.stream_event_dto import LLMStreamEvent
-from core.services.llm_utils.provider_message_converters import GeminiMessageConverter
 from core.services.llm_utils import (
-    GeminiMessageFormatter,
-    GeminiVisionHandler,
     GeminiErrorHandler,
+    GeminiMessageFormatter,
     GeminiStreamProcessor,
     GeminiUrlContextTools,
+    GeminiVisionHandler,
     GeminiWebSearchTools,
-    StreamAggregator,
     SchemaTransformer,
+    StreamAggregator,
 )
+from core.services.llm_utils.provider_message_converters import GeminiMessageConverter
 from core.services.model_capabilities import ModelCapabilities
 
 logger = logging.getLogger(__name__)
@@ -75,7 +75,7 @@ class GeminiService:
     def async_client(self):
         """
         Get the native async interface for the Gemini client.
-        
+
         Uses client.aio for true real-time streaming without blocking.
         """
         return self.client.aio
@@ -87,7 +87,7 @@ class GeminiService:
         temperature: float = 0.7,
         effort: Optional[str] = None,
         images: List[Dict] = None,
-        tools: Optional[List[Dict]] = None
+        tools: Optional[List[Dict]] = None,
     ) -> AsyncGenerator[LLMStreamEvent, None]:
         """
         Stream chat completions from Google Gemini API.
@@ -111,10 +111,7 @@ class GeminiService:
 
             # Step 2: Create streaming response
             response_stream = await self._create_stream(
-                prepared_messages,
-                max_tokens,
-                temperature,
-                tools
+                prepared_messages, max_tokens, temperature, tools
             )
 
             # Step 3: Process and yield stream events
@@ -150,10 +147,7 @@ class GeminiService:
         """
         if structured_spec:
             return await self._get_structured_completion(
-                messages,
-                max_tokens,
-                temperature,
-                structured_spec
+                messages, max_tokens, temperature, structured_spec
             )
 
         # Default: use streaming and aggregate
@@ -184,7 +178,25 @@ class GeminiService:
         Raises:
             ValueError: If schema validation fails or no response returned
         """
-        logger.info(f"[Gemini] generate_structured_output with schema: {list(response_schema.get('properties', {}).keys())}")
+        result, _usage = await self.generate_structured_output_with_usage(
+            messages=messages,
+            response_schema=response_schema,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        return result
+
+    async def generate_structured_output_with_usage(
+        self,
+        messages: List[Dict[str, str]],
+        response_schema: Dict,
+        max_tokens: int = 2000,
+        temperature: float = 0.7,
+    ) -> Tuple[Dict, Dict[str, int]]:
+        """Structured output plus normalized token usage for service billing."""
+        logger.info(
+            f"[Gemini] generate_structured_output with schema: {list(response_schema.get('properties', {}).keys())}"
+        )
 
         contents = GeminiMessageFormatter.convert_to_contents(messages)
 
@@ -192,7 +204,7 @@ class GeminiService:
         generation_config_kwargs = {
             "max_output_tokens": max_tokens + self.TOKEN_BUFFER,
             "response_mime_type": "application/json",
-            "response_schema": response_schema,
+            "response_schema": self._sanitize_response_schema(response_schema),
         }
         if self.capabilities.supports_temperature:
             generation_config_kwargs["temperature"] = temperature
@@ -207,12 +219,21 @@ class GeminiService:
 
         try:
             response = await asyncio.to_thread(generate_sync)
-            content = getattr(response, 'text', None)
+            content = getattr(response, "text", None)
 
             if not content:
                 raise ValueError("Empty response from Gemini structured output")
 
-            return json.loads(content)
+            usage_metadata = getattr(response, "usage_metadata", None)
+            usage = {
+                "input_tokens": int(
+                    getattr(usage_metadata, "prompt_token_count", 0) or 0
+                ),
+                "output_tokens": int(
+                    getattr(usage_metadata, "candidates_token_count", 0) or 0
+                ),
+            }
+            return json.loads(content), usage
 
         except Exception as e:
             logger.exception(f"[Gemini] generate_structured_output error: {str(e)}")
@@ -220,10 +241,21 @@ class GeminiService:
 
     # ==================== Private Methods ====================
 
+    @classmethod
+    def _sanitize_response_schema(cls, value):
+        """Strip ``additionalProperties`` (OpenAI-strict) which Gemini rejects as INVALID_ARGUMENT."""
+        if isinstance(value, dict):
+            return {
+                key: cls._sanitize_response_schema(item)
+                for key, item in value.items()
+                if key != "additionalProperties"
+            }
+        if isinstance(value, list):
+            return [cls._sanitize_response_schema(item) for item in value]
+        return value
+
     def _prepare_messages(
-        self,
-        messages: List[Dict],
-        images: Optional[List[Dict]]
+        self, messages: List[Dict], images: Optional[List[Dict]]
     ) -> List[Dict]:
         """
         Prepare messages by adding vision content if needed.
@@ -245,7 +277,7 @@ class GeminiService:
         messages: List[Dict],
         max_tokens: int,
         temperature: float,
-        tools: Optional[List[Dict]]
+        tools: Optional[List[Dict]],
     ):
         """
         Create Gemini streaming response using native async interface.
@@ -315,9 +347,7 @@ class GeminiService:
                 # forces a function call on EVERY request — inside a tool loop
                 # that means the model can never produce a final text answer.
                 tool_config_kwargs = {
-                    "function_calling_config": types.FunctionCallingConfig(
-                        mode="AUTO"
-                    )
+                    "function_calling_config": types.FunctionCallingConfig(mode="AUTO")
                 }
                 if native_tools:
                     # Built-in tools (google_search, url_context) and function
@@ -365,9 +395,7 @@ class GeminiService:
                 function_declarations.append(func_decl)
 
         if function_declarations:
-            gemini_tools.append(
-                types.Tool(function_declarations=function_declarations)
-            )
+            gemini_tools.append(types.Tool(function_declarations=function_declarations))
         return gemini_tools
 
     def _build_native_tools(self, tools: Optional[List[Dict]]) -> List[types.Tool]:
@@ -394,7 +422,7 @@ class GeminiService:
         messages: List[Dict],
         max_tokens: int,
         temperature: float,
-        structured_spec: Dict
+        structured_spec: Dict,
     ) -> str:
         """
         Get structured output using Gemini response schema.
@@ -423,18 +451,18 @@ class GeminiService:
 
         if not response_mime_type or not response_schema:
             # Fallback to regular completion
-            logger.warning("[Gemini] No response schema generated, falling back to streaming")
+            logger.warning(
+                "[Gemini] No response schema generated, falling back to streaming"
+            )
             stream = self.stream_chat_completion(messages, max_tokens, temperature)
             return await StreamAggregator.aggregate_stream(stream)
 
         # Generate with schema
-        logger.info("[Gemini] Calling native structured output API with response_schema")
+        logger.info(
+            "[Gemini] Calling native structured output API with response_schema"
+        )
         response = await self._generate_with_schema(
-            messages,
-            max_tokens,
-            temperature,
-            response_mime_type,
-            response_schema
+            messages, max_tokens, temperature, response_mime_type, response_schema
         )
         logger.info(f"[Gemini] Native API response received: {str(response)[:200]}...")
 
@@ -449,7 +477,7 @@ class GeminiService:
         max_tokens: int,
         temperature: float,
         response_mime_type: str,
-        response_schema: Dict
+        response_schema: Dict,
     ) -> str:
         """
         Generate content with response schema.
@@ -470,7 +498,7 @@ class GeminiService:
         generation_config_kwargs = {
             "max_output_tokens": max_tokens + self.TOKEN_BUFFER,
             "response_mime_type": response_mime_type,
-            "response_schema": response_schema,
+            "response_schema": self._sanitize_response_schema(response_schema),
         }
         if self.capabilities.supports_temperature:
             generation_config_kwargs["temperature"] = temperature
@@ -499,21 +527,21 @@ class GeminiService:
         Returns:
             Extracted value as string (either single value or full JSON)
         """
-        text_out = getattr(response, 'text', None)
+        text_out = getattr(response, "text", None)
 
         if not text_out:
             return ""
 
-        schema_type = structured_spec.get('type')
+        schema_type = structured_spec.get("type")
 
         # For object schemas, return the full JSON (includes explanation)
-        if schema_type == 'object':
+        if schema_type == "object":
             return text_out
 
         # For legacy enum schemas, extract just the field value
         try:
             data = json.loads(text_out)
-            field_name = structured_spec.get('field', 'route')
+            field_name = structured_spec.get("field", "route")
             value = data.get(field_name)
             return str(value) if value is not None else text_out
         except Exception:
