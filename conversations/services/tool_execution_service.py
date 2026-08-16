@@ -32,7 +32,7 @@ from conversations.models import Conversation, Message
 from conversations.services.artifact_tool_executor import \
     artifact_tool_executor
 from core.services.dtos import ToolCallRequest, ToolCallResult
-from core.services.tool_loop.binding import ToolLoopStore
+from core.services.tool_loop.binding import ArtifactHost, ToolLoopStore
 from core.services.tool_loop.events import ToolEventEmitter
 from dare_tools.constants import ExecutionStatus
 from dare_tools.models import DareTool, DareToolExecution
@@ -70,9 +70,10 @@ RETRIEVAL_TOOLS = frozenset({"search_documents"})
 class ToolExecutionContext:
     """Everything a round of tool execution needs from the host turn.
 
-    ``message``/``conversation`` are chat-only: tools that require them
-    (artifacts, MCP) return a clean error result when they are None
-    (workflow steps), instead of raising.
+    ``message``/``conversation`` are chat-only. Artifact tools and the MCP
+    PDF bridge persist against ``artifact_host`` — chat messages and
+    workflow steps both provide one; a host that can't create artifacts
+    gets a clean error result instead of a raise.
     """
 
     message: Optional[Message]
@@ -82,6 +83,7 @@ class ToolExecutionContext:
     emitter: ToolEventEmitter
     store: ToolLoopStore
     retrieval_scope: Optional[RetrievalScope] = None
+    artifact_host: Optional[ArtifactHost] = None
 
 
 class ToolExecutionService:
@@ -226,13 +228,12 @@ class ToolExecutionService:
                 scope=ctx.retrieval_scope,
             )
         elif tool_name in ARTIFACT_TOOLS:
-            if ctx.message is None or ctx.conversation is None:
+            if ctx.artifact_host is None or not ctx.artifact_host.can_create:
                 return self._unavailable_in_context(tool_name)
             raw_result = await artifact_tool_executor.execute(
                 tool_name=tool_name,
                 arguments=arguments,
-                message=ctx.message,
-                conversation=ctx.conversation,
+                host=ctx.artifact_host,
                 send_callback=ctx.send_callback,
             )
         else:
@@ -266,16 +267,14 @@ class ToolExecutionService:
         if raw_dict.get("isError", False):
             return raw_dict, self._extract_mcp_result_text(raw_dict), True
 
-        # The PDF artifact bridge renders into the conversation's artifact
-        # panel — without a chat Message (workflow steps) the raw MCP text
-        # is the result.
-        if ctx.message is None or ctx.conversation is None:
+        # The PDF artifact bridge renders into the host's artifact panel —
+        # without an artifact host the raw MCP text is the result.
+        if ctx.artifact_host is None or not ctx.artifact_host.can_create:
             return raw_dict, self._extract_mcp_result_text(raw_result), False
 
         bridge_result = await maybe_create_pdf_artifact(
             raw_result,
-            message=ctx.message,
-            conversation=ctx.conversation,
+            host=ctx.artifact_host,
             arguments=arguments,
             server_slug=server_slug,
             tool_name=bare_tool_name,

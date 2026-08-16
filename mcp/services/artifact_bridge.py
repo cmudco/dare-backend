@@ -12,11 +12,10 @@ import httpx
 from asgiref.sync import sync_to_async
 
 from conversations.constants import ArtifactType
-from conversations.models import Artifact, Conversation, Message
-from conversations.services.artifact_service import (
-    create_artifact,
-    create_artifact_version,
-)
+from conversations.models import Artifact, Message
+from conversations.services.artifact_service import (create_artifact,
+                                                     create_artifact_version)
+from core.services.tool_loop.binding import ArtifactHost
 from mcp.models import MCPServer
 
 logger = logging.getLogger(__name__)
@@ -154,31 +153,33 @@ def _get_server_url(server_slug: str) -> str:
 
 @sync_to_async
 def _find_existing_artifact(
-    conversation: Conversation,
+    host: ArtifactHost,
     source_tool: str,
     quill: str,
     title: str,
-    current_message: Message,
 ) -> Optional[Artifact]:
-    """Find an earlier, unambiguous document to version."""
+    """Find an earlier, unambiguous document on the same host to version."""
     if not quill or title == "CMU Document":
         return None
     queryset = Artifact.active_objects.filter(
-        conversation=conversation,
         source_tool=source_tool,
         artifact_type=ArtifactType.PDF,
         title=title,
         metadata__quill=quill,
     ).order_by("-created_at")
-    if current_message is not None:
-        queryset = queryset.exclude(message=current_message)
+    if host.conversation is not None:
+        queryset = queryset.filter(conversation=host.conversation)
+    else:
+        queryset = queryset.filter(workflow_run_step=host.workflow_run_step)
+    if host.message is not None:
+        queryset = queryset.exclude(message=host.message)
     return queryset.first()
 
 
 # Kept as a small public compatibility wrapper for existing tests/callers.
 async def _create_version(
     existing: Artifact,
-    message: Message,
+    message: Optional[Message],
     content: str,
     title: str,
     filename: str,
@@ -198,8 +199,7 @@ async def _create_version(
 async def maybe_create_pdf_artifact(
     result: Any,
     *,
-    message: Message,
-    conversation: Conversation,
+    host: ArtifactHost,
     arguments: Dict,
     server_slug: str,
     tool_name: str,
@@ -227,17 +227,18 @@ async def maybe_create_pdf_artifact(
             "sourceUrl": url,
         }
         existing = await _find_existing_artifact(
-            conversation, source_tool, meta["quill"], meta["title"], message
+            host, source_tool, meta["quill"], meta["title"]
         )
         if existing:
             artifact = await _create_version(
-                existing, message, data_uri, meta["title"], filename, metadata
+                existing, host.message, data_uri, meta["title"], filename, metadata
             )
             event_type = "artifact_updated"
         else:
             artifact = await create_artifact(
-                conversation=conversation,
-                message=message,
+                conversation=host.conversation,
+                message=host.message,
+                workflow_run_step=host.workflow_run_step,
                 title=meta["title"],
                 content=data_uri,
                 artifact_type=ArtifactType.PDF,
@@ -250,8 +251,9 @@ async def maybe_create_pdf_artifact(
 
         event = {
             "type": event_type,
+            **host.event_context,
             "artifactId": artifact.id,
-            "messageId": message.id if message else None,
+            "messageId": host.message.id if host.message else None,
             "artifactGroupId": artifact.artifact_group_id,
             "filename": artifact.filename,
             "title": artifact.title,

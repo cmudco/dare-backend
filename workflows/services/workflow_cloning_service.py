@@ -166,6 +166,7 @@ class WorkflowCloningService:
                 text_input=data_object.text_input,
                 enable_web_search=data_object.enable_web_search,
                 enable_web_fetch=data_object.enable_web_fetch,
+                enable_artifacts=data_object.enable_artifacts,
                 rag_mode=data_object.rag_mode
             )
             # Shared libraries are global corpora, not user files — they stay

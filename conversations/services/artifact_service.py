@@ -12,7 +12,7 @@ from conversations.models import Artifact, ArtifactGroup, Conversation, Message
 @sync_to_async
 def create_artifact(
     *,
-    conversation: Conversation,
+    conversation: Optional[Conversation],
     message: Optional[Message],
     title: str,
     content: str,
@@ -21,15 +21,22 @@ def create_artifact(
     content_type: str,
     source_tool: str,
     metadata: Optional[Dict[str, Any]] = None,
+    workflow_run_step=None,
 ) -> Artifact:
-    """Create a completed artifact and its version group atomically."""
+    """Create a completed artifact and its version group atomically.
+
+    Exactly one host anchors the artifact: a chat ``conversation`` (with an
+    optional ``message``) or a ``workflow_run_step``.
+    """
     with transaction.atomic():
         group = ArtifactGroup.active_objects.create(
             conversation=conversation,
+            workflow_run_step=workflow_run_step,
             base_title=title,
         )
         artifact = Artifact.active_objects.create(
             conversation=conversation,
+            workflow_run_step=workflow_run_step,
             message=message,
             artifact_group=group,
             title=title,

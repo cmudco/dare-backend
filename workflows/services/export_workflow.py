@@ -84,6 +84,7 @@ class WorkflowExportService:
                 "use_previous_step_embeddings": data_obj.use_previous_step_embeddings,
                 "rag_mode": data_obj.rag_mode,
                 "enable_web_fetch": data_obj.enable_web_fetch,
+                "enable_artifacts": data_obj.enable_artifacts,
             }
             libraries = [
                 {"id": library.id, "slug": library.slug, "name": library.name}

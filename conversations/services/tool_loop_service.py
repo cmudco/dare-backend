@@ -145,6 +145,7 @@ class ToolLoopService:
             emitter=emitter,
             store=binding.store,
             retrieval_scope=retrieval_scope,
+            artifact_host=binding.artifact_host,
         )
 
         result = ToolLoopResult()

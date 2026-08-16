@@ -255,6 +255,7 @@ class LLMQueryRequestBuilder:
         library_ids: Optional[list] = None,
         web_fetch_enabled: bool = False,
         mcp_server_ids: Optional[list] = None,
+        artifacts_enabled: bool = False,
     ) -> LLMQueryRequest:
         """Build LLMQueryRequest from workflow execution data.
 
@@ -280,10 +281,14 @@ class LLMQueryRequestBuilder:
             library_ids: Shared library IDs to retrieve context from
             web_fetch_enabled: Enable provider web fetch for this step
             mcp_server_ids: Connected MCP servers whose tools the step may call
+            artifacts_enabled: Expose artifact-creating DARE tools to the step
 
         Returns:
             Fully constructed LLMQueryRequest for workflow execution
         """
+        if artifacts_enabled and max_tokens < ARTIFACT_MIN_MAX_TOKENS:
+            max_tokens = ARTIFACT_MIN_MAX_TOKENS
+
         context = ContextConfig(
             file_ids=file_ids or [],
             embedding_ids=embedding_ids or [],
@@ -309,6 +314,8 @@ class LLMQueryRequestBuilder:
         )
 
         selected_slugs: set = set()
+        if artifacts_enabled:
+            selected_slugs |= ARTIFACT_TOOL_SLUGS
         context = resolve_agentic_rag(context, llm, selected_slugs)
 
         return LLMQueryRequest(

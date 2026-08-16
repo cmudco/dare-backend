@@ -13,22 +13,16 @@ Key Features:
 """
 
 import logging
-from typing import Dict, Optional, Any
+from typing import Any, Dict, Optional
 
 from workflows.constants import WorkflowRunStepStatus
 from workflows.handlers.utils import MetadataKey
 from workflows.handlers.utils.constants import NodeType
-from workflows.models import (
-    WorkflowRun,
-    WorkflowRunStep,
-    WorkflowNode,
-    WorkflowEdge,
-    StructuredOutputNodeData,
-)
+from workflows.models import (StructuredOutputNodeData, WorkflowEdge,
+                              WorkflowNode, WorkflowRun, WorkflowRunStep)
 from workflows.services.citation_serialization import (
-    serialize_step_citations,
-    serialize_step_tool_calls,
-)
+    serialize_step_artifacts, serialize_step_citations,
+    serialize_step_tool_calls)
 
 logger = logging.getLogger(__name__)
 
@@ -185,6 +179,7 @@ class NodeExecutionStateBuilder:
             "snippets": snippets_data,
             "webSearchSources": web_search_sources_data,
             "toolCalls": serialize_step_tool_calls(step),
+            "artifacts": serialize_step_artifacts(step),
             "retrievalTrace": step.retrieval_trace,
             "contextTrace": step.context_trace,
         }

@@ -222,6 +222,10 @@ class StepNodeData(BaseNodeData):
         default=False,
         help_text="If true, enable provider web fetch (explicit URLs/PDFs) for this step's LLM"
     )
+    enable_artifacts = models.BooleanField(
+        default=False,
+        help_text="If true, expose artifact-creating tools (charts, diagrams, docs) to this step's LLM"
+    )
     mcp_servers = models.ManyToManyField(
         'mcp.MCPServer',
         related_name='step_nodes',
@@ -279,6 +283,7 @@ class StepNodeData(BaseNodeData):
             'libraries': library_ids,
             'libraryNames': library_names,
             'enableWebFetch': self.enable_web_fetch,
+            'enableArtifacts': self.enable_artifacts,
             'mcpServers': mcp_server_ids,
             'mcpServerNames': mcp_server_names,
         }

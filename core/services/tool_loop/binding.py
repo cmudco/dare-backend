@@ -15,7 +15,30 @@ Chat implements these over ``Message``/``MessageToolCall``
 ``WorkflowRunStep``. The loop itself never imports either.
 """
 
+from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Optional, Protocol, Tuple
+
+
+@dataclass(frozen=True)
+class ArtifactHost:
+    """Where a turn's artifacts live — a chat message or a workflow step.
+
+    Artifact tools and the MCP PDF bridge persist against exactly one host:
+    chat provides ``message``+``conversation``, workflows provide
+    ``workflow_run_step``. ``event_context`` carries the host's correlation
+    keys (already camelCase) merged into every ``artifact_created`` /
+    ``artifact_updated`` payload.
+    """
+
+    message: Optional[Any] = None
+    conversation: Optional[Any] = None
+    workflow_run_step: Optional[Any] = None
+    event_context: Dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def can_create(self) -> bool:
+        chat = self.message is not None and self.conversation is not None
+        return chat or self.workflow_run_step is not None
 
 
 class ToolLoopStore(Protocol):
@@ -78,3 +101,5 @@ class ToolLoopBinding(Protocol):
     """Chat's Message, or None — tools that require chat context must
     error cleanly when absent."""
     conversation: Optional[Any]
+    artifact_host: ArtifactHost
+    """The host object artifact tools persist and emit against."""
