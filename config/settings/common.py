@@ -65,6 +65,7 @@ LOCAL_APPS = [
     "mcp",
     "dare_tools",
     "memory",
+    "data_exports",
     "sharing",
     "feature_flags",
     "research",
