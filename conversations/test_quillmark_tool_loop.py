@@ -3,8 +3,20 @@ from types import SimpleNamespace
 from django.test import SimpleTestCase
 from django.utils import timezone
 
+from conversations.services.tool_loop_binding import ChatToolLoopBinding
 from conversations.services.tool_loop_service import ToolLoopService
 from core.services.dtos import LLMStreamEvent, ToolCallRequest, ToolCallResult
+
+
+def _binding(message_obj, send_callback):
+    return ChatToolLoopBinding(
+        message_obj=message_obj,
+        conversation=SimpleNamespace(),
+        user=None,
+        llm=SimpleNamespace(),
+        send_callback=send_callback,
+        billing_service=None,
+    )
 
 
 class _QuillmarkChainLLMService:
@@ -80,7 +92,7 @@ class QuillmarkToolLoopTests(SimpleTestCase):
     async def test_get_spec_then_create_document_keeps_original_request(self):
         llm_service = _QuillmarkChainLLMService()
         execution_service = _QuillmarkChainExecutionService()
-        service = ToolLoopService(llm_service, billing_service=None)
+        service = ToolLoopService(llm_service)
         service.execution_service = execution_service
         sent = []
 
@@ -89,11 +101,7 @@ class QuillmarkToolLoopTests(SimpleTestCase):
 
         result = await service.run(
             request=SimpleNamespace(),
-            message_obj=SimpleNamespace(id=296, created_at=timezone.now()),
-            llm=SimpleNamespace(),
-            user=None,
-            conversation=SimpleNamespace(),
-            send_callback=send,
+            binding=_binding(SimpleNamespace(id=296, created_at=timezone.now()), send),
             retrieval_scope=None,
         )
 

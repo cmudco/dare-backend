@@ -2,13 +2,11 @@ import json
 
 from django.test import SimpleTestCase
 
-from conversations.services.tool_execution_service import (
-    MAX_PERSISTED_RESULT_CHARS,
-    ToolExecutionService,
-)
+from core.services.tool_loop.persistence import (MAX_PERSISTED_RESULT_CHARS,
+                                                 serialize_persisted_result)
 
 
-class ToolExecutionPersistenceTests(SimpleTestCase):
+class ToolLoopPersistenceTests(SimpleTestCase):
     def test_large_result_is_compacted_as_valid_json(self):
         result = {
             "success": True,
@@ -17,7 +15,7 @@ class ToolExecutionPersistenceTests(SimpleTestCase):
             "config": {"content": "x" * 6000},
         }
 
-        serialized = ToolExecutionService._serialize_persisted_result(result)
+        serialized = serialize_persisted_result(result)
         parsed = json.loads(serialized)
 
         self.assertLessEqual(len(serialized), MAX_PERSISTED_RESULT_CHARS)
@@ -31,6 +29,6 @@ class ToolExecutionPersistenceTests(SimpleTestCase):
     def test_small_result_is_preserved(self):
         result = {"success": True, "value": "complete"}
 
-        serialized = ToolExecutionService._serialize_persisted_result(result)
+        serialized = serialize_persisted_result(result)
 
         self.assertEqual(json.loads(serialized), result)

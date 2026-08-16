@@ -1,5 +1,5 @@
 """
-Unified tool-call event vocabulary for the chat frontend.
+Unified tool-call event vocabulary for the frontend.
 
 One set of events for every tool origin (DARE, MCP, provider-native),
 covering the full lifecycle the FE renders:
@@ -9,11 +9,13 @@ covering the full lifecycle the FE renders:
     tool_call_executing      the tool is running (final arguments attached)
     tool_call_result         completed or failed, with the typed result
     tool_rounds_capped       the loop hit its round cap
+    context_trace            the turn's context-assembly trace
 
-Replaces the three legacy vocabularies (``mcp_tool_call``/``mcp_tool_result``,
-``dareToolCall``/``dareToolResult``, ``tool_call``/``tool_result``). Payload
-keys are camelized before send; the ``origin`` field routes the result into
-exactly one typed field (``dareResult`` / ``mcpResult`` / ``providerResult``),
+Every payload carries the host's ``correlation`` keys — ``{"message_id"}``
+for chat, ``{"workflow_run_id", "node_id", "run_step_id"}`` for workflow
+steps — so both surfaces consume one payload shape. Payload keys are
+camelized before send; the ``origin`` field routes the result into exactly
+one typed field (``dareResult`` / ``mcpResult`` / ``providerResult``),
 matching the persisted-history payload shape from
 ``conversation_service._build_tool_call_payload``.
 """
@@ -33,11 +35,15 @@ ARGS_PROGRESS_MIN_INTERVAL = 0.4
 
 
 class ToolEventEmitter:
-    """Emits unified tool-call lifecycle events for one assistant message."""
+    """Emits unified tool-call lifecycle events for one host turn."""
 
-    def __init__(self, send_callback: Callable, message_id: int) -> None:
+    def __init__(self, send_callback: Callable, correlation: Dict[str, Any]) -> None:
         self._send = send_callback
-        self._message_id = message_id
+        self._correlation = dict(correlation)
+        self._log_key = " ".join(
+            f"{'mid' if key == 'message_id' else key}={value}"
+            for key, value in self._correlation.items()
+        )
         self._last_progress_at: Dict[str, float] = {}
 
     async def tool_call_pending(
@@ -68,7 +74,7 @@ class ToolEventEmitter:
         await self._send_payload(
             {
                 "type": "tool_call_args_progress",
-                "message_id": self._message_id,
+                **self._correlation,
                 "tool_call_id": tool_call_id,
                 "args_chars": args_chars,
             }
@@ -128,7 +134,7 @@ class ToolEventEmitter:
         await self._send_payload(
             {
                 "type": "tool_rounds_capped",
-                "message_id": self._message_id,
+                **self._correlation,
                 "round": round_index,
             }
         )
@@ -138,7 +144,7 @@ class ToolEventEmitter:
         await self._send_payload(
             {
                 "type": "context_trace",
-                "message_id": self._message_id,
+                **self._correlation,
                 "trace": trace,
             }
         )
@@ -156,7 +162,7 @@ class ToolEventEmitter:
         await self._send_payload(
             {
                 "type": event_type,
-                "message_id": self._message_id,
+                **self._correlation,
                 "tool_call_id": tool_call_id,
                 "tool_name": tool_name,
                 "server_slug": server_slug,
@@ -174,8 +180,8 @@ class ToolEventEmitter:
                 else ""
             )
             logger.info(
-                "[journey] mid=%s event %s%s",
-                self._message_id,
+                "[journey] %s event %s%s",
+                self._log_key,
                 payload.get("type"),
                 detail,
             )

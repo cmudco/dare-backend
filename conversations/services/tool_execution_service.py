@@ -9,8 +9,8 @@ Executes one round of model tool calls, whatever their origin:
   connected MCP servers.
 
 For every call it emits the unified lifecycle events (executing → result),
-persists a ``MessageToolCall`` row (with the loop round) plus the
-``DareToolExecution`` audit row for DARE tools, and returns typed
+persists the host's tool-call row through the binding store (with the loop
+round) plus the ``DareToolExecution`` audit row for DARE tools, and returns typed
 ``ToolCallResult`` objects whose ``content`` is the text the model reads
 in its ``role:"tool"`` turn. Failures never raise — they come back as
 error results so the model can see and react to them.
@@ -26,23 +26,24 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from asgiref.sync import sync_to_async
 from channels.db import database_sync_to_async
-from django.utils import timezone
 
 from conversations.constants import ToolCallOrigin
-from conversations.models import Conversation, Message, MessageToolCall
-from conversations.services.artifact_tool_executor import artifact_tool_executor
-from conversations.services.tool_event_service import ToolEventEmitter
+from conversations.models import Conversation, Message
+from conversations.services.artifact_tool_executor import \
+    artifact_tool_executor
 from core.services.dtos import ToolCallRequest, ToolCallResult
+from core.services.tool_loop.binding import ToolLoopStore
+from core.services.tool_loop.events import ToolEventEmitter
 from dare_tools.constants import ExecutionStatus
 from dare_tools.models import DareTool, DareToolExecution
 from dare_tools.services.registry import DareToolRegistry
 from dare_tools.services.result_formatters import format_dare_result_for_llm
 from dare_tools.services.retrieval_tool_executor import (
-    RetrievalScope,
-    retrieval_tool_executor,
-)
-from mcp.services.artifact_bridge import BridgeStatus, maybe_create_pdf_artifact
-from mcp.services.mcp_tool_executor import MCPToolExecutorError, mcp_tool_executor
+    RetrievalScope, retrieval_tool_executor)
+from mcp.services.artifact_bridge import (BridgeStatus,
+                                          maybe_create_pdf_artifact)
+from mcp.services.mcp_tool_executor import (MCPToolExecutorError,
+                                            mcp_tool_executor)
 
 logger = logging.getLogger(__name__)
 
@@ -64,50 +65,27 @@ ARTIFACT_TOOLS = frozenset(
 # DARE tools that retrieve document context — routed to RetrievalToolExecutor.
 RETRIEVAL_TOOLS = frozenset({"search_documents"})
 
-MAX_PERSISTED_RESULT_CHARS = 5000
-
 
 @dataclass(frozen=True)
 class ToolExecutionContext:
-    """Everything a round of tool execution needs from the chat turn."""
+    """Everything a round of tool execution needs from the host turn.
 
-    message: Message
-    conversation: Conversation
+    ``message``/``conversation`` are chat-only: tools that require them
+    (artifacts, MCP) return a clean error result when they are None
+    (workflow steps), instead of raising.
+    """
+
+    message: Optional[Message]
+    conversation: Optional[Conversation]
     user: Any
     send_callback: Callable
     emitter: ToolEventEmitter
+    store: ToolLoopStore
     retrieval_scope: Optional[RetrievalScope] = None
 
 
 class ToolExecutionService:
     """Executes model tool calls and persists their outcomes."""
-
-    @staticmethod
-    def _serialize_persisted_result(raw_result: Dict) -> str:
-        """Serialize a bounded, valid JSON result for conversation history."""
-        serialized = json.dumps(raw_result)
-        if len(serialized) <= MAX_PERSISTED_RESULT_CHARS:
-            return serialized
-
-        compact_result = {
-            "truncated": True,
-            "original_chars": len(serialized),
-            "content_preview": serialized[: MAX_PERSISTED_RESULT_CHARS - 500],
-        }
-        for key in ("success", "artifactId", "artifact_id", "message", "error"):
-            if key in raw_result:
-                compact_result[key] = raw_result[key]
-
-        # The preserved metadata can itself be unexpectedly large. Reduce the
-        # preview until the envelope remains within the database/UI limit.
-        compact_serialized = json.dumps(compact_result)
-        overflow = len(compact_serialized) - MAX_PERSISTED_RESULT_CHARS
-        if overflow > 0:
-            compact_result["content_preview"] = compact_result["content_preview"][
-                : -(overflow + 1)
-            ]
-            compact_serialized = json.dumps(compact_result)
-        return compact_serialized
 
     async def execute_round(
         self,
@@ -173,7 +151,7 @@ class ToolExecutionService:
         error_message = raw_result.get("error", "") if is_error else ""
         logger.info(
             "[journey] mid=%s round %d tool %s (%s/%s) -> %s in %dms",
-            ctx.message.id,
+            ctx.store.turn_key,
             round_index,
             call.name,
             origin,
@@ -193,16 +171,16 @@ class ToolExecutionService:
                 execution_time_ms,
             )
 
-        await self._save_message_tool_call(
-            ctx.message,
-            call,
-            server_slug,
-            origin,
-            arguments,
-            raw_result,
-            is_error,
-            error_message,
-            round_index,
+        await ctx.store.save_tool_call(
+            call=call,
+            server_slug=server_slug,
+            origin=origin,
+            arguments=arguments,
+            raw_result=raw_result,
+            is_error=is_error,
+            error=error_message,
+            round_index=round_index,
+            execution_time_ms=execution_time_ms,
         )
 
         await ctx.emitter.tool_call_result(
@@ -244,10 +222,12 @@ class ToolExecutionService:
         if tool_name in RETRIEVAL_TOOLS:
             raw_result = await retrieval_tool_executor.execute(
                 arguments=arguments,
-                message=ctx.message,
+                message=ctx.store.retrieval_target,
                 scope=ctx.retrieval_scope,
             )
         elif tool_name in ARTIFACT_TOOLS:
+            if ctx.message is None or ctx.conversation is None:
+                return self._unavailable_in_context(tool_name)
             raw_result = await artifact_tool_executor.execute(
                 tool_name=tool_name,
                 arguments=arguments,
@@ -271,6 +251,8 @@ class ToolExecutionService:
         arguments: Dict,
         ctx: ToolExecutionContext,
     ) -> Tuple[Dict, str, bool]:
+        if ctx.message is None or ctx.conversation is None:
+            return self._unavailable_in_context(f"{server_slug}__{bare_tool_name}")
         raw_result = await mcp_tool_executor.execute_tool_call(
             user=ctx.user,
             server_slug=server_slug,
@@ -319,6 +301,12 @@ class ToolExecutionService:
         )
         is_error = bool(raw_dict.get("isError", False))
         return raw_dict, content, is_error
+
+    @staticmethod
+    def _unavailable_in_context(tool_name: str) -> Tuple[Dict, str, bool]:
+        """Clean error for tools that need chat context the host lacks."""
+        error = f"Tool '{tool_name}' is not available in this execution context"
+        return {"success": False, "error": error}, f"Error: {error}", True
 
     @staticmethod
     def _sanitize_bridged_document_result(result: Any, bridged: Dict) -> Any:
@@ -380,6 +368,8 @@ class ToolExecutionService:
     ) -> None:
         """Persist the DareToolExecution audit row (best-effort)."""
         try:
+            if ctx.message is None:
+                return
             tool = DareTool.active_objects.filter(function_name=call.name).first()
             if not tool:
                 logger.warning("DareTool not found for function_name: %s", call.name)
@@ -400,42 +390,6 @@ class ToolExecutionService:
             )
         except Exception as exc:
             logger.exception("Failed to save DareToolExecution: %s", exc)
-
-    @database_sync_to_async
-    def _save_message_tool_call(
-        self,
-        message: Message,
-        call: ToolCallRequest,
-        server_slug: str,
-        origin: str,
-        arguments: Dict,
-        raw_result: Dict,
-        is_error: bool,
-        error_message: str,
-        round_index: int,
-    ) -> None:
-        """Persist the MessageToolCall row rendered in conversation history."""
-        try:
-            result_text = None
-            if raw_result and not is_error:
-                result_text = self._serialize_persisted_result(raw_result)
-            MessageToolCall.objects.create(
-                message=message,
-                tool_call_id=call.id,
-                server_slug=server_slug,
-                origin=(
-                    origin if origin in ToolCallOrigin.values else ToolCallOrigin.MCP
-                ),
-                tool_name=call.name,
-                arguments=arguments,
-                status="failed" if is_error else "completed",
-                result=result_text,
-                error=error_message or None,
-                executed_at=timezone.now(),
-                round_index=round_index,
-            )
-        except Exception as exc:
-            logger.error("Failed to save MessageToolCall: %s", exc)
 
 
 # Global service instance

@@ -22,43 +22,30 @@ from django.utils import timezone
 from djangorestframework_camel_case.util import camelize
 
 from conversations.api.serializers import ArtifactListSerializer
-from conversations.constants import (
-    DEFAULT_AI_SENDER_NAME,
-    DEFAULT_CONVERSATION_TITLE,
-    ArtifactStatus,
-    ErrorCode,
-    ErrorMessage,
-    SenderType,
-    ToolCallOrigin,
-    ToolCallStatus,
-)
-from conversations.models import (
-    LLM,
-    Artifact,
-    Conversation,
-    Message,
-    MessageToolCall,
-    Snippet,
-    WebSearchSource,
-)
-from conversations.services.image_generation_service import ImageGenerationService
+from conversations.constants import (DEFAULT_AI_SENDER_NAME,
+                                     DEFAULT_CONVERSATION_TITLE,
+                                     ArtifactStatus, ErrorCode, ErrorMessage,
+                                     SenderType, ToolCallOrigin,
+                                     ToolCallStatus)
+from conversations.models import (LLM, Artifact, Conversation, Message,
+                                  MessageToolCall, Snippet, WebSearchSource)
+from conversations.services.image_generation_service import \
+    ImageGenerationService
 from conversations.services.message_helpers import (  # Database helpers; Learning progress helpers; Billing helpers; Finalization helpers; Regeneration helpers
-    build_generated_image_data,
-    build_transcription_data,
-    fetch_preceding_user_message,
-    finalize_message,
-    get_ai_message_by_id,
-    get_conversation_default_descriptor,
-    handle_insufficient_balance,
-    parse_model_id,
-    prepare_regeneration_data,
-    run_learning_progress_stream,
-    should_generate_title,
-)
-from conversations.services.message_validation_service import MessageValidationService
-from conversations.services.tool_loop_service import ToolLoopResult, ToolLoopService
-from conversations.services.web_search_source_service import WebSearchSourceService
-from conversations.services.websocket_response_service import WebSocketResponseService
+    build_generated_image_data, build_transcription_data,
+    fetch_preceding_user_message, finalize_message, get_ai_message_by_id,
+    get_conversation_default_descriptor, handle_insufficient_balance,
+    parse_model_id, prepare_regeneration_data, run_learning_progress_stream,
+    should_generate_title)
+from conversations.services.message_validation_service import \
+    MessageValidationService
+from conversations.services.tool_loop_binding import ChatToolLoopBinding
+from conversations.services.tool_loop_service import (ToolLoopResult,
+                                                      ToolLoopService)
+from conversations.services.web_search_source_service import \
+    WebSearchSourceService
+from conversations.services.websocket_response_service import \
+    WebSocketResponseService
 from core.services.billing_service import BillingService
 from core.services.conversation_service import ConversationService
 from core.services.dtos import LLMDescriptor, LLMQueryRequestBuilder
@@ -101,7 +88,7 @@ class MessageCoordinator:
         self.llm_service = LLMService()
         self.billing_service = BillingService()
         self.learning_progress_service = LearningProgressService()
-        self.tool_loop_service = ToolLoopService(self.llm_service, self.billing_service)
+        self.tool_loop_service = ToolLoopService(self.llm_service)
 
         # Track active artifact generation tasks for cancellation
         self._artifact_tasks: Dict[str, asyncio.Task] = {}
@@ -638,13 +625,18 @@ class MessageCoordinator:
                 similarity_threshold=request.context.document_similarity_threshold,
             )
 
+            binding = ChatToolLoopBinding(
+                message_obj=message_obj,
+                conversation=self.conversation,
+                user=self.user,
+                llm=llm,
+                send_callback=self.send,
+                billing_service=self.billing_service,
+                regenerate=regenerate,
+            )
             result = await self.tool_loop_service.run(
                 request=request,
-                message_obj=message_obj,
-                llm=llm,
-                user=self.user,
-                conversation=self.conversation,
-                send_callback=self.send,
+                binding=binding,
                 retrieval_scope=retrieval_scope,
                 regenerate=regenerate,
             )

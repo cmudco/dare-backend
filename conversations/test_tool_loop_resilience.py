@@ -4,8 +4,20 @@ from types import SimpleNamespace
 from django.test import SimpleTestCase
 from django.utils import timezone
 
+from conversations.services.tool_loop_binding import ChatToolLoopBinding
 from conversations.services.tool_loop_service import ToolLoopService
 from core.services.dtos import LLMStreamEvent
+
+
+def _binding(message_obj, send_callback):
+    return ChatToolLoopBinding(
+        message_obj=message_obj,
+        conversation=SimpleNamespace(),
+        user=None,
+        llm=SimpleNamespace(),
+        send_callback=send_callback,
+        billing_service=None,
+    )
 
 
 class _StalledLLMService:
@@ -17,7 +29,7 @@ class _StalledLLMService:
 
 class ToolLoopResilienceTests(SimpleTestCase):
     async def test_silent_provider_stream_times_out(self):
-        service = ToolLoopService(_StalledLLMService(), billing_service=None)
+        service = ToolLoopService(_StalledLLMService())
         service.stream_idle_timeout_seconds = 0.01
 
         with self.assertRaisesRegex(TimeoutError, "idle for 0.01 seconds"):
@@ -47,7 +59,7 @@ class ToolLoopResilienceTests(SimpleTestCase):
                 yield LLMStreamEvent.text_delta("Recovered answer")
 
         llm_service = EmptyThenTextLLMService()
-        service = ToolLoopService(llm_service, billing_service=None)
+        service = ToolLoopService(llm_service)
         sent = []
 
         async def send(payload):
@@ -55,11 +67,7 @@ class ToolLoopResilienceTests(SimpleTestCase):
 
         result = await service.run(
             request=SimpleNamespace(),
-            message_obj=SimpleNamespace(id=7, created_at=timezone.now()),
-            llm=SimpleNamespace(),
-            user=None,
-            conversation=SimpleNamespace(),
-            send_callback=send,
+            binding=_binding(SimpleNamespace(id=7, created_at=timezone.now()), send),
             retrieval_scope=None,
         )
 
@@ -86,18 +94,14 @@ class ToolLoopResilienceTests(SimpleTestCase):
                 for text in ("Hello", " ", "world", "\n\n", "Done"):
                     yield LLMStreamEvent.text_delta(text)
 
-        service = ToolLoopService(WhitespaceLLMService(), billing_service=None)
+        service = ToolLoopService(WhitespaceLLMService())
 
         async def send(_payload):
             return None
 
         result = await service.run(
             request=SimpleNamespace(),
-            message_obj=SimpleNamespace(id=8, created_at=timezone.now()),
-            llm=SimpleNamespace(),
-            user=None,
-            conversation=SimpleNamespace(),
-            send_callback=send,
+            binding=_binding(SimpleNamespace(id=8, created_at=timezone.now()), send),
             retrieval_scope=None,
         )
 
@@ -123,7 +127,7 @@ class ToolLoopResilienceTests(SimpleTestCase):
                 )
                 await asyncio.sleep(1)
 
-        service = ToolLoopService(TextThenStallLLMService(), billing_service=None)
+        service = ToolLoopService(TextThenStallLLMService())
         service.stream_idle_timeout_seconds = 0.01
 
         async def send(_payload):
@@ -131,11 +135,7 @@ class ToolLoopResilienceTests(SimpleTestCase):
 
         result = await service.run(
             request=SimpleNamespace(),
-            message_obj=SimpleNamespace(id=9, created_at=timezone.now()),
-            llm=SimpleNamespace(),
-            user=None,
-            conversation=SimpleNamespace(),
-            send_callback=send,
+            binding=_binding(SimpleNamespace(id=9, created_at=timezone.now()), send),
             retrieval_scope=None,
         )
 
