@@ -18,6 +18,8 @@ from typing import Any
 from core.services.llm_helpers.db_helpers import (save_document_snippet,
                                                   save_library_snippet,
                                                   save_retrieval_trace)
+from files.models import File
+from workflows.models import WorkflowStepSnippet
 
 logger = logging.getLogger(__name__)
 
@@ -69,9 +71,6 @@ class WorkflowRetrievalTarget:
     def save_document_snippet(self, chunk: Any) -> None:
         """Best-effort, never raises — mirrors the chat snippet helpers."""
         try:
-            from files.models import File
-            from workflows.models import WorkflowStepSnippet
-
             file = File.active_objects.get(id=int(chunk.file_id))
             WorkflowStepSnippet.active_objects.create(
                 workflow_run_step=self.run_step,
@@ -90,8 +89,6 @@ class WorkflowRetrievalTarget:
 
     def save_library_snippet(self, chunk: Any) -> None:
         try:
-            from workflows.models import WorkflowStepSnippet
-
             WorkflowStepSnippet.active_objects.create(
                 workflow_run_step=self.run_step,
                 file=None,

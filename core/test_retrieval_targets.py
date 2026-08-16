@@ -58,8 +58,10 @@ class WorkflowRetrievalTargetTests(SimpleTestCase):
         file_row = MagicMock()
 
         with (
-            patch("files.models.File") as file_model,
-            patch("workflows.models.WorkflowStepSnippet") as snippet_model,
+            patch("core.services.llm_helpers.retrieval_targets.File") as file_model,
+            patch(
+                "core.services.llm_helpers.retrieval_targets.WorkflowStepSnippet"
+            ) as snippet_model,
         ):
             file_model.active_objects.get.return_value = file_row
             target.save_document_snippet(_chunk())
@@ -77,7 +79,9 @@ class WorkflowRetrievalTargetTests(SimpleTestCase):
         target = WorkflowRetrievalTarget(run_step)
         library = MagicMock()
 
-        with patch("workflows.models.WorkflowStepSnippet") as snippet_model:
+        with patch(
+            "core.services.llm_helpers.retrieval_targets.WorkflowStepSnippet"
+        ) as snippet_model:
             target.save_library_snippet(_chunk(library=library, rerank_score=None))
 
         kwargs = snippet_model.active_objects.create.call_args.kwargs
@@ -106,6 +110,8 @@ class WorkflowRetrievalTargetTests(SimpleTestCase):
         run_step = SimpleNamespace(retrieval_trace=None)
         target = WorkflowRetrievalTarget(run_step)
 
-        with patch("workflows.models.WorkflowStepSnippet") as snippet_model:
+        with patch(
+            "core.services.llm_helpers.retrieval_targets.WorkflowStepSnippet"
+        ) as snippet_model:
             snippet_model.active_objects.create.side_effect = RuntimeError("db down")
             target.save_library_snippet(_chunk(library=MagicMock()))
