@@ -4,7 +4,20 @@ from unittest.mock import AsyncMock, patch
 from django.test import SimpleTestCase
 
 from conversations.services.tool_execution_service import ToolExecutionService
+from core.services.tool_loop.binding import ArtifactHost
 from mcp.services.artifact_bridge import BridgeResult, BridgeStatus
+
+
+def _chat_ctx():
+    message = SimpleNamespace()
+    conversation = SimpleNamespace()
+    return SimpleNamespace(
+        user=SimpleNamespace(),
+        message=message,
+        conversation=conversation,
+        send_callback=AsyncMock(),
+        artifact_host=ArtifactHost(message=message, conversation=conversation),
+    )
 
 
 class QuillmarkExecutionBridgeTests(SimpleTestCase):
@@ -29,12 +42,7 @@ class QuillmarkExecutionBridgeTests(SimpleTestCase):
             "filename": "fy27-memo.pdf",
             "version": 1,
         }
-        ctx = SimpleNamespace(
-            user=SimpleNamespace(),
-            message=SimpleNamespace(),
-            conversation=SimpleNamespace(),
-            send_callback=AsyncMock(),
-        )
+        ctx = _chat_ctx()
 
         with (
             patch(
@@ -69,12 +77,7 @@ class QuillmarkExecutionBridgeTests(SimpleTestCase):
             "isError": True,
             "content": [{"type": "text", "text": "Missing required subject"}],
         }
-        ctx = SimpleNamespace(
-            user=SimpleNamespace(),
-            message=SimpleNamespace(),
-            conversation=SimpleNamespace(),
-            send_callback=AsyncMock(),
-        )
+        ctx = _chat_ctx()
 
         with (
             patch(
@@ -99,12 +102,7 @@ class QuillmarkExecutionBridgeTests(SimpleTestCase):
 
     async def test_bridge_failure_is_safe_and_visible_to_the_loop(self):
         service = ToolExecutionService()
-        ctx = SimpleNamespace(
-            user=SimpleNamespace(),
-            message=SimpleNamespace(),
-            conversation=SimpleNamespace(),
-            send_callback=AsyncMock(),
-        )
+        ctx = _chat_ctx()
         raw_result = {
             "structuredContent": {
                 "url": "http://internal/artifact.pdf",

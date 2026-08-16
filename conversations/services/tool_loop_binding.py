@@ -20,6 +20,7 @@ from conversations.models import MessageToolCall
 from conversations.services.websocket_response_service import \
     WebSocketResponseService
 from core.services.llm_helpers.retrieval_targets import ChatRetrievalTarget
+from core.services.tool_loop.binding import ArtifactHost
 from core.services.tool_loop.persistence import serialize_persisted_result
 
 logger = logging.getLogger(__name__)
@@ -168,6 +169,9 @@ class ChatToolLoopBinding:
         self.user = user
         self.send_callback = send_callback
         self.correlation = {"message_id": message_obj.id}
+        self.artifact_host = ArtifactHost(
+            message=message_obj, conversation=conversation
+        )
         self.store = ChatToolLoopStore(message_obj)
         self.sink = ChatStreamSink(message_obj, send_callback, regenerate)
         self.gate = ChatBillingGate(billing_service, user, llm)

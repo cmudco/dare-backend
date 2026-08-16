@@ -11,28 +11,24 @@ from typing import Any, Dict, Optional
 from channels.db import database_sync_to_async
 from django.utils import timezone
 
-from core.services.dtos import LLMQueryRequestBuilder
 from conversations.models import LLM
 from conversations.services.tool_loop_service import ToolLoopService
+from core.services.dtos import LLMQueryRequestBuilder
 from dare_tools.services.retrieval_tool_executor import RetrievalScope
 from workflows.constants import WorkflowRunStepStatus
-from workflows.handlers.base import ExecutionNode, NodeExecutionContext, NodeExecutionResult
+from workflows.handlers.base import (ExecutionNode, NodeExecutionContext,
+                                     NodeExecutionResult)
 from workflows.handlers.event_emitter import EventEmitter
 from workflows.handlers.execution_base import BaseExecutionHandler
-from workflows.handlers.utils import (
-    LLMDefaults,
-    NodeDataValidator,
-    NodeType,
-    StepMessagePreparer,
-)
+from workflows.handlers.utils import (LLMDefaults, NodeDataValidator, NodeType,
+                                      StepMessagePreparer)
 from workflows.models import StepNodeData, WorkflowRun, WorkflowRunStep
 from workflows.services.citation_serialization import (
-    serialize_step_citations,
-    serialize_step_tool_calls,
-)
+    serialize_step_artifacts, serialize_step_citations,
+    serialize_step_tool_calls)
 from workflows.services.tool_loop_binding import WorkflowToolLoopBinding
-from workflows.services.workflow_web_search_source_service import WorkflowWebSearchSourceService
-
+from workflows.services.workflow_web_search_source_service import \
+    WorkflowWebSearchSourceService
 
 logger = logging.getLogger(__name__)
 
@@ -169,6 +165,9 @@ class StepNodeHandler(BaseExecutionHandler):
             file_owner_id=None,
             rag_mode=config['rag_mode'],
             library_ids=config['library_ids'] or None,
+            web_fetch_enabled=config['enable_web_fetch'],
+            mcp_server_ids=config['mcp_server_ids'] or None,
+            artifacts_enabled=config['enable_artifacts'],
         )
 
         retrieval_scope = RetrievalScope(
@@ -258,11 +257,15 @@ class StepNodeHandler(BaseExecutionHandler):
         def _serialize():
             snippets, web_sources = serialize_step_citations(run_step)
             tool_calls = serialize_step_tool_calls(run_step)
-            return snippets, web_sources, tool_calls
+            artifacts = serialize_step_artifacts(run_step)
+            return snippets, web_sources, tool_calls, artifacts
 
-        snippets_data, web_sources_data, tool_calls_data = await database_sync_to_async(
-            _serialize
-        )()
+        (
+            snippets_data,
+            web_sources_data,
+            tool_calls_data,
+            artifacts_data,
+        ) = await database_sync_to_async(_serialize)()
 
         tokens = None
         if token_usage:
@@ -276,6 +279,7 @@ class StepNodeHandler(BaseExecutionHandler):
             snippets_data
             or web_sources_data
             or tool_calls_data
+            or artifacts_data
             or run_step.retrieval_trace
             or run_step.context_trace
         ):
@@ -283,6 +287,7 @@ class StepNodeHandler(BaseExecutionHandler):
                 "snippets": snippets_data,
                 "webSearchSources": web_sources_data,
                 "toolCalls": tool_calls_data,
+                "artifacts": artifacts_data,
                 "retrievalTrace": run_step.retrieval_trace,
                 "contextTrace": run_step.context_trace,
             }
@@ -323,8 +328,11 @@ class StepNodeHandler(BaseExecutionHandler):
                 'embedding_file_ids': list(step_data.embedding_files.values_list('id', flat=True)),
                 'tag_ids': list(step_data.tags.values_list('id', flat=True)),
                 'library_ids': list(step_data.libraries.values_list('id', flat=True)),
+                'mcp_server_ids': list(step_data.mcp_servers.values_list('id', flat=True)),
                 'prompt_id': step_data.prompt.id if step_data.prompt else None,
                 'enable_web_search': step_data.enable_web_search,
+                'enable_web_fetch': step_data.enable_web_fetch,
+                'enable_artifacts': step_data.enable_artifacts,
                 'rag_mode': step_data.rag_mode,
             }
             if context.batch_file_id and context.is_start_connected:

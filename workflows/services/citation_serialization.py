@@ -7,17 +7,16 @@ Separated from serializers.py to avoid circular imports with NodeExecutionStateB
 Output is camelCase to match frontend interfaces (WorkflowStepSnippet, WorkflowStepWebSearchSource).
 """
 
-from typing import List, Dict, Any
+from typing import Any, Dict, List
 
 from djangorestframework_camel_case.util import camelize
 from rest_framework import serializers
+
+from conversations.models import Artifact
 from files.api.serializers import FileSerializer
 from users.constants import VectorDBChoice
-from workflows.models import (
-    WorkflowStepSnippet,
-    WorkflowStepToolCall,
-    WorkflowStepWebSearchSource,
-)
+from workflows.models import (WorkflowStepSnippet, WorkflowStepToolCall,
+                              WorkflowStepWebSearchSource)
 
 
 class WorkflowStepSnippetSerializer(serializers.ModelSerializer):
@@ -95,6 +94,38 @@ def serialize_step_tool_calls(step) -> List[Dict[str, Any]]:
     return camelize(
         WorkflowStepToolCallSerializer(step.tool_calls.all(), many=True).data
     )
+
+
+class WorkflowStepArtifactSerializer(serializers.ModelSerializer):
+    """Serializer for artifacts created during a workflow step's LLM turn.
+
+    Field set mirrors the ``artifact_created`` socket payload so the
+    frontend artifact store can be hydrated from either source.
+    """
+
+    class Meta:
+        model = Artifact
+        fields = [
+            "id",
+            "artifact_group_id",
+            "title",
+            "content",
+            "artifact_type",
+            "filename",
+            "content_type",
+            "source_tool",
+            "version",
+            "metadata",
+        ]
+        read_only_fields = fields
+
+
+def serialize_step_artifacts(step) -> List[Dict[str, Any]]:
+    """Serialize a step's artifacts with camelCase keys for the frontend."""
+    artifacts = Artifact.active_objects.filter(workflow_run_step=step).order_by(
+        "created_at"
+    )
+    return camelize(WorkflowStepArtifactSerializer(artifacts, many=True).data)
 
 
 def serialize_step_citations(step) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:

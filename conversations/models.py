@@ -1306,8 +1306,18 @@ class ArtifactGroup(BaseModel):
     conversation = models.ForeignKey(
         Conversation,
         on_delete=models.CASCADE,
+        null=True,
+        blank=True,
         related_name="artifact_groups",
         help_text="The conversation this artifact group belongs to.",
+    )
+    workflow_run_step = models.ForeignKey(
+        "workflows.WorkflowRunStep",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="artifact_groups",
+        help_text="The workflow run step this artifact group belongs to.",
     )
     base_title = models.CharField(
         max_length=500, help_text="Original title of the artifact (from first version)."
@@ -1322,6 +1332,9 @@ class ArtifactGroup(BaseModel):
     )
 
     active_objects = ActiveObjectsManager()
+    # Declaring a custom manager suppresses Django's implicit ``objects`` —
+    # restore it (second, so active_objects stays the default manager).
+    objects = models.Manager()
 
     class Meta:
         ordering = ["-created_at"]
@@ -1341,8 +1354,18 @@ class Artifact(BaseModel):
     conversation = models.ForeignKey(
         Conversation,
         on_delete=models.CASCADE,
+        null=True,
+        blank=True,
         related_name="artifacts",
         help_text="The conversation this artifact belongs to.",
+    )
+    workflow_run_step = models.ForeignKey(
+        "workflows.WorkflowRunStep",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="artifacts",
+        help_text="The workflow run step this artifact belongs to.",
     )
     message = models.ForeignKey(
         Message,
@@ -1450,6 +1473,15 @@ class Artifact(BaseModel):
         return f"{self.title} ({self.get_status_display()})"
 
     @property
+    def owner(self):
+        """The user who owns this artifact, whichever host it lives on."""
+        if self.conversation_id:
+            return self.conversation.user
+        if self.workflow_run_step_id:
+            return self.workflow_run_step.workflow_run.workflow.user
+        return None
+
+    @property
     def progress(self) -> float:
         """Calculate generation progress as a percentage."""
         if self.estimated_sections == 0:
@@ -1482,6 +1514,7 @@ class Artifact(BaseModel):
         """
         new_artifact = Artifact(
             conversation=self.conversation,
+            workflow_run_step=self.workflow_run_step,
             artifact_group=self.artifact_group,
             parent_artifact=self,
             artifact_type=self.artifact_type,

@@ -19,7 +19,9 @@ from channels.db import database_sync_to_async
 from django.utils import timezone
 
 from conversations.constants import ToolCallOrigin
+from conversations.models import ArtifactGroup
 from core.services.llm_helpers.retrieval_targets import WorkflowRetrievalTarget
+from core.services.tool_loop.binding import ArtifactHost
 from core.services.tool_loop.persistence import serialize_persisted_result
 from workflows.handlers.event_emitter import EventEmitter
 from workflows.models import WorkflowRunStep, WorkflowStepToolCall
@@ -39,15 +41,24 @@ class WorkflowToolLoopStore:
 
     @database_sync_to_async
     def clear_prior_tool_calls(self) -> None:
-        """Re-run of a step: drop its previous tool-call rows."""
+        """Re-run of a step: drop its previous tool-call and artifact rows."""
+        self.clear_prior_tool_calls_sync()
+
+    def clear_prior_tool_calls_sync(self) -> None:
         deleted, _ = WorkflowStepToolCall.objects.filter(
             workflow_run_step=self._run_step
         ).delete()
-        if deleted:
+        # A re-run replaces the step's output wholesale — its previous
+        # artifacts would otherwise linger as stale duplicates.
+        groups_deleted, _ = ArtifactGroup.objects.filter(
+            workflow_run_step=self._run_step
+        ).delete()
+        if deleted or groups_deleted:
             logger.info(
-                "[WorkflowToolLoopStore] Cleared %s prior tool calls for "
-                "re-run step %s",
+                "[WorkflowToolLoopStore] Cleared %s prior tool calls and %s "
+                "artifact groups for re-run step %s",
                 deleted,
+                groups_deleted,
                 self._run_step.id,
             )
 
@@ -137,7 +148,7 @@ class WorkflowToolLoopBinding:
         send_callback: Any,
     ) -> None:
         # Chat-only context: tools that require a Message/Conversation
-        # (artifacts, MCP) error cleanly inside the execution service.
+        # error cleanly inside the execution service.
         self.message = None
         self.conversation = None
         self.user = user
@@ -147,6 +158,14 @@ class WorkflowToolLoopBinding:
             "node_id": node_id,
             "run_step_id": run_step.id,
         }
+        self.artifact_host = ArtifactHost(
+            workflow_run_step=run_step,
+            event_context={
+                "workflowRunId": run_step.workflow_run_id,
+                "nodeId": node_id,
+                "runStepId": run_step.id,
+            },
+        )
         self.store = WorkflowToolLoopStore(run_step)
         self.sink = WorkflowStreamSink(emitter, node_id)
         self.gate = WorkflowBillingGate()

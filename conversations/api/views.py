@@ -799,8 +799,8 @@ class ArtifactStatusView(APIView):
         # Get artifact
         artifact = get_object_or_404(Artifact.active_objects, id=artifact_id)
 
-        # Verify user owns this artifact's conversation
-        if artifact.conversation.user != request.user:
+        # Verify user owns this artifact's host (conversation or workflow)
+        if artifact.owner != request.user:
             return Response(
                 {"error": "You do not have permission to modify this artifact"},
                 status=status.HTTP_403_FORBIDDEN,
@@ -853,8 +853,8 @@ class ArtifactContentView(APIView):
         # Get artifact
         artifact = get_object_or_404(Artifact.active_objects, id=artifact_id)
 
-        # Verify user owns this artifact's conversation
-        if artifact.conversation.user != request.user:
+        # Verify user owns this artifact's host (conversation or workflow)
+        if artifact.owner != request.user:
             return Response(
                 {"error": "You do not have permission to modify this artifact"},
                 status=status.HTTP_403_FORBIDDEN,
@@ -902,7 +902,7 @@ def _attachment_disposition(filename: str) -> str:
 def _build_artifact_download_response(request, artifact, artifact_id):
     requested_format = (request.query_params.get("format") or "").lower().strip()
 
-    if artifact.conversation.user != request.user:
+    if artifact.owner != request.user:
         return Response(
             {"error": "You do not have permission to download this artifact"},
             status=status.HTTP_403_FORBIDDEN,

@@ -1,7 +1,10 @@
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from django.test import SimpleTestCase
 
+from conversations.services.tool_execution_service import (
+    ToolExecutionContext, ToolExecutionService)
 from conversations.services.tool_loop_service import ToolLoopService
 from core.services.dtos import LLMStreamEvent, ToolCallRequest, ToolCallResult
 from workflows.handlers.event_emitter import EventEmitter
@@ -132,3 +135,38 @@ class WorkflowStepToolLoopTests(SimpleTestCase):
         self.assertEqual(pending[0]["nodeId"], "node-1")
         self.assertEqual(pending[0]["runStepId"], 11)
         self.assertNotIn("messageId", pending[0])
+
+
+class WorkflowMcpExecutionTests(SimpleTestCase):
+    async def test_mcp_tool_runs_without_chat_context_and_skips_artifact_bridge(self):
+        run_step = _run_step()
+        sent = []
+        binding = _binding(run_step, sent)
+        ctx = ToolExecutionContext(
+            message=None,
+            conversation=None,
+            user=SimpleNamespace(id=3),
+            send_callback=binding.send_callback,
+            emitter=None,
+            store=binding.store,
+        )
+
+        mcp_result = {"content": [{"type": "text", "text": "Issue #12 summary"}]}
+        with (
+            patch(
+                "conversations.services.tool_execution_service.mcp_tool_executor"
+            ) as executor,
+            patch(
+                "conversations.services.tool_execution_service.maybe_create_pdf_artifact"
+            ) as bridge,
+        ):
+            executor.execute_tool_call = AsyncMock(return_value=mcp_result)
+            raw, content, is_error = await ToolExecutionService()._execute_mcp(
+                "github", "get_issue", {"number": 12}, ctx
+            )
+
+        self.assertFalse(is_error)
+        self.assertEqual(content, "Issue #12 summary")
+        bridge.assert_not_called()
+        executor.execute_tool_call.assert_awaited_once()
+        self.assertIsNone(executor.execute_tool_call.await_args.kwargs["message"])

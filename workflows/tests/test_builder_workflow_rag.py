@@ -50,3 +50,25 @@ class WorkflowRequestBuilderRagTests(SimpleTestCase):
     def test_library_ids_reach_the_context(self):
         request = self._build(rag_mode=RagMode.ADVANCED, library_ids=[7, 9])
         self.assertEqual(request.context.library_ids, [7, 9])
+
+
+class WorkflowRequestBuilderToolsTests(SimpleTestCase):
+    def test_mcp_servers_and_web_fetch_reach_the_request(self):
+        request = LLMQueryRequestBuilder.from_workflow_data(
+            message="fetch the latest issue",
+            user=SimpleNamespace(id=1),
+            llm=_llm(),
+            mcp_server_ids=[3, 9],
+            web_fetch_enabled=True,
+        )
+        self.assertEqual(request.mcp_server_ids, (3, 9))
+        self.assertTrue(request.generation.web_fetch_enabled)
+
+    def test_tools_default_off(self):
+        request = LLMQueryRequestBuilder.from_workflow_data(
+            message="plain step",
+            user=SimpleNamespace(id=1),
+            llm=_llm(),
+        )
+        self.assertEqual(request.mcp_server_ids, ())
+        self.assertFalse(request.generation.web_fetch_enabled)

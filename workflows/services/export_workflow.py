@@ -1,4 +1,3 @@
-
 import logging
 
 from workflows.handlers.utils.constants import (
@@ -24,7 +23,9 @@ class WorkflowExportService:
             dict: Self-contained JSON-serializable workflow representation.
         """
         all_nodes = list(workflow.nodes.all())
-        excluded_ids = {n.node_id for n in all_nodes if n.node_type in EXCLUDED_NODE_TYPES}
+        excluded_ids = {
+            n.node_id for n in all_nodes if n.node_type in EXCLUDED_NODE_TYPES
+        }
 
         nodes = sorted(
             (n for n in all_nodes if n.node_type not in EXCLUDED_NODE_TYPES),
@@ -57,7 +58,10 @@ class WorkflowExportService:
         Returns:
             dict: Node dict with id, type, and data fields.
         """
-        base = {"id": node.node_id, "type": RUNTIME_NODE_TYPE.get(node.node_type, node.node_type)}
+        base = {
+            "id": node.node_id,
+            "type": RUNTIME_NODE_TYPE.get(node.node_type, node.node_type),
+        }
         data_obj = node.data_object
 
         if data_obj is None:
@@ -79,6 +83,8 @@ class WorkflowExportService:
                 "use_previous_step_files": data_obj.use_previous_step_files,
                 "use_previous_step_embeddings": data_obj.use_previous_step_embeddings,
                 "rag_mode": data_obj.rag_mode,
+                "enable_web_fetch": data_obj.enable_web_fetch,
+                "enable_artifacts": data_obj.enable_artifacts,
             }
             libraries = [
                 {"id": library.id, "slug": library.slug, "name": library.name}
@@ -86,6 +92,12 @@ class WorkflowExportService:
             ]
             if libraries:
                 data["libraries"] = libraries
+            mcp_servers = [
+                {"id": server.id, "slug": server.slug, "name": server.name}
+                for server in data_obj.mcp_servers.all()
+            ]
+            if mcp_servers:
+                data["mcp_servers"] = mcp_servers
             if relations.get_step_content_files(data_obj.id):
                 data["needs_content_files"] = True
             if relations.get_step_embedding_files(data_obj.id):
