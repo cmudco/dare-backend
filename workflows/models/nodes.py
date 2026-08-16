@@ -20,6 +20,7 @@ class PrefetchedNodeFileRelations:
     step_embedding_files: dict[int, tuple[NodeFileReference, ...]] = field(default_factory=dict)
     step_tags: dict[int, tuple[NodeFileReference, ...]] = field(default_factory=dict)
     step_libraries: dict[int, tuple[NodeFileReference, ...]] = field(default_factory=dict)
+    step_mcp_servers: dict[int, tuple[NodeFileReference, ...]] = field(default_factory=dict)
     file_node_files: dict[int, tuple[NodeFileReference, ...]] = field(default_factory=dict)
 
     def get_step_content_files(self, node_data_id: int) -> tuple[NodeFileReference, ...]:
@@ -33,6 +34,9 @@ class PrefetchedNodeFileRelations:
 
     def get_step_libraries(self, node_data_id: int) -> tuple[NodeFileReference, ...]:
         return self.step_libraries.get(node_data_id, ())
+
+    def get_step_mcp_servers(self, node_data_id: int) -> tuple[NodeFileReference, ...]:
+        return self.step_mcp_servers.get(node_data_id, ())
 
     def get_file_node_files(self, node_data_id: int) -> tuple[NodeFileReference, ...]:
         return self.file_node_files.get(node_data_id, ())
@@ -59,6 +63,7 @@ def build_prefetched_node_file_relations(nodes) -> PrefetchedNodeFileRelations:
     step_embedding_files: dict[int, tuple[NodeFileReference, ...]] = {}
     step_tags: dict[int, tuple[NodeFileReference, ...]] = {}
     step_libraries: dict[int, tuple[NodeFileReference, ...]] = {}
+    step_mcp_servers: dict[int, tuple[NodeFileReference, ...]] = {}
     file_node_files: dict[int, tuple[NodeFileReference, ...]] = {}
 
     if step_node_data_ids:
@@ -82,6 +87,11 @@ def build_prefetched_node_file_relations(nodes) -> PrefetchedNodeFileRelations:
                 stepnodedata_id__in=step_node_data_ids
             ).values_list("stepnodedata_id", "sharedlibrary_id", "sharedlibrary__name")
         )
+        step_mcp_servers = _group_file_rows(
+            StepNodeData.mcp_servers.through.objects.filter(
+                stepnodedata_id__in=step_node_data_ids
+            ).values_list("stepnodedata_id", "mcpserver_id", "mcpserver__name")
+        )
 
     if file_node_data_ids:
         file_node_files = _group_file_rows(
@@ -95,6 +105,7 @@ def build_prefetched_node_file_relations(nodes) -> PrefetchedNodeFileRelations:
         step_embedding_files=step_embedding_files,
         step_tags=step_tags,
         step_libraries=step_libraries,
+        step_mcp_servers=step_mcp_servers,
         file_node_files=file_node_files,
     )
 
@@ -207,6 +218,16 @@ class StepNodeData(BaseNodeData):
         default=False,
         help_text="If true, enable web search for this step's LLM"
     )
+    enable_web_fetch = models.BooleanField(
+        default=False,
+        help_text="If true, enable provider web fetch (explicit URLs/PDFs) for this step's LLM"
+    )
+    mcp_servers = models.ManyToManyField(
+        'mcp.MCPServer',
+        related_name='step_nodes',
+        blank=True,
+        help_text="Connected MCP servers whose tools this step's LLM may call"
+    )
     rag_mode = models.CharField(
         max_length=20,
         choices=RagMode.choices,
@@ -227,10 +248,12 @@ class StepNodeData(BaseNodeData):
         embedding_file_refs = node_relations.get_step_embedding_files(self.id)
         tag_refs = node_relations.get_step_tags(self.id)
         library_refs = node_relations.get_step_libraries(self.id)
+        mcp_server_refs = node_relations.get_step_mcp_servers(self.id)
         content_file_ids, content_file_names = _serialize_file_refs(content_file_refs)
         embedding_file_ids, embedding_file_names = _serialize_file_refs(embedding_file_refs)
         tag_ids, tag_names = _serialize_file_refs(tag_refs)
         library_ids, library_names = _serialize_file_refs(library_refs)
+        mcp_server_ids, mcp_server_names = _serialize_file_refs(mcp_server_refs)
         return {
             'label': self.label,
             'agent': self.agent.id if self.agent else None,
@@ -255,6 +278,9 @@ class StepNodeData(BaseNodeData):
             'ragMode': self.rag_mode,
             'libraries': library_ids,
             'libraryNames': library_names,
+            'enableWebFetch': self.enable_web_fetch,
+            'mcpServers': mcp_server_ids,
+            'mcpServerNames': mcp_server_names,
         }
 
     def __str__(self):

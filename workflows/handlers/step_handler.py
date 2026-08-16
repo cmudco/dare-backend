@@ -169,6 +169,8 @@ class StepNodeHandler(BaseExecutionHandler):
             file_owner_id=None,
             rag_mode=config['rag_mode'],
             library_ids=config['library_ids'] or None,
+            web_fetch_enabled=config['enable_web_fetch'],
+            mcp_server_ids=config['mcp_server_ids'] or None,
         )
 
         retrieval_scope = RetrievalScope(
@@ -323,8 +325,10 @@ class StepNodeHandler(BaseExecutionHandler):
                 'embedding_file_ids': list(step_data.embedding_files.values_list('id', flat=True)),
                 'tag_ids': list(step_data.tags.values_list('id', flat=True)),
                 'library_ids': list(step_data.libraries.values_list('id', flat=True)),
+                'mcp_server_ids': list(step_data.mcp_servers.values_list('id', flat=True)),
                 'prompt_id': step_data.prompt.id if step_data.prompt else None,
                 'enable_web_search': step_data.enable_web_search,
+                'enable_web_fetch': step_data.enable_web_fetch,
                 'rag_mode': step_data.rag_mode,
             }
             if context.batch_file_id and context.is_start_connected:

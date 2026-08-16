@@ -253,6 +253,8 @@ class LLMQueryRequestBuilder:
         file_owner_id: Optional[int] = None,
         rag_mode: str = RagMode.NAIVE,
         library_ids: Optional[list] = None,
+        web_fetch_enabled: bool = False,
+        mcp_server_ids: Optional[list] = None,
     ) -> LLMQueryRequest:
         """Build LLMQueryRequest from workflow execution data.
 
@@ -276,6 +278,8 @@ class LLMQueryRequestBuilder:
             file_owner_id: Original owner's user ID for cross-user embedding access
             rag_mode: Retrieval mode for the step (naive/advanced/agentic)
             library_ids: Shared library IDs to retrieve context from
+            web_fetch_enabled: Enable provider web fetch for this step
+            mcp_server_ids: Connected MCP servers whose tools the step may call
 
         Returns:
             Fully constructed LLMQueryRequest for workflow execution
@@ -301,6 +305,7 @@ class LLMQueryRequestBuilder:
             prompt_id=prompt_id,
             structured_spec=structured_spec,
             web_search_enabled=web_search_enabled,
+            web_fetch_enabled=web_fetch_enabled,
         )
 
         selected_slugs: set = set()
@@ -314,5 +319,6 @@ class LLMQueryRequestBuilder:
             context=context,
             generation=generation,
             workflow_run_step_obj=workflow_run_step_obj,
+            mcp_server_ids=tuple(mcp_server_ids or []),
             dare_tool_slugs=tuple(selected_slugs),
         )

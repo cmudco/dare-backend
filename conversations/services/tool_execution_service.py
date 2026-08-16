@@ -251,8 +251,6 @@ class ToolExecutionService:
         arguments: Dict,
         ctx: ToolExecutionContext,
     ) -> Tuple[Dict, str, bool]:
-        if ctx.message is None or ctx.conversation is None:
-            return self._unavailable_in_context(f"{server_slug}__{bare_tool_name}")
         raw_result = await mcp_tool_executor.execute_tool_call(
             user=ctx.user,
             server_slug=server_slug,
@@ -267,6 +265,12 @@ class ToolExecutionService:
         )
         if raw_dict.get("isError", False):
             return raw_dict, self._extract_mcp_result_text(raw_dict), True
+
+        # The PDF artifact bridge renders into the conversation's artifact
+        # panel — without a chat Message (workflow steps) the raw MCP text
+        # is the result.
+        if ctx.message is None or ctx.conversation is None:
+            return raw_dict, self._extract_mcp_result_text(raw_result), False
 
         bridge_result = await maybe_create_pdf_artifact(
             raw_result,

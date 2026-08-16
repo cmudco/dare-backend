@@ -165,11 +165,15 @@ class WorkflowCloningService:
                 use_previous_context=data_object.use_previous_context,
                 text_input=data_object.text_input,
                 enable_web_search=data_object.enable_web_search,
+                enable_web_fetch=data_object.enable_web_fetch,
                 rag_mode=data_object.rag_mode
             )
             # Shared libraries are global corpora, not user files — they stay
             # attached on cross-user forks too.
             cloned_data.libraries.set(data_object.libraries.all())
+            # MCP servers are platform-level; access is checked per-user at
+            # execution time, so the references survive cross-user forks.
+            cloned_data.mcp_servers.set(data_object.mcp_servers.all())
             # Clone file references only for same-user clones;
             # cross-user forks start with empty files so users upload their own
             if not is_cross_user:

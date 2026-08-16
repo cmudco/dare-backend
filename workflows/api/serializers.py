@@ -203,6 +203,8 @@ class StepNodeDataSerializer(serializers.ModelSerializer):
             "enable_web_search",
             "rag_mode",
             "libraries",
+            "enable_web_fetch",
+            "mcp_servers",
         ]
 
 
