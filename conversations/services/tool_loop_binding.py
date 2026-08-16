@@ -19,6 +19,7 @@ from conversations.constants import (DEFAULT_AI_SENDER_NAME, SenderType,
 from conversations.models import MessageToolCall
 from conversations.services.websocket_response_service import \
     WebSocketResponseService
+from core.services.llm_helpers.retrieval_targets import ChatRetrievalTarget
 from core.services.tool_loop.persistence import serialize_persisted_result
 
 logger = logging.getLogger(__name__)
@@ -30,10 +31,9 @@ class ChatToolLoopStore:
     def __init__(self, message_obj) -> None:
         self._message = message_obj
         self.turn_key = str(message_obj.id)
-
-    @property
-    def retrieval_target(self) -> Any:
-        return self._message
+        # One target per turn: its once-per-turn trace reset must survive
+        # across repeated search_documents calls in the same loop.
+        self.retrieval_target = ChatRetrievalTarget(message_obj)
 
     @database_sync_to_async
     def clear_prior_tool_calls(self) -> None:

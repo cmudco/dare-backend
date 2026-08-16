@@ -45,12 +45,17 @@ class RetrievalScope:
 
 
 class RetrievalToolExecutor:
-    """Runs the RAG pipeline on demand and persists snippets/trace on the message."""
+    """Runs the RAG pipeline on demand and persists snippets/trace on the target.
+
+    ``target`` is a retrieval target (``core.services.llm_helpers
+    .retrieval_targets``) wrapping the host turn — a chat Message or a
+    WorkflowRunStep — or None to skip persistence entirely.
+    """
 
     async def execute(
         self,
         arguments: Dict[str, Any],
-        message: Optional[Any],
+        target: Optional[Any],
         scope: Optional[RetrievalScope],
     ) -> Dict[str, Any]:
         if scope is None or not scope.has_sources():
@@ -69,12 +74,11 @@ class RetrievalToolExecutor:
             top_k = scope.max_context_snippets
         top_k = max(1, min(top_k, MAX_SEARCH_TOP_K))
 
-        # save_retrieval_trace appends, so a trace left from a previous
-        # generation of this message must be cleared once per turn; multiple
-        # search calls within the same turn keep appending.
-        if message is not None and not getattr(message, "_agentic_trace_reset", False):
-            message.retrieval_trace = None
-            message._agentic_trace_reset = True
+        # save_trace appends, so a trace left from a previous generation of
+        # this turn must be cleared once per turn; multiple search calls
+        # within the same turn keep appending.
+        if target is not None:
+            target.begin_agentic_search()
 
         document_processor = DocumentProcessor()
         blocks = []
@@ -96,7 +100,7 @@ class RetrievalToolExecutor:
                             scope.file_owner_id or scope.user_id,
                             top_k,
                             scope.similarity_threshold,
-                            message,
+                            target,
                         )
                     )
                 except Exception as exc:
@@ -112,7 +116,7 @@ class RetrievalToolExecutor:
                         query,
                         list(scope.library_ids),
                         top_k,
-                        message,
+                        target,
                     )
                 )
             except Exception as exc:

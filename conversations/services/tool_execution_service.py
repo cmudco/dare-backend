@@ -222,7 +222,7 @@ class ToolExecutionService:
         if tool_name in RETRIEVAL_TOOLS:
             raw_result = await retrieval_tool_executor.execute(
                 arguments=arguments,
-                message=ctx.store.retrieval_target,
+                target=ctx.store.retrieval_target,
                 scope=ctx.retrieval_scope,
             )
         elif tool_name in ARTIFACT_TOOLS:

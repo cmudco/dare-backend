@@ -29,7 +29,7 @@ class ChatToolLoopBindingTests(SimpleTestCase):
     def test_correlation_and_turn_key_identify_the_message(self):
         self.assertEqual(self.binding.correlation, {"message_id": 42})
         self.assertEqual(self.binding.store.turn_key, "42")
-        self.assertIs(self.binding.store.retrieval_target, self.message)
+        self.assertIs(self.binding.store.retrieval_target.message, self.message)
 
     def test_save_tool_call_persists_the_history_row(self):
         with patch(

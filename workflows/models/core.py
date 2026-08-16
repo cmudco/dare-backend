@@ -321,6 +321,11 @@ class WorkflowRunStep(TimeStampMixin):
         default=dict,
         help_text="Additional metadata about step execution (e.g., AI analysis, routing decisions)"
     )
+    retrieval_trace = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="Per-stage RAG pipeline trace (query analysis, hybrid, rerank, MMR, grounding) for the retrieval-trace UI."
+    )
 
     class Meta:
         ordering = ['order']
