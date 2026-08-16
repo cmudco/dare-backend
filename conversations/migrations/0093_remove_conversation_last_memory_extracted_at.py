@@ -6,7 +6,7 @@ from django.db import migrations
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("conversations", "0091_message_memory_write_data"),
+        ("conversations", "0092_message_memory_write_data"),
     ]
 
     operations = [

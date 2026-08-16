@@ -29,7 +29,7 @@ def restore_rates(apps, schema_editor):
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("conversations", "0092_remove_conversation_last_memory_extracted_at")
+        ("conversations", "0093_remove_conversation_last_memory_extracted_at")
     ]
 
     operations = [migrations.RunPython(update_rates, restore_rates)]
