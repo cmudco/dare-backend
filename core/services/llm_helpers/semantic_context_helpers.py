@@ -17,9 +17,8 @@ from core.services.rag import (ContextAssembler, RetrievalRequest,
 from core.services.vector_service import get_vector_service_async
 from libraries.services.library_search import search_libraries
 
-from .db_helpers import (get_files_from_folders, get_files_from_tags,
-                         save_document_snippet, save_library_snippet,
-                         save_retrieval_trace)
+from .db_helpers import get_files_from_folders, get_files_from_tags
+from .retrieval_targets import ChatRetrievalTarget, WorkflowRetrievalTarget
 
 logger = logging.getLogger(__name__)
 
@@ -117,10 +116,15 @@ async def add_semantic_context_to_messages(
         return failures
 
     # Fresh turn: documents and libraries each save their own trace below, and
-    # save_retrieval_trace appends to whatever is on the message — so clear any
-    # trace left from a previous generation of this message first.
+    # save_trace appends to whatever is on the host — so clear any trace left
+    # from a previous generation of this turn first.
+    target = None
     if message_obj is not None:
-        message_obj.retrieval_trace = None
+        target = ChatRetrievalTarget(message_obj)
+    elif workflow_run_step_obj is not None:
+        target = WorkflowRetrievalTarget(workflow_run_step_obj)
+    if target is not None:
+        target.reset_trace()
 
     effective_threshold = 0.05 if is_socratic_mode else similarity_threshold
 
@@ -139,11 +143,11 @@ async def add_semantic_context_to_messages(
                 vector_user_id
             )
 
-        # Advanced mode routes chat retrieval through the full RAG pipeline
+        # Advanced mode routes retrieval through the full RAG pipeline
         # (query analysis -> hybrid -> rerank -> grounding -> trace) — the same
-        # treatment shared libraries get. Naive mode and workflow steps keep the
-        # plain hybrid search.
-        if rag_mode == RagMode.ADVANCED and workflow_run_step_obj is None:
+        # treatment shared libraries get, for chat turns and workflow steps
+        # alike. Naive mode keeps the plain hybrid search.
+        if rag_mode == RagMode.ADVANCED:
             blocks = await _search_documents_for_query(
                 document_processor,
                 query,
@@ -151,7 +155,7 @@ async def add_semantic_context_to_messages(
                 vector_user_id,
                 max_context_snippets,
                 effective_threshold,
-                message_obj,
+                target,
                 failures,
             )
             context = "\n\n".join(blocks)
@@ -187,7 +191,7 @@ async def add_semantic_context_to_messages(
             library_ids,
             max_context_snippets,
             rag_mode,
-            message_obj,
+            target,
             failures,
         )
         if library_snippets:
@@ -211,12 +215,13 @@ def run_library_search(
     query: str,
     library_ids: List[int],
     max_context_snippets: int,
-    message_obj: Optional[Any],
+    target: Optional[Any],
 ) -> List[str]:
     """Thin entry: delegate to the RAG pipeline; persist library citation snippets.
 
     All heavy lifting (query analysis, hybrid retrieve, rerank, conditional MMR,
-    grounding, [S#] assembly) lives in ``core.services.rag``.
+    grounding, [S#] assembly) lives in ``core.services.rag``. ``target`` is a
+    retrieval target (``retrieval_targets``) or None to skip persistence.
     """
     request = RetrievalRequest(
         query=query,
@@ -227,14 +232,14 @@ def run_library_search(
     pipeline = build_pipeline("library", document_processor.openai_client)
 
     def _persist(_position, chunk) -> None:
-        if message_obj:
-            save_library_snippet(message_obj, chunk)
+        if target:
+            target.save_library_snippet(chunk)
 
     result = pipeline.run(request, on_keep=_persist)
-    if message_obj and result.trace:
+    if target and result.trace:
         payload = result.trace.to_payload()
         payload["source"] = "libraries"
-        save_retrieval_trace(message_obj, payload)
+        target.save_trace(payload)
     return result.blocks
 
 
@@ -245,7 +250,7 @@ def run_document_search(
     user_id: Optional[int],
     max_context_snippets: int,
     similarity_threshold: float,
-    message_obj: Optional[Any],
+    target: Optional[Any],
 ) -> List[str]:
     """Advanced-mode document retrieval: the library pipeline, pointed at files.
 
@@ -267,14 +272,14 @@ def run_document_search(
     pipeline = build_pipeline("document", document_processor.openai_client)
 
     def _persist(_position, chunk) -> None:
-        if message_obj:
-            save_document_snippet(message_obj, chunk)
+        if target:
+            target.save_document_snippet(chunk)
 
     result = pipeline.run(request, on_keep=_persist)
-    if message_obj and result.trace:
+    if target and result.trace:
         payload = result.trace.to_payload()
         payload["source"] = "documents"
-        save_retrieval_trace(message_obj, payload)
+        target.save_trace(payload)
     return result.blocks
 
 
@@ -285,7 +290,7 @@ async def _search_documents_for_query(
     user_id: Optional[int],
     max_context_snippets: int,
     similarity_threshold: float,
-    message_obj: Optional[Any],
+    target: Optional[Any],
     failures: Optional[List[str]] = None,
 ) -> List[str]:
     """Async wrapper — document search touches the ORM and opens vector clients.
@@ -302,7 +307,7 @@ async def _search_documents_for_query(
             user_id,
             max_context_snippets,
             similarity_threshold,
-            message_obj,
+            target,
         )
     except Exception as exc:
         logger.warning("Document context retrieval failed: %s", exc)
@@ -316,7 +321,7 @@ def _run_naive_library_search(
     query: str,
     library_ids: List[int],
     max_context_snippets: int,
-    message_obj: Optional[Any],
+    target: Optional[Any],
 ) -> List[str]:
     """Dense-only shared-library lookup for baseline RAG mode."""
     query_vector = document_processor.openai_client.create_embeddings(query)
@@ -340,8 +345,8 @@ def _run_naive_library_search(
     ]
 
     def _persist(_position, chunk) -> None:
-        if message_obj:
-            save_library_snippet(message_obj, chunk)
+        if target:
+            target.save_library_snippet(chunk)
 
     return ContextAssembler().assemble(chunks, on_keep=_persist)
 
@@ -352,7 +357,7 @@ async def _search_libraries_for_query(
     library_ids: List[int],
     max_context_snippets: int,
     rag_mode: str,
-    message_obj: Optional[Any],
+    target: Optional[Any],
     failures: Optional[List[str]] = None,
 ) -> List[str]:
     """Async wrapper — library search touches the ORM and opens vector clients.
@@ -367,10 +372,10 @@ async def _search_libraries_for_query(
                 query,
                 library_ids,
                 max_context_snippets,
-                message_obj,
+                target,
             )
         return await sync_to_async(run_library_search)(
-            document_processor, query, library_ids, max_context_snippets, message_obj
+            document_processor, query, library_ids, max_context_snippets, target
         )
     except Exception as exc:
         logger.warning("Library context retrieval failed: %s", exc)

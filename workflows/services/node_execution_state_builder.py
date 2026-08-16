@@ -25,7 +25,10 @@ from workflows.models import (
     WorkflowEdge,
     StructuredOutputNodeData,
 )
-from workflows.services.citation_serialization import serialize_step_citations
+from workflows.services.citation_serialization import (
+    serialize_step_citations,
+    serialize_step_tool_calls,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -181,6 +184,9 @@ class NodeExecutionStateBuilder:
             "metadata": metadata,  # Include AI analysis for completed steps
             "snippets": snippets_data,
             "webSearchSources": web_search_sources_data,
+            "toolCalls": serialize_step_tool_calls(step),
+            "retrievalTrace": step.retrieval_trace,
+            "contextTrace": step.context_trace,
         }
 
     def _build_display_node_state(
@@ -229,7 +235,7 @@ class NodeExecutionStateBuilder:
             snippets_data, web_search_sources_data = serialize_step_citations(source_step)
 
             return {
-    
+
                 "stepId": None,  # Display nodes don't have their own steps
                 "startedAt": source_step.started_at.isoformat() if source_step.started_at else None,
                 "nodeType": node.node_type,
@@ -239,6 +245,9 @@ class NodeExecutionStateBuilder:
                 "validationContext": None,  # Display nodes don't show validation UI
                 "snippets": snippets_data,
                 "webSearchSources": web_search_sources_data,
+                "toolCalls": serialize_step_tool_calls(source_step),
+                "retrievalTrace": source_step.retrieval_trace,
+                "contextTrace": source_step.context_trace,
             }
 
         # Source might be another display node - follow the chain

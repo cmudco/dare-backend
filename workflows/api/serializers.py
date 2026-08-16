@@ -201,6 +201,8 @@ class StepNodeDataSerializer(serializers.ModelSerializer):
             "use_previous_context",
             "text_input",
             "enable_web_search",
+            "rag_mode",
+            "libraries",
         ]
 
 

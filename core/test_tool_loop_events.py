@@ -1,7 +1,7 @@
 from asgiref.sync import async_to_sync
 from django.test import SimpleTestCase
 
-from conversations.services.tool_event_service import ToolEventEmitter
+from core.services.tool_loop.events import ToolEventEmitter
 
 
 class ToolEventEmitterTests(SimpleTestCase):
@@ -11,7 +11,7 @@ class ToolEventEmitterTests(SimpleTestCase):
         async def capture(payload):
             self.events.append(payload)
 
-        self.emitter = ToolEventEmitter(capture, message_id=42)
+        self.emitter = ToolEventEmitter(capture, {"message_id": 42})
 
     def test_lifecycle_payload_keeps_identity_and_round(self):
         async_to_sync(self.emitter.tool_call_pending)(

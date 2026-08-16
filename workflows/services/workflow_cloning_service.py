@@ -164,8 +164,12 @@ class WorkflowCloningService:
                 use_previous_step_embeddings=data_object.use_previous_step_embeddings,
                 use_previous_context=data_object.use_previous_context,
                 text_input=data_object.text_input,
-                enable_web_search=data_object.enable_web_search
+                enable_web_search=data_object.enable_web_search,
+                rag_mode=data_object.rag_mode
             )
+            # Shared libraries are global corpora, not user files — they stay
+            # attached on cross-user forks too.
+            cloned_data.libraries.set(data_object.libraries.all())
             # Clone file references only for same-user clones;
             # cross-user forks start with empty files so users upload their own
             if not is_cross_user:

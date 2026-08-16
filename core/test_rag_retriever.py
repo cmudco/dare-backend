@@ -65,7 +65,7 @@ class AdvancedDocumentSearchTests(SimpleTestCase):
             user_id=7,
             max_context_snippets=6,
             similarity_threshold=0.85,
-            message_obj=None,
+            target=None,
         )
 
         request = pipeline.run.call_args.args[0]

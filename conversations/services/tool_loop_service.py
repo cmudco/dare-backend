@@ -1,7 +1,7 @@
 """
 Tool Loop Service.
 
-The bounded multi-round tool loop at the heart of a chat turn:
+The bounded multi-round tool loop at the heart of an LLM turn:
 
     stream model → collect tool calls → execute → append native tool turns
     → stream again … until the model answers in text or the round cap hits.
@@ -17,6 +17,10 @@ Text accumulates ACROSS rounds (post-tool text appends after a paragraph
 break instead of replacing what the user already read), usage accumulates
 across rounds for billing, and every tool-call lifecycle moment streams to
 the FE through the unified ``ToolEventEmitter`` vocabulary.
+
+The loop is host-agnostic: everything turn-specific — persistence, chunk
+formatting, billing — reaches it through a ``ToolLoopBinding`` (chat's is
+``ChatToolLoopBinding``; workflows bring their own over ``WorkflowRunStep``).
 """
 
 import asyncio
@@ -26,24 +30,18 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from channels.db import database_sync_to_async
-
-from conversations.constants import DEFAULT_AI_SENDER_NAME, MAX_TOOL_ROUNDS, SenderType
-from conversations.models import LLM, Conversation, Message, MessageToolCall
-from conversations.services.message_helpers.usage_helpers import UsageAccumulator
-from conversations.services.tool_event_service import ToolEventEmitter
+from conversations.constants import MAX_TOOL_ROUNDS
+from conversations.services.message_helpers.usage_helpers import \
+    UsageAccumulator
 from conversations.services.tool_execution_service import (
-    ToolExecutionContext,
-    ToolExecutionService,
-    tool_execution_service,
-)
-from conversations.services.websocket_response_service import WebSocketResponseService
-from core.services.dtos import LLMQueryRequest, StreamEventKind, ToolCallRequest
+    ToolExecutionContext, ToolExecutionService, tool_execution_service)
+from core.services.dtos import (LLMQueryRequest, StreamEventKind,
+                                ToolCallRequest)
 from core.services.llm_helpers.tool_turn_helpers import (
-    build_assistant_tool_call_turn,
-    build_tool_result_turn,
-    synthesize_tool_call_id,
-)
+    build_assistant_tool_call_turn, build_tool_result_turn,
+    synthesize_tool_call_id)
+from core.services.tool_loop.binding import ToolLoopBinding
+from core.services.tool_loop.events import ToolEventEmitter
 from dare_tools.services.retrieval_tool_executor import RetrievalScope
 
 logger = logging.getLogger(__name__)
@@ -70,11 +68,10 @@ class ToolLoopResult:
 
 
 class ToolLoopService:
-    """Runs the bounded tool loop for one assistant message."""
+    """Runs the bounded tool loop for one host turn."""
 
-    def __init__(self, llm_service, billing_service) -> None:
+    def __init__(self, llm_service) -> None:
         self.llm_service = llm_service
-        self.billing_service = billing_service
         self.execution_service: ToolExecutionService = tool_execution_service
         self.stream_idle_timeout_seconds = float(
             os.environ.get("LLM_STREAM_IDLE_TIMEOUT_SECONDS", "45")
@@ -106,11 +103,7 @@ class ToolLoopService:
     async def run(
         self,
         request: LLMQueryRequest,
-        message_obj: Message,
-        llm: LLM,
-        user: Any,
-        conversation: Conversation,
-        send_callback: Any,
+        binding: ToolLoopBinding,
         retrieval_scope: Optional[RetrievalScope],
         regenerate: bool = False,
     ) -> ToolLoopResult:
@@ -118,41 +111,39 @@ class ToolLoopService:
 
         Args:
             request: Built LLMQueryRequest for the turn.
-            message_obj: The assistant Message being streamed into.
-            llm: Resolved LLM row (for billing rates).
-            user: Requesting user (None for public bots — skips the
-                mid-stream billing gate, matching the legacy flow).
-            conversation: Conversation context.
-            send_callback: Coordinator's send (camelizes + serializes).
+            binding: Host binding — persistence, stream sink, billing gate,
+                event correlation (chat message or workflow step).
             retrieval_scope: Attached-source scope for search_documents.
-            regenerate: True when regenerating — clears the message's prior
+            regenerate: True when regenerating — clears the turn's prior
                 tool-call rows so history and the FE never show ghosts.
         """
+        turn_key = binding.store.turn_key
         if regenerate:
-            await self._clear_prior_tool_calls(message_obj)
+            await binding.store.clear_prior_tool_calls()
 
         prepared = await self.llm_service.prepare_chat(request)
         messages: List[Dict[str, Any]] = list(prepared.messages)
         logger.info(
             "[journey] mid=%s prepared: %d prompt turns, %d tools, regenerate=%s",
-            message_obj.id,
+            turn_key,
             len(messages),
             len(prepared.tools or []),
             regenerate,
         )
-        emitter = ToolEventEmitter(send_callback, message_obj.id)
+        emitter = ToolEventEmitter(binding.send_callback, binding.correlation)
         if prepared.context_trace and prepared.context_trace["stages"]:
             # Persist first, then emit: a client that misses the event (or
-            # refreshes) still gets the trace from the message payload.
-            await self._save_context_trace(message_obj, prepared.context_trace)
+            # refreshes) still gets the trace from the turn's payload.
+            await binding.store.save_context_trace(prepared.context_trace)
             await emitter.context_trace(prepared.context_trace)
         usage = UsageAccumulator()
         ctx = ToolExecutionContext(
-            message=message_obj,
-            conversation=conversation,
-            user=user,
-            send_callback=send_callback,
+            message=binding.message,
+            conversation=binding.conversation,
+            user=binding.user,
+            send_callback=binding.send_callback,
             emitter=emitter,
+            store=binding.store,
             retrieval_scope=retrieval_scope,
         )
 
@@ -181,7 +172,7 @@ class ToolLoopService:
             round_thinking_blocks: List[Dict[str, str]] = []
             logger.info(
                 "[journey] mid=%s round %d start (tools=%s)",
-                message_obj.id,
+                turn_key,
                 round_index,
                 "on" if tools else "off",
             )
@@ -196,9 +187,7 @@ class ToolLoopService:
                             text_accum += "\n\n"
                         round_has_text = True
                         text_accum += event.text
-                        await self._emit_stream_chunk(
-                            send_callback, message_obj, text_accum, regenerate
-                        )
+                        await binding.sink.text(text_accum)
 
                     elif event.kind is StreamEventKind.THINKING_DELTA:
                         if not event.text:
@@ -208,13 +197,7 @@ class ToolLoopService:
                         round_has_thinking = True
                         round_thinking += event.text
                         thinking_accum += event.text
-                        await self._emit_thinking_chunk(
-                            send_callback,
-                            message_obj,
-                            text_accum,
-                            thinking_accum,
-                            regenerate,
-                        )
+                        await binding.sink.thinking(text_accum, thinking_accum)
 
                     elif event.kind is StreamEventKind.THINKING_BLOCK_READY:
                         if event.provider_thinking_block:
@@ -226,7 +209,7 @@ class ToolLoopService:
                             # Providers without call ids (Gemini): synthesize one
                             # and hand it to the matching READY via FIFO order.
                             call_id = synthesize_tool_call_id(
-                                message_obj.id, round_index, len(synthesized_ids)
+                                turn_key, round_index, len(synthesized_ids)
                             )
                             synthesized_ids.append(call_id)
                         origin, server_slug, _ = ToolExecutionService._classify(
@@ -257,7 +240,7 @@ class ToolLoopService:
                                 synthesized_ids.popleft()
                                 if synthesized_ids
                                 else synthesize_tool_call_id(
-                                    message_obj.id, round_index, len(pending_calls)
+                                    turn_key, round_index, len(pending_calls)
                                 )
                             )
                         pending_calls.append(call)
@@ -277,16 +260,13 @@ class ToolLoopService:
                             )
                             provider_tool_calls.append(provider_call)
 
-                        if user:
-                            can_continue, error_response = (
-                                await self.billing_service.check_streaming_credit_usage(
-                                    user, llm, usage.totals()
-                                )
-                            )
-                            if not can_continue:
-                                result.interrupted = True
-                                result.error_response = error_response
-                                break
+                        can_continue, error_response = await binding.gate.check(
+                            usage.totals()
+                        )
+                        if not can_continue:
+                            result.interrupted = True
+                            result.error_response = error_response
+                            break
 
             except TimeoutError as exc:
                 # Return the partial turn instead of raising: text the user
@@ -294,18 +274,18 @@ class ToolLoopService:
                 # persisted must survive a stalled provider stream.
                 result.timed_out = True
                 logger.warning(
-                    "[ToolLoopService] %s (round %s, message %s) — "
+                    "[ToolLoopService] %s (round %s, turn %s) — "
                     "finishing with the partial turn",
                     exc,
                     round_index,
-                    message_obj.id,
+                    turn_key,
                 )
                 break
 
             logger.info(
                 "[journey] mid=%s round %d stream done: text=%d chars, "
                 "pending_calls=%s, interrupted=%s",
-                message_obj.id,
+                turn_key,
                 round_index,
                 len(text_accum),
                 [call.name for call in pending_calls],
@@ -357,7 +337,7 @@ class ToolLoopService:
                 logger.info(
                     "[journey] mid=%s round cap hit — next round forces a "
                     "text answer",
-                    message_obj.id,
+                    turn_key,
                 )
                 await emitter.rounds_capped(round_index)
 
@@ -374,7 +354,7 @@ class ToolLoopService:
         logger.info(
             "[journey] mid=%s loop done: rounds=%d, tool_calls=%d, "
             "text=%d chars, tokens=%s/%s, interrupted=%s, timed_out=%s",
-            message_obj.id,
+            turn_key,
             result.rounds_used,
             result.tool_calls_made,
             len(text_accum),
@@ -397,50 +377,6 @@ class ToolLoopService:
         return text_accum.rsplit("\n\n", 1)[-1] if "\n\n" in text_accum else text_accum
 
     @staticmethod
-    async def _emit_stream_chunk(
-        send_callback: Any,
-        message_obj: Message,
-        accumulated_text: str,
-        regenerate: bool,
-    ) -> None:
-        payload = WebSocketResponseService.format_streaming_chunk(
-            message_id=message_obj.id,
-            chunk=accumulated_text,
-            is_complete=False,
-            metadata={
-                "senderName": DEFAULT_AI_SENDER_NAME,
-                "senderType": SenderType.AI_ASSISTANT,
-                "streaming": True,
-                "regenerate": regenerate,
-                "createdAt": message_obj.created_at.isoformat(),
-            },
-        )
-        await send_callback(payload)
-
-    @staticmethod
-    async def _emit_thinking_chunk(
-        send_callback: Any,
-        message_obj: Message,
-        accumulated_text: str,
-        thinking_summary: str,
-        regenerate: bool,
-    ) -> None:
-        payload = WebSocketResponseService.format_streaming_chunk(
-            message_id=message_obj.id,
-            chunk=accumulated_text,
-            is_complete=False,
-            metadata={
-                "senderName": DEFAULT_AI_SENDER_NAME,
-                "senderType": SenderType.AI_ASSISTANT,
-                "streaming": True,
-                "regenerate": regenerate,
-                "createdAt": message_obj.created_at.isoformat(),
-                "thinkingSummary": thinking_summary,
-            },
-        )
-        await send_callback(payload)
-
-    @staticmethod
     async def _emit_provider_tool_call(
         emitter: ToolEventEmitter,
         provider_call: Dict[str, Any],
@@ -461,21 +397,3 @@ class ToolLoopService:
             status=provider_call.get("status", "completed"),
             result=provider_call.get("result"),
         )
-
-    @staticmethod
-    @database_sync_to_async
-    def _save_context_trace(message_obj: Message, trace: Dict[str, Any]) -> None:
-        message_obj.context_trace = trace
-        message_obj.save(update_fields=["context_trace"])
-
-    @staticmethod
-    @database_sync_to_async
-    def _clear_prior_tool_calls(message_obj: Message) -> None:
-        """Regeneration: drop ALL of the message's previous tool-call rows."""
-        deleted, _ = MessageToolCall.objects.filter(message=message_obj).delete()
-        if deleted:
-            logger.info(
-                "[ToolLoopService] Cleared %s prior tool calls for regenerated message %s",
-                deleted,
-                message_obj.id,
-            )

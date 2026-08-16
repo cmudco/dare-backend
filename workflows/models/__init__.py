@@ -29,6 +29,8 @@ from .citations import (
     WorkflowStepWebSearchSource,
 )
 
+from .tool_calls import WorkflowStepToolCall
+
 # Make all models available at package level
 __all__ = [
     'BaseNodeData',
@@ -49,4 +51,5 @@ __all__ = [
     'WorkflowRunStep',
     'WorkflowStepSnippet',
     'WorkflowStepWebSearchSource',
+    'WorkflowStepToolCall',
 ]
