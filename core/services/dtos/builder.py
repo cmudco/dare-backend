@@ -34,6 +34,32 @@ ARTIFACT_TOOL_SLUGS = frozenset(
 ARTIFACT_MIN_MAX_TOKENS = 8000
 
 
+def resolve_agentic_rag(
+    context: ContextConfig, llm: Optional[Any], selected_slugs: set
+) -> ContextConfig:
+    """Resolve agentic RAG for a request being built.
+
+    Agentic mode exposes retrieval as the ``search_documents`` tool the model
+    calls on demand instead of pre-injecting context. Fall back to advanced
+    pre-injection when there is nothing to search or the provider cannot call
+    tools (llama), so agentic never silently disables RAG. Mutates
+    ``selected_slugs`` in place; returns the (possibly downgraded) context.
+    """
+    if context.rag_mode != RagMode.AGENTIC:
+        return context
+    has_sources = bool(
+        context.embedding_ids
+        or context.tag_ids
+        or context.folder_ids
+        or context.library_ids
+    )
+    provider_supports_tools = getattr(llm, "provider", None) != Provider.LLAMA.value
+    if has_sources and provider_supports_tools:
+        selected_slugs.add("search_documents")
+        return context
+    return replace(context, rag_mode=RagMode.ADVANCED)
+
+
 class LLMQueryRequestBuilder:
     """Builder pattern for constructing LLMQueryRequest from dictionaries.
 
@@ -179,24 +205,7 @@ class LLMQueryRequestBuilder:
         if artifacts_enabled:
             selected_slugs |= ARTIFACT_TOOL_SLUGS
 
-        # Agentic RAG: retrieval is exposed as a tool the model calls on
-        # demand instead of pre-injecting context. Fall back to advanced
-        # pre-injection when there is nothing to search or the provider
-        # cannot call tools (llama), so agentic never silently disables RAG.
-        if context.rag_mode == RagMode.AGENTIC:
-            has_sources = bool(
-                context.embedding_ids
-                or context.tag_ids
-                or context.folder_ids
-                or context.library_ids
-            )
-            provider_supports_tools = (
-                getattr(llm, "provider", None) != Provider.LLAMA.value
-            )
-            if has_sources and provider_supports_tools:
-                selected_slugs.add("search_documents")
-            else:
-                context = replace(context, rag_mode=RagMode.ADVANCED)
+        context = resolve_agentic_rag(context, llm, selected_slugs)
 
         dare_tool_slugs = tuple(selected_slugs)
 
@@ -242,6 +251,8 @@ class LLMQueryRequestBuilder:
         structured_spec: Optional[Dict[str, Any]] = None,
         web_search_enabled: bool = False,
         file_owner_id: Optional[int] = None,
+        rag_mode: str = RagMode.NAIVE,
+        library_ids: Optional[list] = None,
     ) -> LLMQueryRequest:
         """Build LLMQueryRequest from workflow execution data.
 
@@ -263,6 +274,8 @@ class LLMQueryRequestBuilder:
             structured_spec: JSON schema for structured output
             web_search_enabled: Enable web search for this step
             file_owner_id: Original owner's user ID for cross-user embedding access
+            rag_mode: Retrieval mode for the step (naive/advanced/agentic)
+            library_ids: Shared library IDs to retrieve context from
 
         Returns:
             Fully constructed LLMQueryRequest for workflow execution
@@ -273,10 +286,12 @@ class LLMQueryRequestBuilder:
             media_ids=[],  # Workflows don't use media files
             tag_ids=tag_ids or [],
             folder_ids=folder_ids or [],
+            library_ids=library_ids or [],
             max_context_snippets=max_context_snippets,
             document_similarity_threshold=document_similarity_threshold,
             history_limit=0,  # Workflows don't use conversation history
             file_owner_id=file_owner_id,
+            rag_mode=rag_mode,
         )
 
         generation = GenerationConfig(
@@ -288,6 +303,9 @@ class LLMQueryRequestBuilder:
             web_search_enabled=web_search_enabled,
         )
 
+        selected_slugs: set = set()
+        context = resolve_agentic_rag(context, llm, selected_slugs)
+
         return LLMQueryRequest(
             message=message,
             conversation=None,  # Workflows don't have conversations
@@ -296,4 +314,5 @@ class LLMQueryRequestBuilder:
             context=context,
             generation=generation,
             workflow_run_step_obj=workflow_run_step_obj,
+            dare_tool_slugs=tuple(selected_slugs),
         )

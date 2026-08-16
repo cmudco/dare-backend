@@ -3,6 +3,7 @@ from typing import Iterable
 
 from django.db import models
 from django.core.validators import MinValueValidator, MaxValueValidator
+from conversations.constants import RagMode
 from workflows.node_handler_constants import StepNodeDefaults, FileNodeDefaults
 from workflows.constants import Mode, RetrievalMode, QuerySource
 
@@ -18,6 +19,7 @@ class PrefetchedNodeFileRelations:
     step_content_files: dict[int, tuple[NodeFileReference, ...]] = field(default_factory=dict)
     step_embedding_files: dict[int, tuple[NodeFileReference, ...]] = field(default_factory=dict)
     step_tags: dict[int, tuple[NodeFileReference, ...]] = field(default_factory=dict)
+    step_libraries: dict[int, tuple[NodeFileReference, ...]] = field(default_factory=dict)
     file_node_files: dict[int, tuple[NodeFileReference, ...]] = field(default_factory=dict)
 
     def get_step_content_files(self, node_data_id: int) -> tuple[NodeFileReference, ...]:
@@ -28,6 +30,9 @@ class PrefetchedNodeFileRelations:
 
     def get_step_tags(self, node_data_id: int) -> tuple[NodeFileReference, ...]:
         return self.step_tags.get(node_data_id, ())
+
+    def get_step_libraries(self, node_data_id: int) -> tuple[NodeFileReference, ...]:
+        return self.step_libraries.get(node_data_id, ())
 
     def get_file_node_files(self, node_data_id: int) -> tuple[NodeFileReference, ...]:
         return self.file_node_files.get(node_data_id, ())
@@ -53,6 +58,7 @@ def build_prefetched_node_file_relations(nodes) -> PrefetchedNodeFileRelations:
     step_content_files: dict[int, tuple[NodeFileReference, ...]] = {}
     step_embedding_files: dict[int, tuple[NodeFileReference, ...]] = {}
     step_tags: dict[int, tuple[NodeFileReference, ...]] = {}
+    step_libraries: dict[int, tuple[NodeFileReference, ...]] = {}
     file_node_files: dict[int, tuple[NodeFileReference, ...]] = {}
 
     if step_node_data_ids:
@@ -71,6 +77,11 @@ def build_prefetched_node_file_relations(nodes) -> PrefetchedNodeFileRelations:
                 stepnodedata_id__in=step_node_data_ids
             ).values_list("stepnodedata_id", "tag_id", "tag__label")
         )
+        step_libraries = _group_file_rows(
+            StepNodeData.libraries.through.objects.filter(
+                stepnodedata_id__in=step_node_data_ids
+            ).values_list("stepnodedata_id", "sharedlibrary_id", "sharedlibrary__name")
+        )
 
     if file_node_data_ids:
         file_node_files = _group_file_rows(
@@ -83,6 +94,7 @@ def build_prefetched_node_file_relations(nodes) -> PrefetchedNodeFileRelations:
         step_content_files=step_content_files,
         step_embedding_files=step_embedding_files,
         step_tags=step_tags,
+        step_libraries=step_libraries,
         file_node_files=file_node_files,
     )
 
@@ -195,6 +207,18 @@ class StepNodeData(BaseNodeData):
         default=False,
         help_text="If true, enable web search for this step's LLM"
     )
+    rag_mode = models.CharField(
+        max_length=20,
+        choices=RagMode.choices,
+        default=RagMode.NAIVE,
+        help_text="Retrieval mode for this step's document context (naive/advanced/agentic)"
+    )
+    libraries = models.ManyToManyField(
+        'libraries.SharedLibrary',
+        related_name='step_nodes',
+        blank=True,
+        help_text="Shared libraries to retrieve context from for this step"
+    )
 
     def to_dict(self, relations: PrefetchedNodeFileRelations | None = None):
         """Convert to React Flow node data format."""
@@ -202,9 +226,11 @@ class StepNodeData(BaseNodeData):
         content_file_refs = node_relations.get_step_content_files(self.id)
         embedding_file_refs = node_relations.get_step_embedding_files(self.id)
         tag_refs = node_relations.get_step_tags(self.id)
+        library_refs = node_relations.get_step_libraries(self.id)
         content_file_ids, content_file_names = _serialize_file_refs(content_file_refs)
         embedding_file_ids, embedding_file_names = _serialize_file_refs(embedding_file_refs)
         tag_ids, tag_names = _serialize_file_refs(tag_refs)
+        library_ids, library_names = _serialize_file_refs(library_refs)
         return {
             'label': self.label,
             'agent': self.agent.id if self.agent else None,
@@ -226,6 +252,9 @@ class StepNodeData(BaseNodeData):
             'usePreviousContext': self.use_previous_context,
             'textInput': self.text_input,
             'enableWebSearch': self.enable_web_search,
+            'ragMode': self.rag_mode,
+            'libraries': library_ids,
+            'libraryNames': library_names,
         }
 
     def __str__(self):

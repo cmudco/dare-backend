@@ -78,7 +78,14 @@ class WorkflowExportService:
                 "enable_web_search": data_obj.enable_web_search,
                 "use_previous_step_files": data_obj.use_previous_step_files,
                 "use_previous_step_embeddings": data_obj.use_previous_step_embeddings,
+                "rag_mode": data_obj.rag_mode,
             }
+            libraries = [
+                {"id": library.id, "slug": library.slug, "name": library.name}
+                for library in data_obj.libraries.all()
+            ]
+            if libraries:
+                data["libraries"] = libraries
             if relations.get_step_content_files(data_obj.id):
                 data["needs_content_files"] = True
             if relations.get_step_embedding_files(data_obj.id):

@@ -157,6 +157,8 @@ class StepNodeHandler(BaseExecutionHandler):
             structured_spec=None,
             web_search_enabled=config['enable_web_search'],
             file_owner_id=None,
+            rag_mode=config['rag_mode'],
+            library_ids=config['library_ids'] or None,
         )
 
         return await self._execute_llm_query_with_collection(
@@ -268,8 +270,10 @@ class StepNodeHandler(BaseExecutionHandler):
                 'content_file_ids': list(step_data.content_files.values_list('id', flat=True)),
                 'embedding_file_ids': list(step_data.embedding_files.values_list('id', flat=True)),
                 'tag_ids': list(step_data.tags.values_list('id', flat=True)),
+                'library_ids': list(step_data.libraries.values_list('id', flat=True)),
                 'prompt_id': step_data.prompt.id if step_data.prompt else None,
                 'enable_web_search': step_data.enable_web_search,
+                'rag_mode': step_data.rag_mode,
             }
             if context.batch_file_id and context.is_start_connected:
                 content_file_ids = config['content_file_ids']
