@@ -72,6 +72,7 @@ class WorkflowStepToolCall(BaseModel):
         help_text="Wall-clock execution time of the tool call in milliseconds.",
     )
 
+    objects = models.Manager()
     active_objects = ActiveObjectsManager()
 
     class Meta:
