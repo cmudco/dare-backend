@@ -15,6 +15,7 @@ from typing import Any, Dict, Optional
 
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import FieldDoesNotExist
 
 from conversations.models import LLM
 
@@ -91,7 +92,7 @@ def _is_auto(field) -> bool:
 def _has_field(model, name: str) -> bool:
     try:
         model._meta.get_field(name)
-    except Exception:
+    except FieldDoesNotExist:
         return False
     return True
 
