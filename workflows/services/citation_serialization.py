@@ -13,23 +13,45 @@ from djangorestframework_camel_case.util import camelize
 from rest_framework import serializers
 from files.api.serializers import FileSerializer
 from users.constants import VectorDBChoice
-from workflows.models import WorkflowStepSnippet, WorkflowStepWebSearchSource
+from workflows.models import (
+    WorkflowStepSnippet,
+    WorkflowStepToolCall,
+    WorkflowStepWebSearchSource,
+)
 
 
 class WorkflowStepSnippetSerializer(serializers.ModelSerializer):
     """Serializer for workflow step RAG snippets."""
+
     file = FileSerializer(read_only=True)
+    library = serializers.SerializerMethodField()
     vector_db_source = serializers.SerializerMethodField()
 
     class Meta:
         model = WorkflowStepSnippet
-        fields = ['id', 'file', 'text', 'similarity_score', 'chunk_index', 'vector_db_source']
+        fields = [
+            "id",
+            "file",
+            "library",
+            "source_ref",
+            "text",
+            "similarity_score",
+            "chunk_index",
+            "vector_db_source",
+        ]
         read_only_fields = fields
+
+    def get_library(self, obj):
+        if obj.library_id:
+            return {"id": obj.library_id, "name": obj.library.name}
+        return None
 
     def get_vector_db_source(self, obj):
         """Return the human-readable name of the vector database source."""
         if obj.vector_db_source:
-            return dict(VectorDBChoice.choices).get(obj.vector_db_source, obj.vector_db_source)
+            return dict(VectorDBChoice.choices).get(
+                obj.vector_db_source, obj.vector_db_source
+            )
         return "Unknown"
 
 
@@ -43,8 +65,36 @@ class WorkflowStepWebSearchSourceSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = WorkflowStepWebSearchSource
-        fields = ['id', 'url', 'title', 'cited_text', 'page_age', 'provider']
+        fields = ["id", "url", "title", "cited_text", "page_age", "provider"]
         read_only_fields = fields
+
+
+class WorkflowStepToolCallSerializer(serializers.ModelSerializer):
+    """Serializer for tool calls made during a workflow step's LLM turn."""
+
+    class Meta:
+        model = WorkflowStepToolCall
+        fields = [
+            "id",
+            "tool_call_id",
+            "server_slug",
+            "origin",
+            "tool_name",
+            "arguments",
+            "round_index",
+            "status",
+            "result",
+            "error",
+            "execution_time_ms",
+        ]
+        read_only_fields = fields
+
+
+def serialize_step_tool_calls(step) -> List[Dict[str, Any]]:
+    """Serialize a step's tool calls with camelCase keys for the frontend."""
+    return camelize(
+        WorkflowStepToolCallSerializer(step.tool_calls.all(), many=True).data
+    )
 
 
 def serialize_step_citations(step) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
@@ -61,10 +111,12 @@ def serialize_step_citations(step) -> tuple[List[Dict[str, Any]], List[Dict[str,
     Returns:
         Tuple of (snippets_data, web_search_sources_data) with camelCase keys
     """
-    snippets_data = camelize(WorkflowStepSnippetSerializer(
-        step.snippets.all(), many=True
-    ).data)
-    web_search_sources_data = camelize(WorkflowStepWebSearchSourceSerializer(
-        step.web_search_sources.all(), many=True
-    ).data)
+    snippets_data = camelize(
+        WorkflowStepSnippetSerializer(step.snippets.all(), many=True).data
+    )
+    web_search_sources_data = camelize(
+        WorkflowStepWebSearchSourceSerializer(
+            step.web_search_sources.all(), many=True
+        ).data
+    )
     return snippets_data, web_search_sources_data

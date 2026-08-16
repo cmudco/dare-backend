@@ -13,6 +13,8 @@ from django.utils import timezone
 
 from core.services.dtos import LLMQueryRequestBuilder
 from conversations.models import LLM
+from conversations.services.tool_loop_service import ToolLoopService
+from dare_tools.services.retrieval_tool_executor import RetrievalScope
 from workflows.constants import WorkflowRunStepStatus
 from workflows.handlers.base import ExecutionNode, NodeExecutionContext, NodeExecutionResult
 from workflows.handlers.event_emitter import EventEmitter
@@ -24,7 +26,11 @@ from workflows.handlers.utils import (
     StepMessagePreparer,
 )
 from workflows.models import StepNodeData, WorkflowRun, WorkflowRunStep
-from workflows.services.citation_serialization import serialize_step_citations
+from workflows.services.citation_serialization import (
+    serialize_step_citations,
+    serialize_step_tool_calls,
+)
+from workflows.services.tool_loop_binding import WorkflowToolLoopBinding
 from workflows.services.workflow_web_search_source_service import WorkflowWebSearchSourceService
 
 
@@ -33,6 +39,10 @@ logger = logging.getLogger(__name__)
 
 class StepNodeHandler(BaseExecutionHandler):
     """Handler for 'step' type nodes."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.tool_loop_service = ToolLoopService(self.llm_service)
 
     def can_handle(self, node_type: str) -> bool:
         return node_type == NodeType.STEP
@@ -161,11 +171,39 @@ class StepNodeHandler(BaseExecutionHandler):
             library_ids=config['library_ids'] or None,
         )
 
-        return await self._execute_llm_query_with_collection(
-            self.llm_service.query(request),
-            emitter=emitter,
-            node_id=node_id,
+        retrieval_scope = RetrievalScope(
+            embedding_ids=tuple(request.context.embedding_ids or ()),
+            tag_ids=tuple(request.context.tag_ids or ()),
+            folder_ids=tuple(request.context.folder_ids or ()),
+            library_ids=tuple(request.context.library_ids or ()),
+            user_id=config['user'].id,
+            file_owner_id=request.context.file_owner_id,
+            max_context_snippets=request.context.max_context_snippets,
+            similarity_threshold=request.context.document_similarity_threshold,
         )
+        binding = WorkflowToolLoopBinding(
+            run_step=run_step,
+            node_id=node_id,
+            user=config['user'],
+            emitter=emitter,
+            send_callback=context.send_callback,
+        )
+
+        # regenerate=True: a re-run reuses the same WorkflowRunStep, so its
+        # previous tool-call rows must never survive into the new turn.
+        result = await self.tool_loop_service.run(
+            request=request,
+            binding=binding,
+            retrieval_scope=retrieval_scope,
+            regenerate=True,
+        )
+
+        if result.timed_out:
+            raise TimeoutError(
+                "The model stream stalled mid-step; the step was aborted."
+            )
+
+        return result.text, result.token_usage or {}
 
     async def _save_web_search_sources(
         self,
@@ -216,9 +254,14 @@ class StepNodeHandler(BaseExecutionHandler):
         token_usage: Dict,
         run_step: WorkflowRunStep,
     ) -> None:
-        """Emit step_completed event with citation metadata."""
-        snippets_data, web_sources_data = await database_sync_to_async(
-            lambda: serialize_step_citations(run_step)
+        """Emit step_completed event with citation and tool-call metadata."""
+        def _serialize():
+            snippets, web_sources = serialize_step_citations(run_step)
+            tool_calls = serialize_step_tool_calls(run_step)
+            return snippets, web_sources, tool_calls
+
+        snippets_data, web_sources_data, tool_calls_data = await database_sync_to_async(
+            _serialize
         )()
 
         tokens = None
@@ -229,10 +272,19 @@ class StepNodeHandler(BaseExecutionHandler):
             }
 
         metadata = None
-        if snippets_data or web_sources_data:
+        if (
+            snippets_data
+            or web_sources_data
+            or tool_calls_data
+            or run_step.retrieval_trace
+            or run_step.context_trace
+        ):
             metadata = {
                 "snippets": snippets_data,
                 "webSearchSources": web_sources_data,
+                "toolCalls": tool_calls_data,
+                "retrievalTrace": run_step.retrieval_trace,
+                "contextTrace": run_step.context_trace,
             }
 
         await emitter.step_completed(node_id, response, "completed", tokens, metadata)
