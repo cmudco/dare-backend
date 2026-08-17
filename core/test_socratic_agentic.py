@@ -110,30 +110,50 @@ class SocraticBuilderAgenticSkipTests(SimpleTestCase):
             search_similar_documents=AsyncMock(return_value="snippet text"),
         )
 
+    def _stage(self, result, kind):
+        return next(
+            (s for s in result.context_trace["stages"] if s["kind"] == kind), None
+        )
+
     def test_classic_agentic_skips_pre_injection(self):
-        messages = async_to_sync(build_classic_socratic_messages)(
+        result = async_to_sync(build_classic_socratic_messages)(
             _socratic_request(RagMode.AGENTIC), self.processor
         )
         self.processor.search_similar_documents.assert_not_called()
-        self.assertIn(AGENTIC_RETRIEVAL_DIRECTIVE, messages[1]["content"])
+        self.assertIn(AGENTIC_RETRIEVAL_DIRECTIVE, result.messages[1]["content"])
+        retrieval = self._stage(result, "retrieval")
+        self.assertTrue(retrieval["deferredToTool"])
 
     def test_classic_non_agentic_still_pre_injects(self):
-        messages = async_to_sync(build_classic_socratic_messages)(
+        result = async_to_sync(build_classic_socratic_messages)(
             _socratic_request(RagMode.ADVANCED), self.processor
         )
         self.processor.search_similar_documents.assert_called_once()
-        self.assertIn("snippet text", messages[1]["content"])
+        self.assertIn("snippet text", result.messages[1]["content"])
+        retrieval = self._stage(result, "retrieval")
+        self.assertEqual(retrieval["mode"], RagMode.ADVANCED)
+        self.assertEqual(retrieval["chars"], len("snippet text"))
 
     def test_advanced_agentic_skips_pre_injection(self):
-        messages = async_to_sync(build_advanced_socratic_messages)(
+        result = async_to_sync(build_advanced_socratic_messages)(
             _socratic_request(RagMode.AGENTIC), self.processor
         )
         self.processor.search_similar_documents.assert_not_called()
-        self.assertIn(AGENTIC_RETRIEVAL_DIRECTIVE, messages[0]["content"])
+        self.assertIn(AGENTIC_RETRIEVAL_DIRECTIVE, result.messages[0]["content"])
+        retrieval = self._stage(result, "retrieval")
+        self.assertTrue(retrieval["deferredToTool"])
 
     def test_advanced_non_agentic_still_pre_injects(self):
-        messages = async_to_sync(build_advanced_socratic_messages)(
+        result = async_to_sync(build_advanced_socratic_messages)(
             _socratic_request(RagMode.ADVANCED), self.processor
         )
         self.processor.search_similar_documents.assert_called_once()
-        self.assertIn("snippet text", messages[0]["content"])
+        self.assertIn("snippet text", result.messages[0]["content"])
+
+    def test_trace_records_prompt_stage(self):
+        result = async_to_sync(build_advanced_socratic_messages)(
+            _socratic_request(RagMode.ADVANCED), self.processor
+        )
+        prompt = self._stage(result, "prompt")
+        self.assertGreater(prompt["chars"], 0)
+        self.assertIn("totalMs", result.context_trace)
