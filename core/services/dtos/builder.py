@@ -152,6 +152,14 @@ class LLMQueryRequestBuilder:
         # truncates it mid-stream so the artifact is silently dropped.
         artifacts_enabled = message_data.get("artifacts_enabled", False)
         requested_slugs = message_data.get("dare_tool_slugs") or []
+
+        # The tool loop is shared with DARE chat, so gate defensively at the
+        # boundary: Socratic Bots is a retrieval-only surface — no artifacts,
+        # no MCP, whatever the payload claims.
+        if is_socratic_bots:
+            artifacts_enabled = False
+            requested_slugs = [s for s in requested_slugs if s == "search_documents"]
+
         loads_artifact_tools = artifacts_enabled or any(
             slug in ARTIFACT_TOOL_SLUGS for slug in requested_slugs
         )
@@ -194,16 +202,23 @@ class LLMQueryRequestBuilder:
         )
 
         # Extract MCP server IDs from frontend payload
-        mcp_server_ids = tuple(message_data.get("mcp_server_ids") or [])
+        mcp_server_ids = (
+            () if is_socratic_bots else tuple(message_data.get("mcp_server_ids") or [])
+        )
 
         # Extract DARE tool slugs from frontend payload. When the Artifacts toggle
         # is on, inject the full artifact toolkit regardless of the drawer selection
         # so the model can CREATE artifacts (create_docx/create_diagram/etc.), not
         # just fork a new version off an existing one via update_artifact. The
         # toggle is the source of truth here: it unions over the drawer selection.
-        selected_slugs = set(message_data.get("dare_tool_slugs") or [])
+        selected_slugs = set(requested_slugs)
         if artifacts_enabled:
             selected_slugs |= ARTIFACT_TOOL_SLUGS
+
+        # Anonymous (public bot) sessions never run the agentic tool loop:
+        # downgrade before resolution so no tool slug is ever added for them.
+        if is_socratic_bots and user is None and context.rag_mode == RagMode.AGENTIC:
+            context = replace(context, rag_mode=RagMode.ADVANCED)
 
         context = resolve_agentic_rag(context, llm, selected_slugs)
 
