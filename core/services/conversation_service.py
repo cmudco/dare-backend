@@ -77,6 +77,7 @@ class ConversationService:
                 "energyStats": msg.get("energy_stats", None),
                 "artifactId": msg.get("artifactId", None),
                 "artifactIds": msg.get("artifactIds", []),
+                "contextTrace": msg.get("context_trace", None),
                 "memoryContextData": msg.get("memory_context_data") or [],
                 # Keep socket fallback history aligned with the REST message
                 # serializer; the client camelizes this to `toolCalls`.
@@ -248,7 +249,8 @@ class ConversationService:
         provides it: that model just handled the chat, so the title call
         can never fail on a provider the deployment has no key for.
         """
-        from core.services.llm_service import LLMService  # avoid module-load cycle
+        from core.services.llm_service import \
+            LLMService  # avoid module-load cycle
 
         messages = [
             {

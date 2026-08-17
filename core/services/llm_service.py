@@ -6,33 +6,21 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 from conversations.constants import Provider, SenderType
 from conversations.models import LLM, Conversation, Message
 from core.integrations import ToolFetcher
-from core.services.api_key_service import (
-    get_dispatch_credentials_for_user,
-    get_provider_api_key,
-)
+from core.services.api_key_service import (get_dispatch_credentials_for_user,
+                                           get_provider_api_key)
 from core.services.claude_service import ClaudeService
 from core.services.custom_llm_service import CustomLLMService
 from core.services.document_processor import DocumentProcessor
-from core.services.dtos import (
-    LLMDescriptor,
-    LLMQueryChunk,
-    LLMQueryRequest,
-    LLMStreamEvent,
-    PreparedChat,
-    ResolvedDispatchCredentials,
-    StreamEventKind,
-)
+from core.services.dtos import (LLMDescriptor, LLMQueryChunk, LLMQueryRequest,
+                                LLMStreamEvent, PreparedChat,
+                                ResolvedDispatchCredentials, StreamEventKind)
 from core.services.file_processor import FileProcessor
 from core.services.gemini_service import GeminiService
 from core.services.llama_service import LlamaService
 from core.services.llm_helpers import (  # Database helpers; Socratic message builders; Media helpers; Standard message builders
-    add_video_transcriptions_to_messages,
-    build_advanced_socratic_messages,
-    build_classic_socratic_messages,
-    build_standard_messages,
-    execute_audio_transcription,
-    get_media_files_as_images,
-)
+    add_video_transcriptions_to_messages, build_advanced_socratic_messages,
+    build_classic_socratic_messages, build_standard_messages,
+    execute_audio_transcription, get_media_files_as_images)
 from core.services.openai_service import OpenAIService
 from files.models import File, Folder
 
@@ -277,13 +265,15 @@ class LLMService:
             List of message dictionaries
         """
         if request.is_advanced_mode():
-            return await build_advanced_socratic_messages(
+            result = await build_advanced_socratic_messages(
                 request, self.document_processor
             )
         else:
-            return await build_classic_socratic_messages(
+            result = await build_classic_socratic_messages(
                 request, self.document_processor
             )
+        self._pending_context_trace = result.context_trace
+        return result.messages
 
     async def _build_standard_messages(
         self, request: LLMQueryRequest
