@@ -167,3 +167,41 @@ class SocraticBooksClient:
         except (ValueError, AttributeError):
             pass
         return True
+
+    @classmethod
+    def delete_user(cls, dare_user_id: int) -> bool:
+        """Delete the SocraticBooks account linked to a DARE user.
+
+        Called during account expunge. Returns ``True`` when the SB account
+        was deleted or none exists (404); ``False`` when SB is unreachable or
+        unconfigured, so the caller can surface a warning.
+        """
+        base = cls._base_url()
+        headers = cls._headers()
+        if not base or not headers:
+            logger.error(
+                'SocraticBooksClient unconfigured for user delete: base=%r headers_present=%s',
+                base, headers is not None,
+            )
+            return False
+
+        url = f'{base}/api/users/internal/delete-user/'
+        try:
+            response = requests.post(
+                url,
+                headers=headers,
+                json={'dare_user_id': dare_user_id},
+                timeout=cls.REQUEST_TIMEOUT,
+            )
+        except requests.RequestException as exc:
+            logger.error('delete-user request failed for DARE user %s: %s', dare_user_id, exc)
+            return False
+
+        if response.status_code in (200, 404):
+            return True
+
+        logger.error(
+            'delete-user returned %s for DARE user %s: %s',
+            response.status_code, dare_user_id, response.text[:200],
+        )
+        return False
