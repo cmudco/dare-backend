@@ -33,6 +33,10 @@ ARTIFACT_TOOL_SLUGS = frozenset(
 )
 ARTIFACT_MIN_MAX_TOKENS = 8000
 
+# Tools that belong to the memory feature and are switched by its toggle
+# rather than chosen from the tool drawer.
+MEMORY_TOOL_SLUGS = frozenset({"search_sessions"})
+
 
 def resolve_agentic_rag(
     context: ContextConfig, llm: Optional[Any], selected_slugs: set
@@ -206,6 +210,12 @@ class LLMQueryRequestBuilder:
             selected_slugs |= ARTIFACT_TOOL_SLUGS
 
         context = resolve_agentic_rag(context, llm, selected_slugs)
+
+        # The memory toggle controls access to conversation search.
+        if context.use_memory:
+            selected_slugs |= MEMORY_TOOL_SLUGS
+        else:
+            selected_slugs -= MEMORY_TOOL_SLUGS
 
         dare_tool_slugs = tuple(selected_slugs)
 

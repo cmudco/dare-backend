@@ -58,32 +58,27 @@ def append_document_access_status(
     has_grouped_sources: bool,
     has_library_sources: bool,
 ) -> None:
-    """Tell the model what is searchable now versus merely present in history."""
+    """List document sources available to the current turn."""
     selected_names = list(dict.fromkeys(full_file_names + embedding_file_names))
     has_current_sources = bool(
         selected_names or has_grouped_sources or has_library_sources
     )
 
-    if has_current_sources:
-        lines = ["Current document access for this turn:"]
-        if selected_names:
-            lines.extend(f"- {name}" for name in selected_names)
-        if has_grouped_sources:
-            lines.append("- Additional documents selected through tags or folders")
-        if has_library_sources:
-            lines.append("- Selected shared libraries")
-        lines.append(
-            "These sources are available for this turn. Retrieved [S#] passages are "
-            "only the query-matched subset, so the absence of a passage from a source "
-            "does not mean that source is unavailable."
-        )
-    else:
-        lines = [
-            "Current document access for this turn: none selected.",
-            "Earlier chat messages may still contain information derived from files "
-            "that were selected on prior turns. You may use that visible conversation "
-            "history, but do not describe it as current access to those files.",
-        ]
+    if not has_current_sources:
+        return
+
+    lines = ["Current document access for this turn:"]
+    if selected_names:
+        lines.extend(f"- {name}" for name in selected_names)
+    if has_grouped_sources:
+        lines.append("- Additional documents selected through tags or folders")
+    if has_library_sources:
+        lines.append("- Selected shared libraries")
+    lines.append(
+        "These sources are available for this turn. Retrieved [S#] passages are "
+        "only the query-matched subset, so the absence of a passage from a source "
+        "does not mean that source is unavailable."
+    )
 
     messages.append({"role": "user", "content": "\n".join(lines)})
 
@@ -190,6 +185,7 @@ async def build_standard_messages(
         with trace.stage("summaries") as stage:
             summary_context = await get_referenced_summaries_context(
                 request.context.referenced_summary_ids,
+                user_id,
             )
             if summary_context:
                 messages.append({"role": "user", "content": summary_context})
@@ -297,10 +293,7 @@ async def build_standard_messages(
             stage["turns"] = len(history_messages)
             stage["limit"] = request.context.history_limit
 
-    # Keep current source availability adjacent to the current question. This
-    # prevents the model from mistaking "one matched snippet" for "only one
-    # selected file", and makes deselection semantics explicit even while old
-    # file-derived answers remain in the conversation-history window.
+    # Keep selected source names adjacent to the current question.
     embedding_file_names = await get_selected_file_names(
         request.context.embedding_ids,
         user_id,

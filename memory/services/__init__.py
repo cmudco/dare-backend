@@ -1,4 +1,6 @@
-# Memory services module
-from memory.services.memu_service import MemUService, get_memu_service
+"""Service layer for the memory subsystem — the impure half.
 
-__all__ = ["MemUService", "get_memu_service"]
+Everything here touches storage, the network, or the clock. The rules these
+services enforce live in memory/domain, which is pure and where the tests
+point.
+"""

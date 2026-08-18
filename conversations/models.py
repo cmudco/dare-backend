@@ -574,6 +574,16 @@ class Conversation(BaseModel):
     artifacts_enabled = models.BooleanField(
         default=False, help_text="Enable artifact generation for long-form content."
     )
+    memory_enabled = models.BooleanField(
+        default=False,
+        help_text=(
+            "Enable cross-conversation memory. Gates BOTH halves of the "
+            "pipeline: retrieved memories are injected into this "
+            "conversation's prompts, and its completed turns are read by the "
+            "memory writer. Off means nothing is recalled and nothing is "
+            "written down."
+        ),
+    )
     selected_model = models.ForeignKey(
         LLM,
         on_delete=models.SET_NULL,
@@ -629,13 +639,6 @@ class Conversation(BaseModel):
     )
     feedback_last_prompt_timestamp = models.DateTimeField(
         null=True, blank=True, help_text="Timestamp when feedback prompt was last shown"
-    )
-
-    # Memory extraction tracking
-    last_memory_extracted_at = models.DateTimeField(
-        null=True,
-        blank=True,
-        help_text="Timestamp of last memory extraction from this conversation.",
     )
 
     # MCP Server integration
@@ -995,6 +998,17 @@ class Message(BaseModel):
         default=list,
         blank=True,
         help_text="Memory items used as context for this message. List of {content, memory_type, categories}.",
+    )
+    memory_write_data = models.JSONField(
+        null=True,
+        blank=True,
+        help_text=(
+            "What the memory writer decided after this turn: counts plus every "
+            "ledger entry including refusals. Written by the background job "
+            "after the reply is finished, so it arrives later than the rest of "
+            "the message — and is stored rather than only pushed, so the panel "
+            "survives a reload."
+        ),
     )
     retrieval_trace = models.JSONField(
         null=True,

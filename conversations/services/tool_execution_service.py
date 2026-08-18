@@ -39,11 +39,12 @@ from dare_tools.models import DareTool, DareToolExecution
 from dare_tools.services.registry import DareToolRegistry
 from dare_tools.services.result_formatters import format_dare_result_for_llm
 from dare_tools.services.retrieval_tool_executor import (
-    RetrievalScope, retrieval_tool_executor)
-from mcp.services.artifact_bridge import (BridgeStatus,
-                                          maybe_create_pdf_artifact)
-from mcp.services.mcp_tool_executor import (MCPToolExecutorError,
-                                            mcp_tool_executor)
+    RetrievalScope,
+    retrieval_tool_executor,
+)
+from mcp.services.artifact_bridge import BridgeStatus, maybe_create_pdf_artifact
+from mcp.services.mcp_tool_executor import MCPToolExecutorError, mcp_tool_executor
+from memory.services.session_search import search_sessions_for_user
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,9 @@ ARTIFACT_TOOLS = frozenset(
 
 # DARE tools that retrieve document context — routed to RetrievalToolExecutor.
 RETRIEVAL_TOOLS = frozenset({"search_documents"})
+
+# Memory tools are scoped to the authenticated user by the server.
+MEMORY_TOOLS = frozenset({"search_sessions"})
 
 
 @dataclass(frozen=True)
@@ -226,6 +230,13 @@ class ToolExecutionService:
                 arguments=arguments,
                 target=ctx.store.retrieval_target,
                 scope=ctx.retrieval_scope,
+            )
+        elif tool_name in MEMORY_TOOLS:
+            raw_result = await sync_to_async(search_sessions_for_user)(
+                ctx.user,
+                arguments["query"],
+                since=arguments.get("since"),
+                until=arguments.get("until"),
             )
         elif tool_name in ARTIFACT_TOOLS:
             if ctx.artifact_host is None or not ctx.artifact_host.can_create:

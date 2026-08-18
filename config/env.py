@@ -58,10 +58,10 @@ SOCRATIC_BOTS_BACKEND_URL = os.getenv("SOCRATIC_BOTS_BACKEND_URL")
 PINECONE_API_KEY = env("PINECONE_API_KEY")
 PINECONE_INDEX_NAME = env("PINECONE_INDEX_NAME")
 OPENAI_API_KEY = env("OPENAI_API_KEY")
+MEMORY_WRITER_MODEL = os.getenv("MEMORY_WRITER_MODEL", "gpt-5.6-luna")
 CLAUDE_API_KEY = env("CLAUDE_API_KEY")
 GEMINI_API_KEY = env("GEMINI_API_KEY")
 OLLAMA_HOST = env("OLLAMA_HOST", default="http://localhost:11434")
-ELEVENLABS_API_KEY = env("ELEVENLABS_API_KEY", default="")
 
 # Docling enrichment; the model resolves from DARE's LLM catalog so billing stays consistent.
 DOCUMENT_ENRICHMENT_ENABLED = env.bool("DOCUMENT_ENRICHMENT_ENABLED", default=True)

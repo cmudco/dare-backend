@@ -53,6 +53,15 @@ def format_dare_result_for_llm(tool_name: str, result: Dict[str, Any]) -> str:
             "When you use a passage in your answer, cite it inline with "
             "its [S#] tag:\n\n" + "\n\n".join(blocks)
         )
+    elif tool_name == "search_sessions":
+        found = result.get("found", 0)
+        if not found:
+            return "No past messages matched those words."
+        return (
+            f"Found {found} matching moment{'s' if found != 1 else ''} in past "
+            "conversations, each with the turn before and after it:\n\n"
+            + result.get("transcript", "")
+        )
     elif tool_name == "create_react_component":
         return f"React component created successfully. Artifact ID: {result.get('artifact_id')}, Title: {result.get('message', 'Component')}"
     elif tool_name == "update_artifact_inline":

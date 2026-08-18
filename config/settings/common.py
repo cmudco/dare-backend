@@ -349,21 +349,25 @@ RQ_QUEUES = {
         'DB': REDIS_DB,
         'PASSWORD': REDIS_PASSWORD if REDIS_PASSWORD else None,
     },
-    'simple_queue': {
+    # Use one worker until memory writes are serialized per user.
+    'memory': {
         'HOST': REDIS_HOST,
         'PORT': REDIS_PORT,
         'DB': REDIS_DB,
         'PASSWORD': REDIS_PASSWORD if REDIS_PASSWORD else None,
-        'DEFAULT_TIMEOUT': 3600,
+        'DEFAULT_TIMEOUT': 300,
+        # Keep idle Redis connections healthy.
+        'REDIS_CLIENT_KWARGS': {
+            'socket_keepalive': True,
+            'health_check_interval': 30,
+        },
     },
 }
 
 RQ_SHOW_ADMIN_LINK = True
 
-# Shared cache. The default LocMemCache is per-process, so cached values aren't
-# shared across uvicorn workers; Redis makes them visible to all. Shares the
-# Channels/RQ DB, namespaced via KEY_PREFIX — avoid cache.clear() here, which
-# FLUSHDBs the shared DB; delete specific keys instead.
+# Share cache across processes. Delete specific keys because cache.clear()
+# flushes the shared Redis database.
 CACHES = {
     "default": {
         "BACKEND": "django.core.cache.backends.redis.RedisCache",

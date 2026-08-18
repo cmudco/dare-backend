@@ -24,7 +24,6 @@ graph TB
 
     subgraph "External Services"
         LLM["LLM Providers<br/>(OpenAI, Anthropic,<br/>Google, Ollama)"]
-        EL["ElevenLabs<br/>(Voice)"]
     end
 
     DF -- "REST API + Socket.IO" --> DB
@@ -36,7 +35,6 @@ graph TB
     DB --> VDB
     DB --> LLM
     SB --> PG
-    SB --> EL
 ```
 
 ## Component Responsibilities
@@ -78,7 +76,6 @@ Thin Django layer focused on educational features, delegates core operations to 
 - **Proxy pattern**: `DareApiClient` forwards auth, conversations, files, and model requests to dare-backend
 - **Two auth modes**: JWT (user-authenticated) and `X-Internal-Key` (service-to-service)
 - **Educational models**: Book, Chapter, Note, BotGroup, AccessCode
-- **Voice features**: ElevenLabs integration for voice-based learning
 
 ### socraticbooks-react (Educational Frontend)
 

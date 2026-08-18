@@ -1,10 +1,13 @@
-"""Helpers for injecting memory context into LLM messages via semantic search."""
+"""Attach the current memory layers to a model request."""
 
 import logging
-from typing import List, Dict, Any
+from typing import Any, Dict, List
+
+from channels.db import database_sync_to_async
+from django.contrib.auth import get_user_model
 
 from config.env import USE_POSTGRES
-from memory.services import get_memu_service
+from memory.services.context import ReadContext, read_context
 
 logger = logging.getLogger(__name__)
 
@@ -15,19 +18,16 @@ async def add_memory_context_to_messages(
     user_id: int,
 ) -> List[Dict[str, Any]]:
     """
-    Search user's memory store and append matching items as context.
-
-    Uses the user's message as a semantic search query against their
-    personal memory store. Skips gracefully when USE_POSTGRES is False.
+    Read the user's memory layers and append the framed context block.
 
     Args:
         messages: LLM message list to append to (modified in place)
-        query: The user's message text used as the search query
+        query: The user's message text used as the retrieval query
         user_id: Authenticated user's integer ID
 
     Returns:
-        List of memory item dicts used as context (for display on frontend).
-        Each dict has: content, memoryType, categories.
+        List of memory item dicts the prompt actually carried (for display on
+        the frontend). Each dict has: content, memory_type, categories.
     """
     if not query or not query.strip():
         return []
@@ -36,48 +36,25 @@ async def add_memory_context_to_messages(
         logger.debug("Memory context injection skipped: USE_POSTGRES is False")
         return []
 
-    service = get_memu_service()
     try:
-        result = await service.search(str(user_id), query.strip())
-    except Exception as exc:
-        logger.warning(
-            "Failed to search memory for context injection for user %s: %s",
-            user_id,
-            exc,
+        context = await database_sync_to_async(_read_context_for_user)(
+            user_id, query.strip()
+        )
+    except Exception:
+        logger.exception(
+            "Memory context read failed for user %s; injecting nothing", user_id
         )
         return []
 
-    items = result.get("items", []) if isinstance(result, dict) else []
-    fetched_contents: List[str] = []
-    used_items: List[Dict[str, Any]] = []
-
-    for item in items:
-        if hasattr(item, "model_dump"):
-            item = item.model_dump()
-        elif hasattr(item, "__dict__") and not isinstance(item, (str, dict)):
-            item = vars(item)
-
-        if isinstance(item, dict):
-            content = (item.get("content") or item.get("summary") or "").strip()
-        else:
-            content = str(item).strip()
-            item = {"content": content}
-
-        if content:
-            fetched_contents.append(content)
-            used_items.append({
-                "content": content,
-                "memory_type": item.get("memory_type", ""),
-                "categories": item.get("categories", []),
-            })
-
-    if not fetched_contents:
+    if context is None or not context.block:
         return []
 
-    formatted = "\n".join(f"- {entry}" for entry in fetched_contents)
-    context_block = (
-        "Relevant memories from the user's personal memory store:\n" + formatted
-    )
-    messages.append({"role": "user", "content": context_block})
+    messages.append({"role": "user", "content": context.block})
+    return context.items
 
-    return used_items
+
+def _read_context_for_user(user_id: int, query: str) -> ReadContext | None:
+    user = get_user_model().objects.filter(pk=user_id).first()
+    if user is None:
+        return None
+    return read_context(user, query)

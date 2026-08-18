@@ -6,7 +6,7 @@ definitions and executors.
 """
 
 import logging
-from typing import Dict, List, Optional, Any, Callable
+from typing import Any, Callable, Dict, List, Optional
 
 from core.services.llm_utils.diagram_tool import (get_diagram_tool_claude,
                                                   get_diagram_tool_openai,
@@ -717,6 +717,74 @@ def get_search_documents_tool_claude() -> Dict:
     }
 
 
+def get_search_sessions_tool_openai() -> Dict:
+    """Get search_sessions tool definition in OpenAI format."""
+    return {
+        "type": "function",
+        "function": {
+            "name": "search_sessions",
+            "description": (
+                "Search the full transcript of this person's past "
+                "conversations, word for word. ALWAYS use it when they ask "
+                "about a past conversation in any form: what was said, "
+                "discussed or decided; a rundown of a day or period ('what "
+                "did we talk about yesterday / last week'); 'did I ever "
+                "mention…'; or an exact quote ('what were my words'). The "
+                "memories in your context are distilled summaries — they are "
+                "NEVER the person's exact words and never a record of a "
+                "specific conversation, so answering those questions without "
+                "this search means guessing, and a wrong guess about their "
+                "own words is worse than a moment's delay. Do not use it for "
+                "what is true about them now; that is already provided."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": (
+                            "Keywords likely to appear in the messages "
+                            "themselves, not a question. Leave empty when the "
+                            "person is asking about a period rather than a "
+                            "topic, and use the dates alone."
+                        ),
+                    },
+                    "since": {
+                        "type": "string",
+                        "description": (
+                            "YYYY-MM-DD. Only search on or after this day. "
+                            "Work it out from today's date: 'last week', "
+                            "'in June', 'a couple of months ago'. Do NOT put "
+                            "the period in `query` — searching for the words "
+                            "'last week' finds messages that happen to say "
+                            "'last week', not messages from last week."
+                        ),
+                    },
+                    "until": {
+                        "type": "string",
+                        "description": (
+                            "YYYY-MM-DD. Only search on or before this day. "
+                            "Pair it with `since` to bound a period."
+                        ),
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    }
+
+
+def get_search_sessions_tool_claude() -> Dict:
+    """Get search_sessions tool definition in Claude/Anthropic format."""
+    openai_spec = get_search_sessions_tool_openai()
+    func = openai_spec["function"]
+    return {
+        "name": func["name"],
+        "description": func["description"],
+        "input_schema": func["parameters"],
+    }
+
+
 class DareToolRegistry:
     """
     Registry of all available DARE tools.
@@ -805,6 +873,16 @@ class DareToolRegistry:
             "get_openai_schema": get_search_documents_tool_openai,
             "get_claude_schema": get_search_documents_tool_claude,
             "executor": None,  # Handled by RetrievalToolExecutor directly (async, needs request scope)
+        },
+        "search_sessions": {
+            "name": "Search Past Conversations",
+            "slug": "search_sessions",
+            "description": "Search the verbatim transcript of the user's past conversations (episodic memory).",
+            "icon": "history",
+            "category": "retrieval",
+            "get_openai_schema": get_search_sessions_tool_openai,
+            "get_claude_schema": get_search_sessions_tool_claude,
+            "executor": None,  # Routed via ToolExecutionService (needs user scope + async ORM)
         },
     }
     

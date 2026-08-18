@@ -54,6 +54,7 @@ from core.services.learning_progress_service import LearningProgressService
 from core.services.llm_service import LLMService
 from core.services.sb_client import SocraticBooksClient
 from dare_tools.services.retrieval_tool_executor import RetrievalScope
+from memory.tasks import run_memory_writer
 from users.utils import should_run_learning_progress
 
 logger = logging.getLogger(__name__)
@@ -265,6 +266,17 @@ class MessageCoordinator:
         await database_sync_to_async(message_obj.save)(
             update_fields=["memory_context_data"]
         )
+
+    async def _enqueue_memory_writer(self, message_obj: "Message") -> None:
+        """Queue memory processing after a completed reply."""
+        try:
+            await database_sync_to_async(run_memory_writer.delay)(message_obj.id)
+        except Exception:
+            # A queue failure must not discard an already delivered reply.
+            logger.exception(
+                "[MessageCoordinator] failed to enqueue memory writer for mid=%s",
+                message_obj.id,
+            )
 
     async def _mark_as_regenerated(self, message: "Message") -> None:
         """Mark a message as regenerated if applicable."""
@@ -678,6 +690,14 @@ class MessageCoordinator:
                     token_usage=token_usage,
                     regenerate=regenerate,
                 )
+
+                # Write only new, memory-enabled turns from authenticated users.
+                if (
+                    not regenerate
+                    and self.user is not None
+                    and request.context.use_memory
+                ):
+                    await self._enqueue_memory_writer(message_obj)
 
                 # Run learning progress assessment (Socratic only, sequential after AI response)
                 if not regenerate and should_run_learning_progress(
