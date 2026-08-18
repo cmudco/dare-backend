@@ -7,15 +7,25 @@ document context retrieval, and prompt assembly.
 """
 
 import logging
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, List, Optional
 
-from core.services.dtos import LLMQueryRequest
+from conversations.constants import RagMode
 from core.services.document_processor import DocumentProcessor
+from core.services.dtos import LLMQueryRequest
 from core.services.vector_service import get_vector_service_async
+
 from .history_helpers import get_conversation_history
 
-
 logger = logging.getLogger(__name__)
+
+# Under agentic RAG the model retrieves on demand via the search_documents
+# tool, so the builders skip their similarity-search pre-injection and hand
+# the model this directive instead.
+AGENTIC_RETRIEVAL_DIRECTIVE = (
+    "Document context is not pre-loaded. Call the search_documents tool to "
+    "retrieve relevant passages from the attached course materials before "
+    "answering questions about their content."
+)
 
 
 # ============================================================================
@@ -69,21 +79,24 @@ async def build_classic_socratic_messages(
 
     conversation_history = _format_transcript(history_list)
 
-    # Classic mode uses file_owner_id for shared boards (deployed Socratic bots)
-    vector_user_id = request.context.file_owner_id or user_id
+    if request.context.rag_mode == RagMode.AGENTIC:
+        file_context = AGENTIC_RETRIEVAL_DIRECTIVE
+    else:
+        # Classic mode uses file_owner_id for shared boards (deployed Socratic bots)
+        vector_user_id = request.context.file_owner_id or user_id
 
-    doc_context = await _retrieve_document_context(
-        document_processor=document_processor,
-        query=request.message,
-        file_ids=request.context.embedding_ids,
-        user_id=vector_user_id,
-        top_k=request.context.max_context_snippets,
-        similarity_threshold=request.context.document_similarity_threshold,
-        message_obj=request.message_obj,
-        workflow_run_step_obj=request.workflow_run_step_obj,
-    )
+        doc_context = await _retrieve_document_context(
+            document_processor=document_processor,
+            query=request.message,
+            file_ids=request.context.embedding_ids,
+            user_id=vector_user_id,
+            top_k=request.context.max_context_snippets,
+            similarity_threshold=request.context.document_similarity_threshold,
+            message_obj=request.message_obj,
+            workflow_run_step_obj=request.workflow_run_step_obj,
+        )
 
-    file_context = _format_document_snippets(doc_context, fallback="No relevant file content found.")
+        file_context = _format_document_snippets(doc_context, fallback="No relevant file content found.")
 
     user_message = _build_classic_user_message(
         document_context=file_context,
@@ -143,19 +156,22 @@ async def build_advanced_socratic_messages(
 
     conversation_history = _format_transcript(history_list)
 
-    # Advanced mode uses user_id directly (not file_owner_id)
-    doc_context = await _retrieve_document_context(
-        document_processor=document_processor,
-        query=request.message,
-        file_ids=request.context.embedding_ids,
-        user_id=user_id,
-        top_k=request.context.max_context_snippets,
-        similarity_threshold=request.context.document_similarity_threshold,
-        message_obj=request.message_obj,
-        workflow_run_step_obj=request.workflow_run_step_obj,
-    )
+    if request.context.rag_mode == RagMode.AGENTIC:
+        relevant_content = AGENTIC_RETRIEVAL_DIRECTIVE
+    else:
+        # Advanced mode uses user_id directly (not file_owner_id)
+        doc_context = await _retrieve_document_context(
+            document_processor=document_processor,
+            query=request.message,
+            file_ids=request.context.embedding_ids,
+            user_id=user_id,
+            top_k=request.context.max_context_snippets,
+            similarity_threshold=request.context.document_similarity_threshold,
+            message_obj=request.message_obj,
+            workflow_run_step_obj=request.workflow_run_step_obj,
+        )
 
-    relevant_content = _format_document_snippets(doc_context, fallback="No relevant external content found.")
+        relevant_content = _format_document_snippets(doc_context, fallback="No relevant external content found.")
 
     system_prompt = _build_advanced_system_prompt(
         title=title,
