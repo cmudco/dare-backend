@@ -234,6 +234,36 @@ class DocumentEnrichmentReadingOrderTests(SimpleTestCase):
 
 
 class DocumentModelContextTests(SimpleTestCase):
+    def test_persisted_model_rehydrates_without_enrichment_fields(self):
+        parsed = ParsedDocument.from_persisted(
+            "Original parser text",
+            {
+                "parser": "docling",
+                "duration_seconds": 2.4,
+                "counts": {"pages": 2, "pages_without_text": 1},
+                "elements": [
+                    {
+                        "order": 1,
+                        "kind": "picture",
+                        "label": "picture",
+                        "page_no": 2,
+                        "bbox": {
+                            "left": 0.1,
+                            "top": 0.2,
+                            "width": 0.3,
+                            "height": 0.4,
+                        },
+                        "enrichment": {"status": "complete"},
+                    }
+                ],
+            },
+        )
+
+        self.assertEqual(parsed.text, "Original parser text")
+        self.assertEqual(parsed.parser, "docling")
+        self.assertEqual(parsed.structure.pages, 2)
+        self.assertEqual(parsed.elements[0].bbox.width, 0.3)
+
     def test_context_and_classifier_provenance_are_serialized(self):
         element = ParsedElement(
             order=4,
@@ -455,3 +485,54 @@ class DocumentEnrichmentOrchestrationTests(SimpleTestCase):
         describe.assert_not_called()
         self.assertEqual(result.transcribed_pages, 1)
         self.assertIn("Written in 1912", result.text)
+
+    @patch(
+        "core.services.document_enrichment_service.get_dispatch_credentials_for_user_sync"
+    )
+    def test_continuation_only_transcribes_unfinished_pages(self, credentials):
+        credentials.return_value = self.credentials
+        parsed = ParsedDocument(
+            parser="docling",
+            structure=DocumentStructure(
+                pages=3, pictures=0, pages_without_text=3, content_chars=0
+            ),
+        )
+        self.file.document_model = {
+            **parsed.to_dict(),
+            "page_enrichments": [
+                {
+                    "page_no": 1,
+                    "status": "complete",
+                    "kind": "page_transcription",
+                    "transcription_markdown": "Already complete",
+                }
+            ],
+        }
+        service = DocumentEnrichmentService()
+
+        def transcribe(_file, page_no, *_args):
+            return {
+                "status": "complete",
+                "kind": "page_transcription",
+                "transcription_markdown": f"Page {page_no}",
+            }
+
+        with (
+            patch.object(service, "_resolve_model", return_value=self.model),
+            patch.object(service, "_build_ai_service", return_value=object()),
+            patch.object(service, "_transcribe_page", side_effect=transcribe) as call,
+            patch.object(service, "_describe_figure") as describe,
+            patch.object(service, "_persist"),
+        ):
+            result = service.enrich(
+                self.file, parsed, page_limit=1, continue_existing=True
+            )
+
+        self.assertEqual([row.args[1] for row in call.call_args_list], [2])
+        describe.assert_not_called()
+        self.assertEqual(result.transcribed_pages, 2)
+        self.assertEqual(
+            result.document_model["enrichment"]["deferred_textless_pages"], 1
+        )
+        self.assertIn("Already complete", result.text)
+        self.assertIn("Page 2", result.text)

@@ -1,114 +1,32 @@
 import logging
-import time
 from datetime import datetime
-from typing import Optional, Tuple
 
 from django.contrib.auth import get_user_model
 from django_rq import job
 
+from config import env
+from core.services.document_ingestion_service import (
+    DocumentIngestionCommand,
+    DocumentIngestionService,
+)
 from core.services.document_processor import DocumentProcessor
-from core.services.file_processing_journey import FileProcessingJourney
 from core.services.vector_service import get_vector_service
 from core.storage.constants import StorageBackendChoice
 from users.constants import VectorDBChoice
 
-from .constants import FileProcessingStage, FileStatus
+from .constants import FileStatus
 from .models import File
 from .utils import migrate_file_to_target_storage
 
 logger = logging.getLogger(__name__)
 
 
-def _resolve_status(file: File, vector_count: int) -> Tuple[int, Optional[str]]:
-    """Decide a file's post-ingest status from what the parse actually yielded.
-
-    A file that produced no vectors did not succeed, whatever the parser
-    reported. When the pages are scans we can name the reason and the vision
-    layer can pick it up later; otherwise we surface it as a failure rather
-    than leaving the user with a library entry that answers nothing.
-    """
-    # NEEDS_OCR only applies when no embeddable text survived the whole pipeline.
-    if vector_count > 0:
-        return FileStatus.PROCESSED, None
-
-    if file.page_count and file.pages_without_text >= file.page_count:
-        return FileStatus.NEEDS_OCR, (
-            f"All {file.page_count} pages are scanned images with no readable "
-            f"text and vision transcription was unavailable. Nothing was embedded, "
-            f"so this file cannot answer questions yet."
-        )
-
-    return FileStatus.FAILED, (
-        "No text could be extracted from this file, so nothing was embedded."
-    )
-
-
-@job
+@job("default", timeout=env.DOCUMENT_OCR_JOB_TIMEOUT_SECONDS)
 def process_file_embeddings(file_id, chunk_size=None, overlap_size=None):
-    try:
-        if chunk_size is not None and not isinstance(chunk_size, int):
-            chunk_size = int(chunk_size)
-    except (ValueError, TypeError):
-        chunk_size = None
-    try:
-        if overlap_size is not None and not isinstance(overlap_size, int):
-            overlap_size = int(overlap_size)
-    except (ValueError, TypeError):
-        overlap_size = None
-    start_time = time.time()
-
-    try:
-        file = File.active_objects.get(id=file_id)
-    except File.DoesNotExist:
-        return
-    except Exception as e:
-        return
-
-    # Skip vectorization for media files (images/videos)
-    if file.is_media:
-        return
-
-    try:
-        journey = FileProcessingJourney(file)
-        journey.begin_attempt()
-        file.status = FileStatus.PROCESSING
-        file.processing_stage = FileProcessingStage.PARSING
-        file.error_message = None
-        file.save(update_fields=["status", "processing_stage", "error_message"])
-
-        processor = DocumentProcessor()
-        vector_count = processor.create_file_embeddings(
-            file, chunk_size, overlap_size, journey=journey
-        )
-
-        # Record the user's current vector DB preference with the file
-        file.vector_db_source = file.user.vector_db
-        file.status, file.error_message = _resolve_status(file, vector_count)
-        file.processing_stage = FileProcessingStage.COMPLETE
-        file.save(
-            update_fields=[
-                "status",
-                "processing_stage",
-                "vector_db_source",
-                "error_message",
-            ]
-        )
-        journey.complete_attempt(outcome=file.get_status_display().lower())
-
-        elapsed_time = time.time() - start_time
-
-    except Exception as e:
-        elapsed_time = time.time() - start_time
-        error_message = str(e)
-
-        try:
-            if "journey" in locals():
-                journey.fail_attempt(error_message)
-            file.status = FileStatus.FAILED
-            file.error_message = error_message
-            file.save(update_fields=["status", "error_message"])
-        except Exception as update_error:
-            pass
+    command = DocumentIngestionCommand.from_raw(
+        file_id, chunk_size=chunk_size, overlap_size=overlap_size
+    )
+    return DocumentIngestionService().process(command)
 
 
 @job

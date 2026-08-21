@@ -4,7 +4,7 @@ APP_NAME = "files"
 ALLOWED_FILES = [
     # Common extensions
     'docx', 'doc', 'pdf', 'txt', 'md', 'json',
-    'csv', 'xls', 'xlsx',
+    'csv', 'xls', 'xlsx', 'ipynb', 'x-ipynb+json',
     'pptx', 'ppt',
     'jpg', 'jpeg', 'png', 'gif', 'bmp', 'tiff', 'webp',
 
@@ -39,6 +39,15 @@ class FileStatus(models.IntegerChoices):
     # text to embed. Distinct from FAILED (nothing went wrong) and from
     # PROCESSED (the file cannot answer questions yet).
     NEEDS_OCR = 3, "Needs OCR"
+
+
+class DocumentOcrStatus(models.TextChoices):
+    AWAITING_APPROVAL = "awaiting_approval", "Awaiting approval"
+    APPROVED = "approved", "Approved"
+    PROCESSING = "processing", "Processing"
+    COMPLETE = "complete", "Complete"
+    PARTIAL = "partial", "Partially complete"
+    UNAVAILABLE = "unavailable", "Unavailable"
 
 
 class FileProcessingStage(models.TextChoices):

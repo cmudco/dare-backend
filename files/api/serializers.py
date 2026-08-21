@@ -1,12 +1,75 @@
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
+from config import env
 from core.config.document_parsing import HEADING_LABELS
 
 from ..constants import FileStatus
-from ..models import File, FileShare, Folder, Tag
+from ..models import DocumentOcrRequest, File, FileShare, Folder, Tag
 
 User = get_user_model()
+
+
+class DocumentOcrRequestSerializer(serializers.ModelSerializer):
+    status_label = serializers.CharField(source="get_status_display", read_only=True)
+    estimated_selected_cost = serializers.SerializerMethodField()
+    estimated_max_cost = serializers.SerializerMethodField()
+    selectable_pages = serializers.SerializerMethodField()
+    automatic_page_limit = serializers.SerializerMethodField()
+    remaining_pages = serializers.SerializerMethodField()
+    can_continue = serializers.SerializerMethodField()
+
+    class Meta:
+        model = DocumentOcrRequest
+        fields = [
+            "status",
+            "status_label",
+            "detected_pages",
+            "page_limit",
+            "max_page_limit",
+            "selectable_pages",
+            "automatic_page_limit",
+            "processed_pages",
+            "remaining_pages",
+            "can_continue",
+            "estimated_cost_per_page",
+            "estimated_selected_cost",
+            "estimated_max_cost",
+            "model_identifier",
+            "approved_at",
+        ]
+
+    @staticmethod
+    def get_selectable_pages(obj):
+        return min(max(obj.detected_pages - obj.processed_pages, 0), obj.max_page_limit)
+
+    @staticmethod
+    def get_automatic_page_limit(obj):
+        return min(
+            int(env.DOCUMENT_OCR_AUTO_PAGE_LIMIT),
+            max(obj.detected_pages - obj.processed_pages, 0),
+        )
+
+    @staticmethod
+    def get_remaining_pages(obj):
+        return max(obj.detected_pages - obj.processed_pages, 0)
+
+    @staticmethod
+    def get_can_continue(obj):
+        return obj.status == "partial" and obj.processed_pages < obj.detected_pages
+
+    @staticmethod
+    def get_estimated_selected_cost(obj):
+        return obj.estimated_cost_per_page * obj.page_limit
+
+    @staticmethod
+    def get_estimated_max_cost(obj):
+        remaining = max(obj.detected_pages - obj.processed_pages, 0)
+        return obj.estimated_cost_per_page * min(remaining, obj.max_page_limit)
+
+
+class DocumentOcrApprovalSerializer(serializers.Serializer):
+    page_limit = serializers.IntegerField(min_value=1)
 
 
 class FileSerializer(serializers.ModelSerializer):
@@ -28,6 +91,7 @@ class FileSerializer(serializers.ModelSerializer):
     # Headline counts only. The elements themselves are large, so the full
     # document model is served by the dedicated `structure` endpoint.
     structure_counts = serializers.SerializerMethodField()
+    ocr = serializers.SerializerMethodField()
 
     class Meta:
         model = File
@@ -58,6 +122,7 @@ class FileSerializer(serializers.ModelSerializer):
             "pages_without_text",
             "parser_name",
             "structure_counts",
+            "ocr",
             "created_at",
             "updated_at",
         ]
@@ -65,6 +130,13 @@ class FileSerializer(serializers.ModelSerializer):
     def get_structure_counts(self, obj):
         """Pages, sections, tables and pictures — or None if never parsed."""
         return (obj.document_model or {}).get("counts") or None
+
+    def get_ocr(self, obj):
+        try:
+            request = obj.ocr_request
+        except DocumentOcrRequest.DoesNotExist:
+            return None
+        return DocumentOcrRequestSerializer(request).data
 
     def get_size(self, obj):
         if not obj.file:

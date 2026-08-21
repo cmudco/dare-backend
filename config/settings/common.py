@@ -343,6 +343,11 @@ RQ_QUEUES = {
         'DB': REDIS_DB,
         'PASSWORD': REDIS_PASSWORD if REDIS_PASSWORD else None,
         'DEFAULT_TIMEOUT': 3600,
+        # Keep long-idle workers alive between document uploads.
+        'REDIS_CLIENT_KWARGS': {
+            'socket_keepalive': True,
+            'health_check_interval': 30,
+        },
     },
     'scheduler': {
         'HOST': REDIS_HOST,
