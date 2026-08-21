@@ -9,6 +9,7 @@ import hashlib
 import json
 import logging
 import time
+from copy import deepcopy
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
@@ -106,9 +107,19 @@ class DocumentEnrichmentService:
     def __init__(self, crop_service: Optional[DocumentCropService] = None):
         self.crop_service = crop_service or DocumentCropService()
 
-    def enrich(self, file: File, parsed: ParsedDocument) -> EnrichmentResult:
+    def enrich(
+        self,
+        file: File,
+        parsed: ParsedDocument,
+        page_limit: Optional[int] = None,
+        continue_existing: bool = False,
+    ) -> EnrichmentResult:
         """Run applicable vision lanes, persist their model, and return text."""
-        model_payload = parsed.to_dict()
+        model_payload = (
+            deepcopy(file.document_model)
+            if continue_existing and file.document_model
+            else parsed.to_dict()
+        )
         if (
             not self._enabled()
             or parsed.parser != "docling"
@@ -145,11 +156,31 @@ class DocumentEnrichmentService:
             for page_no, count in page_characters.items()
             if count < MIN_CHARS_PER_PAGE
         }
-        page_results: Dict[int, Dict[str, Any]] = {}
-        element_results: Dict[int, Dict[str, Any]] = {}
+        page_results: Dict[int, Dict[str, Any]] = {
+            int(row["page_no"]): {
+                key: value for key, value in row.items() if key != "page_no"
+            }
+            for row in model_payload.get("page_enrichments", [])
+            if row.get("page_no") is not None
+        }
+        element_results: Dict[int, Dict[str, Any]] = {
+            int(element["order"]): deepcopy(element["enrichment"])
+            for element in model_payload.get("elements", [])
+            if element.get("order") is not None
+            and isinstance(element.get("enrichment"), dict)
+        }
         telemetry = EnrichmentTelemetry()
 
-        for page_no in sorted(textless_pages):
+        completed_before = {
+            page_no
+            for page_no, result in page_results.items()
+            if result.get("status") == "complete"
+        }
+        selected_textless_pages = sorted(textless_pages - completed_before)
+        if page_limit is not None:
+            selected_textless_pages = selected_textless_pages[: max(page_limit, 0)]
+
+        for page_no in selected_textless_pages:
             telemetry.visual_operations += 1
             try:
                 page_results[page_no] = self._transcribe_page(
@@ -165,11 +196,10 @@ class DocumentEnrichmentService:
                 )
                 page_results[page_no] = self._error_result("page_transcription", error)
 
-        described = 0
         considered = 0
         max_figures = max(int(env.DOCUMENT_ENRICHMENT_MAX_FIGURES), 0)
         elements = list(parsed.elements)
-        for index, element in enumerate(elements):
+        for index, element in enumerate(elements if not continue_existing else []):
             if element.kind != ElementKind.PICTURE:
                 continue
             decision = self._picture_decision(element, textless_pages)
@@ -204,8 +234,6 @@ class DocumentEnrichmentService:
                     telemetry,
                 )
                 element_results[element.order] = result
-                if result.get("status") == "complete":
-                    described += 1
             except Exception as error:
                 telemetry.failed_operations += 1
                 logger.warning(
@@ -227,10 +255,26 @@ class DocumentEnrichmentService:
         transcribed = sum(
             1 for result in page_results.values() if result.get("status") == "complete"
         )
+        described = sum(
+            1
+            for result in element_results.values()
+            if result.get("kind") == "figure_description"
+            and result.get("status") == "complete"
+        )
         status = self._summary_status(
             telemetry.visual_operations,
             telemetry.failed_operations,
             described + transcribed,
+        )
+        pages_deferred = max(len(textless_pages) - transcribed, 0)
+        if pages_deferred and (described or transcribed):
+            status = "partial"
+        elif not pages_deferred and textless_pages:
+            status = "complete"
+        total_failures = sum(
+            1
+            for result in [*element_results.values(), *page_results.values()]
+            if result.get("status") == "error"
         )
         model_payload["enrichment"] = {
             "status": status,
@@ -238,6 +282,10 @@ class DocumentEnrichmentService:
             "prompt_version": PROMPT_VERSION,
             "described_figures": described,
             "transcribed_pages": transcribed,
+            "detected_textless_pages": len(textless_pages),
+            "selected_textless_pages": len(selected_textless_pages),
+            "deferred_textless_pages": pages_deferred,
+            "previously_transcribed_pages": len(completed_before),
             # attempted_calls is kept for older API clients; visual_operations supersedes it.
             "attempted_calls": telemetry.visual_operations,
             "visual_operations": telemetry.visual_operations,
@@ -248,11 +296,16 @@ class DocumentEnrichmentService:
             "completed_at": timezone.now().isoformat(),
             "provenance": "machine_generated",
         }
+        if pages_deferred:
+            model_payload["enrichment"]["reason"] = (
+                f"{transcribed} of {len(textless_pages)} scanned pages are complete; "
+                f"{pages_deferred} remain."
+            )
         model_payload.setdefault("counts", {}).update(
             {
                 "described_figures": described,
                 "transcribed_pages": transcribed,
-                "enrichment_failures": telemetry.failed_operations,
+                "enrichment_failures": total_failures,
             }
         )
 

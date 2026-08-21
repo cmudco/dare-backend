@@ -10,7 +10,7 @@ from core.storage.constants import StorageBackendChoice
 from core.storage.fields import DynamicStorageFileField
 from users.constants import VectorDBChoice
 
-from .constants import FileProcessingStage, FileStatus
+from .constants import DocumentOcrStatus, FileProcessingStage, FileStatus
 
 logger = logging.getLogger(__name__)
 
@@ -269,6 +269,39 @@ class File(BaseModel):
 
     def __str__(self):
         return self.name if self.name else self.file.name
+
+
+class DocumentOcrRequest(TimeStampMixin):
+    """Persisted approval boundary for scanned-page vision transcription."""
+
+    file = models.OneToOneField(
+        File,
+        on_delete=models.CASCADE,
+        related_name="ocr_request",
+    )
+    status = models.CharField(
+        max_length=24,
+        choices=DocumentOcrStatus.choices,
+        default=DocumentOcrStatus.AWAITING_APPROVAL,
+    )
+    detected_pages = models.PositiveIntegerField(default=0)
+    page_limit = models.PositiveIntegerField(default=0)
+    max_page_limit = models.PositiveIntegerField(default=100)
+    processed_pages = models.PositiveIntegerField(default=0)
+    estimated_cost_per_page = models.DecimalField(
+        max_digits=12, decimal_places=8, default=0
+    )
+    model_identifier = models.CharField(max_length=255, blank=True)
+    chunk_size = models.PositiveIntegerField(blank=True, null=True)
+    overlap_size = models.PositiveIntegerField(blank=True, null=True)
+    approved_at = models.DateTimeField(blank=True, null=True)
+    # The original parser text is kept separately from File.text, which is
+    # replaced by progressively enriched OCR text.  This lets continuation
+    # runs rebuild the document without invoking Docling again.
+    parsed_text = models.TextField(blank=True, null=True)
+
+    def __str__(self):
+        return f"OCR for file {self.file_id}: {self.status}"
 
 
 class DocumentEnrichmentCache(TimeStampMixin):

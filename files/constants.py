@@ -41,6 +41,15 @@ class FileStatus(models.IntegerChoices):
     NEEDS_OCR = 3, "Needs OCR"
 
 
+class DocumentOcrStatus(models.TextChoices):
+    AWAITING_APPROVAL = "awaiting_approval", "Awaiting approval"
+    APPROVED = "approved", "Approved"
+    PROCESSING = "processing", "Processing"
+    COMPLETE = "complete", "Complete"
+    PARTIAL = "partial", "Partially complete"
+    UNAVAILABLE = "unavailable", "Unavailable"
+
+
 class FileProcessingStage(models.TextChoices):
     PARSING = "parsing", "Analyzing document"
     ENRICHING = "enriching", "Describing visuals"
