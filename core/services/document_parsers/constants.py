@@ -1,6 +1,7 @@
 """Constants for the document-parsing layer."""
 
 PARSER_DOCLING = "docling"
+PARSER_NOTEBOOK = "notebook"
 PARSER_LEGACY = "legacy"
 
 # Formats Docling handles natively. Plain text, markdown, JSON and CSV are
@@ -17,3 +18,8 @@ DOCLING_EXTENSIONS = frozenset(
         "adoc",
     }
 )
+
+# Jupyter notebooks. Docling does not read them, and the legacy reader would
+# decode the raw JSON — cell metadata and base64 image outputs included — so
+# they get a parser of their own.
+NOTEBOOK_EXTENSIONS = frozenset({"ipynb"})
