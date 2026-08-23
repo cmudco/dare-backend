@@ -54,6 +54,17 @@ class LLMSerializer(serializers.ModelSerializer):
         ]
 
 
+class LLMDeletionOptionsSerializer(serializers.Serializer):
+    confirm = serializers.BooleanField(default=False)
+    notify_affected_users = serializers.BooleanField(default=True)
+    notification_message = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default="",
+        max_length=1000,
+    )
+
+
 class ConversationSerializer(serializers.ModelSerializer):
     user = serializers.SerializerMethodField()
     prompt = PromptSerializer(read_only=True)
