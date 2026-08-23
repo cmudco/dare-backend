@@ -143,12 +143,15 @@ async def build_advanced_socratic_messages(
 
     conversation_history = _format_transcript(history_list)
 
-    # Advanced mode uses user_id directly (not file_owner_id)
+    # Like classic mode, use file_owner_id for shared/public bots: anonymous
+    # visitors have no user, and vectors are stored under the bot creator's id
+    vector_user_id = request.context.file_owner_id or user_id
+
     doc_context = await _retrieve_document_context(
         document_processor=document_processor,
         query=request.message,
         file_ids=request.context.embedding_ids,
-        user_id=user_id,
+        user_id=vector_user_id,
         top_k=request.context.max_context_snippets,
         similarity_threshold=request.context.document_similarity_threshold,
         message_obj=request.message_obj,

@@ -802,7 +802,10 @@ class MessageCoordinator:
                             return
 
                 # Send chunk to client
-                if chunk and chunk.strip():
+                # Keep whitespace-only chunks: providers (e.g. Responses API)
+                # stream newlines as standalone deltas; dropping them destroys
+                # markdown structure.
+                if chunk:
                     ai_response_accumulator += chunk
                     payload = WebSocketResponseService.format_streaming_chunk(
                         message_id=bot_message_id,
