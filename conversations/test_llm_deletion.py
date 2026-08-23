@@ -561,13 +561,14 @@ class LLMDeletionEntryPointTests(TestCase):
             f"/api/llms/{self.model.pk}/",
             {
                 "confirm": True,
-                "notify_affected_users": True,
-                "notification_message": "API deletion notice.",
+                "notifyAffectedUsers": True,
+                "notificationMessage": "API deletion notice.",
             },
             format="json",
         )
 
         self.assertEqual(delete_response.status_code, 200)
+        self.assertEqual(delete_response.json()["notifications"]["socraticBots"], 0)
         self.assertFalse(LLM.objects.filter(pk=self.model.pk).exists())
         notification = Notification.objects.get(user=self.user)
         self.assertEqual(notification.action_url, f"/workflows/{workflow.pk}/edit")
