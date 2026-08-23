@@ -116,7 +116,28 @@ class ClaudeUsageExtractor:
         if self.input_tokens is None:
             return None
 
-        return UsageExtractor.build_usage_dict(self.input_tokens, output_tokens)
+        usage = UsageExtractor.build_usage_dict(self.input_tokens, output_tokens)
+        if usage is None:
+            return None
+
+        details = getattr(event.usage, "output_tokens_details", None)
+        if isinstance(details, dict):
+            thinking_tokens = details.get("thinking_tokens")
+        else:
+            thinking_tokens = getattr(details, "thinking_tokens", None)
+
+        if thinking_tokens is not None:
+            thinking_tokens = max(int(thinking_tokens), 0)
+            usage["thinking_tokens"] = thinking_tokens
+            # Anthropic documents this subtraction as an approximation of
+            # the non-reasoning portion because output_tokens is the inclusive,
+            # authoritative billable total.
+            usage["visible_output_tokens"] = max(
+                int(output_tokens) - thinking_tokens,
+                0,
+            )
+
+        return usage
 
     def reset(self):
         """Reset the state."""

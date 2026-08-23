@@ -253,4 +253,4 @@ python manage.py shell
 | Token cost off | Verify `input_token_rate_per_million` / `output_token_rate_per_million` on the model record |
 | Access code rejected | Admin → access code group → verify expiry and remaining uses |
 
-For deeper issues, see [INSTALL.md § Troubleshooting](../INSTALL.md#troubleshooting).
+For deeper issues, see [DEPLOYMENT.md § Troubleshooting](../DEPLOYMENT.md#troubleshooting).

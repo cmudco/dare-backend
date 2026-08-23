@@ -49,7 +49,6 @@ At least one provider key should be set. Missing keys disable the corresponding 
 | `CLAUDE_API_KEY` | string | *(none)* | Anthropic API key (`sk-ant-...`). Required for Claude models. |
 | `GEMINI_API_KEY` | string | *(none)* | Google AI API key. Required for Gemini models. |
 | `OLLAMA_HOST` | url | `http://localhost:11434` | Ollama server URL for self-hosted LLaMA models. |
-| `ELEVENLABS_API_KEY` | string | *(none)* | ElevenLabs API key for text-to-speech features. Optional. |
 
 ## Vector Stores
 

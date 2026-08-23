@@ -6,7 +6,7 @@ definitions and executors.
 """
 
 import logging
-from typing import Dict, List, Optional, Any, Callable
+from typing import Any, Callable, Dict, List, Optional
 
 from core.services.llm_utils.diagram_tool import (get_diagram_tool_claude,
                                                   get_diagram_tool_openai,
@@ -102,10 +102,26 @@ def execute_create_docx(arguments: Dict[str, Any]) -> Dict[str, Any]:
                 "error": "Document title is required",
             }
 
+        # Weaker models flatten the nested schema into a plain `content`
+        # string. Coerce that shape into paragraph blocks instead of
+        # failing the whole turn.
+        if (not isinstance(blocks, list) or not blocks) and isinstance(
+            arguments.get("content"), str
+        ):
+            blocks = [
+                {"type": "paragraph", "text": paragraph.strip()}
+                for paragraph in arguments["content"].split("\n\n")
+                if paragraph.strip()
+            ]
+
         if not isinstance(blocks, list) or not blocks:
             return {
                 "success": False,
-                "error": "At least one document block is required",
+                "error": (
+                    "At least one document block is required. Pass a 'blocks' "
+                    'array of objects like {"type": "heading", "level": 1, '
+                    '"text": ...} or {"type": "paragraph", "text": ...}.'
+                ),
             }
 
         allowed_alignments = {"left", "center", "right"}
@@ -316,7 +332,10 @@ def get_create_docx_tool_openai() -> Dict:
                                 },
                                 "level": {
                                     "type": "integer",
-                                    "enum": [1, 2, 3, 4],
+                                    # min/max, not an integer enum — Gemini
+                                    # only accepts string enum values.
+                                    "minimum": 1,
+                                    "maximum": 4,
                                     "description": "Heading level (1=main section, 2=subsection, 3-4=sub-subsection). Only for heading blocks.",
                                 },
                                 "text": {
@@ -649,10 +668,127 @@ def execute_create_react_component(arguments: Dict[str, Any]) -> Dict[str, Any]:
 
 # ============ REGISTRY ============
 
+def get_search_documents_tool_openai() -> Dict:
+    """Get search_documents tool definition in OpenAI format."""
+    return {
+        "type": "function",
+        "function": {
+            "name": "search_documents",
+            "description": (
+                "Search the user's attached documents and shared libraries for "
+                "passages relevant to a query. Use this whenever the answer may "
+                "depend on the attached sources — facts, quotes, definitions, "
+                "data, or anything you are not certain about. Write a focused "
+                "search query describing the information you need (not the "
+                "user's message verbatim). Results are passages tagged [S1], "
+                "[S2], ...; when you use a passage in your answer, cite it "
+                "inline with its [S#] tag. If the question is general knowledge "
+                "unrelated to the attached documents, answer directly without "
+                "calling this tool."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Focused natural-language search query describing the information needed."
+                    },
+                    "top_k": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 10,
+                        "description": "Number of passages to retrieve. Omit to use the conversation's default."
+                    }
+                },
+                "required": ["query"]
+            }
+        }
+    }
+
+
+def get_search_documents_tool_claude() -> Dict:
+    """Get search_documents tool definition in Claude/Anthropic format."""
+    openai_spec = get_search_documents_tool_openai()
+    func = openai_spec["function"]
+    return {
+        "name": func["name"],
+        "description": func["description"],
+        "input_schema": func["parameters"]
+    }
+
+
+def get_search_sessions_tool_openai() -> Dict:
+    """Get search_sessions tool definition in OpenAI format."""
+    return {
+        "type": "function",
+        "function": {
+            "name": "search_sessions",
+            "description": (
+                "Search the full transcript of this person's past "
+                "conversations, word for word. ALWAYS use it when they ask "
+                "about a past conversation in any form: what was said, "
+                "discussed or decided; a rundown of a day or period ('what "
+                "did we talk about yesterday / last week'); 'did I ever "
+                "mention…'; or an exact quote ('what were my words'). The "
+                "memories in your context are distilled summaries — they are "
+                "NEVER the person's exact words and never a record of a "
+                "specific conversation, so answering those questions without "
+                "this search means guessing, and a wrong guess about their "
+                "own words is worse than a moment's delay. Do not use it for "
+                "what is true about them now; that is already provided."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": (
+                            "Keywords likely to appear in the messages "
+                            "themselves, not a question. Leave empty when the "
+                            "person is asking about a period rather than a "
+                            "topic, and use the dates alone."
+                        ),
+                    },
+                    "since": {
+                        "type": "string",
+                        "description": (
+                            "YYYY-MM-DD. Only search on or after this day. "
+                            "Work it out from today's date: 'last week', "
+                            "'in June', 'a couple of months ago'. Do NOT put "
+                            "the period in `query` — searching for the words "
+                            "'last week' finds messages that happen to say "
+                            "'last week', not messages from last week."
+                        ),
+                    },
+                    "until": {
+                        "type": "string",
+                        "description": (
+                            "YYYY-MM-DD. Only search on or before this day. "
+                            "Pair it with `since` to bound a period."
+                        ),
+                    },
+                },
+                "required": ["query"],
+            },
+        },
+    }
+
+
+def get_search_sessions_tool_claude() -> Dict:
+    """Get search_sessions tool definition in Claude/Anthropic format."""
+    openai_spec = get_search_sessions_tool_openai()
+    func = openai_spec["function"]
+    return {
+        "name": func["name"],
+        "description": func["description"],
+        "input_schema": func["parameters"],
+    }
+
+
 class DareToolRegistry:
     """
     Registry of all available DARE tools.
-    
+
     Maps tool function names to their definitions and executors.
     """
     
@@ -727,6 +863,26 @@ class DareToolRegistry:
             "get_openai_schema": get_create_react_component_tool_openai,
             "get_claude_schema": get_create_react_component_tool_claude,
             "executor": execute_create_react_component,
+        },
+        "search_documents": {
+            "name": "Search Documents",
+            "slug": "search_documents",
+            "description": "Search attached documents and shared libraries for relevant passages (agentic RAG).",
+            "icon": "search",
+            "category": "retrieval",
+            "get_openai_schema": get_search_documents_tool_openai,
+            "get_claude_schema": get_search_documents_tool_claude,
+            "executor": None,  # Handled by RetrievalToolExecutor directly (async, needs request scope)
+        },
+        "search_sessions": {
+            "name": "Search Past Conversations",
+            "slug": "search_sessions",
+            "description": "Search the verbatim transcript of the user's past conversations (episodic memory).",
+            "icon": "history",
+            "category": "retrieval",
+            "get_openai_schema": get_search_sessions_tool_openai,
+            "get_claude_schema": get_search_sessions_tool_claude,
+            "executor": None,  # Routed via ToolExecutionService (needs user scope + async ORM)
         },
     }
     

@@ -68,7 +68,7 @@ case "$1" in
         ;;
     worker)
         echo "Starting RQ worker..."
-        exec python manage.py rqworker default simple_queue --verbosity 2
+        exec python manage.py rqworker default --verbosity 2
         ;;
     migrate)
         echo "Running migrations..."

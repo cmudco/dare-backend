@@ -1,4 +1,5 @@
 # fmt: off
+import base64
 import json
 import logging
 import os
@@ -18,39 +19,70 @@ from django.utils import timezone
 from rest_framework import generics, mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import NotFound
-from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from conversations.api.content_negotiation import \
-    ArtifactDownloadContentNegotiation
+from conversations.api.content_negotiation import ArtifactDownloadContentNegotiation
 from conversations.api.mixins import ConversationSharingMixin
-from conversations.constants import (ArtifactStatus, ArtifactType,
-                                     SharingErrorCode, SharingErrorMessage)
+from conversations.constants import (
+    ArtifactStatus,
+    ArtifactType,
+    SharingErrorCode,
+    SharingErrorMessage,
+)
 from conversations.exceptions import SharingAPIException
-from conversations.models import (LLM, Artifact, Conversation,
-                                  ConversationSummary, Feedback, Message,
-                                  ModelCardData, Snippet)
+from conversations.models import (
+    LLM,
+    Artifact,
+    Conversation,
+    ConversationSummary,
+    Feedback,
+    Message,
+    ModelCardData,
+    Snippet,
+)
 from conversations.services.conversation_preference_service import (
-    ConversationPreferenceError, ConversationPreferenceService)
+    ConversationPreferenceError,
+    ConversationPreferenceService,
+)
+from conversations.services.llm_deletion_service import (
+    LLMDeletionConflictError,
+    LLMDeletionError,
+    LLMDeletionOptions,
+    LLMDeletionService,
+)
 from conversations.services.llm_filter_service import (
-    filter_for_active_wallet, filter_for_bot, parse_scope)
-from conversations.services.sharing_service import (ConversationSharingService,
-                                                    SharingValidationError)
-from conversations.services.socratic_dependency_service import \
-    SocraticDependencyService
+    filter_for_active_wallet,
+    filter_for_bot,
+    parse_scope,
+)
+from conversations.services.sharing_service import (
+    ConversationSharingService,
+    SharingValidationError,
+)
 from core.services.sb_client import SocraticBooksClient
 from dare_tools.services.artifact_pdf_generator import (
-    generate_docx_pdf_bytes, generate_pptx_pdf_bytes)
+    generate_docx_pdf_bytes,
+    generate_pptx_pdf_bytes,
+)
 from dare_tools.services.pptx_generator import generate_pptx_bytes
 from sharing.services.sharing_service import SharingService
 from users.utils import detect_platform_from_request
 
-from .serializers import (ArtifactCheckpointSerializer, ArtifactListSerializer,
-                          ArtifactSerializer, ConversationSerializer,
-                          ConversationSummarySerializer, FeedbackSerializer,
-                          LLMSerializer, MessageSerializer,
-                          ModelCardDataListSerializer, ModelCardDataSerializer)
+from .serializers import (
+    ArtifactCheckpointSerializer,
+    ArtifactListSerializer,
+    ArtifactSerializer,
+    ConversationSerializer,
+    ConversationSummarySerializer,
+    FeedbackSerializer,
+    LLMDeletionOptionsSerializer,
+    LLMSerializer,
+    MessageSerializer,
+    ModelCardDataListSerializer,
+    ModelCardDataSerializer,
+)
 
 # fmt: on
 
@@ -798,8 +830,8 @@ class ArtifactStatusView(APIView):
         # Get artifact
         artifact = get_object_or_404(Artifact.active_objects, id=artifact_id)
 
-        # Verify user owns this artifact's conversation
-        if artifact.conversation.user != request.user:
+        # Verify user owns this artifact's host (conversation or workflow)
+        if artifact.owner != request.user:
             return Response(
                 {"error": "You do not have permission to modify this artifact"},
                 status=status.HTTP_403_FORBIDDEN,
@@ -852,8 +884,8 @@ class ArtifactContentView(APIView):
         # Get artifact
         artifact = get_object_or_404(Artifact.active_objects, id=artifact_id)
 
-        # Verify user owns this artifact's conversation
-        if artifact.conversation.user != request.user:
+        # Verify user owns this artifact's host (conversation or workflow)
+        if artifact.owner != request.user:
             return Response(
                 {"error": "You do not have permission to modify this artifact"},
                 status=status.HTTP_403_FORBIDDEN,
@@ -901,7 +933,7 @@ def _attachment_disposition(filename: str) -> str:
 def _build_artifact_download_response(request, artifact, artifact_id):
     requested_format = (request.query_params.get("format") or "").lower().strip()
 
-    if artifact.conversation.user != request.user:
+    if artifact.owner != request.user:
         return Response(
             {"error": "You do not have permission to download this artifact"},
             status=status.HTTP_403_FORBIDDEN,
@@ -915,6 +947,7 @@ def _build_artifact_download_response(request, artifact, artifact_id):
     supported_formats = {
         ArtifactType.PPTX: {"pptx", "pdf"},
         ArtifactType.DOCX: {"pdf"},
+        ArtifactType.PDF: {"pdf"},
     }
     allowed_formats = supported_formats.get(artifact.artifact_type, set())
     if requested_format not in allowed_formats:
@@ -929,6 +962,20 @@ def _build_artifact_download_response(request, artifact, artifact_id):
         )
 
     try:
+        if artifact.artifact_type == ArtifactType.PDF:
+            # PDF artifacts (e.g. quillmark documents) store the finished file
+            # as a base64 data URI — decode, no regeneration step.
+            _, _, encoded = artifact.content.partition("base64,")
+            if not encoded:
+                raise ValueError("PDF artifact content is not a base64 data URI")
+            download_content = base64.b64decode(encoded)
+            content_type = "application/pdf"
+            filename = _artifact_download_filename(artifact, requested_format)
+            response = HttpResponse(download_content, content_type=content_type)
+            response["Content-Disposition"] = _attachment_disposition(filename)
+            response["Content-Length"] = len(download_content)
+            return response
+
         config = json.loads(artifact.content)
         if artifact.artifact_type == ArtifactType.PPTX and requested_format == "pptx":
             download_content = generate_pptx_bytes(config)
@@ -988,6 +1035,11 @@ class LLMViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
     queryset = LLM.objects.filter(is_active=True).order_by("tier", "name")
 
+    def get_permissions(self):
+        if self.action in {"create", "update", "partial_update", "destroy"}:
+            return [IsAdminUser()]
+        return super().get_permissions()
+
     def get_queryset(self):
         """
         Filter LLM models based on the user's Access Code Group -> Model Group mapping.
@@ -996,23 +1048,7 @@ class LLMViewSet(viewsets.ModelViewSet):
         - If the access code group has no model group (or is inactive), return ALL models.
         - Otherwise, return the allowed models from the group's model list.
         """
-        user = self.request.user
-
-        # No access code group: all models
-        if not getattr(user, "access_code_group", None):
-            return LLM.objects.filter(is_active=True).order_by("tier", "name")
-
-        acg = user.access_code_group
-        # ACG without model group or inactive group: all models
-        if not getattr(acg, "model_group", None):
-            return LLM.objects.filter(is_active=True).order_by("tier", "name")
-        if not acg.model_group.is_active:
-            return LLM.objects.filter(is_active=True).order_by("tier", "name")
-
-        # Restrict to allowed models from the access code group's model group
-        return acg.model_group.allowed_models.filter(is_active=True).order_by(
-            "tier", "name"
-        )
+        return LLM.visible_for_user(self.request.user).order_by("tier", "name")
 
     def list(self, request, *args, **kwargs):
         """
@@ -1057,37 +1093,61 @@ class LLMViewSet(viewsets.ModelViewSet):
         return Response(serializer.data)
 
     def destroy(self, request, *args, **kwargs):
-        """
-        Override destroy to check for Socratic Books bot dependencies before deletion.
-
-        If dependent bots exist and ?confirm=true is not provided, returns a 409 Conflict
-        response with the list of dependent bots instead of deleting.
-
-        If ?confirm=true is provided, proceeds with deletion regardless of dependencies.
-        """
+        """Preview or execute the same coordinated deletion used by admin."""
         instance = self.get_object()
-        confirm = request.query_params.get("confirm", "").lower() == "true"
+        input_data = request.query_params.copy()
+        input_data.update(request.data)
+        options_serializer = LLMDeletionOptionsSerializer(data=input_data)
+        options_serializer.is_valid(raise_exception=True)
+        options_data = options_serializer.validated_data
 
-        if not confirm:
-            dependency_data = SocraticDependencyService.get_dependent_bots(instance.id)
+        try:
+            preview = LLMDeletionService.preview(instance)
+        except LLMDeletionError as exc:
+            return Response(
+                {
+                    "detail": str(exc),
+                    "code": "model_dependency_check_unavailable",
+                },
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
 
-            if dependency_data and dependency_data.get("dependent_bots_count", 0) > 0:
-                return Response(
-                    {
-                        "warning": True,
-                        "message": (
-                            f"This model is used by {dependency_data['dependent_bots_count']} "
-                            f"Socratic Books bot(s). Deleting it will break these bots."
-                        ),
-                        "model_id": instance.id,
-                        "model_name": instance.name,
-                        "dependent_bots": dependency_data["dependent_bots"],
-                        "confirm_url": f"/api/conversations/llms/{instance.id}/?confirm=true",
-                    },
-                    status=status.HTTP_409_CONFLICT,
-                )
+        if preview.has_dependents and not options_data["confirm"]:
+            return Response(
+                {
+                    "warning": True,
+                    "message": (
+                        "This model is still used by editable resources. Review "
+                        "the dependency list and confirm the deletion."
+                    ),
+                    "model_id": instance.id,
+                    "model_name": instance.name,
+                    "dependencies": preview.to_dict(),
+                    "confirm_url": f"/api/llms/{instance.id}/?confirm=true",
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
 
-        return super().destroy(request, *args, **kwargs)
+        try:
+            result = LLMDeletionService.delete(
+                instance,
+                LLMDeletionOptions(
+                    send_notifications=options_data["notify_affected_users"],
+                    custom_message=options_data["notification_message"],
+                ),
+            )
+        except LLMDeletionConflictError as exc:
+            return Response(
+                {"detail": str(exc), "code": "model_deletion_conflict"},
+                status=status.HTTP_409_CONFLICT,
+            )
+        except LLMDeletionError as exc:
+            return Response(
+                {"detail": str(exc), "code": "model_deletion_failed"},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+
+        return Response(result.to_dict(), status=status.HTTP_200_OK)
 
 
 class FeedbackViewSet(mixins.CreateModelMixin, viewsets.GenericViewSet):

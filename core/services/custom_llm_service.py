@@ -13,6 +13,7 @@ from openai import AsyncOpenAI
 
 from conversations.models import LLM
 from core.services.api_key_service import get_provider_api_key
+from core.services.dtos.stream_event_dto import LLMStreamEvent
 from core.services.llm_utils import (
     OpenAIMessageFormatter,
     OpenAIVisionHandler,
@@ -68,7 +69,7 @@ class CustomLLMService:
         effort: Optional[str] = None,
         images: List[Dict] = None,
         tools: Optional[List[Dict]] = None
-    ) -> AsyncGenerator[Tuple[str, Dict], None]:
+    ) -> AsyncGenerator[LLMStreamEvent, None]:
         """
         Stream chat completions from custom OpenAI-compatible endpoint.
 
@@ -80,7 +81,7 @@ class CustomLLMService:
             tools: Optional tools list (not commonly supported by custom endpoints)
 
         Yields:
-            Tuple of (text_chunk, usage_data)
+            LLMStreamEvent
         """
         try:
             # Prepare messages with vision if needed
@@ -95,15 +96,15 @@ class CustomLLMService:
                 tools,
             )
 
-            # Process and yield stream chunks
+            # Process and yield stream events
             processor = OpenAIStreamProcessor.process_chat_completion_stream
-            async for chunk, usage in processor(response):
-                yield chunk, usage
+            async for event in processor(response):
+                yield event
 
         except Exception as e:
             logger.exception(f"Custom LLM streaming error for {self.base_url}")
             error_message = OpenAIErrorHandler.format_error(e)
-            yield f"Error: {error_message}", None
+            yield LLMStreamEvent.text_delta(f"Error: {error_message}")
 
     async def get_chat_completion(
         self,

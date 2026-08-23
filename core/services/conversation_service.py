@@ -1,4 +1,4 @@
-import json
+import logging
 from decimal import Decimal
 from typing import Dict, Optional
 
@@ -8,6 +8,7 @@ from django.db import models
 from django.db.models import Prefetch
 from djangorestframework_camel_case.util import camelize
 
+from config import env
 from conversations.api.serializers import MessageSerializer
 from conversations.constants import SenderType, ToolCallOrigin
 from conversations.models import LLM, Artifact, Conversation, Message
@@ -15,6 +16,8 @@ from core.services.billing_service import BillingService
 from core.services.dtos import LLMDescriptor
 from files.models import File, Tag
 from users.models import User
+
+logger = logging.getLogger(__name__)
 
 
 class ConversationService:
@@ -71,17 +74,19 @@ class ConversationService:
                 "cost": msg.get("cost", None),
                 "inputTokens": msg.get("input_tokens", None),
                 "outputTokens": msg.get("output_tokens", None),
+                "usageDetails": msg.get("usage_details", None),
                 "energyWh": msg.get("energy_wh", None),
                 "carbonG": msg.get("carbon_g", None),
                 "waterMl": msg.get("water_ml", None),
                 "energyStats": msg.get("energy_stats", None),
                 "artifactId": msg.get("artifactId", None),
+                "artifactIds": msg.get("artifactIds", []),
                 "memoryContextData": msg.get("memory_context_data") or [],
                 # Keep socket fallback history aligned with the REST message
-                # serializer; the client camelizes this to `mcpToolCalls`.
-                "mcp_tool_calls": [
+                # serializer; the client camelizes this to `toolCalls`.
+                "tool_calls": [
                     self._build_tool_call_payload(tc)
-                    for tc in msg.get("mcp_tool_calls", [])
+                    for tc in msg.get("tool_calls", [])
                 ],
             }
             for msg in serialized_messages
@@ -96,41 +101,26 @@ class ConversationService:
         for clean, zero-confusion typing on FE side.
         """
         origin = tc.get("origin") or ToolCallOrigin.MCP
-        parsed_result = self._parse_tool_result(tc.get("result"))
 
         payload = {
-            "id": tc["tool_call_id"],
+            "id": tc["id"],
             "toolName": tc["tool_name"],
             "serverSlug": tc["server_slug"],
             "origin": origin,
             "status": tc["status"],
+            "round": tc.get("round", 0),
+            "arguments": tc.get("arguments") or {},
             "error": tc.get("error"),
         }
 
         if origin == ToolCallOrigin.DARE:
-            payload["dareResult"] = parsed_result
+            payload["dareResult"] = tc.get("dare_result")
         elif origin == ToolCallOrigin.PROVIDER:
-            payload["providerResult"] = parsed_result
+            payload["providerResult"] = tc.get("provider_result")
         else:
-            payload["mcpResult"] = parsed_result
+            payload["mcpResult"] = tc.get("mcp_result")
 
         return payload
-
-    def _parse_tool_result(self, result: str):
-        """
-        Parse tool result JSON string and camelize for FE.
-
-        The result is stored as a JSON string in the database, but FE
-        expects a properly camelCased object - no parsing needed on FE side.
-        """
-        if not result:
-            return None
-        try:
-            parsed = json.loads(result)
-            return camelize(parsed)
-        except (json.JSONDecodeError, TypeError):
-            # If parsing fails, return as-is (shouldn't happen normally)
-            return result
 
     async def get_user_email(self, conversation: Conversation) -> str:
         """Fetch user email associated with the conversation."""
@@ -249,6 +239,7 @@ class ConversationService:
         user_message: str,
         ai_response: str = "",
         user: Optional[User] = None,
+        llm: Optional[LLM] = None,
     ) -> str:
         """Generate a concise conversation title.
 
@@ -256,13 +247,22 @@ class ConversationService:
         wallet (DARE / BYO / LITELLM) decides which key pays for the title
         call, just like the main chat path. Pre-wallet-refactor this used a
         direct ``OpenAIService(...)`` instantiation that always billed DARE.
+
+        Prefers the configured lightweight title model. If that provider is
+        unavailable for the active wallet, the conversation's own model is a
+        safe fallback because it just completed the main response.
         """
         from core.services.llm_service import LLMService  # avoid module-load cycle
 
         messages = [
             {
                 "role": "system",
-                "content": "Generate a short, descriptive conversation title (max 6 words).",
+                "content": (
+                    "Generate a short, descriptive conversation title of at "
+                    "most 6 words. Reply with ONLY the title itself - no "
+                    "quotes, no markdown, no explanation, no punctuation at "
+                    "the end."
+                ),
             },
             {
                 "role": "user",
@@ -270,29 +270,70 @@ class ConversationService:
             },
         ]
 
-        llm = await self.get_gpt_35_turbo_model()
-        if not llm:
-            return "New Chat"
+        preferred_llm = await self.get_title_generation_model()
+        fallback_llm = llm or await self.get_cheapest_active_text_model()
+        candidates = [
+            candidate
+            for index, candidate in enumerate((preferred_llm, fallback_llm))
+            if candidate is not None
+            and all(
+                previous is None or previous.identifier != candidate.identifier
+                for previous in (preferred_llm, fallback_llm)[:index]
+            )
+        ]
 
-        try:
-            ai_service = await LLMService()._get_ai_service(llm, user=user)
-            return await ai_service.get_chat_completion(messages)
-        except Exception:
-            return "New Chat"
+        for candidate in candidates:
+            try:
+                ai_service = await LLMService()._get_ai_service(candidate, user=user)
+                title = await ai_service.get_chat_completion(messages)
+                return self._sanitize_title(title)
+            except Exception as exc:
+                logger.warning(
+                    "Conversation title generation failed with model %s: %s",
+                    candidate.identifier,
+                    exc,
+                )
+                continue
+        return "New Chat"
 
-    async def get_gpt_35_turbo_model(self) -> LLM:
-        """Fetch the gpt-3.5-turbo LLM."""
-        llm = await database_sync_to_async(
+    @staticmethod
+    def _sanitize_title(raw: str) -> str:
+        """Normalize a model-generated title for the 255-char DB column.
+
+        Models (especially small ones) sometimes return markdown headers,
+        surrounding quotes, or whole paragraphs; unsanitized output crashed
+        the save with StringDataRightTruncation and left conversations
+        untitled.
+        """
+        if not raw:
+            return "New Chat"
+        first_line = raw.strip().splitlines()[0]
+        title = first_line.strip().lstrip("#*- ").strip().strip("\"'`").strip()
+        # Provider failures surface as error text in the aggregated stream
+        # rather than exceptions; never let that become a title.
+        if title.lower().startswith("error"):
+            return "New Chat"
+        if len(title) > 120:
+            title = title[:119].rstrip() + "…"
+        return title or "New Chat"
+
+    async def get_title_generation_model(self) -> Optional[LLM]:
+        """Fetch the configured lightweight model used for conversation titles."""
+        return await database_sync_to_async(
             lambda: LLM.objects.filter(
-                identifier="gpt-3.5-turbo", provider="openai"
+                identifier=env.TITLE_GENERATION_MODEL,
+                is_active=True,
+                is_image_generator=False,
             ).first()
         )()
-        return (
-            llm
-            or await database_sync_to_async(
-                lambda: LLM.objects.filter(provider="openai").first()
-            )()
-        )
+
+    async def get_cheapest_active_text_model(self) -> Optional[LLM]:
+        """Fallback for installations missing the configured title model."""
+        return await database_sync_to_async(
+            lambda: LLM.objects.filter(is_active=True, is_image_generator=False)
+            .order_by("output_token_rate_per_million", "pk")
+            .first()
+        )()
 
     async def get_latest_user_message(
         self, conversation: Conversation

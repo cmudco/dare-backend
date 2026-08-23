@@ -7,7 +7,7 @@ Claude models, including support for streaming, vision, web search, and structur
 
 import json
 import logging
-from typing import AsyncGenerator, Dict, List, Tuple, Optional
+from typing import AsyncGenerator, Dict, List, Optional, Tuple
 
 from anthropic import AsyncAnthropic
 from django.core.exceptions import SynchronousOnlyOperation
@@ -15,16 +15,18 @@ from django.core.exceptions import SynchronousOnlyOperation
 from config import env
 from conversations.models import LLM
 from core.services.api_key_service import get_provider_api_key_sync
+from core.services.dtos.stream_event_dto import LLMStreamEvent
 from core.services.llm_utils import (
-    MessageFormatter,
-    ClaudeVisionHandler,
     ClaudeErrorHandler,
     ClaudeStreamProcessor,
+    ClaudeVisionHandler,
     ClaudeWebFetchTools,
     ClaudeWebSearchTools,
-    StreamAggregator,
+    MessageFormatter,
     SchemaTransformer,
+    StreamAggregator,
 )
+from core.services.llm_utils.provider_message_converters import ClaudeMessageConverter
 from core.services.model_capabilities import ModelCapabilities
 
 logger = logging.getLogger(__name__)
@@ -73,8 +75,8 @@ class ClaudeService:
         temperature: float = 0.7,
         effort: Optional[str] = None,
         images: List[Dict] = None,
-        tools: Optional[List[Dict]] = None
-    ) -> AsyncGenerator[Tuple[str, Dict], None]:
+        tools: Optional[List[Dict]] = None,
+    ) -> AsyncGenerator[LLMStreamEvent, None]:
         """
         Stream chat completions from Claude API.
 
@@ -89,7 +91,7 @@ class ClaudeService:
             tools: Optional tools for web search support
 
         Yields:
-            Tuple of (text_chunk, usage_data)
+            LLMStreamEvent
         """
         try:
             # Step 1: Prepare messages with vision if needed
@@ -97,21 +99,25 @@ class ClaudeService:
 
             # Step 2: Create streaming response
             stream = await self._create_stream(
-                prepared_messages,
-                max_tokens,
-                temperature,
-                effort,
-                tools
+                prepared_messages, max_tokens, temperature, effort, tools
             )
 
-            # Step 3: Process and yield stream chunks
-            async for chunk, usage in ClaudeStreamProcessor.process_stream(stream):
-                yield chunk, usage
+            # Step 3: Process and yield stream events
+            resolved_effort = self.capabilities.resolve_effort(effort)
+            async for event in ClaudeStreamProcessor.process_stream(stream):
+                if event.usage is not None:
+                    usage = dict(event.usage)
+                    usage["request_max_tokens"] = max_tokens
+                    if resolved_effort:
+                        usage["effort"] = resolved_effort
+                    yield LLMStreamEvent.usage_frame(usage)
+                else:
+                    yield event
 
         except Exception as e:
             logger.exception(f"Error streaming chat completion: {str(e)}")
             error_message = ClaudeErrorHandler.format_error(e)
-            yield f"Error: {error_message}", None
+            yield LLMStreamEvent.text_delta(f"Error: {error_message}")
 
     async def get_chat_completion(
         self,
@@ -137,11 +143,7 @@ class ClaudeService:
         """
         if structured_spec:
             return await self._get_structured_completion(
-                messages,
-                max_tokens,
-                temperature,
-                effort,
-                structured_spec
+                messages, max_tokens, temperature, effort, structured_spec
             )
 
         # Default: use streaming and aggregate
@@ -175,7 +177,9 @@ class ClaudeService:
         Raises:
             ValueError: If schema validation fails or no response returned
         """
-        logger.info(f"[Claude] generate_structured_output with schema: {list(response_schema.get('properties', {}).keys())}")
+        logger.info(
+            f"[Claude] generate_structured_output with schema: {list(response_schema.get('properties', {}).keys())}"
+        )
 
         # Models that support structured output (Claude 4.x only)
         SUPPORTED_MODELS = [
@@ -184,15 +188,19 @@ class ClaudeService:
             "claude-opus-4-5-20250929",
             "claude-haiku-4-5-20250929",
         ]
-        
+
         # Use the configured model if it supports structured output, otherwise use Sonnet 4.5
         model_to_use = self.model
         if not any(supported in self.model for supported in SUPPORTED_MODELS):
             model_to_use = "claude-sonnet-4-5-20250929"
-            logger.info(f"[Claude] Model {self.model} doesn't support structured output, using {model_to_use}")
+            logger.info(
+                f"[Claude] Model {self.model} doesn't support structured output, using {model_to_use}"
+            )
 
         # Extract system message (Claude requires it separately)
-        system_message, filtered_messages = MessageFormatter.extract_system_messages(messages)
+        system_message, filtered_messages = MessageFormatter.extract_system_messages(
+            messages
+        )
 
         params = {
             "model": model_to_use,
@@ -202,7 +210,7 @@ class ClaudeService:
             "output_format": {
                 "type": "json_schema",
                 "schema": response_schema,
-            }
+            },
         }
         self.capabilities.apply_sampling_params(params, temperature, effort)
         self._move_output_config_to_extra_body(params)
@@ -232,9 +240,7 @@ class ClaudeService:
     # ==================== Private Methods ====================
 
     def _prepare_messages(
-        self,
-        messages: List[Dict],
-        images: Optional[List[Dict]]
+        self, messages: List[Dict], images: Optional[List[Dict]]
     ) -> List[Dict]:
         """
         Prepare messages by adding vision content if needed.
@@ -257,7 +263,7 @@ class ClaudeService:
         max_tokens: int,
         temperature: float,
         effort: Optional[str],
-        tools: Optional[List[Dict]]
+        tools: Optional[List[Dict]],
     ):
         """
         Create Claude streaming response.
@@ -272,11 +278,7 @@ class ClaudeService:
             Claude message stream
         """
         call_params = self._build_stream_params(
-            messages,
-            max_tokens,
-            temperature,
-            effort,
-            tools
+            messages, max_tokens, temperature, effort, tools
         )
 
         return await self.client.messages.create(**call_params)
@@ -287,7 +289,7 @@ class ClaudeService:
         max_tokens: int,
         temperature: float,
         effort: Optional[str],
-        tools: Optional[List[Dict]]
+        tools: Optional[List[Dict]],
     ) -> Dict:
         """
         Build parameters for Claude stream API call.
@@ -301,14 +303,16 @@ class ClaudeService:
         Returns:
             API call parameters dictionary
         """
-        # Extract system message (Claude requires it separately)
-        system_message, filtered_messages = MessageFormatter.extract_system_messages(messages)
+        # Convert internal (OpenAI-format) messages: extracts the system
+        # prompt and translates tool_calls / role:"tool" turns into Claude's
+        # tool_use / tool_result content blocks.
+        system_message, converted_messages = ClaudeMessageConverter.convert(messages)
 
         params = {
             "model": self.model,
             "max_tokens": max_tokens,
-            "messages": filtered_messages,
-            "stream": True
+            "messages": converted_messages,
+            "stream": True,
         }
         self.capabilities.apply_sampling_params(params, temperature, effort)
         self._move_output_config_to_extra_body(params)
@@ -325,7 +329,9 @@ class ClaudeService:
                 params["extra_headers"] = {
                     "anthropic-beta": ClaudeWebFetchTools.BETA_HEADER
                 }
-            logger.debug(f"[Claude] Converted {len(tools)} tools to Claude format: {[t.get('name') for t in claude_tools]}")
+            logger.debug(
+                f"[Claude] Converted {len(tools)} tools to Claude format: {[t.get('name') for t in claude_tools]}"
+            )
             # Let LLM decide when to use tools (auto is default, so no need to set explicitly)
 
         return params
@@ -386,7 +392,9 @@ class ClaudeService:
                 claude_tool = {
                     "name": func.get("name", ""),
                     "description": func.get("description", ""),
-                    "input_schema": func.get("parameters", {"type": "object", "properties": {}})
+                    "input_schema": func.get(
+                        "parameters", {"type": "object", "properties": {}}
+                    ),
                 }
                 claude_tools.append(claude_tool)
             elif "type" in tool and "name" in tool:
@@ -404,7 +412,7 @@ class ClaudeService:
         max_tokens: int,
         temperature: float,
         effort: Optional[str],
-        structured_spec: Dict
+        structured_spec: Dict,
     ) -> str:
         """
         Get structured output using Claude's native structured output API.
@@ -426,18 +434,24 @@ class ClaudeService:
         response_schema = SchemaTransformer.transform_for_claude(structured_spec)
 
         if not response_schema:
-            logger.warning("[Claude] Could not transform spec to schema, falling back to streaming")
-            stream = self.stream_chat_completion(messages, max_tokens, temperature, effort)
+            logger.warning(
+                "[Claude] Could not transform spec to schema, falling back to streaming"
+            )
+            stream = self.stream_chat_completion(
+                messages, max_tokens, temperature, effort
+            )
             return await StreamAggregator.aggregate_stream(stream)
 
         # Use native structured output API
-        logger.info(f"[Claude] Using native structured output with schema: {list(response_schema.get('properties', {}).keys())}")
+        logger.info(
+            f"[Claude] Using native structured output with schema: {list(response_schema.get('properties', {}).keys())}"
+        )
         result = await self.generate_structured_output(
             messages=messages,
             response_schema=response_schema,
             max_tokens=max_tokens,
             temperature=temperature,
-            effort=effort
+            effort=effort,
         )
 
         # Return as JSON string (consistent with other providers)

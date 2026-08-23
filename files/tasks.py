@@ -1,19 +1,47 @@
+import logging
 import time
 from datetime import datetime
-import logging
+from typing import Optional, Tuple
 
 from django.contrib.auth import get_user_model
 from django_rq import job
 
-from core.storage.constants import StorageBackendChoice
 from core.services.document_processor import DocumentProcessor
+from core.services.file_processing_journey import FileProcessingJourney
 from core.services.vector_service import get_vector_service
+from core.storage.constants import StorageBackendChoice
 from users.constants import VectorDBChoice
-from .constants import FileStatus
+
+from .constants import FileProcessingStage, FileStatus
 from .models import File
 from .utils import migrate_file_to_target_storage
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_status(file: File, vector_count: int) -> Tuple[int, Optional[str]]:
+    """Decide a file's post-ingest status from what the parse actually yielded.
+
+    A file that produced no vectors did not succeed, whatever the parser
+    reported. When the pages are scans we can name the reason and the vision
+    layer can pick it up later; otherwise we surface it as a failure rather
+    than leaving the user with a library entry that answers nothing.
+    """
+    # NEEDS_OCR only applies when no embeddable text survived the whole pipeline.
+    if vector_count > 0:
+        return FileStatus.PROCESSED, None
+
+    if file.page_count and file.pages_without_text >= file.page_count:
+        return FileStatus.NEEDS_OCR, (
+            f"All {file.page_count} pages are scanned images with no readable "
+            f"text and vision transcription was unavailable. Nothing was embedded, "
+            f"so this file cannot answer questions yet."
+        )
+
+    return FileStatus.FAILED, (
+        "No text could be extracted from this file, so nothing was embedded."
+    )
+
 
 @job
 def process_file_embeddings(file_id, chunk_size=None, overlap_size=None):
@@ -41,18 +69,31 @@ def process_file_embeddings(file_id, chunk_size=None, overlap_size=None):
         return
 
     try:
+        journey = FileProcessingJourney(file)
+        journey.begin_attempt()
         file.status = FileStatus.PROCESSING
+        file.processing_stage = FileProcessingStage.PARSING
         file.error_message = None
-        file.save(update_fields=['status', 'error_message'])
+        file.save(update_fields=["status", "processing_stage", "error_message"])
 
         processor = DocumentProcessor()
-        result = processor.create_file_embeddings(file, chunk_size, overlap_size)
+        vector_count = processor.create_file_embeddings(
+            file, chunk_size, overlap_size, journey=journey
+        )
 
         # Record the user's current vector DB preference with the file
         file.vector_db_source = file.user.vector_db
-        file.status = FileStatus.PROCESSED
-        file.error_message = None
-        file.save(update_fields=['status', 'vector_db_source', 'error_message'])
+        file.status, file.error_message = _resolve_status(file, vector_count)
+        file.processing_stage = FileProcessingStage.COMPLETE
+        file.save(
+            update_fields=[
+                "status",
+                "processing_stage",
+                "vector_db_source",
+                "error_message",
+            ]
+        )
+        journey.complete_attempt(outcome=file.get_status_display().lower())
 
         elapsed_time = time.time() - start_time
 
@@ -61,9 +102,11 @@ def process_file_embeddings(file_id, chunk_size=None, overlap_size=None):
         error_message = str(e)
 
         try:
+            if "journey" in locals():
+                journey.fail_attempt(error_message)
             file.status = FileStatus.FAILED
-            file.error_message = error_message 
-            file.save(update_fields=['status', 'error_message'])
+            file.error_message = error_message
+            file.save(update_fields=["status", "error_message"])
         except Exception as update_error:
             pass
 
@@ -99,7 +142,7 @@ def delete_file_vectors(file_id, user_id):
         if vector_db_source:
             # Temporarily set user's vector_db to match the file's source
             user.vector_db = vector_db_source
-            user.save(update_fields=['vector_db'])
+            user.save(update_fields=["vector_db"])
 
             # Delete vectors using correct vector DB
             processor = DocumentProcessor()
@@ -108,7 +151,7 @@ def delete_file_vectors(file_id, user_id):
 
             # Reset user's preference
             user.vector_db = current_preference
-            user.save(update_fields=['vector_db'])
+            user.save(update_fields=["vector_db"])
 
         else:
             # For older files with no recorded source, default to current preference
@@ -118,6 +161,7 @@ def delete_file_vectors(file_id, user_id):
 
     except Exception as e:
         pass
+
 
 # @job("default", timeout=3600)
 # def migrate_vector_db(user_id, target_vector_db, source_vector_db=None):

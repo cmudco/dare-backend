@@ -1,32 +1,70 @@
-from typing import Any, Dict, List, Tuple, Optional
-import weaviate
-from weaviate.classes.config import Configure, Property, DataType
-from django.conf import settings
+import logging
 import uuid
+from typing import Any, Dict, List, Optional, Tuple
+
+import weaviate
+from django.conf import settings
+from weaviate.classes.config import Configure, DataType, Property
+
+logger = logging.getLogger(__name__)
+
 
 class WeaviateClient:
     def __init__(self):
-        self.collection_name = settings.WEAVIATE.get('COLLECTION_NAME', 'Document')
+        self.collection_name = settings.WEAVIATE.get("COLLECTION_NAME", "Document")
         self.client = self._connect_to_weaviate()
         self._create_collection()
 
     def _connect_to_weaviate(self):
+        """
+        Open a Weaviate connection.
+
+        ``grpc_port`` matters as much as ``port``: the HTTP port carries
+        schema and single-object writes, but every search runs over gRPC.
+        Leaving it unset falls back to the client's 50051 default, which on a
+        host running more than one Weaviate silently routes reads to the wrong
+        instance — writes land correctly while every query fails against a
+        foreign schema.
+        """
+        host = settings.WEAVIATE.get("HOST", "localhost")
+        port = settings.WEAVIATE.get("PORT", 8080)
+        grpc_port = settings.WEAVIATE.get("GRPC_PORT", 50051)
+
         try:
             client = weaviate.connect_to_local(
-                host=settings.WEAVIATE.get('HOST', 'localhost'),
-                port=settings.WEAVIATE.get('PORT', 8080),
-                skip_init_checks=settings.WEAVIATE.get('SKIP_INIT_CHECKS', True)
+                host=host,
+                port=port,
+                grpc_port=grpc_port,
+                skip_init_checks=settings.WEAVIATE.get("SKIP_INIT_CHECKS", True),
+            )
+            # Logged because SKIP_INIT_CHECKS leaves the gRPC channel
+            # unverified at connect time: a wrong port surfaces much later as
+            # a schema error from whatever else answered.
+            logger.info(
+                "[Weaviate] connected host=%s http=%s grpc=%s collection=%s",
+                host,
+                port,
+                grpc_port,
+                self.collection_name,
             )
             return client
         except Exception as e:
-            error_details = f"Host: {settings.WEAVIATE.get('HOST', 'localhost')}, " \
-                            f"Port: {settings.WEAVIATE.get('PORT', 8080)}, " \
-                            f"Error: {str(e)}"
-            raise ConnectionError(f"Could not connect to Weaviate. Details: {error_details}")
+            error_details = (
+                f"Host: {host}, Port: {port}, gRPC Port: {grpc_port}, "
+                f"Error: {str(e)}"
+            )
+            raise ConnectionError(
+                f"Could not connect to Weaviate. Details: {error_details}"
+            )
 
-    def _close_connection(self):
-        if hasattr(self, 'client') and self.client:
+    def close(self):
+        """Release the underlying Weaviate transport."""
+        if hasattr(self, "client") and self.client:
             self.client.close()
+
+    # Backwards-compatible alias for older internal callers.
+    def _close_connection(self):
+        self.close()
 
     def _create_collection(self):
         try:
@@ -40,13 +78,15 @@ class WeaviateClient:
                         Property(name="user_id", data_type=DataType.TEXT),
                         Property(name="file_id", data_type=DataType.TEXT),
                         Property(name="chunk_index", data_type=DataType.INT),
-                        Property(name="original_id", data_type=DataType.TEXT)
-                    ]
+                        Property(name="original_id", data_type=DataType.TEXT),
+                    ],
                 )
         except Exception as e:
             raise
 
-    def upsert_document(self, doc_id: str, vector: List[float], metadata: Dict[str, Any], user_id: str) -> bool:
+    def upsert_document(
+        self, doc_id: str, vector: List[float], metadata: Dict[str, Any], user_id: str
+    ) -> bool:
         try:
             collection = self.client.collections.get(self.collection_name)
 
@@ -56,7 +96,7 @@ class WeaviateClient:
                 "user_id": user_id,
                 "file_id": metadata.get("file_id", ""),
                 "chunk_index": metadata.get("chunk_index", 0),
-                "original_id": doc_id
+                "original_id": doc_id,
             }
 
             weaviate_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, doc_id))
@@ -64,7 +104,7 @@ class WeaviateClient:
             try:
                 existing = collection.query.fetch_objects(
                     filters=weaviate.classes.query.Filter.by_id().equal(weaviate_uuid),
-                    limit=1
+                    limit=1,
                 )
                 if existing.objects:
                     collection.data.delete_by_id(uuid=weaviate_uuid)
@@ -72,26 +112,63 @@ class WeaviateClient:
                 pass
 
             collection.data.insert(
-                properties=properties,
-                vector=vector,
-                uuid=weaviate_uuid
+                properties=properties, vector=vector, uuid=weaviate_uuid
             )
 
             return True
         except Exception as e:
             raise
 
-    def query_documents(self, vector: List[float], user_id: str, top_k: int = 5) -> List[Dict]:
+    def query_documents(
+        self,
+        vector: List[float],
+        user_id: str,
+        top_k: int = 5,
+        query_text: str = "",
+        file_ids: Optional[List[str]] = None,
+    ) -> List[Dict]:
         try:
             collection = self.client.collections.get(self.collection_name)
-            user_filter = weaviate.classes.query.Filter.by_property("user_id").equal(user_id)
-
-            response = collection.query.near_vector(
-                near_vector=vector,
-                limit=top_k,
-                filters=user_filter,
-                return_metadata=weaviate.classes.query.MetadataQuery(distance=True)
+            query_filter = weaviate.classes.query.Filter.by_property("user_id").equal(
+                user_id
             )
+            if file_ids:
+                # Apply the selected-file scope before Weaviate chooses its
+                # top-k candidates. Filtering the returned top-k in Python can
+                # lose every candidate from a selected file when another file
+                # (including an unselected one) dominates the user's corpus.
+                file_filter = weaviate.classes.query.Filter.by_property(
+                    "file_id"
+                ).equal(str(file_ids[0]))
+                for file_id in file_ids[1:]:
+                    file_filter = (
+                        file_filter
+                        | weaviate.classes.query.Filter.by_property("file_id").equal(
+                            str(file_id)
+                        )
+                    )
+                query_filter = query_filter & file_filter
+
+            if query_text:
+                # HYBRID: BM25 keyword + dense vector, fused with RELATIVE_SCORE so
+                # the returned score stays on a 0-1 scale compatible with the
+                # downstream cosine-style similarity threshold.
+                response = collection.query.hybrid(
+                    query=query_text,
+                    vector=vector,
+                    alpha=0.5,
+                    limit=top_k,
+                    filters=query_filter,
+                    fusion_type=weaviate.classes.query.HybridFusion.RELATIVE_SCORE,
+                    return_metadata=weaviate.classes.query.MetadataQuery(score=True),
+                )
+            else:
+                response = collection.query.near_vector(
+                    near_vector=vector,
+                    limit=top_k,
+                    filters=query_filter,
+                    return_metadata=weaviate.classes.query.MetadataQuery(distance=True),
+                )
 
             results = []
             for obj in response.objects:
@@ -101,22 +178,27 @@ class WeaviateClient:
                 if file_id is not None:
                     file_id = str(file_id)
 
-                distance = getattr(obj.metadata, 'distance', 1.0)
-                cosine_similarity = 1.0 - distance
+                if query_text:
+                    cosine_similarity = getattr(obj.metadata, "score", 0.0) or 0.0
+                else:
+                    distance = getattr(obj.metadata, "distance", 1.0)
+                    cosine_similarity = 1.0 - distance
 
                 chunk_index = properties.get("chunk_index", 0)
 
-                results.append({
-                    "id": file_id,
-                    "metadata": {
-                        "title": properties.get("title"),
-                        "content": properties.get("content"),
-                        "user_id": properties.get("user_id"),
-                        "chunk_index": chunk_index
-                    },
-                    "score": cosine_similarity,
-                    "raw_similarity": cosine_similarity
-                })
+                results.append(
+                    {
+                        "id": file_id,
+                        "metadata": {
+                            "title": properties.get("title"),
+                            "content": properties.get("content"),
+                            "user_id": properties.get("user_id"),
+                            "chunk_index": chunk_index,
+                        },
+                        "score": cosine_similarity,
+                        "raw_similarity": cosine_similarity,
+                    }
+                )
 
             return results
         except Exception as e:
@@ -126,23 +208,33 @@ class WeaviateClient:
         try:
             collection = self.client.collections.get(self.collection_name)
 
-            if '_' in doc_id:
-                document_filter = (
-                    weaviate.classes.query.Filter.by_property("original_id").equal(doc_id) &
-                    weaviate.classes.query.Filter.by_property("user_id").equal(user_id)
+            if "_" in doc_id:
+                document_filter = weaviate.classes.query.Filter.by_property(
+                    "original_id"
+                ).equal(doc_id) & weaviate.classes.query.Filter.by_property(
+                    "user_id"
+                ).equal(
+                    user_id
                 )
-                response = collection.query.fetch_objects(filters=document_filter, limit=1)
+                response = collection.query.fetch_objects(
+                    filters=document_filter, limit=1
+                )
 
                 if response.objects:
                     weaviate_uuid = response.objects[0].uuid
                     collection.data.delete_by_id(uuid=weaviate_uuid)
                     return True
 
-            document_filter = (
-                weaviate.classes.query.Filter.by_property("file_id").equal(doc_id) &
-                weaviate.classes.query.Filter.by_property("user_id").equal(user_id)
+            document_filter = weaviate.classes.query.Filter.by_property(
+                "file_id"
+            ).equal(doc_id) & weaviate.classes.query.Filter.by_property(
+                "user_id"
+            ).equal(
+                user_id
             )
-            response = collection.query.fetch_objects(filters=document_filter, limit=100)
+            response = collection.query.fetch_objects(
+                filters=document_filter, limit=100
+            )
 
             if not response.objects:
                 return False
@@ -158,38 +250,40 @@ class WeaviateClient:
     def upsert_vectors(
         self,
         vectors: List[Tuple[str, List[float], Dict]],
-        namespace: Optional[str] = None
+        namespace: Optional[str] = None,
     ) -> bool:
         """Upsert vectors to Weaviate."""
         try:
             if not namespace:
-                raise ValueError("Namespace (user_id) is required for Weaviate upsertion")
+                raise ValueError(
+                    "Namespace (user_id) is required for Weaviate upsertion"
+                )
 
             user_id = namespace.replace("user_", "")
 
             for i, (vector_id, embedding, metadata) in enumerate(vectors):
                 chunk_index = 0
-                vector_parts = vector_id.split('_')
+                vector_parts = vector_id.split("_")
 
                 if len(vector_parts) >= 4:
                     try:
                         chunk_index = int(vector_parts[3])
                     except (ValueError, IndexError) as e:
-                        chunk_index = metadata.get('chunk_index', 0)
+                        chunk_index = metadata.get("chunk_index", 0)
                 else:
-                    chunk_index = metadata.get('chunk_index', 0)
+                    chunk_index = metadata.get("chunk_index", 0)
 
-                doc_id = metadata.get('file_id')
+                doc_id = metadata.get("file_id")
 
                 if doc_id is not None:
                     doc_id = str(doc_id)
 
                 weaviate_metadata = {
-                    'title': metadata.get('file_name', ''),
-                    'content': metadata.get('text', ''),
-                    'user_id': user_id,
-                    'file_id': doc_id,
-                    'chunk_index': chunk_index
+                    "title": metadata.get("file_name", ""),
+                    "content": metadata.get("text", ""),
+                    "user_id": user_id,
+                    "file_id": doc_id,
+                    "chunk_index": chunk_index,
                 }
 
                 full_doc_id = f"{doc_id}_{chunk_index}"
@@ -198,7 +292,7 @@ class WeaviateClient:
                     doc_id=full_doc_id,
                     vector=embedding,
                     metadata=weaviate_metadata,
-                    user_id=user_id
+                    user_id=user_id,
                 )
             return True
         except Exception as e:
@@ -209,20 +303,27 @@ class WeaviateClient:
         vector: List[float],
         top_k: int = 5,
         namespace: Optional[str] = None,
-        filter: Optional[Dict] = None
+        filter: Optional[Dict] = None,
+        query_text: str = "",
     ) -> List[Dict]:
         """Query similar vectors from Weaviate matching the vector service interface."""
         try:
-            if not namespace or not filter or not filter.get('user_id'):
+            if not namespace or not filter or not filter.get("user_id"):
                 raise ValueError("Namespace (user_id) is required for Weaviate queries")
 
             user_id = namespace.replace("user_", "")
 
             file_ids = []
-            if filter and 'file_id' in filter and '$in' in filter['file_id']:
-                file_ids = [str(id) for id in filter['file_id']['$in']]
+            if filter and "file_id" in filter and "$in" in filter["file_id"]:
+                file_ids = [str(id) for id in filter["file_id"]["$in"]]
 
-            results = self.query_documents(vector=vector, user_id=user_id, top_k=top_k)
+            results = self.query_documents(
+                vector=vector,
+                user_id=user_id,
+                top_k=top_k,
+                query_text=query_text,
+                file_ids=file_ids,
+            )
 
             formatted_results = []
             for result in results:
@@ -233,44 +334,46 @@ class WeaviateClient:
                 if file_ids and file_id not in file_ids:
                     continue
 
-                formatted_results.append({
-                    'id': f"file_{file_id}_chunk_{chunk_index}",
-                    'score': result.get('score', 0.0),
-                    'metadata': {
-                        'file_id': file_id,
-                        'user_id': metadata.get('user_id'),
-                        'file_name': metadata.get('title'),
-                        'text': metadata.get('content'),
-                        'chunk_index': chunk_index
+                formatted_results.append(
+                    {
+                        "id": f"file_{file_id}_chunk_{chunk_index}",
+                        "score": result.get("score", 0.0),
+                        "metadata": {
+                            "file_id": file_id,
+                            "user_id": metadata.get("user_id"),
+                            "file_name": metadata.get("title"),
+                            "text": metadata.get("content"),
+                            "chunk_index": chunk_index,
+                        },
                     }
-                })
+                )
 
             return formatted_results
         except Exception as e:
             raise Exception(f"Error querying vectors from Weaviate: {str(e)}")
 
-    def delete_vectors(
-        self,
-        ids: List[str],
-        namespace: Optional[str] = None
-    ) -> bool:
+    def delete_vectors(self, ids: List[str], namespace: Optional[str] = None) -> bool:
         """Delete vectors by their IDs matching the vector service interface."""
         try:
             if not namespace:
-                raise ValueError("Namespace (user_id) is required for Weaviate deletion")
+                raise ValueError(
+                    "Namespace (user_id) is required for Weaviate deletion"
+                )
 
             user_id = namespace.replace("user_", "")
 
             for vector_id in ids:
                 try:
-                    vector_parts = vector_id.split('_')
+                    vector_parts = vector_id.split("_")
                     if len(vector_parts) >= 4:
                         file_id = vector_parts[1]
                         chunk_index = vector_parts[3]
                         doc_id = f"{file_id}_{chunk_index}"
                         self.delete_document(doc_id=doc_id, user_id=user_id)
                     else:
-                        file_id = vector_parts[1] if len(vector_parts) > 1 else vector_id
+                        file_id = (
+                            vector_parts[1] if len(vector_parts) > 1 else vector_id
+                        )
                         self.delete_document(doc_id=file_id, user_id=user_id)
                 except Exception as e:
                     continue
@@ -283,7 +386,9 @@ class WeaviateClient:
         try:
             user_id = namespace.replace("user_", "")
             collection = self.client.collections.get(self.collection_name)
-            user_filter = weaviate.classes.query.Filter.by_property("user_id").equal(user_id)
+            user_filter = weaviate.classes.query.Filter.by_property("user_id").equal(
+                user_id
+            )
             collection.data.delete_many(where=user_filter)
             return True
         except Exception as e:

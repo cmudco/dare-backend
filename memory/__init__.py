@@ -1,1 +1,1 @@
-# Memory app for cross-conversation user memory using MemU
+# Cross-conversation memory: USER.md + facts/rules archive + transcript search.

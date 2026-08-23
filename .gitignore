@@ -45,6 +45,12 @@ db.sqlite3
 # Cursor
 .cursor/
 
+# AI coding agents — per-developer state. The shared config (AGENTS.md, CLAUDE.md,
+# .agents/skills/, .claude/skills/) is committed; see .agents/README.md.
+.claude/settings.local.json
+.claude/*.local.json
+CLAUDE.local.md
+
 # macOS
 .DS_Store
 
@@ -59,3 +65,10 @@ data/
 weaviate_data/
 backups/
 model_card_cache/
+
+# rag_lab embedding cache (derived artifact)
+rag_lab/.embed_cache.json
+
+# Local-only files (contain secrets / caches)
+docker-compose.override.yml
+.cache/

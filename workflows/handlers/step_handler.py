@@ -11,28 +11,34 @@ from typing import Any, Dict, Optional
 from channels.db import database_sync_to_async
 from django.utils import timezone
 
-from core.services.dtos import LLMQueryRequestBuilder
 from conversations.models import LLM
+from conversations.services.tool_loop_service import ToolLoopService
+from core.services.dtos import LLMQueryRequestBuilder
+from dare_tools.services.retrieval_tool_executor import RetrievalScope
 from workflows.constants import WorkflowRunStepStatus
-from workflows.handlers.base import ExecutionNode, NodeExecutionContext, NodeExecutionResult
+from workflows.handlers.base import (ExecutionNode, NodeExecutionContext,
+                                     NodeExecutionResult)
 from workflows.handlers.event_emitter import EventEmitter
 from workflows.handlers.execution_base import BaseExecutionHandler
-from workflows.handlers.utils import (
-    LLMDefaults,
-    NodeDataValidator,
-    NodeType,
-    StepMessagePreparer,
-)
+from workflows.handlers.utils import (LLMDefaults, NodeDataValidator, NodeType,
+                                      StepMessagePreparer)
 from workflows.models import StepNodeData, WorkflowRun, WorkflowRunStep
-from workflows.services.citation_serialization import serialize_step_citations
-from workflows.services.workflow_web_search_source_service import WorkflowWebSearchSourceService
-
+from workflows.services.citation_serialization import (
+    serialize_step_artifacts, serialize_step_citations,
+    serialize_step_tool_calls)
+from workflows.services.tool_loop_binding import WorkflowToolLoopBinding
+from workflows.services.workflow_web_search_source_service import \
+    WorkflowWebSearchSourceService
 
 logger = logging.getLogger(__name__)
 
 
 class StepNodeHandler(BaseExecutionHandler):
     """Handler for 'step' type nodes."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.tool_loop_service = ToolLoopService(self.llm_service)
 
     def can_handle(self, node_type: str) -> bool:
         return node_type == NodeType.STEP
@@ -157,13 +163,46 @@ class StepNodeHandler(BaseExecutionHandler):
             structured_spec=None,
             web_search_enabled=config['enable_web_search'],
             file_owner_id=None,
+            rag_mode=config['rag_mode'],
+            library_ids=config['library_ids'] or None,
+            web_fetch_enabled=config['enable_web_fetch'],
+            mcp_server_ids=config['mcp_server_ids'] or None,
+            artifacts_enabled=config['enable_artifacts'],
         )
 
-        return await self._execute_llm_query_with_collection(
-            self.llm_service.query(request),
-            emitter=emitter,
-            node_id=node_id,
+        retrieval_scope = RetrievalScope(
+            embedding_ids=tuple(request.context.embedding_ids or ()),
+            tag_ids=tuple(request.context.tag_ids or ()),
+            folder_ids=tuple(request.context.folder_ids or ()),
+            library_ids=tuple(request.context.library_ids or ()),
+            user_id=config['user'].id,
+            file_owner_id=request.context.file_owner_id,
+            max_context_snippets=request.context.max_context_snippets,
+            similarity_threshold=request.context.document_similarity_threshold,
         )
+        binding = WorkflowToolLoopBinding(
+            run_step=run_step,
+            node_id=node_id,
+            user=config['user'],
+            emitter=emitter,
+            send_callback=context.send_callback,
+        )
+
+        # regenerate=True: a re-run reuses the same WorkflowRunStep, so its
+        # previous tool-call rows must never survive into the new turn.
+        result = await self.tool_loop_service.run(
+            request=request,
+            binding=binding,
+            retrieval_scope=retrieval_scope,
+            regenerate=True,
+        )
+
+        if result.timed_out:
+            raise TimeoutError(
+                "The model stream stalled mid-step; the step was aborted."
+            )
+
+        return result.text, result.token_usage or {}
 
     async def _save_web_search_sources(
         self,
@@ -214,10 +253,19 @@ class StepNodeHandler(BaseExecutionHandler):
         token_usage: Dict,
         run_step: WorkflowRunStep,
     ) -> None:
-        """Emit step_completed event with citation metadata."""
-        snippets_data, web_sources_data = await database_sync_to_async(
-            lambda: serialize_step_citations(run_step)
-        )()
+        """Emit step_completed event with citation and tool-call metadata."""
+        def _serialize():
+            snippets, web_sources = serialize_step_citations(run_step)
+            tool_calls = serialize_step_tool_calls(run_step)
+            artifacts = serialize_step_artifacts(run_step)
+            return snippets, web_sources, tool_calls, artifacts
+
+        (
+            snippets_data,
+            web_sources_data,
+            tool_calls_data,
+            artifacts_data,
+        ) = await database_sync_to_async(_serialize)()
 
         tokens = None
         if token_usage:
@@ -227,10 +275,21 @@ class StepNodeHandler(BaseExecutionHandler):
             }
 
         metadata = None
-        if snippets_data or web_sources_data:
+        if (
+            snippets_data
+            or web_sources_data
+            or tool_calls_data
+            or artifacts_data
+            or run_step.retrieval_trace
+            or run_step.context_trace
+        ):
             metadata = {
                 "snippets": snippets_data,
                 "webSearchSources": web_sources_data,
+                "toolCalls": tool_calls_data,
+                "artifacts": artifacts_data,
+                "retrievalTrace": run_step.retrieval_trace,
+                "contextTrace": run_step.context_trace,
             }
 
         await emitter.step_completed(node_id, response, "completed", tokens, metadata)
@@ -268,8 +327,13 @@ class StepNodeHandler(BaseExecutionHandler):
                 'content_file_ids': list(step_data.content_files.values_list('id', flat=True)),
                 'embedding_file_ids': list(step_data.embedding_files.values_list('id', flat=True)),
                 'tag_ids': list(step_data.tags.values_list('id', flat=True)),
+                'library_ids': list(step_data.libraries.values_list('id', flat=True)),
+                'mcp_server_ids': list(step_data.mcp_servers.values_list('id', flat=True)),
                 'prompt_id': step_data.prompt.id if step_data.prompt else None,
                 'enable_web_search': step_data.enable_web_search,
+                'enable_web_fetch': step_data.enable_web_fetch,
+                'enable_artifacts': step_data.enable_artifacts,
+                'rag_mode': step_data.rag_mode,
             }
             if context.batch_file_id and context.is_start_connected:
                 content_file_ids = config['content_file_ids']

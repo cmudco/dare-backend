@@ -20,7 +20,9 @@ def infer_supports_temperature(
     if provider == Provider.OPENAI.value and normalized in {"gpt-5", "gpt-5.5"}:
         return False
     if provider == Provider.CLAUDE.value and (
-        "claude-opus-4-7" in normalized or "claude-opus-4-8" in normalized
+        "claude-opus-4-7" in normalized
+        or "claude-opus-4-8" in normalized
+        or "claude-sonnet-5" in normalized
     ):
         return False
     return True
@@ -30,7 +32,9 @@ def infer_supports_effort(identifier: str, provider: str) -> bool:
     """Infer effort support for synthetic or legacy model descriptors."""
     normalized = (identifier or "").lower()
     return provider == Provider.CLAUDE.value and (
-        "claude-opus-4-7" in normalized or "claude-opus-4-8" in normalized
+        "claude-opus-4-7" in normalized
+        or "claude-opus-4-8" in normalized
+        or "claude-sonnet-5" in normalized
     )
 
 
@@ -99,11 +103,8 @@ class ModelCapabilities:
         if resolved_effort:
             params["output_config"] = {"effort": resolved_effort}
 
-        if (
-            self.supports_adaptive_thinking
-            and self.default_adaptive_thinking_enabled
-        ):
-            params["thinking"] = {"type": "adaptive"}
+        if self.supports_adaptive_thinking and self.default_adaptive_thinking_enabled:
+            params["thinking"] = {"type": "adaptive", "display": "summarized"}
 
 
 def normalize_effort(value: Optional[str], default: str) -> str:

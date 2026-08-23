@@ -131,11 +131,9 @@ Conventional-ish: `<type>: <summary>` where type is one of `feat`, `fix`, `refac
 Example:
 
 ```
-feat: add streaming TTS support to /chat namespace
+feat: refresh conversation summaries in the background
 
-Wires ElevenLabs into AIService.stream_chat_completion via an
-optional `tts=True` flag. Audio chunks are emitted as base64
-on a new `audio_chunk` Socket.IO event.
+Queues a summary refresh after every fifth completed response.
 
 Closes #482.
 ```
@@ -145,6 +143,30 @@ Closes #482.
 - Review for correctness, then design, then style. Style nits are last priority.
 - Suggest, don't demand — `nit:`, `consider:`, and `blocking:` prefixes help calibrate.
 - Approve when you'd be comfortable shipping the change as-is.
+
+---
+
+## Using AI coding agents
+
+This repo ships shared configuration for AI coding agents, so an agent you point at a fresh clone
+already knows how to run the backend, start workers, and check a change before you open a PR.
+
+| File | What it is |
+| --- | --- |
+| `AGENTS.md` | Project instructions — architecture, conventions, patterns. Read by Codex and other tools following the `AGENTS.md` convention. |
+| `CLAUDE.md` | Imports `AGENTS.md`, plus any Claude Code-specific notes. |
+| `.agents/skills/<name>/SKILL.md` | Task procedures — `run-backend`, `run-workers`, `check`. |
+| `.claude/skills/<name>` | Symlinks to the above, because Claude Code scans a different path. |
+
+Invoke a skill by name — `/run-backend` in Claude Code, `$run-backend` in Codex — or just describe
+the task and let the agent load the matching skill on its own.
+
+To add or change a skill, edit the file under `.agents/skills/`; the `.claude/skills/` symlink
+needs no change. See [`.agents/README.md`](.agents/README.md) for the layout, how to add a new
+skill, and the Windows symlink caveat.
+
+Treat these files like code: they are reviewed in PRs, and a stale skill is worse than no skill.
+If you change how the backend is run, built, or tested, update the matching skill in the same PR.
 
 ---
 

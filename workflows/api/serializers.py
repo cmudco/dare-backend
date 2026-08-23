@@ -201,6 +201,11 @@ class StepNodeDataSerializer(serializers.ModelSerializer):
             "use_previous_context",
             "text_input",
             "enable_web_search",
+            "rag_mode",
+            "libraries",
+            "enable_web_fetch",
+            "enable_artifacts",
+            "mcp_servers",
         ]
 
 

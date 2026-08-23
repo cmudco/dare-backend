@@ -1,216 +1,94 @@
-"""
-Memory Extraction Background Tasks
-
-Handles automatic extraction of user memories from conversations.
-Uses django-rq for background job processing.
-"""
+"""Post-reply ingestion on the dedicated memory queue."""
 
 import logging
-from datetime import timedelta
 
-from django.db.models import Count
-from django.utils import timezone
+from django.db import close_old_connections
 from django_rq import job
-from asgiref.sync import async_to_sync
 
-from conversations.models import Conversation
-from memory.services import get_memu_service
+from config.env import USE_POSTGRES
+from conversations.constants import SenderType
+from conversations.models import Message
+from memory.models import MemoryLedgerEntry
+from memory.services.ingest import ingest_turn
+from memory.services.notify import announce_write, summarize_report
 
 logger = logging.getLogger(__name__)
 
-# =============================================================================
-# CONFIGURABLE CONSTANTS
-# =============================================================================
-
-# Minimum number of messages required before extracting memories
-MIN_MESSAGE_COUNT = 5
-
-# Minimum time (in hours) since last extraction before re-extracting
-EXTRACTION_COOLDOWN_HOURS = 1
-
-# Batch size for processing conversations
-BATCH_SIZE = 50
+MEMORY_QUEUE = "memory"
 
 
-@job("simple_queue")
-def process_memory_extraction():
-    """
-    Extract memories from eligible conversations.
-    
-    A conversation is eligible if:
-    1. It has >= MIN_MESSAGE_COUNT messages
-    2. Either:
-       a. Never been extracted (last_memory_extracted_at is NULL), OR
-       b. Has new messages since last extraction AND cooldown period has passed
-    
-    Returns:
-        dict: Stats about the extraction run
-    """
-    stats = {
-        "total_checked": 0,
-        "eligible": 0,
-        "processed": 0,
-        "failed": 0,
-        "skipped_low_message_count": 0,
-        "skipped_recently_extracted": 0,
-        "skipped_no_new_messages": 0,
-    }
-    
-    try:
-        memu_service = get_memu_service()
-        # Initialize once before batch; fail fast if memu-py/config is broken
-        async_to_sync(memu_service._ensure_initialized)()
-    except Exception as e:
-        logger.error(f"Failed to initialize MemU service: {e}")
-        return {"status": "error", "message": str(e)}
-    
-    cooldown_cutoff = timezone.now() - timedelta(hours=EXTRACTION_COOLDOWN_HOURS)
-    
-    # Get conversations with message counts
-    conversations = (
-        Conversation.active_objects
-        .filter(user__isnull=False)  # Only user conversations, not anonymous
-        .annotate(message_count=Count('messages'))
-        .order_by('last_memory_extracted_at')  # Process oldest first
-        [:BATCH_SIZE]
+@job(MEMORY_QUEUE)
+def run_memory_writer(ai_message_id: int) -> None:
+    # Refresh stale database connections in the long-lived worker.
+    close_old_connections()
+
+    if not USE_POSTGRES:
+        logger.debug("[memory] writer skipped: USE_POSTGRES is False")
+        return
+
+    ai_message = (
+        Message.active_objects.select_related("conversation", "conversation__user")
+        .filter(pk=ai_message_id)
+        .first()
     )
-    
-    for conv in conversations:
-        stats["total_checked"] += 1
-        
-        # Check minimum message count
-        if conv.message_count < MIN_MESSAGE_COUNT:
-            stats["skipped_low_message_count"] += 1
-            continue
-        
-        # Check if never extracted
-        if conv.last_memory_extracted_at is None:
-            is_eligible = True
-        else:
-            # Check cooldown
-            if conv.last_memory_extracted_at > cooldown_cutoff:
-                stats["skipped_recently_extracted"] += 1
-                continue
-            
-            # Check for new messages since last extraction
-            has_new_messages = conv.messages.filter(
-                created_at__gt=conv.last_memory_extracted_at
-            ).exists()
-            
-            if not has_new_messages:
-                stats["skipped_no_new_messages"] += 1
-                continue
-            
-            is_eligible = True
-        
-        if is_eligible:
-            stats["eligible"] += 1
-            success = _extract_conversation_memories(conv, memu_service)
-            
-            if success:
-                stats["processed"] += 1
-            else:
-                stats["failed"] += 1
-    
-    logger.info(f"Memory extraction completed: {stats}")
-    return stats
+    if ai_message is None:
+        logger.warning("[memory] writer: message %s vanished", ai_message_id)
+        return
 
+    conversation = ai_message.conversation
+    user = conversation.user
+    if user is None:
+        # Public conversations have no user-owned memory store.
+        return
 
-def _extract_conversation_memories(conversation: Conversation, memu_service) -> bool:
-    """
-    Extract memories from a single conversation.
-    
-    Args:
-        conversation: The conversation to process
-        memu_service: Initialized MemU service instance
-        
-    Returns:
-        bool: True if extraction succeeded, False otherwise
-    """
-    try:
-        user_id = str(conversation.user.id)
-        
-        # Get messages (only since last extraction if applicable)
-        messages_qs = conversation.messages.all().order_by('created_at')
-        
-        if conversation.last_memory_extracted_at:
-            messages_qs = messages_qs.filter(
-                created_at__gt=conversation.last_memory_extracted_at
-            )
-        
-        # Format messages for MemU
-        messages = [
-            {
-                "role": "user" if msg.sender_type == 1 else "assistant",
-                "content": msg.message
-            }
-            for msg in messages_qs
-        ]
-        
-        if not messages:
-            logger.debug(f"No messages to extract for conversation {conversation.id}")
-            return True
-        
-        # Call MemU synchronously (wrap async)
-        async_to_sync(memu_service.memorize_conversation)(user_id, messages)
-        
-        # Update tracking timestamp
-        conversation.last_memory_extracted_at = timezone.now()
-        conversation.save(update_fields=['last_memory_extracted_at'])
-        
+    user_message = (
+        Message.active_objects.filter(
+            conversation=conversation,
+            sender_type=SenderType.PLAYER,
+            id__lt=ai_message.id,
+            is_deleted=False,
+        )
+        .order_by("-id")
+        .first()
+    )
+    if user_message is None:
+        return
+
+    # Either marker proves this turn already finished.
+    if (
+        ai_message.memory_write_data is not None
+        or MemoryLedgerEntry.objects.filter(source_message=user_message).exists()
+    ):
         logger.info(
-            f"Extracted memories from conversation {conversation.id} "
-            f"({len(messages)} messages) for user {user_id}"
+            "[memory] writer: message %s already ingested, skipping", user_message.id
         )
-        return True
-        
-    except Exception as e:
-        logger.error(
-            f"Failed to extract memories from conversation {conversation.id}: {e}"
-        )
-        return False
+        return
 
+    report = ingest_turn(user, conversation, user_message, ai_message)
 
-@job("simple_queue")
-def extract_single_conversation(conversation_id: int):
-    """
-    Extract memories from a specific conversation.
-    Can be triggered manually or as a one-off job.
-    
-    Args:
-        conversation_id: ID of the conversation to process
-
-    Returns:
-        dict: Result of the extraction
-    """
-    try:
-        conversation = Conversation.active_objects.get(id=conversation_id)
-    except Conversation.DoesNotExist:
-        return {"status": "error", "message": "Conversation not found"}
-    
-    if not conversation.user:
-        return {"status": "error", "message": "Anonymous conversation, skipping"}
-    
-    try:
-        memu_service = get_memu_service()
-        success = _extract_conversation_memories(conversation, memu_service)
-        
-        if success:
-            return {
-                "status": "success",
-                "conversation_id": conversation_id,
-                "message": "Memories extracted successfully"
-            }
-        else:
-            return {
-                "status": "failed",
-                "conversation_id": conversation_id,
-                "message": "Extraction failed, check logs"
-            }
-            
-    except Exception as e:
-        return {
-            "status": "error",
-            "conversation_id": conversation_id,
-            "message": str(e)
+    if report.skipped:
+        ai_message.memory_write_data = {
+            **summarize_report(report, report.entries),
+            "skipped": report.skipped,
         }
+        ai_message.save(update_fields=["memory_write_data", "updated_at"])
+        logger.info("[memory] turn %s skipped: %s", user_message.id, report.skipped)
+        return
+
+    # Persist the memory chip before broadcasting it to the conversation.
+    summary = summarize_report(report, report.entries)
+    ai_message.memory_write_data = summary
+    ai_message.save(update_fields=["memory_write_data", "updated_at"])
+    # Clients subscribe with the public conversation ID.
+    announce_write(conversation.conversation_id, ai_message.id, summary)
+
+    logger.info(
+        "[memory] turn %s: %d decisions → %d created, %d retired, %d reinforced, "
+        "profile_changed=%s",
+        user_message.id,
+        report.decisions,
+        len(report.created),
+        report.retired,
+        report.reinforced,
+        report.profile_changed,
+    )

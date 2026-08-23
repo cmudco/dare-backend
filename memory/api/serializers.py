@@ -1,29 +1,28 @@
-"""
-Memory API Serializers
+"""Serializers for the memory API.
 
-Serializers for memory-related API endpoints.
+Wire casing is handled globally (djangorestframework-camel-case), so these
+declare snake_case and the frontend sees ``memoryType`` / ``createdAt``.
 """
+
 from rest_framework import serializers
 
 
 class MemoryItemSerializer(serializers.Serializer):
-    """Serializer for a single memory item."""
-    
+    """One compat item — a USER.md line, a fact, or a rule, flattened."""
+
     id = serializers.CharField(read_only=True)
     memory_type = serializers.CharField(read_only=True)
-    content = serializers.CharField(source="summary", read_only=True)
-    categories = serializers.ListField(
-        child=serializers.CharField(),
-        read_only=True,
-    )
-    created_at = serializers.DateTimeField(read_only=True, required=False)
-    updated_at = serializers.DateTimeField(read_only=True, required=False)
+    content = serializers.CharField(read_only=True)
+    categories = serializers.ListField(child=serializers.CharField(), read_only=True)
+    created_at = serializers.CharField(read_only=True, required=False, allow_null=True)
+    updated_at = serializers.CharField(read_only=True, required=False, allow_null=True)
     score = serializers.FloatField(read_only=True, required=False)
+    state = serializers.CharField(read_only=True, required=False, allow_null=True)
+    valid_until = serializers.CharField(read_only=True, required=False, allow_null=True)
+    replaced_by = serializers.CharField(read_only=True, required=False, allow_null=True)
 
 
 class MemorySearchRequestSerializer(serializers.Serializer):
-    """Serializer for search request input."""
-    
     query = serializers.CharField(
         required=True,
         min_length=1,
@@ -32,40 +31,16 @@ class MemorySearchRequestSerializer(serializers.Serializer):
     )
 
 
-class MemorySearchResultSerializer(serializers.Serializer):
-    """Serializer for individual search result."""
-    
-    id = serializers.CharField(read_only=True)
-    memory_type = serializers.CharField(read_only=True)
-    content = serializers.CharField(source="summary", read_only=True)
-    categories = serializers.ListField(
-        child=serializers.CharField(),
-        read_only=True,
-    )
-    score = serializers.FloatField(read_only=True, help_text="Relevance score")
-
-
 class MemorySearchResponseSerializer(serializers.Serializer):
-    """Serializer for search response."""
-    
     query = serializers.CharField(read_only=True)
-    items = MemorySearchResultSerializer(many=True, read_only=True)
+    items = MemoryItemSerializer(many=True, read_only=True)
     categories = serializers.ListField(
         child=serializers.DictField(),
         read_only=True,
-        help_text="Category-level summaries",
+        help_text="Cluster-level summaries shown as 'matched clusters' chips",
     )
 
 
-class SeedResponseSerializer(serializers.Serializer):
-    """Serializer for seeding response."""
-    
-    items_created = serializers.IntegerField(read_only=True)
-    message = serializers.CharField(read_only=True)
-
-
 class ClearResponseSerializer(serializers.Serializer):
-    """Serializer for clear all response."""
-    
     success = serializers.BooleanField(read_only=True)
     message = serializers.CharField(read_only=True)

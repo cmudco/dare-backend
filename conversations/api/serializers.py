@@ -2,30 +2,31 @@ import json
 
 from djangorestframework_camel_case.util import camelize
 from rest_framework import serializers
-from conversations.models import (
-    LLM,
-    Message,
-    Conversation,
-    Snippet,
-    WebSearchSource,
-    Artifact,
-    ArtifactCheckpoint,
-    Feedback,
-    ModelCardData,
-    PublicFeedbackSourceCluster,
-    PublicFeedbackSource,
-    MessageToolCall,
-    ConversationSummary,
-)
-from core.services.energy_service import compute_relatable_stats
-from files.api.serializers import FileSerializer, TagSerializer
-from prompts.models import Prompt
-from prompts.api.serializers import PromptSerializer
-from users.constants import VectorDBChoice
-from mcp.models import MCPServer
-from dare_tools.models import DareTool
+
 from agents.models import Agent
 from conversations.constants import ToolCallOrigin
+from conversations.models import (
+    LLM,
+    Artifact,
+    ArtifactCheckpoint,
+    Conversation,
+    ConversationSummary,
+    Feedback,
+    Message,
+    MessageToolCall,
+    ModelCardData,
+    PublicFeedbackSource,
+    PublicFeedbackSourceCluster,
+    Snippet,
+    WebSearchSource,
+)
+from core.services.energy_service import compute_relatable_stats
+from dare_tools.models import DareTool
+from files.api.serializers import FileSerializer, TagSerializer
+from mcp.models import MCPServer
+from prompts.api.serializers import PromptSerializer
+from prompts.models import Prompt
+from users.constants import VectorDBChoice
 
 
 class LLMSerializer(serializers.ModelSerializer):
@@ -39,6 +40,7 @@ class LLMSerializer(serializers.ModelSerializer):
             "description",
             "is_active",
             "is_reasoning",
+            "reasoning_level",
             "supports_temperature",
             "supports_effort",
             "supports_adaptive_thinking",
@@ -50,6 +52,17 @@ class LLMSerializer(serializers.ModelSerializer):
             "output_token_rate_per_million",
             "tier",
         ]
+
+
+class LLMDeletionOptionsSerializer(serializers.Serializer):
+    confirm = serializers.BooleanField(default=False)
+    notify_affected_users = serializers.BooleanField(default=True)
+    notification_message = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default="",
+        max_length=1000,
+    )
 
 
 class ConversationSerializer(serializers.ModelSerializer):
@@ -190,6 +203,7 @@ class ConversationSerializer(serializers.ModelSerializer):
             "user",
             "max_context_snippets",
             "document_similarity_threshold",
+            "rag_mode",
             "temperature",
             "effort",
             "max_tokens",
@@ -199,6 +213,7 @@ class ConversationSerializer(serializers.ModelSerializer):
             "image_generation_enabled",
             "audio_transcription_enabled",
             "artifacts_enabled",
+            "memory_enabled",
             "selected_model",
             "selected_media_ids",
             "prompt",
@@ -206,6 +221,7 @@ class ConversationSerializer(serializers.ModelSerializer):
             "sort_order",
             "selected_embedding_ids",
             "selected_file_ids",
+            "selected_library_ids",
             "feedback_auto_prompt_count",
             "feedback_last_prompt_message_count",
             "feedback_last_prompt_timestamp",
@@ -284,12 +300,15 @@ class ConversationSummarySerializer(serializers.ModelSerializer):
 class SnippetSerializer(serializers.ModelSerializer):
     file = FileSerializer(read_only=True)
     vector_db_source = serializers.SerializerMethodField()
+    library = serializers.SerializerMethodField()
 
     class Meta:
         model = Snippet
         fields = [
             "id",
             "file",
+            "library",
+            "source_ref",
             "text",
             "similarity_score",
             "chunk_index",
@@ -298,21 +317,35 @@ class SnippetSerializer(serializers.ModelSerializer):
         read_only_fields = [
             "id",
             "file",
+            "library",
+            "source_ref",
             "text",
             "similarity_score",
             "chunk_index",
             "vector_db_source",
         ]
 
+    def get_library(self, obj):
+        """Lightweight library reference for shared-library snippets."""
+        if obj.library_id is None:
+            return None
+        return {
+            "id": obj.library.id,
+            "name": obj.library.name,
+            "slug": obj.library.slug,
+        }
+
     def get_vector_db_source(self, obj):
         """Return the human-readable name of the vector database source."""
         if (
-            hasattr(obj.file, "vector_db_source")
-            and obj.file.vector_db_source is not None
+            obj.file is not None
+            and getattr(obj.file, "vector_db_source", None) is not None
         ):
             return dict(VectorDBChoice.choices).get(
                 obj.file.vector_db_source, "Unknown"
             )
+        if obj.library_id is not None:
+            return obj.library.get_backend_display()
         return "Unknown"
 
 
@@ -341,6 +374,7 @@ class MessageToolCallSerializer(serializers.ModelSerializer):
     """Serializer for persisted tool calls shown when messages are reloaded."""
 
     id = serializers.CharField(source="tool_call_id", read_only=True)
+    round = serializers.IntegerField(source="round_index", read_only=True)
     mcp_result = serializers.SerializerMethodField()
     dare_result = serializers.SerializerMethodField()
     provider_result = serializers.SerializerMethodField()
@@ -349,12 +383,12 @@ class MessageToolCallSerializer(serializers.ModelSerializer):
         model = MessageToolCall
         fields = [
             "id",
-            "tool_call_id",
             "tool_name",
             "server_slug",
             "origin",
             "status",
-            "result",
+            "round",
+            "arguments",
             "error",
             "mcp_result",
             "dare_result",
@@ -397,7 +431,12 @@ class MessageSerializer(serializers.ModelSerializer):
     web_search_sources = WebSearchSourceSerializer(many=True, read_only=True)
     llm = serializers.PrimaryKeyRelatedField(read_only=True, allow_null=True)
     artifactId = serializers.SerializerMethodField()
-    mcp_tool_calls = MessageToolCallSerializer(many=True, read_only=True)
+    artifactIds = serializers.SerializerMethodField()
+    # Unified tool-call list (DARE + MCP + provider). The model's
+    # related_name stays mcp_tool_calls for schema stability.
+    tool_calls = MessageToolCallSerializer(
+        many=True, read_only=True, source="mcp_tool_calls"
+    )
     energy_stats = serializers.SerializerMethodField()
 
     class Meta:
@@ -424,16 +463,21 @@ class MessageSerializer(serializers.ModelSerializer):
             "litellm_model_name",
             "input_tokens",
             "output_tokens",
+            "usage_details",
             "cost",
             "energy_wh",
             "carbon_g",
             "water_ml",
             "energy_stats",
             "artifactId",
-            "mcp_tool_calls",
+            "artifactIds",
+            "tool_calls",
             "content_type",
             "content_metadata",
             "memory_context_data",
+            "memory_write_data",
+            "retrieval_trace",
+            "context_trace",
         ]
         read_only_fields = [
             "id",
@@ -445,16 +489,21 @@ class MessageSerializer(serializers.ModelSerializer):
             "web_search_sources",
             "input_tokens",
             "output_tokens",
+            "usage_details",
             "cost",
             "energy_wh",
             "carbon_g",
             "water_ml",
             "energy_stats",
             "artifactId",
-            "mcp_tool_calls",
+            "artifactIds",
+            "tool_calls",
             "content_type",
             "content_metadata",
             "memory_context_data",
+            "memory_write_data",
+            "retrieval_trace",
+            "context_trace",
         ]
 
     def get_artifactId(self, obj):
@@ -465,10 +514,41 @@ class MessageSerializer(serializers.ModelSerializer):
         request URL, so advertising an artifact that lives in a different
         conversation would hand the UI an id that 404s. Stay consistent.
         """
-        artifact = obj.artifacts.filter(
-            is_active=True, conversation_id=obj.conversation_id
-        ).first()
-        return str(artifact.id) if artifact else None
+        artifact_ids = self._get_artifact_ids(obj)
+        return str(artifact_ids[0]) if artifact_ids else None
+
+    def get_artifactIds(self, obj):
+        """Return every active artifact created by this assistant message."""
+        return self._get_artifact_ids(obj)
+
+    @staticmethod
+    def _get_artifact_ids(obj):
+        """Resolve artifact IDs once when both compatibility fields serialize."""
+        cache_attr = "_serialized_active_artifact_ids"
+        artifact_ids = getattr(obj, cache_attr, None)
+        if artifact_ids is None:
+            prefetched = getattr(obj, "_prefetched_objects_cache", {}).get("artifacts")
+            if prefetched is not None:
+                artifacts = sorted(
+                    (
+                        artifact
+                        for artifact in prefetched
+                        if artifact.is_active
+                        and artifact.conversation_id == obj.conversation_id
+                    ),
+                    key=lambda artifact: (artifact.created_at, artifact.id),
+                )
+                artifact_ids = [artifact.id for artifact in artifacts]
+            else:
+                artifact_ids = list(
+                    obj.artifacts.filter(
+                        is_active=True, conversation_id=obj.conversation_id
+                    )
+                    .order_by("created_at", "id")
+                    .values_list("id", flat=True)
+                )
+            setattr(obj, cache_attr, artifact_ids)
+        return artifact_ids
 
     def get_energy_stats(self, obj):
         """Compute relatable energy stats at read time from stored energy_wh."""
@@ -659,6 +739,11 @@ class ModelCardDataSerializer(serializers.ModelSerializer):
             "slug",
             "provider_name",
             "name_variants",
+            "reasoning_level",
+            "wikidata_id",
+            "external_metadata",
+            "benchmark_scores",
+            "arena_data",
             "public_feedback",
             "source_clusters",
             "llm",

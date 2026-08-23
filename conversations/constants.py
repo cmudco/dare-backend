@@ -30,6 +30,11 @@ class ModelEffort(models.TextChoices):
     XHIGH = 'xhigh', 'Extra High'
     MAX = 'max', 'Max'
 
+class ModelReasoningLevel(models.TextChoices):
+    NONE = 'none', 'None'
+    COST_PREDICTABLE = 'cost_predictable', 'Cost Predictable'
+    COST_UNCONSTRAINED = 'cost_unconstrained', 'Cost Unconstrained'
+
 class FeedbackType(models.TextChoices):
     LIKE = 'like', 'Like'
     DISLIKE = 'dislike', 'Dislike'
@@ -37,6 +42,13 @@ class FeedbackType(models.TextChoices):
 class ConversationSource(models.TextChoices):
     DARE = 'DARE', 'DARE'
     SOCRATIC_BOTS = 'SocraticBots', 'SocraticBots'
+
+
+class RagMode(models.TextChoices):
+    NAIVE = "naive", "Naive RAG"
+    ADVANCED = "advanced", "Advanced RAG"
+    AGENTIC = "agentic", "Agentic RAG"
+
 
 class WebSocketMessageType(Enum):
     """WebSocket message types for outgoing messages."""
@@ -73,6 +85,7 @@ class ArtifactType(models.TextChoices):
     REACT = 'react', 'React Component'
     DOCX = 'docx', 'Word Document'
     PPTX = 'pptx', 'PowerPoint Presentation'
+    PDF = 'pdf', 'PDF Document'
 
 
 class ArtifactStatus(models.TextChoices):
@@ -114,6 +127,10 @@ class ToolCallOrigin(models.TextChoices):
 DEFAULT_AI_SENDER_NAME = "AI Assistant"
 DEFAULT_ANONYMOUS_USER_NAME = "Anonymous User"
 DEFAULT_CONVERSATION_TITLE = "New Chat"
+
+# Tool loop: maximum tool-execution rounds per turn. The call after the
+# final round runs with tools stripped, forcing a text answer.
+MAX_TOOL_ROUNDS = 5
 
 # Default LLM configuration values
 DEFAULT_TEMPERATURE = 0.7
@@ -250,4 +267,5 @@ ARTIFACT_CONTENT_TYPES = {
     'document': 'text/markdown',
     'code': 'text/plain',
     'react': 'application/vnd.dare.react+jsx',
+    'pdf': 'application/pdf',
 }

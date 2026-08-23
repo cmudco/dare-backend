@@ -8,13 +8,13 @@ dictionaries with camelCase keys.
 
 import logging
 from datetime import datetime
-from typing import Dict, Any, Optional, List
+from typing import Any, Dict, List, Optional
 
 from channels.db import database_sync_to_async
 
 from conversations.api.serializers import MessageSerializer
 from conversations.constants import SenderType
-from conversations.models import Message, Artifact
+from conversations.models import Artifact, Message
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +79,12 @@ class WebSocketResponseService:
         @database_sync_to_async
         def serialize_message():
             msg = Message.active_objects.prefetch_related(
-                "files", "tags", "snippets__file", "web_search_sources"
+                "files",
+                "tags",
+                "snippets__file",
+                "snippets__library",
+                "web_search_sources",
+                "artifacts",
             ).get(id=message.id)
             return MessageSerializer(msg).data
 
@@ -103,24 +108,29 @@ class WebSocketResponseService:
         learning_progress_data = await database_sync_to_async(
             lambda: message.learning_progress_data
         )()
+        usage_details = serialized_data.get("usage_details") or []
+        thinking_summary = "\n\n".join(
+            detail.get("thinking_summary", "")
+            for detail in usage_details
+            if detail.get("thinking_summary")
+        )
 
-        # Get linked artifact ID if exists
-        # Use fresh DB query to avoid stale cached relation
-        @database_sync_to_async
-        def get_artifact_id():
-            artifact = Artifact.active_objects.filter(message_id=message.id).first()
-            return str(artifact.id) if artifact else None
-
-        artifact_id = await get_artifact_id()
+        # The serializer loaded a fresh Message row and resolved this relation;
+        # reuse it rather than issuing a third artifact query for the same payload.
+        artifact_ids = serialized_data.get("artifactIds", [])
+        artifact_id = str(artifact_ids[0]) if artifact_ids else None
 
         # Debug log to trace artifact ID resolution
         if artifact_id:
             logger.info(
-                f"format_message: message_id={message.id}, resolved artifact_id={artifact_id}"
+                "format_message: message_id=%s, resolved artifact_id=%s",
+                message.id,
+                artifact_id,
             )
         else:
-            logger.warning(
-                f"format_message: message_id={message.id}, NO artifact found in DB"
+            logger.debug(
+                "format_message: message_id=%s, no artifact found",
+                message.id,
             )
 
         # Build response — field names match MessageSerializer (camelCase via DRF)
@@ -129,6 +139,7 @@ class WebSocketResponseService:
             "id": message.id,
             "message": message.message,
             "artifactId": artifact_id,
+            "artifactIds": artifact_ids,
             "senderType": message.sender_type,
             "senderName": message.sender or "AI Assistant",
             "streaming": streaming,
@@ -148,6 +159,10 @@ class WebSocketResponseService:
             "cost": str(cost) if cost is not None else None,
             "inputTokens": input_tokens,
             "outputTokens": output_tokens,
+            "usageDetails": serialized_data.get("usage_details"),
+            # Explicitly send null when a regeneration starts so Redux does
+            # not retain the prior run's streamed summary during object merge.
+            "thinkingSummary": thinking_summary or None,
             "energyWh": serialized_data.get("energy_wh"),
             "carbonG": serialized_data.get("carbon_g"),
             "waterMl": serialized_data.get("water_ml"),
@@ -156,6 +171,8 @@ class WebSocketResponseService:
             "generatedImage": generated_image,
             "generatedTranscription": generated_transcription,
             "memoryContextData": serialized_data.get("memory_context_data") or [],
+            "retrievalTrace": serialized_data.get("retrieval_trace"),
+            "contextTrace": serialized_data.get("context_trace"),
         }
 
         return cls._dict_to_camel_case(response)

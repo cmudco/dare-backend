@@ -83,10 +83,16 @@ class NotificationViewSet(viewsets.ModelViewSet):
                 Q(expires_at__isnull=True) | Q(expires_at__gt=timezone.now())
             )
 
-        # By default, exclude read notifications for all delivery types
-        # This can be overridden by explicitly setting status=read in query params
+        include_read = self.request.query_params.get(
+            'include_read', 'false'
+        ).lower() == 'true'
+
+        # Archived items stay hidden unless explicitly requested. Read history is
+        # opt-in so existing notification clients preserve their current behavior.
         if not status_filter:
-            queryset = queryset.exclude(effective_status=NotificationStatus.READ)
+            queryset = queryset.exclude(effective_status=NotificationStatus.ARCHIVED)
+            if not include_read:
+                queryset = queryset.exclude(effective_status=NotificationStatus.READ)
 
         return queryset.order_by('-created_at')
 

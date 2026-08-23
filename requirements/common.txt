@@ -35,8 +35,18 @@ djangorestframework_simplejwt~=5.5.0
 requests~=2.32.3
 httpx~=0.28.1
 
-# PDF
+# Document parsing
+# Docling produces the structured document model (elements in reading order,
+# tables as markdown, picture positions and captions). Importing it loads a
+# layout model on top of the torch stack sentence-transformers already brings
+# in, so it is imported lazily and only ever reached in the RQ worker that
+# parses uploads — see core/services/document_parsers/__init__.py.
+docling~=2.117.0
+# PyPDF2 remains the flat-text fallback when a Docling conversion fails.
 PyPDF2~=3.0.1
+# Renders a page region back to an image, so a picture the parser located can
+# be cropped out of the original on demand instead of being stored twice.
+pypdfium2~=5.12.1
 weasyprint~=62.3
 pydyf<0.12.0
 markdown~=3.7
@@ -45,7 +55,7 @@ python-pptx~=1.0.2
 # Pinecone
 pinecone~=6.0.1
 
-# OpenAI (2.8+ required for memu-py compatibility)
+# OpenAI (also used by the memory writer + text-embedding-3-small)
 openai>=2.8.0
 tiktoken~=0.8.0
 
@@ -53,7 +63,7 @@ tiktoken~=0.8.0
 anthropic~=0.75.0
 
 # Google Gemini (new unified SDK)
-google-genai~=1.53.0
+google-genai~=1.75.0
 
 # LLaMA (via Ollama)
 # ollama~=0.4.2 - upgrading it below to avoid conflict with httpx
@@ -70,10 +80,14 @@ pycryptodome==3.22.0
 # weaviate
 weaviate-client==4.14.1
 
+# Local cross-encoder reranker (Track A). Imported lazily when advanced retrieval
+# runs; pulls in torch transitively (~CPU/MPS build).
+sentence-transformers~=5.6.0
+
 #email
 resend~=2.7.0
 
-# Text splitting (updated to support langchain-core 1.x required by memu-py)
+# Text splitting (document chunking in core/services/document_processor.py)
 langchain-text-splitters>=0.4.0
 
 # Spreadsheet processing
@@ -86,12 +100,9 @@ opencv-python~=4.10.0
 Pillow~=11.1.0
 ffmpeg-python~=0.2.0
 
-# Cross-conversation memory layer (requires Python 3.13+)
-# Pinned to 1.2.x — v1.3.0 has a SQLAlchemy bug (duplicate 'url' column on resources table)
-memu-py~=1.2.0
-# Python pgvector client required by memu-py for Postgres vector support
+# Cross-conversation memory layer: pgvector column type on MemoryRecord
 pgvector~=0.3.6
-# memu-py with PostgreSQL uses postgresql+psycopg:// (requires psycopg3, not psycopg2)
+# Postgres driver (psycopg3)
 psycopg[binary]~=3.2.0
 
 # Energy/environmental impact tracking for LLM calls

@@ -1,0 +1,456 @@
+{% extends "admin/delete_confirmation.html" %}
+{% load i18n admin_urls %}
+
+{% block content_title %}<h1>{% translate "Retire model" %}</h1>{% endblock %}
+
+{% block extrastyle %}
+  {{ block.super }}
+  <style>
+    .retirement-page {
+      max-width: 1180px;
+      color: var(--body-fg);
+    }
+
+    .retirement-hero {
+      padding: 24px 28px;
+      margin-bottom: 20px;
+      border: 1px solid var(--hairline-color);
+      border-radius: 10px;
+      background: var(--darkened-bg);
+    }
+
+    .retirement-eyebrow {
+      margin: 0 0 6px;
+      color: var(--body-quiet-color);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    .retirement-hero h2 {
+      margin: 0 0 8px;
+      color: var(--body-fg);
+      font-size: 24px;
+    }
+
+    .retirement-hero p {
+      max-width: 820px;
+      margin: 0;
+      color: var(--body-quiet-color);
+      line-height: 1.55;
+    }
+
+    .retirement-error {
+      margin: 0 0 20px !important;
+      padding: 16px 18px !important;
+      border-radius: 8px;
+    }
+
+    .dependency-panel {
+      padding: 22px;
+      margin-bottom: 20px;
+      border: 1px solid var(--hairline-color);
+      border-radius: 10px;
+      background: var(--body-bg);
+    }
+
+    .dependency-panel h2,
+    .retirement-card h2 {
+      margin: 0;
+      color: var(--body-fg);
+      font-size: 18px;
+    }
+
+    .dependency-metrics {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 16px;
+    }
+
+    .dependency-metric {
+      padding: 16px;
+      border: 1px solid var(--hairline-color);
+      border-radius: 8px;
+      background: var(--darkened-bg);
+    }
+
+    .dependency-metric strong {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--body-fg);
+      font-size: 25px;
+      line-height: 1;
+    }
+
+    .dependency-metric span {
+      color: var(--body-quiet-color);
+      font-size: 13px;
+    }
+
+    .dependency-details,
+    .object-details {
+      margin-top: 14px;
+      border-top: 1px solid var(--hairline-color);
+    }
+
+    .dependency-details summary,
+    .object-details summary {
+      padding: 14px 2px 0;
+      color: var(--link-fg);
+      cursor: pointer;
+      font-weight: 600;
+    }
+
+    .dependency-groups {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 18px;
+      padding-top: 12px;
+    }
+
+    .dependency-groups h3 {
+      margin: 0 0 8px;
+      color: var(--body-fg);
+      font-size: 14px;
+    }
+
+    .dependency-groups ul,
+    #deleted-objects {
+      margin: 0;
+      padding-left: 18px;
+      color: var(--body-quiet-color);
+      line-height: 1.55;
+    }
+
+    .retirement-actions {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+      align-items: start;
+    }
+
+    .retirement-card {
+      overflow: hidden;
+      border: 1px solid var(--hairline-color);
+      border-radius: 10px;
+      background: var(--body-bg);
+    }
+
+    .retirement-card__header {
+      display: flex;
+      gap: 14px;
+      align-items: flex-start;
+      padding: 20px 22px 16px;
+      border-bottom: 1px solid var(--hairline-color);
+    }
+
+    .retirement-step {
+      display: inline-flex;
+      flex: 0 0 auto;
+      align-items: center;
+      justify-content: center;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      color: #fff;
+      background: var(--primary);
+      font-weight: 700;
+    }
+
+    .retirement-card--delete .retirement-step {
+      background: var(--delete-button-bg, #ba2121);
+    }
+
+    .retirement-card__header p {
+      margin: 6px 0 0;
+      color: var(--body-quiet-color);
+      line-height: 1.45;
+    }
+
+    .retirement-card__body {
+      padding: 20px 22px 22px;
+    }
+
+    .retirement-card fieldset.module {
+      margin: 0;
+      border: 0;
+      background: transparent;
+    }
+
+    .retirement-card .form-row {
+      padding: 0 0 18px;
+      border: 0;
+    }
+
+    .retirement-card .form-row > label,
+    .retirement-card .form-row > div > label {
+      display: block;
+      float: none;
+      width: auto;
+      margin-bottom: 7px;
+      color: var(--body-fg);
+      font-weight: 600;
+    }
+
+    .retirement-card input[type="date"],
+    .retirement-card textarea {
+      box-sizing: border-box;
+      width: 100%;
+      max-width: none;
+    }
+
+    .retirement-card textarea {
+      min-height: 110px;
+      resize: vertical;
+    }
+
+    .retirement-card .help {
+      margin: 7px 0 0;
+      padding: 0;
+      color: var(--body-quiet-color);
+      font-size: 12px;
+    }
+
+    .retirement-card .submit-row {
+      padding: 0;
+      margin: 2px 0 0;
+      border: 0;
+      background: transparent;
+      text-align: left;
+    }
+
+    .advance-warning-submit {
+      background: var(--primary, #417690) !important;
+    }
+
+    .advance-warning-submit:hover,
+    .advance-warning-submit:focus {
+      background: var(--secondary, #205067) !important;
+    }
+
+    .delete-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      margin-top: 18px;
+    }
+
+    .delete-actions .cancel-link {
+      margin: 0;
+    }
+
+    .notification-toggle label {
+      display: flex !important;
+      gap: 8px;
+      align-items: flex-start;
+    }
+
+    .notification-toggle input {
+      margin-top: 2px;
+    }
+
+    @media (max-width: 900px) {
+      .retirement-actions,
+      .dependency-groups {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 600px) {
+      .retirement-hero,
+      .dependency-panel,
+      .retirement-card__header,
+      .retirement-card__body {
+        padding: 18px;
+      }
+
+      .dependency-metrics {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+{% endblock %}
+
+{% block delete_confirm %}
+  {% translate "Unknown owner" as unknown_owner %}
+  <div class="retirement-page">
+    <section class="retirement-hero">
+      <p class="retirement-eyebrow">{% translate "Model retirement" %}</p>
+      <h2>{{ object }}</h2>
+      <p>
+        {% blocktranslate %}
+          Review who will be affected, warn them ahead of time if needed, then
+          remove the model when you are ready. Active references will be cleared
+          so each affected resource can select a replacement.
+        {% endblocktranslate %}
+      </p>
+    </section>
+
+    {% if deletion_preview_error %}
+      <p class="errornote retirement-error">
+        {% blocktranslate %}
+          Dependency checks could not be completed. Warning and deletion are
+          disabled until the integration is healthy: {{ deletion_preview_error }}
+        {% endblocktranslate %}
+      </p>
+    {% elif deletion_preview %}
+      {% with preview=deletion_preview.to_dict %}
+        <section class="dependency-panel">
+          <h2>{% translate "Impact overview" %}</h2>
+          <div class="dependency-metrics">
+            <div class="dependency-metric">
+              <strong>{{ preview.counts.workflows }}</strong>
+              <span>{% translate "DARE workflows" %}</span>
+            </div>
+            <div class="dependency-metric">
+              <strong>{{ preview.counts.agents }}</strong>
+              <span>{% translate "DARE agents" %}</span>
+            </div>
+            <div class="dependency-metric">
+              <strong>{{ preview.counts.socratic_bots }}</strong>
+              <span>{% translate "Socratic bots" %}</span>
+            </div>
+          </div>
+
+          {% if preview.workflows or preview.agents or preview.socratic_bots %}
+            <details class="dependency-details">
+              <summary>{% translate "View affected resources" %}</summary>
+              <div class="dependency-groups">
+                {% if preview.workflows %}
+                  <div>
+                    <h3>{% translate "DARE workflows" %}</h3>
+                    <ul>
+                      {% for workflow in preview.workflows %}
+                        <li>{{ workflow.title }} — {{ workflow.owner_email }}</li>
+                      {% endfor %}
+                    </ul>
+                  </div>
+                {% endif %}
+                {% if preview.agents %}
+                  <div>
+                    <h3>{% translate "DARE agents" %}</h3>
+                    <ul>
+                      {% for agent in preview.agents %}
+                        <li>{{ agent.name }} — {{ agent.owner_email }}</li>
+                      {% endfor %}
+                    </ul>
+                  </div>
+                {% endif %}
+                {% if preview.socratic_bots %}
+                  <div>
+                    <h3>{% translate "Socratic bots" %}</h3>
+                    <ul>
+                      {% for bot in preview.socratic_bots %}
+                        <li>
+                          {{ bot.title }} ({{ bot.group_title }}, {{ bot.usage_type }}) —
+                          {{ bot.owner_email|default:unknown_owner }}
+                        </li>
+                      {% endfor %}
+                    </ul>
+                  </div>
+                {% endif %}
+              </div>
+            </details>
+          {% endif %}
+        </section>
+      {% endwith %}
+    {% endif %}
+
+    <div class="retirement-actions">
+      <section class="retirement-card retirement-card--warning">
+        <header class="retirement-card__header">
+          <span class="retirement-step">1</span>
+          <div>
+            <h2>{% translate "Warn affected users" %}</h2>
+            <p>{% translate "Send a heads-up now without changing the model or its references." %}</p>
+          </div>
+        </header>
+        <div class="retirement-card__body">
+          <form method="post">
+            {% csrf_token %}
+            <input type="hidden" name="send_advance_warning" value="yes">
+            <fieldset class="module aligned">
+              <div class="form-row">
+                {{ advance_warning_form.planned_deletion_date.errors }}
+                {{ advance_warning_form.planned_deletion_date.label_tag }}
+                {{ advance_warning_form.planned_deletion_date }}
+                <div class="help">{{ advance_warning_form.planned_deletion_date.help_text }}</div>
+              </div>
+              <div class="form-row">
+                {{ advance_warning_form.advance_warning_message.errors }}
+                {{ advance_warning_form.advance_warning_message.label_tag }}
+                {{ advance_warning_form.advance_warning_message }}
+                <div class="help">
+                  {% translate "This plain-text message is appended to each advance warning." %}
+                </div>
+              </div>
+            </fieldset>
+            <div class="submit-row">
+              <button
+                type="submit"
+                class="button advance-warning-submit"
+                {% if deletion_preview_error %}disabled{% endif %}
+              >
+                {% translate "Send warning without deleting" %}
+              </button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <section class="retirement-card retirement-card--delete">
+        <header class="retirement-card__header">
+          <span class="retirement-step">2</span>
+          <div>
+            <h2>{% translate "Delete model" %}</h2>
+            <p>{% translate "Clear active references, notify users if selected, and permanently remove the model." %}</p>
+          </div>
+        </header>
+        <div class="retirement-card__body">
+          <form method="post">
+            {% csrf_token %}
+            <fieldset class="module aligned">
+              <div class="form-row notification-toggle">
+                {{ deletion_options_form.notify_affected_users.errors }}
+                <label for="{{ deletion_options_form.notify_affected_users.id_for_label }}">
+                  {{ deletion_options_form.notify_affected_users }}
+                  <span>{{ deletion_options_form.notify_affected_users.label }}</span>
+                </label>
+                <div class="help">{{ deletion_options_form.notify_affected_users.help_text }}</div>
+              </div>
+              <div class="form-row">
+                {{ deletion_options_form.notification_message.errors }}
+                {{ deletion_options_form.notification_message.label_tag }}
+                {{ deletion_options_form.notification_message }}
+                <div class="help">
+                  {% translate "This plain-text message is appended to each targeted notification." %}
+                </div>
+              </div>
+            </fieldset>
+
+            <details class="object-details">
+              <summary>{% translate "View database objects included in deletion" %}</summary>
+              {% include "admin/includes/object_delete_summary.html" %}
+              <ul id="deleted-objects">{{ deleted_objects|unordered_list }}</ul>
+            </details>
+
+            <div class="delete-actions">
+              <input type="hidden" name="post" value="yes">
+              {% if is_popup %}<input type="hidden" name="{{ is_popup_var }}" value="1">{% endif %}
+              {% if to_field %}<input type="hidden" name="{{ to_field_var }}" value="{{ to_field }}">{% endif %}
+              <input
+                type="submit"
+                value="{% translate 'Delete model now' %}"
+                {% if deletion_preview_error %}disabled{% endif %}
+              >
+              <a href="#" class="button cancel-link">{% translate "Cancel" %}</a>
+            </div>
+          </form>
+        </div>
+      </section>
+    </div>
+  </div>
+{% endblock %}

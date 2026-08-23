@@ -25,7 +25,23 @@ class WorkflowStepSnippet(BaseModel):
         'files.File',
         on_delete=models.CASCADE,
         related_name="workflow_step_snippets",
-        help_text="The file this snippet belongs to."
+        null=True,
+        blank=True,
+        help_text="The file this snippet belongs to (null for library snippets)."
+    )
+    library = models.ForeignKey(
+        'libraries.SharedLibrary',
+        on_delete=models.CASCADE,
+        related_name="workflow_step_snippets",
+        null=True,
+        blank=True,
+        help_text="The shared library this snippet belongs to (null for the user's own files)."
+    )
+    source_ref = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        help_text="Human-readable source for library snippets (e.g. 'Fields Paul p.78')."
     )
     text = models.TextField(
         help_text="The text content of the snippet (chunk)."
@@ -46,7 +62,8 @@ class WorkflowStepSnippet(BaseModel):
     active_objects = ActiveObjectsManager()
 
     def __str__(self):
-        return f"Snippet for WorkflowRunStep {self.workflow_run_step.id} from File {self.file.id}"
+        source = f"File {self.file_id}" if self.file_id else f"Library {self.library_id}"
+        return f"Snippet for WorkflowRunStep {self.workflow_run_step.id} from {source}"
 
 
 class WorkflowStepWebSearchSource(BaseModel):

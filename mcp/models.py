@@ -132,6 +132,7 @@ class MCPServer(BaseModel):
         help_text="Markdown-formatted setup instructions shown in the connection modal",
     )
 
+    all_objects = models.Manager()
     active_objects = ActiveObjectsManager()
 
     class Meta:

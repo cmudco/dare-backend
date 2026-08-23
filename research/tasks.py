@@ -37,6 +37,7 @@ from research.services import (
     parse_staging_items,
     safe_hermes_usage,
 )
+from research.services.profile_service import propose_project_memory
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +75,22 @@ def _finish(run, detail, hermes, failed=False, raw_output=None):
         run.raw_output = raw_output
         fields.append("raw_output")
     run.save(update_fields=fields)
+    _raise_memory_proposals(run.project)
+
+
+def _raise_memory_proposals(project):
+    """Surface anything the run wrote to MEMORY.md as a pending decision.
+
+    Raised here rather than only when the Context tab is opened, because a
+    badge that appears the first time you look is a badge that can never tell
+    you to look. Best-effort: a proposal is never worth failing a finished run.
+    """
+    try:
+        propose_project_memory(project)
+    except Exception:  # noqa: BLE001 - never let bookkeeping break a run
+        logger.warning(
+            "Could not raise memory proposals for project %s", project.id, exc_info=True
+        )
 
 
 def _save_verified_status(run, status, detail, *, terminal=False, usage=None):
@@ -246,8 +263,22 @@ def _start_run(hermes, run, input_text, instructions):
     return None
 
 
-_GATEWAY_PREFIX = "mcp_dare_"
+# Hermes namespaces MCP tools as `<prefix><server>_<tool>`. It used a single
+# underscore until v0.19, which switched to the `mcp__<server>__<tool>` form
+# shared with Claude Code/Codex (tools/mcp_tool.py MCP_TOOL_NAME_PREFIX). Both
+# are accepted so the audit keeps working across runtime versions — matching the
+# wrong one silently drops every GatewayFetch row (no URL, no content, no
+# failure reason) rather than raising.
+_GATEWAY_PREFIXES = ("mcp__dare__", "mcp_dare_")
 _encoder = None
+
+
+def _gateway_tool_base(tool):
+    """The bare gateway tool name (`web_search`), or None if not a gateway call."""
+    for prefix in _GATEWAY_PREFIXES:
+        if tool.startswith(prefix):
+            return tool[len(prefix) :]
+    return None
 
 
 def _token_count(text):
@@ -291,9 +322,9 @@ def _next_gateway_fetch(run, tool, seen_ids, call_id=""):
     calls that shared a time window (and, when a call wrote no row at all,
     borrowed a different call's reason — the "same URL ×N" audit artifact).
     Returns None for tools that never touch the gateway."""
-    if not tool.startswith(_GATEWAY_PREFIX):
+    base = _gateway_tool_base(tool)
+    if base is None:
         return None
-    base = tool[len(_GATEWAY_PREFIX) :]
     row = None
     if call_id:
         # tool_use ids are globally unique, so match them WITHOUT the time
@@ -305,6 +336,17 @@ def _next_gateway_fetch(run, tool, seen_ids, call_id=""):
             .order_by("created_at")
             .first()
         )
+        if row is None:
+            # The runtime named an id and we still could not match it. Ordering
+            # takes over from here, which is a guess — and a silent guess is how
+            # a whole run's audit ended up blank once already. Say it out loud.
+            logger.warning(
+                "research.audit run %s: %s carried toolCallId=%r with no "
+                "matching GatewayFetch row — falling back to positional order",
+                run.id,
+                tool,
+                call_id,
+            )
     if row is None:
         window = GatewayFetch.all_objects.filter(
             tool=base, created_at__gte=run.started_at
@@ -334,6 +376,18 @@ def _record_tool_call(run, event, arguments, seen_ids):
     result_summary = ""
 
     row = _next_gateway_fetch(run, tool, seen_ids, event.get("toolCallId") or "")
+    if row is None and _gateway_tool_base(tool) is not None:
+        # A gateway tool that produced no row means the audit lost this call's
+        # URL and body entirely. It has failed silently twice now (once on a
+        # tool-name rename), so say so rather than persist a blank row.
+        logger.warning(
+            "research.audit run %s: no GatewayFetch row for %s "
+            "(toolCallId=%r, run_key=%r) — url and result will be blank",
+            run.id,
+            tool,
+            event.get("toolCallId") or "",
+            _run_session_key(run),
+        )
     if row is not None:
         if row.url:
             arguments = {**arguments, "url": row.url}

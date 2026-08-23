@@ -1,0 +1,350 @@
+"""
+Per-project Hermes profiles — the isolation boundary for agent memory.
+
+A Hermes profile is simply its own ``HERMES_HOME`` directory. Everything the
+runtime keeps per profile resolves from that root: ``SOUL.md``, the memory tool's
+``memories/{MEMORY,USER}.md`` (``get_hermes_home() / "memories"`` in Hermes's
+``tools/memory_tool.py``), sessions, and ``.env``. So giving each project its own
+directory makes its agent memory isolated *by construction* — not by a naming
+convention we have to keep honouring.
+
+Two things make this cheap. The gateway's multiplex mode serves every profile
+from the one listener under ``/p/<profile>/``, so N projects still means one
+process and one port. And a profile needs nothing but its directory to exist —
+Hermes resolves it, inherits the default config, and creates the rest on demand.
+We still write a config so the toolset and MCP surface are deliberate rather
+than inherited.
+
+The profile's ``.env`` carries a DARE-minted JWT for the project's owner, so the
+audited web tools run as that scholar. Without it a profile's tools resolve no
+credential at all: Hermes does not fall back to the default profile's ``.env``.
+"""
+
+import logging
+from datetime import timedelta
+from pathlib import Path
+
+from django.conf import settings
+from django.core.exceptions import ImproperlyConfigured
+from rest_framework_simplejwt.tokens import AccessToken
+
+from research.constants import MemoryProposalStatus, MemoryType
+from research.models import (
+    ResearcherProfile,
+    ResearchMemoryProposal,
+    ResearchProject,
+    ResearchProjectMemory,
+)
+
+logger = logging.getLogger(__name__)
+
+# Toolsets the api_server platform exposes inside a project profile. Deliberately
+# narrow: the research agent gets memory + skills + todo + vision, and reaches
+# the web only through DARE's audited MCP tools. `terminal`, `file` and
+# `code_execution` are inherited by a bare profile and are NOT wanted here.
+PROJECT_TOOLSETS = ["memory", "skills", "todo", "vision"]
+
+_ENV_FILENAME = ".env"
+_CONFIG_FILENAME = "config.yaml"
+_TOKEN_VAR = "MCP_DARE_API_KEY"
+
+
+def profile_name_for(project):
+    """The Hermes profile name for ``project`` (matches [a-z0-9][a-z0-9_-]{0,63})."""
+    return f"{settings.HERMES_PROFILE_PREFIX}{project.id}"
+
+
+def profile_home_for(project):
+    """The profile's HERMES_HOME directory — where its soul and memory live."""
+    return Path(settings.HERMES_PROFILES_ROOT) / profile_name_for(project)
+
+
+def profile_base_url_for(project):
+    """The project's gateway URL — the shared listener, its own profile prefix."""
+    gateway = settings.HERMES_GATEWAY_URL.rstrip("/")
+    return f"{gateway}/p/{profile_name_for(project)}/"
+
+
+def mint_project_token(project):
+    """A long-lived access token for the project's owner.
+
+    The profile's MCP tools authenticate to DARE with this, so `web_search` /
+    `fetch_page` run under the owner's account and every captured GatewayFetch
+    row is attributed to the right scholar instead of one shared identity.
+    """
+    token = AccessToken.for_user(project.user)
+    token.set_exp(lifetime=timedelta(days=settings.HERMES_PROFILE_TOKEN_DAYS))
+    return str(token)
+
+
+def _render_config(project):
+    """The profile's config.yaml.
+
+    Written by hand rather than via PyYAML so the file stays readable and
+    reviewable — an operator opening it should see exactly the four decisions
+    this profile encodes.
+    """
+    model = (
+        getattr(project, "hermes_model", "") or settings.HERMES_PROFILE_MODEL or ""
+    ).strip()
+    provider = (settings.HERMES_PROFILE_MODEL_PROVIDER or "").strip()
+    if provider and not model:
+        # The expensive trapdoor: with a provider set and no model, Hermes falls
+        # through to entry [0] of that provider's curated list, which for
+        # anthropic is the flagship (claude-fable-5). It guards metered
+        # aggregators against this but not the direct providers, so a blank
+        # model here would silently bill the priciest model on every run.
+        # Naming no provider at all is safe — it resolves to "" and inherits.
+        raise ImproperlyConfigured(
+            "HERMES_PROFILE_MODEL_PROVIDER is set but HERMES_PROFILE_MODEL is "
+            "empty. Set a model explicitly, or clear the provider — never ship "
+            "a provider with no model."
+        )
+
+    toolsets = "\n".join(f"    - {name}" for name in PROJECT_TOOLSETS)
+    model_block = (
+        # Pinned on purpose: an unpinned profile follows whatever the runtime
+        # default happens to be, so `hermes model` on the box would re-point
+        # every research project at once — and could re-point it at the flagship.
+        "model:\n"
+        f"  default: {model}\n" + (f"  provider: {provider}\n" if provider else "")
+        if model
+        else ""
+    )
+    return (
+        f"# Hermes profile for DARE research project {project.id}\n"
+        f"# {project.title}\n"
+        "#\n"
+        "# Generated by DARE (research/services/profile_service.py) and rewritten\n"
+        "# whenever it drifts from the template — edit DARE, not this file.\n"
+        "\n"
+        f"{model_block}"
+        "\n"
+        "# Tiered disclosure hides the MCP tools behind `tool_search` and makes\n"
+        "# the agent go find them. That trade is wrong here: a project profile\n"
+        "# exposes two gateway tools, so the extra hop buys nothing and costs a\n"
+        "# turn per lookup — observed a run spend four failed `tool_call` hops\n"
+        "# before falling back to calling mcp__dare__* directly.\n"
+        "tools:\n"
+        "  tool_search:\n"
+        "    enabled: false\n"
+        "\n"
+        "platform_toolsets:\n"
+        "  api_server:\n"
+        f"{toolsets}\n"
+        "\n"
+        "mcp_servers:\n"
+        "  dare:\n"
+        f"    url: {settings.DARE_MCP_GATEWAY_URL}\n"
+        "    transport: http\n"
+        "    enabled: true\n"
+        "    headers:\n"
+        f"      Authorization: Bearer ${{{_TOKEN_VAR}}}\n"
+    )
+
+
+def _write_if_changed(path, content):
+    """Write ``content`` only when it differs from what is on disk.
+
+    Idempotent so provisioning can run on every request, while still letting a
+    change to the template (a new pinned model, a different toolset) reach
+    profiles that already exist.
+    """
+    try:
+        if path.exists() and path.read_text(encoding="utf-8") == content:
+            return False
+    except OSError:
+        pass
+    path.write_text(content, encoding="utf-8")
+    return True
+
+
+def ensure_project_profile(project, *, refresh_token=False):
+    """Make sure ``project`` has a Hermes profile on disk, and return its name.
+
+    Idempotent: safe to call on every run. Creates the directory, writes the
+    config and the owner-scoped token on first use, and records the gateway URL
+    on the project so ``get_hermes_service(project)`` routes there from then on.
+
+    Returns "" when per-project profiles are disabled, which leaves every caller
+    on the shared default profile — the pre-multiplex behaviour.
+    """
+    if not settings.HERMES_PROFILE_PER_PROJECT:
+        return ""
+
+    name = profile_name_for(project)
+    home = profile_home_for(project)
+    try:
+        home.mkdir(parents=True, exist_ok=True)
+        (home / "memories").mkdir(exist_ok=True)
+
+        _write_if_changed(home / _CONFIG_FILENAME, _render_config(project))
+        render_user_memory(project)
+
+        env_path = home / _ENV_FILENAME
+        if refresh_token or not env_path.exists():
+            # 0600: this file holds a year-long token for the project's owner.
+            env_path.write_text(
+                f"{_TOKEN_VAR}={mint_project_token(project)}\n", encoding="utf-8"
+            )
+            env_path.chmod(0o600)
+    except OSError as exc:
+        # Provisioning is best-effort: a project that cannot get its own profile
+        # must still work, so fall back to the shared default rather than 500.
+        logger.warning(
+            "Could not provision Hermes profile %s at %s: %s", name, home, exc
+        )
+        return ""
+
+    base_url = profile_base_url_for(project)
+    if project.hermes_base_url != base_url:
+        project.hermes_base_url = base_url
+        project.save(update_fields=["hermes_base_url", "updated_at"])
+        logger.info("Project %s bound to Hermes profile %s", project.id, name)
+
+    return name
+
+
+def _user_memory_path(project):
+    return profile_home_for(project) / "memories" / "USER.md"
+
+
+def render_user_memory(project):
+    """Write the scholar's DARE-owned record into THIS project's USER.md.
+
+    Called on every provision, so a new project starts already knowing who its
+    scholar is instead of re-learning it. MEMORY.md is deliberately untouched:
+    the person travels between projects, the project's facts do not.
+    """
+    record = ResearcherProfile.active_objects.filter(user=project.user).first()
+    if record is None or not record.content.strip():
+        return False
+    path = _user_memory_path(project)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists() and path.read_text(encoding="utf-8") == record.content:
+            return False
+        path.write_text(record.content, encoding="utf-8")
+        return True
+    except OSError as exc:
+        logger.warning("Could not render USER.md for project %s: %s", project.id, exc)
+        return False
+
+
+def absorb_user_memory(project, user_file_text):
+    """Fold anything the agent learned about the scholar back into DARE's record.
+
+    The agent writes USER.md inside whichever project it is working in. Without
+    this that knowledge would stay stranded there, which is the whole complaint:
+    "it knows me in this project and nowhere else." Absorbing on read means one
+    project teaching it your name makes every project know it, while the
+    projects' own memories stay separate.
+
+    Returns the names of profiles that were refreshed as a result.
+    """
+    incoming = [e.strip() for e in (user_file_text or "").split("§") if e.strip()]
+    if not incoming:
+        return []
+
+    record, _ = ResearcherProfile.objects.get_or_create(user=project.user)
+    changed = record.merge(incoming)
+
+    siblings = [
+        p
+        for p in ResearchProject.active_objects.filter(user=project.user)
+        if profile_home_for(p).is_dir()
+    ]
+
+    # Take in what every OTHER profile already knows before writing over any of
+    # them. Rendering first would destroy a fact the scholar taught a different
+    # project — the same silent clobber that combined memory entries caused, and
+    # just as invisible. Absorb everywhere, then render everywhere.
+    for sibling in siblings:
+        if sibling.id == project.id:
+            continue
+        try:
+            existing = _user_memory_path(sibling).read_text(encoding="utf-8")
+        except OSError:
+            continue
+        others = [e.strip() for e in existing.split("§") if e.strip()]
+        changed = record.merge(others) or changed
+
+    if not changed:
+        return []
+    record.save(update_fields=["content", "updated_at"])
+
+    # Propagate, so the next project the scholar opens already knows them.
+    refreshed = []
+    for sibling in siblings:
+        if render_user_memory(sibling):
+            refreshed.append(profile_name_for(sibling))
+    return refreshed
+
+
+def propose_project_memory(project):
+    """Raise a proposal for anything in MEMORY.md the scholar has not seen.
+
+    The runtime writes project memory directly, which is fine for working
+    context but leaves DARE with no say over what becomes durable — the gap the
+    Agent Memory panel used to paper over. Turning each new entry into a
+    ResearchMemoryProposal gives the scholar the same accept/reject control they
+    already have over staged findings, without blocking the agent mid-run: the
+    entry stays in MEMORY.md and keeps working, and the proposal decides whether
+    it graduates into DARE's own record.
+
+    Returns the proposals created by this call.
+    """
+    path = profile_home_for(project) / "memories" / "MEMORY.md"
+    try:
+        entries = [e.strip() for e in path.read_text(encoding="utf-8").split("§")]
+    except OSError:
+        return []
+
+    # Anything already proposed, decided, or promoted is not news.
+    seen = set(
+        ResearchMemoryProposal.objects.filter(project=project).values_list(
+            "content", flat=True
+        )
+    )
+    seen.update(
+        ResearchProjectMemory.active_objects.filter(project=project).values_list(
+            "detail", flat=True
+        )
+    )
+
+    created = []
+    for entry in entries:
+        if not entry or entry in seen:
+            continue
+        created.append(
+            ResearchMemoryProposal.objects.create(
+                project=project,
+                content=entry,
+                memory_type=MemoryType.PROJECT_MEMORY,
+                proposed_by_role="agent",
+                status=MemoryProposalStatus.PROPOSED,
+            )
+        )
+        seen.add(entry)
+    return created
+
+
+def forget_project_memory(project, entry):
+    """Remove one entry from a project's MEMORY.md.
+
+    Rejecting a proposal has to reach the file. Left in place the agent still
+    believes it, still acts on it, and proposes it again the next time DARE
+    reads — so "reject" would mean nothing.
+    """
+    path = profile_home_for(project) / "memories" / "MEMORY.md"
+    try:
+        kept = [
+            e.strip()
+            for e in path.read_text(encoding="utf-8").split("§")
+            if e.strip() and e.strip() != entry.strip()
+        ]
+        path.write_text("\n§\n".join(kept), encoding="utf-8")
+        return True
+    except OSError as exc:
+        logger.warning("Could not forget memory for project %s: %s", project.id, exc)
+        return False

@@ -1,12 +1,15 @@
 """Builder pattern for constructing LLMQueryRequest from dictionaries."""
 
-from typing import Dict, Any, Optional
+from dataclasses import replace
+from typing import Any, Dict, Optional
 
+from conversations.constants import Provider, RagMode
 from users.constants import AuthSourceChoice
-from .request_dto import LLMQueryRequest
+
 from .context_dto import ContextConfig
 from .generation_dto import GenerationConfig
 from .media_dto import MediaConfig
+from .request_dto import LLMQueryRequest
 from .socratic_dto import SocraticConfig
 
 # Minimum max_tokens for Socratic bots to prevent truncated responses
@@ -29,6 +32,36 @@ ARTIFACT_TOOL_SLUGS = frozenset(
     }
 )
 ARTIFACT_MIN_MAX_TOKENS = 8000
+
+# Tools that belong to the memory feature and are switched by its toggle
+# rather than chosen from the tool drawer.
+MEMORY_TOOL_SLUGS = frozenset({"search_sessions"})
+
+
+def resolve_agentic_rag(
+    context: ContextConfig, llm: Optional[Any], selected_slugs: set
+) -> ContextConfig:
+    """Resolve agentic RAG for a request being built.
+
+    Agentic mode exposes retrieval as the ``search_documents`` tool the model
+    calls on demand instead of pre-injecting context. Fall back to advanced
+    pre-injection when there is nothing to search or the provider cannot call
+    tools (llama), so agentic never silently disables RAG. Mutates
+    ``selected_slugs`` in place; returns the (possibly downgraded) context.
+    """
+    if context.rag_mode != RagMode.AGENTIC:
+        return context
+    has_sources = bool(
+        context.embedding_ids
+        or context.tag_ids
+        or context.folder_ids
+        or context.library_ids
+    )
+    provider_supports_tools = getattr(llm, "provider", None) != Provider.LLAMA.value
+    if has_sources and provider_supports_tools:
+        selected_slugs.add("search_documents")
+        return context
+    return replace(context, rag_mode=RagMode.ADVANCED)
 
 
 class LLMQueryRequestBuilder:
@@ -81,6 +114,7 @@ class LLMQueryRequestBuilder:
             media_ids=message_data.get("media_ids", []),
             tag_ids=message_data.get("tag_ids", []),
             folder_ids=message_data.get("folder_ids", []),
+            library_ids=message_data.get("library_ids", []),
             referenced_conversation_ids=message_data.get(
                 "referenced_conversation_ids", []
             ),
@@ -91,6 +125,9 @@ class LLMQueryRequestBuilder:
             max_context_snippets=message_data.get("max_context_snippets", 4),
             document_similarity_threshold=message_data.get(
                 "document_similarity_threshold", 0.5
+            ),
+            rag_mode=message_data.get(
+                "rag_mode", getattr(conversation, "rag_mode", "advanced")
             ),
             history_limit=message_data.get("history_limit", 20),
             use_memory=bool(message_data.get("use_memory", False)),
@@ -171,6 +208,15 @@ class LLMQueryRequestBuilder:
         selected_slugs = set(message_data.get("dare_tool_slugs") or [])
         if artifacts_enabled:
             selected_slugs |= ARTIFACT_TOOL_SLUGS
+
+        context = resolve_agentic_rag(context, llm, selected_slugs)
+
+        # The memory toggle controls access to conversation search.
+        if context.use_memory:
+            selected_slugs |= MEMORY_TOOL_SLUGS
+        else:
+            selected_slugs -= MEMORY_TOOL_SLUGS
+
         dare_tool_slugs = tuple(selected_slugs)
 
         # Build request
@@ -215,6 +261,11 @@ class LLMQueryRequestBuilder:
         structured_spec: Optional[Dict[str, Any]] = None,
         web_search_enabled: bool = False,
         file_owner_id: Optional[int] = None,
+        rag_mode: str = RagMode.NAIVE,
+        library_ids: Optional[list] = None,
+        web_fetch_enabled: bool = False,
+        mcp_server_ids: Optional[list] = None,
+        artifacts_enabled: bool = False,
     ) -> LLMQueryRequest:
         """Build LLMQueryRequest from workflow execution data.
 
@@ -236,20 +287,30 @@ class LLMQueryRequestBuilder:
             structured_spec: JSON schema for structured output
             web_search_enabled: Enable web search for this step
             file_owner_id: Original owner's user ID for cross-user embedding access
+            rag_mode: Retrieval mode for the step (naive/advanced/agentic)
+            library_ids: Shared library IDs to retrieve context from
+            web_fetch_enabled: Enable provider web fetch for this step
+            mcp_server_ids: Connected MCP servers whose tools the step may call
+            artifacts_enabled: Expose artifact-creating DARE tools to the step
 
         Returns:
             Fully constructed LLMQueryRequest for workflow execution
         """
+        if artifacts_enabled and max_tokens < ARTIFACT_MIN_MAX_TOKENS:
+            max_tokens = ARTIFACT_MIN_MAX_TOKENS
+
         context = ContextConfig(
             file_ids=file_ids or [],
             embedding_ids=embedding_ids or [],
             media_ids=[],  # Workflows don't use media files
             tag_ids=tag_ids or [],
             folder_ids=folder_ids or [],
+            library_ids=library_ids or [],
             max_context_snippets=max_context_snippets,
             document_similarity_threshold=document_similarity_threshold,
             history_limit=0,  # Workflows don't use conversation history
             file_owner_id=file_owner_id,
+            rag_mode=rag_mode,
         )
 
         generation = GenerationConfig(
@@ -259,7 +320,13 @@ class LLMQueryRequestBuilder:
             prompt_id=prompt_id,
             structured_spec=structured_spec,
             web_search_enabled=web_search_enabled,
+            web_fetch_enabled=web_fetch_enabled,
         )
+
+        selected_slugs: set = set()
+        if artifacts_enabled:
+            selected_slugs |= ARTIFACT_TOOL_SLUGS
+        context = resolve_agentic_rag(context, llm, selected_slugs)
 
         return LLMQueryRequest(
             message=message,
@@ -269,4 +336,6 @@ class LLMQueryRequestBuilder:
             context=context,
             generation=generation,
             workflow_run_step_obj=workflow_run_step_obj,
+            mcp_server_ids=tuple(mcp_server_ids or []),
+            dare_tool_slugs=tuple(selected_slugs),
         )

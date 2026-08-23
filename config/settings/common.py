@@ -17,6 +17,8 @@ from config.sentry import init_sentry
 
 init_sentry(
     dsn=env.SENTRY_DSN,
+    environment=env.SENTRY_ENVIRONMENT,
+    traces_sample_rate=env.SENTRY_TRACES_SAMPLE_RATE,
 )
 
 SECRET_KEY = env.SECRET_KEY
@@ -63,9 +65,11 @@ LOCAL_APPS = [
     "mcp",
     "dare_tools",
     "memory",
+    "data_exports",
     "sharing",
     "feature_flags",
     "research",
+    "libraries",
 ]
 
 THIRD_PARTY_APPS = [
@@ -346,21 +350,25 @@ RQ_QUEUES = {
         'DB': REDIS_DB,
         'PASSWORD': REDIS_PASSWORD if REDIS_PASSWORD else None,
     },
-    'simple_queue': {
+    # Use one worker until memory writes are serialized per user.
+    'memory': {
         'HOST': REDIS_HOST,
         'PORT': REDIS_PORT,
         'DB': REDIS_DB,
         'PASSWORD': REDIS_PASSWORD if REDIS_PASSWORD else None,
-        'DEFAULT_TIMEOUT': 3600,
+        'DEFAULT_TIMEOUT': 300,
+        # Keep idle Redis connections healthy.
+        'REDIS_CLIENT_KWARGS': {
+            'socket_keepalive': True,
+            'health_check_interval': 30,
+        },
     },
 }
 
 RQ_SHOW_ADMIN_LINK = True
 
-# Shared cache. The default LocMemCache is per-process, so cached values aren't
-# shared across uvicorn workers; Redis makes them visible to all. Shares the
-# Channels/RQ DB, namespaced via KEY_PREFIX — avoid cache.clear() here, which
-# FLUSHDBs the shared DB; delete specific keys instead.
+# Share cache across processes. Delete specific keys because cache.clear()
+# flushes the shared Redis database.
 CACHES = {
     "default": {
         "BACKEND": "django.core.cache.backends.redis.RedisCache",
@@ -380,6 +388,7 @@ FILE_UPLOAD_MAX_MEMORY_SIZE = 104857600  # 100MB in bytes
 WEAVIATE = {
     'HOST': env.WEAVIATE_HOST,
     'PORT': env.WEAVIATE_PORT,
+    'GRPC_PORT': env.WEAVIATE_GRPC_PORT,
     'COLLECTION_NAME': env.WEAVIATE_COLLECTION_NAME,
     'SKIP_INIT_CHECKS': env.WEAVIATE_SKIP_INIT_CHECKS,
     'AUTOSCHEMA_ENABLED': env.WEAVIATE_AUTOSCHEMA_ENABLED
@@ -397,3 +406,11 @@ HERMES_GATEWAY_URL = env.HERMES_GATEWAY_URL
 HERMES_API_KEY = env.HERMES_API_KEY
 HERMES_SYNC_SOUL = env.HERMES_SYNC_SOUL
 HERMES_SOUL_PATH = env.HERMES_SOUL_PATH
+HERMES_PROFILE_PER_PROJECT = env.HERMES_PROFILE_PER_PROJECT
+HERMES_PROFILES_ROOT = env.HERMES_PROFILES_ROOT
+HERMES_PROFILE_PREFIX = env.HERMES_PROFILE_PREFIX
+HERMES_PROFILE_TOKEN_DAYS = env.HERMES_PROFILE_TOKEN_DAYS
+HERMES_STREAM_IDLE_SECONDS = env.HERMES_STREAM_IDLE_SECONDS
+HERMES_PROFILE_MODEL = env.HERMES_PROFILE_MODEL
+HERMES_PROFILE_MODEL_PROVIDER = env.HERMES_PROFILE_MODEL_PROVIDER
+DARE_MCP_GATEWAY_URL = env.DARE_MCP_GATEWAY_URL

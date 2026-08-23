@@ -4,14 +4,18 @@ Routes visual outputs to artifact panel instead of inline rendering.
 """
 import json
 import logging
-from typing import Dict, Any, Callable, Optional
+from typing import Any, Callable, Dict, Optional
 
 from asgiref.sync import sync_to_async
 
-from conversations.models import Artifact, Message, Conversation, ArtifactGroup
-from conversations.constants import ArtifactStatus, ArtifactType, ARTIFACT_CONTENT_TYPES
+from conversations.constants import (ARTIFACT_CONTENT_TYPES, ArtifactStatus,
+                                     ArtifactType)
+from conversations.models import Artifact, Message
+from conversations.services.artifact_service import create_artifact
 from core.services.llm_utils.diagram_tool import json_to_mermaid
-from dare_tools.services.registry import execute_create_docx, execute_create_pptx
+from core.services.tool_loop.binding import ArtifactHost
+from dare_tools.services.registry import (execute_create_docx,
+                                          execute_create_pptx)
 
 logger = logging.getLogger(__name__)
 
@@ -28,45 +32,42 @@ class ArtifactToolExecutor:
         self,
         tool_name: str,
         arguments: Dict[str, Any],
-        message: Message,
-        conversation: Conversation,
+        host: ArtifactHost,
         send_callback: Callable,
     ) -> Dict[str, Any]:
         """
         Execute tool and create artifact.
-        
+
         Args:
             tool_name: Name of the tool to execute
             arguments: Tool arguments from LLM
-            message: The AI message associated with this tool call
-            conversation: The conversation context
+            host: Where the artifact lives (chat message or workflow step)
             send_callback: Callback to send WebSocket events
-            
+
         Returns:
             Dict with success status and artifact_id
         """
         if tool_name == 'create_chart':
-            return await self._execute_create_chart(arguments, message, conversation, send_callback)
+            return await self._execute_create_chart(arguments, host, send_callback)
         elif tool_name == 'create_diagram':
-            return await self._execute_create_diagram(arguments, message, conversation, send_callback)
+            return await self._execute_create_diagram(arguments, host, send_callback)
         elif tool_name == 'create_docx':
-            return await self._execute_create_docx(arguments, message, conversation, send_callback)
+            return await self._execute_create_docx(arguments, host, send_callback)
         elif tool_name == 'create_pptx':
-            return await self._execute_create_pptx(arguments, message, conversation, send_callback)
+            return await self._execute_create_pptx(arguments, host, send_callback)
         elif tool_name == 'create_react_component':
-            return await self._execute_create_react_component(arguments, message, conversation, send_callback)
+            return await self._execute_create_react_component(arguments, host, send_callback)
         elif tool_name == 'update_artifact':
-            return await self._execute_update_artifact(arguments, message, conversation, send_callback)
+            return await self._execute_update_artifact(arguments, host, send_callback)
         elif tool_name == 'update_artifact_inline':
-            return await self._execute_update_artifact_inline(arguments, message, conversation, send_callback)
+            return await self._execute_update_artifact_inline(arguments, host, send_callback)
         else:
             raise ValueError(f"Unsupported tool: {tool_name}")
     
     async def _execute_create_chart(
         self,
         arguments: Dict[str, Any],
-        message: Message,
-        conversation: Conversation,
+        host: ArtifactHost,
         send_callback: Callable,
     ) -> Dict[str, Any]:
         """
@@ -100,9 +101,10 @@ class ArtifactToolExecutor:
         content = json.dumps(chart_config, indent=2)
         
         # Create artifact group and artifact
-        artifact = await self._create_artifact(
-            conversation=conversation,
-            message=message,
+        artifact = await create_artifact(
+            conversation=host.conversation,
+            message=host.message,
+            workflow_run_step=host.workflow_run_step,
             title=title,
             content=content,
             artifact_type=ArtifactType.CHART,
@@ -116,7 +118,7 @@ class ArtifactToolExecutor:
         await self._emit_artifact_created(
             send_callback=send_callback,
             artifact=artifact,
-            message=message,
+            host=host,
         )
         
         logger.info(f"Created chart artifact {artifact.id}: {title}")
@@ -132,8 +134,7 @@ class ArtifactToolExecutor:
     async def _execute_create_diagram(
         self,
         arguments: Dict[str, Any],
-        message: Message,
-        conversation: Conversation,
+        host: ArtifactHost,
         send_callback: Callable,
     ) -> Dict[str, Any]:
         """
@@ -159,9 +160,10 @@ class ArtifactToolExecutor:
         filename = f"{safe_title}.mmd"
         
         # Create artifact
-        artifact = await self._create_artifact(
-            conversation=conversation,
-            message=message,
+        artifact = await create_artifact(
+            conversation=host.conversation,
+            message=host.message,
+            workflow_run_step=host.workflow_run_step,
             title=title,
             content=mermaid_code,
             artifact_type=ArtifactType.DIAGRAM,
@@ -175,7 +177,7 @@ class ArtifactToolExecutor:
         await self._emit_artifact_created(
             send_callback=send_callback,
             artifact=artifact,
-            message=message,
+            host=host,
         )
         
         logger.info(f"Created diagram artifact {artifact.id}: {title} (type: {diagram_type})")
@@ -192,8 +194,7 @@ class ArtifactToolExecutor:
     async def _execute_create_docx(
         self,
         arguments: Dict[str, Any],
-        message: Message,
-        conversation: Conversation,
+        host: ArtifactHost,
         send_callback: Callable,
     ) -> Dict[str, Any]:
         """
@@ -215,9 +216,10 @@ class ArtifactToolExecutor:
         filename = f"{safe_title}.docx"
         content = json.dumps(doc_config, indent=2)
 
-        artifact = await self._create_artifact(
-            conversation=conversation,
-            message=message,
+        artifact = await create_artifact(
+            conversation=host.conversation,
+            message=host.message,
+            workflow_run_step=host.workflow_run_step,
             title=title,
             content=content,
             artifact_type=ArtifactType.DOCX,
@@ -230,7 +232,7 @@ class ArtifactToolExecutor:
         await self._emit_artifact_created(
             send_callback=send_callback,
             artifact=artifact,
-            message=message,
+            host=host,
         )
 
         logger.info(f"Created docx artifact {artifact.id}: {title}")
@@ -245,8 +247,7 @@ class ArtifactToolExecutor:
     async def _execute_create_pptx(
         self,
         arguments: Dict[str, Any],
-        message: Message,
-        conversation: Conversation,
+        host: ArtifactHost,
         send_callback: Callable,
     ) -> Dict[str, Any]:
         """
@@ -269,9 +270,10 @@ class ArtifactToolExecutor:
         filename = f"{safe_title}.pptx"
         content = json.dumps(ppt_config, indent=2)
 
-        artifact = await self._create_artifact(
-            conversation=conversation,
-            message=message,
+        artifact = await create_artifact(
+            conversation=host.conversation,
+            message=host.message,
+            workflow_run_step=host.workflow_run_step,
             title=title,
             content=content,
             artifact_type=ArtifactType.PPTX,
@@ -284,7 +286,7 @@ class ArtifactToolExecutor:
         await self._emit_artifact_created(
             send_callback=send_callback,
             artifact=artifact,
-            message=message,
+            host=host,
         )
 
         logger.info(f"Created PPTX artifact {artifact.id}: {title}")
@@ -299,8 +301,7 @@ class ArtifactToolExecutor:
     async def _execute_create_react_component(
         self,
         arguments: Dict[str, Any],
-        message: Message,
-        conversation: Conversation,
+        host: ArtifactHost,
         send_callback: Callable,
     ) -> Dict[str, Any]:
         """
@@ -340,9 +341,10 @@ class ArtifactToolExecutor:
         filename = f"{safe_title}.jsx"
 
         # Create artifact
-        artifact = await self._create_artifact(
-            conversation=conversation,
-            message=message,
+        artifact = await create_artifact(
+            conversation=host.conversation,
+            message=host.message,
+            workflow_run_step=host.workflow_run_step,
             title=title,
             content=code,
             artifact_type=ArtifactType.REACT,
@@ -361,7 +363,7 @@ class ArtifactToolExecutor:
         await self._emit_artifact_created(
             send_callback=send_callback,
             artifact=artifact,
-            message=message,
+            host=host,
         )
 
         logger.info(f"Created React component artifact {artifact.id}: {title}")
@@ -390,59 +392,18 @@ class ArtifactToolExecutor:
 
         return any(pattern in code_stripped for pattern in patterns)
 
-    @sync_to_async
-    def _create_artifact(
-        self,
-        conversation: Conversation,
-        message: Message,
-        title: str,
-        content: str,
-        artifact_type: str,
-        filename: str,
-        content_type: str,
-        source_tool: str,
-        metadata: Dict[str, Any] = None,
-    ) -> Artifact:
-        """Create artifact and artifact group in database."""
-        # Create artifact group
-        group = ArtifactGroup.active_objects.create(
-            conversation=conversation,
-            base_title=title,
-        )
-        
-        # Create artifact using active_objects pattern
-        artifact = Artifact.active_objects.create(
-            conversation=conversation,
-            message=message,
-            artifact_group=group,
-            title=title,
-            content=content,
-            artifact_type=artifact_type,
-            filename=filename,
-            content_type=content_type,
-            source_tool=source_tool,
-            status=ArtifactStatus.COMPLETED,
-            metadata=metadata or {},
-            version=1,
-        )
-        
-        # Update group's latest version
-        group.latest_version = artifact
-        group.save(update_fields=['latest_version'])
-        
-        return artifact
-    
     async def _emit_artifact_created(
         self,
         send_callback: Callable,
         artifact: Artifact,
-        message: Message,
+        host: ArtifactHost,
     ):
         """Emit artifact_created WebSocket event."""
         event_data = {
             'type': 'artifact_created',
+            **host.event_context,
             'artifactId': artifact.id,
-            'messageId': message.id if message else None,
+            'messageId': host.message.id if host.message else None,
             'artifactGroupId': artifact.artifact_group_id,
             'filename': artifact.filename,
             'title': artifact.title,
@@ -462,8 +423,7 @@ class ArtifactToolExecutor:
     async def _execute_update_artifact(
         self,
         arguments: Dict[str, Any],
-        message: Message,
-        conversation: Conversation,
+        host: ArtifactHost,
         send_callback: Callable,
     ) -> Dict[str, Any]:
         """
@@ -487,15 +447,15 @@ class ArtifactToolExecutor:
                 artifact_id=artifact_id,
                 new_content=new_content,
                 new_title=new_title,
-                message=message,
+                message=host.message,
             )
-            
+
             # Emit artifact_updated event
             await self._emit_artifact_updated(
                 send_callback=send_callback,
                 artifact=new_artifact,
                 parent_artifact_id=artifact_id,
-                message=message,
+                host=host,
             )
             
             logger.info(
@@ -573,15 +533,16 @@ class ArtifactToolExecutor:
         send_callback: Callable,
         artifact: Artifact,
         parent_artifact_id: int,
-        message: Message,
+        host: ArtifactHost,
     ):
         """Emit artifact_updated WebSocket event."""
         event_data = {
             'type': 'artifact_updated',
+            **host.event_context,
             'artifactId': artifact.id,
             'parentArtifactId': parent_artifact_id,
             'artifactGroupId': artifact.artifact_group_id,
-            'messageId': message.id if message else None,
+            'messageId': host.message.id if host.message else None,
             'filename': artifact.filename,
             'title': artifact.title,
             'contentType': artifact.content_type,
@@ -609,8 +570,7 @@ class ArtifactToolExecutor:
     async def _execute_update_artifact_inline(
         self,
         arguments: Dict[str, Any],
-        message: Message,
-        conversation: Conversation,
+        host: ArtifactHost,
         send_callback: Callable,
     ) -> Dict[str, Any]:
         """
@@ -688,7 +648,7 @@ class ArtifactToolExecutor:
                 artifact_id=artifact.id,
                 new_content=new_content,
                 new_title=None,  # Keep original title
-                message=message,
+                message=host.message,
             )
 
             # Emit artifact_updated event with inline update type
@@ -696,7 +656,7 @@ class ArtifactToolExecutor:
                 send_callback=send_callback,
                 artifact=new_artifact,
                 parent_artifact_id=artifact.id,
-                message=message,
+                host=host,
             )
 
             logger.info(
@@ -771,7 +731,7 @@ class ArtifactToolExecutor:
         send_callback: Callable,
         artifact: Artifact,
         parent_artifact_id: int,
-        message: Message,
+        host: ArtifactHost,
     ):
         """Emit artifact_updated WebSocket event with inline update type.
 
@@ -781,10 +741,11 @@ class ArtifactToolExecutor:
         event_data = {
             'type': 'artifact_updated',
             'updateType': 'inline',  # Distinguishes from full rewrite
+            **host.event_context,
             'artifactId': artifact.id,
             'parentArtifactId': parent_artifact_id,
             'artifactGroupId': artifact.artifact_group_id,
-            'messageId': message.id if message else None,
+            'messageId': host.message.id if host.message else None,
             'filename': artifact.filename,
             'title': artifact.title,
             'contentType': artifact.content_type,

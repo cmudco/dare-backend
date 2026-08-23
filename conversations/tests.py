@@ -6,7 +6,6 @@ from conversations.models import LLM
 from core.services.claude_service import ClaudeService
 from core.services.openai_service import OpenAIService
 
-
 User = get_user_model()
 
 
@@ -84,7 +83,9 @@ class ClaudeCapabilityPayloadTests(TestCase):
 
         self.assertNotIn("temperature", params)
         self.assertEqual(params["extra_body"]["output_config"], {"effort": "xhigh"})
-        self.assertEqual(params["thinking"], {"type": "adaptive"})
+        self.assertEqual(
+            params["thinking"], {"type": "adaptive", "display": "summarized"}
+        )
 
     def test_temperature_is_sent_for_temperature_capable_models(self):
         llm = LLM(

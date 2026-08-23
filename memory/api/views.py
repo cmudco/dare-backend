@@ -1,203 +1,176 @@
-"""
-Memory API Views
+"""HTTP endpoints for the memory feature."""
 
-REST API endpoints for cross-conversation memory management.
-Uses synchronous DRF ViewSet with async service calls via async_to_sync.
-"""
-import logging
-
-from asgiref.sync import async_to_sync
-from django.conf import settings
-from rest_framework import status
+from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.viewsets import ViewSet
 
-from memory.services import get_memu_service
-from memory.api.serializers import (
+from memory.services import api_service as memory_service
+from memory.services import portability
+
+from .serializers import (
+    ClearResponseSerializer,
     MemoryItemSerializer,
     MemorySearchRequestSerializer,
     MemorySearchResponseSerializer,
-    SeedResponseSerializer,
-    ClearResponseSerializer,
 )
 
-logger = logging.getLogger(__name__)
+SERVICE_ERROR_STATUSES = {
+    memory_service.MemoryNotFound: status.HTTP_404_NOT_FOUND,
+    memory_service.MemoryInvalid: status.HTTP_400_BAD_REQUEST,
+    memory_service.MemoryConflict: status.HTTP_409_CONFLICT,
+    memory_service.MemoryUnavailable: status.HTTP_502_BAD_GATEWAY,
+}
 
 
-class MemoryViewSet(ViewSet):
-    """
-    ViewSet for memory management operations.
-    
-    Provides endpoints for:
-    - Listing all memory items for the authenticated user
-    - Retrieving a single memory item
-    - Deleting a memory item
-    - Searching memories via vector similarity
-    - Clearing all memories
-    - Seeding demo data (development only)
-    """
+def _service_error_response(error):
+    response_status = SERVICE_ERROR_STATUSES.get(
+        type(error), status.HTTP_500_INTERNAL_SERVER_ERROR
+    )
+    if not str(error) and not error.payload:
+        return Response(status=response_status)
+    return Response(
+        {"detail": str(error), **error.payload},
+        status=response_status,
+    )
+
+
+class MemoryViewSet(viewsets.ViewSet):
+    """Expose the authenticated user's memory store."""
 
     permission_classes = [IsAuthenticated]
 
-    def get_user_id(self) -> str:
-        """Get the string user ID for MemU operations."""
-        return str(self.request.user.id)
-
     def list(self, request):
-        """
-        List all memory items for the authenticated user.
-        
-        GET /api/memory/items/
-        """
-        try:
-            service = get_memu_service()
-            items = async_to_sync(service.list_items)(self.get_user_id())
-            
-            serializer = MemoryItemSerializer(items, many=True)
-            return Response(serializer.data, status=status.HTTP_200_OK)
-        except Exception as e:
-            logger.error(f"Failed to list memory items: {e}")
-            return Response(
-                {"error": "Failed to retrieve memories"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
+        items = memory_service.list_items(
+            request.user,
+            retired=request.query_params.get("state") == "retired",
+        )
+        return Response(MemoryItemSerializer(items, many=True).data)
 
     def retrieve(self, request, pk=None):
-        """
-        Retrieve a single memory item owned by the authenticated user.
-
-        GET /api/memory/items/<id>/
-        """
         try:
-            service = get_memu_service()
-            item = async_to_sync(service.get_item)(pk, self.get_user_id())
+            item = memory_service.get_item(request.user, pk)
+        except memory_service.MemoryServiceError as error:
+            return _service_error_response(error)
+        return Response(MemoryItemSerializer(item).data)
 
-            if not item:
-                return Response(
-                    {"error": "Memory item not found"},
-                    status=status.HTTP_404_NOT_FOUND,
-                )
-
-            serializer = MemoryItemSerializer(item)
-            return Response(serializer.data, status=status.HTTP_200_OK)
-        except Exception as e:
-            logger.error(f"Failed to retrieve memory item {pk}: {e}")
+    def partial_update(self, request, pk=None):
+        content = request.data.get("content")
+        if content is None:
             return Response(
-                {"error": "Failed to retrieve memory item"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-
-    def destroy(self, request, pk=None):
-        """
-        Delete a memory item owned by the authenticated user.
-
-        DELETE /api/memory/items/<id>/
-        """
-        try:
-            service = get_memu_service()
-            async_to_sync(service.delete_item)(pk, self.get_user_id())
-
-            return Response(status=status.HTTP_204_NO_CONTENT)
-        except PermissionError:
-            return Response(
-                {"error": "Memory item not found"},
-                status=status.HTTP_404_NOT_FOUND,
-            )
-        except Exception as e:
-            logger.error(f"Failed to delete memory item {pk}: {e}")
-            return Response(
-                {"error": "Failed to delete memory item"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
-
-    @action(detail=False, methods=["post"], url_path="search")
-    def search(self, request):
-        """
-        Search memories using vector similarity.
-        
-        POST /api/memory/search/
-        Body: {"query": "search text"}
-        """
-        serializer = MemorySearchRequestSerializer(data=request.data)
-        if not serializer.is_valid():
-            return Response(
-                serializer.errors,
+                {"detail": "A content field is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        query = serializer.validated_data["query"]
-
         try:
-            service = get_memu_service()
-            results = async_to_sync(service.search)(self.get_user_id(), query)
-            
-            response_data = {
-                "query": query,
-                "items": results.get("items", []),
-                "categories": results.get("categories", []),
-            }
-            
-            response_serializer = MemorySearchResponseSerializer(response_data)
-            return Response(response_serializer.data, status=status.HTTP_200_OK)
-        except Exception as e:
-            logger.error(f"Failed to search memories: {e}")
-            return Response(
-                {"error": "Failed to search memories"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
+            item = memory_service.update_item(request.user, pk, str(content))
+        except memory_service.MemoryServiceError as error:
+            return _service_error_response(error)
+        if item is None:
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        return Response(MemoryItemSerializer(item).data)
 
-    @action(detail=False, methods=["delete"], url_path="clear")
+    def destroy(self, request, pk=None):
+        try:
+            memory_service.forget_item(request.user, pk)
+        except memory_service.MemoryServiceError as error:
+            return _service_error_response(error)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @action(detail=False, methods=["post"])
+    def search(self, request):
+        serializer = MemorySearchRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        payload = memory_service.search_items(
+            request.user,
+            serializer.validated_data["query"].strip(),
+        )
+        return Response(MemorySearchResponseSerializer(payload).data)
+
+    @action(detail=False, methods=["delete"])
     def clear(self, request):
-        """
-        Clear all memory items for the authenticated user.
-        
-        DELETE /api/memory/clear/
-        """
-        try:
-            service = get_memu_service()
-            async_to_sync(service.clear_all)(self.get_user_id())
-            
-            serializer = ClearResponseSerializer({
-                "success": True,
-                "message": "All memories cleared successfully",
-            })
-            return Response(serializer.data, status=status.HTTP_200_OK)
-        except Exception as e:
-            logger.error(f"Failed to clear memories: {e}")
-            return Response(
-                {"error": "Failed to clear memories"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
+        payload = memory_service.clear_store(request.user)
+        return Response(ClearResponseSerializer(payload).data)
 
-    @action(detail=False, methods=["post"], url_path="seed")
-    def seed(self, request):
-        """
-        Seed demo memory data for development/testing.
-        Only available in DEBUG mode.
-        
-        POST /api/memory/seed/
-        """
-        # Only allow in development mode
-        if not getattr(settings, "DEBUG", False):
-            return Response(
-                {"error": "Seeding is only available in development mode"},
-                status=status.HTTP_403_FORBIDDEN,
-            )
-
+    def document(self, request):
         try:
-            service = get_memu_service()
-            result = async_to_sync(service.seed_demo_data)(self.get_user_id())
-            
-            serializer = SeedResponseSerializer({
-                "items_created": result["items_created"],
-                "message": f"Successfully created {result['items_created']} demo memories",
-            })
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
-        except Exception as e:
-            logger.error(f"Failed to seed demo data: {e}")
-            return Response(
-                {"error": "Failed to seed demo data"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            if request.method.lower() == "get":
+                payload = memory_service.get_document(request.user)
+            else:
+                payload = memory_service.save_document(
+                    request.user, request.data.get("markdown")
+                )
+        except memory_service.MemoryServiceError as error:
+            return _service_error_response(error)
+        return Response(payload)
+
+    def consolidate(self, request):
+        try:
+            if request.method.lower() == "get":
+                payload = memory_service.get_consolidation(request.user)
+            else:
+                payload = memory_service.apply_consolidation(
+                    request.user, request.data or {}
+                )
+        except memory_service.MemoryServiceError as error:
+            return _service_error_response(error)
+        return Response(payload)
+
+    def ledger(self, request):
+        return Response(
+            memory_service.get_ledger(
+                request.user,
+                request.query_params.get("limit", 100),
             )
+        )
+
+    def hold(self, request):
+        try:
+            item = memory_service.set_hold(
+                request.user,
+                request.data.get("id"),
+                request.data.get("held"),
+            )
+        except memory_service.MemoryServiceError as error:
+            return _service_error_response(error)
+        return Response(MemoryItemSerializer(item).data)
+
+    def sessions(self, request):
+        query = (request.query_params.get("q") or "").strip()[:2000]
+        since = (request.query_params.get("since") or "").strip() or None
+        until = (request.query_params.get("until") or "").strip() or None
+        try:
+            payload = memory_service.get_sessions(
+                request.user,
+                query=query,
+                since=since,
+                until=until,
+            )
+        except memory_service.MemoryServiceError as error:
+            return _service_error_response(error)
+        return Response(payload)
+
+    def export(self, request):
+        return Response(portability.export_bundle(request.user))
+
+    def import_bundle(self, request):
+        try:
+            payload = portability.import_bundle(request.user, request.data)
+        except portability.ImportError_ as error:
+            return Response({"detail": str(error)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(payload, status=status.HTTP_201_CREATED)
+
+    def import_foreign(self, request):
+        try:
+            payload = portability.import_foreign(request.user, request.data.get("text"))
+        except portability.ImportError_ as error:
+            return Response({"detail": str(error)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(payload, status=status.HTTP_202_ACCEPTED)
+
+    def recall(self, request):
+        query = (request.query_params.get("q") or "").strip()[:2000]
+        try:
+            payload = memory_service.get_recall(request.user, query)
+        except memory_service.MemoryServiceError as error:
+            return _service_error_response(error)
+        return Response(payload)
