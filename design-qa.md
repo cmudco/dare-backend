@@ -13,6 +13,8 @@
 2. The warning action now uses the admin primary blue treatment, while the destructive delete action remains visually separate beneath the “Delete model now” heading.
 3. Browser interaction sent an advance warning for 30 August 2026 with an admin message. The success banner reported one workflow notification and one agent notification and explicitly confirmed that the model was unchanged.
 4. The dependency summary, optional date, optional message, and two-stage lifecycle remain readable without introducing a modal or hidden controls.
+5. Final iteration replaces the long linear form with an impact overview and two numbered action cards. Detailed dependency and database-object lists are collapsed by default, while the warning and deletion controls remain immediately visible.
+6. The rendered Django response was regression-tested for the “Retire model” heading, all three impact metrics, both notification forms, and the destructive confirmation action at desktop and responsive CSS breakpoints.
 
 No P0, P1, or P2 visual issues remain in the verified desktop state.
 
