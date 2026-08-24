@@ -212,9 +212,13 @@ class CustomLLMService:
             "stream_options": {"include_usage": True},
         }
 
-        # Reasoning models use different parameter names
+        # Reasoning models use different parameter names and reject the
+        # sampling controls entirely; effort is the one knob they do take.
         if self.is_reasoning:
             params["max_completion_tokens"] = max_tokens
+            resolved_effort = self.capabilities.resolve_effort(effort)
+            if resolved_effort:
+                params["reasoning_effort"] = resolved_effort
         else:
             params["max_tokens"] = max_tokens
             self.capabilities.apply_sampling_params(params, temperature, effort)
