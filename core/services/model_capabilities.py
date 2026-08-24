@@ -3,39 +3,19 @@
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
-from conversations.constants import ModelEffort, Provider
+from conversations.constants import ModelEffort
+from core.services.model_identity import ModelFamily, resolve_family
 
 EFFORT_VALUES = {choice.value for choice in ModelEffort}
 
 
-def infer_supports_temperature(
-    identifier: str,
-    provider: str,
-    is_reasoning: bool = False,
+def family_supports_temperature(
+    family: Optional[ModelFamily], is_reasoning: bool
 ) -> bool:
-    """Infer temperature support for synthetic or legacy model descriptors."""
-    normalized = (identifier or "").lower()
+    """Temperature support for a model with no explicit flag of its own."""
     if is_reasoning:
         return False
-    if provider == Provider.OPENAI.value and normalized in {"gpt-5", "gpt-5.5"}:
-        return False
-    if provider == Provider.CLAUDE.value and (
-        "claude-opus-4-7" in normalized
-        or "claude-opus-4-8" in normalized
-        or "claude-sonnet-5" in normalized
-    ):
-        return False
-    return True
-
-
-def infer_supports_effort(identifier: str, provider: str) -> bool:
-    """Infer effort support for synthetic or legacy model descriptors."""
-    normalized = (identifier or "").lower()
-    return provider == Provider.CLAUDE.value and (
-        "claude-opus-4-7" in normalized
-        or "claude-opus-4-8" in normalized
-        or "claude-sonnet-5" in normalized
-    )
+    return family.supports_temperature if family else True
 
 
 @dataclass(frozen=True)
@@ -52,28 +32,27 @@ class ModelCapabilities:
     def from_llm(cls, llm: Any) -> "ModelCapabilities":
         """Build capability data from a real or synthetic LLM-shaped object."""
         identifier = getattr(llm, "identifier", "")
-        provider = getattr(llm, "provider", "")
         is_reasoning = bool(getattr(llm, "is_reasoning", False))
         supports_temperature = getattr(llm, "supports_temperature", None)
         supports_effort = getattr(llm, "supports_effort", None)
         supports_adaptive_thinking = getattr(llm, "supports_adaptive_thinking", None)
 
-        inferred_effort = infer_supports_effort(identifier, provider)
+        family = resolve_family(identifier)
         return cls(
             supports_temperature=(
                 bool(supports_temperature)
                 if supports_temperature is not None
-                else infer_supports_temperature(identifier, provider, is_reasoning)
+                else family_supports_temperature(family, is_reasoning)
             ),
             supports_effort=(
                 bool(supports_effort)
                 if supports_effort is not None
-                else inferred_effort
+                else bool(family and family.supports_effort)
             ),
             supports_adaptive_thinking=(
                 bool(supports_adaptive_thinking)
                 if supports_adaptive_thinking is not None
-                else inferred_effort
+                else bool(family and family.supports_adaptive_thinking)
             ),
             default_effort=normalize_effort(
                 getattr(llm, "default_effort", None), ModelEffort.HIGH.value

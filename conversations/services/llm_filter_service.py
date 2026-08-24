@@ -38,9 +38,8 @@ from billing.wallet_router import (
     resolve_active_wallet_for_bot,
 )
 from conversations.models import LLM
-from core.services.model_capabilities import (
-    infer_supports_temperature,
-)
+from core.services.model_capabilities import family_supports_temperature
+from core.services.model_identity import resolve_family
 
 # === Wallet metadata wire shape ============================================
 #
@@ -121,11 +120,13 @@ def _llm_entry(model: LLM) -> Dict[str, Any]:
 def _litellm_entry(litellm_key, probed) -> Dict[str, Any]:
     """Flat picker entry for a LiteLLM-routed model. ``id`` is opaque to the
     FE: ``litellm:<key_pk>:<model_name>``. ``parse_model_id`` on the BE
-    inverts it on dispatch. Capability flags are forced false because the
-    proxy doesn't transparently forward provider-native endpoints (DALL-E,
-    Whisper, reasoning-mode); zero rates because billing happens externally.
+    inverts it on dispatch. Capabilities come from the resolved model family;
+    image and audio flags stay false because those need provider-native
+    endpoints the proxy doesn't forward. Zero rates: billing is external.
     """
     provider = probed.provider or "custom"
+    family = resolve_family(probed.name)
+    is_reasoning = bool(family and family.is_reasoning)
     return {
         "id": f"{LITELLM_ID_PREFIX}{litellm_key.pk}:{probed.name}",
         "name": probed.name,
@@ -133,10 +134,12 @@ def _litellm_entry(litellm_key, probed) -> Dict[str, Any]:
         "provider": provider,
         "description": None,
         "is_active": True,
-        "is_reasoning": False,
-        "supports_temperature": infer_supports_temperature(probed.name, provider),
-        "supports_effort": False,
-        "supports_adaptive_thinking": False,
+        "is_reasoning": is_reasoning,
+        "supports_temperature": family_supports_temperature(family, is_reasoning),
+        "supports_effort": bool(family and family.supports_effort),
+        "supports_adaptive_thinking": bool(
+            family and family.supports_adaptive_thinking
+        ),
         "default_effort": "high",
         "default_adaptive_thinking_enabled": False,
         "is_image_generator": False,
