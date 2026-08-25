@@ -1,0 +1,13 @@
+{
+  "_source": "Azure list prices, Global Standard. Verify before relying on these for anything user-facing; regional and Data Zone deployments cost more.",
+  "_precedence": "An LLM row in the database always wins. This file only covers models DARE routes but does not itself offer.",
+  "_unpriced": [
+    "Azure does not sell Anthropic, Google or Meta models, so us.anthropic.*, gemini/* and us.meta.* cannot be priced from an Azure list. Add an LLM row, or extend this file from the vendor that actually serves them (Bedrock / Vertex).",
+    "gpt-5-mini, gpt-5.4-nano and gpt-4o-transcribe had no published per-million rate at the time of writing."
+  ],
+  "prices": {
+    "gpt-5-nano": { "input": "0.05", "output": "0.40" },
+    "gpt-5.4-pro": { "input": "30.00", "output": "180.00" },
+    "text-embedding-3-small": { "input": "0.02", "output": "0.00" }
+  }
+}

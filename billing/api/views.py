@@ -45,9 +45,12 @@ from billing.group_wallet_service import (
     UpdateGroupPolicyRequest,
     UpsertUserOverrideRequest,
 )
+from decimal import Decimal
+
 from billing.models import (
     GroupWallet,
     LiteLLMKey,
+    LiteLLMSpend,
     SystemRefillPolicy,
     Transaction,
     UserRefillOverride,
@@ -556,6 +559,12 @@ class BillingViewSet(viewsets.ViewSet):
         # enable_litellm_wallet flag suppresses the entire bucket — admins can
         # turn off this wallet type per group/user without revoking the keys.
         litellm_qs = LiteLLMKey.visible_for_user(user) if litellm_enabled else LiteLLMKey.objects.none()
+        # One indexed read covering every key the user can see, rather than an
+        # aggregate over Transaction per wallet row.
+        spend_by_key = {
+            str(row.litellm_key_id): row.total_reference_amount
+            for row in LiteLLMSpend.objects.filter(user=user)
+        }
         for key in litellm_qs:
             group_name = key.source_group.access_code if key.source_group else None
             wallets_list.append(
@@ -573,7 +582,12 @@ class BillingViewSet(viewsets.ViewSet):
                         == UserWalletPreferenceTypeChoice.LITELLM
                         and pref.active_wallet_ref_id == str(key.pk)
                     ),
-                    "status": {"kind": "EXTERNAL"},
+                    "status": {
+                        "kind": "EXTERNAL",
+                        "spend": str(
+                            spend_by_key.get(str(key.pk), Decimal("0.000000"))
+                        ),
+                    },
                 }
             )
 

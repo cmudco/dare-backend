@@ -4,7 +4,7 @@ from django.test import SimpleTestCase, TestCase
 
 from conversations.models import LLM
 from core.services.model_identity import pricing_keys
-from core.services.reference_pricing import find_reference_llm
+from core.services.reference_pricing import reference_rates
 
 
 class PricingKeyTests(SimpleTestCase):
@@ -34,15 +34,15 @@ class FindReferenceLLMTests(TestCase):
         )
 
     def test_matches_across_the_vendor_namespace(self):
-        found = find_reference_llm("wine-claude-opus-4-6")
+        found = reference_rates("wine-claude-opus-4-6")
         self.assertEqual(found, self.opus)
 
     def test_matches_a_full_deployment_address(self):
-        found = find_reference_llm("bedrock/us.anthropic.claude-opus-4-6-v1")
+        found = reference_rates("bedrock/us.anthropic.claude-opus-4-6-v1")
         self.assertEqual(found, self.opus)
 
     def test_returns_none_when_dare_does_not_offer_the_model(self):
-        self.assertIsNone(find_reference_llm("wine-qwen3-coder-next"))
+        self.assertIsNone(reference_rates("wine-qwen3-coder-next"))
 
 
 class LiteLLMMessageCostTests(TestCase):
@@ -111,12 +111,69 @@ class TierPricingTests(TestCase):
     def test_each_tier_prices_from_its_own_row(self):
         for tier in ("sol", "terra", "luna"):
             with self.subTest(tier=tier):
-                found = find_reference_llm(f"bedrock_mantle/openai.gpt-5.6-{tier}")
+                found = reference_rates(f"bedrock_mantle/openai.gpt-5.6-{tier}")
                 self.assertEqual(found.identifier, f"gpt-5.6-{tier}")
 
     def test_tiers_do_not_collapse_onto_one_row(self):
         found = {
-            find_reference_llm(f"gpt-5.6-{tier}").identifier
+            reference_rates(f"gpt-5.6-{tier}").identifier
             for tier in ("sol", "terra", "luna")
         }
         self.assertEqual(len(found), 3)
+
+
+class RegistryPricingTests(TestCase):
+    """Models DARE routes but does not offer fall back to the price registry."""
+
+    def test_registry_prices_a_model_with_no_dare_row(self):
+        rates = reference_rates("gpt-5-nano")
+        self.assertIsNotNone(rates)
+        self.assertEqual(rates.input_token_rate_per_million, Decimal("0.05"))
+        self.assertEqual(rates.output_token_rate_per_million, Decimal("0.40"))
+
+    def test_unknown_model_stays_unpriced(self):
+        # Better a blank cost than a wrong one in a billing table.
+        self.assertIsNone(reference_rates("acme/never-heard-of-it"))
+
+
+class SpendCounterTests(TestCase):
+    """The wallet indicator reads one row, so the counter must stay accurate."""
+
+    def test_each_call_adds_to_the_running_total(self):
+        from billing.constants import LiteLLMKeySourceChoice
+        from billing.models import LiteLLMKey, LiteLLMSpend
+        from conversations.models import Conversation, Message
+        from core.services.billing_service import BillingService
+        from users.models import User
+
+        user = User.objects.create_user(email="spender@example.com", password="x")
+        key = LiteLLMKey.objects.create(
+            label="gw",
+            base_url="https://proxy.example/v1",
+            api_key="k",
+            source=LiteLLMKeySourceChoice.USER,
+            owner_user=user,
+            created_by=user,
+        )
+        llm = LLM.objects.get(identifier="claude-sonnet-5")
+        llm.input_token_rate_per_million = Decimal("3.00")
+        llm.output_token_rate_per_million = Decimal("15.00")
+        llm.save()
+        conversation = Conversation.active_objects.create(user=user)
+
+        for _ in range(2):
+            message = Message.active_objects.create(
+                conversation=conversation,
+                sender_type=2,
+                litellm_key=key,
+                litellm_model_name="us.anthropic.claude-sonnet-5",
+            )
+            BillingService().finalize_ai_message(
+                message,
+                "hi",
+                {"input_tokens": 1_000_000, "output_tokens": 0},
+            )
+
+        spend = LiteLLMSpend.objects.get(user=user, litellm_key=key)
+        self.assertEqual(spend.call_count, 2)
+        self.assertEqual(spend.total_reference_amount, Decimal("6.000000"))

@@ -5,11 +5,12 @@ from typing import Dict, Optional
 from channels.db import database_sync_to_async
 from django.core.exceptions import ValidationError
 from django.db import transaction as db_transaction
+from django.db.models import F
 
 from api_keys.constants import BillingModeChoice
 from billing.constants import TransactionSourceChoice, TransactionTypeChoice
 from billing.exceptions import PaymentRequiredError
-from billing.models import Transaction, Wallet
+from billing.models import LiteLLMSpend, Transaction, Wallet
 from billing.wallet_router import (
     BOT_WALLET_BYO,
     BOT_WALLET_DARE,
@@ -19,7 +20,7 @@ from billing.wallet_router import (
 )
 from conversations.models import LLM, Message
 from core.services.energy_service import compute_impact
-from core.services.reference_pricing import find_reference_llm
+from core.services.reference_pricing import reference_rates
 from users.constants import AuthSourceChoice
 from users.models import User
 from workflows.models import Workflow, WorkflowNode, WorkflowRun
@@ -314,18 +315,20 @@ class BillingService:
         # internal UUID, which is meaningless to the user and would be a
         # surface for a key-id leak if scraped from the FE.
         key_label = getattr(message_obj.litellm_key, "label", None) or "LiteLLM proxy"
+        reference_amount = (
+            self._calculate_cost(
+                reference_llm,
+                message_obj.input_tokens,
+                message_obj.output_tokens,
+            )
+            if reference_llm is not None
+            else None
+        )
+        self._accumulate_litellm_spend(message_obj, reference_amount)
         Transaction.objects.create(
             user=conversation.user,
             amount=Decimal("0.00"),
-            reference_amount=(
-                self._calculate_cost(
-                    reference_llm,
-                    message_obj.input_tokens,
-                    message_obj.output_tokens,
-                )
-                if reference_llm is not None
-                else None
-            ),
+            reference_amount=reference_amount,
             llm=None,
             llm_name=message_obj.litellm_model_name,
             type=TransactionTypeChoice.DEBIT,
@@ -339,6 +342,27 @@ class BillingService:
             output_tokens=message_obj.output_tokens,
             billing_mode=BillingModeChoice.LITELLM,
             platform=conversation.source,
+        )
+
+    @staticmethod
+    def _accumulate_litellm_spend(message_obj: Message, amount) -> None:
+        """Add one call to this user's running total for this key.
+
+        Written here rather than summed on read: the wallet indicator renders
+        on every page, and an aggregate over a growing transaction table would
+        get slower for exactly the heaviest users. F() expressions keep
+        concurrent turns from clobbering each other.
+        """
+        if amount is None:
+            return
+
+        spend, _created = LiteLLMSpend.objects.get_or_create(
+            user=message_obj.conversation.user,
+            litellm_key_id=message_obj.litellm_key_id,
+        )
+        LiteLLMSpend.objects.filter(pk=spend.pk).update(
+            total_reference_amount=F("total_reference_amount") + amount,
+            call_count=F("call_count") + 1,
         )
 
     def finalize_ai_message(
@@ -382,7 +406,7 @@ class BillingService:
                 # Transaction row for attribution + Recent Transactions
                 # visibility, and capture proxy-reported energy if present.
                 if message_obj.litellm_key_id is not None:
-                    reference_llm = find_reference_llm(message_obj.litellm_model_name)
+                    reference_llm = reference_rates(message_obj.litellm_model_name)
                     self._record_litellm_transaction(message_obj, reference_llm)
                     if reference_llm is not None:
                         message_obj.cost = self._calculate_cost(
