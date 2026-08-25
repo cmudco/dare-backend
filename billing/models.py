@@ -234,7 +234,7 @@ class Wallet(TimeStampMixin):
         """
         return f"Wallet of {self.user.email} with balance {self.display_balance}"
 
-def _format_usd(value):
+def format_usd(value):
     """Render a USD figure, keeping sub-cent amounts legible rather than $0.00."""
     if value is None:
         return "No amount"
@@ -416,14 +416,14 @@ class Transaction(TimeStampMixin):
 
     @property
     def display_amount(self):
-        return _format_usd(self.amount)
+        return format_usd(self.amount)
 
     @property
     def display_reference_amount(self):
         """Formatted reference cost, or None when there is nothing to show."""
         if self.reference_amount is None:
             return None
-        return _format_usd(self.reference_amount)
+        return format_usd(self.reference_amount)
 
     def save(self, *args, **kwargs):
         """

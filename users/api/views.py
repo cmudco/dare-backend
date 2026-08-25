@@ -127,10 +127,13 @@ class UserStatsView(APIView):
 
         tagged_files_count = File.active_objects.filter(user=user, tags__isnull=False).count()
 
+        # Every debited call, including proxy-routed ones. Those carry no
+        # ``llm`` row, and filtering them out here understated the token
+        # counts for anyone on a LiteLLM key. Tokens are a count, not money —
+        # unlike cost, they are the same quantity whoever paid for the call.
         token_stats = Transaction.objects.filter(
             user=user,
             type=TransactionTypeChoice.DEBIT,
-            llm__isnull=False
         ).aggregate(
             total_input_tokens=Sum('input_tokens'),
             total_output_tokens=Sum('output_tokens')
