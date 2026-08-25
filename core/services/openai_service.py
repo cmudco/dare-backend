@@ -272,7 +272,7 @@ class OpenAIService:
         else:
             params["max_tokens"] = max_tokens
 
-        self.capabilities.apply_sampling_params(params, temperature, effort)
+        self._apply_openai_sampling(params, temperature, effort)
 
         try:
             response = await self.client.chat.completions.create(**params)
@@ -308,7 +308,7 @@ class OpenAIService:
         else:
             params["max_tokens"] = max_tokens
 
-        self.capabilities.apply_sampling_params(params, 0.0)
+        self._apply_openai_sampling(params, 0.0)
         response = await self.client.chat.completions.parse(**params)
         parsed = response.choices[0].message.parsed
         if parsed is None:
@@ -459,6 +459,25 @@ class OpenAIService:
 
         return await self.client.chat.completions.create(**kwargs)
 
+    def _apply_openai_sampling(
+        self,
+        params: Dict,
+        temperature: float,
+        effort: Optional[str] = None,
+    ) -> None:
+        """Apply generation controls in the OpenAI dialect.
+
+        Each service owns its own dialect. ``output_config`` and ``thinking``
+        are Anthropic shapes and belong to ClaudeService; sending either to an
+        OpenAI client fails the request as an unknown argument.
+        """
+        if self.capabilities.supports_temperature:
+            params["temperature"] = temperature
+
+        resolved_effort = self.capabilities.resolve_effort(effort)
+        if resolved_effort:
+            params["reasoning_effort"] = resolved_effort
+
     def _build_chat_completion_params(
         self,
         messages: List[Dict],
@@ -492,7 +511,7 @@ class OpenAIService:
         else:
             params["max_tokens"] = max_tokens
 
-        self.capabilities.apply_sampling_params(params, temperature, effort)
+        self._apply_openai_sampling(params, temperature, effort)
 
         # Add tools if provided (for function calling like MCP)
         if tools:
@@ -577,7 +596,7 @@ class OpenAIService:
         else:
             params["max_tokens"] = 1024
 
-        self.capabilities.apply_sampling_params(params, 0.0)
+        self._apply_openai_sampling(params, 0.0)
 
         return await self.client.chat.completions.create(**params)
 

@@ -62,9 +62,7 @@ class CapabilityResolutionTests(SimpleTestCase):
         capabilities = ModelCapabilities.from_llm(
             SimpleNamespace(identifier="gpt-5.6-sol", provider="custom")
         )
-        params = {}
-        capabilities.apply_sampling_params(params, temperature=0.7)
-        self.assertNotIn("temperature", params)
+        self.assertFalse(capabilities.supports_temperature)
 
     def test_explicit_flag_outranks_the_family(self):
         capabilities = ModelCapabilities.from_llm(
@@ -78,9 +76,7 @@ class CapabilityResolutionTests(SimpleTestCase):
         capabilities = ModelCapabilities.from_llm(
             SimpleNamespace(identifier="wine-llama3-70b-instruct", provider="custom")
         )
-        params = {}
-        capabilities.apply_sampling_params(params, temperature=0.7)
-        self.assertEqual(params["temperature"], 0.7)
+        self.assertTrue(capabilities.supports_temperature)
 
 
 def proxy_service(model_name):

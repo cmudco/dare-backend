@@ -212,7 +212,7 @@ class ClaudeService:
                 "schema": response_schema,
             },
         }
-        self.capabilities.apply_sampling_params(params, temperature, effort)
+        self._apply_claude_sampling(params, temperature, effort)
         self._move_output_config_to_extra_body(params)
 
         if system_message:
@@ -314,7 +314,7 @@ class ClaudeService:
             "messages": converted_messages,
             "stream": True,
         }
-        self.capabilities.apply_sampling_params(params, temperature, effort)
+        self._apply_claude_sampling(params, temperature, effort)
         self._move_output_config_to_extra_body(params)
 
         # Add system message if present
@@ -335,6 +335,31 @@ class ClaudeService:
             # Let LLM decide when to use tools (auto is default, so no need to set explicitly)
 
         return params
+
+    def _apply_claude_sampling(
+        self,
+        params: Dict,
+        temperature: float,
+        effort: Optional[str] = None,
+    ) -> None:
+        """Apply generation controls in the Anthropic dialect.
+
+        ``output_config`` and ``thinking`` are Anthropic shapes, so they are
+        written here rather than by a shared helper — every other transport
+        rejects them as unknown arguments.
+        """
+        if self.capabilities.supports_temperature:
+            params["temperature"] = temperature
+
+        resolved_effort = self.capabilities.resolve_effort(effort)
+        if resolved_effort:
+            params["output_config"] = {"effort": resolved_effort}
+
+        if (
+            self.capabilities.supports_adaptive_thinking
+            and self.capabilities.default_adaptive_thinking_enabled
+        ):
+            params["thinking"] = {"type": "adaptive", "display": "summarized"}
 
     @staticmethod
     def _move_output_config_to_extra_body(params: Dict) -> None:

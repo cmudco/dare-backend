@@ -26,11 +26,9 @@ from core.services.model_capabilities import ModelCapabilities
 logger = logging.getLogger(__name__)
 
 
-# Every key this transport can legitimately send. The proxy speaks the OpenAI
-# chat-completions dialect, and AsyncOpenAI rejects an unknown keyword by
-# failing the whole request — so a param injected by a shared, provider-shaped
-# helper takes the turn down. Anything outside this set is dropped and logged
-# instead of reaching the client.
+# Every key this transport can legitimately send. AsyncOpenAI rejects an
+# unknown keyword by failing the whole request, so anything outside this set is
+# dropped and logged rather than taking the turn down at the provider.
 OPENAI_CHAT_PARAMS = frozenset(
     {
         "model",
@@ -50,16 +48,24 @@ OPENAI_CHAT_PARAMS = frozenset(
 class CustomLLMService:
     """Service for interacting with custom OpenAI-compatible LLM endpoints."""
 
-    def __init__(self, llm: LLM, api_key: Optional[str] = None):
+    def __init__(
+        self,
+        llm: LLM,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+    ):
         """
         Initialize Custom LLM service with OpenAI-compatible endpoint.
 
         Args:
             llm: LLM model instance with configuration including base_url
             api_key: Optional API key override. If not provided, uses provider key resolution
+            base_url: Endpoint override. LiteLLM dispatch passes the proxy URL
+                from the wallet, since a synthetic model carries no base_url
+                of its own.
         """
-        # Validate that base_url is provided for custom endpoints
-        if not llm.base_url:
+        endpoint = base_url or llm.base_url
+        if not endpoint:
             raise ValueError(
                 f"Custom LLM '{llm.name}' requires a base_url to be configured. "
                 "Please set the base_url field in the Django admin."
@@ -72,15 +78,15 @@ class CustomLLMService:
         # Initialize OpenAI client with custom base URL
         self.client = AsyncOpenAI(
             api_key=api_key,
-            base_url=llm.base_url,
+            base_url=endpoint,
             http_client=httpx.AsyncClient(verify=False),  # bypass SSL verification
         )
         self.model = llm.identifier
         self.is_reasoning = llm.is_reasoning
-        self.base_url = llm.base_url
+        self.base_url = endpoint
         self.capabilities = ModelCapabilities.from_llm(llm)
 
-        logger.info(f"Initialized CustomLLMService for {llm.name} at {llm.base_url}")
+        logger.info(f"Initialized CustomLLMService for {llm.name} at {endpoint}")
 
     async def stream_chat_completion(
         self,
@@ -89,7 +95,7 @@ class CustomLLMService:
         temperature: float = 0.7,
         effort: Optional[str] = None,
         images: List[Dict] = None,
-        tools: Optional[List[Dict]] = None
+        tools: Optional[List[Dict]] = None,
     ) -> AsyncGenerator[LLMStreamEvent, None]:
         """
         Stream chat completions from custom OpenAI-compatible endpoint.
@@ -157,9 +163,7 @@ class CustomLLMService:
     # ==================== Private Methods ====================
 
     def _prepare_messages(
-        self,
-        messages: List[Dict],
-        images: Optional[List[Dict]]
+        self, messages: List[Dict], images: Optional[List[Dict]]
     ) -> List[Dict]:
         """
         Prepare messages by adding vision content if needed.
@@ -234,10 +238,9 @@ class CustomLLMService:
         }
 
         # Reasoning models rename the token ceiling and reject sampling
-        # controls. Effort is applied here rather than through
-        # `apply_sampling_params`, which emits the Anthropic-shaped
-        # `output_config` that only ClaudeService knows how to forward; this
-        # transport speaks OpenAI and rejects it as an unknown argument.
+        # controls. Generation controls are written in this transport's own
+        # dialect: every service owns its shape, so an Anthropic field can
+        # never reach an OpenAI-compatible endpoint.
         if self.is_reasoning:
             params["max_completion_tokens"] = max_tokens
         else:
