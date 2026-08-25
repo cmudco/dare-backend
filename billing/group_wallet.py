@@ -13,6 +13,9 @@ any time.
 import logging
 from typing import Optional
 
+from django.db.models import Q
+from django.utils import timezone
+
 from billing.constants import LiteLLMKeySourceChoice, UserWalletPreferenceTypeChoice
 from billing.models import LiteLLMKey, UserWalletPreference
 from feature_flags.services import is_flag_enabled_for_user
@@ -29,23 +32,25 @@ def group_default_key(group) -> Optional[LiteLLMKey]:
     if group is None:
         return None
 
+    now = timezone.now()
     keys = list(
         LiteLLMKey.objects.filter(
             source=LiteLLMKeySourceChoice.ADMIN_GROUP,
             source_group=group,
-        ).exclude(api_key="")[:2]
+        )
+        .exclude(api_key="")
+        .filter(Q(expires_at__isnull=True) | Q(expires_at__gt=now))[:2]
     )
-    usable = [key for key in keys if not getattr(key, "is_expired", False)]
 
-    if len(usable) != 1:
-        if len(usable) > 1:
+    if len(keys) != 1:
+        if len(keys) > 1:
             logger.info(
                 "Access code group %s has multiple LiteLLM keys; leaving members "
                 "on their existing wallet rather than guessing.",
                 group.pk,
             )
         return None
-    return usable[0]
+    return keys[0]
 
 
 def adopt_group_wallet(user) -> bool:

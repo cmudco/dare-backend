@@ -2,8 +2,8 @@ import logging
 from decimal import Decimal
 
 from dj_rest_auth.registration.serializers import RegisterSerializer
-from dj_rest_auth.serializers import UserDetailsSerializer, LoginSerializer
-from django.contrib.auth import get_user_model, authenticate
+from dj_rest_auth.serializers import LoginSerializer, UserDetailsSerializer
+from django.contrib.auth import authenticate, get_user_model
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
@@ -11,9 +11,9 @@ from billing.constants import TransactionSourceChoice
 from billing.group_wallet import adopt_group_wallet
 from billing.models import Wallet
 from billing.services import WalletService
-from prompts.api.serializers import PromptSerializer
 from core.storage.constants import StorageBackendChoice
-from users.constants import VectorDBChoice, AuthSourceChoice, RoleChoice
+from prompts.api.serializers import PromptSerializer
+from users.constants import AuthSourceChoice, RoleChoice, VectorDBChoice
 from users.models import AccessCodeGroup
 from users.utils import detect_platform_from_request, get_platform_access_permission
 
