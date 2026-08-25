@@ -39,6 +39,11 @@ _NORMALIZERS: Tuple[Tuple[re.Pattern, str], ...] = (
 )
 
 
+_VENDOR_PREFIX = re.compile(
+    r"^(?:anthropic|meta|google|deepseek|qwen|mistral|amazon|cohere|openai)-"
+)
+
+
 @dataclass(frozen=True)
 class ModelFamily:
     """Capability profile shared by every deployment of one model family."""
@@ -81,6 +86,22 @@ def normalize_identifier(raw_identifier: str) -> str:
     for pattern, replacement in _NORMALIZERS:
         value = pattern.sub(replacement, value, count=1)
     return value
+
+
+def candidate_keys(raw_identifier: str) -> Tuple[str, ...]:
+    """Keys a raw identifier could match a DARE-side model under.
+
+    Normalization keeps a leading vendor namespace, since for some models it
+    carries the only distinguishing token. DARE's own identifiers omit it, so
+    matching the two sides needs the vendor-less spelling as well.
+    """
+    canonical = normalize_identifier(raw_identifier)
+    if not canonical:
+        return ()
+    stripped = _VENDOR_PREFIX.sub("", canonical, count=1)
+    if stripped != canonical:
+        return (canonical, stripped)
+    return (canonical,)
 
 
 def resolve_family(raw_identifier: str) -> Optional[ModelFamily]:

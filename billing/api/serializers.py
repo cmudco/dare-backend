@@ -28,6 +28,7 @@ class WalletSerializer(serializers.ModelSerializer):
 
 class TransactionSerializer(serializers.ModelSerializer):
     display_amount = serializers.CharField(read_only=True)
+    display_reference_amount = serializers.CharField(read_only=True)
     type = serializers.CharField(source="get_type_display")
     llm = LLMSerializer(read_only=True)
     billing_mode = serializers.CharField(source="get_billing_mode_display", read_only=True)
@@ -40,6 +41,7 @@ class TransactionSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "display_amount",
+            "display_reference_amount",
             "type",
             "source",
             "related_group_code",
