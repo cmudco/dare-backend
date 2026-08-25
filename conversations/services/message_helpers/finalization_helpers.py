@@ -15,6 +15,7 @@ from typing import Awaitable, Callable, Dict, Optional
 
 from channels.db import database_sync_to_async
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import IntegrityError
 
 from billing.exceptions import PaymentRequiredError
 from conversations.constants import ErrorCode, ErrorMessage
@@ -24,6 +25,14 @@ from conversations.services.websocket_response_service import \
 from core.services.sb_client import SocraticBooksClient
 
 logger = logging.getLogger(__name__)
+
+
+@database_sync_to_async
+def _conversation_was_deleted(conversation_id) -> bool:
+    """True when the conversation this message belonged to is gone."""
+    from conversations.models import Conversation
+
+    return not Conversation.objects.filter(pk=conversation_id).exists()
 
 
 async def finalize_message(
@@ -65,6 +74,21 @@ async def finalize_message(
         mark_as_regenerated_callback: Async callback for marking message as regenerated
     """
     try:
+        # Deleting a conversation takes its messages with it. If that happened
+        # while this answer was still streaming there is nothing left to
+        # finalize, and going ahead is actively harmful: `save()` falls back to
+        # INSERT when its UPDATE matches no rows, so it would recreate the
+        # message against a conversation that no longer exists and fail on the
+        # foreign key. Nobody is waiting for the payload either — the client
+        # closed the chat.
+        if await _conversation_was_deleted(message_obj.conversation_id):
+            logger.info(
+                "Conversation %s was deleted mid-stream; discarding message %s.",
+                message_obj.conversation_id,
+                message_obj.id,
+            )
+            return
+
         # Save original message content on first regeneration
         if regenerate and not message_obj.original_message:
             message_obj.original_message = message_obj.message
@@ -116,6 +140,21 @@ async def finalize_message(
     except PaymentRequiredError as e:
         logger.error("Payment required finalizing message: %s", str(e))
         await send_error_callback(e.code, str(e), e.details)
+    except IntegrityError:
+        # Same deletion, lost to the race between the check above and the
+        # write. Expected, not a fault: log it as such rather than paging
+        # someone. Any other integrity failure is a real bug and still reports.
+        if await _conversation_was_deleted(message_obj.conversation_id):
+            logger.info(
+                "Conversation %s was deleted mid-finalize; discarding message %s.",
+                message_obj.conversation_id,
+                message_obj.id,
+            )
+            return
+        logger.exception("Integrity error finalizing message")
+        await send_error_callback(
+            ErrorCode.FINALIZE_ERROR, ErrorMessage.FINALIZE_ERROR, None
+        )
     except Exception as e:
         logger.exception(f"Error finalizing message: {str(e)}")
         await send_error_callback(
