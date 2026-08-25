@@ -44,7 +44,7 @@ class ResolveFamilyTests(SimpleTestCase):
         self.assertIsNotNone(family)
         self.assertTrue(family.is_reasoning)
         self.assertFalse(family.supports_temperature)
-        self.assertTrue(family.supports_effort)
+        self.assertFalse(family.supports_effort)
 
     def test_ordinary_chat_models_have_no_family(self):
         for identifier in (
@@ -123,6 +123,9 @@ class ProxyParamShapeTests(SimpleTestCase):
         self.assertEqual(params["max_completion_tokens"], 1024)
         self.assertNotIn("max_tokens", params)
         self.assertNotIn("temperature", params)
+        # This family exposes no effort control, so a requested effort is
+        # dropped rather than sent as a parameter the model didn't offer.
+        self.assertNotIn("reasoning_effort", params)
 
     def test_ordinary_proxy_model_keeps_temperature_and_sends_no_effort(self):
         params = proxy_service(
@@ -132,3 +135,12 @@ class ProxyParamShapeTests(SimpleTestCase):
         )
         self.assertEqual(params["temperature"], 0.7)
         self.assertNotIn("reasoning_effort", params)
+
+    def test_unknown_params_are_dropped_before_reaching_the_client(self):
+        # A shared helper injecting a provider-shaped key must not be able to
+        # take the whole turn down with an unknown-keyword error.
+        service = proxy_service("wine-llama3-70b-instruct")
+        params = service._drop_unsupported(
+            {"model": "m", "output_config": {"effort": "high"}}
+        )
+        self.assertEqual(params, {"model": "m"})

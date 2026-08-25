@@ -26,6 +26,27 @@ from core.services.model_capabilities import ModelCapabilities
 logger = logging.getLogger(__name__)
 
 
+# Every key this transport can legitimately send. The proxy speaks the OpenAI
+# chat-completions dialect, and AsyncOpenAI rejects an unknown keyword by
+# failing the whole request — so a param injected by a shared, provider-shaped
+# helper takes the turn down. Anything outside this set is dropped and logged
+# instead of reaching the client.
+OPENAI_CHAT_PARAMS = frozenset(
+    {
+        "model",
+        "messages",
+        "stream",
+        "stream_options",
+        "max_tokens",
+        "max_completion_tokens",
+        "temperature",
+        "reasoning_effort",
+        "tools",
+        "tool_choice",
+    }
+)
+
+
 class CustomLLMService:
     """Service for interacting with custom OpenAI-compatible LLM endpoints."""
 
@@ -232,6 +253,19 @@ class CustomLLMService:
             params["tools"] = tools
             params["tool_choice"] = "auto"
 
+        return self._drop_unsupported(params)
+
+    @staticmethod
+    def _drop_unsupported(params: Dict) -> Dict:
+        """Strip keys this transport can't send, so one stray param can't 400."""
+        unsupported = set(params) - OPENAI_CHAT_PARAMS
+        if unsupported:
+            logger.warning(
+                "Dropping params this transport cannot send: %s",
+                sorted(unsupported),
+            )
+            for key in unsupported:
+                params.pop(key)
         return params
 
     # ==================== Static Methods ====================
