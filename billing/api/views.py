@@ -74,6 +74,15 @@ def _validation_response(exc: ValidationError):
     return Response(detail, status=status.HTTP_400_BAD_REQUEST)
 
 
+# Energy is recorded against the model that produced it, but `Message.llm`
+# is SET_NULL, so retiring a model leaves its messages pointing at nothing.
+# The consumption still happened and still belongs in the total, so the rows
+# are kept under one heading rather than dropped — which would make the chart
+# disagree with the headline figure.
+DELETED_MODEL_LABEL = "Deleted model"
+DELETED_MODEL_PROVIDER = "unknown"
+
+
 def _model_stat_row(
     *,
     llm_id,
@@ -332,9 +341,9 @@ class BillingViewSet(viewsets.ViewSet):
         models_breakdown = [
             {
                 "llmId": row["llm__id"],
-                "llmName": row["llm__name"],
-                "llmIdentifier": row["llm__identifier"],
-                "llmProvider": row["llm__provider"],
+                "llmName": row["llm__name"] or DELETED_MODEL_LABEL,
+                "llmIdentifier": row["llm__identifier"] or DELETED_MODEL_LABEL,
+                "llmProvider": row["llm__provider"] or DELETED_MODEL_PROVIDER,
                 "energyWh": float(row["energy_wh_sum"] or 0),
                 "carbonG": float(row["carbon_g_sum"] or 0),
                 "waterMl": float(row["water_ml_sum"] or 0),
