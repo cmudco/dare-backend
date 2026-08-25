@@ -62,11 +62,9 @@ class RegistryLookupTests(TestCase):
         # Better a blank cost than a wrong one in a billing table.
         self.assertIsNone(reference_rates("acme/never-heard-of-it"))
 
-
-class ModelTableFallbackTests(TestCase):
-    """Anything the registry does not carry still resolves from an LLM row."""
-
-    def test_llm_row_prices_a_model_the_registry_lacks(self):
+    def test_a_dare_model_row_does_not_price_a_proxy_call(self):
+        # The model table holds what DARE charges on its own keys, which says
+        # nothing about what a proxy route cost. Only the registry knows that.
         LLM.objects.create(
             name="House model",
             identifier="dare-house-model-x1",
@@ -74,9 +72,7 @@ class ModelTableFallbackTests(TestCase):
             input_token_rate_per_million=Decimal("7.00"),
             output_token_rate_per_million=Decimal("21.00"),
         )
-        rates = reference_rates("dare-house-model-x1")
-        self.assertEqual(rates.input_token_rate_per_million, Decimal("7.00"))
-        self.assertEqual(rates.output_token_rate_per_million, Decimal("21.00"))
+        self.assertIsNone(reference_rates("dare-house-model-x1"))
 
 
 class SpendCounterTests(TestCase):
