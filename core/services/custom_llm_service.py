@@ -26,6 +26,27 @@ from core.services.model_capabilities import ModelCapabilities
 logger = logging.getLogger(__name__)
 
 
+# Every key this transport can legitimately send. The proxy speaks the OpenAI
+# chat-completions dialect, and AsyncOpenAI rejects an unknown keyword by
+# failing the whole request — so a param injected by a shared, provider-shaped
+# helper takes the turn down. Anything outside this set is dropped and logged
+# instead of reaching the client.
+OPENAI_CHAT_PARAMS = frozenset(
+    {
+        "model",
+        "messages",
+        "stream",
+        "stream_options",
+        "max_tokens",
+        "max_completion_tokens",
+        "temperature",
+        "reasoning_effort",
+        "tools",
+        "tool_choice",
+    }
+)
+
+
 class CustomLLMService:
     """Service for interacting with custom OpenAI-compatible LLM endpoints."""
 
@@ -212,21 +233,39 @@ class CustomLLMService:
             "stream_options": {"include_usage": True},
         }
 
-        # Reasoning models use different parameter names and reject the
-        # sampling controls entirely; effort is the one knob they do take.
+        # Reasoning models rename the token ceiling and reject sampling
+        # controls. Effort is applied here rather than through
+        # `apply_sampling_params`, which emits the Anthropic-shaped
+        # `output_config` that only ClaudeService knows how to forward; this
+        # transport speaks OpenAI and rejects it as an unknown argument.
         if self.is_reasoning:
             params["max_completion_tokens"] = max_tokens
-            resolved_effort = self.capabilities.resolve_effort(effort)
-            if resolved_effort:
-                params["reasoning_effort"] = resolved_effort
         else:
             params["max_tokens"] = max_tokens
-            self.capabilities.apply_sampling_params(params, temperature, effort)
+            if self.capabilities.supports_temperature:
+                params["temperature"] = temperature
+
+        resolved_effort = self.capabilities.resolve_effort(effort)
+        if resolved_effort:
+            params["reasoning_effort"] = resolved_effort
 
         if tools:
             params["tools"] = tools
             params["tool_choice"] = "auto"
 
+        return self._drop_unsupported(params)
+
+    @staticmethod
+    def _drop_unsupported(params: Dict) -> Dict:
+        """Strip keys this transport can't send, so one stray param can't 400."""
+        unsupported = set(params) - OPENAI_CHAT_PARAMS
+        if unsupported:
+            logger.warning(
+                "Dropping params this transport cannot send: %s",
+                sorted(unsupported),
+            )
+            for key in unsupported:
+                params.pop(key)
         return params
 
     # ==================== Static Methods ====================

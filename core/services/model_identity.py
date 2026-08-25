@@ -62,7 +62,6 @@ FAMILIES: Tuple[ModelFamily, ...] = (
         patterns=(re.compile(r"^gpt-5(?:\.\d+)?$"),),
         is_reasoning=True,
         supports_temperature=False,
-        supports_effort=True,
     ),
     ModelFamily(
         key="claude-reasoning-effort",
