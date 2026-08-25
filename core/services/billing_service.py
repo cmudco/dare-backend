@@ -1,6 +1,6 @@
 import logging
 from decimal import Decimal
-from typing import Dict
+from typing import Dict, Optional
 
 from channels.db import database_sync_to_async
 from django.core.exceptions import ValidationError
@@ -284,7 +284,9 @@ class BillingService:
 
     # ------------------------------------------------------------------
 
-    def _record_litellm_transaction(self, message_obj: Message) -> None:
+    def _record_litellm_transaction(
+        self, message_obj: Message, reference_llm: Optional[LLM]
+    ) -> None:
         """Emit a $0 Transaction row for a LiteLLM-routed message.
 
         DARE doesn't debit its own wallet for LiteLLM dispatch (the user
@@ -299,9 +301,11 @@ class BillingService:
         returns reliably is the ``usage`` token block, which has already
         been stamped on ``message_obj`` by the caller.
 
-        ``reference_amount`` carries what the call would have cost at DARE's
-        rates when the proxy is serving a model DARE also offers. It exists so
-        usage reporting isn't blank; it is never charged.
+        ``reference_llm`` is the DARE-side model this proxy identifier maps
+        to, resolved by the caller because it also prices the message. Its
+        rates give ``reference_amount``: what the call would have cost at
+        DARE's prices. It exists so usage reporting isn't blank, and is never
+        charged.
         """
         conversation = message_obj.conversation
         # Audit attribution lives on Message.litellm_key (the FK). The
@@ -310,7 +314,6 @@ class BillingService:
         # internal UUID, which is meaningless to the user and would be a
         # surface for a key-id leak if scraped from the FE.
         key_label = getattr(message_obj.litellm_key, "label", None) or "LiteLLM proxy"
-        reference_llm = find_reference_llm(message_obj.litellm_model_name)
         Transaction.objects.create(
             user=conversation.user,
             amount=Decimal("0.00"),
@@ -379,7 +382,14 @@ class BillingService:
                 # Transaction row for attribution + Recent Transactions
                 # visibility, and capture proxy-reported energy if present.
                 if message_obj.litellm_key_id is not None:
-                    self._record_litellm_transaction(message_obj)
+                    reference_llm = find_reference_llm(message_obj.litellm_model_name)
+                    self._record_litellm_transaction(message_obj, reference_llm)
+                    if reference_llm is not None:
+                        message_obj.cost = self._calculate_cost(
+                            reference_llm,
+                            message_obj.input_tokens,
+                            message_obj.output_tokens,
+                        )
                     message_obj.save()
                     return message_obj
 
