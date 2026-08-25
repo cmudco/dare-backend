@@ -5,6 +5,16 @@ on:
     branches:
       - dev
 
+# Deploys SSH into one staging box and run migrations against one database.
+# Merging several PRs in quick succession starts overlapping runs, and two
+# `migrate` commands racing on the same schema is not something to leave to
+# timing. Queue rather than cancel: an in-flight deploy is midway through a
+# remote install and migrate, so killing it could leave the server between
+# states. Pending runs still collapse to the newest commit.
+concurrency:
+  group: deploy-staging-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   deploy-staging:
     runs-on: ubuntu-latest
