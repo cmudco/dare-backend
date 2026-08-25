@@ -658,6 +658,55 @@ class LiteLLMKey(TimeStampMixin):
         return f"LiteLLMKey<{self.label} / {self.get_source_display()}>"
 
 
+class LiteLLMSpend(TimeStampMixin):
+    """Running total of what one user has spent through one LiteLLM key.
+
+    Kept as a counter rather than summed from Transaction on read: the wallet
+    chip renders on every page, and an aggregate over a growing transaction
+    table would get slower for exactly the heaviest users. Incremented in the
+    same place the Transaction is written, so the two cannot drift.
+
+    Amounts are reference costs — what the calls would have cost at DARE's
+    rates. Nothing here is charged; the user pays their proxy account directly.
+    """
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="litellm_spend",
+        verbose_name=_("User"),
+    )
+    litellm_key = models.ForeignKey(
+        "billing.LiteLLMKey",
+        on_delete=models.CASCADE,
+        related_name="spend_records",
+        verbose_name=_("LiteLLM Key"),
+    )
+    total_reference_amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=6,
+        default=Decimal("0.000000"),
+        verbose_name=_("Total Reference Amount"),
+        help_text=_(
+            "Cumulative reference cost of calls this user made through this "
+            "key, in USD. Reporting only — never charged."
+        ),
+    )
+    call_count = models.PositiveIntegerField(
+        default=0,
+        verbose_name=_("Call Count"),
+        help_text=_("Number of calls counted into the total."),
+    )
+
+    class Meta:
+        unique_together = ("user", "litellm_key")
+        verbose_name = _("LiteLLM Spend")
+        verbose_name_plural = _("LiteLLM Spend")
+
+    def __str__(self):
+        return f"LiteLLMSpend<{self.user.email} / {self.litellm_key.label}: {self.total_reference_amount}>"
+
+
 class UserWalletPreference(TimeStampMixin):
     """
     Per-user pointer to the active wallet for routing LLM calls. Created lazily

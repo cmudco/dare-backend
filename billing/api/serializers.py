@@ -211,6 +211,7 @@ class WalletStatusSerializer(serializers.Serializer):
     kind = serializers.CharField()  # "BALANCE" or "EXTERNAL"
     balance = serializers.CharField(required=False, allow_null=True)        # BALANCE only
     last_refill_at = serializers.DateTimeField(required=False, allow_null=True)  # BALANCE only
+    spend = serializers.CharField(required=False, allow_null=True)          # EXTERNAL only
 
 
 class UnifiedWalletSerializer(serializers.Serializer):
