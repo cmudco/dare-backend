@@ -1,6 +1,8 @@
 from http import HTTPStatus
 from typing import Any
 
+from django.db import transaction
+
 from prompts.models import Prompt, PublishedPrompt
 from sharing.services.sharing_service import SharingService
 
@@ -19,8 +21,9 @@ class PromptService:
     @staticmethod
     def create_prompt(validated_data: dict[str, Any], user, is_default: bool) -> Prompt:
         """Create a prompt for the current user."""
-        prompt = Prompt.active_objects.create(user=user, **validated_data)
-        PromptService.set_default_prompt(user, prompt, is_default)
+        with transaction.atomic():
+            prompt = Prompt.active_objects.create(user=user, **validated_data)
+            PromptService.set_default_prompt(user, prompt, is_default)
         return prompt
 
     @staticmethod
@@ -38,15 +41,16 @@ class PromptService:
                 HTTPStatus.BAD_REQUEST,
             )
 
-        new_prompt = Prompt.active_objects.create(
-            user=prompt.user,
-            title=validated_data.get("title", prompt.title),
-            content=validated_data.get("content", prompt.content),
-            version=prompt.version + 1,
-            parent=prompt,
-            forked_from_user=prompt.forked_from_user,
-        )
-        PromptService.set_default_prompt(user, new_prompt, is_default)
+        with transaction.atomic():
+            new_prompt = Prompt.active_objects.create(
+                user=prompt.user,
+                title=validated_data.get("title", prompt.title),
+                content=validated_data.get("content", prompt.content),
+                version=prompt.version + 1,
+                parent=prompt,
+                forked_from_user=prompt.forked_from_user,
+            )
+            PromptService.set_default_prompt(user, new_prompt, is_default)
         return new_prompt
 
     @staticmethod
@@ -125,7 +129,9 @@ class PromptService:
             return
 
         user.default_prompt = prompt
-        user.save(update_fields=["default_prompt", "updated_at"])
+        # `User` is not a `BaseModel` and has no `updated_at`; naming it here
+        # made Django reject the write outright.
+        user.save(update_fields=["default_prompt"])
 
     @staticmethod
     def _get_latest_family_version(prompt: Prompt) -> int:
