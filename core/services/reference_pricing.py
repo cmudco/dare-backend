@@ -15,19 +15,28 @@ import logging
 from typing import Optional
 
 from conversations.models import LLM
-from core.services.model_identity import candidate_keys, normalize_identifier
+from core.services.model_identity import pricing_keys
 
 logger = logging.getLogger(__name__)
 
 
 def find_reference_llm(model_name: str) -> Optional[LLM]:
-    """Return the DARE-side model a proxy identifier refers to, if any."""
-    wanted = set(candidate_keys(model_name))
+    """Return the DARE-side model a proxy identifier refers to, if any.
+
+    An exact identifier match wins before a normalized one, and rows are read
+    in a fixed order, so a model can never be priced from a sibling that
+    happens to be seeded first.
+    """
+    wanted = set(pricing_keys(model_name))
     if not wanted:
         return None
 
-    for llm in LLM.objects.exclude(identifier=""):
-        if normalize_identifier(llm.identifier) in wanted:
+    rows = list(LLM.objects.exclude(identifier="").order_by("pk"))
+    for llm in rows:
+        if llm.identifier.strip().lower() in wanted:
+            return llm
+    for llm in rows:
+        if wanted.intersection(pricing_keys(llm.identifier)):
             return llm
 
     logger.info(
