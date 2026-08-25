@@ -7,12 +7,18 @@ that is real even when DARE isn't the one charging for it.
 
 Rates come from one of two places, in order:
 
-1. an ``LLM`` row, when the proxy is serving a model DARE also offers — that
-   row is admin-editable and authoritative;
-2. ``model_prices.json``, for models DARE routes but does not itself offer.
+1. ``model_prices.json``, synced from LiteLLM's published price file. It is
+   keyed by the identifiers a proxy actually serves, so a gateway model id
+   matches verbatim — and it distinguishes routes the model table cannot, such
+   as a Bedrock-fronted model costing more than the same model direct.
+2. an ``LLM`` row, for anything the registry does not carry.
 
 Anything matching neither stays unpriced. Inventing a rate would put a wrong
 number in a billing table, which is worse than showing none.
+
+The registry is a module-level dict read once at import, so the common case
+costs one dictionary lookup and no query at all. Only a model the registry
+does not know reaches the database.
 """
 
 import json
@@ -27,7 +33,7 @@ from core.services.model_identity import pricing_keys
 
 logger = logging.getLogger(__name__)
 
-_PRICES_PATH = Path(__file__).with_name("model_prices.json")
+PRICES_PATH = Path(__file__).with_name("model_prices.json")
 
 
 @dataclass(frozen=True)
@@ -44,10 +50,10 @@ class ReferenceRates:
 
 def _load_registry() -> Dict[str, ReferenceRates]:
     try:
-        payload = json.loads(_PRICES_PATH.read_text())
+        payload = json.loads(PRICES_PATH.read_text())
     except (OSError, ValueError):
         logger.exception(
-            "Could not read %s; registry pricing unavailable.", _PRICES_PATH
+            "Could not read %s; registry pricing unavailable.", PRICES_PATH
         )
         return {}
 
@@ -85,22 +91,29 @@ def _find_llm_row(wanted) -> Optional[LLM]:
 
 def reference_rates(model_name: str):
     """Rates to price a proxy-routed call with, or None when unknown."""
-    wanted = set(pricing_keys(model_name))
-    if not wanted:
+    exact = (model_name or "").strip().lower()
+    if not exact:
         return None
 
-    row = _find_llm_row(wanted)
-    if row is not None:
-        return row
+    # The overwhelmingly common path: the gateway serves the identifier the
+    # registry is keyed by, so this resolves without touching the database.
+    rates = REGISTRY.get(exact)
+    if rates is not None:
+        return rates
 
+    wanted = set(pricing_keys(model_name))
     for key in wanted:
         rates = REGISTRY.get(key)
         if rates is not None:
             return rates
 
+    row = _find_llm_row(wanted)
+    if row is not None:
+        return row
+
     logger.info(
-        "No rates for proxy identifier %s in either the model table or the "
-        "price registry; recording usage without a reference cost.",
+        "No rates for proxy identifier %s in either the price registry or the "
+        "model table; recording usage without a reference cost.",
         model_name,
     )
     return None
