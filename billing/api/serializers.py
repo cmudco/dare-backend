@@ -228,6 +228,8 @@ class UnifiedWalletSerializer(serializers.Serializer):
     status = WalletStatusSerializer()
     # Type-specific named fields:
     provider = serializers.CharField(required=False, allow_null=True)            # BYO only
+    title_model = serializers.CharField(required=False, allow_blank=True)        # LITELLM only
+    memory_model = serializers.CharField(required=False, allow_blank=True)       # LITELLM only
     source = serializers.ChoiceField(                                            # LITELLM only
         choices=LiteLLMKeySourceChoice.choices, required=False, allow_null=True
     )
@@ -255,11 +257,29 @@ class LiteLLMKeyCreateSerializer(serializers.Serializer):
     label = serializers.CharField(max_length=128)
     base_url = serializers.URLField()
     api_key = serializers.CharField(max_length=500, write_only=True)
+    title_model = serializers.CharField(
+        max_length=255, required=False, allow_blank=True, default=""
+    )
+    memory_model = serializers.CharField(
+        max_length=255, required=False, allow_blank=True, default=""
+    )
 
 
-class LiteLLMKeyRenameSerializer(serializers.Serializer):
-    """Body for PATCH /api/billing/wallets/litellm/{id}/. Label change only."""
-    label = serializers.CharField(max_length=128)
+class LiteLLMKeyUpdateSerializer(serializers.Serializer):
+    """Body for PATCH /api/billing/wallets/litellm/{id}/.
+
+    Every field is optional so the modal can send only what changed. The two
+    model fields accept an empty string, which means "fall back to DARE's
+    default" — distinct from omitting the field, which leaves it as it was.
+    """
+
+    label = serializers.CharField(max_length=128, required=False)
+    title_model = serializers.CharField(
+        max_length=255, required=False, allow_blank=True
+    )
+    memory_model = serializers.CharField(
+        max_length=255, required=False, allow_blank=True
+    )
 
 
 class LiteLLMTestRequestSerializer(serializers.Serializer):
@@ -283,6 +303,8 @@ class LiteLLMKeyReadSerializer(serializers.ModelSerializer):
             "base_url",
             "source",
             "group_name",
+            "title_model",
+            "memory_model",
             "expires_at",
             "created_at",
             "updated_at",
