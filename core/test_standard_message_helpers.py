@@ -4,9 +4,13 @@ from unittest.mock import AsyncMock, patch
 from django.contrib.auth import get_user_model
 from django.test import SimpleTestCase, TestCase
 
-from conversations.models import Conversation, ConversationSummary
+from conversations.constants import SenderType
+from conversations.models import Conversation, ConversationSummary, Message
 from core.services.dtos import ContextConfig, LLMQueryRequest
-from core.services.llm_helpers.db_helpers import get_referenced_summaries_context
+from core.services.llm_helpers.db_helpers import (
+    get_referenced_conversations_context,
+    get_referenced_summaries_context,
+)
 from core.services.llm_helpers.standard_message_helpers import (
     append_document_access_status,
     append_saved_system_prompt,
@@ -136,3 +140,37 @@ class ReferencedSummaryScopeTests(TestCase):
 
         self.assertIn("Owned summary text.", context)
         self.assertNotIn("Other user's private summary.", context)
+
+
+class ReferencedConversationContextTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = get_user_model().objects.create_user(
+            email="conversation-owner@example.com",
+            password="x",
+        )
+        cls.conversation = Conversation.active_objects.create(
+            user=cls.user,
+            conversation_id="referenced-conversation",
+            title="Referenced conversation",
+        )
+        Message.active_objects.create(
+            conversation=cls.conversation,
+            sender_type=SenderType.PLAYER,
+            message="What is the answer?",
+        )
+        Message.active_objects.create(
+            conversation=cls.conversation,
+            sender_type=SenderType.AI_ASSISTANT,
+            message="The answer is 42.",
+        )
+
+    def test_formats_referenced_conversation_messages(self):
+        context = get_referenced_conversations_context.func(
+            [self.conversation.conversation_id],
+            self.user.id,
+        )
+
+        self.assertIn("Referenced Conversation: Referenced conversation", context)
+        self.assertIn("User: What is the answer?", context)
+        self.assertIn("Assistant: The answer is 42.", context)
