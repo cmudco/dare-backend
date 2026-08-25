@@ -30,13 +30,19 @@ _NORMALIZERS: Tuple[Tuple[re.Pattern, str], ...] = (
     (re.compile(r"^(?:us|eu|apac)\."), ""),
     (re.compile(r"^wine-"), ""),
     (
-        re.compile(r"^(anthropic|meta|google|deepseek|qwen|mistral|amazon|cohere)\."),
+        re.compile(
+            r"^(anthropic|openai|meta|google|deepseek|qwen|mistral|amazon|cohere)\."
+        ),
         r"\1-",
     ),
     (re.compile(r"-v\d+(?::\d+)?$"), ""),
     (re.compile(r"-\d{8}$"), ""),
-    (re.compile(r"-(?:sol|terra|luna|preview)$"), ""),
 )
+
+# Tier and channel variants of one model — gpt-5.6 sol/terra/luna — share a
+# capability profile but are priced separately, so this suffix is removed for
+# family matching and kept for price lookup.
+_TIER_SUFFIX = re.compile(r"-(?:sol|terra|luna|preview)$")
 
 
 _VENDOR_PREFIX = re.compile(
@@ -59,7 +65,7 @@ class ModelFamily:
 FAMILIES: Tuple[ModelFamily, ...] = (
     ModelFamily(
         key="gpt-5-reasoning",
-        patterns=(re.compile(r"^gpt-5(?:\.\d+)?$"),),
+        patterns=(re.compile(r"(?:^|-)gpt-5(?:[.-]|$)"),),
         is_reasoning=True,
         supports_temperature=False,
     ),
@@ -79,22 +85,30 @@ FAMILIES: Tuple[ModelFamily, ...] = (
 )
 
 
-def normalize_identifier(raw_identifier: str) -> str:
-    """Reduce a model identifier or deployment address to a model identity."""
+def _reduce(raw_identifier: str) -> str:
+    """Strip deployment addressing, keeping the tier suffix."""
     value = (raw_identifier or "").strip().lower()
     for pattern, replacement in _NORMALIZERS:
         value = pattern.sub(replacement, value, count=1)
     return value
 
 
-def candidate_keys(raw_identifier: str) -> Tuple[str, ...]:
-    """Keys a raw identifier could match a DARE-side model under.
+def normalize_identifier(raw_identifier: str) -> str:
+    """Model identity for capability matching. Tier variants collapse here."""
+    return _TIER_SUFFIX.sub("", _reduce(raw_identifier), count=1)
 
-    Normalization keeps a leading vendor namespace, since for some models it
-    carries the only distinguishing token. DARE's own identifiers omit it, so
-    matching the two sides needs the vendor-less spelling as well.
+
+def pricing_keys(raw_identifier: str) -> Tuple[str, ...]:
+    """Keys a raw identifier could match a separately-priced model under.
+
+    The tier suffix is kept: gpt-5.6 sol, terra and luna differ by 25x in
+    price, so collapsing them would bill one model at another's rate.
+
+    A leading vendor namespace is kept too, since for some models it carries
+    the only distinguishing token. DARE's own identifiers omit it, so matching
+    the two sides needs the vendor-less spelling as well.
     """
-    canonical = normalize_identifier(raw_identifier)
+    canonical = _reduce(raw_identifier)
     if not canonical:
         return ()
     stripped = _VENDOR_PREFIX.sub("", canonical, count=1)

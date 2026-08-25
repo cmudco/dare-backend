@@ -37,6 +37,7 @@ from billing.wallet_router import (
     resolve_active_wallet,
     resolve_active_wallet_for_bot,
 )
+from conversations.constants import Provider
 from conversations.models import LLM
 from core.services.model_capabilities import family_supports_temperature
 from core.services.model_identity import resolve_family
@@ -124,7 +125,10 @@ def _litellm_entry(litellm_key, probed) -> Dict[str, Any]:
     image and audio flags stay false because those need provider-native
     endpoints the proxy doesn't forward. Zero rates: billing is external.
     """
-    provider = probed.provider or "custom"
+    # Not ``probed.provider``: that is the upstream vendor, and gateways
+    # commonly report "openai" for everything they front. This field drives
+    # dispatch and credential lookup, which for a proxy model is always custom.
+    provider = Provider.CUSTOM.value
     family = resolve_family(probed.name)
     is_reasoning = bool(family and family.is_reasoning)
     return {

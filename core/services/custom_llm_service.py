@@ -5,20 +5,20 @@ This service enables integration with custom LLM endpoints that follow the OpenA
 including LiteLLM proxy servers and other OpenAI-compatible providers.
 """
 
-import httpx
 import logging
-from typing import AsyncGenerator, List, Dict, Tuple, Optional
+from typing import AsyncGenerator, Dict, List, Optional
 
+import httpx
 from openai import AsyncOpenAI
 
 from conversations.models import LLM
 from core.services.api_key_service import get_provider_api_key
 from core.services.dtos.stream_event_dto import LLMStreamEvent
 from core.services.llm_utils import (
-    OpenAIMessageFormatter,
-    OpenAIVisionHandler,
     OpenAIErrorHandler,
     OpenAIStreamProcessor,
+    OpenAIVisionHandler,
+    SchemaTransformer,
     StreamAggregator,
 )
 from core.services.model_capabilities import ModelCapabilities
@@ -26,11 +26,9 @@ from core.services.model_capabilities import ModelCapabilities
 logger = logging.getLogger(__name__)
 
 
-# Every key this transport can legitimately send. The proxy speaks the OpenAI
-# chat-completions dialect, and AsyncOpenAI rejects an unknown keyword by
-# failing the whole request — so a param injected by a shared, provider-shaped
-# helper takes the turn down. Anything outside this set is dropped and logged
-# instead of reaching the client.
+# Every key this transport can legitimately send. AsyncOpenAI rejects an
+# unknown keyword by failing the whole request, so anything outside this set is
+# dropped and logged rather than taking the turn down at the provider.
 OPENAI_CHAT_PARAMS = frozenset(
     {
         "model",
@@ -43,6 +41,7 @@ OPENAI_CHAT_PARAMS = frozenset(
         "reasoning_effort",
         "tools",
         "tool_choice",
+        "response_format",
     }
 )
 
@@ -50,16 +49,24 @@ OPENAI_CHAT_PARAMS = frozenset(
 class CustomLLMService:
     """Service for interacting with custom OpenAI-compatible LLM endpoints."""
 
-    def __init__(self, llm: LLM, api_key: Optional[str] = None):
+    def __init__(
+        self,
+        llm: LLM,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+    ):
         """
         Initialize Custom LLM service with OpenAI-compatible endpoint.
 
         Args:
             llm: LLM model instance with configuration including base_url
             api_key: Optional API key override. If not provided, uses provider key resolution
+            base_url: Endpoint override. LiteLLM dispatch passes the proxy URL
+                from the wallet, since a synthetic model carries no base_url
+                of its own.
         """
-        # Validate that base_url is provided for custom endpoints
-        if not llm.base_url:
+        endpoint = base_url or llm.base_url
+        if not endpoint:
             raise ValueError(
                 f"Custom LLM '{llm.name}' requires a base_url to be configured. "
                 "Please set the base_url field in the Django admin."
@@ -72,15 +79,15 @@ class CustomLLMService:
         # Initialize OpenAI client with custom base URL
         self.client = AsyncOpenAI(
             api_key=api_key,
-            base_url=llm.base_url,
+            base_url=endpoint,
             http_client=httpx.AsyncClient(verify=False),  # bypass SSL verification
         )
         self.model = llm.identifier
         self.is_reasoning = llm.is_reasoning
-        self.base_url = llm.base_url
+        self.base_url = endpoint
         self.capabilities = ModelCapabilities.from_llm(llm)
 
-        logger.info(f"Initialized CustomLLMService for {llm.name} at {llm.base_url}")
+        logger.info(f"Initialized CustomLLMService for {llm.name} at {endpoint}")
 
     async def stream_chat_completion(
         self,
@@ -89,7 +96,7 @@ class CustomLLMService:
         temperature: float = 0.7,
         effort: Optional[str] = None,
         images: List[Dict] = None,
-        tools: Optional[List[Dict]] = None
+        tools: Optional[List[Dict]] = None,
     ) -> AsyncGenerator[LLMStreamEvent, None]:
         """
         Stream chat completions from custom OpenAI-compatible endpoint.
@@ -149,17 +156,59 @@ class CustomLLMService:
         Returns:
             Complete generated response text
         """
-        # Default: use streaming and aggregate
-        # Custom endpoints may not support structured outputs
+        if structured_spec:
+            return await self._get_structured_completion(
+                messages, structured_spec, max_tokens
+            )
+
         stream = self.stream_chat_completion(messages, max_tokens, temperature, effort)
         return await StreamAggregator.aggregate_stream(stream)
+
+    async def _get_structured_completion(
+        self,
+        messages: List[Dict],
+        structured_spec: Dict,
+        max_tokens: int,
+    ) -> str:
+        """Structured output over the OpenAI-compatible ``response_format``.
+
+        Workflow routing depends on this: without it a router node behind a
+        proxy would receive prose where it expects JSON.
+        """
+        response_format = SchemaTransformer.transform_for_openai(structured_spec)
+        if not response_format:
+            logger.warning(
+                "No response_format for spec %s; falling back to streaming.",
+                structured_spec,
+            )
+            stream = self.stream_chat_completion(messages, max_tokens)
+            return await StreamAggregator.aggregate_stream(stream)
+
+        params = {
+            "model": self.model,
+            "messages": messages,
+            "response_format": response_format,
+        }
+        if self.is_reasoning:
+            params["max_completion_tokens"] = max_tokens
+        else:
+            params["max_tokens"] = max_tokens
+            if self.capabilities.supports_temperature:
+                params["temperature"] = 0.0
+
+        try:
+            response = await self.client.chat.completions.create(
+                **self._drop_unsupported(params)
+            )
+            return SchemaTransformer.extract_field_value(response, structured_spec)
+        except Exception as e:
+            logger.error("Structured output failed: %s", e, exc_info=True)
+            return f"Error: {OpenAIErrorHandler.format_error(e)}"
 
     # ==================== Private Methods ====================
 
     def _prepare_messages(
-        self,
-        messages: List[Dict],
-        images: Optional[List[Dict]]
+        self, messages: List[Dict], images: Optional[List[Dict]]
     ) -> List[Dict]:
         """
         Prepare messages by adding vision content if needed.
@@ -234,10 +283,9 @@ class CustomLLMService:
         }
 
         # Reasoning models rename the token ceiling and reject sampling
-        # controls. Effort is applied here rather than through
-        # `apply_sampling_params`, which emits the Anthropic-shaped
-        # `output_config` that only ClaudeService knows how to forward; this
-        # transport speaks OpenAI and rejects it as an unknown argument.
+        # controls. Generation controls are written in this transport's own
+        # dialect: every service owns its shape, so an Anthropic field can
+        # never reach an OpenAI-compatible endpoint.
         if self.is_reasoning:
             params["max_completion_tokens"] = max_tokens
         else:

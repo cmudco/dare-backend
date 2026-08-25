@@ -3,19 +3,24 @@ from decimal import Decimal
 from django.test import SimpleTestCase, TestCase
 
 from conversations.models import LLM
-from core.services.model_identity import candidate_keys
+from core.services.model_identity import pricing_keys
 from core.services.reference_pricing import find_reference_llm
 
 
-class CandidateKeyTests(SimpleTestCase):
+class PricingKeyTests(SimpleTestCase):
     def test_offers_the_vendor_less_spelling_dare_uses(self):
         self.assertEqual(
-            candidate_keys("bedrock/us.anthropic.claude-opus-4-6-v1"),
+            pricing_keys("bedrock/us.anthropic.claude-opus-4-6-v1"),
             ("anthropic-claude-opus-4-6", "claude-opus-4-6"),
         )
 
-    def test_single_key_when_there_is_no_vendor_prefix(self):
-        self.assertEqual(candidate_keys("gpt-5.6-sol"), ("gpt-5.6",))
+    def test_tier_suffix_survives_because_tiers_are_priced_apart(self):
+        # sol/terra/luna differ by 25x. Collapsing them to "gpt-5.6" would
+        # price one from whichever sibling the DB returned first.
+        self.assertEqual(
+            pricing_keys("bedrock_mantle/openai.gpt-5.6-sol"),
+            ("openai-gpt-5.6-sol", "gpt-5.6-sol"),
+        )
 
 
 class FindReferenceLLMTests(TestCase):
@@ -94,3 +99,24 @@ class LiteLLMMessageCostTests(TestCase):
         )
         self.message.refresh_from_db()
         self.assertEqual(self.message.cost, Decimal("0.000000"))
+
+
+class TierPricingTests(TestCase):
+    """gpt-5.6 tiers share a capability profile but not a price.
+
+    The tier rows are seeded by migration, so this asserts the mapping rather
+    than the rates — the mapping is the invariant, the prices can move.
+    """
+
+    def test_each_tier_prices_from_its_own_row(self):
+        for tier in ("sol", "terra", "luna"):
+            with self.subTest(tier=tier):
+                found = find_reference_llm(f"bedrock_mantle/openai.gpt-5.6-{tier}")
+                self.assertEqual(found.identifier, f"gpt-5.6-{tier}")
+
+    def test_tiers_do_not_collapse_onto_one_row(self):
+        found = {
+            find_reference_llm(f"gpt-5.6-{tier}").identifier
+            for tier in ("sol", "terra", "luna")
+        }
+        self.assertEqual(len(found), 3)

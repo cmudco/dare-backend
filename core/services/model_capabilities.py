@@ -1,7 +1,7 @@
 """Helpers for model capability-aware provider request parameters."""
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 from conversations.constants import ModelEffort
 from core.services.model_identity import ModelFamily, resolve_family
@@ -67,23 +67,6 @@ class ModelCapabilities:
         if not self.supports_effort:
             return None
         return normalize_effort(requested_effort, self.default_effort)
-
-    def apply_sampling_params(
-        self,
-        params: Dict[str, Any],
-        temperature: float,
-        effort: Optional[str] = None,
-    ) -> None:
-        """Mutate provider params with supported generation controls."""
-        if self.supports_temperature:
-            params["temperature"] = temperature
-
-        resolved_effort = self.resolve_effort(effort)
-        if resolved_effort:
-            params["output_config"] = {"effort": resolved_effort}
-
-        if self.supports_adaptive_thinking and self.default_adaptive_thinking_enabled:
-            params["thinking"] = {"type": "adaptive", "display": "summarized"}
 
 
 def normalize_effort(value: Optional[str], default: str) -> str:
