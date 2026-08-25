@@ -18,7 +18,7 @@ from billing.api.serializers import (
     GroupWalletWriteSerializer,
     LiteLLMKeyCreateSerializer,
     LiteLLMKeyReadSerializer,
-    LiteLLMKeyRenameSerializer,
+    LiteLLMKeyUpdateSerializer,
     LiteLLMTestRequestSerializer,
     MemberRowSerializer,
     OwnedGroupSerializer,
@@ -738,6 +738,8 @@ class LiteLLMKeyViewSet(
             api_key=write.validated_data[
                 "api_key"
             ],  # EncryptedCharField encrypts on save
+            title_model=write.validated_data["title_model"],
+            memory_model=write.validated_data["memory_model"],
             source=LiteLLMKeySourceChoice.USER,
             owner_user=request.user,
             created_by=request.user,
@@ -748,10 +750,16 @@ class LiteLLMKeyViewSet(
 
     def partial_update(self, request, *args, **kwargs):
         instance = self.get_object()
-        write = LiteLLMKeyRenameSerializer(data=request.data, partial=True)
+        write = LiteLLMKeyUpdateSerializer(data=request.data, partial=True)
         write.is_valid(raise_exception=True)
-        instance.label = write.validated_data["label"]
-        instance.save(update_fields=["label", "updated_at"])
+
+        changed = []
+        for field in ("label", "title_model", "memory_model"):
+            if field in write.validated_data:
+                setattr(instance, field, write.validated_data[field])
+                changed.append(field)
+        if changed:
+            instance.save(update_fields=changed + ["updated_at"])
         return Response(LiteLLMKeyReadSerializer(instance).data)
 
     def destroy(self, request, *args, **kwargs):
