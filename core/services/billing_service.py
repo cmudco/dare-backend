@@ -19,6 +19,7 @@ from billing.wallet_router import (
 )
 from conversations.models import LLM, Message
 from core.services.energy_service import compute_impact
+from core.services.reference_pricing import find_reference_llm
 from users.constants import AuthSourceChoice
 from users.models import User
 from workflows.models import Workflow, WorkflowNode, WorkflowRun
@@ -297,6 +298,10 @@ class BillingService:
         different shapes; the only field every OpenAI-compatible endpoint
         returns reliably is the ``usage`` token block, which has already
         been stamped on ``message_obj`` by the caller.
+
+        ``reference_amount`` carries what the call would have cost at DARE's
+        rates when the proxy is serving a model DARE also offers. It exists so
+        usage reporting isn't blank; it is never charged.
         """
         conversation = message_obj.conversation
         # Audit attribution lives on Message.litellm_key (the FK). The
@@ -305,9 +310,19 @@ class BillingService:
         # internal UUID, which is meaningless to the user and would be a
         # surface for a key-id leak if scraped from the FE.
         key_label = getattr(message_obj.litellm_key, "label", None) or "LiteLLM proxy"
+        reference_llm = find_reference_llm(message_obj.litellm_model_name)
         Transaction.objects.create(
             user=conversation.user,
             amount=Decimal("0.00"),
+            reference_amount=(
+                self._calculate_cost(
+                    reference_llm,
+                    message_obj.input_tokens,
+                    message_obj.output_tokens,
+                )
+                if reference_llm is not None
+                else None
+            ),
             llm=None,
             llm_name=message_obj.litellm_model_name,
             type=TransactionTypeChoice.DEBIT,

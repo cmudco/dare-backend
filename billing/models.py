@@ -234,6 +234,19 @@ class Wallet(TimeStampMixin):
         """
         return f"Wallet of {self.user.email} with balance {self.display_balance}"
 
+def _format_usd(value):
+    """Render a USD figure, keeping sub-cent amounts legible rather than $0.00."""
+    if value is None:
+        return "No amount"
+    if value == Decimal("0"):
+        return "$0.00"
+    if abs(value) >= Decimal("0.01"):
+        return f"${value:.2f}"
+    if abs(value) < Decimal("0.0000001"):
+        return f"${value:.8e}"
+    return f"${value.normalize()}"
+
+
 class Transaction(TimeStampMixin):
     """
     Model for transactions in the wallet.
@@ -272,6 +285,19 @@ class Transaction(TimeStampMixin):
         decimal_places=6,
         verbose_name=("Amount"),
         help_text=("Transaction amount in USD"),
+    )
+    reference_amount = models.DecimalField(
+        max_digits=10,
+        decimal_places=6,
+        null=True,
+        blank=True,
+        verbose_name=_("Reference Amount"),
+        help_text=_(
+            "What this call would have cost at DARE's own rates, for usage "
+            "reporting only. Set on externally-billed calls, where `amount` is "
+            "zero because the wallet was never debited. Null when no DARE-side "
+            "model matches."
+        ),
     )
     type = models.IntegerField(
         choices=TransactionTypeChoice.choices,
@@ -390,18 +416,14 @@ class Transaction(TimeStampMixin):
 
     @property
     def display_amount(self):
-        if self.amount is None:
-            return "No amount"
-        if self.amount == Decimal('0'):
-            return "$0.00"
-        if abs(self.amount) >= Decimal('0.01'):
-            return f"${self.amount:.2f}"
-        else:
-            if abs(self.amount) < Decimal('0.0000001'):
-                return f"${self.amount:.8e}"
-            else:
-                normalized = self.amount.normalize()
-                return f"${normalized}"
+        return _format_usd(self.amount)
+
+    @property
+    def display_reference_amount(self):
+        """Formatted reference cost, or None when there is nothing to show."""
+        if self.reference_amount is None:
+            return None
+        return _format_usd(self.reference_amount)
 
     def save(self, *args, **kwargs):
         """
