@@ -565,6 +565,8 @@ class BillingViewSet(viewsets.ViewSet):
                     "label": key.label,
                     "source": key.source,
                     "group_name": group_name,
+                    "title_model": key.title_model,
+                    "memory_model": key.memory_model,
                     "expires_at": key.expires_at,
                     "base_url": key.base_url,
                     "is_default": False,

@@ -227,6 +227,8 @@ class UnifiedWalletSerializer(serializers.Serializer):
     status = WalletStatusSerializer()
     # Type-specific named fields:
     provider = serializers.CharField(required=False, allow_null=True)            # BYO only
+    title_model = serializers.CharField(required=False, allow_blank=True)        # LITELLM only
+    memory_model = serializers.CharField(required=False, allow_blank=True)       # LITELLM only
     source = serializers.ChoiceField(                                            # LITELLM only
         choices=LiteLLMKeySourceChoice.choices, required=False, allow_null=True
     )
