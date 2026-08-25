@@ -2,6 +2,8 @@ from types import SimpleNamespace
 
 from django.test import SimpleTestCase
 
+from core.services.custom_llm_service import CustomLLMService
+from core.services.dtos import LLMDescriptor
 from core.services.model_capabilities import ModelCapabilities
 from core.services.model_identity import normalize_identifier, resolve_family
 
@@ -79,3 +81,54 @@ class CapabilityResolutionTests(SimpleTestCase):
         params = {}
         capabilities.apply_sampling_params(params, temperature=0.7)
         self.assertEqual(params["temperature"], 0.7)
+
+
+def proxy_service(model_name):
+    """A CustomLLMService for a proxy-routed model, built the way dispatch does."""
+    descriptor = LLMDescriptor.from_litellm(
+        litellm_key=None, model_name=model_name, provider="custom"
+    )
+    handle = descriptor.to_dispatch_handle()
+    handle.base_url = "https://proxy.example/v1"
+    return CustomLLMService(llm=handle, api_key="test-key")
+
+
+class ProxyParamShapeTests(SimpleTestCase):
+    """The proxy transport speaks OpenAI; Anthropic-shaped params 400 there."""
+
+    def test_effort_never_leaves_as_anthropic_output_config(self):
+        # `output_config` is forwarded only by ClaudeService, via extra_body.
+        # Reaching AsyncOpenAI.create() with it raises "unexpected keyword
+        # argument 'output_config'".
+        params = proxy_service(
+            "us.anthropic.claude-sonnet-5"
+        )._build_chat_completion_params(
+            messages=[], max_tokens=1024, temperature=0.7, effort="high"
+        )
+        self.assertNotIn("output_config", params)
+        self.assertEqual(params["reasoning_effort"], "high")
+
+    def test_effort_capable_claude_drops_temperature(self):
+        params = proxy_service(
+            "us.anthropic.claude-opus-4-8"
+        )._build_chat_completion_params(
+            messages=[], max_tokens=1024, temperature=0.7, effort="high"
+        )
+        self.assertNotIn("temperature", params)
+
+    def test_reasoning_model_renames_the_token_ceiling(self):
+        params = proxy_service("gpt-5.6-sol")._build_chat_completion_params(
+            messages=[], max_tokens=1024, temperature=0.7, effort="high"
+        )
+        self.assertEqual(params["max_completion_tokens"], 1024)
+        self.assertNotIn("max_tokens", params)
+        self.assertNotIn("temperature", params)
+
+    def test_ordinary_proxy_model_keeps_temperature_and_sends_no_effort(self):
+        params = proxy_service(
+            "wine-llama3-70b-instruct"
+        )._build_chat_completion_params(
+            messages=[], max_tokens=1024, temperature=0.7, effort="high"
+        )
+        self.assertEqual(params["temperature"], 0.7)
+        self.assertNotIn("reasoning_effort", params)
