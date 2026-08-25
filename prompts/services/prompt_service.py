@@ -50,7 +50,12 @@ class PromptService:
                 parent=prompt,
                 forked_from_user=prompt.forked_from_user,
             )
-            PromptService.set_default_prompt(user, new_prompt, is_default)
+            PromptService.set_default_prompt(
+                user,
+                new_prompt,
+                is_default,
+                replaced_prompt=prompt,
+            )
         return new_prompt
 
     @staticmethod
@@ -123,12 +128,19 @@ class PromptService:
         published_prompt.delete()
 
     @staticmethod
-    def set_default_prompt(user, prompt: Prompt, is_default: bool) -> None:
-        """Update the user's default prompt when requested."""
-        if not is_default:
+    def set_default_prompt(
+        user,
+        prompt: Prompt,
+        is_default: bool,
+        *,
+        replaced_prompt: Prompt | None = None,
+    ) -> None:
+        """Set or clear the default represented by this prompt save."""
+        default_to_clear = replaced_prompt or prompt
+        if not is_default and user.default_prompt_id != default_to_clear.pk:
             return
 
-        user.default_prompt = prompt
+        user.default_prompt = prompt if is_default else None
         # `User` is not a `BaseModel` and has no `updated_at`; naming it here
         # made Django reject the write outright.
         user.save(update_fields=["default_prompt"])
@@ -149,4 +161,6 @@ class PromptService:
                 collect_family(child)
 
         collect_family(root_prompt)
-        return max([family_prompt.version for family_prompt in family_prompts], default=0)
+        return max(
+            [family_prompt.version for family_prompt in family_prompts], default=0
+        )

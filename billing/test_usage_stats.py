@@ -4,8 +4,11 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 from api_keys.constants import BillingModeChoice
-from billing.constants import (LiteLLMKeySourceChoice, TransactionSourceChoice,
-                               TransactionTypeChoice)
+from billing.constants import (
+    LiteLLMKeySourceChoice,
+    TransactionSourceChoice,
+    TransactionTypeChoice,
+)
 from billing.models import LiteLLMKey, LiteLLMSpend, Transaction, Wallet
 from conversations.constants import SenderType
 from conversations.models import LLM, Conversation, Message

@@ -6,10 +6,11 @@ including LiteLLM proxy servers and other OpenAI-compatible providers.
 """
 
 import logging
-from typing import AsyncGenerator, Dict, List, Optional
+from typing import AsyncGenerator, Dict, List, Optional, Tuple, Type, TypeVar
 
 import httpx
 from openai import AsyncOpenAI
+from pydantic import BaseModel
 
 from conversations.models import LLM
 from core.services.api_key_service import get_provider_api_key
@@ -17,6 +18,7 @@ from core.services.dtos.stream_event_dto import LLMStreamEvent
 from core.services.llm_utils import (
     OpenAIErrorHandler,
     OpenAIStreamProcessor,
+    OpenAIUsageExtractor,
     OpenAIVisionHandler,
     SchemaTransformer,
     StreamAggregator,
@@ -24,6 +26,8 @@ from core.services.llm_utils import (
 from core.services.model_capabilities import ModelCapabilities
 
 logger = logging.getLogger(__name__)
+
+StructuredModel = TypeVar("StructuredModel", bound=BaseModel)
 
 
 # Every key this transport can legitimately send. AsyncOpenAI rejects an
@@ -204,6 +208,51 @@ class CustomLLMService:
         except Exception as e:
             logger.error("Structured output failed: %s", e, exc_info=True)
             return f"Error: {OpenAIErrorHandler.format_error(e)}"
+
+    async def parse_structured_output(
+        self,
+        messages: List[Dict[str, str]],
+        response_model: Type[StructuredModel],
+        max_tokens: int = 2000,
+    ) -> Tuple[StructuredModel, Dict[str, int]]:
+        """Return a validated Pydantic response and its token usage.
+
+        LiteLLM exposes the OpenAI-compatible parse endpoint, so auxiliary
+        jobs such as memory writing can use the same strict response contract
+        as direct OpenAI calls instead of attempting to parse free-form text.
+        """
+        params = {
+            "model": self.model,
+            "messages": messages,
+            "response_format": response_model,
+        }
+        if self.is_reasoning:
+            params["max_completion_tokens"] = max_tokens
+        else:
+            params["max_tokens"] = max_tokens
+            if self.capabilities.supports_temperature:
+                params["temperature"] = 0.0
+
+        response = await self.client.chat.completions.parse(
+            **self._drop_unsupported(params)
+        )
+        parsed = response.choices[0].message.parsed
+        if parsed is None:
+            raise ValueError("Empty structured response from custom LLM")
+
+        usage = OpenAIUsageExtractor.extract_from_chat_completion(response) or {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+        }
+        return parsed, usage
+
+    async def close(self) -> None:
+        """Close the OpenAI-compatible client and its HTTP connection pool."""
+        try:
+            await self.client.close()
+        except Exception:
+            logger.warning("[Custom LLM] Failed to close async client", exc_info=True)
 
     # ==================== Private Methods ====================
 

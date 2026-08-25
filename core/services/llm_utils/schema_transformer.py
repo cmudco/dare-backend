@@ -8,11 +8,11 @@ and provider-specific structured output formats.
 import json
 import logging
 import re
-from typing import Dict, Any, Optional, List
+from typing import Any, Dict, List, Optional
 
 from google.genai import types
-from conversations.constants import Provider
 
+from conversations.constants import Provider
 
 logger = logging.getLogger(__name__)
 

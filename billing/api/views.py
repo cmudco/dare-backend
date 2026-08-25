@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db.models import Count, Q, Sum
 from django.db.models.functions import TruncDate
@@ -8,6 +10,7 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from api_keys.constants import BillingModeChoice
 from api_keys.models import UserProviderAPIKey
 from billing.api.serializers import (
     ActiveWalletRefSerializer,
@@ -30,14 +33,11 @@ from billing.api.serializers import (
     WalletSerializer,
     WalletsListResponseSerializer,
 )
-from billing.litellm_probe import probe_litellm_connection
-from api_keys.constants import BillingModeChoice
 from billing.constants import (
-    TransactionTypeChoice,
     LiteLLMKeySourceChoice,
+    TransactionTypeChoice,
     UserWalletPreferenceTypeChoice,
 )
-from users.constants import AuthSourceChoice
 from billing.group_wallet_service import (
     AllocateToMemberRequest,
     FundGroupBudgetRequest,
@@ -45,8 +45,7 @@ from billing.group_wallet_service import (
     UpdateGroupPolicyRequest,
     UpsertUserOverrideRequest,
 )
-from decimal import Decimal
-
+from billing.litellm_probe import probe_litellm_connection
 from billing.models import (
     GroupWallet,
     LiteLLMKey,
@@ -58,13 +57,14 @@ from billing.models import (
     Wallet,
     format_usd,
 )
-from feature_flags.services import is_flag_enabled_for_user
 from billing.services import WalletService
 from common.pagination import CustomPageNumberPagination
 from common.permissions import IsSuperAdmin
 from conversations.constants import Provider
 from conversations.models import Message
 from core.services.energy_service import compute_relatable_stats
+from feature_flags.services import is_flag_enabled_for_user
+from users.constants import AuthSourceChoice
 from users.models import User
 from users.utils import detect_platform_from_request
 
@@ -180,9 +180,7 @@ class BillingViewSet(viewsets.ViewSet):
             "all": base_qs.count(),
             "wallet": base_qs.filter(billing_mode=BillingModeChoice.WALLET).count(),
             "ownApi": base_qs.filter(billing_mode=BillingModeChoice.OWN_API).count(),
-            "litellm": base_qs.filter(
-                billing_mode=BillingModeChoice.LITELLM
-            ).count(),
+            "litellm": base_qs.filter(billing_mode=BillingModeChoice.LITELLM).count(),
         }
 
         queryset = base_qs.order_by("-created_at")
@@ -732,7 +730,11 @@ class BillingViewSet(viewsets.ViewSet):
         # and select_related's source_group for the cohort name (no N+1). The
         # enable_litellm_wallet flag suppresses the entire bucket — admins can
         # turn off this wallet type per group/user without revoking the keys.
-        litellm_qs = LiteLLMKey.visible_for_user(user) if litellm_enabled else LiteLLMKey.objects.none()
+        litellm_qs = (
+            LiteLLMKey.visible_for_user(user)
+            if litellm_enabled
+            else LiteLLMKey.objects.none()
+        )
         # One indexed read covering every key the user can see, rather than an
         # aggregate over Transaction per wallet row.
         spend_by_key = {
@@ -894,6 +896,7 @@ class BillingViewSet(viewsets.ViewSet):
                 ).data,
             }
         )
+
 
 class LiteLLMKeyViewSet(
     viewsets.GenericViewSet,

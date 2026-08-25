@@ -3,6 +3,7 @@ from django.test import TestCase
 from billing.constants import LiteLLMKeySourceChoice, UserWalletPreferenceTypeChoice
 from billing.models import LiteLLMKey, UserWalletPreference
 from core.services.auxiliary_models import MEMORY, TITLE, auxiliary_descriptor
+from feature_flags.models import FeatureFlag
 from users.models import User
 
 
@@ -10,6 +11,10 @@ class AuxiliaryModelTests(TestCase):
     """A proxy user's side jobs run on their roster, not DARE's."""
 
     def setUp(self):
+        FeatureFlag.objects.update_or_create(
+            key="enable_litellm_wallet",
+            defaults={"default_enabled": True},
+        )
         self.user = User.objects.create_user(email="proxy@example.com", password="x")
         self.key = LiteLLMKey.objects.create(
             label="gateway",

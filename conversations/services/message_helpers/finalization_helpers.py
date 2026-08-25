@@ -19,9 +19,8 @@ from django.db import IntegrityError
 
 from billing.exceptions import PaymentRequiredError
 from conversations.constants import ErrorCode, ErrorMessage
-from conversations.models import Message
-from conversations.services.websocket_response_service import \
-    WebSocketResponseService
+from conversations.models import Conversation, Message
+from conversations.services.websocket_response_service import WebSocketResponseService
 from core.services.sb_client import SocraticBooksClient
 
 logger = logging.getLogger(__name__)
@@ -29,10 +28,8 @@ logger = logging.getLogger(__name__)
 
 @database_sync_to_async
 def _conversation_was_deleted(conversation_id) -> bool:
-    """True when the conversation this message belonged to is gone."""
-    from conversations.models import Conversation
-
-    return not Conversation.objects.filter(pk=conversation_id).exists()
+    """True when the conversation row no longer exists."""
+    return not Conversation._base_manager.filter(pk=conversation_id).exists()
 
 
 async def finalize_message(

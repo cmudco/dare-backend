@@ -285,9 +285,10 @@ class BillingService:
 
     # ------------------------------------------------------------------
 
+    @db_transaction.atomic
     def _record_litellm_transaction(
         self, message_obj: Message, reference_llm: Optional[LLM]
-    ) -> None:
+    ) -> Transaction:
         """Emit a $0 Transaction row for a LiteLLM-routed message.
 
         DARE doesn't debit its own wallet for LiteLLM dispatch (the user
@@ -324,28 +325,23 @@ class BillingService:
             if reference_llm is not None
             else None
         )
-        self._accumulate_litellm_spend(message_obj, reference_amount)
-        Transaction.objects.create(
+        return self._record_litellm_usage(
             user=conversation.user,
-            amount=Decimal("0.00"),
-            reference_amount=reference_amount,
-            llm=None,
-            llm_name=message_obj.litellm_model_name,
-            type=TransactionTypeChoice.DEBIT,
-            source=TransactionSourceChoice.USAGE,
-            message=(
+            litellm_key=message_obj.litellm_key,
+            model_name=message_obj.litellm_model_name,
+            input_tokens=message_obj.input_tokens,
+            output_tokens=message_obj.output_tokens,
+            description=(
                 f"Message {message_obj.id}: {message_obj.message[:80]} | "
                 f"via {key_label} | "
                 f"model={message_obj.litellm_model_name}"
             ),
-            input_tokens=message_obj.input_tokens,
-            output_tokens=message_obj.output_tokens,
-            billing_mode=BillingModeChoice.LITELLM,
             platform=conversation.source,
+            reference_amount=reference_amount,
         )
 
     @staticmethod
-    def _accumulate_litellm_spend(message_obj: Message, amount) -> None:
+    def _accumulate_litellm_spend(user: "User", litellm_key_id, amount) -> None:
         """Add one call to this user's running total for this key.
 
         Written here rather than summed on read: the wallet indicator renders
@@ -357,12 +353,41 @@ class BillingService:
             return
 
         spend, _created = LiteLLMSpend.objects.get_or_create(
-            user=message_obj.conversation.user,
-            litellm_key_id=message_obj.litellm_key_id,
+            user=user,
+            litellm_key_id=litellm_key_id,
         )
         LiteLLMSpend.objects.filter(pk=spend.pk).update(
             total_reference_amount=F("total_reference_amount") + amount,
             call_count=F("call_count") + 1,
+        )
+
+    def _record_litellm_usage(
+        self,
+        *,
+        user: "User",
+        litellm_key,
+        model_name: str,
+        input_tokens: int,
+        output_tokens: int,
+        description: str,
+        platform: str,
+        reference_amount,
+    ) -> Transaction:
+        """Persist one externally billed call without touching DARE credit."""
+        self._accumulate_litellm_spend(user, litellm_key.pk, reference_amount)
+        return Transaction.objects.create(
+            user=user,
+            amount=Decimal("0.00"),
+            reference_amount=reference_amount,
+            llm=None,
+            llm_name=model_name,
+            type=TransactionTypeChoice.DEBIT,
+            source=TransactionSourceChoice.USAGE,
+            message=description,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            billing_mode=BillingModeChoice.LITELLM,
+            platform=platform,
         )
 
     def finalize_ai_message(
@@ -762,6 +787,41 @@ class BillingService:
             output_tokens=output_tokens,
             billing_mode=BillingModeChoice.WALLET,
             platform=platform,
+        )
+
+    @db_transaction.atomic
+    def record_litellm_service_usage(
+        self,
+        *,
+        user: "User",
+        litellm_key,
+        model_name: str,
+        input_tokens: int,
+        output_tokens: int,
+        description: str,
+        platform: str = AuthSourceChoice.DARE,
+    ) -> Transaction:
+        """Record an auxiliary call paid through a user's LiteLLM proxy.
+
+        The synthetic dispatch model is intentionally never persisted as an
+        ``LLM`` foreign key. Reference pricing remains reporting-only and the
+        user's DARE wallet is not debited.
+        """
+        rates = reference_rates(model_name)
+        reference_amount = (
+            self._calculate_cost(rates, input_tokens, output_tokens)
+            if rates is not None
+            else None
+        )
+        return self._record_litellm_usage(
+            user=user,
+            litellm_key=litellm_key,
+            model_name=model_name,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            description=description,
+            platform=platform,
+            reference_amount=reference_amount,
         )
 
     async def _get_user_wallet(self, user: "User") -> "Wallet":

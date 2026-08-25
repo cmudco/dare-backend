@@ -1,8 +1,12 @@
+from datetime import timedelta
+
 from django.test import TestCase
+from django.utils import timezone
 
 from billing.constants import LiteLLMKeySourceChoice, UserWalletPreferenceTypeChoice
 from billing.group_wallet import adopt_group_wallet, group_default_key
 from billing.models import LiteLLMKey, UserWalletPreference
+from feature_flags.models import FeatureFlag
 from users.models import AccessCodeGroup, User
 
 
@@ -25,6 +29,13 @@ def make_key(group, admin, label="gateway"):
     )
 
 
+def enable_litellm_wallet():
+    FeatureFlag.objects.update_or_create(
+        key="enable_litellm_wallet",
+        defaults={"default_enabled": True},
+    )
+
+
 class GroupDefaultKeyTests(TestCase):
     def setUp(self):
         self.group = make_group()
@@ -43,12 +54,30 @@ class GroupDefaultKeyTests(TestCase):
         make_key(self.group, self.admin, label="two")
         self.assertIsNone(group_default_key(self.group))
 
+    def test_expired_key_does_not_hide_the_only_usable_key(self):
+        expired = make_key(self.group, self.admin, label="expired")
+        expired.expires_at = timezone.now() - timedelta(minutes=1)
+        expired.save(update_fields=["expires_at", "updated_at"])
+        usable = make_key(self.group, self.admin, label="usable")
+
+        self.assertEqual(group_default_key(self.group), usable)
+
+    def test_expired_key_does_not_make_two_usable_keys_look_unambiguous(self):
+        expired = make_key(self.group, self.admin, label="expired")
+        expired.expires_at = timezone.now() - timedelta(minutes=1)
+        expired.save(update_fields=["expires_at", "updated_at"])
+        make_key(self.group, self.admin, label="one")
+        make_key(self.group, self.admin, label="two")
+
+        self.assertIsNone(group_default_key(self.group))
+
     def test_ungrouped_user_has_no_default(self):
         self.assertIsNone(group_default_key(None))
 
 
 class AdoptGroupWalletTests(TestCase):
     def setUp(self):
+        enable_litellm_wallet()
         self.group = make_group()
         self.admin = make_admin()
         self.user = User.objects.create_user(
@@ -99,6 +128,7 @@ class GroupKeyProvisioningTests(TestCase):
     """Issuing a key must reach members who signed up before it existed."""
 
     def test_existing_members_are_adopted_when_the_key_is_created(self):
+        enable_litellm_wallet()
         group = make_group("TEST-202")
         member = User.objects.create_user(
             email="early@example.com", password="x", access_code_group=group

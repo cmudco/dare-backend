@@ -67,3 +67,45 @@ class DefaultPromptTests(TestCase):
         self.user.refresh_from_db()
         self.assertEqual(self.user.default_prompt.title, "Seminar peer v2")
         self.assertEqual(self.user.default_prompt.version, 2)
+
+    def test_simple_update_can_clear_the_current_default(self):
+        created = self._create("Seminar peer", is_default=True)
+        prompt_id = created.data["id"]
+
+        response = self.client.patch(
+            f"/api/prompts/{prompt_id}/simple-update/",
+            {"title": "Seminar peer", "content": "body", "is_default": False},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.user.refresh_from_db()
+        self.assertIsNone(self.user.default_prompt)
+
+    def test_new_version_can_clear_the_previous_default(self):
+        created = self._create("Seminar peer", is_default=True)
+        prompt_id = created.data["id"]
+
+        response = self.client.put(
+            f"/api/prompts/{prompt_id}/",
+            {
+                "title": "Seminar peer v2",
+                "content": "body v2",
+                "is_default": False,
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.user.refresh_from_db()
+        self.assertIsNone(self.user.default_prompt)
+
+    def test_non_default_create_preserves_an_existing_default(self):
+        default_response = self._create("Seminar peer", is_default=True)
+        default_prompt_id = default_response.data["id"]
+
+        response = self._create("Another prompt", is_default=False)
+
+        self.assertEqual(response.status_code, 201)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.default_prompt_id, default_prompt_id)
