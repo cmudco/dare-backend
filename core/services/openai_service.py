@@ -561,7 +561,9 @@ class OpenAIService:
                 f"[OpenAI] Native API response received: {str(response)[:200]}..."
             )
 
-            extracted_value = self._extract_field_value(response, structured_spec)
+            extracted_value = SchemaTransformer.extract_field_value(
+                response, structured_spec
+            )
             logger.info(f"[OpenAI] Extracted field value: {extracted_value}")
             return extracted_value
         except Exception as e:
@@ -599,44 +601,6 @@ class OpenAIService:
         self._apply_openai_sampling(params, 0.0)
 
         return await self.client.chat.completions.create(**params)
-
-    def _extract_field_value(self, response, structured_spec: Dict) -> str:
-        """
-        Extract field value from structured response.
-
-        For object schemas (with explanation), returns the full JSON string.
-        For enum schemas, returns just the field value.
-
-        Args:
-            response: OpenAI response object (from chat.completions.create)
-            structured_spec: Schema specification with field name
-
-        Returns:
-            Extracted value as string (either single value or full JSON)
-        """
-        try:
-            text_out = response.choices[0].message.content
-        except (AttributeError, IndexError):
-            logger.warning("Failed to extract content from OpenAI structured response")
-            return ""
-
-        if not text_out:
-            return ""
-
-        schema_type = structured_spec.get("type")
-
-        # For object schemas, return the full JSON (includes explanation)
-        if schema_type == "object":
-            return text_out
-
-        # For legacy enum schemas, extract just the field value
-        try:
-            data = json.loads(text_out)
-            field_name = structured_spec.get("field", "route")
-            value = data.get(field_name)
-            return str(value) if value is not None else text_out
-        except Exception:
-            return text_out
 
     async def generate_image(
         self,

@@ -89,8 +89,7 @@ class LLMDescriptor:
         litellm_key = getattr(message, "litellm_key", None)
         model_name = getattr(message, "litellm_model_name", None)
         if litellm_key is not None and model_name:
-            provider = getattr(litellm_key, "default_provider", None) or "custom"
-            return cls.from_litellm(litellm_key, model_name, provider)
+            return cls.from_litellm(litellm_key, model_name, "custom")
         return None
 
     @classmethod

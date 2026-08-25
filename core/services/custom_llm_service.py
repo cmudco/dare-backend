@@ -5,20 +5,20 @@ This service enables integration with custom LLM endpoints that follow the OpenA
 including LiteLLM proxy servers and other OpenAI-compatible providers.
 """
 
-import httpx
 import logging
-from typing import AsyncGenerator, List, Dict, Tuple, Optional
+from typing import AsyncGenerator, Dict, List, Optional
 
+import httpx
 from openai import AsyncOpenAI
 
 from conversations.models import LLM
 from core.services.api_key_service import get_provider_api_key
 from core.services.dtos.stream_event_dto import LLMStreamEvent
 from core.services.llm_utils import (
-    OpenAIMessageFormatter,
-    OpenAIVisionHandler,
     OpenAIErrorHandler,
     OpenAIStreamProcessor,
+    OpenAIVisionHandler,
+    SchemaTransformer,
     StreamAggregator,
 )
 from core.services.model_capabilities import ModelCapabilities
@@ -41,6 +41,7 @@ OPENAI_CHAT_PARAMS = frozenset(
         "reasoning_effort",
         "tools",
         "tool_choice",
+        "response_format",
     }
 )
 
@@ -155,10 +156,54 @@ class CustomLLMService:
         Returns:
             Complete generated response text
         """
-        # Default: use streaming and aggregate
-        # Custom endpoints may not support structured outputs
+        if structured_spec:
+            return await self._get_structured_completion(
+                messages, structured_spec, max_tokens
+            )
+
         stream = self.stream_chat_completion(messages, max_tokens, temperature, effort)
         return await StreamAggregator.aggregate_stream(stream)
+
+    async def _get_structured_completion(
+        self,
+        messages: List[Dict],
+        structured_spec: Dict,
+        max_tokens: int,
+    ) -> str:
+        """Structured output over the OpenAI-compatible ``response_format``.
+
+        Workflow routing depends on this: without it a router node behind a
+        proxy would receive prose where it expects JSON.
+        """
+        response_format = SchemaTransformer.transform_for_openai(structured_spec)
+        if not response_format:
+            logger.warning(
+                "No response_format for spec %s; falling back to streaming.",
+                structured_spec,
+            )
+            stream = self.stream_chat_completion(messages, max_tokens)
+            return await StreamAggregator.aggregate_stream(stream)
+
+        params = {
+            "model": self.model,
+            "messages": messages,
+            "response_format": response_format,
+        }
+        if self.is_reasoning:
+            params["max_completion_tokens"] = max_tokens
+        else:
+            params["max_tokens"] = max_tokens
+            if self.capabilities.supports_temperature:
+                params["temperature"] = 0.0
+
+        try:
+            response = await self.client.chat.completions.create(
+                **self._drop_unsupported(params)
+            )
+            return SchemaTransformer.extract_field_value(response, structured_spec)
+        except Exception as e:
+            logger.error("Structured output failed: %s", e, exc_info=True)
+            return f"Error: {OpenAIErrorHandler.format_error(e)}"
 
     # ==================== Private Methods ====================
 
