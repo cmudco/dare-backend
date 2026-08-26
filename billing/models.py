@@ -1,26 +1,29 @@
 import uuid
 from decimal import Decimal
-from django.db import models, transaction as db_transaction
-from django.db.models import F, Q
+
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.db import models
+from django.db import transaction as db_transaction
+from django.db.models import F, Q
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
+
+from api_keys.constants import BillingModeChoice
+from api_keys.models import UserProviderAPIKey
 from billing.constants import (
-    TransactionTypeChoice,
-    TransactionSourceChoice,
-    LiteLLMKeySourceChoice,
-    UserWalletPreferenceTypeChoice,
     DEFAULT_REFILL_AMOUNT,
     DEFAULT_REFILL_PERIOD_DAYS,
+    LiteLLMKeySourceChoice,
+    TransactionSourceChoice,
+    TransactionTypeChoice,
+    UserWalletPreferenceTypeChoice,
 )
 from common.models import TimeStampMixin
 from conversations.models import LLM
 from core.fields import EncryptedCharField
-from users.models import User, AccessCodeGroup
 from users.constants import AuthSourceChoice
-from api_keys.constants import BillingModeChoice
-from api_keys.models import UserProviderAPIKey
+from users.models import AccessCodeGroup, User
 
 
 class SystemRefillPolicy(TimeStampMixin):
@@ -28,12 +31,15 @@ class SystemRefillPolicy(TimeStampMixin):
     Singleton holding the platform-wide default refill amount and period.
     Edited via Django admin; seeded with $5 / 30 days to preserve existing behaviour.
     """
+
     refill_amount = models.DecimalField(
         max_digits=10,
         decimal_places=6,
         default=Decimal(DEFAULT_REFILL_AMOUNT),
         verbose_name=_("Default Refill Amount (USD)"),
-        help_text=_("Platform-wide default refill amount applied to every user whose group/override does not specify one."),
+        help_text=_(
+            "Platform-wide default refill amount applied to every user whose group/override does not specify one."
+        ),
     )
     refill_period_days = models.PositiveIntegerField(
         default=DEFAULT_REFILL_PERIOD_DAYS,
@@ -47,9 +53,13 @@ class SystemRefillPolicy(TimeStampMixin):
 
     def clean(self):
         if self.refill_amount is not None and self.refill_amount < 0:
-            raise ValidationError({"refill_amount": _("Refill amount cannot be negative.")})
+            raise ValidationError(
+                {"refill_amount": _("Refill amount cannot be negative.")}
+            )
         if self.refill_period_days is not None and self.refill_period_days < 1:
-            raise ValidationError({"refill_period_days": _("Refill period must be at least 1 day.")})
+            raise ValidationError(
+                {"refill_period_days": _("Refill period must be at least 1 day.")}
+            )
 
     def save(self, *args, **kwargs):
         self.pk = 1
@@ -71,6 +81,7 @@ class GroupWallet(TimeStampMixin):
     group-level overrides of refill amount / period. Member refills debit
     `budget_balance`; when it hits zero, refills pause until refunded.
     """
+
     group = models.OneToOneField(
         AccessCodeGroup,
         on_delete=models.CASCADE,
@@ -94,18 +105,24 @@ class GroupWallet(TimeStampMixin):
         null=True,
         blank=True,
         verbose_name=_("Group Refill Amount (USD)"),
-        help_text=_("Per-member refill amount for this group. Null means inherit the system default."),
+        help_text=_(
+            "Per-member refill amount for this group. Null means inherit the system default."
+        ),
     )
     refill_period_days = models.PositiveIntegerField(
         null=True,
         blank=True,
         verbose_name=_("Group Refill Period (days)"),
-        help_text=_("Days between automatic refills for members of this group. Null means inherit the system default."),
+        help_text=_(
+            "Days between automatic refills for members of this group. Null means inherit the system default."
+        ),
     )
     is_active = models.BooleanField(
         default=True,
         verbose_name=_("Active"),
-        help_text=_("When inactive, scheduled refills are paused for all members of this group."),
+        help_text=_(
+            "When inactive, scheduled refills are paused for all members of this group."
+        ),
     )
 
     class Meta:
@@ -114,15 +131,25 @@ class GroupWallet(TimeStampMixin):
 
     def clean(self):
         if self.refill_amount is not None and self.refill_amount < 0:
-            raise ValidationError({"refill_amount": _("Refill amount cannot be negative.")})
+            raise ValidationError(
+                {"refill_amount": _("Refill amount cannot be negative.")}
+            )
         if self.refill_period_days is not None and self.refill_period_days < 1:
-            raise ValidationError({"refill_period_days": _("Refill period must be at least 1 day.")})
+            raise ValidationError(
+                {"refill_period_days": _("Refill period must be at least 1 day.")}
+            )
         if self.budget_balance is not None and self.budget_balance < 0:
-            raise ValidationError({"budget_balance": _("Budget balance cannot be negative.")})
+            raise ValidationError(
+                {"budget_balance": _("Budget balance cannot be negative.")}
+            )
 
     @property
     def display_budget(self):
-        return f"${self.budget_balance:.2f}" if self.budget_balance is not None else "$0.00"
+        return (
+            f"${self.budget_balance:.2f}"
+            if self.budget_balance is not None
+            else "$0.00"
+        )
 
     def __str__(self):
         return f"GroupWallet<{self.group.access_code}> budget={self.display_budget}"
@@ -134,6 +161,7 @@ class UserRefillOverride(TimeStampMixin):
     to fall through to the group's value (or the system default). Set by admins
     platform-wide or by group owners for members of their own group.
     """
+
     user = models.OneToOneField(
         User,
         on_delete=models.CASCADE,
@@ -147,13 +175,17 @@ class UserRefillOverride(TimeStampMixin):
         null=True,
         blank=True,
         verbose_name=_("Refill Amount (USD)"),
-        help_text=_("Custom refill amount for this user. Null means inherit from group/system."),
+        help_text=_(
+            "Custom refill amount for this user. Null means inherit from group/system."
+        ),
     )
     refill_period_days = models.PositiveIntegerField(
         null=True,
         blank=True,
         verbose_name=_("Refill Period (days)"),
-        help_text=_("Custom period between refills for this user. Null means inherit from group/system."),
+        help_text=_(
+            "Custom period between refills for this user. Null means inherit from group/system."
+        ),
     )
     reason = models.CharField(
         max_length=255,
@@ -177,9 +209,13 @@ class UserRefillOverride(TimeStampMixin):
 
     def clean(self):
         if self.refill_amount is not None and self.refill_amount < 0:
-            raise ValidationError({"refill_amount": _("Refill amount cannot be negative.")})
+            raise ValidationError(
+                {"refill_amount": _("Refill amount cannot be negative.")}
+            )
         if self.refill_period_days is not None and self.refill_period_days < 1:
-            raise ValidationError({"refill_period_days": _("Refill period must be at least 1 day.")})
+            raise ValidationError(
+                {"refill_period_days": _("Refill period must be at least 1 day.")}
+            )
 
     def __str__(self):
         parts = []
@@ -195,6 +231,7 @@ class Wallet(TimeStampMixin):
     """
     Model for user wallets.
     """
+
     user = models.OneToOneField(
         User,
         on_delete=models.CASCADE,
@@ -213,13 +250,15 @@ class Wallet(TimeStampMixin):
         null=True,
         blank=True,
         verbose_name=_("Last Refill At"),
-        help_text=_("Timestamp of the most recent scheduled refill for this user. "
-                    "Used by the scheduler to determine when the next refill is due."),
+        help_text=_(
+            "Timestamp of the most recent scheduled refill for this user. "
+            "Used by the scheduler to determine when the next refill is due."
+        ),
     )
 
     class Meta:
-        verbose_name = ("Wallet")
-        verbose_name_plural = ("Wallets")
+        verbose_name = "Wallet"
+        verbose_name_plural = "Wallets"
 
     @property
     def display_balance(self):
@@ -234,10 +273,25 @@ class Wallet(TimeStampMixin):
         """
         return f"Wallet of {self.user.email} with balance {self.display_balance}"
 
+
+def format_usd(value):
+    """Render a USD figure, keeping sub-cent amounts legible rather than $0.00."""
+    if value is None:
+        return "No amount"
+    if value == Decimal("0"):
+        return "$0.00"
+    if abs(value) >= Decimal("0.01"):
+        return f"${value:.2f}"
+    if abs(value) < Decimal("0.0000001"):
+        return f"${value:.8e}"
+    return f"${value.normalize()}"
+
+
 class Transaction(TimeStampMixin):
     """
     Model for transactions in the wallet.
     """
+
     user = models.ForeignKey(
         User,
         on_delete=models.CASCADE,
@@ -273,6 +327,19 @@ class Transaction(TimeStampMixin):
         verbose_name=("Amount"),
         help_text=("Transaction amount in USD"),
     )
+    reference_amount = models.DecimalField(
+        max_digits=10,
+        decimal_places=6,
+        null=True,
+        blank=True,
+        verbose_name=_("Reference Amount"),
+        help_text=_(
+            "What this call would have cost at DARE's own rates, for usage "
+            "reporting only. Set on externally-billed calls, where `amount` is "
+            "zero because the wallet was never debited. Null when no DARE-side "
+            "model matches."
+        ),
+    )
     type = models.IntegerField(
         choices=TransactionTypeChoice.choices,
         verbose_name=("Transaction Type"),
@@ -301,7 +368,9 @@ class Transaction(TimeStampMixin):
         blank=True,
         related_name="related_from",
         verbose_name=_("Related Transaction"),
-        help_text=_("Paired transaction — for example, the informational owner row linked to a member's allocation credit."),
+        help_text=_(
+            "Paired transaction — for example, the informational owner row linked to a member's allocation credit."
+        ),
     )
     input_tokens = models.PositiveIntegerField(
         null=True,
@@ -339,7 +408,9 @@ class Transaction(TimeStampMixin):
         blank=True,
         db_index=True,
         verbose_name=_("Bot ID"),
-        help_text=_("Socratic Bot ID (SocraticBooks-owned), set when the call was made through a deployed bot."),
+        help_text=_(
+            "Socratic Bot ID (SocraticBooks-owned), set when the call was made through a deployed bot."
+        ),
     )
     bot_owner = models.ForeignKey(
         User,
@@ -348,14 +419,18 @@ class Transaction(TimeStampMixin):
         on_delete=models.SET_NULL,
         related_name="bot_owned_transactions",
         verbose_name=_("Bot Owner"),
-        help_text=_("DARE user who owns the Socratic Bot this call was attributed to. Used by the owner usage dashboard."),
+        help_text=_(
+            "DARE user who owns the Socratic Bot this call was attributed to. Used by the owner usage dashboard."
+        ),
     )
     fallback_reason = models.CharField(
         max_length=64,
         null=True,
         blank=True,
         verbose_name=_("Fallback Reason"),
-        help_text=_("When the wallet router couldn't honor the user's preferred wallet (e.g. BYO_PROVIDER_MISSING, LITELLM_EXPIRED), this records why DARE billed instead."),
+        help_text=_(
+            "When the wallet router couldn't honor the user's preferred wallet (e.g. BYO_PROVIDER_MISSING, LITELLM_EXPIRED), this records why DARE billed instead."
+        ),
     )
 
     # Energy/environmental impact tracking
@@ -385,23 +460,19 @@ class Transaction(TimeStampMixin):
     )
 
     class Meta:
-        verbose_name = ("Transaction")
-        verbose_name_plural = ("Transactions")
+        verbose_name = "Transaction"
+        verbose_name_plural = "Transactions"
 
     @property
     def display_amount(self):
-        if self.amount is None:
-            return "No amount"
-        if self.amount == Decimal('0'):
-            return "$0.00"
-        if abs(self.amount) >= Decimal('0.01'):
-            return f"${self.amount:.2f}"
-        else:
-            if abs(self.amount) < Decimal('0.0000001'):
-                return f"${self.amount:.8e}"
-            else:
-                normalized = self.amount.normalize()
-                return f"${normalized}"
+        return format_usd(self.amount)
+
+    @property
+    def display_reference_amount(self):
+        """Formatted reference cost, or None when there is nothing to show."""
+        if self.reference_amount is None:
+            return None
+        return format_usd(self.reference_amount)
 
     def save(self, *args, **kwargs):
         """
@@ -446,32 +517,29 @@ class Transaction(TimeStampMixin):
             return
 
         with db_transaction.atomic():
-            wallet = (
-                Wallet.objects
-                .select_for_update()
-                .filter(user=self.user)
-                .first()
-            )
+            wallet = Wallet.objects.select_for_update().filter(user=self.user).first()
             if wallet is None:
                 # First-call lazy creation; immediately re-lock so subsequent
                 # mutations within this transaction operate on the locked row.
-                Wallet.objects.create(user=self.user, balance=Decimal('5.00'))
+                Wallet.objects.create(user=self.user, balance=Decimal("5.00"))
                 wallet = Wallet.objects.select_for_update().get(user=self.user)
 
             if self.type == TransactionTypeChoice.DEBIT:
                 if wallet.balance < self.amount:
-                    raise ValidationError({
-                        'error': ['insufficient_balance'],
-                        'message': ['Insufficient wallet balance'],
-                        'current_balance': [str(wallet.balance)],
-                        'required_amount': [str(self.amount)],
-                    })
+                    raise ValidationError(
+                        {
+                            "error": ["insufficient_balance"],
+                            "message": ["Insufficient wallet balance"],
+                            "current_balance": [str(wallet.balance)],
+                            "required_amount": [str(self.amount)],
+                        }
+                    )
                 Wallet.objects.filter(pk=wallet.pk).update(
-                    balance=F('balance') - self.amount
+                    balance=F("balance") - self.amount
                 )
             elif self.type == TransactionTypeChoice.CREDIT:
                 Wallet.objects.filter(pk=wallet.pk).update(
-                    balance=F('balance') + self.amount
+                    balance=F("balance") + self.amount
                 )
 
             super().save(*args, **kwargs)
@@ -480,7 +548,11 @@ class Transaction(TimeStampMixin):
         """
         Returns a string representation of the transaction.
         """
-        token_info = f", {self.input_tokens} input, {self.output_tokens} output tokens" if self.input_tokens is not None and self.output_tokens is not None else ""
+        token_info = (
+            f", {self.input_tokens} input, {self.output_tokens} output tokens"
+            if self.input_tokens is not None and self.output_tokens is not None
+            else ""
+        )
         model_info = f" ({self.llm_name})" if self.llm_name else ""
         return f"{self.user.email}: {self.get_type_display()} - {self.display_amount}{model_info}{token_info}"
 
@@ -493,11 +565,14 @@ class LiteLLMKey(TimeStampMixin):
     (`ADMIN_GROUP`). Group keys are gated by AccessCodeGroup membership at
     query time — leaving the group hides the key implicitly.
     """
+
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     label = models.CharField(
         max_length=128,
         verbose_name=_("Label"),
-        help_text=_("Human-readable name to disambiguate keys (e.g. 'Personal' or 'PHIL 101 - Spring 2026')."),
+        help_text=_(
+            "Human-readable name to disambiguate keys (e.g. 'Personal' or 'PHIL 101 - Spring 2026')."
+        ),
     )
     base_url = models.URLField(
         verbose_name=_("Base URL"),
@@ -512,7 +587,9 @@ class LiteLLMKey(TimeStampMixin):
         max_length=16,
         choices=LiteLLMKeySourceChoice.choices,
         verbose_name=_("Source"),
-        help_text=_("Where the key originated — user self-served, admin-issued to a user, or admin-issued to a group."),
+        help_text=_(
+            "Where the key originated — user self-served, admin-issued to a user, or admin-issued to a group."
+        ),
     )
     owner_user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -530,7 +607,9 @@ class LiteLLMKey(TimeStampMixin):
         on_delete=models.CASCADE,
         related_name="litellm_keys_assigned",
         verbose_name=_("Assigned User"),
-        help_text=_("Set when source=ADMIN_USER. The user the admin assigned this key to."),
+        help_text=_(
+            "Set when source=ADMIN_USER. The user the admin assigned this key to."
+        ),
     )
     source_group = models.ForeignKey(
         AccessCodeGroup,
@@ -539,13 +618,38 @@ class LiteLLMKey(TimeStampMixin):
         on_delete=models.CASCADE,
         related_name="litellm_keys",
         verbose_name=_("Source Group"),
-        help_text=_("Set when source=ADMIN_GROUP. The cohort whose members all have access to this key."),
+        help_text=_(
+            "Set when source=ADMIN_GROUP. The cohort whose members all have access to this key."
+        ),
+    )
+    title_model = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        verbose_name=_("Title Model"),
+        help_text=_(
+            "Model this proxy serves that should name conversations. Blank "
+            "falls back to DARE's configured title model, which a proxy may "
+            "not serve under the same identifier."
+        ),
+    )
+    memory_model = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        verbose_name=_("Memory Model"),
+        help_text=_(
+            "Model this proxy serves that should write memory. Blank falls "
+            "back to DARE's configured memory model, billed to DARE."
+        ),
     )
     expires_at = models.DateTimeField(
         null=True,
         blank=True,
         verbose_name=_("Expires At"),
-        help_text=_("Optional hard expiry. Past expiry hides the key from the user's wallet list."),
+        help_text=_(
+            "Optional hard expiry. Past expiry hides the key from the user's wallet list."
+        ),
     )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -562,18 +666,24 @@ class LiteLLMKey(TimeStampMixin):
             models.CheckConstraint(
                 name="litellm_source_owner_consistency",
                 condition=(
-                    (Q(source=LiteLLMKeySourceChoice.USER)
+                    (
+                        Q(source=LiteLLMKeySourceChoice.USER)
                         & Q(owner_user__isnull=False)
                         & Q(assigned_user__isnull=True)
-                        & Q(source_group__isnull=True))
-                    | (Q(source=LiteLLMKeySourceChoice.ADMIN_USER)
+                        & Q(source_group__isnull=True)
+                    )
+                    | (
+                        Q(source=LiteLLMKeySourceChoice.ADMIN_USER)
                         & Q(assigned_user__isnull=False)
                         & Q(owner_user__isnull=True)
-                        & Q(source_group__isnull=True))
-                    | (Q(source=LiteLLMKeySourceChoice.ADMIN_GROUP)
+                        & Q(source_group__isnull=True)
+                    )
+                    | (
+                        Q(source=LiteLLMKeySourceChoice.ADMIN_GROUP)
                         & Q(source_group__isnull=False)
                         & Q(owner_user__isnull=True)
-                        & Q(assigned_user__isnull=True))
+                        & Q(assigned_user__isnull=True)
+                    )
                 ),
             ),
         ]
@@ -620,9 +730,8 @@ class LiteLLMKey(TimeStampMixin):
         not_expired = Q(expires_at__isnull=True) | Q(expires_at__gt=now)
         user_group_id = getattr(user, "access_code_group_id", None)
 
-        owned_or_assigned = (
-            Q(source=LiteLLMKeySourceChoice.USER, owner_user=user)
-            | Q(source=LiteLLMKeySourceChoice.ADMIN_USER, assigned_user=user)
+        owned_or_assigned = Q(source=LiteLLMKeySourceChoice.USER, owner_user=user) | Q(
+            source=LiteLLMKeySourceChoice.ADMIN_USER, assigned_user=user
         )
         if user_group_id:
             owned_or_assigned = owned_or_assigned | Q(
@@ -630,10 +739,64 @@ class LiteLLMKey(TimeStampMixin):
                 source_group_id=user_group_id,
             )
 
-        return cls.objects.filter(not_expired).filter(owned_or_assigned).select_related("source_group").distinct()
+        return (
+            cls.objects.filter(not_expired)
+            .filter(owned_or_assigned)
+            .select_related("source_group")
+            .distinct()
+        )
 
     def __str__(self):
         return f"LiteLLMKey<{self.label} / {self.get_source_display()}>"
+
+
+class LiteLLMSpend(TimeStampMixin):
+    """Running total of what one user has spent through one LiteLLM key.
+
+    Kept as a counter rather than summed from Transaction on read: the wallet
+    chip renders on every page, and an aggregate over a growing transaction
+    table would get slower for exactly the heaviest users. Incremented in the
+    same place the Transaction is written, so the two cannot drift.
+
+    Amounts are reference costs — what the calls would have cost at DARE's
+    rates. Nothing here is charged; the user pays their proxy account directly.
+    """
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="litellm_spend",
+        verbose_name=_("User"),
+    )
+    litellm_key = models.ForeignKey(
+        "billing.LiteLLMKey",
+        on_delete=models.CASCADE,
+        related_name="spend_records",
+        verbose_name=_("LiteLLM Key"),
+    )
+    total_reference_amount = models.DecimalField(
+        max_digits=12,
+        decimal_places=6,
+        default=Decimal("0.000000"),
+        verbose_name=_("Total Reference Amount"),
+        help_text=_(
+            "Cumulative reference cost of calls this user made through this "
+            "key, in USD. Reporting only — never charged."
+        ),
+    )
+    call_count = models.PositiveIntegerField(
+        default=0,
+        verbose_name=_("Call Count"),
+        help_text=_("Number of calls counted into the total."),
+    )
+
+    class Meta:
+        unique_together = ("user", "litellm_key")
+        verbose_name = _("LiteLLM Spend")
+        verbose_name_plural = _("LiteLLM Spend")
+
+    def __str__(self):
+        return f"LiteLLMSpend<{self.user.email} / {self.litellm_key.label}: {self.total_reference_amount}>"
 
 
 class UserWalletPreference(TimeStampMixin):
@@ -643,6 +806,7 @@ class UserWalletPreference(TimeStampMixin):
     with no data migration. The router (`billing.wallet_router`) consults this
     on every call; admin-side changes self-heal here on the next request.
     """
+
     user = models.OneToOneField(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -677,68 +841,97 @@ class UserWalletPreference(TimeStampMixin):
 
         if wallet_type == UserWalletPreferenceTypeChoice.DARE:
             if ref_id not in (None, ""):
-                raise ValidationError({
-                    "active_wallet_ref_id": _("DARE wallet must not have a ref_id."),
-                })
+                raise ValidationError(
+                    {
+                        "active_wallet_ref_id": _(
+                            "DARE wallet must not have a ref_id."
+                        ),
+                    }
+                )
             return
 
         if wallet_type == UserWalletPreferenceTypeChoice.BYO:
             # Local import — feature_flags imports billing models indirectly via
             # users.AccessCodeGroup, so a top-level import would risk an app-load cycle.
             from feature_flags.services import is_flag_enabled_for_user
+
             if not is_flag_enabled_for_user(self.user, "enable_byok"):
-                raise ValidationError({
-                    "active_wallet_type": _("BYO wallet type is currently disabled platform-wide."),
-                })
+                raise ValidationError(
+                    {
+                        "active_wallet_type": _(
+                            "BYO wallet type is currently disabled platform-wide."
+                        ),
+                    }
+                )
 
             # Collective BYO: ref_id is None ⇒ "use whichever BYO key matches
             # the requested provider at dispatch time." Validate that the user
             # has at least one populated BYO key configured.
             if not ref_id:
                 has_any_byo = (
-                    UserProviderAPIKey.active_objects
-                    .filter(user=self.user)
+                    UserProviderAPIKey.active_objects.filter(user=self.user)
                     .exclude(api_key__isnull=True)
                     .exclude(api_key="")
                     .exists()
                 )
                 if not has_any_byo:
-                    raise ValidationError({
-                        "active_wallet_ref_id": _(
-                            "Add at least one BYO provider key before setting BYO active."
-                        ),
-                    })
+                    raise ValidationError(
+                        {
+                            "active_wallet_ref_id": _(
+                                "Add at least one BYO provider key before setting BYO active."
+                            ),
+                        }
+                    )
                 return
 
             # Legacy specific-key BYO mode.
             try:
                 ref_pk = int(ref_id)
             except (TypeError, ValueError):
-                raise ValidationError({"active_wallet_ref_id": _("BYO ref_id must be an integer pk.")})
+                raise ValidationError(
+                    {"active_wallet_ref_id": _("BYO ref_id must be an integer pk.")}
+                )
             byo_qs = UserProviderAPIKey.active_objects.filter(pk=ref_pk, user=self.user)
             byo_row = byo_qs.first()
             if byo_row is None:
-                raise ValidationError({
-                    "active_wallet_ref_id": _("BYO key not found for this user."),
-                })
+                raise ValidationError(
+                    {
+                        "active_wallet_ref_id": _("BYO key not found for this user."),
+                    }
+                )
             if not byo_row.has_key:
-                raise ValidationError({
-                    "active_wallet_ref_id": _("BYO key is empty — add a key value before setting it active."),
-                })
+                raise ValidationError(
+                    {
+                        "active_wallet_ref_id": _(
+                            "BYO key is empty — add a key value before setting it active."
+                        ),
+                    }
+                )
             return
 
         if wallet_type == UserWalletPreferenceTypeChoice.LITELLM:
             from feature_flags.services import is_flag_enabled_for_user
+
             if not is_flag_enabled_for_user(self.user, "enable_litellm_wallet"):
-                raise ValidationError({
-                    "active_wallet_type": _("LiteLLM wallet type is currently disabled."),
-                })
+                raise ValidationError(
+                    {
+                        "active_wallet_type": _(
+                            "LiteLLM wallet type is currently disabled."
+                        ),
+                    }
+                )
             if not ref_id:
-                raise ValidationError({"active_wallet_ref_id": _("LiteLLM wallet requires a ref_id.")})
+                raise ValidationError(
+                    {"active_wallet_ref_id": _("LiteLLM wallet requires a ref_id.")}
+                )
             if not LiteLLMKey.visible_for_user(self.user).filter(pk=ref_id).exists():
-                raise ValidationError({
-                    "active_wallet_ref_id": _("LiteLLM key not visible to this user (expired, missing, or unauthorized)."),
-                })
+                raise ValidationError(
+                    {
+                        "active_wallet_ref_id": _(
+                            "LiteLLM key not visible to this user (expired, missing, or unauthorized)."
+                        ),
+                    }
+                )
 
     def save(self, *args, **kwargs):
         self.full_clean()
@@ -759,7 +952,13 @@ class UserWalletPreference(TimeStampMixin):
         self.active_wallet_type = UserWalletPreferenceTypeChoice.DARE
         self.active_wallet_ref_id = None
         if save:
-            self.save(update_fields=["active_wallet_type", "active_wallet_ref_id", "updated_at"])
+            self.save(
+                update_fields=[
+                    "active_wallet_type",
+                    "active_wallet_ref_id",
+                    "updated_at",
+                ]
+            )
 
     def __str__(self):
         ref = f":{self.active_wallet_ref_id}" if self.active_wallet_ref_id else ""

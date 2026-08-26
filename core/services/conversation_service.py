@@ -252,6 +252,7 @@ class ConversationService:
         unavailable for the active wallet, the conversation's own model is a
         safe fallback because it just completed the main response.
         """
+        from core.services.auxiliary_models import TITLE, auxiliary_descriptor
         from core.services.llm_service import LLMService  # avoid module-load cycle
 
         messages = [
@@ -270,7 +271,16 @@ class ConversationService:
             },
         ]
 
-        preferred_llm = await self.get_title_generation_model()
+        # A proxy user is on a different roster: DARE's configured title model
+        # is rejected there under DARE's own name, which is why untitled
+        # conversations show up as "New Chat". Their key names the model to
+        # use instead, and it is tried first.
+        chosen = await database_sync_to_async(auxiliary_descriptor)(user, TITLE)
+        preferred_llm = (
+            chosen.to_dispatch_handle()
+            if chosen is not None
+            else await self.get_title_generation_model()
+        )
         fallback_llm = llm or await self.get_cheapest_active_text_model()
         candidates = [
             candidate

@@ -2,13 +2,14 @@
 Connection probe for LiteLLM proxy keys.
 
 LiteLLM serves an OpenAI-compatible HTTP API at `<base>/v1/...`; the lightest
-reachability + auth check is hitting `GET /v1/models`. The raw JSON response
-carries `litellm_provider` per entry — we use httpx directly so we capture
-that field (the OpenAI SDK strips it down to the standard Model schema).
+reachability + auth check is hitting `GET /v1/models`. Only the model id is
+kept: a gateway's `litellm_provider` names the upstream vendor, which says
+nothing about how DARE reaches the model, and reading it as a transport was
+a source of misrouting.
 """
+
 from dataclasses import dataclass, field
-from typing import List, Optional
-from urllib.parse import urljoin
+from typing import List
 
 import httpx
 
@@ -16,7 +17,6 @@ import httpx
 @dataclass(frozen=True)
 class ProbedModel:
     name: str
-    provider: Optional[str]
 
 
 @dataclass
@@ -48,15 +48,14 @@ def probe_litellm_connection(
         payload = response.json()
         entries = payload.get("data", []) if isinstance(payload, dict) else []
         models = [
-            ProbedModel(
-                name=str(entry.get("id")),
-                provider=entry.get("litellm_provider") or entry.get("provider") or None,
-            )
+            ProbedModel(name=str(entry.get("id")))
             for entry in entries
             if isinstance(entry, dict) and entry.get("id")
         ]
         return LiteLLMProbeResult(ok=True, models=models)
     except httpx.HTTPStatusError as e:
-        return LiteLLMProbeResult(ok=False, error=f"HTTP {e.response.status_code}: {e.response.text[:200]}")
+        return LiteLLMProbeResult(
+            ok=False, error=f"HTTP {e.response.status_code}: {e.response.text[:200]}"
+        )
     except Exception as e:
         return LiteLLMProbeResult(ok=False, error=f"{type(e).__name__}: {e}")

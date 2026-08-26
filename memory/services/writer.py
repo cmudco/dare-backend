@@ -23,8 +23,13 @@ from pydantic import BaseModel, Field
 
 from config.env import MEMORY_WRITER_MODEL
 from conversations.models import LLM
-from core.services.api_key_service import get_provider_api_key_sync
+from core.services.api_key_service import (
+    get_dispatch_credentials_for_user_sync,
+    get_provider_api_key_sync,
+)
+from core.services.auxiliary_models import MEMORY, auxiliary_descriptor
 from core.services.billing_service import BillingService
+from core.services.custom_llm_service import CustomLLMService
 from core.services.openai_service import OpenAIService
 from memory.constants import TOKEN_BUDGET, TOPICS, Sensitivity
 from memory.domain.keys import key_for, procedure_key
@@ -344,12 +349,25 @@ def propose_decisions(
     This cannot violate the queue's ordering guarantee — nothing has been
     persisted yet; it is the same turn asking its question twice.
     """
-    model = model or MEMORY_WRITER_MODEL
-    llm = LLM.objects.get(identifier=model, is_active=True)
-    service = OpenAIService(
-        llm=llm,
-        api_key=get_provider_api_key_sync(llm.provider),
-    )
+    # A proxy user is on their own roster and their own bill. When their key
+    # names a memory model, route to it rather than spending DARE's OpenAI key
+    # on a user who is paying for a gateway.
+    chosen = auxiliary_descriptor(user, MEMORY) if model is None else None
+    if chosen is not None:
+        llm = chosen.to_dispatch_handle()
+        creds = get_dispatch_credentials_for_user_sync(llm.provider, user)
+        service = CustomLLMService(
+            llm=llm,
+            api_key=creds.api_key,
+            base_url=creds.base_url,
+        )
+    else:
+        model = model or MEMORY_WRITER_MODEL
+        llm = LLM.objects.get(identifier=model, is_active=True)
+        service = OpenAIService(
+            llm=llm,
+            api_key=get_provider_api_key_sync(llm.provider),
+        )
     billing = BillingService()
     moment = now or datetime.now(timezone.utc).isoformat()
 
@@ -405,13 +423,26 @@ Set `explicit_request` from what the PERSON asked for in this message, not from 
             response_model=WriterResponse,
             max_tokens=WRITER_MAX_TOKENS,
         )
-        await sync_to_async(billing.record_service_usage, thread_sensitive=True)(
-            user=user,
-            llm=llm,
-            input_tokens=usage["input_tokens"],
-            output_tokens=usage["output_tokens"],
-            description=f"Memory writer for message {source_message_id}",
-        )
+        usage_kwargs = {
+            "user": user,
+            "input_tokens": usage["input_tokens"],
+            "output_tokens": usage["output_tokens"],
+            "description": f"Memory writer for message {source_message_id}",
+        }
+        if chosen is not None:
+            await sync_to_async(
+                billing.record_litellm_service_usage,
+                thread_sensitive=True,
+            )(
+                litellm_key=chosen.litellm_key,
+                model_name=chosen.litellm_model_name,
+                **usage_kwargs,
+            )
+        else:
+            await sync_to_async(
+                billing.record_service_usage,
+                thread_sensitive=True,
+            )(llm=llm, **usage_kwargs)
         return parsed
 
     async def run_writer(messages):

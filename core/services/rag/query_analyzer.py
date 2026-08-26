@@ -89,32 +89,24 @@ class QueryAnalyzer:
             return None
 
     def _call(self, client, model: str, query: str) -> dict:
-        """Structured output where supported; strict tool-use on older SDKs."""
-        messages = [{"role": "user", "content": query}]
-        try:
-            response = client.messages.create(
-                model=model,
-                max_tokens=512,
-                system=_SYSTEM,
-                messages=messages,
-                output_config={"format": {"type": "json_schema", "schema": _SCHEMA}},
-            )
-            return json.loads(
-                next(b.text for b in response.content if b.type == "text")
-            )
-        except TypeError:
-            response = client.messages.create(
-                model=model,
-                max_tokens=512,
-                system=_SYSTEM,
-                messages=messages,
-                tools=[
-                    {
-                        "name": "plan",
-                        "description": "Return the structured retrieval plan.",
-                        "input_schema": _SCHEMA,
-                    }
-                ],
-                tool_choice={"type": "tool", "name": "plan"},
-            )
-            return next(b.input for b in response.content if b.type == "tool_use")
+        """Ask for the plan under a schema the API enforces.
+
+        ``output_config`` goes through ``extra_body`` because the pinned SDK
+        has no typed argument for it — passing it directly raises TypeError
+        client-side, before any request is made. The wire field is real and
+        the API enforces it; only the Python signature lags. ``ClaudeService``
+        sends it the same way.
+
+        A model that rejects the field returns 400, which ``analyze`` already
+        turns into a raw-query retrieval.
+        """
+        response = client.messages.create(
+            model=model,
+            max_tokens=512,
+            system=_SYSTEM,
+            messages=[{"role": "user", "content": query}],
+            extra_body={
+                "output_config": {"format": {"type": "json_schema", "schema": _SCHEMA}}
+            },
+        )
+        return json.loads(next(b.text for b in response.content if b.type == "text"))

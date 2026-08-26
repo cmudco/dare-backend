@@ -1,3 +1,4 @@
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -5,16 +6,31 @@ from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 
-from billing.models import Transaction, Wallet
+from api_keys.constants import BillingModeChoice
+from billing.constants import LiteLLMKeySourceChoice
+from billing.models import LiteLLMKey, LiteLLMSpend, Transaction, Wallet
 from conversations.models import LLM
 from core.services.billing_service import BillingService
+from core.services.custom_llm_service import CustomLLMService
+from core.services.dtos import LLMDescriptor
 from core.services.openai_service import OpenAIService
 from memory.services.writer import Decision, WriterResponse, propose_decisions
 
 
 class StructuredWriterServiceTests(TestCase):
     def setUp(self):
-        self.llm = LLM.objects.get(identifier="gpt-5.6-luna")
+        self.llm, _created = LLM.objects.update_or_create(
+            identifier="gpt-5.6-luna",
+            defaults={
+                "name": "GPT-5.6 Luna",
+                "provider": "openai",
+                "is_active": True,
+                "is_reasoning": True,
+                "supports_temperature": False,
+                "input_token_rate_per_million": Decimal("0.20"),
+                "output_token_rate_per_million": Decimal("1.20"),
+            },
+        )
         self.user = get_user_model().objects.create_user(
             email="writer-service@example.com",
             password="x",
@@ -47,6 +63,41 @@ class StructuredWriterServiceTests(TestCase):
         self.assertEqual(params["response_format"], WriterResponse)
         self.assertEqual(params["max_completion_tokens"], 4000)
         self.assertNotIn("temperature", params)
+
+    def test_custom_service_returns_parsed_model_and_usage(self):
+        parsed = WriterResponse(
+            explicit_request=False,
+            decisions=[self._ignore_decision()],
+        )
+        response = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(parsed=parsed))],
+            usage=SimpleNamespace(prompt_tokens=321, completion_tokens=54),
+        )
+        client = MagicMock()
+        client.chat.completions.parse = AsyncMock(return_value=response)
+        client.close = AsyncMock()
+
+        with patch("core.services.custom_llm_service.AsyncOpenAI", return_value=client):
+            service = CustomLLMService(
+                self.llm,
+                api_key="test",
+                base_url="https://proxy.example/v1",
+            )
+
+        result, usage = async_to_sync(service.parse_structured_output)(
+            messages=[{"role": "user", "content": "hello"}],
+            response_model=WriterResponse,
+            max_tokens=4000,
+        )
+        async_to_sync(service.close)()
+
+        self.assertEqual(result, parsed)
+        self.assertEqual(usage["input_tokens"], 321)
+        self.assertEqual(usage["output_tokens"], 54)
+        params = client.chat.completions.parse.await_args.kwargs
+        self.assertEqual(params["response_format"], WriterResponse)
+        self.assertEqual(params["max_completion_tokens"], 4000)
+        client.close.assert_awaited_once()
 
     def test_writer_records_usage_for_the_structured_call(self):
         parsed = WriterResponse(
@@ -91,6 +142,63 @@ class StructuredWriterServiceTests(TestCase):
         )
         service.close.assert_awaited_once()
 
+    def test_writer_routes_proxy_usage_to_litellm_billing(self):
+        key = self._make_litellm_key()
+        descriptor = LLMDescriptor.from_litellm(
+            key,
+            "bedrock_mantle/openai.gpt-5.6-luna",
+            "custom",
+        )
+        parsed = WriterResponse(
+            explicit_request=False,
+            decisions=[self._ignore_decision()],
+        )
+        service = MagicMock()
+        service.parse_structured_output = AsyncMock(
+            return_value=(
+                parsed,
+                {"input_tokens": 7000, "output_tokens": 300, "total_tokens": 7300},
+            )
+        )
+        service.close = AsyncMock()
+
+        with patch(
+            "memory.services.writer.auxiliary_descriptor",
+            return_value=descriptor,
+        ), patch(
+            "memory.services.writer.get_dispatch_credentials_for_user_sync",
+            return_value=SimpleNamespace(
+                api_key="test", base_url="https://proxy.example/v1"
+            ),
+        ), patch(
+            "memory.services.writer.CustomLLMService",
+            return_value=service,
+        ), patch(
+            "memory.services.writer.BillingService"
+        ) as billing_class:
+            proposal = propose_decisions(
+                user=self.user,
+                source_message_id=84,
+                user_doc="",
+                archive=[],
+                user_message="Remember this",
+                assistant_message="I will",
+                keys_in_use=[],
+            )
+
+        self.assertEqual(proposal.decisions[0].action, "ignore")
+        billing = billing_class.return_value
+        billing.record_litellm_service_usage.assert_called_once_with(
+            user=self.user,
+            litellm_key=key,
+            model_name="bedrock_mantle/openai.gpt-5.6-luna",
+            input_tokens=7000,
+            output_tokens=300,
+            description="Memory writer for message 84",
+        )
+        billing.record_service_usage.assert_not_called()
+        service.close.assert_awaited_once()
+
     def test_service_usage_creates_a_costed_transaction(self):
         wallet = Wallet.objects.get(user=self.user)
         wallet.balance = "5.00"
@@ -110,6 +218,43 @@ class StructuredWriterServiceTests(TestCase):
         self.assertEqual(str(wallet.balance), "4.999480")
         self.assertEqual(transaction.input_tokens, 2000)
         self.assertEqual(transaction.output_tokens, 100)
+
+    def test_litellm_service_usage_is_reported_without_debiting_wallet(self):
+        key = self._make_litellm_key()
+        wallet = Wallet.objects.get(user=self.user)
+        wallet.balance = "5.00"
+        wallet.save(update_fields=["balance", "updated_at"])
+
+        transaction = BillingService().record_litellm_service_usage(
+            user=self.user,
+            litellm_key=key,
+            model_name="bedrock_mantle/openai.gpt-5.6-luna",
+            input_tokens=2000,
+            output_tokens=100,
+            description="Memory writer for message 84",
+        )
+
+        transaction.refresh_from_db()
+        wallet.refresh_from_db()
+        spend = LiteLLMSpend.objects.get(user=self.user, litellm_key=key)
+        self.assertEqual(transaction.billing_mode, BillingModeChoice.LITELLM)
+        self.assertEqual(transaction.amount, 0)
+        self.assertIsNone(transaction.llm)
+        self.assertEqual(transaction.llm_name, "bedrock_mantle/openai.gpt-5.6-luna")
+        self.assertGreater(transaction.reference_amount, 0)
+        self.assertEqual(wallet.balance, 5)
+        self.assertEqual(spend.call_count, 1)
+        self.assertEqual(spend.total_reference_amount, transaction.reference_amount)
+
+    def _make_litellm_key(self):
+        return LiteLLMKey.objects.create(
+            label="writer proxy",
+            base_url="https://proxy.example/v1",
+            api_key="k",
+            source=LiteLLMKeySourceChoice.USER,
+            owner_user=self.user,
+            created_by=self.user,
+        )
 
     @staticmethod
     def _ignore_decision() -> Decision:

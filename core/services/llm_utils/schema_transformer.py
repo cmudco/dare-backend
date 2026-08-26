@@ -4,14 +4,15 @@ Schema transformer for unified structured output handling.
 This module provides transformation between a unified schema format
 and provider-specific structured output formats.
 """
+
 import json
 import logging
 import re
-from typing import Dict, Any, Optional, List
+from typing import Any, Dict, List, Optional
 
 from google.genai import types
-from conversations.constants import Provider
 
+from conversations.constants import Provider
 
 logger = logging.getLogger(__name__)
 
@@ -56,32 +57,6 @@ class SchemaTransformer:
     """
 
     @staticmethod
-    def supports_native_structured_output(provider: str) -> bool:
-        """
-        Check if provider supports native structured outputs.
-
-        All modern providers now support native structured output:
-        - OpenAI: json_schema with strict mode
-        - Gemini: response_schema with JSON mime type
-        - Claude: json_schema via beta API (structured-outputs-2025-11-13)
-
-        Args:
-            provider: Provider name (openai, claude, gemini, etc.)
-
-        Returns:
-            bool: True if provider has native structured output support
-        """
-        supports = provider in [
-            Provider.OPENAI.value,
-            Provider.GEMINI.value,
-            Provider.CLAUDE.value,  # Claude now supports native via beta API
-        ]
-        logger.debug(
-            f"[SchemaTransformer] Provider '{provider}' native structured output support: {supports}"
-        )
-        return supports
-
-    @staticmethod
     def transform_for_openai(schema: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Transform unified schema to OpenAI's json_schema format.
@@ -94,18 +69,20 @@ class SchemaTransformer:
         Returns:
             OpenAI response_format configuration or None
         """
-        logger.debug(f"[SchemaTransformer] transform_for_openai called with schema: {schema}")
+        logger.debug(
+            f"[SchemaTransformer] transform_for_openai called with schema: {schema}"
+        )
 
         if not schema:
             logger.warning("[SchemaTransformer] No schema provided")
             return None
 
-        schema_type = schema.get('type')
+        schema_type = schema.get("type")
 
         # Handle object schema (with explanation)
-        if schema_type == 'object':
-            properties = schema.get('properties', {})
-            required = schema.get('required', [])
+        if schema_type == "object":
+            properties = schema.get("properties", {})
+            required = schema.get("required", [])
 
             if not properties:
                 logger.warning("[SchemaTransformer] Object schema has no properties")
@@ -114,23 +91,25 @@ class SchemaTransformer:
             # Build OpenAI schema properties
             openai_properties = {}
             for prop_name, prop_def in properties.items():
-                prop_type = prop_def.get('type')
+                prop_type = prop_def.get("type")
 
-                if prop_type == 'enum':
+                if prop_type == "enum":
                     # Enum property (e.g., route)
                     openai_properties[prop_name] = {
                         "type": "string",
-                        "enum": prop_def.get('values', []),
-                        "description": prop_def.get('description', '')
+                        "enum": prop_def.get("values", []),
+                        "description": prop_def.get("description", ""),
                     }
-                elif prop_type == 'string':
+                elif prop_type == "string":
                     # String property (e.g., explanation)
                     openai_properties[prop_name] = {
                         "type": "string",
-                        "description": prop_def.get('description', '')
+                        "description": prop_def.get("description", ""),
                     }
                 else:
-                    logger.warning(f"[SchemaTransformer] Unsupported property type: {prop_type}")
+                    logger.warning(
+                        f"[SchemaTransformer] Unsupported property type: {prop_type}"
+                    )
                     continue
 
             json_schema = {
@@ -144,10 +123,7 @@ class SchemaTransformer:
                 "strict": True,
             }
 
-            result = {
-                "type": "json_schema",
-                "json_schema": json_schema
-            }
+            result = {"type": "json_schema", "json_schema": json_schema}
 
             logger.info(
                 f"[SchemaTransformer] OpenAI object transformation successful - "
@@ -157,13 +133,17 @@ class SchemaTransformer:
             return result
 
         # Handle legacy enum schema (backward compatibility)
-        elif schema_type == 'enum':
-            field_name = schema.get('field', 'route')
-            enum_values = schema.get('values', [])
-            description = schema.get('description', f'Select one of: {", ".join(enum_values)}')
+        elif schema_type == "enum":
+            field_name = schema.get("field", "route")
+            enum_values = schema.get("values", [])
+            description = schema.get(
+                "description", f'Select one of: {", ".join(enum_values)}'
+            )
 
             if not enum_values:
-                logger.warning("[SchemaTransformer] No enum values provided for OpenAI structured output")
+                logger.warning(
+                    "[SchemaTransformer] No enum values provided for OpenAI structured output"
+                )
                 return None
 
             # OpenAI expects a json_schema with strict mode
@@ -175,7 +155,7 @@ class SchemaTransformer:
                         field_name: {
                             "type": "string",
                             "enum": enum_values,
-                            "description": description
+                            "description": description,
                         }
                     },
                     "required": [field_name],
@@ -184,10 +164,7 @@ class SchemaTransformer:
                 "strict": True,
             }
 
-            result = {
-                "type": "json_schema",
-                "json_schema": json_schema
-            }
+            result = {"type": "json_schema", "json_schema": json_schema}
 
             logger.info(
                 f"[SchemaTransformer] OpenAI enum transformation successful - "
@@ -197,7 +174,9 @@ class SchemaTransformer:
             return result
 
         else:
-            logger.warning(f"[SchemaTransformer] Unsupported schema type: {schema_type}")
+            logger.warning(
+                f"[SchemaTransformer] Unsupported schema type: {schema_type}"
+            )
             return None
 
     @staticmethod
@@ -213,18 +192,20 @@ class SchemaTransformer:
         Returns:
             Tuple of (response_mime_type, response_schema) for Gemini
         """
-        logger.debug(f"[SchemaTransformer] transform_for_gemini called with schema: {schema}")
+        logger.debug(
+            f"[SchemaTransformer] transform_for_gemini called with schema: {schema}"
+        )
 
         if not schema:
             logger.warning("[SchemaTransformer] No schema provided")
             return None, None
 
-        schema_type = schema.get('type')
+        schema_type = schema.get("type")
 
         # Handle object schema (with explanation)
-        if schema_type == 'object':
-            properties = schema.get('properties', {})
-            required = schema.get('required', [])
+        if schema_type == "object":
+            properties = schema.get("properties", {})
+            required = schema.get("required", [])
 
             if not properties:
                 logger.warning("[SchemaTransformer] Object schema has no properties")
@@ -233,27 +214,24 @@ class SchemaTransformer:
             # Build Gemini schema properties
             gemini_properties = {}
             for prop_name, prop_def in properties.items():
-                prop_type = prop_def.get('type')
+                prop_type = prop_def.get("type")
 
-                if prop_type == 'enum':
+                if prop_type == "enum":
                     # Enum property (e.g., route)
                     gemini_properties[prop_name] = types.Schema(
-                        type=types.Type.STRING,
-                        enum=prop_def.get('values', [])
+                        type=types.Type.STRING, enum=prop_def.get("values", [])
                     )
-                elif prop_type == 'string':
+                elif prop_type == "string":
                     # String property (e.g., explanation)
-                    gemini_properties[prop_name] = types.Schema(
-                        type=types.Type.STRING
-                    )
+                    gemini_properties[prop_name] = types.Schema(type=types.Type.STRING)
                 else:
-                    logger.warning(f"[SchemaTransformer] Unsupported property type: {prop_type}")
+                    logger.warning(
+                        f"[SchemaTransformer] Unsupported property type: {prop_type}"
+                    )
                     continue
 
             response_schema = types.Schema(
-                type=types.Type.OBJECT,
-                properties=gemini_properties,
-                required=required
+                type=types.Type.OBJECT, properties=gemini_properties, required=required
             )
 
             logger.info(
@@ -261,27 +239,26 @@ class SchemaTransformer:
                 f"properties: {list(gemini_properties.keys())}, required: {required}, mime_type: application/json"
             )
 
-            return 'application/json', response_schema
+            return "application/json", response_schema
 
         # Handle legacy enum schema (backward compatibility)
-        elif schema_type == 'enum':
-            field_name = schema.get('field', 'route')
-            enum_values = schema.get('values', [])
+        elif schema_type == "enum":
+            field_name = schema.get("field", "route")
+            enum_values = schema.get("values", [])
 
             if not enum_values:
-                logger.warning("[SchemaTransformer] No enum values provided for Gemini structured output")
+                logger.warning(
+                    "[SchemaTransformer] No enum values provided for Gemini structured output"
+                )
                 return None, None
 
             # Gemini expects response_schema with type definitions
             response_schema = types.Schema(
                 type=types.Type.OBJECT,
                 properties={
-                    field_name: types.Schema(
-                        type=types.Type.STRING,
-                        enum=enum_values
-                    )
+                    field_name: types.Schema(type=types.Type.STRING, enum=enum_values)
                 },
-                required=[field_name]
+                required=[field_name],
             )
 
             logger.info(
@@ -289,10 +266,12 @@ class SchemaTransformer:
                 f"field: {field_name}, values: {enum_values}, mime_type: application/json"
             )
 
-            return 'application/json', response_schema
+            return "application/json", response_schema
 
         else:
-            logger.warning(f"[SchemaTransformer] Unsupported schema type: {schema_type}")
+            logger.warning(
+                f"[SchemaTransformer] Unsupported schema type: {schema_type}"
+            )
             return None, None
 
     @staticmethod
@@ -310,18 +289,20 @@ class SchemaTransformer:
         Returns:
             JSON schema configuration for Claude's structured output API
         """
-        logger.debug(f"[SchemaTransformer] transform_for_claude called with schema: {schema}")
+        logger.debug(
+            f"[SchemaTransformer] transform_for_claude called with schema: {schema}"
+        )
 
         if not schema:
             logger.warning("[SchemaTransformer] No schema provided for Claude")
             return None
 
-        schema_type = schema.get('type')
+        schema_type = schema.get("type")
 
         # Handle object schema (with explanation) - recommended format
-        if schema_type == 'object':
-            properties = schema.get('properties', {})
-            required = schema.get('required', [])
+        if schema_type == "object":
+            properties = schema.get("properties", {})
+            required = schema.get("required", [])
 
             if not properties:
                 logger.warning("[SchemaTransformer] Object schema has no properties")
@@ -330,21 +311,23 @@ class SchemaTransformer:
             # Build Claude schema properties (same format as OpenAI)
             claude_properties = {}
             for prop_name, prop_def in properties.items():
-                prop_type = prop_def.get('type')
+                prop_type = prop_def.get("type")
 
-                if prop_type == 'enum':
+                if prop_type == "enum":
                     claude_properties[prop_name] = {
                         "type": "string",
-                        "enum": prop_def.get('values', []),
-                        "description": prop_def.get('description', '')
+                        "enum": prop_def.get("values", []),
+                        "description": prop_def.get("description", ""),
                     }
-                elif prop_type == 'string':
+                elif prop_type == "string":
                     claude_properties[prop_name] = {
                         "type": "string",
-                        "description": prop_def.get('description', '')
+                        "description": prop_def.get("description", ""),
                     }
                 else:
-                    logger.warning(f"[SchemaTransformer] Unsupported property type: {prop_type}")
+                    logger.warning(
+                        f"[SchemaTransformer] Unsupported property type: {prop_type}"
+                    )
                     continue
 
             result = {
@@ -362,13 +345,17 @@ class SchemaTransformer:
             return result
 
         # Handle legacy enum schema (backward compatibility)
-        elif schema_type == 'enum':
-            field_name = schema.get('field', 'route')
-            enum_values = schema.get('values', [])
-            description = schema.get('description', f'Select one of: {", ".join(enum_values)}')
+        elif schema_type == "enum":
+            field_name = schema.get("field", "route")
+            enum_values = schema.get("values", [])
+            description = schema.get(
+                "description", f'Select one of: {", ".join(enum_values)}'
+            )
 
             if not enum_values:
-                logger.warning("[SchemaTransformer] No enum values provided for Claude structured output")
+                logger.warning(
+                    "[SchemaTransformer] No enum values provided for Claude structured output"
+                )
                 return None
 
             result = {
@@ -377,7 +364,7 @@ class SchemaTransformer:
                     field_name: {
                         "type": "string",
                         "enum": enum_values,
-                        "description": description
+                        "description": description,
                     }
                 },
                 "required": [field_name],
@@ -392,14 +379,41 @@ class SchemaTransformer:
             return result
 
         else:
-            logger.warning(f"[SchemaTransformer] Unsupported schema type: {schema_type}")
+            logger.warning(
+                f"[SchemaTransformer] Unsupported schema type: {schema_type}"
+            )
             return None
 
     @staticmethod
+    def extract_field_value(response, schema: Dict[str, Any]) -> str:
+        """Read the structured value out of an OpenAI-shaped chat response.
+
+        Object schemas return the whole JSON payload, since it carries fields
+        the caller wants beyond the answer itself. Legacy enum schemas return
+        just the named field.
+        """
+        try:
+            text_out = response.choices[0].message.content
+        except (AttributeError, IndexError):
+            logger.warning("Failed to extract content from structured response")
+            return ""
+
+        if not text_out:
+            return ""
+
+        if schema.get("type") == "object":
+            return text_out
+
+        try:
+            data = json.loads(text_out)
+            value = data.get(schema.get("field", "route"))
+            return str(value) if value is not None else text_out
+        except Exception:
+            return text_out
+
+    @staticmethod
     def extract_value_from_response(
-        response: str,
-        schema: Dict[str, Any],
-        provider: str
+        response: str, schema: Dict[str, Any], provider: str
     ) -> str:
         """
         Extract the structured value from a provider's response.
@@ -414,8 +428,8 @@ class SchemaTransformer:
         Returns:
             Extracted value (or fallback to first valid value)
         """
-        field_name = schema.get('field', 'route')
-        allowed_values = schema.get('values', [])
+        field_name = schema.get("field", "route")
+        allowed_values = schema.get("values", [])
 
         if not allowed_values:
             return response.strip()
@@ -431,22 +445,22 @@ class SchemaTransformer:
                 if str(value).lower() == allowed.lower():
                     return allowed
         except (json.JSONDecodeError, AttributeError):
-            logger.warning(f"Failed to parse JSON from {provider} response: {response[:100]}")
+            logger.warning(
+                f"Failed to parse JSON from {provider} response: {response[:100]}"
+            )
 
         # Fallback: normalize response with fuzzy matching
-        return SchemaTransformer._normalize_with_fuzzy_match(
-            response, allowed_values
-        )
+        return SchemaTransformer._normalize_with_fuzzy_match(response, allowed_values)
 
     @staticmethod
     def _normalize_with_fuzzy_match(response: str, allowed_values: List[str]) -> str:
         """
         Attempt to match response to allowed values using various strategies.
-        
+
         Args:
             response: Raw response text
             allowed_values: List of valid values
-        
+
         Returns:
             Best matched value or first value as fallback
         """

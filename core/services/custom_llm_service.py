@@ -5,40 +5,72 @@ This service enables integration with custom LLM endpoints that follow the OpenA
 including LiteLLM proxy servers and other OpenAI-compatible providers.
 """
 
-import httpx
 import logging
-from typing import AsyncGenerator, List, Dict, Tuple, Optional
+from typing import AsyncGenerator, Dict, List, Optional, Tuple, Type, TypeVar
 
+import httpx
 from openai import AsyncOpenAI
+from pydantic import BaseModel
 
 from conversations.models import LLM
 from core.services.api_key_service import get_provider_api_key
 from core.services.dtos.stream_event_dto import LLMStreamEvent
 from core.services.llm_utils import (
-    OpenAIMessageFormatter,
-    OpenAIVisionHandler,
     OpenAIErrorHandler,
     OpenAIStreamProcessor,
+    OpenAIUsageExtractor,
+    OpenAIVisionHandler,
+    SchemaTransformer,
     StreamAggregator,
 )
 from core.services.model_capabilities import ModelCapabilities
 
 logger = logging.getLogger(__name__)
 
+StructuredModel = TypeVar("StructuredModel", bound=BaseModel)
+
+
+# Every key this transport can legitimately send. AsyncOpenAI rejects an
+# unknown keyword by failing the whole request, so anything outside this set is
+# dropped and logged rather than taking the turn down at the provider.
+OPENAI_CHAT_PARAMS = frozenset(
+    {
+        "model",
+        "messages",
+        "stream",
+        "stream_options",
+        "max_tokens",
+        "max_completion_tokens",
+        "temperature",
+        "reasoning_effort",
+        "tools",
+        "tool_choice",
+        "response_format",
+    }
+)
+
 
 class CustomLLMService:
     """Service for interacting with custom OpenAI-compatible LLM endpoints."""
 
-    def __init__(self, llm: LLM, api_key: Optional[str] = None):
+    def __init__(
+        self,
+        llm: LLM,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+    ):
         """
         Initialize Custom LLM service with OpenAI-compatible endpoint.
 
         Args:
             llm: LLM model instance with configuration including base_url
             api_key: Optional API key override. If not provided, uses provider key resolution
+            base_url: Endpoint override. LiteLLM dispatch passes the proxy URL
+                from the wallet, since a synthetic model carries no base_url
+                of its own.
         """
-        # Validate that base_url is provided for custom endpoints
-        if not llm.base_url:
+        endpoint = base_url or llm.base_url
+        if not endpoint:
             raise ValueError(
                 f"Custom LLM '{llm.name}' requires a base_url to be configured. "
                 "Please set the base_url field in the Django admin."
@@ -51,15 +83,15 @@ class CustomLLMService:
         # Initialize OpenAI client with custom base URL
         self.client = AsyncOpenAI(
             api_key=api_key,
-            base_url=llm.base_url,
+            base_url=endpoint,
             http_client=httpx.AsyncClient(verify=False),  # bypass SSL verification
         )
         self.model = llm.identifier
         self.is_reasoning = llm.is_reasoning
-        self.base_url = llm.base_url
+        self.base_url = endpoint
         self.capabilities = ModelCapabilities.from_llm(llm)
 
-        logger.info(f"Initialized CustomLLMService for {llm.name} at {llm.base_url}")
+        logger.info(f"Initialized CustomLLMService for {llm.name} at {endpoint}")
 
     async def stream_chat_completion(
         self,
@@ -68,7 +100,7 @@ class CustomLLMService:
         temperature: float = 0.7,
         effort: Optional[str] = None,
         images: List[Dict] = None,
-        tools: Optional[List[Dict]] = None
+        tools: Optional[List[Dict]] = None,
     ) -> AsyncGenerator[LLMStreamEvent, None]:
         """
         Stream chat completions from custom OpenAI-compatible endpoint.
@@ -128,17 +160,104 @@ class CustomLLMService:
         Returns:
             Complete generated response text
         """
-        # Default: use streaming and aggregate
-        # Custom endpoints may not support structured outputs
+        if structured_spec:
+            return await self._get_structured_completion(
+                messages, structured_spec, max_tokens
+            )
+
         stream = self.stream_chat_completion(messages, max_tokens, temperature, effort)
         return await StreamAggregator.aggregate_stream(stream)
+
+    async def _get_structured_completion(
+        self,
+        messages: List[Dict],
+        structured_spec: Dict,
+        max_tokens: int,
+    ) -> str:
+        """Structured output over the OpenAI-compatible ``response_format``.
+
+        Workflow routing depends on this: without it a router node behind a
+        proxy would receive prose where it expects JSON.
+        """
+        response_format = SchemaTransformer.transform_for_openai(structured_spec)
+        if not response_format:
+            logger.warning(
+                "No response_format for spec %s; falling back to streaming.",
+                structured_spec,
+            )
+            stream = self.stream_chat_completion(messages, max_tokens)
+            return await StreamAggregator.aggregate_stream(stream)
+
+        params = {
+            "model": self.model,
+            "messages": messages,
+            "response_format": response_format,
+        }
+        if self.is_reasoning:
+            params["max_completion_tokens"] = max_tokens
+        else:
+            params["max_tokens"] = max_tokens
+            if self.capabilities.supports_temperature:
+                params["temperature"] = 0.0
+
+        try:
+            response = await self.client.chat.completions.create(
+                **self._drop_unsupported(params)
+            )
+            return SchemaTransformer.extract_field_value(response, structured_spec)
+        except Exception as e:
+            logger.error("Structured output failed: %s", e, exc_info=True)
+            return f"Error: {OpenAIErrorHandler.format_error(e)}"
+
+    async def parse_structured_output(
+        self,
+        messages: List[Dict[str, str]],
+        response_model: Type[StructuredModel],
+        max_tokens: int = 2000,
+    ) -> Tuple[StructuredModel, Dict[str, int]]:
+        """Return a validated Pydantic response and its token usage.
+
+        LiteLLM exposes the OpenAI-compatible parse endpoint, so auxiliary
+        jobs such as memory writing can use the same strict response contract
+        as direct OpenAI calls instead of attempting to parse free-form text.
+        """
+        params = {
+            "model": self.model,
+            "messages": messages,
+            "response_format": response_model,
+        }
+        if self.is_reasoning:
+            params["max_completion_tokens"] = max_tokens
+        else:
+            params["max_tokens"] = max_tokens
+            if self.capabilities.supports_temperature:
+                params["temperature"] = 0.0
+
+        response = await self.client.chat.completions.parse(
+            **self._drop_unsupported(params)
+        )
+        parsed = response.choices[0].message.parsed
+        if parsed is None:
+            raise ValueError("Empty structured response from custom LLM")
+
+        usage = OpenAIUsageExtractor.extract_from_chat_completion(response) or {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0,
+        }
+        return parsed, usage
+
+    async def close(self) -> None:
+        """Close the OpenAI-compatible client and its HTTP connection pool."""
+        try:
+            await self.client.close()
+        except Exception:
+            logger.warning("[Custom LLM] Failed to close async client", exc_info=True)
 
     # ==================== Private Methods ====================
 
     def _prepare_messages(
-        self,
-        messages: List[Dict],
-        images: Optional[List[Dict]]
+        self, messages: List[Dict], images: Optional[List[Dict]]
     ) -> List[Dict]:
         """
         Prepare messages by adding vision content if needed.
@@ -212,17 +331,38 @@ class CustomLLMService:
             "stream_options": {"include_usage": True},
         }
 
-        # Reasoning models use different parameter names
+        # Reasoning models rename the token ceiling and reject sampling
+        # controls. Generation controls are written in this transport's own
+        # dialect: every service owns its shape, so an Anthropic field can
+        # never reach an OpenAI-compatible endpoint.
         if self.is_reasoning:
             params["max_completion_tokens"] = max_tokens
         else:
             params["max_tokens"] = max_tokens
-            self.capabilities.apply_sampling_params(params, temperature, effort)
+            if self.capabilities.supports_temperature:
+                params["temperature"] = temperature
+
+        resolved_effort = self.capabilities.resolve_effort(effort)
+        if resolved_effort:
+            params["reasoning_effort"] = resolved_effort
 
         if tools:
             params["tools"] = tools
             params["tool_choice"] = "auto"
 
+        return self._drop_unsupported(params)
+
+    @staticmethod
+    def _drop_unsupported(params: Dict) -> Dict:
+        """Strip keys this transport can't send, so one stray param can't 400."""
+        unsupported = set(params) - OPENAI_CHAT_PARAMS
+        if unsupported:
+            logger.warning(
+                "Dropping params this transport cannot send: %s",
+                sorted(unsupported),
+            )
+            for key in unsupported:
+                params.pop(key)
         return params
 
     # ==================== Static Methods ====================

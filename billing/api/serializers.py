@@ -1,8 +1,8 @@
 from rest_framework import serializers
 
 from billing.constants import (
-    PolicySourceChoice,
     LiteLLMKeySourceChoice,
+    PolicySourceChoice,
     UserWalletPreferenceTypeChoice,
 )
 from billing.models import (
@@ -28,18 +28,24 @@ class WalletSerializer(serializers.ModelSerializer):
 
 class TransactionSerializer(serializers.ModelSerializer):
     display_amount = serializers.CharField(read_only=True)
+    display_reference_amount = serializers.CharField(read_only=True)
     type = serializers.CharField(source="get_type_display")
     llm = LLMSerializer(read_only=True)
-    billing_mode = serializers.CharField(source="get_billing_mode_display", read_only=True)
+    billing_mode = serializers.CharField(
+        source="get_billing_mode_display", read_only=True
+    )
     platform = serializers.CharField(source="get_platform_display", read_only=True)
     source = serializers.CharField(read_only=True)
-    related_group_code = serializers.CharField(source="related_group.access_code", read_only=True, default=None)
+    related_group_code = serializers.CharField(
+        source="related_group.access_code", read_only=True, default=None
+    )
 
     class Meta:
         model = Transaction
         fields = [
             "id",
             "display_amount",
+            "display_reference_amount",
             "type",
             "source",
             "related_group_code",
@@ -56,6 +62,7 @@ class TransactionSerializer(serializers.ModelSerializer):
 
 
 # --- System refill policy -------------------------------------------------
+
 
 class SystemRefillPolicySerializer(serializers.ModelSerializer):
     class Meta:
@@ -75,8 +82,10 @@ class SystemRefillPolicySerializer(serializers.ModelSerializer):
 
 # --- Effective policy / overrides -----------------------------------------
 
+
 class EffectivePolicySerializer(serializers.Serializer):
     """Flat, typed representation of a user's resolved refill policy."""
+
     amount = serializers.DecimalField(max_digits=10, decimal_places=6)
     period_days = serializers.IntegerField()
     amount_source = serializers.ChoiceField(choices=PolicySourceChoice.choices)
@@ -91,16 +100,23 @@ class UserRefillOverrideSerializer(serializers.ModelSerializer):
 
 class UpsertUserOverrideSerializer(serializers.Serializer):
     """Write payload for creating or updating a user's refill override."""
+
     refill_amount = serializers.DecimalField(
-        max_digits=10, decimal_places=6, required=False, allow_null=True,
+        max_digits=10,
+        decimal_places=6,
+        required=False,
+        allow_null=True,
     )
-    refill_period_days = serializers.IntegerField(required=False, allow_null=True, min_value=1)
+    refill_period_days = serializers.IntegerField(
+        required=False, allow_null=True, min_value=1
+    )
     reason = serializers.CharField(required=False, allow_blank=True, max_length=255)
     clear_amount = serializers.BooleanField(required=False, default=False)
     clear_period = serializers.BooleanField(required=False, default=False)
 
 
 # --- Group wallet ---------------------------------------------------------
+
 
 class GroupWalletReadSerializer(serializers.ModelSerializer):
     display_budget = serializers.CharField(read_only=True)
@@ -126,35 +142,52 @@ class GroupWalletReadSerializer(serializers.ModelSerializer):
 
 class GroupWalletWriteSerializer(serializers.Serializer):
     refill_amount = serializers.DecimalField(
-        max_digits=10, decimal_places=6, required=False, allow_null=True,
+        max_digits=10,
+        decimal_places=6,
+        required=False,
+        allow_null=True,
     )
-    refill_period_days = serializers.IntegerField(required=False, allow_null=True, min_value=1)
+    refill_period_days = serializers.IntegerField(
+        required=False, allow_null=True, min_value=1
+    )
     is_active = serializers.BooleanField(required=False)
     clear_amount = serializers.BooleanField(required=False, default=False)
     clear_period = serializers.BooleanField(required=False, default=False)
 
 
 class FundBudgetSerializer(serializers.Serializer):
-    amount = serializers.DecimalField(max_digits=15, decimal_places=6, min_value=0.000001)
+    amount = serializers.DecimalField(
+        max_digits=15, decimal_places=6, min_value=0.000001
+    )
     note = serializers.CharField(required=False, allow_blank=True, max_length=255)
 
 
 class AllocateSerializer(serializers.Serializer):
     recipient_user_id = serializers.IntegerField()
-    amount = serializers.DecimalField(max_digits=15, decimal_places=6, min_value=0.000001)
+    amount = serializers.DecimalField(
+        max_digits=15, decimal_places=6, min_value=0.000001
+    )
     note = serializers.CharField(required=False, allow_blank=True, max_length=255)
 
 
 class MemberRowSerializer(serializers.ModelSerializer):
     """Single member row with resolved effective policy + current override state."""
+
     display_balance = serializers.SerializerMethodField()
     effective_policy = serializers.SerializerMethodField()
     override = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ["id", "email", "first_name", "last_name", "display_balance",
-                  "effective_policy", "override"]
+        fields = [
+            "id",
+            "email",
+            "first_name",
+            "last_name",
+            "display_balance",
+            "effective_policy",
+            "override",
+        ]
 
     def get_display_balance(self, obj):
         wallet = getattr(obj, "wallet", None)
@@ -175,6 +208,7 @@ class MemberRowSerializer(serializers.ModelSerializer):
 
 class OwnedGroupSerializer(serializers.ModelSerializer):
     """Response shape for /group-wallets/owned/ — nests wallet + members."""
+
     group_wallet = GroupWalletReadSerializer(read_only=True)
     members = MemberRowSerializer(source="users", many=True, read_only=True)
 
@@ -194,8 +228,10 @@ class OwnedGroupSerializer(serializers.ModelSerializer):
 
 # === Multi-wallet selection / list ========================================
 
+
 class ActiveWalletRefSerializer(serializers.Serializer):
     """Pointer to the currently-active wallet in the unified list."""
+
     type = serializers.ChoiceField(choices=UserWalletPreferenceTypeChoice.choices)
     ref_id = serializers.CharField(allow_null=True)
 
@@ -206,9 +242,13 @@ class WalletStatusSerializer(serializers.Serializer):
     (per the data-schema-contract rule: no wire-level unions; type-tagged
     variants only).
     """
+
     kind = serializers.CharField()  # "BALANCE" or "EXTERNAL"
-    balance = serializers.CharField(required=False, allow_null=True)        # BALANCE only
-    last_refill_at = serializers.DateTimeField(required=False, allow_null=True)  # BALANCE only
+    balance = serializers.CharField(required=False, allow_null=True)  # BALANCE only
+    last_refill_at = serializers.DateTimeField(
+        required=False, allow_null=True
+    )  # BALANCE only
+    spend = serializers.CharField(required=False, allow_null=True)  # EXTERNAL only
 
 
 class UnifiedWalletSerializer(serializers.Serializer):
@@ -217,6 +257,7 @@ class UnifiedWalletSerializer(serializers.Serializer):
     fields are individually optional rather than a union — FE narrows by
     `type`, then by `status.kind`.
     """
+
     type = serializers.ChoiceField(choices=UserWalletPreferenceTypeChoice.choices)
     ref_id = serializers.CharField(allow_null=True)
     label = serializers.CharField()
@@ -224,43 +265,78 @@ class UnifiedWalletSerializer(serializers.Serializer):
     is_active = serializers.BooleanField()
     status = WalletStatusSerializer()
     # Type-specific named fields:
-    provider = serializers.CharField(required=False, allow_null=True)            # BYO only
-    source = serializers.ChoiceField(                                            # LITELLM only
+    provider = serializers.CharField(required=False, allow_null=True)  # BYO only
+    title_model = serializers.CharField(
+        required=False, allow_blank=True
+    )  # LITELLM only
+    memory_model = serializers.CharField(
+        required=False, allow_blank=True
+    )  # LITELLM only
+    source = serializers.ChoiceField(  # LITELLM only
         choices=LiteLLMKeySourceChoice.choices, required=False, allow_null=True
     )
-    group_name = serializers.CharField(required=False, allow_null=True)          # LITELLM ADMIN_GROUP only
-    expires_at = serializers.DateTimeField(required=False, allow_null=True)      # LITELLM only
-    base_url = serializers.CharField(required=False, allow_null=True)            # LITELLM only (display)
+    group_name = serializers.CharField(
+        required=False, allow_null=True
+    )  # LITELLM ADMIN_GROUP only
+    expires_at = serializers.DateTimeField(
+        required=False, allow_null=True
+    )  # LITELLM only
+    base_url = serializers.CharField(
+        required=False, allow_null=True
+    )  # LITELLM only (display)
 
 
 class WalletsListResponseSerializer(serializers.Serializer):
     """Envelope for GET /api/billing/wallets/."""
+
     active_wallet = ActiveWalletRefSerializer()
     wallets = UnifiedWalletSerializer(many=True)
 
 
 class SetActiveWalletRequestSerializer(serializers.Serializer):
     """Body for PUT /api/billing/wallets/active/."""
+
     type = serializers.ChoiceField(choices=UserWalletPreferenceTypeChoice.choices)
     ref_id = serializers.CharField(allow_null=True, required=False)
 
 
 # === LiteLLM key CRUD =====================================================
 
+
 class LiteLLMKeyCreateSerializer(serializers.Serializer):
     """Body for POST /api/billing/wallets/litellm/. Creates a USER-source key."""
+
     label = serializers.CharField(max_length=128)
     base_url = serializers.URLField()
     api_key = serializers.CharField(max_length=500, write_only=True)
+    title_model = serializers.CharField(
+        max_length=255, required=False, allow_blank=True, default=""
+    )
+    memory_model = serializers.CharField(
+        max_length=255, required=False, allow_blank=True, default=""
+    )
 
 
-class LiteLLMKeyRenameSerializer(serializers.Serializer):
-    """Body for PATCH /api/billing/wallets/litellm/{id}/. Label change only."""
-    label = serializers.CharField(max_length=128)
+class LiteLLMKeyUpdateSerializer(serializers.Serializer):
+    """Body for PATCH /api/billing/wallets/litellm/{id}/.
+
+    Every field is optional so the modal can send only what changed. The two
+    model fields accept an empty string, which means "fall back to DARE's
+    default" — distinct from omitting the field, which leaves it as it was.
+    """
+
+    label = serializers.CharField(max_length=128, required=False)
+    title_model = serializers.CharField(
+        max_length=255, required=False, allow_blank=True
+    )
+    memory_model = serializers.CharField(
+        max_length=255, required=False, allow_blank=True
+    )
 
 
 class LiteLLMTestRequestSerializer(serializers.Serializer):
     """Body for POST /api/billing/wallets/litellm/test/ — pre-save probe."""
+
     base_url = serializers.URLField()
     api_key = serializers.CharField(max_length=500, write_only=True)
 
@@ -270,7 +346,10 @@ class LiteLLMKeyReadSerializer(serializers.ModelSerializer):
     Display shape for a LiteLLM key. Never emits the api_key field; the EncryptedCharField
     decrypts internally only for routing, never for serialization.
     """
-    group_name = serializers.CharField(source="source_group.access_code", read_only=True, default=None)
+
+    group_name = serializers.CharField(
+        source="source_group.access_code", read_only=True, default=None
+    )
 
     class Meta:
         model = LiteLLMKey
@@ -280,6 +359,8 @@ class LiteLLMKeyReadSerializer(serializers.ModelSerializer):
             "base_url",
             "source",
             "group_name",
+            "title_model",
+            "memory_model",
             "expires_at",
             "created_at",
             "updated_at",

@@ -1,15 +1,16 @@
 import logging
 from decimal import Decimal
-from typing import Dict
+from typing import Dict, Optional
 
 from channels.db import database_sync_to_async
 from django.core.exceptions import ValidationError
 from django.db import transaction as db_transaction
+from django.db.models import F
 
 from api_keys.constants import BillingModeChoice
 from billing.constants import TransactionSourceChoice, TransactionTypeChoice
 from billing.exceptions import PaymentRequiredError
-from billing.models import Transaction, Wallet
+from billing.models import LiteLLMSpend, Transaction, Wallet
 from billing.wallet_router import (
     BOT_WALLET_BYO,
     BOT_WALLET_DARE,
@@ -19,6 +20,7 @@ from billing.wallet_router import (
 )
 from conversations.models import LLM, Message
 from core.services.energy_service import compute_impact
+from core.services.reference_pricing import reference_rates
 from users.constants import AuthSourceChoice
 from users.models import User
 from workflows.models import Workflow, WorkflowNode, WorkflowRun
@@ -283,7 +285,10 @@ class BillingService:
 
     # ------------------------------------------------------------------
 
-    def _record_litellm_transaction(self, message_obj: Message) -> None:
+    @db_transaction.atomic
+    def _record_litellm_transaction(
+        self, message_obj: Message, reference_llm: Optional[LLM]
+    ) -> Transaction:
         """Emit a $0 Transaction row for a LiteLLM-routed message.
 
         DARE doesn't debit its own wallet for LiteLLM dispatch (the user
@@ -297,6 +302,12 @@ class BillingService:
         different shapes; the only field every OpenAI-compatible endpoint
         returns reliably is the ``usage`` token block, which has already
         been stamped on ``message_obj`` by the caller.
+
+        ``reference_llm`` is the DARE-side model this proxy identifier maps
+        to, resolved by the caller because it also prices the message. Its
+        rates give ``reference_amount``: what the call would have cost at
+        DARE's prices. It exists so usage reporting isn't blank, and is never
+        charged.
         """
         conversation = message_obj.conversation
         # Audit attribution lives on Message.litellm_key (the FK). The
@@ -305,22 +316,78 @@ class BillingService:
         # internal UUID, which is meaningless to the user and would be a
         # surface for a key-id leak if scraped from the FE.
         key_label = getattr(message_obj.litellm_key, "label", None) or "LiteLLM proxy"
-        Transaction.objects.create(
+        reference_amount = (
+            self._calculate_cost(
+                reference_llm,
+                message_obj.input_tokens,
+                message_obj.output_tokens,
+            )
+            if reference_llm is not None
+            else None
+        )
+        return self._record_litellm_usage(
             user=conversation.user,
-            amount=Decimal("0.00"),
-            llm=None,
-            llm_name=message_obj.litellm_model_name,
-            type=TransactionTypeChoice.DEBIT,
-            source=TransactionSourceChoice.USAGE,
-            message=(
+            litellm_key=message_obj.litellm_key,
+            model_name=message_obj.litellm_model_name,
+            input_tokens=message_obj.input_tokens,
+            output_tokens=message_obj.output_tokens,
+            description=(
                 f"Message {message_obj.id}: {message_obj.message[:80]} | "
                 f"via {key_label} | "
                 f"model={message_obj.litellm_model_name}"
             ),
-            input_tokens=message_obj.input_tokens,
-            output_tokens=message_obj.output_tokens,
-            billing_mode=BillingModeChoice.LITELLM,
             platform=conversation.source,
+            reference_amount=reference_amount,
+        )
+
+    @staticmethod
+    def _accumulate_litellm_spend(user: "User", litellm_key_id, amount) -> None:
+        """Add one call to this user's running total for this key.
+
+        Written here rather than summed on read: the wallet indicator renders
+        on every page, and an aggregate over a growing transaction table would
+        get slower for exactly the heaviest users. F() expressions keep
+        concurrent turns from clobbering each other.
+        """
+        if amount is None:
+            return
+
+        spend, _created = LiteLLMSpend.objects.get_or_create(
+            user=user,
+            litellm_key_id=litellm_key_id,
+        )
+        LiteLLMSpend.objects.filter(pk=spend.pk).update(
+            total_reference_amount=F("total_reference_amount") + amount,
+            call_count=F("call_count") + 1,
+        )
+
+    def _record_litellm_usage(
+        self,
+        *,
+        user: "User",
+        litellm_key,
+        model_name: str,
+        input_tokens: int,
+        output_tokens: int,
+        description: str,
+        platform: str,
+        reference_amount,
+    ) -> Transaction:
+        """Persist one externally billed call without touching DARE credit."""
+        self._accumulate_litellm_spend(user, litellm_key.pk, reference_amount)
+        return Transaction.objects.create(
+            user=user,
+            amount=Decimal("0.00"),
+            reference_amount=reference_amount,
+            llm=None,
+            llm_name=model_name,
+            type=TransactionTypeChoice.DEBIT,
+            source=TransactionSourceChoice.USAGE,
+            message=description,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            billing_mode=BillingModeChoice.LITELLM,
+            platform=platform,
         )
 
     def finalize_ai_message(
@@ -364,7 +431,14 @@ class BillingService:
                 # Transaction row for attribution + Recent Transactions
                 # visibility, and capture proxy-reported energy if present.
                 if message_obj.litellm_key_id is not None:
-                    self._record_litellm_transaction(message_obj)
+                    reference_llm = reference_rates(message_obj.litellm_model_name)
+                    self._record_litellm_transaction(message_obj, reference_llm)
+                    if reference_llm is not None:
+                        message_obj.cost = self._calculate_cost(
+                            reference_llm,
+                            message_obj.input_tokens,
+                            message_obj.output_tokens,
+                        )
                     message_obj.save()
                     return message_obj
 
@@ -713,6 +787,41 @@ class BillingService:
             output_tokens=output_tokens,
             billing_mode=BillingModeChoice.WALLET,
             platform=platform,
+        )
+
+    @db_transaction.atomic
+    def record_litellm_service_usage(
+        self,
+        *,
+        user: "User",
+        litellm_key,
+        model_name: str,
+        input_tokens: int,
+        output_tokens: int,
+        description: str,
+        platform: str = AuthSourceChoice.DARE,
+    ) -> Transaction:
+        """Record an auxiliary call paid through a user's LiteLLM proxy.
+
+        The synthetic dispatch model is intentionally never persisted as an
+        ``LLM`` foreign key. Reference pricing remains reporting-only and the
+        user's DARE wallet is not debited.
+        """
+        rates = reference_rates(model_name)
+        reference_amount = (
+            self._calculate_cost(rates, input_tokens, output_tokens)
+            if rates is not None
+            else None
+        )
+        return self._record_litellm_usage(
+            user=user,
+            litellm_key=litellm_key,
+            model_name=model_name,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            description=description,
+            platform=platform,
+            reference_amount=reference_amount,
         )
 
     async def _get_user_wallet(self, user: "User") -> "Wallet":

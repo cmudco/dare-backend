@@ -487,12 +487,13 @@ class LLMService:
                 api_key=await get_provider_api_key(llm.provider),
             )
 
-        # LITELLM short-circuit: route every provider through the OpenAI-
-        # compatible proxy regardless of llm.provider. Provider-native quirks
-        # (Anthropic tool format, Gemini's safety filters, etc.) get translated
-        # by the proxy itself.
+        # LITELLM short-circuit: the proxy is one OpenAI-compatible endpoint
+        # whatever the underlying vendor, so dispatch goes to the transport
+        # built for that — never to a provider-native service, whose dialect
+        # (Anthropic's output_config, Gemini's safety config) the endpoint
+        # would reject as unknown arguments.
         if creds.use_litellm_proxy:
-            return OpenAIService(
+            return CustomLLMService(
                 llm=llm,
                 api_key=creds.api_key,
                 base_url=creds.base_url,

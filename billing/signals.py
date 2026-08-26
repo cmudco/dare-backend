@@ -1,19 +1,19 @@
+import logging
+from decimal import Decimal
+
+from django.conf import settings
 from django.db.models.signals import post_save, pre_delete
 from django.dispatch import receiver
-from django.conf import settings
-from decimal import Decimal
-from users.models import User
-from billing.models import (
-    Wallet,
-    UserWalletPreference,
-    LiteLLMKey,
-)
-from billing.constants import (
-    UserWalletPreferenceTypeChoice,
-)
-from billing.litellm_models_service import invalidate as invalidate_litellm_probe
+
 from api_keys.constants import BillingModeChoice
 from api_keys.models import UserProviderAPIKey
+from billing.constants import LiteLLMKeySourceChoice, UserWalletPreferenceTypeChoice
+from billing.group_wallet import adopt_group_wallet
+from billing.litellm_models_service import invalidate as invalidate_litellm_probe
+from billing.models import LiteLLMKey, UserWalletPreference, Wallet
+from users.models import User
+
+logger = logging.getLogger(__name__)
 
 
 # Reentrancy guard for the User.billing_mode <-> UserWalletPreference bridge:
@@ -29,7 +29,7 @@ def create_user_wallet(sender, instance, created, **kwargs):
     during registration (either via Access Code Group setting or $5 default).
     """
     if created:
-        Wallet.objects.create(user=instance, balance=Decimal('0.00'))
+        Wallet.objects.create(user=instance, balance=Decimal("0.00"))
 
 
 def _legacy_to_preference(billing_mode: str) -> str:
@@ -86,7 +86,13 @@ def mirror_billing_mode_to_preference(sender, instance, created, **kwargs):
         try:
             pref.active_wallet_type = target_type
             pref.active_wallet_ref_id = None
-            pref.save(update_fields=["active_wallet_type", "active_wallet_ref_id", "updated_at"])
+            pref.save(
+                update_fields=[
+                    "active_wallet_type",
+                    "active_wallet_ref_id",
+                    "updated_at",
+                ]
+            )
         except Exception:
             pref.reset_to_dare()
     finally:
@@ -123,6 +129,7 @@ def mirror_preference_to_billing_mode(sender, instance, created, **kwargs):
 # points at, the preference would dangle. Reset it to DARE so the next request
 # resolves cleanly without going through the wallet_router self-heal path.
 
+
 @receiver(pre_delete, sender=UserProviderAPIKey)
 def reset_pref_on_byo_delete(sender, instance, **kwargs):
     """
@@ -145,8 +152,7 @@ def reset_pref_on_byo_delete(sender, instance, **kwargs):
 
     if pref.active_wallet_ref_id is None:
         remaining = (
-            UserProviderAPIKey.active_objects
-            .filter(user=instance.user)
+            UserProviderAPIKey.active_objects.filter(user=instance.user)
             .exclude(pk=instance.pk)
             .exclude(api_key__isnull=True)
             .exclude(api_key="")
@@ -176,3 +182,28 @@ def reset_pref_on_litellm_delete(sender, instance, **kwargs):
 def invalidate_litellm_probe_on_save(sender, instance, **kwargs):
     """Drop the cached probe when the key's URL or secret changes."""
     invalidate_litellm_probe(instance.pk)
+
+
+@receiver(post_save, sender=LiteLLMKey)
+def adopt_group_members_on_key_created(sender, instance, created, **kwargs):
+    """Default a cohort onto a newly issued group key.
+
+    The mirror of ``reset_pref_on_litellm_delete``: provisioning a group key
+    should reach the members who already signed up, not only the ones who join
+    afterwards. Only fires on create, so renaming or rotating a key leaves
+    everyone's current choice alone.
+    """
+    if not created or instance.source != LiteLLMKeySourceChoice.ADMIN_GROUP:
+        return
+    if instance.source_group_id is None:
+        return
+
+    members = User.objects.filter(access_code_group_id=instance.source_group_id)
+    adopted = sum(1 for member in members if adopt_group_wallet(member))
+    if adopted:
+        logger.info(
+            "Defaulted %s member(s) of group %s onto LiteLLM key %s.",
+            adopted,
+            instance.source_group_id,
+            instance.pk,
+        )

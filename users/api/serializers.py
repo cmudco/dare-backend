@@ -2,17 +2,18 @@ import logging
 from decimal import Decimal
 
 from dj_rest_auth.registration.serializers import RegisterSerializer
-from dj_rest_auth.serializers import UserDetailsSerializer, LoginSerializer
-from django.contrib.auth import get_user_model, authenticate
+from dj_rest_auth.serializers import LoginSerializer, UserDetailsSerializer
+from django.contrib.auth import authenticate, get_user_model
 from django.core.exceptions import ValidationError as DjangoValidationError
 from rest_framework import serializers
 
 from billing.constants import TransactionSourceChoice
+from billing.group_wallet import adopt_group_wallet
 from billing.models import Wallet
 from billing.services import WalletService
-from prompts.api.serializers import PromptSerializer
 from core.storage.constants import StorageBackendChoice
-from users.constants import VectorDBChoice, AuthSourceChoice, RoleChoice
+from prompts.api.serializers import PromptSerializer
+from users.constants import AuthSourceChoice, RoleChoice, VectorDBChoice
 from users.models import AccessCodeGroup
 from users.utils import detect_platform_from_request, get_platform_access_permission
 
@@ -25,10 +26,14 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
     vector_db = serializers.ChoiceField(choices=VectorDBChoice.choices)
     default_prompt = serializers.SerializerMethodField()
     model_group = serializers.SerializerMethodField()
-    auth_source = serializers.ChoiceField(choices=AuthSourceChoice.choices, read_only=True)
+    auth_source = serializers.ChoiceField(
+        choices=AuthSourceChoice.choices, read_only=True
+    )
     platform_role = serializers.ChoiceField(choices=RoleChoice.choices, read_only=True)
     billing_mode = serializers.CharField(read_only=True)
-    billing_mode_display = serializers.CharField(source='get_billing_mode_display', read_only=True)
+    billing_mode_display = serializers.CharField(
+        source="get_billing_mode_display", read_only=True
+    )
     avatar_url = serializers.SerializerMethodField()
     is_syftbox_file_storage = serializers.SerializerMethodField()
     access_code_group = serializers.SerializerMethodField()
@@ -57,7 +62,14 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
             "is_syftbox_file_storage",
             "access_code_group",
         ]
-        read_only_fields = ["id", "auth_source", "platform_role", "billing_mode", "billing_mode_display", "is_onboarding_completed"]
+        read_only_fields = [
+            "id",
+            "auth_source",
+            "platform_role",
+            "billing_mode",
+            "billing_mode_display",
+            "is_onboarding_completed",
+        ]
 
     def get_default_prompt(self, obj):
         if obj.default_prompt:
@@ -66,15 +78,15 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
 
     def get_model_group(self, obj):
         # Only use AccessCodeGroup -> ModelGroup mapping
-        acg = getattr(obj, 'access_code_group', None)
-        group = acg.model_group if acg and getattr(acg, 'model_group', None) else None
+        acg = getattr(obj, "access_code_group", None)
+        group = acg.model_group if acg and getattr(acg, "model_group", None) else None
 
         if group:
             return {
                 "id": group.id,
                 "name": group.name,
                 "description": group.description,
-                "isActive": group.is_active
+                "isActive": group.is_active,
             }
         return None
 
@@ -85,16 +97,18 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
         """Return absolute URL for avatar, or None if not set."""
         if not obj.avatar_url:
             return None
-        
+
         # If already an absolute URL, return as-is
-        if obj.avatar_url.startswith('http://') or obj.avatar_url.startswith('https://'):
+        if obj.avatar_url.startswith("http://") or obj.avatar_url.startswith(
+            "https://"
+        ):
             return obj.avatar_url
-        
+
         # Build absolute URL from request context
-        request = self.context.get('request')
+        request = self.context.get("request")
         if request:
             return request.build_absolute_uri(obj.avatar_url)
-        
+
         # Fallback: return the relative URL
         return obj.avatar_url
 
@@ -116,27 +130,34 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
 
     def update(self, instance, validated_data):
         instance = super().update(instance, validated_data)
-    
+
         # Only check if any onboarding field was updated
-        onboarding_fields = {'role', 'industry', 'purpose', 'referral_source'}
+        onboarding_fields = {"role", "industry", "purpose", "referral_source"}
         if onboarding_fields.intersection(validated_data.keys()):
             # Auto-set if all fields are now complete
-            if instance.role and instance.industry and instance.purpose and instance.referral_source:
+            if (
+                instance.role
+                and instance.industry
+                and instance.purpose
+                and instance.referral_source
+            ):
                 instance.is_onboarding_completed = True
-                instance.save(update_fields=['is_onboarding_completed'])
+                instance.save(update_fields=["is_onboarding_completed"])
         return instance
 
 
 class CustomRegisterSerializer(RegisterSerializer):
     name = serializers.CharField(max_length=255, required=True)
-    access_code = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    access_code = serializers.CharField(
+        max_length=255, required=False, allow_blank=True
+    )
 
     validate_access_code_attrs = {
         # Platform rules:
         # - DARE: access_code is optional
         # - SocraticBots: access_code is optional
-        AuthSourceChoice.DARE: {'access_code_required': False},
-        AuthSourceChoice.SOCRATIC_BOTS: {'access_code_required': False}
+        AuthSourceChoice.DARE: {"access_code_required": False},
+        AuthSourceChoice.SOCRATIC_BOTS: {"access_code_required": False},
     }
 
     def validate(self, attrs):
@@ -144,11 +165,11 @@ class CustomRegisterSerializer(RegisterSerializer):
         Validate registration based on platform detection
         """
         # Get platform from request
-        platform = detect_platform_from_request(self.context['request'])
-        
+        platform = detect_platform_from_request(self.context["request"])
+
         access_code = attrs.get("access_code")
         validation_rules = self.validate_access_code_attrs.get(platform, {})
-        
+
         # For SocraticBots, empty access code is allowed
         if platform == AuthSourceChoice.SOCRATIC_BOTS and not access_code:
             return attrs
@@ -165,21 +186,21 @@ class CustomRegisterSerializer(RegisterSerializer):
                         error_message = "This access code is no longer active."
                     else:
                         error_message = "This access code has reached its usage limit."
-                    raise serializers.ValidationError({
-                        "access_code": error_message
-                    })
-                attrs['_code_group'] = code_group
+                    raise serializers.ValidationError({"access_code": error_message})
+                attrs["_code_group"] = code_group
             except AccessCodeGroup.DoesNotExist:
-                raise serializers.ValidationError({
-                    "access_code": "Invalid access code. Please check the code and try again."
-                })
-        
+                raise serializers.ValidationError(
+                    {
+                        "access_code": "Invalid access code. Please check the code and try again."
+                    }
+                )
+
         # Check if access code is required for the platform
-        elif validation_rules.get('access_code_required', False):
-            raise serializers.ValidationError({
-                "access_code": f"Access code is required for {platform} registration."
-            })
-            
+        elif validation_rules.get("access_code_required", False):
+            raise serializers.ValidationError(
+                {"access_code": f"Access code is required for {platform} registration."}
+            )
+
         return attrs
 
     def validate_email(self, email):
@@ -238,24 +259,32 @@ class CustomRegisterSerializer(RegisterSerializer):
 
         user.save()
 
+        # Members of a group that was issued a LiteLLM key route through it by
+        # default. Their own wallet and credit below are untouched — this sets
+        # the default provider, not a restriction.
+        adopt_group_wallet(user)
+
         # Apply initial wallet credit with a single transaction
         # - If access code has an initial_wallet_credit, grant exactly that amount
         # - Otherwise grant the default $5.00
         try:
             # Ensure wallet exists with $0 from signal; create with $0 if missing
-            wallet = getattr(user, 'wallet', None)
+            wallet = getattr(user, "wallet", None)
             if wallet is None:
-                wallet = Wallet.objects.create(user=user, balance=Decimal('0.00'))
+                wallet = Wallet.objects.create(user=user, balance=Decimal("0.00"))
 
-            if code_group and getattr(code_group, 'initial_wallet_credit', None) is not None:
+            if (
+                code_group
+                and getattr(code_group, "initial_wallet_credit", None) is not None
+            ):
                 initial_amount = Decimal(code_group.initial_wallet_credit)
                 message = f"Initial credit via access code '{code_group.access_code}'"
             else:
-                initial_amount = Decimal('5.00')
+                initial_amount = Decimal("5.00")
                 message = "Initial wallet credit"
 
             # Credit exactly the intended amount (wallet starts at $0)
-            if initial_amount > Decimal('0.00'):
+            if initial_amount > Decimal("0.00"):
                 WalletService.add_topup(
                     user,
                     amount=initial_amount,
@@ -265,23 +294,29 @@ class CustomRegisterSerializer(RegisterSerializer):
                 )
         except Exception:
             # Do not block registration if crediting fails
-            logger.exception(f"Failed to apply initial wallet credit for user {user.id}")
+            logger.exception(
+                f"Failed to apply initial wallet credit for user {user.id}"
+            )
             pass
         return user
 
 
 class CustomLoginSerializer(LoginSerializer):
     def validate(self, attrs):
-        email = attrs.get('email')
+        email = attrs.get("email")
 
         if email:
             try:
                 user = User.objects.get(email__iexact=email)
 
                 # Check if user's access code has expired and deactivate if necessary
-                if user.access_code_group and user.access_code_group.is_expired and user.is_active:
+                if (
+                    user.access_code_group
+                    and user.access_code_group.is_expired
+                    and user.is_active
+                ):
                     user.is_active = False
-                    user.save(update_fields=['is_active'])
+                    user.save(update_fields=["is_active"])
                     logger.warning(
                         f"User {user.email} deactivated due to expired access code {user.access_code_group.access_code}"
                     )
@@ -296,11 +331,15 @@ class CustomLoginSerializer(LoginSerializer):
                         "Your account is currently inactive. Please contact the administrator for assistance."
                     )
 
-                request = self.context.get('request')
+                request = self.context.get("request")
                 if request:
                     platform = detect_platform_from_request(request)
                     if not get_platform_access_permission(user, platform):
-                        platform_name = "DARE" if platform == AuthSourceChoice.DARE else "SocraticBots"
+                        platform_name = (
+                            "DARE"
+                            if platform == AuthSourceChoice.DARE
+                            else "SocraticBots"
+                        )
                         raise serializers.ValidationError(
                             f"You do not have access to the {platform_name} platform. Please contact the administrator for assistance."
                         )

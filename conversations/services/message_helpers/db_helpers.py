@@ -13,9 +13,8 @@ from typing import Dict, List, Optional
 
 from channels.db import database_sync_to_async
 
-from billing import litellm_models_service
 from billing.models import LiteLLMKey
-from conversations.constants import SenderType
+from conversations.constants import Provider, SenderType
 from conversations.models import LLM, Conversation, Message
 from core.services.dtos import LLMDescriptor
 
@@ -23,9 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 @database_sync_to_async
-def get_ai_message_by_id(
-    message_id: int, conversation_id: int
-) -> Optional[Message]:
+def get_ai_message_by_id(message_id: int, conversation_id: int) -> Optional[Message]:
     """Fetch an AI message by ID with dispatch relations loaded.
 
     Eager-loads ``llm`` and ``litellm_key`` so the regeneration path can
@@ -70,12 +67,7 @@ def get_message_media_file_ids(message: Message) -> List[int]:
 def _resolve_litellm_ref(
     key_id: str, model_name: str, user=None
 ) -> Optional[LLMDescriptor]:
-    """Look up a LiteLLM dispatch reference and build the descriptor.
-
-    Uses the cached probe (`billing.litellm_models_service.list_models`) to
-    discover the provider the proxy reports for ``model_name``; falls back
-    to ``"custom"`` if the probe is unavailable so dispatch can still run.
-    """
+    """Look up a LiteLLM dispatch reference and build the descriptor."""
     key_queryset = (
         LiteLLMKey.visible_for_user(user)
         if user is not None
@@ -89,13 +81,12 @@ def _resolve_litellm_ref(
         logger.info("LiteLLM ref references expired LiteLLMKey id=%s", key_id)
         return None
 
-    cached = litellm_models_service.list_models(key)
-    provider = next(
-        (m.provider for m in cached.models if m.name == model_name and m.provider),
-        "custom",
-    )
+    # The probe's ``litellm_provider`` names the upstream vendor, and some
+    # gateways report "openai" for every model they front. ``provider`` selects
+    # DARE's service class and credential, so it must describe the transport:
+    # a proxy-routed model is always reached the same way.
     return LLMDescriptor.from_litellm(
-        litellm_key=key, model_name=model_name, provider=provider
+        litellm_key=key, model_name=model_name, provider=Provider.CUSTOM.value
     )
 
 

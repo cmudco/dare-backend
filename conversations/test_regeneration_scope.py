@@ -1,7 +1,8 @@
-from asgiref.sync import async_to_sync
-from django.test import SimpleTestCase, TestCase
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+
+from asgiref.sync import async_to_sync
+from django.test import SimpleTestCase, TransactionTestCase
 
 from billing.models import LiteLLMKey
 from conversations.constants import SenderType
@@ -43,7 +44,16 @@ class ModelRoutingScopeTests(SimpleTestCase):
         )
 
 
-class RegenerationScopeTests(TestCase):
+class RegenerationScopeTests(TransactionTestCase):
+    """Exercise the thread-hopping DB helper without TestCase transactions.
+
+    ``database_sync_to_async`` closes stale connections at its thread
+    boundary. A ``TestCase`` transaction lives on the calling connection, so
+    that cleanup can close the transaction out from under the next assertion.
+    TransactionTestCase gives the worker a normal committed database view and
+    matches how this helper runs under Channels in production.
+    """
+
     def test_ai_message_lookup_is_scoped_to_active_conversation(self):
         owned = Conversation.active_objects.create(conversation_id="OWNED")
         other = Conversation.active_objects.create(conversation_id="OTHER")

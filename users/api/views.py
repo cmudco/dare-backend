@@ -4,6 +4,7 @@ import uuid
 
 from allauth.account import app_settings as allauth_account_settings
 from allauth.account.models import EmailAddress
+from dj_rest_auth.registration.views import VerifyEmailView
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core import signing
@@ -12,7 +13,6 @@ from django.db.models import Sum
 from django.http import Http404
 from django.utils import timezone
 from django_rq import enqueue, get_queue
-from dj_rest_auth.registration.views import VerifyEmailView
 from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -20,18 +20,19 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
-
 from billing.constants import TransactionTypeChoice
 from billing.models import Transaction
 from conversations.constants import SenderType
 from conversations.models import Conversation, Message
 from files.models import File
 from prompts.models import Prompt
-from users.constants import VectorDBChoice, AuthSourceChoice, RoleChoice
+from users.constants import AuthSourceChoice, RoleChoice, VectorDBChoice
 from users.models import AccessCodeGroup
 from users.services import AvatarService, AvatarValidationError
-from users.services.account_deletion_service import (AccountDeletionBlocked,
-                                                     AccountDeletionService)
+from users.services.account_deletion_service import (
+    AccountDeletionBlocked,
+    AccountDeletionService,
+)
 
 User = get_user_model()
 
@@ -42,13 +43,14 @@ class CustomVerifyEmailView(VerifyEmailView):
     """
     Custom email verification view that returns JWT tokens after successful verification.
     This enables auto-login after email verification for a smoother onboarding experience.
-    
+
     Only DARE users receive tokens - Socratic Bots users are redirected to their own
     frontend and can't use tokens stored in DARE's localStorage anyway.
     """
+
     def _already_verified_response(self):
         return Response(
-            {'detail': 'Email already verified', 'already_verified': True},
+            {"detail": "Email already verified", "already_verified": True},
             status=status.HTTP_200_OK,
         )
 
@@ -72,10 +74,10 @@ class CustomVerifyEmailView(VerifyEmailView):
         # Validate the key first
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        key = serializer.validated_data['key']
+        key = serializer.validated_data["key"]
 
         # Set the key in kwargs so get_object() works (like parent class does)
-        self.kwargs['key'] = key
+        self.kwargs["key"] = key
 
         # Get the confirmation object and confirm it
         try:
@@ -93,18 +95,16 @@ class CustomVerifyEmailView(VerifyEmailView):
         user = confirmation.email_address.user
 
         # Prepare response
-        response_data = {'detail': 'ok'}
+        response_data = {"detail": "ok"}
 
         # Only generate JWT tokens for DARE users (auto-login)
         # Socratic Bots users will be redirected to their frontend where these tokens wouldn't be accessible
         if user.auth_source == AuthSourceChoice.DARE:
             refresh = RefreshToken.for_user(user)
-            response_data['access'] = str(refresh.access_token)
-            response_data['refresh'] = str(refresh)
+            response_data["access"] = str(refresh.access_token)
+            response_data["refresh"] = str(refresh)
 
         return Response(response_data, status=status.HTTP_200_OK)
-
-
 
 
 class UserStatsView(APIView):
@@ -121,56 +121,62 @@ class UserStatsView(APIView):
         message_count = Message.active_objects.filter(conversation__user=user).count()
 
         ai_message_count = Message.active_objects.filter(
-            conversation__user=user,
-            sender_type=SenderType.AI_ASSISTANT
+            conversation__user=user, sender_type=SenderType.AI_ASSISTANT
         ).count()
 
-        tagged_files_count = File.active_objects.filter(user=user, tags__isnull=False).count()
+        tagged_files_count = File.active_objects.filter(
+            user=user, tags__isnull=False
+        ).count()
 
+        # Every debited call, including proxy-routed ones. Those carry no
+        # ``llm`` row, and filtering them out here understated the token
+        # counts for anyone on a LiteLLM key. Tokens are a count, not money —
+        # unlike cost, they are the same quantity whoever paid for the call.
         token_stats = Transaction.objects.filter(
             user=user,
             type=TransactionTypeChoice.DEBIT,
-            llm__isnull=False
         ).aggregate(
-            total_input_tokens=Sum('input_tokens'),
-            total_output_tokens=Sum('output_tokens')
+            total_input_tokens=Sum("input_tokens"),
+            total_output_tokens=Sum("output_tokens"),
         )
 
         stats = {
-            'prompt_count': prompt_count,
-            'file_count': file_count,
-            'conversation_count': conversation_count,
-            'message_count': message_count,
-            'ai_message_count': ai_message_count,
-            'tagged_files_count': tagged_files_count,
-            'total_input_tokens': token_stats['total_input_tokens'] or 0,
-            'total_output_tokens': token_stats['total_output_tokens'] or 0,
-            'total_tokens': (token_stats['total_input_tokens'] or 0) + (token_stats['total_output_tokens'] or 0)
+            "prompt_count": prompt_count,
+            "file_count": file_count,
+            "conversation_count": conversation_count,
+            "message_count": message_count,
+            "ai_message_count": ai_message_count,
+            "tagged_files_count": tagged_files_count,
+            "total_input_tokens": token_stats["total_input_tokens"] or 0,
+            "total_output_tokens": token_stats["total_output_tokens"] or 0,
+            "total_tokens": (token_stats["total_input_tokens"] or 0)
+            + (token_stats["total_output_tokens"] or 0),
         }
 
         return Response(stats, status=status.HTTP_200_OK)
+
 
 class VectorDBViewSet(viewsets.ViewSet):
     """
     ViewSet for managing user's vector database preference.
     """
+
     permission_classes = [IsAuthenticated]
 
     def get_vector_db_response(self, vector_db):
         """Create a standardized response for vector DB data."""
         try:
             vector_db_name = dict(VectorDBChoice.choices).get(vector_db, "Unknown")
-            return {
-                "vector_db": vector_db,
-                "vector_db_name": vector_db_name
-            }
+            return {"vector_db": vector_db, "vector_db_name": vector_db_name}
         except Exception:
             return {
                 "vector_db": VectorDBChoice.WEAVIATE,
-                "vector_db_name": dict(VectorDBChoice.choices).get(VectorDBChoice.WEAVIATE)
+                "vector_db_name": dict(VectorDBChoice.choices).get(
+                    VectorDBChoice.WEAVIATE
+                ),
             }
 
-    @action(detail=False, methods=['get', 'post'])
+    @action(detail=False, methods=["get", "post"])
     def preference(self, request):
         """
         Get or update the vector DB setting for the authenticated user.
@@ -178,27 +184,29 @@ class VectorDBViewSet(viewsets.ViewSet):
         GET: Returns the current vector DB setting
         POST: Updates the vector DB setting and starts migration
         """
-        if request.method == 'GET':
+        if request.method == "GET":
             try:
                 user = request.user
                 vector_db_value = user.vector_db
                 return Response(self.get_vector_db_response(vector_db_value))
             except Exception as e:
-                return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                return Response(
+                    {"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
 
-        vector_db = request.data.get('vector_db')
+        vector_db = request.data.get("vector_db")
 
         if vector_db is None:
             return Response(
                 {"error": "vector_db field is required"},
-                status=status.HTTP_400_BAD_REQUEST
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         valid_choices = [choice[0] for choice in VectorDBChoice.choices]
         if vector_db not in valid_choices:
             return Response(
                 {"error": f"Invalid vector_db value. Must be one of: {valid_choices}"},
-                status=status.HTTP_400_BAD_REQUEST
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         try:
@@ -207,50 +215,56 @@ class VectorDBViewSet(viewsets.ViewSet):
             if current_db == vector_db:
                 return Response(self.get_vector_db_response(vector_db))
 
-
             request.user.vector_db = vector_db
-            request.user.save(update_fields=['vector_db'])
+            request.user.save(update_fields=["vector_db"])
 
-            return Response({
-                **self.get_vector_db_response(vector_db),
-                "migration_status": "queued"
-            })
+            return Response(
+                {**self.get_vector_db_response(vector_db), "migration_status": "queued"}
+            )
         except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response(
+                {"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
-    @action(detail=False, methods=['get'])
+    @action(detail=False, methods=["get"])
     def migration_status(self, request):
         """Get the status of the current migration job."""
         try:
             queue = get_queue()
 
-            return Response({
-                "status": "No migration in progress",
-                "current_vector_db": self.get_vector_db_response(request.user.vector_db)
-            })
+            return Response(
+                {
+                    "status": "No migration in progress",
+                    "current_vector_db": self.get_vector_db_response(
+                        request.user.vector_db
+                    ),
+                }
+            )
         except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response(
+                {"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
 
 class ChunkingSettingsViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
-    @action(detail=False, methods=['get', 'post', 'patch'], url_path='settings')
+    @action(detail=False, methods=["get", "post", "patch"], url_path="settings")
     def config(self, request):
         user = request.user
 
-        if request.method == 'GET':
-            return Response({
-                "chunk_size": user.chunk_size,
-                "overlap_size": user.overlap_size
-            })
+        if request.method == "GET":
+            return Response(
+                {"chunk_size": user.chunk_size, "overlap_size": user.overlap_size}
+            )
 
-        chunk_size = request.data.get('chunk_size')
-        overlap_size = request.data.get('overlap_size')
+        chunk_size = request.data.get("chunk_size")
+        overlap_size = request.data.get("overlap_size")
 
         if chunk_size is None or overlap_size is None:
             return Response(
                 {"error": "chunk_size and overlap_size fields are required"},
-                status=status.HTTP_400_BAD_REQUEST
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         try:
@@ -260,31 +274,32 @@ class ChunkingSettingsViewSet(viewsets.ModelViewSet):
             if chunk_size <= 0:
                 return Response(
                     {"error": "chunk_size  must be positive"},
-                    status=status.HTTP_400_BAD_REQUEST
+                    status=status.HTTP_400_BAD_REQUEST,
                 )
 
             if overlap_size < 0 or overlap_size >= chunk_size:
                 return Response(
-                    {"error": "overlap_size must be non-negative and less than chunk_size"},
-                    status=status.HTTP_400_BAD_REQUEST
+                    {
+                        "error": "overlap_size must be non-negative and less than chunk_size"
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
                 )
 
             user.chunk_size = chunk_size
             user.overlap_size = overlap_size
             user.save(update_fields=["chunk_size", "overlap_size"])
 
-            return Response({
-                "chunk_size": user.chunk_size,
-                "overlap_size": user.overlap_size
-            })
+            return Response(
+                {"chunk_size": user.chunk_size, "overlap_size": user.overlap_size}
+            )
         except ValueError:
             return Response(
                 {"error": "chunk_size and overlap_size must be integers"},
-                status=status.HTTP_400_BAD_REQUEST
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
 
-@api_view(['GET'])
+@api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def token_health_check(request):
     """
@@ -295,18 +310,22 @@ def token_health_check(request):
     """
     try:
         user = request.user
-        return Response({
-            'status': 'valid',
-            'user_id': user.id,
-            'username': user.username if hasattr(user, 'username') else user.email,
-            'is_active': user.is_active,
-            'timestamp': timezone.now().isoformat()
-        }, status=status.HTTP_200_OK)
+        return Response(
+            {
+                "status": "valid",
+                "user_id": user.id,
+                "username": user.username if hasattr(user, "username") else user.email,
+                "is_active": user.is_active,
+                "timestamp": timezone.now().isoformat(),
+            },
+            status=status.HTTP_200_OK,
+        )
     except Exception:
-        return Response({
-            'status': 'invalid',
-            'detail': 'Token validation failed'
-        }, status=status.HTTP_401_UNAUTHORIZED)
+        return Response(
+            {"status": "invalid", "detail": "Token validation failed"},
+            status=status.HTTP_401_UNAUTHORIZED,
+        )
+
 
 class AccessCodeCheckView(APIView):
     """
@@ -315,6 +334,7 @@ class AccessCodeCheckView(APIView):
     Used by SocraticBots backend for cross-platform validation.
     Checks if a user exists in DARE and can access both platforms.
     """
+
     permission_classes = [AllowAny]
 
     def post(self, request, *args, **kwargs):
@@ -334,7 +354,7 @@ class AccessCodeCheckView(APIView):
             "message": "descriptive message"
         }
         """
-        access_code = request.data.get('access_code')
+        access_code = request.data.get("access_code")
 
         if not access_code:
             return Response(
@@ -342,9 +362,9 @@ class AccessCodeCheckView(APIView):
                     "exists": False,
                     "default_role": None,
                     "available_slots": 0,
-                    "message": "Access code is required"
+                    "message": "Access code is required",
                 },
-                status=status.HTTP_400_BAD_REQUEST
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         try:
@@ -359,30 +379,36 @@ class AccessCodeCheckView(APIView):
                 else:
                     message = "Access code exists but has reached maximum capacity"
 
-                return Response({
-                    "exists": True,
-                    "default_role": code_group.default_role,
-                    "available_slots": 0,
-                    "message": message
-                })
+                return Response(
+                    {
+                        "exists": True,
+                        "default_role": code_group.default_role,
+                        "available_slots": 0,
+                        "message": message,
+                    }
+                )
 
             # Code exists and is available
             available_slots = code_group.max_capacity - code_group.current_usage
 
-            return Response({
-                "exists": True,
-                "default_role": code_group.default_role,
-                "available_slots": available_slots,
-                "message": f"Access code is available with {code_group.get_default_role_display()} role"
-            })
+            return Response(
+                {
+                    "exists": True,
+                    "default_role": code_group.default_role,
+                    "available_slots": available_slots,
+                    "message": f"Access code is available with {code_group.get_default_role_display()} role",
+                }
+            )
 
         except AccessCodeGroup.DoesNotExist:
-            return Response({
-                "exists": False,
-                "default_role": None,
-                "available_slots": 0,
-                "message": "Access code not found"
-            })
+            return Response(
+                {
+                    "exists": False,
+                    "default_role": None,
+                    "available_slots": 0,
+                    "message": "Access code not found",
+                }
+            )
 
 
 class AvatarViewSet(viewsets.ViewSet):
@@ -397,11 +423,13 @@ class AvatarViewSet(viewsets.ViewSet):
             avatar_file = request.FILES.get("avatar")
             avatar_url = AvatarService.upload_avatar(request.user, avatar_file, request)
 
-            return Response({
-                "avatar_url": avatar_url,
-                "avatar_type": "custom",
-                "message": "Avatar uploaded successfully"
-            })
+            return Response(
+                {
+                    "avatar_url": avatar_url,
+                    "avatar_type": "custom",
+                    "message": "Avatar uploaded successfully",
+                }
+            )
 
         except AvatarValidationError as e:
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
@@ -409,7 +437,7 @@ class AvatarViewSet(viewsets.ViewSet):
         except Exception as e:
             return Response(
                 {"error": f"Failed to upload avatar: {str(e)}"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
     @action(detail=False, methods=["delete"], url_path="remove")
@@ -418,15 +446,14 @@ class AvatarViewSet(viewsets.ViewSet):
         try:
             AvatarService.remove_avatar(request.user)
 
-            return Response({
-                "avatar_type": "initials",
-                "message": "Avatar removed successfully"
-            })
+            return Response(
+                {"avatar_type": "initials", "message": "Avatar removed successfully"}
+            )
 
         except Exception as e:
             return Response(
                 {"error": f"Failed to remove avatar: {str(e)}"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
 
 
@@ -443,29 +470,33 @@ class InternalSetRoleView(APIView):
     - If is_professor=False and user has DARE access → USER (unchanged)
     - If is_professor=False and user has no DARE access → SB_USER
     """
+
     permission_classes = [AllowAny]
 
     # Roles that have DARE access
-    DARE_ACCESS_ROLES = {RoleChoice.SUPERADMIN, RoleChoice.SUPERVISOR, RoleChoice.RESEARCHER, RoleChoice.USER}
+    DARE_ACCESS_ROLES = {
+        RoleChoice.SUPERADMIN,
+        RoleChoice.SUPERVISOR,
+        RoleChoice.RESEARCHER,
+        RoleChoice.USER,
+    }
 
     def post(self, request, *args, **kwargs):
         # Verify internal key
-        internal_key = request.headers.get('X-Internal-Key', '')
-        expected_key = getattr(settings, 'DARE_INTERNAL_KEY', '')
+        internal_key = request.headers.get("X-Internal-Key", "")
+        expected_key = getattr(settings, "DARE_INTERNAL_KEY", "")
         if not internal_key or internal_key != expected_key:
-            return Response(
-                {"error": "Unauthorized"},
-                status=status.HTTP_403_FORBIDDEN
-            )
+            return Response({"error": "Unauthorized"}, status=status.HTTP_403_FORBIDDEN)
 
-        user_id = request.data.get('user_id')
-        platform_role = request.data.get('platform_role')
-        is_professor = request.data.get('is_professor')  # Optional: for smart role assignment
+        user_id = request.data.get("user_id")
+        platform_role = request.data.get("platform_role")
+        is_professor = request.data.get(
+            "is_professor"
+        )  # Optional: for smart role assignment
 
         if not user_id:
             return Response(
-                {"error": "user_id is required"},
-                status=status.HTTP_400_BAD_REQUEST
+                {"error": "user_id is required"}, status=status.HTTP_400_BAD_REQUEST
             )
 
         try:
@@ -496,33 +527,37 @@ class InternalSetRoleView(APIView):
                 valid_roles = [choice[0] for choice in RoleChoice.choices]
                 if platform_role not in valid_roles:
                     return Response(
-                        {"error": f"Invalid platform_role. Must be one of: {valid_roles}"},
-                        status=status.HTTP_400_BAD_REQUEST
+                        {
+                            "error": f"Invalid platform_role. Must be one of: {valid_roles}"
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
                     )
                 new_role = platform_role
             else:
                 return Response(
                     {"error": "Either platform_role or is_professor is required"},
-                    status=status.HTTP_400_BAD_REQUEST
+                    status=status.HTTP_400_BAD_REQUEST,
                 )
 
             user.platform_role = new_role
-            user.save(update_fields=['platform_role'])
+            user.save(update_fields=["platform_role"])
 
-            return Response({
-                "success": True,
-                "user_id": user.id,
-                "email": user.email,
-                "old_role": old_role,
-                "new_role": new_role,
-                "had_dare_access": has_dare_access,
-                "is_professor": is_professor
-            })
+            return Response(
+                {
+                    "success": True,
+                    "user_id": user.id,
+                    "email": user.email,
+                    "old_role": old_role,
+                    "new_role": new_role,
+                    "had_dare_access": has_dare_access,
+                    "is_professor": is_professor,
+                }
+            )
 
         except User.DoesNotExist:
             return Response(
                 {"error": f"User with id={user_id} not found"},
-                status=status.HTTP_404_NOT_FOUND
+                status=status.HTTP_404_NOT_FOUND,
             )
 
 
@@ -542,40 +577,44 @@ class InternalAccessCodeSyncView(APIView):
         "action": "sync"               # "sync" (create/update) or "delete" (deactivate)
     }
     """
+
     permission_classes = [IsAuthenticated]
 
     def post(self, request, *args, **kwargs):
 
-        access_code = request.data.get('access_code', '').strip()
-        action = request.data.get('action', 'sync')
+        access_code = request.data.get("access_code", "").strip()
+        action = request.data.get("action", "sync")
 
         if not access_code:
             return Response(
-                {"error": "access_code is required"},
-                status=status.HTTP_400_BAD_REQUEST
+                {"error": "access_code is required"}, status=status.HTTP_400_BAD_REQUEST
             )
 
-        if action == 'delete':
+        if action == "delete":
             # Deactivate the access code group
             try:
                 code_group = AccessCodeGroup.objects.get(access_code=access_code)
                 code_group.is_active = False
-                code_group.save(update_fields=['is_active'])
-                return Response({
-                    "success": True,
-                    "action": "deactivated",
-                    "access_code": access_code,
-                })
+                code_group.save(update_fields=["is_active"])
+                return Response(
+                    {
+                        "success": True,
+                        "action": "deactivated",
+                        "access_code": access_code,
+                    }
+                )
             except AccessCodeGroup.DoesNotExist:
-                return Response({
-                    "success": True,
-                    "action": "not_found",
-                    "message": "Access code not found, nothing to deactivate",
-                })
+                return Response(
+                    {
+                        "success": True,
+                        "action": "not_found",
+                        "message": "Access code not found, nothing to deactivate",
+                    }
+                )
 
         # action == 'sync': create or update
-        max_capacity = request.data.get('max_capacity', 9999)
-        default_role = request.data.get('default_role', RoleChoice.SB_USER)
+        max_capacity = request.data.get("max_capacity", 9999)
+        default_role = request.data.get("default_role", RoleChoice.SB_USER)
 
         # Validate role
         valid_roles = [choice[0] for choice in RoleChoice.choices]
@@ -592,20 +631,23 @@ class InternalAccessCodeSyncView(APIView):
         code_group, created = AccessCodeGroup.objects.update_or_create(
             access_code=access_code,
             defaults={
-                'max_capacity': max_capacity,
-                'default_role': default_role,
-                'is_active': True,
+                "max_capacity": max_capacity,
+                "default_role": default_role,
+                "is_active": True,
+            },
+        )
+
+        return Response(
+            {
+                "success": True,
+                "action": "created" if created else "updated",
+                "access_code": access_code,
+                "max_capacity": code_group.max_capacity,
+                "default_role": code_group.default_role,
+                "is_active": code_group.is_active,
             }
         )
 
-        return Response({
-            "success": True,
-            "action": "created" if created else "updated",
-            "access_code": access_code,
-            "max_capacity": code_group.max_capacity,
-            "default_role": code_group.default_role,
-            "is_active": code_group.is_active,
-        })
 
 class AccountDeletionView(APIView):
     """Permanently delete the authenticated user's account and all their data."""

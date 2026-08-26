@@ -14,7 +14,8 @@ from typing import Callable, List, Optional
 
 from channels.db import database_sync_to_async
 
-from conversations.models import ConversationSummary, Snippet
+from conversations.constants import SenderType
+from conversations.models import Conversation, ConversationSummary, Message, Snippet
 from files.models import File
 from prompts.models import Prompt
 

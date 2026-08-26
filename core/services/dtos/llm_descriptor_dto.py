@@ -13,7 +13,8 @@ cycle; consumers receive the real instances on the optional fields.
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from core.services.model_capabilities import infer_supports_temperature
+from core.services.model_capabilities import family_supports_temperature
+from core.services.model_identity import resolve_family
 
 
 @dataclass(frozen=True)
@@ -88,8 +89,7 @@ class LLMDescriptor:
         litellm_key = getattr(message, "litellm_key", None)
         model_name = getattr(message, "litellm_model_name", None)
         if litellm_key is not None and model_name:
-            provider = getattr(litellm_key, "default_provider", None) or "custom"
-            return cls.from_litellm(litellm_key, model_name, provider)
+            return cls.from_litellm(litellm_key, model_name, "custom")
         return None
 
     @classmethod
@@ -101,18 +101,22 @@ class LLMDescriptor:
     ) -> "LLMDescriptor":
         """Build a descriptor from a synthetic LiteLLM model entry.
 
-        Capability flags are forced to False because the picker filter strips
-        them from synthetic entries — DALL-E, Whisper, and reasoning models
-        require provider-native code paths the LiteLLM proxy doesn't forward.
+        Capabilities come from the resolved model family, since the proxy
+        advertises a deployment address rather than an identifier DARE knows.
+        Image and audio flags stay False: those need provider-native endpoints
+        the proxy doesn't forward, whichever model is behind it.
         """
+        family = resolve_family(model_name)
+        is_reasoning = bool(family and family.is_reasoning)
         return cls(
             identifier=model_name,
             provider=provider or "custom",
-            supports_temperature=infer_supports_temperature(
-                model_name, provider or "custom"
+            is_reasoning=is_reasoning,
+            supports_temperature=family_supports_temperature(family, is_reasoning),
+            supports_effort=bool(family and family.supports_effort),
+            supports_adaptive_thinking=bool(
+                family and family.supports_adaptive_thinking
             ),
-            supports_effort=False,
-            supports_adaptive_thinking=False,
             default_effort="high",
             default_adaptive_thinking_enabled=False,
             litellm_key=litellm_key,

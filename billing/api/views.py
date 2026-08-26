@@ -1,5 +1,7 @@
+from decimal import Decimal
+
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.db.models import Count, Sum
+from django.db.models import Count, Q, Sum
 from django.db.models.functions import TruncDate
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
@@ -8,6 +10,7 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from api_keys.constants import BillingModeChoice
 from api_keys.models import UserProviderAPIKey
 from billing.api.serializers import (
     ActiveWalletRefSerializer,
@@ -18,7 +21,7 @@ from billing.api.serializers import (
     GroupWalletWriteSerializer,
     LiteLLMKeyCreateSerializer,
     LiteLLMKeyReadSerializer,
-    LiteLLMKeyRenameSerializer,
+    LiteLLMKeyUpdateSerializer,
     LiteLLMTestRequestSerializer,
     MemberRowSerializer,
     OwnedGroupSerializer,
@@ -30,14 +33,11 @@ from billing.api.serializers import (
     WalletSerializer,
     WalletsListResponseSerializer,
 )
-from billing.litellm_probe import probe_litellm_connection
-from api_keys.constants import BillingModeChoice
 from billing.constants import (
-    TransactionTypeChoice,
     LiteLLMKeySourceChoice,
+    TransactionTypeChoice,
     UserWalletPreferenceTypeChoice,
 )
-from users.constants import AuthSourceChoice
 from billing.group_wallet_service import (
     AllocateToMemberRequest,
     FundGroupBudgetRequest,
@@ -45,21 +45,26 @@ from billing.group_wallet_service import (
     UpdateGroupPolicyRequest,
     UpsertUserOverrideRequest,
 )
+from billing.litellm_probe import probe_litellm_connection
 from billing.models import (
     GroupWallet,
     LiteLLMKey,
+    LiteLLMSpend,
     SystemRefillPolicy,
     Transaction,
     UserRefillOverride,
     UserWalletPreference,
     Wallet,
+    format_usd,
 )
-from feature_flags.services import is_flag_enabled_for_user
 from billing.services import WalletService
 from common.pagination import CustomPageNumberPagination
 from common.permissions import IsSuperAdmin
+from conversations.constants import Provider
 from conversations.models import Message
 from core.services.energy_service import compute_relatable_stats
+from feature_flags.services import is_flag_enabled_for_user
+from users.constants import AuthSourceChoice
 from users.models import User
 from users.utils import detect_platform_from_request
 
@@ -67,6 +72,55 @@ from users.utils import detect_platform_from_request
 def _validation_response(exc: ValidationError):
     detail = getattr(exc, "message_dict", None) or {"detail": exc.messages}
     return Response(detail, status=status.HTTP_400_BAD_REQUEST)
+
+
+# Energy is recorded against the model that produced it, but `Message.llm`
+# is SET_NULL, so retiring a model leaves its messages pointing at nothing.
+# The consumption still happened and still belongs in the total, so the rows
+# are kept under one heading rather than dropped — which would make the chart
+# disagree with the headline figure.
+DELETED_MODEL_LABEL = "Deleted model"
+DELETED_MODEL_PROVIDER = "unknown"
+
+
+def _model_stat_row(
+    *,
+    llm_id,
+    name,
+    identifier,
+    provider,
+    cost,
+    is_estimated,
+    input_tokens,
+    output_tokens,
+    transaction_count,
+):
+    """One model's row in the per-model token and cost breakdown.
+
+    ``is_estimated`` marks a cost DARE never charged — a proxy-routed call
+    priced from the reference registry — so the UI can label it instead of
+    presenting it alongside wallet spend as the same kind of number.
+    """
+    input_tokens = input_tokens or 0
+    output_tokens = output_tokens or 0
+    # A None cost means every call in this group was unpriced — the registry
+    # carries no rate for the model. Rendering that as $0.00 would claim the
+    # calls were free, so it stays visibly absent instead.
+    unpriced = cost is None
+    cost = cost or 0
+    return {
+        "llm_id": llm_id,
+        "llm_name": name,
+        "llm_identifier": identifier,
+        "llm_provider": provider,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": input_tokens + output_tokens,
+        "total_cost": "—" if unpriced else (f"${cost:.6f}" if cost else "$0.00"),
+        "total_cost_decimal": cost,
+        "is_estimated": is_estimated,
+        "transaction_count": transaction_count,
+    }
 
 
 class BillingViewSet(viewsets.ViewSet):
@@ -126,9 +180,7 @@ class BillingViewSet(viewsets.ViewSet):
             "all": base_qs.count(),
             "wallet": base_qs.filter(billing_mode=BillingModeChoice.WALLET).count(),
             "ownApi": base_qs.filter(billing_mode=BillingModeChoice.OWN_API).count(),
-            "litellm": base_qs.filter(
-                billing_mode=BillingModeChoice.LITELLM
-            ).count(),
+            "litellm": base_qs.filter(billing_mode=BillingModeChoice.LITELLM).count(),
         }
 
         queryset = base_qs.order_by("-created_at")
@@ -147,76 +199,98 @@ class BillingViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=["get"])
     def model_stats(self, request):
+        """Per-model token and cost totals behind the dashboard's token cards.
+
+        Two groupings, deliberately kept apart. DARE-billed rows group by the
+        ``llm`` foreign key, so a model renamed after the fact still reports as
+        a single row. Proxy-routed rows have no such row to point at, so they
+        group by the identifier the gateway served; their cost comes from the
+        reference registry and was never charged, which ``is_estimated`` says
+        out loud rather than letting it read as spend.
+        """
         platform = detect_platform_from_request(request)
-
-        per_model_stats = (
-            Transaction.objects.filter(
-                user=request.user,
-                type=TransactionTypeChoice.DEBIT,
-                llm__isnull=False,
-                platform=platform,
-            )
-            .values("llm__id", "llm__name", "llm__identifier", "llm__provider")
-            .annotate(
-                total_cost=Sum("amount"),
-                input_tokens=Sum("input_tokens"),
-                output_tokens=Sum("output_tokens"),
-                transaction_count=Count("id"),
-            )
-            .order_by("-total_cost")
-        )
-
-        models_billing_stats = []
-        for stat in per_model_stats:
-            input_tokens = stat["input_tokens"] or 0
-            output_tokens = stat["output_tokens"] or 0
-            total_cost = stat["total_cost"] or 0
-
-            models_billing_stats.append(
-                {
-                    "llm_id": stat["llm__id"],
-                    "llm_name": stat["llm__name"],
-                    "llm_identifier": stat["llm__identifier"],
-                    "llm_provider": stat["llm__provider"],
-                    "input_tokens": input_tokens,
-                    "output_tokens": output_tokens,
-                    "total_tokens": input_tokens + output_tokens,
-                    "total_cost": f"${total_cost:.6f}" if total_cost else "$0.00",
-                    "total_cost_decimal": total_cost,
-                    "transaction_count": stat["transaction_count"],
-                }
-            )
-
-        overall_stats = Transaction.objects.filter(
+        base_qs = Transaction.objects.filter(
             user=request.user,
             type=TransactionTypeChoice.DEBIT,
-            llm__isnull=False,
             platform=platform,
-        ).aggregate(
-            total_cost=Sum("amount"),
-            total_input_tokens=Sum("input_tokens"),
-            total_output_tokens=Sum("output_tokens"),
-            total_transactions=Count("id"),
         )
 
-        response_data = {
-            "models_billing_stats": models_billing_stats,
-            "overall_stats": {
-                "total_cost": (
-                    f"${overall_stats['total_cost']:.6f}"
-                    if overall_stats["total_cost"]
-                    else "$0.00"
-                ),
-                "total_cost_decimal": overall_stats["total_cost"] or 0,
-                "total_input_tokens": overall_stats["total_input_tokens"] or 0,
-                "total_output_tokens": overall_stats["total_output_tokens"] or 0,
-                "total_tokens": (overall_stats["total_input_tokens"] or 0)
-                + (overall_stats["total_output_tokens"] or 0),
-                "total_transactions": overall_stats["total_transactions"] or 0,
-            },
+        token_sums = {
+            "input_tokens": Sum("input_tokens"),
+            "output_tokens": Sum("output_tokens"),
+            "transaction_count": Count("id"),
         }
 
-        return Response(response_data)
+        models_billing_stats = [
+            _model_stat_row(
+                llm_id=stat["llm__id"],
+                name=stat["llm__name"],
+                identifier=stat["llm__identifier"],
+                provider=stat["llm__provider"],
+                cost=stat["total_cost"],
+                is_estimated=False,
+                input_tokens=stat["input_tokens"],
+                output_tokens=stat["output_tokens"],
+                transaction_count=stat["transaction_count"],
+            )
+            for stat in base_qs.filter(llm__isnull=False)
+            .values("llm__id", "llm__name", "llm__identifier", "llm__provider")
+            .annotate(total_cost=Sum("amount"), **token_sums)
+        ]
+
+        models_billing_stats += [
+            _model_stat_row(
+                llm_id=None,
+                name=stat["llm_name"],
+                identifier=stat["llm_name"],
+                provider=Provider.CUSTOM.value,
+                cost=stat["total_reference"],
+                is_estimated=True,
+                input_tokens=stat["input_tokens"],
+                output_tokens=stat["output_tokens"],
+                transaction_count=stat["transaction_count"],
+            )
+            for stat in base_qs.filter(billing_mode=BillingModeChoice.LITELLM)
+            .values("llm_name")
+            .annotate(total_reference=Sum("reference_amount"), **token_sums)
+        ]
+
+        models_billing_stats.sort(
+            key=lambda row: row["total_cost_decimal"], reverse=True
+        )
+
+        # Summed from the rows above rather than re-queried, so the totals can
+        # never disagree with the breakdown the user is looking at.
+        charged = sum(
+            row["total_cost_decimal"]
+            for row in models_billing_stats
+            if not row["is_estimated"]
+        )
+        estimated = sum(
+            row["total_cost_decimal"]
+            for row in models_billing_stats
+            if row["is_estimated"]
+        )
+        total_input_tokens = sum(row["input_tokens"] for row in models_billing_stats)
+        total_output_tokens = sum(row["output_tokens"] for row in models_billing_stats)
+
+        return Response(
+            {
+                "models_billing_stats": models_billing_stats,
+                "overall_stats": {
+                    "total_cost": f"${charged:.6f}" if charged else "$0.00",
+                    "total_cost_decimal": charged,
+                    "estimated_cost": f"${estimated:.6f}" if estimated else "$0.00",
+                    "estimated_cost_decimal": estimated,
+                    "total_input_tokens": total_input_tokens,
+                    "total_output_tokens": total_output_tokens,
+                    "total_tokens": total_input_tokens + total_output_tokens,
+                    "total_transactions": sum(
+                        row["transaction_count"] for row in models_billing_stats
+                    ),
+                },
+            }
+        )
 
     @action(detail=False, methods=["get"], url_path="energy-stats")
     def energy_stats(self, request):
@@ -265,9 +339,9 @@ class BillingViewSet(viewsets.ViewSet):
         models_breakdown = [
             {
                 "llmId": row["llm__id"],
-                "llmName": row["llm__name"],
-                "llmIdentifier": row["llm__identifier"],
-                "llmProvider": row["llm__provider"],
+                "llmName": row["llm__name"] or DELETED_MODEL_LABEL,
+                "llmIdentifier": row["llm__identifier"] or DELETED_MODEL_LABEL,
+                "llmProvider": row["llm__provider"] or DELETED_MODEL_PROVIDER,
                 "energyWh": float(row["energy_wh_sum"] or 0),
                 "carbonG": float(row["carbon_g_sum"] or 0),
                 "waterMl": float(row["water_ml_sum"] or 0),
@@ -295,6 +369,107 @@ class BillingViewSet(viewsets.ViewSet):
                 },
                 "modelsBreakdown": models_breakdown,
                 "period": period,
+            }
+        )
+
+    @action(detail=False, methods=["get"], url_path="litellm-stats")
+    def litellm_stats(self, request):
+        """Usage and reference spend through the user's LiteLLM proxy keys.
+
+        Reported on its own rather than folded into the wallet figures: these
+        calls are paid for on the user's proxy account, so their dollars are a
+        different quantity from wallet spend and adding the two would produce a
+        number that describes nothing.
+
+        Per-model totals aggregate over Transaction. That is a scan, which the
+        wallet chip deliberately avoids by reading the ``LiteLLMSpend`` counter
+        instead — but the chip renders on every page and this endpoint is
+        opened on purpose, so the trade is the other way round here. The
+        counter cannot answer "which models", only "how much".
+        """
+        platform = detect_platform_from_request(request)
+        base_qs = Transaction.objects.filter(
+            user=request.user,
+            type=TransactionTypeChoice.DEBIT,
+            billing_mode=BillingModeChoice.LITELLM,
+            platform=platform,
+        )
+
+        models_breakdown = []
+        for stat in (
+            base_qs.values("llm_name")
+            .annotate(
+                input_tokens=Sum("input_tokens"),
+                output_tokens=Sum("output_tokens"),
+                reference_cost=Sum("reference_amount"),
+                call_count=Count("id"),
+                unpriced_calls=Count("id", filter=Q(reference_amount__isnull=True)),
+            )
+            .order_by("-call_count")
+        ):
+            input_tokens = stat["input_tokens"] or 0
+            output_tokens = stat["output_tokens"] or 0
+            reference_cost = stat["reference_cost"] or Decimal("0")
+            models_breakdown.append(
+                {
+                    "modelName": stat["llm_name"],
+                    "inputTokens": input_tokens,
+                    "outputTokens": output_tokens,
+                    "totalTokens": input_tokens + output_tokens,
+                    "callCount": stat["call_count"],
+                    "referenceCost": str(reference_cost),
+                    "referenceCostDisplay": format_usd(reference_cost),
+                    "unpricedCalls": stat["unpriced_calls"],
+                }
+            )
+
+        total_input_tokens = sum(row["inputTokens"] for row in models_breakdown)
+        total_output_tokens = sum(row["outputTokens"] for row in models_breakdown)
+        total_reference_cost = sum(
+            (Decimal(row["referenceCost"]) for row in models_breakdown), Decimal("0")
+        )
+
+        # Per-key totals come from the counter, which has no platform column —
+        # it is incremented once per call wherever the call came from. Labelled
+        # as all-time in the UI so it is not read as a per-platform figure.
+        keys_breakdown = [
+            {
+                "keyId": str(spend.litellm_key_id),
+                "label": spend.litellm_key.label,
+                "source": spend.litellm_key.source,
+                "groupName": (
+                    spend.litellm_key.source_group.name
+                    if spend.litellm_key.source_group_id
+                    else None
+                ),
+                "callCount": spend.call_count,
+                "referenceCost": str(spend.total_reference_amount),
+                "referenceCostDisplay": format_usd(spend.total_reference_amount),
+            }
+            for spend in LiteLLMSpend.objects.filter(user=request.user)
+            .select_related("litellm_key", "litellm_key__source_group")
+            .order_by("-total_reference_amount")
+        ]
+
+        return Response(
+            {
+                "overallStats": {
+                    "totalCalls": sum(row["callCount"] for row in models_breakdown),
+                    "totalInputTokens": total_input_tokens,
+                    "totalOutputTokens": total_output_tokens,
+                    "totalTokens": total_input_tokens + total_output_tokens,
+                    "totalReferenceCost": str(total_reference_cost),
+                    "totalReferenceCostDisplay": format_usd(total_reference_cost),
+                    # Calls the price registry had no entry for. Reported
+                    # instead of quietly counted as $0, so a registry gap reads
+                    # as a gap rather than as a free call.
+                    "unpricedCalls": sum(
+                        row["unpricedCalls"] for row in models_breakdown
+                    ),
+                    "modelCount": len(models_breakdown),
+                },
+                "modelsBreakdown": models_breakdown,
+                "keysBreakdown": keys_breakdown,
             }
         )
 
@@ -555,7 +730,17 @@ class BillingViewSet(viewsets.ViewSet):
         # and select_related's source_group for the cohort name (no N+1). The
         # enable_litellm_wallet flag suppresses the entire bucket — admins can
         # turn off this wallet type per group/user without revoking the keys.
-        litellm_qs = LiteLLMKey.visible_for_user(user) if litellm_enabled else LiteLLMKey.objects.none()
+        litellm_qs = (
+            LiteLLMKey.visible_for_user(user)
+            if litellm_enabled
+            else LiteLLMKey.objects.none()
+        )
+        # One indexed read covering every key the user can see, rather than an
+        # aggregate over Transaction per wallet row.
+        spend_by_key = {
+            str(row.litellm_key_id): row.total_reference_amount
+            for row in LiteLLMSpend.objects.filter(user=user)
+        }
         for key in litellm_qs:
             group_name = key.source_group.access_code if key.source_group else None
             wallets_list.append(
@@ -565,6 +750,8 @@ class BillingViewSet(viewsets.ViewSet):
                     "label": key.label,
                     "source": key.source,
                     "group_name": group_name,
+                    "title_model": key.title_model,
+                    "memory_model": key.memory_model,
                     "expires_at": key.expires_at,
                     "base_url": key.base_url,
                     "is_default": False,
@@ -573,7 +760,12 @@ class BillingViewSet(viewsets.ViewSet):
                         == UserWalletPreferenceTypeChoice.LITELLM
                         and pref.active_wallet_ref_id == str(key.pk)
                     ),
-                    "status": {"kind": "EXTERNAL"},
+                    "status": {
+                        "kind": "EXTERNAL",
+                        "spend": str(
+                            spend_by_key.get(str(key.pk), Decimal("0.000000"))
+                        ),
+                    },
                 }
             )
 
@@ -705,6 +897,7 @@ class BillingViewSet(viewsets.ViewSet):
             }
         )
 
+
 class LiteLLMKeyViewSet(
     viewsets.GenericViewSet,
     mixins.CreateModelMixin,
@@ -738,6 +931,8 @@ class LiteLLMKeyViewSet(
             api_key=write.validated_data[
                 "api_key"
             ],  # EncryptedCharField encrypts on save
+            title_model=write.validated_data["title_model"],
+            memory_model=write.validated_data["memory_model"],
             source=LiteLLMKeySourceChoice.USER,
             owner_user=request.user,
             created_by=request.user,
@@ -748,10 +943,16 @@ class LiteLLMKeyViewSet(
 
     def partial_update(self, request, *args, **kwargs):
         instance = self.get_object()
-        write = LiteLLMKeyRenameSerializer(data=request.data, partial=True)
+        write = LiteLLMKeyUpdateSerializer(data=request.data, partial=True)
         write.is_valid(raise_exception=True)
-        instance.label = write.validated_data["label"]
-        instance.save(update_fields=["label", "updated_at"])
+
+        changed = []
+        for field in ("label", "title_model", "memory_model"):
+            if field in write.validated_data:
+                setattr(instance, field, write.validated_data[field])
+                changed.append(field)
+        if changed:
+            instance.save(update_fields=changed + ["updated_at"])
         return Response(LiteLLMKeyReadSerializer(instance).data)
 
     def destroy(self, request, *args, **kwargs):
