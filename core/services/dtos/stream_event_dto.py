@@ -19,6 +19,7 @@ class StreamEventKind(Enum):
     TEXT_DELTA = "text_delta"
     THINKING_DELTA = "thinking_delta"
     THINKING_BLOCK_READY = "thinking_block_ready"
+    PROVIDER_CONTENT_BLOCK_READY = "provider_content_block_ready"
     TOOL_CALL_START = "tool_call_start"  # name (and usually id) known, args streaming
     TOOL_CALL_ARGS_DELTA = "tool_call_args_delta"  # argument JSON grew
     TOOL_CALL_READY = "tool_call_ready"  # arguments complete
@@ -35,6 +36,9 @@ class LLMStreamEvent:
         TOOL_CALL_ARGS_DELTA: ``tool_call_id``, ``args_delta``, ``args_len``
             (cumulative characters — drives FE progress)
         TOOL_CALL_READY: ``tool_call``
+        PROVIDER_CONTENT_BLOCK_READY: ``provider_content_block`` and
+            ``provider_block_index`` — the provider-native assistant block,
+            retained so tool continuations can replay the response verbatim
         USAGE: ``usage`` — token counts plus provider extras
             (provider_tool_calls, web_search_sources, image_bytes, ...)
     """
@@ -49,6 +53,8 @@ class LLMStreamEvent:
     usage: Optional[Dict[str, Any]] = None
     thinking_signature: Optional[str] = None
     provider_thinking_block: Optional[Dict[str, Any]] = None
+    provider_content_block: Optional[Dict[str, Any]] = None
+    provider_block_index: Optional[int] = None
 
     @classmethod
     def text_delta(cls, text: str) -> "LLMStreamEvent":
@@ -79,6 +85,23 @@ class LLMStreamEvent:
         return cls(
             kind=StreamEventKind.THINKING_BLOCK_READY,
             provider_thinking_block={"type": "redacted_thinking", "data": data},
+        )
+
+    @classmethod
+    def provider_content_block_ready(
+        cls, block: Dict[str, Any], index: int
+    ) -> "LLMStreamEvent":
+        """One complete provider-native assistant content block.
+
+        Anthropic requires the latest assistant message to be echoed unchanged
+        when a tool result continues that response. The normalized text/tool
+        events are intentionally lossy, so this event carries the exact ordered
+        block used only for provider replay.
+        """
+        return cls(
+            kind=StreamEventKind.PROVIDER_CONTENT_BLOCK_READY,
+            provider_content_block=block,
+            provider_block_index=index,
         )
 
     @classmethod

@@ -11,6 +11,7 @@ them translated at the provider edge by
 
 import json
 import logging
+from copy import deepcopy
 from typing import Any, Dict, List, Sequence
 
 from core.services.dtos.tool_dto import ToolCallRequest, ToolCallResult
@@ -30,6 +31,7 @@ def build_assistant_tool_call_turn(
     text: str,
     tool_calls: Sequence[ToolCallRequest],
     provider_thinking_blocks: Sequence[Dict[str, str]] = (),
+    provider_assistant_content: Sequence[Dict[str, Any]] = (),
 ) -> Dict[str, Any]:
     """Assistant turn announcing the calls the model made this round.
 
@@ -59,6 +61,12 @@ def build_assistant_tool_call_turn(
     }
     if provider_thinking_blocks:
         turn["provider_thinking_blocks"] = list(provider_thinking_blocks)
+    if provider_assistant_content:
+        # This is the provider's complete assistant response in original block
+        # order. It is deliberately kept separate from our normalized schema:
+        # Claude requires this message to be echoed unchanged when tool results
+        # continue a response containing signed thinking blocks.
+        turn["provider_assistant_content"] = deepcopy(list(provider_assistant_content))
     return turn
 
 

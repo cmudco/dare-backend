@@ -13,6 +13,7 @@ sources/citations when web search is enabled.
 import base64
 import json
 import logging
+from copy import deepcopy
 from typing import AsyncGenerator, Dict, List
 
 from core.services.dtos.stream_event_dto import LLMStreamEvent, StreamEventKind
@@ -47,6 +48,23 @@ def _safe_to_dict(obj):
     if hasattr(obj, "dict"):
         return obj.dict()
     return obj
+
+
+def _provider_replay_block(obj) -> Dict:
+    """Return a detached JSON-shaped copy of a provider content block."""
+    if isinstance(obj, dict):
+        return deepcopy(obj)
+    if hasattr(obj, "model_dump"):
+        try:
+            return obj.model_dump(mode="json", exclude_none=True)
+        except TypeError:
+            return obj.model_dump()
+    if hasattr(obj, "dict"):
+        try:
+            return obj.dict(exclude_none=True)
+        except TypeError:
+            return obj.dict()
+    return {"type": _safe_get(obj, "type", "")}
 
 
 def _sanitize_web_fetch_result(block) -> Dict:
@@ -351,6 +369,9 @@ class ClaudeStreamProcessor:
         current_tool_call = None
         current_provider_tool_call = None
         current_thinking_block = None
+        current_replay_block = None
+        current_replay_block_index = None
+        current_replay_input_json = ""
         provider_tool_calls_yielded = False
 
         async for event in response:
@@ -358,6 +379,9 @@ class ClaudeStreamProcessor:
             if event.type == "content_block_start":
                 if hasattr(event, "content_block"):
                     block = event.content_block
+                    current_replay_block = _provider_replay_block(block)
+                    current_replay_block_index = getattr(event, "index", 0)
+                    current_replay_input_json = ""
                     if block.type == "thinking":
                         current_thinking_block = {
                             "type": "thinking",
@@ -403,16 +427,28 @@ class ClaudeStreamProcessor:
                 if delta_type == "thinking_delta" and hasattr(event.delta, "thinking"):
                     if current_thinking_block is not None:
                         current_thinking_block["thinking"] += event.delta.thinking
+                    if current_replay_block is not None:
+                        current_replay_block["thinking"] = (
+                            current_replay_block.get("thinking", "")
+                            + event.delta.thinking
+                        )
                     yield LLMStreamEvent.thinking_delta(event.delta.thinking)
                 elif delta_type == "signature_delta" and hasattr(
                     event.delta, "signature"
                 ):
                     if current_thinking_block is not None:
                         current_thinking_block["signature"] = event.delta.signature
+                    if current_replay_block is not None:
+                        current_replay_block["signature"] = event.delta.signature
                 elif hasattr(event.delta, "text"):
+                    if current_replay_block is not None:
+                        current_replay_block["text"] = (
+                            current_replay_block.get("text", "") + event.delta.text
+                        )
                     yield LLMStreamEvent.text_delta(event.delta.text)
                 # Handle tool input JSON delta
                 elif hasattr(event.delta, "partial_json"):
+                    current_replay_input_json += event.delta.partial_json
                     if current_tool_call:
                         current_tool_call["arguments"] += event.delta.partial_json
                         yield LLMStreamEvent.tool_call_args_delta(
@@ -424,6 +460,11 @@ class ClaudeStreamProcessor:
                         current_provider_tool_call[
                             "arguments"
                         ] += event.delta.partial_json
+                elif (
+                    delta_type == "citations_delta" and current_replay_block is not None
+                ):
+                    citation = _safe_to_dict(getattr(event.delta, "citation", {}))
+                    current_replay_block.setdefault("citations", []).append(citation)
 
             # Handle content block stop (finalize tool call)
             elif event.type == "content_block_stop":
@@ -450,6 +491,23 @@ class ClaudeStreamProcessor:
                 if current_provider_tool_call:
                     provider_tool_calls.append(current_provider_tool_call)
                     current_provider_tool_call = None
+                if current_replay_block is not None:
+                    if current_replay_input_json:
+                        try:
+                            current_replay_block["input"] = json.loads(
+                                current_replay_input_json
+                            )
+                        except (TypeError, ValueError):
+                            logger.warning(
+                                "Could not parse Claude tool input for exact replay"
+                            )
+                    yield LLMStreamEvent.provider_content_block_ready(
+                        current_replay_block,
+                        current_replay_block_index or 0,
+                    )
+                    current_replay_block = None
+                    current_replay_block_index = None
+                    current_replay_input_json = ""
 
             # Extract input tokens from message start
             elif event.type == "message_start":

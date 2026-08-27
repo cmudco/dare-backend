@@ -31,15 +31,18 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from conversations.constants import MAX_TOOL_ROUNDS
-from conversations.services.message_helpers.usage_helpers import \
-    UsageAccumulator
+from conversations.services.message_helpers.usage_helpers import UsageAccumulator
 from conversations.services.tool_execution_service import (
-    ToolExecutionContext, ToolExecutionService, tool_execution_service)
-from core.services.dtos import (LLMQueryRequest, StreamEventKind,
-                                ToolCallRequest)
+    ToolExecutionContext,
+    ToolExecutionService,
+    tool_execution_service,
+)
+from core.services.dtos import LLMQueryRequest, StreamEventKind, ToolCallRequest
 from core.services.llm_helpers.tool_turn_helpers import (
-    build_assistant_tool_call_turn, build_tool_result_turn,
-    synthesize_tool_call_id)
+    build_assistant_tool_call_turn,
+    build_tool_result_turn,
+    synthesize_tool_call_id,
+)
 from core.services.tool_loop.binding import ToolLoopBinding
 from core.services.tool_loop.events import ToolEventEmitter
 from dare_tools.services.retrieval_tool_executor import RetrievalScope
@@ -168,9 +171,11 @@ class ToolLoopService:
             pending_calls: List[ToolCallRequest] = []
             synthesized_ids: deque = deque()
             round_has_text = False
+            round_text = ""
             round_has_thinking = False
             round_thinking = ""
             round_thinking_blocks: List[Dict[str, str]] = []
+            round_provider_content: Dict[int, Dict[str, Any]] = {}
             logger.info(
                 "[journey] mid=%s round %d start (tools=%s)",
                 turn_key,
@@ -187,6 +192,7 @@ class ToolLoopService:
                             # New segment after a tool round: append, never replace.
                             text_accum += "\n\n"
                         round_has_text = True
+                        round_text += event.text
                         text_accum += event.text
                         await binding.sink.text(text_accum)
 
@@ -203,6 +209,15 @@ class ToolLoopService:
                     elif event.kind is StreamEventKind.THINKING_BLOCK_READY:
                         if event.provider_thinking_block:
                             round_thinking_blocks.append(event.provider_thinking_block)
+
+                    elif (
+                        event.kind is StreamEventKind.PROVIDER_CONTENT_BLOCK_READY
+                        and event.provider_content_block is not None
+                        and event.provider_block_index is not None
+                    ):
+                        round_provider_content[event.provider_block_index] = (
+                            event.provider_content_block
+                        )
 
                     elif event.kind is StreamEventKind.TOOL_CALL_START:
                         call_id = event.tool_call_id
@@ -321,9 +336,13 @@ class ToolLoopService:
 
             messages.append(
                 build_assistant_tool_call_turn(
-                    self._round_text(round_has_text, text_accum),
+                    round_text,
                     pending_calls,
                     provider_thinking_blocks=round_thinking_blocks,
+                    provider_assistant_content=[
+                        round_provider_content[index]
+                        for index in sorted(round_provider_content)
+                    ],
                 )
             )
             tool_results = await self.execution_service.execute_round(
@@ -368,14 +387,6 @@ class ToolLoopService:
         return result
 
     # ========== Helpers ==========
-
-    @staticmethod
-    def _round_text(round_has_text: bool, text_accum: str) -> str:
-        """Text for the assistant tool-call turn — this round's segment only."""
-        if not round_has_text:
-            return ""
-        # The last segment after the final "\n\n" is this round's text.
-        return text_accum.rsplit("\n\n", 1)[-1] if "\n\n" in text_accum else text_accum
 
     @staticmethod
     async def _emit_provider_tool_call(

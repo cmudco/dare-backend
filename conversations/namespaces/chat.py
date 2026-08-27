@@ -203,12 +203,13 @@ class ChatNamespace(socketio.AsyncNamespace):
         logger.info(f"Socket.IO connected (session): conv_id={conversation_id}, sid={sid}, platform={platform}, bot_id={conversation.bot_id}")
         return True
     
-    async def on_disconnect(self, sid: str):
+    async def on_disconnect(self, sid: str, reason: Optional[str] = None):
         """
         Handle disconnection - cleanup session and pause artifacts.
 
         Args:
             sid: Socket session ID
+            reason: Engine.IO disconnect reason, when provided.
         """
         try:
             session = self.sessions.pop(sid, None)
@@ -216,22 +217,31 @@ class ChatNamespace(socketio.AsyncNamespace):
                 return
 
             user = session.get('user')
-            subscriptions = session.get('subscriptions', set())
+            # Subscription handlers can still hold this session dict while a
+            # disconnect is being processed. Snapshot before the first await
+            # so a concurrent unsubscribe cannot resize the set mid-iteration.
+            subscriptions = tuple(session.get('subscriptions', ()))
             is_public = session.get('is_public', False)
 
             if is_public:
-                logger.info(f"Socket.IO disconnected (public): session_id={session.get('session_id')}, sid={sid}")
+                logger.info(
+                    f"Socket.IO disconnected (public): session_id={session.get('session_id')}, "
+                    f"sid={sid}, reason={reason or 'unknown'}"
+                )
             else:
-                logger.info(f"Socket.IO disconnected (JWT): user={user.id if user else 'None'}, sid={sid}")
-            
-            # Pause any in-progress artifacts for subscribed conversations
+                logger.info(
+                    f"Socket.IO disconnected (JWT): user={user.id if user else 'None'}, "
+                    f"sid={sid}, reason={reason or 'unknown'}"
+                )
+
+            # Coordinator cleanup is local and must not depend on database I/O.
+            for conv_id in subscriptions:
+                self.coordinators.pop(f"{sid}_{conv_id}", None)
+
+            # Pause any in-progress artifacts for subscribed conversations.
             for conv_id in subscriptions:
                 await self._pause_conversation_artifacts(conv_id)
-                
-                # Clean up coordinator
-                coordinator_key = f"{sid}_{conv_id}"
-                self.coordinators.pop(coordinator_key, None)
-                
+
         except Exception as e:
             logger.exception(f"Socket.IO disconnect error: {str(e)}")
     
