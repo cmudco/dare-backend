@@ -79,6 +79,7 @@ DESC_EXTRA_ALIASES = [
     ("dall-e-3",),
 ]
 
+# fmt: off
 DESCRIPTIONS = [
     ("claude-opus-4-5-20251101", "Premium model combining high intelligence with practical performance. No adaptive thinking."),
     ("claude-opus-4-6-premium", "Improved long-context management; sustained work over large documents and codebases."),
@@ -107,6 +108,7 @@ DESCRIPTIONS = [
     ("gpt-5-6-luna", "Smallest GPT-5.6 variant; lowest cost and latency."),
     ("gpt-5-6-sol", "Largest GPT-5.6 variant; pro reasoning mode with higher latency."),
 ]
+# fmt: on
 
 _desc_slugs = [slug for slug, _ in DESCRIPTIONS]
 assert len(_desc_slugs) == len(set(_desc_slugs)), "duplicate DESCRIPTIONS slugs"
@@ -128,7 +130,9 @@ def forward(apps, schema_editor):
         if len(rows) > 1:
             logger.info(
                 "0096: alias set %s matched %d rows %s — applying to all",
-                label, len(rows), [r.identifier for r in rows],
+                label,
+                len(rows),
+                [r.identifier for r in rows],
             )
 
     def set_llm(rows, field, value):
@@ -162,7 +166,9 @@ def forward(apps, schema_editor):
         for aliases in sets:
             rows = match_rows(aliases)
             if not rows:
-                logger.info("0096 reasoning_level[%s]: %s absent — skipped", level, aliases[0])
+                logger.info(
+                    "0096 reasoning_level[%s]: %s absent — skipped", level, aliases[0]
+                )
                 r_absent += 1
                 continue
             note_multi(aliases, rows)
@@ -195,7 +201,9 @@ def forward(apps, schema_editor):
             if row.tier != expect_from:
                 logger.info(
                     "0096 tier: %s current=%r != expected-from=%r — skipped",
-                    row.identifier, row.tier, expect_from,
+                    row.identifier,
+                    row.tier,
+                    expect_from,
                 )
                 t_wrongfrom += 1
                 continue
@@ -205,8 +213,11 @@ def forward(apps, schema_editor):
     # 4. descriptions --------------------------------------
     alias_to_rows = {}
     for aliases in (
-        COST_UNCONSTRAINED + COST_PREDICTABLE
-        + IS_REASONING_SEVEN + [t[0] for t in TIER_MOVES] + DESC_EXTRA_ALIASES
+        COST_UNCONSTRAINED
+        + COST_PREDICTABLE
+        + IS_REASONING_SEVEN
+        + [t[0] for t in TIER_MOVES]
+        + DESC_EXTRA_ALIASES
     ):
         rows = match_rows(aliases)
         for spelling in aliases:
@@ -233,16 +244,27 @@ def forward(apps, schema_editor):
         set_llm(rows, "description", description)
         d_resolved += 1
     if unresolved:
-        logger.info("0096 descriptions: %d slug(s) unresolved (base model absent), skipped: %s",
-                    d_unresolved, unresolved)
+        logger.info(
+            "0096 descriptions: %d slug(s) unresolved (base model absent), skipped: %s",
+            d_unresolved,
+            unresolved,
+        )
 
     logger.info(
         "0096 summary | reasoning matched=%d absent=%d (=%d) | "
         "is_reasoning matched=%d absent=%d | tier applied=%d absent=%d wrong-from=%d | "
         "descriptions resolved=%d unresolved=%d | rows changed this pass=%d",
-        r_matched, r_absent, r_matched + r_absent,
-        ir_matched, ir_absent, t_applied, t_absent, t_wrongfrom,
-        d_resolved, d_unresolved, changed,
+        r_matched,
+        r_absent,
+        r_matched + r_absent,
+        ir_matched,
+        ir_absent,
+        t_applied,
+        t_absent,
+        t_wrongfrom,
+        d_resolved,
+        d_unresolved,
+        changed,
     )
 
 
