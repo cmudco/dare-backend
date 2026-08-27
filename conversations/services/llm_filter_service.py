@@ -108,6 +108,7 @@ def _llm_entry(model: LLM) -> Dict[str, Any]:
         "supports_temperature": model.supports_temperature,
         "supports_effort": model.supports_effort,
         "supports_adaptive_thinking": model.supports_adaptive_thinking,
+        "reasoning_level": model.reasoning_level,
         "default_effort": model.default_effort,
         "default_adaptive_thinking_enabled": model.default_adaptive_thinking_enabled,
         "is_image_generator": model.is_image_generator,
@@ -139,6 +140,7 @@ def _litellm_entry(litellm_key, probed) -> Dict[str, Any]:
         "description": None,
         "is_active": True,
         "is_reasoning": is_reasoning,
+        "reasoning_level": None,
         "supports_temperature": family_supports_temperature(family, is_reasoning),
         "supports_effort": bool(family and family.supports_effort),
         "supports_adaptive_thinking": bool(
