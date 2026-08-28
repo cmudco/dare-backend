@@ -1130,7 +1130,7 @@ Each cluster number corresponds to the sources listed below.
                 else:
                     mc, created = ModelCardData.objects.get_or_create(
                         llm=llm,
-                        defaults={'name': llm.name, 'slug': slugify(llm.name)}
+                        defaults={'name': llm.name, 'slug': generate_slug(llm.name)}
                     )
                     models.append((mc.name, True))
             return models
