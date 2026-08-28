@@ -168,6 +168,146 @@ class ClaudeUsageObservabilityTests(SimpleTestCase):
             {"type": "redacted_thinking", "data": "opaque-redacted-data"},
         )
 
+    def test_replays_complete_interleaved_assistant_response_unchanged(self):
+        provider_content = [
+            {
+                "type": "thinking",
+                "thinking": "Check the first source.",
+                "signature": "signed-1",
+            },
+            {
+                "type": "server_tool_use",
+                "id": "srvtoolu-1",
+                "name": "web_search",
+                "input": {"query": "first"},
+            },
+            {
+                "type": "web_search_tool_result",
+                "tool_use_id": "srvtoolu-1",
+                "content": [],
+            },
+            {
+                "type": "redacted_thinking",
+                "data": "opaque-redacted-data",
+            },
+            {"type": "text", "text": "Now use the client tool."},
+            {
+                "type": "tool_use",
+                "id": "tool-1",
+                "name": "search",
+                "input": {"query": "second"},
+            },
+        ]
+        turn = build_assistant_tool_call_turn(
+            "Now use the client tool.",
+            [
+                ToolCallRequest(
+                    id="tool-1",
+                    name="search",
+                    arguments='{"query":"second"}',
+                )
+            ],
+            provider_assistant_content=provider_content,
+        )
+
+        _, converted = ClaudeMessageConverter.convert([turn])
+
+        self.assertEqual(converted[0]["content"], provider_content)
+        self.assertIsNot(converted[0]["content"], provider_content)
+
+    async def test_stream_exposes_provider_blocks_with_original_indexes(self):
+        class ReplayBlock(SimpleNamespace):
+            def model_dump(self, **_kwargs):
+                return dict(vars(self))
+
+        async def stream():
+            yield SimpleNamespace(
+                type="content_block_start",
+                index=4,
+                content_block=ReplayBlock(type="thinking", thinking="", signature=""),
+            )
+            yield SimpleNamespace(
+                type="content_block_delta",
+                index=4,
+                delta=SimpleNamespace(type="thinking_delta", thinking="Check."),
+            )
+            yield SimpleNamespace(
+                type="content_block_delta",
+                index=4,
+                delta=SimpleNamespace(type="signature_delta", signature="signed"),
+            )
+            yield SimpleNamespace(type="content_block_stop", index=4)
+            yield SimpleNamespace(
+                type="content_block_start",
+                index=5,
+                content_block=ReplayBlock(type="text", text=""),
+            )
+            yield SimpleNamespace(
+                type="content_block_delta",
+                index=5,
+                delta=SimpleNamespace(type="text_delta", text="Visible"),
+            )
+            yield SimpleNamespace(type="content_block_stop", index=5)
+            yield SimpleNamespace(
+                type="content_block_start",
+                index=6,
+                content_block=ReplayBlock(
+                    type="server_tool_use",
+                    id="srvtoolu-1",
+                    name="web_search",
+                    input={},
+                ),
+            )
+            yield SimpleNamespace(
+                type="content_block_delta",
+                index=6,
+                delta=SimpleNamespace(
+                    type="input_json_delta", partial_json='{"query":"current"}'
+                ),
+            )
+            yield SimpleNamespace(type="content_block_stop", index=6)
+            yield SimpleNamespace(
+                type="content_block_start",
+                index=7,
+                content_block=ReplayBlock(
+                    type="web_search_tool_result",
+                    tool_use_id="srvtoolu-1",
+                    content=[],
+                ),
+            )
+            yield SimpleNamespace(type="content_block_stop", index=7)
+
+        events = [
+            event async for event in ClaudeStreamProcessor.process_stream(stream())
+        ]
+        replay_events = [
+            event
+            for event in events
+            if event.kind is StreamEventKind.PROVIDER_CONTENT_BLOCK_READY
+        ]
+
+        self.assertEqual(
+            [event.provider_block_index for event in replay_events], [4, 5, 6, 7]
+        )
+        self.assertEqual(
+            [event.provider_content_block for event in replay_events],
+            [
+                {"type": "thinking", "thinking": "Check.", "signature": "signed"},
+                {"type": "text", "text": "Visible"},
+                {
+                    "type": "server_tool_use",
+                    "id": "srvtoolu-1",
+                    "name": "web_search",
+                    "input": {"query": "current"},
+                },
+                {
+                    "type": "web_search_tool_result",
+                    "tool_use_id": "srvtoolu-1",
+                    "content": [],
+                },
+            ],
+        )
+
     async def test_credit_interruption_persists_usage_before_finalizing(self):
         coordinator = object.__new__(MessageCoordinator)
         coordinator._save_usage_breakdown = AsyncMock()

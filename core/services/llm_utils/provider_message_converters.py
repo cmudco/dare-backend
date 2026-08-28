@@ -20,6 +20,7 @@ the two provider-native APIs that speak a different dialect:
 import base64
 import json
 import logging
+from copy import deepcopy
 from typing import Any, Dict, List, Optional, Tuple
 
 from google.genai import types
@@ -91,6 +92,18 @@ class ClaudeMessageConverter:
             _flush_tool_results()
 
             if role == "assistant" and message.get("tool_calls"):
+                provider_content = message.get("provider_assistant_content")
+                if provider_content:
+                    # Anthropic's documented tool-continuation contract is to
+                    # echo the complete assistant response unchanged, then add
+                    # the tool_result user turn. Reconstructing it from our
+                    # normalized text/thinking/tool buckets changes interleaved
+                    # adaptive-thinking block order and is rejected with 400.
+                    converted.append(
+                        {"role": "assistant", "content": deepcopy(provider_content)}
+                    )
+                    continue
+
                 # Anthropic requires thinking blocks, including their opaque
                 # signatures, to be replayed unchanged when tool results
                 # continue the same assistant turn.
