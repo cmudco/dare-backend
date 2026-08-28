@@ -4,7 +4,10 @@ djangorestframework~=3.15.2
 asgiref~=3.8.1
 channels~=4.2.0
 channels-redis~=4.2.0
-python-socketio~=5.11.0
+# 5.12+ matches Engine.IO's disconnect-reason callback contract. Stay on the
+# 5.13 line to include the upstream disconnect race fixes without crossing the
+# 5.14 Redis manager wire-format change during a rolling deployment.
+python-socketio~=5.13.0
 uvicorn[standard]~=0.34.0
 
 # Authentication

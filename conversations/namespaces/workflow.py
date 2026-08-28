@@ -123,12 +123,13 @@ class WorkflowNamespace(socketio.AsyncNamespace):
             logger.exception(f"Workflow Socket.IO connect error: {str(e)}")
             raise socketio.exceptions.ConnectionRefusedError(f'Connection failed: {str(e)}')
 
-    async def on_disconnect(self, sid: str):
+    async def on_disconnect(self, sid: str, reason: Optional[str] = None):
         """
         Handle disconnection - cleanup session.
 
         Args:
             sid: Socket session ID
+            reason: Engine.IO disconnect reason, when provided.
         """
         try:
             session = self.sessions.pop(sid, None)
@@ -137,7 +138,8 @@ class WorkflowNamespace(socketio.AsyncNamespace):
 
             user = session.get('user')
             logger.info(
-                f"Workflow Socket.IO disconnected: user={user.id if user else 'None'}, sid={sid}"
+                f"Workflow Socket.IO disconnected: user={user.id if user else 'None'}, "
+                f"sid={sid}, reason={reason or 'unknown'}"
             )
 
             # Note: We don't cancel execution tasks on disconnect
