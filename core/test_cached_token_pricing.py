@@ -85,12 +85,22 @@ class CachedTokenExtractionTests(SimpleTestCase):
         self.assertEqual(usage["cached_input_tokens"], 7201)
         self.assertGreater(usage["output_tokens"], 0)
         self.assertTrue(usage["estimated"])
+        self.assertEqual(usage["estimated_fields"], ["output_tokens"])
+        self.assertEqual(usage["stop_reason"], "stopped by user")
         self.assertNotIn("provisional", usage)
+
+    def test_fully_reported_stopped_turn_is_not_estimated(self):
+        reported = {"input_tokens": 500, "output_tokens": 40, "provisional": True}
+        usage = estimate_usage([], None, "short", reported)
+        self.assertEqual(usage["estimated_fields"], [])
+        self.assertFalse(usage["estimated"])
+        self.assertEqual((usage["input_tokens"], usage["output_tokens"]), (500, 40))
 
     def test_stopped_turn_without_provider_counts_estimates_both_sides(self):
         usage = estimate_usage([{"role": "user", "content": "hi"}], None, "")
         self.assertGreater(usage["input_tokens"], 0)
         self.assertEqual(usage["output_tokens"], 0)
+        self.assertEqual(usage["estimated_fields"], ["input_tokens", "output_tokens"])
 
     def test_accumulator_sums_cached_tokens_across_rounds(self):
         usage = UsageAccumulator()
