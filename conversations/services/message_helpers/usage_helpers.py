@@ -12,6 +12,8 @@ import json
 from functools import lru_cache
 from typing import Any, Dict, List, Optional
 
+import tiktoken
+
 _TOKEN_KEYS = ("input_tokens", "output_tokens", "total_tokens")
 _BREAKDOWN_KEYS = (
     "thinking_tokens",
@@ -100,8 +102,6 @@ class UsageAccumulator:
 
 @lru_cache(maxsize=1)
 def _encoder():
-    import tiktoken
-
     return tiktoken.get_encoding("cl100k_base")
 
 
@@ -123,10 +123,9 @@ def estimate_usage(
     """Approximate a usage frame for a call whose provider never reported one.
 
     Providers only send token counts with the final stream chunk, so a turn
-    the user stops mid-stream would otherwise bill nothing for tokens that
-    were consumed. This tokenizes the request and the streamed text with a
-    GPT-family encoder; it is close for OpenAI models and within roughly
-    ten percent for the others, and the frame is marked ``estimated``.
+    stopped mid-stream would otherwise bill nothing. The request and the
+    streamed text are tokenized with a GPT-family encoder and the frame is
+    marked ``estimated``.
     """
     input_tokens = sum(_count_tokens(message) for message in messages)
     if tools:

@@ -28,10 +28,12 @@ from workflows.models import Workflow, WorkflowNode, WorkflowRun
 logger = logging.getLogger(__name__)
 
 
-def cached_input_tokens(message_obj) -> int:
+def cached_prompt_tokens(message_obj: Message) -> int:
     """Prompt tokens the provider served from cache, summed over the turn's rounds."""
-    rounds = getattr(message_obj, "usage_details", None) or []
-    return sum(int(r.get("cached_input_tokens") or 0) for r in rounds if isinstance(r, dict))
+    return sum(
+        round_usage.get("cached_input_tokens") or 0
+        for round_usage in message_obj.usage_details or []
+    )
 
 
 class BillingService:
@@ -246,7 +248,7 @@ class BillingService:
             source=TransactionSourceChoice.USAGE,
             input_tokens=message_obj.input_tokens,
             output_tokens=message_obj.output_tokens,
-            cached_input_tokens=cached_input_tokens(message_obj),
+            cached_input_tokens=cached_prompt_tokens(message_obj),
             platform=platform,
             bot_id=conversation.bot_id,
             bot_owner=resolved.bot_owner,
@@ -328,7 +330,7 @@ class BillingService:
                 reference_llm,
                 message_obj.input_tokens,
                 message_obj.output_tokens,
-                cached_input_tokens(message_obj),
+                cached_prompt_tokens(message_obj),
             )
             if reference_llm is not None
             else None
@@ -339,7 +341,7 @@ class BillingService:
             model_name=message_obj.litellm_model_name,
             input_tokens=message_obj.input_tokens,
             output_tokens=message_obj.output_tokens,
-            cached_input_tokens=cached_input_tokens(message_obj),
+            cached_input_tokens=cached_prompt_tokens(message_obj),
             description=(
                 f"Message {message_obj.id}: {message_obj.message[:80]} | "
                 f"via {key_label} | "
@@ -449,7 +451,7 @@ class BillingService:
                             reference_llm,
                             message_obj.input_tokens,
                             message_obj.output_tokens,
-                            cached_input_tokens(message_obj),
+                            cached_prompt_tokens(message_obj),
                         )
                     message_obj.save()
                     return message_obj
@@ -464,7 +466,7 @@ class BillingService:
                             llm,
                             message_obj.input_tokens,
                             message_obj.output_tokens,
-                            cached_input_tokens(message_obj),
+                            cached_prompt_tokens(message_obj),
                         )
                     message_obj.cost = cost
                     logger.debug(
@@ -535,7 +537,7 @@ class BillingService:
                                     message=transaction_message,
                                     input_tokens=message_obj.input_tokens,
                                     output_tokens=message_obj.output_tokens,
-                                    cached_input_tokens=cached_input_tokens(message_obj),
+                                    cached_input_tokens=cached_prompt_tokens(message_obj),
                                     billing_mode=BillingModeChoice.OWN_API,
                                     platform=transaction_platform,
                                     **energy_data,
@@ -579,7 +581,7 @@ class BillingService:
                                     message=transaction_message,
                                     input_tokens=message_obj.input_tokens,
                                     output_tokens=message_obj.output_tokens,
-                                    cached_input_tokens=cached_input_tokens(message_obj),
+                                    cached_input_tokens=cached_prompt_tokens(message_obj),
                                     billing_mode=BillingModeChoice.WALLET,
                                     platform=transaction_platform,
                                     **energy_data,
@@ -640,7 +642,7 @@ class BillingService:
                             llm,
                             message_obj.input_tokens,
                             message_obj.output_tokens,
-                            cached_input_tokens(message_obj),
+                            cached_prompt_tokens(message_obj),
                         )
 
                     message_obj.cost = cost
@@ -779,18 +781,15 @@ class BillingService:
         per_million = Decimal("1000000")
         input_rate = llm.input_token_rate_per_million / per_million
         output_rate = llm.output_token_rate_per_million / per_million
-        cached_rate_per_million = getattr(llm, "cached_input_token_rate_per_million", None)
         cached_rate = (
-            cached_rate_per_million / per_million
-            if cached_rate_per_million is not None
+            llm.cached_input_token_rate_per_million / per_million
+            if llm.cached_input_token_rate_per_million is not None
             else input_rate
         )
-        cached = min(int(cached_input_tokens or 0), int(input_tokens or 0))
-        uncached = int(input_tokens or 0) - cached
         return (
-            Decimal(uncached) * input_rate
-            + Decimal(cached) * cached_rate
-            + Decimal(int(output_tokens or 0)) * output_rate
+            Decimal(input_tokens - cached_input_tokens) * input_rate
+            + Decimal(cached_input_tokens) * cached_rate
+            + Decimal(output_tokens) * output_rate
         )
 
     def _calculate_cost(
