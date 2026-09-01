@@ -36,7 +36,10 @@ class LiteLLMBackgroundModelAPITests(TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.data["suggested_model"], "openai/gpt-5.6-luna")
+        self.assertEqual(
+            response.data["recommended_models"],
+            ["openai/gpt-5.6-luna", "gemini/gemini-3.7-flash"],
+        )
 
     def test_create_persists_one_background_model(self):
         response = self.client.post(

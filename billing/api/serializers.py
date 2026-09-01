@@ -334,11 +334,11 @@ class LiteLLMTestRequestSerializer(serializers.Serializer):
 
 
 class LiteLLMTestResponseSerializer(serializers.Serializer):
-    """Connection test result plus the backend-owned model recommendation."""
+    """Connection test result plus backend-owned model recommendations."""
 
     ok = serializers.BooleanField()
     models = serializers.ListField(child=serializers.CharField())
-    suggested_model = serializers.CharField(allow_null=True)
+    recommended_models = serializers.ListField(child=serializers.CharField())
     error = serializers.CharField(allow_blank=True)
 
 

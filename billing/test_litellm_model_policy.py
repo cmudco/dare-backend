@@ -1,43 +1,82 @@
 from django.test import SimpleTestCase
 
-from billing.litellm_model_policy import recommend_background_model
+from billing.litellm_model_policy import recommend_background_models
 
 
 class BackgroundModelRecommendationTests(SimpleTestCase):
-    def test_prefers_luna_with_proxy_prefixes(self):
+    def test_recommends_one_canonical_luna_then_newest_gemini_flash(self):
         models = [
+            "gemini/gemini-3.6-flash",
+            "openai/gpt-5.6-sol",
             "gemini/gemini-3.7-flash",
             "bedrock_mantle/openai.gpt-5.6-luna",
+            "gpt-5.6-luna",
+            "bedrock_mantle/openai.gpt-5.6-terra",
+            "gemini/gemini-3.5-flash",
+            "gemini/gemini-3.5-pro",
         ]
 
         self.assertEqual(
-            recommend_background_model(models),
-            "bedrock_mantle/openai.gpt-5.6-luna",
+            recommend_background_models(models),
+            [
+                "gpt-5.6-luna",
+                "gemini/gemini-3.7-flash",
+                "gemini/gemini-3.6-flash",
+                "gemini/gemini-3.5-flash",
+            ],
         )
 
-    def test_prefers_newest_stable_gemini_flash(self):
+    def test_caps_many_flash_models_in_descending_order(self):
         models = [
             "gemini/gemini-3.1-flash-lite",
             "gemini/gemini-3.7-flash-preview",
             "gemini/gemini-3.7-flash",
             "gemini/gemini-3.6-flash",
+            "gemini/gemini-3.5-flash",
         ]
 
-        self.assertEqual(recommend_background_model(models), "gemini/gemini-3.7-flash")
+        self.assertEqual(
+            recommend_background_models(models),
+            [
+                "gemini/gemini-3.7-flash",
+                "gemini/gemini-3.7-flash-preview",
+                "gemini/gemini-3.6-flash",
+                "gemini/gemini-3.5-flash",
+            ],
+        )
 
-    def test_uses_lightweight_text_model_as_third_layer(self):
-        models = ["text-embedding-3-large", "anthropic/claude-haiku-4-5"]
+    def test_uses_other_gemini_models_after_flash(self):
+        models = [
+            "gemini/gemini-2.5-pro",
+            "gemini/gemini-3.1-pro",
+            "gemini/gemini-3.0-flash",
+        ]
 
         self.assertEqual(
-            recommend_background_model(models), "anthropic/claude-haiku-4-5"
+            recommend_background_models(models),
+            [
+                "gemini/gemini-3.0-flash",
+                "gemini/gemini-3.1-pro",
+                "gemini/gemini-2.5-pro",
+            ],
         )
 
-    def test_uses_first_generic_text_model_as_last_resort(self):
-        models = ["image/generator", "custom/chat-model", "custom/other-model"]
+    def test_excludes_other_families_non_text_models_and_duplicates(self):
+        models = [
+            "anthropic/claude-haiku-4-5",
+            "text-embedding-3-large",
+            "openai/gpt-5.6-luna",
+            "OPENAI/GPT-5.6-LUNA",
+            "image/gemini-3.7-flash",
+        ]
 
-        self.assertEqual(recommend_background_model(models), "custom/chat-model")
-
-    def test_returns_none_when_no_text_model_exists(self):
-        self.assertIsNone(
-            recommend_background_model(["text-embedding-3-large", "voice/tts"])
+        self.assertEqual(
+            recommend_background_models(models),
+            ["openai/gpt-5.6-luna"],
         )
+
+    def test_honors_custom_limit(self):
+        models = ["gpt-5.6-luna", "gemini-3.7-flash", "gemini-3.6-flash"]
+
+        self.assertEqual(recommend_background_models(models, limit=2), models[:2])
+        self.assertEqual(recommend_background_models(models, limit=0), [])

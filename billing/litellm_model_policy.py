@@ -2,16 +2,14 @@
 
 import re
 from collections.abc import Iterable
-from typing import Optional
 
-_LUNA = re.compile(r"gpt[\W_]*5[\W_]*6[\W_]*luna", re.IGNORECASE)
+MAX_BACKGROUND_MODEL_RECOMMENDATIONS = 4
+
+_LUNA = re.compile(r"(?:^|[/_.-])luna(?:$|[/_.-])", re.IGNORECASE)
+_GEMINI = re.compile(r"(?:^|[/_.-])gemini(?:$|[/_.-]|\d)", re.IGNORECASE)
 _GEMINI_FLASH = re.compile(r"gemini.*flash", re.IGNORECASE)
 _GEMINI_VERSION = re.compile(
     r"gemini[\W_]*(?P<major>\d+)(?:[\W_]+(?P<minor>\d+))?",
-    re.IGNORECASE,
-)
-_LIGHTWEIGHT = re.compile(
-    r"(?:^|[/_.-])(haiku|mini|nano|lite|small)(?:$|[/_.-])",
     re.IGNORECASE,
 )
 _NON_TEXT = re.compile(
@@ -22,29 +20,75 @@ _NON_TEXT = re.compile(
 )
 
 
-def recommend_background_model(models: Iterable[str]) -> Optional[str]:
-    """Return Luna, the newest Gemini Flash, then a lightweight text model."""
-    candidates = [model.strip() for model in models if model and model.strip()]
-    text_models = [model for model in candidates if not _NON_TEXT.search(model)]
+def recommend_background_models(
+    models: Iterable[str],
+    *,
+    limit: int = MAX_BACKGROUND_MODEL_RECOMMENDATIONS,
+) -> list[str]:
+    """Return a ranked shortlist from the explicitly recommended model families."""
+    if limit <= 0:
+        return []
 
-    luna = next((model for model in text_models if _LUNA.search(model)), None)
-    if luna:
-        return luna
-
-    flashes = [model for model in text_models if _GEMINI_FLASH.search(model)]
-    if flashes:
-        return max(flashes, key=_gemini_flash_rank)
-
-    lightweight = next(
-        (model for model in text_models if _LIGHTWEIGHT.search(model)), None
+    candidates = _unique_text_models(models)
+    luna = min(
+        (model for model in candidates if _LUNA.search(model)),
+        key=_canonical_route_rank,
+        default=None,
     )
-    return lightweight or next(iter(text_models), None)
+    groups = (
+        [luna] if luna else [],
+        sorted(
+            (model for model in candidates if _GEMINI_FLASH.search(model)),
+            key=_gemini_rank,
+            reverse=True,
+        ),
+        sorted(
+            (
+                model
+                for model in candidates
+                if _GEMINI.search(model) and not _GEMINI_FLASH.search(model)
+            ),
+            key=_gemini_rank,
+            reverse=True,
+        ),
+    )
+
+    recommendations: list[str] = []
+    seen: set[str] = set()
+    for group in groups:
+        for model in group:
+            normalized = model.casefold()
+            if normalized in seen:
+                continue
+            recommendations.append(model)
+            seen.add(normalized)
+            if len(recommendations) == limit:
+                return recommendations
+    return recommendations
 
 
-def _gemini_flash_rank(model: str) -> tuple[int, int, int, int]:
+def _canonical_route_rank(model: str) -> tuple[int, int, str]:
+    """Prefer the clean model ID over provider-prefixed aliases."""
+    return model.count("/") + model.count("."), len(model), model.casefold()
+
+
+def _unique_text_models(models: Iterable[str]) -> list[str]:
+    unique: list[str] = []
+    seen: set[str] = set()
+    for raw_model in models:
+        model = raw_model.strip() if raw_model else ""
+        normalized = model.casefold()
+        if not model or normalized in seen or _NON_TEXT.search(model):
+            continue
+        unique.append(model)
+        seen.add(normalized)
+    return unique
+
+
+def _gemini_rank(model: str) -> tuple[int, int, int, int, str]:
     match = _GEMINI_VERSION.search(model)
     major = int(match.group("major")) if match else 0
     minor = int(match.group("minor") or 0) if match else 0
     stable = 0 if "preview" in model.casefold() else 1
-    full_flash = 0 if "lite" in model.casefold() else 1
-    return major, minor, stable, full_flash
+    full_model = 0 if "lite" in model.casefold() else 1
+    return major, minor, stable, full_model, model.casefold()
