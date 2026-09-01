@@ -3,14 +3,17 @@ from decimal import Decimal
 from django.db import migrations
 
 # Cached-input price as a fraction of the model's own input rate, from the
-# providers' published cache pricing. Deriving from the row's input rate
-# keeps the value correct in every environment regardless of the absolute
-# prices configured there.
+# providers' published cache pricing (checked 2026-09-02):
+#   OpenAI    developers.openai.com/api/docs/pricing
+#   Anthropic platform.claude.com/docs/en/about-claude/pricing
+#   Google    ai.google.dev/gemini-api/docs/pricing
+# Deriving from the row's input rate keeps the value correct in every
+# environment regardless of the absolute prices configured there.
 #
-#   OpenAI:    gpt-4o family 50%, gpt-4.1 family 25%, gpt-5 / o-series 10%
-#   Anthropic: cache reads are 10% of input on every model
-#   Google:    Gemini 2.5 Pro 25%, 2.0 family 25%, 2.5 Flash / Flash-Lite and
-#              Gemini 3.x 10%
+#   OpenAI:    gpt-4o family and o1/o3-mini 50%, gpt-4.1 family and o3/o4 25%,
+#              gpt-5 family 10%
+#   Anthropic: 10% on every model except Fable 5.1 / Mythos 5.1 at 2.5%
+#   Google:    10% on every current Gemini model; the retired 2.0 family was 25%
 #
 # Longest prefix wins. Models with no entry (image, audio, gpt-3.5, unknown
 # custom rows) are left untouched and bill cached tokens at the input rate.
@@ -19,13 +22,14 @@ CACHE_DISCOUNT_BY_PREFIX = {
     "gpt-4.1": Decimal("0.25"),
     "gpt-5": Decimal("0.10"),
     "o1": Decimal("0.50"),
+    "o3-mini": Decimal("0.50"),
     "o3": Decimal("0.25"),
     "o4": Decimal("0.25"),
+    "claude-fable-5-1": Decimal("0.025"),
+    "claude-mythos-5-1": Decimal("0.025"),
     "claude": Decimal("0.10"),
     "gemini-2.0": Decimal("0.25"),
-    "gemini-2.5-pro": Decimal("0.25"),
-    "gemini-2.5": Decimal("0.10"),
-    "gemini-3": Decimal("0.10"),
+    "gemini": Decimal("0.10"),
 }
 
 EXCLUDED_PREFIXES = ("dall-e", "whisper", "gpt-4o-transcribe", "gpt-image")
