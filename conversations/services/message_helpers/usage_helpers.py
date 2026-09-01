@@ -124,31 +124,26 @@ def estimate_usage(
 ) -> Dict[str, Any]:
     """Usage frame for a call stopped before the provider's final count.
 
-    The provider still bills the full prompt and every token it generated,
-    so nothing here may be zero. Provider-reported numbers win where they
-    exist (Anthropic reports the prompt at stream start, Gemini reports
-    cumulative counts per chunk); the rest is tokenized with a GPT-family
-    encoder. The frame is marked ``estimated``.
+    The provider bills the full prompt and every token it generated, so
+    provider-reported numbers win where they exist (Anthropic reports the
+    prompt at stream start, Gemini reports running counts per chunk) and
+    the rest is tokenized. ``estimated_fields`` names what was tokenized.
     """
-    observed = dict(observed or {})
-    estimated_fields = []
-    input_tokens = observed.get("input_tokens")
-    if not input_tokens:
-        input_tokens = sum(_count_tokens(message) for message in messages) + (
-            _count_tokens(tools) if tools else 0
-        )
-        estimated_fields.append("input_tokens")
-    reported_output = observed.get("output_tokens") or 0
-    output_tokens = max(reported_output, _count_tokens(output_text))
-    if output_tokens != reported_output:
-        estimated_fields.append("output_tokens")
-    observed.pop("provisional", None)
+    reported = {
+        key: value for key, value in (observed or {}).items() if key != "provisional"
+    }
+    input_tokens = reported.get("input_tokens") or _count_tokens(
+        messages
+    ) + _count_tokens(tools)
+    output_tokens = max(reported.get("output_tokens") or 0, _count_tokens(output_text))
+    counts = {"input_tokens": input_tokens, "output_tokens": output_tokens}
     return {
-        **observed,
-        "input_tokens": input_tokens,
-        "output_tokens": output_tokens,
+        **reported,
+        **counts,
         "total_tokens": input_tokens + output_tokens,
         "estimated": True,
-        "estimated_fields": estimated_fields,
+        "estimated_fields": [
+            field for field, value in counts.items() if value != reported.get(field)
+        ],
         "stop_reason": "stopped by user",
     }
