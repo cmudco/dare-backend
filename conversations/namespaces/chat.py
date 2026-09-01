@@ -611,6 +611,49 @@ class ChatNamespace(socketio.AsyncNamespace):
             logger.exception(f"Continue artifact error: {str(e)}")
             return {'error': str(e)}
     
+    async def on_stop_generation(self, sid: str, data: dict) -> dict:
+        """
+        Stop the in-flight AI response for a conversation.
+
+        Cancels the generation task on this worker, which unwinds the
+        provider stream and finalizes the partial message.
+
+        Args:
+            sid: Socket session ID
+            data: {'conversationId': 'uuid', 'messageId': int (optional)}
+
+        Returns:
+            {'success': bool} or {'error': 'message'}
+        """
+        try:
+            session = self.sessions.get(sid)
+            if not session:
+                return {'error': 'Not authenticated'}
+
+            conv_id = data.get('conversationId')
+            if not conv_id or conv_id not in session['subscriptions']:
+                return {'error': 'Not subscribed to this conversation'}
+
+            coordinator = self.coordinators.get(f"{sid}_{conv_id}")
+            if not coordinator:
+                return {'error': 'Conversation not initialized'}
+
+            raw_message_id = data.get('messageId')
+            try:
+                message_id = int(raw_message_id) if raw_message_id is not None else None
+            except (TypeError, ValueError):
+                message_id = None
+
+            cancelled = coordinator.cancel_generation(message_id)
+            logger.info(
+                f"Stop generation: conv_id={conv_id}, message_id={message_id}, cancelled={cancelled}"
+            )
+            return {'success': cancelled}
+
+        except Exception as e:
+            logger.exception(f"Stop generation error: {str(e)}")
+            return {'error': str(e)}
+
     async def on_pause_artifact(self, sid: str, data: dict) -> dict:
         """
         Pause an in-progress artifact generation.

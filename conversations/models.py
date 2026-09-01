@@ -125,6 +125,17 @@ class LLM(models.Model):
         validators=[MinValueValidator(0)],
         help_text="Cost per million output tokens in USD (e.g., 15.00 for $15 per 1M tokens).",
     )
+    cached_input_token_rate_per_million = models.DecimalField(
+        max_digits=10,
+        decimal_places=4,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0)],
+        help_text=(
+            "Cost per million prompt-cached input tokens in USD. Leave empty to "
+            "bill cached tokens at the full input rate."
+        ),
+    )
 
     def __str__(self):
         return self.name

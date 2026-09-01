@@ -159,6 +159,7 @@ class LLMAdmin(admin.ModelAdmin):
                 "fields": (
                     "input_token_rate_per_million",
                     "output_token_rate_per_million",
+                    "cached_input_token_rate_per_million",
                 ),
                 "classes": ("collapse",),
             },

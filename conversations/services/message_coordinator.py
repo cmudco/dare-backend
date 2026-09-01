@@ -93,6 +93,10 @@ class MessageCoordinator:
 
         # Track active artifact generation tasks for cancellation
         self._artifact_tasks: Dict[str, asyncio.Task] = {}
+        # In-flight AI turns keyed by message id, plus the subset currently
+        # inside the tool loop (the only phase that knows how to unwind).
+        self._generation_tasks: Dict[int, asyncio.Task] = {}
+        self._cancellable_message_ids: set = set()
 
     async def send(self, data: Dict[str, Any]):
         """Send data through WebSocket if callback is available."""
@@ -391,7 +395,7 @@ class MessageCoordinator:
                 )
 
             # Stream AI response
-            await self.stream_ai_response(
+            await self._run_generation(
                 message_data=message_data,
                 message_obj=ai_message,
                 llm=dispatch_handle,
@@ -493,7 +497,7 @@ class MessageCoordinator:
             await self._send_regeneration_placeholder(ai_message)
 
             # Stream AI response into the EXISTING message (don't create new one)
-            await self.stream_ai_response(
+            await self._run_generation(
                 message_data=regeneration_message_data,
                 message_obj=ai_message,
                 llm=dispatch_handle,
@@ -567,6 +571,36 @@ class MessageCoordinator:
                 "usage_details",
             ]
         )
+
+    async def _run_generation(self, message_obj: Message, **kwargs) -> None:
+        """Run ``stream_ai_response`` as an owned task so it can be cancelled."""
+        task = asyncio.create_task(
+            self.stream_ai_response(message_obj=message_obj, **kwargs)
+        )
+        self._generation_tasks[message_obj.id] = task
+        try:
+            await task
+        except asyncio.CancelledError:
+            if not task.cancelled():
+                raise
+            logger.info("[journey] mid=%s generation task cancelled", message_obj.id)
+        finally:
+            self._generation_tasks.pop(message_obj.id, None)
+
+    def cancel_generation(self, message_id: Optional[int] = None) -> bool:
+        """Cancel the in-flight AI turn; returns True when a cancel was issued."""
+        if message_id is None:
+            message_id = next(iter(self._cancellable_message_ids), None)
+        task = self._generation_tasks.get(message_id)
+        if (
+            task is None
+            or task.done()
+            or message_id not in self._cancellable_message_ids
+        ):
+            return False
+        self._cancellable_message_ids.discard(message_id)
+        task.cancel()
+        return True
 
     async def stream_ai_response(
         self,
@@ -646,12 +680,23 @@ class MessageCoordinator:
                 billing_service=self.billing_service,
                 regenerate=regenerate,
             )
-            result = await self.tool_loop_service.run(
-                request=request,
-                binding=binding,
-                retrieval_scope=retrieval_scope,
-                regenerate=regenerate,
-            )
+            self._cancellable_message_ids.add(message_obj.id)
+            try:
+                result = await self.tool_loop_service.run(
+                    request=request,
+                    binding=binding,
+                    retrieval_scope=retrieval_scope,
+                    regenerate=regenerate,
+                )
+            finally:
+                self._cancellable_message_ids.discard(message_obj.id)
+
+            if result.cancelled:
+                # The loop swallowed the CancelledError; clear the task's
+                # pending-cancel state so finalization awaits run normally.
+                asyncio.current_task().uncancel()
+                await self._finalize_cancelled_turn(message_obj, result, regenerate)
+                return
 
             if result.interrupted:
                 await self._finalize_interrupted_turn(message_obj, result)
@@ -877,6 +922,26 @@ class MessageCoordinator:
             regenerate=regenerate,
         )
         await self.send_error(ErrorCode.STREAM_ERROR, ErrorMessage.STREAM_ERROR)
+
+    async def _finalize_cancelled_turn(
+        self, message_obj: Message, result: ToolLoopResult, regenerate: bool
+    ) -> None:
+        """Finalize a turn the user stopped: keep what streamed, bill what was observed."""
+        token_usage = result.token_usage
+        await self._save_usage_breakdown(message_obj, result.usage_breakdown)
+        if result.text.strip():
+            ai_response = f"{result.text}\n\n*Generation stopped.*"
+            await self._save_web_search_sources(message_obj, token_usage, regenerate)
+            await self._save_provider_tool_calls(message_obj, token_usage, regenerate)
+            await self._save_memory_context(message_obj, token_usage)
+        else:
+            ai_response = "*Generation stopped before a response was produced.*"
+        await self._finalize_message(
+            message_obj=message_obj,
+            ai_response=ai_response,
+            token_usage=token_usage,
+            regenerate=regenerate,
+        )
 
     async def _finalize_interrupted_turn(
         self, message_obj: Message, result: ToolLoopResult
