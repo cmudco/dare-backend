@@ -629,25 +629,15 @@ class LiteLLMKey(TimeStampMixin):
             "Set when source=ADMIN_GROUP. The cohort whose members all have access to this key."
         ),
     )
-    title_model = models.CharField(
+    background_model = models.CharField(
         max_length=255,
         blank=True,
         default="",
-        verbose_name=_("Title Model"),
+        verbose_name=_("Background Model"),
         help_text=_(
-            "Model this proxy serves that should name conversations. Blank "
-            "falls back to DARE's configured title model, which a proxy may "
-            "not serve under the same identifier."
-        ),
-    )
-    memory_model = models.CharField(
-        max_length=255,
-        blank=True,
-        default="",
-        verbose_name=_("Memory Model"),
-        help_text=_(
-            "Model this proxy serves that should write memory. Blank falls "
-            "back to DARE's configured memory model, billed to DARE."
+            "Model this proxy serves for conversation titles, summaries, "
+            "memory extraction, and retrieval query analysis. Blank falls "
+            "back to DARE's configured background model."
         ),
     )
     expires_at = models.DateTimeField(

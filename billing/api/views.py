@@ -23,6 +23,7 @@ from billing.api.serializers import (
     LiteLLMKeyReadSerializer,
     LiteLLMKeyUpdateSerializer,
     LiteLLMTestRequestSerializer,
+    LiteLLMTestResponseSerializer,
     MemberRowSerializer,
     OwnedGroupSerializer,
     SetActiveWalletRequestSerializer,
@@ -45,6 +46,7 @@ from billing.group_wallet_service import (
     UpdateGroupPolicyRequest,
     UpsertUserOverrideRequest,
 )
+from billing.litellm_model_policy import recommend_background_model
 from billing.litellm_probe import probe_litellm_connection
 from billing.models import (
     GroupWallet,
@@ -750,8 +752,7 @@ class BillingViewSet(viewsets.ViewSet):
                     "label": key.label,
                     "source": key.source,
                     "group_name": group_name,
-                    "title_model": key.title_model,
-                    "memory_model": key.memory_model,
+                    "background_model": key.background_model,
                     "expires_at": key.expires_at,
                     "base_url": key.base_url,
                     "is_default": False,
@@ -931,8 +932,7 @@ class LiteLLMKeyViewSet(
             api_key=write.validated_data[
                 "api_key"
             ],  # EncryptedCharField encrypts on save
-            title_model=write.validated_data["title_model"],
-            memory_model=write.validated_data["memory_model"],
+            background_model=write.validated_data["background_model"],
             source=LiteLLMKeySourceChoice.USER,
             owner_user=request.user,
             created_by=request.user,
@@ -947,7 +947,7 @@ class LiteLLMKeyViewSet(
         write.is_valid(raise_exception=True)
 
         changed = []
-        for field in ("label", "title_model", "memory_model"):
+        for field in ("label", "background_model"):
             if field in write.validated_data:
                 setattr(instance, field, write.validated_data[field])
                 changed.append(field)
@@ -972,9 +972,7 @@ class LiteLLMKeyViewSet(
             s.validated_data["base_url"],
             s.validated_data["api_key"],
         )
-        return Response(
-            {"ok": result.ok, "models": result.model_names, "error": result.error}
-        )
+        return Response(self._test_response(result))
 
     @action(detail=True, methods=["post"], url_path="test")
     def test_saved(self, request, pk=None):
@@ -982,9 +980,18 @@ class LiteLLMKeyViewSet(
         per the viewset's queryset filter."""
         key = self.get_object()
         result = probe_litellm_connection(key.base_url, key.api_key)
-        return Response(
-            {"ok": result.ok, "models": result.model_names, "error": result.error}
-        )
+        return Response(self._test_response(result))
+
+    @staticmethod
+    def _test_response(result):
+        return LiteLLMTestResponseSerializer(
+            {
+                "ok": result.ok,
+                "models": result.model_names,
+                "suggested_model": recommend_background_model(result.model_names),
+                "error": result.error,
+            }
+        ).data
 
 
 class SystemRefillPolicyViewSet(viewsets.ViewSet):

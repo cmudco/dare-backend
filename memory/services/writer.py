@@ -18,19 +18,10 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import List, Literal, Optional
 
-from asgiref.sync import async_to_sync, sync_to_async
+from asgiref.sync import async_to_sync
 from pydantic import BaseModel, Field
 
-from config.env import MEMORY_WRITER_MODEL
-from conversations.models import LLM
-from core.services.api_key_service import (
-    get_dispatch_credentials_for_user_sync,
-    get_provider_api_key_sync,
-)
-from core.services.auxiliary_models import MEMORY, auxiliary_descriptor
-from core.services.billing_service import BillingService
-from core.services.custom_llm_service import CustomLLMService
-from core.services.openai_service import OpenAIService
+from core.services.background_model_service import BackgroundModelService
 from memory.constants import TOKEN_BUDGET, TOPICS, Sensitivity
 from memory.domain.keys import key_for, procedure_key
 from memory.domain.types import MemoryRow, WriterDecision
@@ -349,26 +340,7 @@ def propose_decisions(
     This cannot violate the queue's ordering guarantee — nothing has been
     persisted yet; it is the same turn asking its question twice.
     """
-    # A proxy user is on their own roster and their own bill. When their key
-    # names a memory model, route to it rather than spending DARE's OpenAI key
-    # on a user who is paying for a gateway.
-    chosen = auxiliary_descriptor(user, MEMORY) if model is None else None
-    if chosen is not None:
-        llm = chosen.to_dispatch_handle()
-        creds = get_dispatch_credentials_for_user_sync(llm.provider, user)
-        service = CustomLLMService(
-            llm=llm,
-            api_key=creds.api_key,
-            base_url=creds.base_url,
-        )
-    else:
-        model = model or MEMORY_WRITER_MODEL
-        llm = LLM.objects.get(identifier=model, is_active=True)
-        service = OpenAIService(
-            llm=llm,
-            api_key=get_provider_api_key_sync(llm.provider),
-        )
-    billing = BillingService()
+    background_models = BackgroundModelService()
     moment = now or datetime.now(timezone.utc).isoformat()
 
     # What the retriever thought was relevant to this turn — not the most
@@ -418,48 +390,26 @@ ASSISTANT: {assistant_message or "(no reply captured)"}
 Set `explicit_request` from what the PERSON asked for in this message, not from how useful the content looks to you. It decides whether anything may be written into USER.md, which is read on every future turn."""
 
     async def ask(messages):
-        parsed, usage = await service.parse_structured_output(
+        result = await background_models.parse_structured(
+            user=user,
             messages=messages,
             response_model=WriterResponse,
+            description=f"Memory writer for message {source_message_id}",
             max_tokens=WRITER_MAX_TOKENS,
+            model_override=model,
         )
-        usage_kwargs = {
-            "user": user,
-            "input_tokens": usage["input_tokens"],
-            "output_tokens": usage["output_tokens"],
-            "description": f"Memory writer for message {source_message_id}",
-        }
-        if chosen is not None:
-            await sync_to_async(
-                billing.record_litellm_service_usage,
-                thread_sensitive=True,
-            )(
-                litellm_key=chosen.litellm_key,
-                model_name=chosen.litellm_model_name,
-                **usage_kwargs,
-            )
-        else:
-            await sync_to_async(
-                billing.record_service_usage,
-                thread_sensitive=True,
-            )(llm=llm, **usage_kwargs)
-        return parsed
+        return result.value
 
     async def run_writer(messages):
-        try:
-            parsed = await ask(messages)
-            if any(_is_malformed(decision) for decision in parsed.decisions):
-                logger.warning(
-                    "[memory] writer emitted a decision with empty text; retrying once"
-                )
-                retried = await ask(
-                    messages + [{"role": "user", "content": _REPAIR_NOTE}]
-                )
-                if not any(_is_malformed(decision) for decision in retried.decisions):
-                    parsed = retried
-            return parsed
-        finally:
-            await service.close()
+        parsed = await ask(messages)
+        if any(_is_malformed(decision) for decision in parsed.decisions):
+            logger.warning(
+                "[memory] writer emitted a decision with empty text; retrying once"
+            )
+            retried = await ask(messages + [{"role": "user", "content": _REPAIR_NOTE}])
+            if not any(_is_malformed(decision) for decision in retried.decisions):
+                parsed = retried
+        return parsed
 
     base_messages = [
         {"role": "system", "content": SYSTEM},

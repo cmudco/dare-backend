@@ -12,8 +12,12 @@ from asgiref.sync import sync_to_async
 
 from conversations.constants import RagMode
 from core.services.document_processor import DocumentProcessor
-from core.services.rag import (ContextAssembler, RetrievalRequest,
-                               RetrievedChunk, build_pipeline)
+from core.services.rag import (
+    ContextAssembler,
+    RetrievalRequest,
+    RetrievedChunk,
+    build_pipeline,
+)
 from core.services.vector_service import get_vector_service_async
 from libraries.services.library_search import search_libraries
 
@@ -68,6 +72,7 @@ async def add_semantic_context_to_messages(
     folder_ids: Optional[List[int]],
     library_ids: Optional[List[int]],
     user_id: Optional[int],
+    payer_bot_id: Optional[int],
     file_owner_id: Optional[int],
     is_socratic_mode: bool,
     similarity_threshold: float,
@@ -153,6 +158,8 @@ async def add_semantic_context_to_messages(
                 query,
                 sorted(all_embedding_file_ids),
                 vector_user_id,
+                user_id,
+                payer_bot_id,
                 max_context_snippets,
                 effective_threshold,
                 target,
@@ -189,6 +196,8 @@ async def add_semantic_context_to_messages(
             document_processor,
             query,
             library_ids,
+            user_id,
+            payer_bot_id,
             max_context_snippets,
             rag_mode,
             target,
@@ -214,6 +223,8 @@ def run_library_search(
     document_processor: DocumentProcessor,
     query: str,
     library_ids: List[int],
+    payer_user_id: Optional[int],
+    payer_bot_id: Optional[int],
     max_context_snippets: int,
     target: Optional[Any],
 ) -> List[str]:
@@ -227,6 +238,8 @@ def run_library_search(
         query=query,
         top_k=max_context_snippets,
         library_ids=tuple(library_ids),
+        payer_user_id=payer_user_id,
+        payer_bot_id=payer_bot_id,
         trace=True,
     )
     pipeline = build_pipeline("library", document_processor.openai_client)
@@ -247,7 +260,9 @@ def run_document_search(
     document_processor: DocumentProcessor,
     query: str,
     file_ids: List[int],
-    user_id: Optional[int],
+    vector_user_id: Optional[int],
+    payer_user_id: Optional[int],
+    payer_bot_id: Optional[int],
     max_context_snippets: int,
     similarity_threshold: float,
     target: Optional[Any],
@@ -265,7 +280,9 @@ def run_document_search(
         query=query,
         top_k=max_context_snippets,
         file_ids=tuple(file_ids),
-        user_id=user_id,
+        user_id=vector_user_id,
+        payer_user_id=payer_user_id,
+        payer_bot_id=payer_bot_id,
         similarity_threshold=0.0,
         trace=True,
     )
@@ -287,7 +304,9 @@ async def _search_documents_for_query(
     document_processor: DocumentProcessor,
     query: str,
     file_ids: List[int],
-    user_id: Optional[int],
+    vector_user_id: Optional[int],
+    payer_user_id: Optional[int],
+    payer_bot_id: Optional[int],
     max_context_snippets: int,
     similarity_threshold: float,
     target: Optional[Any],
@@ -304,7 +323,9 @@ async def _search_documents_for_query(
             document_processor,
             query,
             file_ids,
-            user_id,
+            vector_user_id,
+            payer_user_id,
+            payer_bot_id,
             max_context_snippets,
             similarity_threshold,
             target,
@@ -355,6 +376,8 @@ async def _search_libraries_for_query(
     document_processor: DocumentProcessor,
     query: str,
     library_ids: List[int],
+    payer_user_id: Optional[int],
+    payer_bot_id: Optional[int],
     max_context_snippets: int,
     rag_mode: str,
     target: Optional[Any],
@@ -375,7 +398,13 @@ async def _search_libraries_for_query(
                 target,
             )
         return await sync_to_async(run_library_search)(
-            document_processor, query, library_ids, max_context_snippets, target
+            document_processor,
+            query,
+            library_ids,
+            payer_user_id,
+            payer_bot_id,
+            max_context_snippets,
+            target,
         )
     except Exception as exc:
         logger.warning("Library context retrieval failed: %s", exc)

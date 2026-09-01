@@ -8,7 +8,6 @@ from django.db import models
 from django.db.models import Prefetch
 from djangorestframework_camel_case.util import camelize
 
-from config import env
 from conversations.api.serializers import MessageSerializer
 from conversations.constants import SenderType, ToolCallOrigin
 from conversations.models import LLM, Artifact, Conversation, Message
@@ -239,21 +238,10 @@ class ConversationService:
         user_message: str,
         ai_response: str = "",
         user: Optional[User] = None,
-        llm: Optional[LLM] = None,
+        public_bot_id: Optional[int] = None,
     ) -> str:
-        """Generate a concise conversation title.
-
-        Routes through ``LLMService._get_ai_service`` so the user's active
-        wallet (DARE / BYO / LITELLM) decides which key pays for the title
-        call, just like the main chat path. Pre-wallet-refactor this used a
-        direct ``OpenAIService(...)`` instantiation that always billed DARE.
-
-        Prefers the configured lightweight title model. If that provider is
-        unavailable for the active wallet, the conversation's own model is a
-        safe fallback because it just completed the main response.
-        """
-        from core.services.auxiliary_models import TITLE, auxiliary_descriptor
-        from core.services.llm_service import LLMService  # avoid module-load cycle
+        """Generate a concise title with the user's resolved background model."""
+        from core.services.background_model_service import BackgroundModelService
 
         messages = [
             {
@@ -271,40 +259,18 @@ class ConversationService:
             },
         ]
 
-        # A proxy user is on a different roster: DARE's configured title model
-        # is rejected there under DARE's own name, which is why untitled
-        # conversations show up as "New Chat". Their key names the model to
-        # use instead, and it is tried first.
-        chosen = await database_sync_to_async(auxiliary_descriptor)(user, TITLE)
-        preferred_llm = (
-            chosen.to_dispatch_handle()
-            if chosen is not None
-            else await self.get_title_generation_model()
-        )
-        fallback_llm = llm or await self.get_cheapest_active_text_model()
-        candidates = [
-            candidate
-            for index, candidate in enumerate((preferred_llm, fallback_llm))
-            if candidate is not None
-            and all(
-                previous is None or previous.identifier != candidate.identifier
-                for previous in (preferred_llm, fallback_llm)[:index]
+        try:
+            result = await BackgroundModelService().complete_text(
+                user=user,
+                messages=messages,
+                description="Conversation title generation",
+                max_tokens=80,
+                public_bot_id=public_bot_id,
             )
-        ]
-
-        for candidate in candidates:
-            try:
-                ai_service = await LLMService()._get_ai_service(candidate, user=user)
-                title = await ai_service.get_chat_completion(messages)
-                return self._sanitize_title(title)
-            except Exception as exc:
-                logger.warning(
-                    "Conversation title generation failed with model %s: %s",
-                    candidate.identifier,
-                    exc,
-                )
-                continue
-        return "New Chat"
+            return self._sanitize_title(result.value)
+        except Exception:
+            logger.exception("Conversation title generation failed")
+            return "New Chat"
 
     @staticmethod
     def _sanitize_title(raw: str) -> str:
@@ -326,24 +292,6 @@ class ConversationService:
         if len(title) > 120:
             title = title[:119].rstrip() + "…"
         return title or "New Chat"
-
-    async def get_title_generation_model(self) -> Optional[LLM]:
-        """Fetch the configured lightweight model used for conversation titles."""
-        return await database_sync_to_async(
-            lambda: LLM.objects.filter(
-                identifier=env.TITLE_GENERATION_MODEL,
-                is_active=True,
-                is_image_generator=False,
-            ).first()
-        )()
-
-    async def get_cheapest_active_text_model(self) -> Optional[LLM]:
-        """Fallback for installations missing the configured title model."""
-        return await database_sync_to_async(
-            lambda: LLM.objects.filter(is_active=True, is_image_generator=False)
-            .order_by("output_token_rate_per_million", "pk")
-            .first()
-        )()
 
     async def get_latest_user_message(
         self, conversation: Conversation

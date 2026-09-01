@@ -52,7 +52,11 @@ class RetrievalPipeline:
         self, request: RetrievalRequest, on_keep: KeepHook = None
     ) -> RetrievalResult:
         # 1) Understand the query (optional). Drives MMR gating + retrieval inputs.
-        plan = self.analyzer.analyze(request.query)
+        plan = self.analyzer.analyze(
+            request.query,
+            request.payer_user_id,
+            request.payer_bot_id,
+        )
         exploratory = bool(plan) and plan.is_exploratory
 
         # Retrieval inputs. The HyDE flag gates the *hypothesized* text (the

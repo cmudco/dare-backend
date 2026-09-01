@@ -4,19 +4,25 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TestCase, override_settings
 
 from api_keys.constants import BillingModeChoice
 from billing.constants import LiteLLMKeySourceChoice
 from billing.models import LiteLLMKey, LiteLLMSpend, Transaction, Wallet
 from conversations.models import LLM
+from core.services.background_model_service import (
+    BackgroundModelResult,
+    BackgroundModelRoute,
+)
 from core.services.billing_service import BillingService
 from core.services.custom_llm_service import CustomLLMService
-from core.services.dtos import LLMDescriptor
 from core.services.openai_service import OpenAIService
 from memory.services.writer import Decision, WriterResponse, propose_decisions
 
 
+@override_settings(
+    CACHES={"default": {"BACKEND": "django.core.cache.backends.locmem.LocMemCache"}}
+)
 class StructuredWriterServiceTests(TestCase):
     def setUp(self):
         self.llm, _created = LLM.objects.update_or_create(
@@ -104,24 +110,24 @@ class StructuredWriterServiceTests(TestCase):
             explicit_request=False,
             decisions=[self._ignore_decision()],
         )
-        service = MagicMock()
-        service.parse_structured_output = AsyncMock(
-            return_value=(
-                parsed,
-                {"input_tokens": 7000, "output_tokens": 300, "total_tokens": 7300},
+        background_models = MagicMock()
+        background_models.parse_structured = AsyncMock(
+            return_value=BackgroundModelResult(
+                value=parsed,
+                route=BackgroundModelRoute(
+                    model=self.llm,
+                    wallet_type="DARE",
+                    dispatch_user=self.user,
+                ),
+                input_tokens=7000,
+                output_tokens=300,
             )
         )
-        service.close = AsyncMock()
 
         with patch(
-            "memory.services.writer.get_provider_api_key_sync",
-            return_value="test",
-        ), patch(
-            "memory.services.writer.OpenAIService",
-            return_value=service,
-        ), patch(
-            "memory.services.writer.BillingService"
-        ) as billing_class:
+            "memory.services.writer.BackgroundModelService",
+            return_value=background_models,
+        ):
             proposal = propose_decisions(
                 user=self.user,
                 source_message_id=42,
@@ -133,71 +139,12 @@ class StructuredWriterServiceTests(TestCase):
             )
 
         self.assertEqual(proposal.decisions[0].action, "ignore")
-        billing_class.return_value.record_service_usage.assert_called_once_with(
-            user=self.user,
-            llm=self.llm,
-            input_tokens=7000,
-            output_tokens=300,
-            description="Memory writer for message 42",
-        )
-        service.close.assert_awaited_once()
-
-    def test_writer_routes_proxy_usage_to_litellm_billing(self):
-        key = self._make_litellm_key()
-        descriptor = LLMDescriptor.from_litellm(
-            key,
-            "bedrock_mantle/openai.gpt-5.6-luna",
-            "custom",
-        )
-        parsed = WriterResponse(
-            explicit_request=False,
-            decisions=[self._ignore_decision()],
-        )
-        service = MagicMock()
-        service.parse_structured_output = AsyncMock(
-            return_value=(
-                parsed,
-                {"input_tokens": 7000, "output_tokens": 300, "total_tokens": 7300},
-            )
-        )
-        service.close = AsyncMock()
-
-        with patch(
-            "memory.services.writer.auxiliary_descriptor",
-            return_value=descriptor,
-        ), patch(
-            "memory.services.writer.get_dispatch_credentials_for_user_sync",
-            return_value=SimpleNamespace(
-                api_key="test", base_url="https://proxy.example/v1"
-            ),
-        ), patch(
-            "memory.services.writer.CustomLLMService",
-            return_value=service,
-        ), patch(
-            "memory.services.writer.BillingService"
-        ) as billing_class:
-            proposal = propose_decisions(
-                user=self.user,
-                source_message_id=84,
-                user_doc="",
-                archive=[],
-                user_message="Remember this",
-                assistant_message="I will",
-                keys_in_use=[],
-            )
-
-        self.assertEqual(proposal.decisions[0].action, "ignore")
-        billing = billing_class.return_value
-        billing.record_litellm_service_usage.assert_called_once_with(
-            user=self.user,
-            litellm_key=key,
-            model_name="bedrock_mantle/openai.gpt-5.6-luna",
-            input_tokens=7000,
-            output_tokens=300,
-            description="Memory writer for message 84",
-        )
-        billing.record_service_usage.assert_not_called()
-        service.close.assert_awaited_once()
+        call = background_models.parse_structured.await_args.kwargs
+        self.assertEqual(call["user"], self.user)
+        self.assertIs(call["response_model"], WriterResponse)
+        self.assertEqual(call["description"], "Memory writer for message 42")
+        self.assertEqual(call["max_tokens"], 4000)
+        self.assertIsNone(call["model_override"])
 
     def test_service_usage_creates_a_costed_transaction(self):
         wallet = Wallet.objects.get(user=self.user)

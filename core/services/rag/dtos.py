@@ -49,7 +49,9 @@ class RetrievalRequest:
     top_k: int = 6
     library_ids: Tuple[int, ...] = ()
     file_ids: Tuple[int, ...] = ()
-    user_id: Optional[int] = None
+    user_id: Optional[int] = None  # document/vector ownership boundary
+    payer_user_id: Optional[int] = None  # wallet owner for query analysis
+    payer_bot_id: Optional[int] = None  # public bot whose owner funds analysis
     similarity_threshold: float = 0.0
     trace: bool = False  # capture a per-stage RetrievalTrace for the UI
 
