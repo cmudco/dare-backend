@@ -214,6 +214,12 @@ class CompatClearTests(MemoryApiTestCase):
             sender="tester",
             message="This conversation must survive a memory wipe.",
         )
+        reply = Message.active_objects.create(
+            conversation=conversation,
+            sender_type=SenderType.AI_ASSISTANT,
+            message="The transcript must remain, but its memory audit is cleared.",
+            memory_write_data={"created": 1},
+        )
         before = Message.active_objects.count()
 
         response = self.client.delete("/api/memory/clear/")
@@ -225,6 +231,12 @@ class CompatClearTests(MemoryApiTestCase):
         self.assertEqual(UserMemoryDocument.objects.get(user=self.user).content, "")
         # The one guarantee worth its own assertion.
         self.assertEqual(Message.active_objects.count(), before)
+        reply.refresh_from_db()
+        self.assertEqual(
+            reply.message,
+            "The transcript must remain, but its memory audit is cleared.",
+        )
+        self.assertIsNone(reply.memory_write_data)
 
 
 class V2DocumentTests(MemoryApiTestCase):
