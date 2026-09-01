@@ -132,9 +132,7 @@ def estimate_usage(
     reported = {
         key: value for key, value in (observed or {}).items() if key != "provisional"
     }
-    input_tokens = reported.get("input_tokens") or _count_tokens(
-        messages
-    ) + _count_tokens(tools)
+    input_tokens = reported.get("input_tokens") or _count_tokens([messages, tools])
     output_tokens = max(reported.get("output_tokens") or 0, _count_tokens(output_text))
     counts = {"input_tokens": input_tokens, "output_tokens": output_tokens}
     return {

@@ -93,7 +93,7 @@ class CachedTokenExtractionTests(SimpleTestCase):
         usage = estimate_usage([{"role": "user", "content": "hi"}], None, "")
         self.assertGreater(usage["input_tokens"], 0)
         self.assertEqual(usage["output_tokens"], 0)
-        self.assertEqual(usage["estimated_fields"], ["input_tokens"])
+        self.assertEqual(usage["estimated_fields"], ["input_tokens", "output_tokens"])
 
     def test_accumulator_sums_cached_tokens_across_rounds(self):
         usage = UsageAccumulator()
