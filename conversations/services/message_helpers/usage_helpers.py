@@ -127,7 +127,8 @@ def estimate_usage(
     The provider bills the full prompt and every token it generated, so
     provider-reported numbers win where they exist (Anthropic reports the
     prompt at stream start, Gemini reports running counts per chunk) and
-    the rest is tokenized. ``estimated_fields`` names what was tokenized.
+    the rest is tokenized. ``estimated_fields`` names what was tokenized;
+    a turn the provider fully reported is not marked estimated.
     """
     reported = {
         key: value for key, value in (observed or {}).items() if key != "provisional"
@@ -135,13 +136,14 @@ def estimate_usage(
     input_tokens = reported.get("input_tokens") or _count_tokens([messages, tools])
     output_tokens = max(reported.get("output_tokens") or 0, _count_tokens(output_text))
     counts = {"input_tokens": input_tokens, "output_tokens": output_tokens}
+    estimated_fields = [
+        field for field, value in counts.items() if value != reported.get(field)
+    ]
     return {
         **reported,
         **counts,
         "total_tokens": input_tokens + output_tokens,
-        "estimated": True,
-        "estimated_fields": [
-            field for field, value in counts.items() if value != reported.get(field)
-        ],
+        "estimated": bool(estimated_fields),
+        "estimated_fields": estimated_fields,
         "stop_reason": "stopped by user",
     }
