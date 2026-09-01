@@ -17,7 +17,7 @@ def restore_legacy_models(apps, schema_editor):
 
 
 class Migration(migrations.Migration):
-    dependencies = [("billing", "0025_merge_20260825_1516")]
+    dependencies = [("billing", "0026_transaction_cached_input_tokens")]
 
     operations = [
         migrations.AddField(
