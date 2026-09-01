@@ -28,7 +28,7 @@ import logging
 from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
-from typing import Dict
+from typing import Optional, Dict
 
 from core.services.model_identity import pricing_keys
 
@@ -47,6 +47,7 @@ class ReferenceRates:
 
     input_token_rate_per_million: Decimal
     output_token_rate_per_million: Decimal
+    cached_input_token_rate_per_million: Optional[Decimal] = None
 
 
 def _load_registry() -> Dict[str, ReferenceRates]:
@@ -64,6 +65,11 @@ def _load_registry() -> Dict[str, ReferenceRates]:
             registry[key.strip().lower()] = ReferenceRates(
                 input_token_rate_per_million=Decimal(str(rates["input"])),
                 output_token_rate_per_million=Decimal(str(rates["output"])),
+                cached_input_token_rate_per_million=(
+                    Decimal(str(rates["cached_input"]))
+                    if rates.get("cached_input") is not None
+                    else None
+                ),
             )
         except (KeyError, TypeError, ArithmeticError):
             logger.warning("Skipping malformed price entry for %s.", key)

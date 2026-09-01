@@ -31,7 +31,10 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from conversations.constants import MAX_TOOL_ROUNDS
-from conversations.services.message_helpers.usage_helpers import UsageAccumulator
+from conversations.services.message_helpers.usage_helpers import (
+    UsageAccumulator,
+    estimate_usage,
+)
 from conversations.services.tool_execution_service import (
     ToolExecutionContext,
     ToolExecutionService,
@@ -48,6 +51,11 @@ from core.services.tool_loop.events import ToolEventEmitter
 from dare_tools.services.retrieval_tool_executor import RetrievalScope
 
 logger = logging.getLogger(__name__)
+
+
+def _cancel_requested() -> bool:
+    task = asyncio.current_task()
+    return bool(task and task.cancelling())
 
 
 @dataclass
@@ -67,6 +75,7 @@ class ToolLoopResult:
     tool_calls_made: int = 0
     interrupted: bool = False
     timed_out: bool = False
+    cancelled: bool = False
     error_response: Optional[Dict[str, Any]] = None
 
 
@@ -94,6 +103,11 @@ class ToolLoopService:
                     anext(iterator), timeout=self.stream_idle_timeout_seconds
                 )
             except StopAsyncIteration:
+                # The HTTP client stack can absorb a task cancellation while
+                # closing the response and report a clean end of stream
+                # instead; the task's pending-cancel flag is the reliable tell.
+                if _cancel_requested():
+                    raise asyncio.CancelledError()
                 return
             except TimeoutError as exc:
                 await iterator.aclose()
@@ -101,6 +115,9 @@ class ToolLoopService:
                     "The model stream was idle for "
                     f"{self.stream_idle_timeout_seconds:g} seconds"
                 ) from exc
+            if _cancel_requested():
+                await iterator.aclose()
+                raise asyncio.CancelledError()
             yield event
 
     async def run(
@@ -124,7 +141,11 @@ class ToolLoopService:
         if regenerate:
             await binding.store.clear_prior_tool_calls()
 
-        prepared = await self.llm_service.prepare_chat(request)
+        try:
+            prepared = await self.llm_service.prepare_chat(request)
+        except asyncio.CancelledError:
+            logger.info("[journey] mid=%s cancelled during prepare", turn_key)
+            return ToolLoopResult(cancelled=True)
         messages: List[Dict[str, Any]] = list(prepared.messages)
         logger.info(
             "[journey] mid=%s prepared: %d prompt turns, %d tools, regenerate=%s",
@@ -297,6 +318,22 @@ class ToolLoopService:
                     turn_key,
                 )
                 break
+            except asyncio.CancelledError:
+                # The user pressed stop. The provider generator has already
+                # unwound at its await, closing the HTTP stream. Return the
+                # partial turn so the host can persist what was streamed.
+                result.cancelled = True
+                if not usage.has_round(round_index):
+                    usage.observe(
+                        round_index,
+                        estimate_usage(messages, tools, round_text + round_thinking),
+                    )
+                logger.info(
+                    "[journey] mid=%s cancelled mid-stream (round %d)",
+                    turn_key,
+                    round_index,
+                )
+                break
 
             logger.info(
                 "[journey] mid=%s round %d stream done: text=%d chars, "
@@ -345,9 +382,18 @@ class ToolLoopService:
                     ],
                 )
             )
-            tool_results = await self.execution_service.execute_round(
-                pending_calls, ctx, round_index
-            )
+            try:
+                tool_results = await self.execution_service.execute_round(
+                    pending_calls, ctx, round_index
+                )
+            except asyncio.CancelledError:
+                result.cancelled = True
+                logger.info(
+                    "[journey] mid=%s cancelled during tool execution (round %d)",
+                    turn_key,
+                    round_index,
+                )
+                break
             messages.extend(
                 build_tool_result_turn(tool_result) for tool_result in tool_results
             )
@@ -373,7 +419,8 @@ class ToolLoopService:
         result.token_usage = token_usage or None
         logger.info(
             "[journey] mid=%s loop done: rounds=%d, tool_calls=%d, "
-            "text=%d chars, tokens=%s/%s, interrupted=%s, timed_out=%s",
+            "text=%d chars, tokens=%s/%s, interrupted=%s, timed_out=%s, "
+            "cancelled=%s",
             turn_key,
             result.rounds_used,
             result.tool_calls_made,
@@ -382,6 +429,7 @@ class ToolLoopService:
             (token_usage or {}).get("output_tokens"),
             result.interrupted,
             result.timed_out,
+            result.cancelled,
         )
         result.usage_breakdown = usage.breakdown()
         return result

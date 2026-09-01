@@ -54,6 +54,7 @@ class TransactionSerializer(serializers.ModelSerializer):
             "llm_name",
             "input_tokens",
             "output_tokens",
+            "cached_input_tokens",
             "billing_mode",
             "platform",
             "created_at",

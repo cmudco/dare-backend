@@ -386,6 +386,13 @@ class Transaction(TimeStampMixin):
         verbose_name=("Output Tokens"),
         help_text=("Number of output tokens used in the transaction"),
     )
+    cached_input_tokens = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        default=0,
+        verbose_name=("Cached Input Tokens"),
+        help_text=("Input tokens the provider served from its prompt cache"),
+    )
     billing_mode = models.CharField(
         max_length=20,
         choices=BillingModeChoice.choices,

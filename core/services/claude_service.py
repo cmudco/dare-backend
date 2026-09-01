@@ -319,7 +319,16 @@ class ClaudeService:
 
         # Add system message if present
         if system_message:
-            params["system"] = system_message
+            params["system"] = [
+                {
+                    "type": "text",
+                    "text": system_message,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
+        # A breakpoint on the latest turn caches the whole conversation
+        # prefix, so the next turn only pays full price for what is new.
+        self._mark_last_turn_cacheable(converted_messages)
 
         # Add tools if provided (convert from OpenAI format to Claude format)
         if tools:
@@ -335,6 +344,32 @@ class ClaudeService:
             # Let LLM decide when to use tools (auto is default, so no need to set explicitly)
 
         return params
+
+    @staticmethod
+    def _mark_last_turn_cacheable(messages: List[Dict]) -> None:
+        if not messages:
+            return
+        last = messages[-1]
+        content = last.get("content")
+        if isinstance(content, str):
+            if not content:
+                return
+            last["content"] = [
+                {
+                    "type": "text",
+                    "text": content,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
+        elif isinstance(content, list) and content:
+            block = content[-1]
+            if isinstance(block, dict) and block.get("type") in (
+                "text",
+                "tool_result",
+                "image",
+                "document",
+            ):
+                block["cache_control"] = {"type": "ephemeral"}
 
     def _apply_claude_sampling(
         self,

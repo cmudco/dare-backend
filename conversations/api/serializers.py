@@ -50,6 +50,7 @@ class LLMSerializer(serializers.ModelSerializer):
             "is_audio_transcriber",
             "input_token_rate_per_million",
             "output_token_rate_per_million",
+            "cached_input_token_rate_per_million",
             "tier",
         ]
 
