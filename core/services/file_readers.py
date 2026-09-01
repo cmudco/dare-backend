@@ -77,7 +77,22 @@ def read_bytes_as_text(data: bytes, filename: str) -> str:
         return read_xlsx(data)
     if name.endswith(".xls"):
         return read_xls(data)
+    if name.endswith(".ipynb"):
+        return read_ipynb(data)
     return ""
+
+
+def read_ipynb(data: bytes) -> str:
+    """Markdown twin of a Jupyter notebook.
+
+    The import is inline to break a real cycle: the notebook renderer lives in
+    the parser package, whose ``__init__`` reaches back into this module
+    through the legacy parser.
+    """
+    from core.services.document_parsers.notebook_parser import \
+        notebook_markdown
+
+    return notebook_markdown(data)
 
 
 def read_pdf(data: bytes) -> str:

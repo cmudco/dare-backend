@@ -8,7 +8,8 @@ from django.contrib.auth import get_user_model
 from django.db.models import BooleanField, Count, Exists, OuterRef, Prefetch, Q, Value
 from django.db.models.functions import Lower
 from django.http import FileResponse, Http404, HttpResponse
-from django_rq import enqueue, get_queue
+from django_rq import get_queue
+from djangorestframework_camel_case.parser import CamelCaseJSONParser
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
@@ -36,9 +37,21 @@ from syftbox.services.syftbox_permission_service import (
     SyftBoxPermissionService as SyftBoxApiPermissionService,
 )
 
-from ..constants import ALLOWED_FILES, FileStatus
+from ..constants import (
+    ALLOWED_FILES,
+    FileStatus,
+)
 from ..models import File, FileShare, Folder, Tag
+from ..services.document_ocr_approval_service import (
+    DocumentOcrApprovalCommand,
+    DocumentOcrApprovalService,
+    DocumentOcrInvalidState,
+    DocumentOcrNotFound,
+    DocumentOcrPageLimitError,
+    DocumentOcrQueueError,
+)
 from .serializers import (
+    DocumentOcrApprovalSerializer,
     FileProcessingJourneySerializer,
     FileSerializer,
     FileShareSerializer,
@@ -63,6 +76,7 @@ class FileViewSet(viewsets.ModelViewSet):
     def get_queryset(self):
         return (
             File.active_objects.filter(user=self.request.user)
+            .select_related("ocr_request")
             .annotate(
                 is_shared_by_me=Exists(FileShare.objects.filter(file=OuterRef("pk"))),
                 is_shared_publicly=Exists(
@@ -104,6 +118,35 @@ class FileViewSet(viewsets.ModelViewSet):
                 {"error": f"Error uploading files: {str(e)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="approve-ocr",
+        parser_classes=[CamelCaseJSONParser],
+    )
+    def approve_ocr(self, request, pk=None):
+        payload = DocumentOcrApprovalSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+        command = DocumentOcrApprovalCommand(
+            file_id=int(pk),
+            user_id=request.user.id,
+            page_limit=payload.validated_data["page_limit"],
+        )
+        try:
+            file = DocumentOcrApprovalService().start(command)
+        except DocumentOcrNotFound:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        except DocumentOcrInvalidState as error:
+            return Response({"error": str(error)}, status=status.HTTP_409_CONFLICT)
+        except DocumentOcrPageLimitError as error:
+            return Response({"error": str(error)}, status=status.HTTP_400_BAD_REQUEST)
+        except DocumentOcrQueueError as error:
+            return Response(
+                {"error": str(error)},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        return Response(self.get_serializer(file).data, status=status.HTTP_202_ACCEPTED)
 
     @action(
         detail=False,

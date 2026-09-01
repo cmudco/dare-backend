@@ -38,6 +38,8 @@ class ElementLabel:
     TEXT = "text"
     LIST_ITEM = "list_item"
     CAPTION = "caption"
+    CODE = "code"
+    CODE_OUTPUT = "code_output"
     PAGE_HEADER = "page_header"
     PAGE_FOOTER = "page_footer"
     FOOTNOTE = "footnote"
@@ -75,3 +77,7 @@ ELEMENT_TEXT_LIMIT = 400
 TABLE_MARKDOWN_LIMIT = 4000
 CAPTION_LIMIT = 300
 SECTION_LIMIT = 120
+
+# Cap on the recorded output kept per notebook code cell. A dataframe dump or a
+# progress-bar stream is thousands of characters that say the same thing once.
+NOTEBOOK_OUTPUT_LIMIT = 2000

@@ -14,12 +14,18 @@ at the end of the document.
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
-from core.config.document_parsing import (CAPTION_LIMIT, ELEMENT_TEXT_LIMIT,
-                                          FURNITURE_LABELS, HEADING_LABELS,
-                                          MAX_STORED_ELEMENTS,
-                                          MIN_CONTENT_CHARS, SECTION_LIMIT,
-                                          TABLE_MARKDOWN_LIMIT, ElementKind,
-                                          ElementLabel)
+from core.config.document_parsing import (
+    CAPTION_LIMIT,
+    ELEMENT_TEXT_LIMIT,
+    FURNITURE_LABELS,
+    HEADING_LABELS,
+    MAX_STORED_ELEMENTS,
+    MIN_CONTENT_CHARS,
+    SECTION_LIMIT,
+    TABLE_MARKDOWN_LIMIT,
+    ElementKind,
+    ElementLabel,
+)
 
 
 @dataclass(frozen=True)
@@ -193,6 +199,67 @@ class ParsedDocument:
             ],
             "elements_truncated": len(self.elements) > MAX_STORED_ELEMENTS,
         }
+
+    @classmethod
+    def from_persisted(
+        cls, text: str, payload: Optional[Dict[str, Any]]
+    ) -> "ParsedDocument":
+        """Rehydrate the parser result stored on a File row.
+
+        Enrichment adds fields to the stored model over time; this method only
+        reads the parser-owned contract so continuation runs are forward-safe.
+        """
+        payload = payload or {}
+        counts = payload.get("counts") or {}
+        structure = DocumentStructure(
+            pages=int(counts.get("pages") or 0),
+            sections=int(counts.get("sections") or 0),
+            tables=int(counts.get("tables") or 0),
+            pictures=int(counts.get("pictures") or 0),
+            pages_without_text=int(counts.get("pages_without_text") or 0),
+            content_chars=int(counts.get("content_chars") or 0),
+        )
+
+        elements = []
+        for item in payload.get("elements") or []:
+            bbox_payload = item.get("bbox") or None
+            bbox = None
+            if bbox_payload:
+                bbox = BoundingBox(
+                    left=float(bbox_payload.get("left") or 0),
+                    top=float(bbox_payload.get("top") or 0),
+                    width=float(bbox_payload.get("width") or 0),
+                    height=float(bbox_payload.get("height") or 0),
+                )
+            elements.append(
+                ParsedElement(
+                    order=int(item.get("order") or 0),
+                    kind=str(item.get("kind") or ElementKind.TEXT),
+                    label=str(item.get("label") or ElementLabel.TEXT),
+                    page_no=(
+                        int(item["page_no"])
+                        if item.get("page_no") is not None
+                        else None
+                    ),
+                    text=str(item.get("text") or ""),
+                    section=item.get("section"),
+                    caption=item.get("caption"),
+                    table_markdown=item.get("table_markdown"),
+                    bbox=bbox,
+                    tree_depth=int(item.get("tree_depth") or 0),
+                    heading_context=tuple(item.get("heading_context") or ()),
+                    classifications=tuple(item.get("classifications") or ()),
+                    content_sha256=item.get("content_sha256"),
+                )
+            )
+
+        return cls(
+            text=text or "",
+            elements=tuple(elements),
+            structure=structure,
+            parser=str(payload.get("parser") or "unknown"),
+            duration_seconds=float(payload.get("duration_seconds") or 0),
+        )
 
 
 def text_only_document(
