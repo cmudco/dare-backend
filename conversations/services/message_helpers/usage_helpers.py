@@ -23,6 +23,7 @@ _BREAKDOWN_KEYS = (
     "effort",
     "thinking_summary",
     "estimated",
+    "estimated_fields",
     "cached_input_tokens",
     "cache_write_input_tokens",
 )
@@ -130,11 +131,17 @@ def estimate_usage(
     encoder. The frame is marked ``estimated``.
     """
     observed = dict(observed or {})
-    input_tokens = observed.get("input_tokens") or (
-        sum(_count_tokens(message) for message in messages)
-        + (_count_tokens(tools) if tools else 0)
-    )
-    output_tokens = max(observed.get("output_tokens") or 0, _count_tokens(output_text))
+    estimated_fields = []
+    input_tokens = observed.get("input_tokens")
+    if not input_tokens:
+        input_tokens = sum(_count_tokens(message) for message in messages) + (
+            _count_tokens(tools) if tools else 0
+        )
+        estimated_fields.append("input_tokens")
+    reported_output = observed.get("output_tokens") or 0
+    output_tokens = max(reported_output, _count_tokens(output_text))
+    if output_tokens != reported_output:
+        estimated_fields.append("output_tokens")
     observed.pop("provisional", None)
     return {
         **observed,
@@ -142,4 +149,6 @@ def estimate_usage(
         "output_tokens": output_tokens,
         "total_tokens": input_tokens + output_tokens,
         "estimated": True,
+        "estimated_fields": estimated_fields,
+        "stop_reason": "stopped by user",
     }
