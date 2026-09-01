@@ -126,6 +126,18 @@ class ClaudeUsageExtractor:
                 + self.cache_write_tokens
             )
 
+    def provisional_usage(self) -> Optional[Dict]:
+        """Input-side usage known before any output streams; None until message_start."""
+        if self.input_tokens is None:
+            return None
+        usage = UsageExtractor.build_usage_dict(self.input_tokens, 0)
+        if self.cache_read_tokens:
+            usage["cached_input_tokens"] = self.cache_read_tokens
+        if self.cache_write_tokens:
+            usage["cache_write_input_tokens"] = self.cache_write_tokens
+        usage["provisional"] = True
+        return usage
+
     def extract_from_message_delta(self, event) -> Optional[Dict]:
         """
         Extract usage from message_delta event.
@@ -214,6 +226,13 @@ class GeminiUsageExtractor:
 
         if hasattr(usage, "cached_content_token_count"):
             self.cached_tokens = usage.cached_content_token_count
+
+    def provisional_usage(self) -> Optional[Dict]:
+        """Cumulative usage so far; Gemini reports it on every chunk."""
+        usage = self.get_final_usage()
+        if usage is not None:
+            usage["provisional"] = True
+        return usage
 
     def get_final_usage(self) -> Optional[Dict]:
         """

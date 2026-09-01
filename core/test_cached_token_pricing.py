@@ -3,7 +3,10 @@ from types import SimpleNamespace
 
 from django.test import SimpleTestCase
 
-from conversations.services.message_helpers.usage_helpers import UsageAccumulator
+from conversations.services.message_helpers.usage_helpers import (
+    UsageAccumulator,
+    estimate_usage,
+)
 from core.services.billing_service import BillingService
 from core.services.llm_utils.usage_extractors import (
     ClaudeUsageExtractor,
@@ -67,6 +70,27 @@ class CachedTokenExtractionTests(SimpleTestCase):
         self.assertEqual(usage["input_tokens"], 7210)
         self.assertEqual(usage["cached_input_tokens"], 7201)
         self.assertNotIn("cache_write_input_tokens", usage)
+
+    def test_stopped_turn_keeps_provider_counts_and_estimates_the_rest(self):
+        provisional = {
+            "input_tokens": 7210,
+            "output_tokens": 0,
+            "cached_input_tokens": 7201,
+            "provisional": True,
+        }
+        usage = estimate_usage(
+            [{"role": "user", "content": "hi"}], None, "one two three", provisional
+        )
+        self.assertEqual(usage["input_tokens"], 7210)
+        self.assertEqual(usage["cached_input_tokens"], 7201)
+        self.assertGreater(usage["output_tokens"], 0)
+        self.assertTrue(usage["estimated"])
+        self.assertNotIn("provisional", usage)
+
+    def test_stopped_turn_without_provider_counts_estimates_both_sides(self):
+        usage = estimate_usage([{"role": "user", "content": "hi"}], None, "")
+        self.assertGreater(usage["input_tokens"], 0)
+        self.assertEqual(usage["output_tokens"], 0)
 
     def test_accumulator_sums_cached_tokens_across_rounds(self):
         usage = UsageAccumulator()

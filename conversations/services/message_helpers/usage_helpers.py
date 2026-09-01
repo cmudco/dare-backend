@@ -96,8 +96,8 @@ class UsageAccumulator:
     def has_usage(self) -> bool:
         return bool(self._rounds)
 
-    def has_round(self, round_index: int) -> bool:
-        return round_index in self._rounds
+    def round_usage(self, round_index: int) -> Optional[Dict[str, Any]]:
+        return self._rounds.get(round_index)
 
 
 @lru_cache(maxsize=1)
@@ -119,19 +119,25 @@ def estimate_usage(
     messages: List[Dict[str, Any]],
     tools: Optional[List[Dict[str, Any]]],
     output_text: str,
+    observed: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    """Approximate a usage frame for a call whose provider never reported one.
+    """Usage frame for a call stopped before the provider's final count.
 
-    Providers only send token counts with the final stream chunk, so a turn
-    stopped mid-stream would otherwise bill nothing. The request and the
-    streamed text are tokenized with a GPT-family encoder and the frame is
-    marked ``estimated``.
+    The provider still bills the full prompt and every token it generated,
+    so nothing here may be zero. Provider-reported numbers win where they
+    exist (Anthropic reports the prompt at stream start, Gemini reports
+    cumulative counts per chunk); the rest is tokenized with a GPT-family
+    encoder. The frame is marked ``estimated``.
     """
-    input_tokens = sum(_count_tokens(message) for message in messages)
-    if tools:
-        input_tokens += _count_tokens(tools)
-    output_tokens = _count_tokens(output_text)
+    observed = dict(observed or {})
+    input_tokens = observed.get("input_tokens") or (
+        sum(_count_tokens(message) for message in messages)
+        + (_count_tokens(tools) if tools else 0)
+    )
+    output_tokens = max(observed.get("output_tokens") or 0, _count_tokens(output_text))
+    observed.pop("provisional", None)
     return {
+        **observed,
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "total_tokens": input_tokens + output_tokens,

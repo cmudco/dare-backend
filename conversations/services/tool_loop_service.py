@@ -284,6 +284,11 @@ class ToolLoopService:
 
                     elif event.kind is StreamEventKind.USAGE and event.usage:
                         observed_usage = dict(event.usage)
+                        if observed_usage.get("provisional"):
+                            # Interim counts only matter if the turn is
+                            # stopped; the final frame replaces them.
+                            usage.observe(round_index, observed_usage)
+                            continue
                         if round_thinking:
                             observed_usage["thinking_summary"] = round_thinking
                         usage.observe(round_index, observed_usage)
@@ -323,11 +328,15 @@ class ToolLoopService:
                 # unwound at its await, closing the HTTP stream. Return the
                 # partial turn so the host can persist what was streamed.
                 result.cancelled = True
-                if not usage.has_round(round_index):
-                    usage.observe(
-                        round_index,
-                        estimate_usage(messages, tools, round_text + round_thinking),
-                    )
+                usage.observe(
+                    round_index,
+                    estimate_usage(
+                        messages,
+                        tools,
+                        round_text + round_thinking,
+                        observed=usage.round_usage(round_index),
+                    ),
+                )
                 logger.info(
                     "[journey] mid=%s cancelled mid-stream (round %d)",
                     turn_key,
