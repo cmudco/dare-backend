@@ -175,20 +175,29 @@ class FileUploadService:
 
         # Only queue background processing job for non-media files (documents)
         if is_valid and not is_media:
-            try:
-                job = enqueue(process_file_embeddings, file_instance.id, chunk_size, overlap_size)
-                file_instance.job_id = job.id
-                file_instance.save(update_fields=['job_id'])
-                logger.info(f"Queued document processing for file '{file_name}'")
-            except Exception as e:
-                file_instance.status = FileStatus.FAILED
-                file_instance.save(update_fields=['status'])
-                logger.error(f"Error processing file '{file_name}': {str(e)}")
-                raise Exception(f"Error processing file '{file_name}': {str(e)}")
+            # Uploads are batched in one transaction; a job enqueued before it
+            # commits can run against a row the worker cannot see yet.
+            transaction.on_commit(
+                lambda: FileUploadService.enqueue_processing(file_instance, chunk_size, overlap_size)
+            )
         elif is_media:
             logger.info(f"Media file '{file_name}' ({media_type}) uploaded successfully - skipping vectorization")
 
         return file_instance
+
+    @staticmethod
+    def enqueue_processing(file_instance: File, chunk_size: int | None = None, overlap_size: int | None = None) -> None:
+        try:
+            job = enqueue(process_file_embeddings, file_instance.id, chunk_size, overlap_size)
+        except Exception as e:
+            file_instance.status = FileStatus.FAILED
+            file_instance.error_message = f"Could not queue processing: {e}"
+            file_instance.save(update_fields=['status', 'error_message'])
+            logger.error(f"Error queueing file '{file_instance.name}': {str(e)}")
+            return
+        file_instance.job_id = job.id
+        file_instance.save(update_fields=['job_id'])
+        logger.info(f"Queued document processing for file '{file_instance.name}'")
 
     @staticmethod
     def upload_files(uploaded_files: List, file_names: List[str], user, tag_ids: List[int] = None, *, chunk_size: int | None = None, overlap_size: int | None = None) -> List[File]:

@@ -78,7 +78,8 @@ class NotebookUploadAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
     def test_notebook_is_accepted_and_queued_for_processing(self):
-        response = self.upload()
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.upload()
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         file_obj = File.active_objects.get(user=self.user)
