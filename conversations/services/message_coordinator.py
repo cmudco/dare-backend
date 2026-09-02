@@ -22,30 +22,44 @@ from django.utils import timezone
 from djangorestframework_camel_case.util import camelize
 
 from conversations.api.serializers import ArtifactListSerializer
-from conversations.constants import (DEFAULT_AI_SENDER_NAME,
-                                     DEFAULT_CONVERSATION_TITLE,
-                                     ArtifactStatus, ErrorCode, ErrorMessage,
-                                     SenderType, ToolCallOrigin,
-                                     ToolCallStatus)
-from conversations.models import (LLM, Artifact, Conversation, Message,
-                                  MessageToolCall, Snippet, WebSearchSource)
-from conversations.services.image_generation_service import \
-    ImageGenerationService
+from conversations.constants import (
+    DEFAULT_AI_SENDER_NAME,
+    DEFAULT_CONVERSATION_TITLE,
+    ArtifactStatus,
+    ErrorCode,
+    ErrorMessage,
+    SenderType,
+    ToolCallOrigin,
+    ToolCallStatus,
+)
+from conversations.models import (
+    LLM,
+    Artifact,
+    Conversation,
+    Message,
+    MessageToolCall,
+    Snippet,
+    WebSearchSource,
+)
+from conversations.services.image_generation_service import ImageGenerationService
 from conversations.services.message_helpers import (  # Database helpers; Learning progress helpers; Billing helpers; Finalization helpers; Regeneration helpers
-    build_generated_image_data, build_transcription_data,
-    fetch_preceding_user_message, finalize_message, get_ai_message_by_id,
-    get_conversation_default_descriptor, handle_insufficient_balance,
-    parse_model_id, prepare_regeneration_data, run_learning_progress_stream,
-    should_generate_title)
-from conversations.services.message_validation_service import \
-    MessageValidationService
+    build_generated_image_data,
+    build_transcription_data,
+    fetch_preceding_user_message,
+    finalize_message,
+    get_ai_message_by_id,
+    get_conversation_default_descriptor,
+    handle_insufficient_balance,
+    parse_model_id,
+    prepare_regeneration_data,
+    run_learning_progress_stream,
+    should_generate_title,
+)
+from conversations.services.message_validation_service import MessageValidationService
 from conversations.services.tool_loop_binding import ChatToolLoopBinding
-from conversations.services.tool_loop_service import (ToolLoopResult,
-                                                      ToolLoopService)
-from conversations.services.web_search_source_service import \
-    WebSearchSourceService
-from conversations.services.websocket_response_service import \
-    WebSocketResponseService
+from conversations.services.tool_loop_service import ToolLoopResult, ToolLoopService
+from conversations.services.web_search_source_service import WebSearchSourceService
+from conversations.services.websocket_response_service import WebSocketResponseService
 from core.services.billing_service import BillingService
 from core.services.conversation_service import ConversationService
 from core.services.dtos import LLMDescriptor, LLMQueryRequestBuilder
@@ -390,9 +404,7 @@ class MessageCoordinator:
 
             # Generate conversation title if first message (User + AI = 2 messages)
             if await should_generate_title(self.conversation):
-                asyncio.create_task(
-                    self._generate_conversation_title(llm=dispatch_handle)
-                )
+                asyncio.create_task(self._generate_conversation_title())
 
             # Stream AI response
             await self._run_generation(
@@ -1072,7 +1084,7 @@ class MessageCoordinator:
             get_llm_callback=self._fetch_progress_llm,
         )
 
-    async def _generate_conversation_title(self, llm=None):
+    async def _generate_conversation_title(self):
         """Generate conversation title asynchronously (fire and forget)."""
         try:
             # Refresh conversation from DB
@@ -1087,14 +1099,11 @@ class MessageCoordinator:
             if not user_message:
                 return
 
-            # Generate title — pass `user` so the title call honors the
-            # user's active wallet (DARE/BYO/LITELLM) just like the main chat,
-            # and the conversation's own model so titles never depend on some
-            # other provider being configured.
+            # The background-model service owns model, wallet, and billing.
             title = await self.conversation_service.generate_title(
                 user_message.message,
                 user=self.user,
-                llm=llm,
+                public_bot_id=(self.conversation.bot_id if self.user is None else None),
             )
 
             # Update conversation

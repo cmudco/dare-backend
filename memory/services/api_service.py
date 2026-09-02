@@ -5,7 +5,14 @@ from typing import Any, Dict, List, Optional
 
 from django.db import transaction
 
-from memory.constants import TOKEN_BUDGET, TOKEN_WARNING, MemoryState, WriterAction
+from conversations.models import Message
+from memory.constants import (
+    ACTIVE_BACKFILL_STATUSES,
+    TOKEN_BUDGET,
+    TOKEN_WARNING,
+    MemoryState,
+    WriterAction,
+)
 from memory.domain.guards import inspect_write
 from memory.domain.user_doc import (
     estimate_tokens,
@@ -14,7 +21,12 @@ from memory.domain.user_doc import (
     parse_user_doc,
     render_user_doc,
 )
-from memory.models import MemoryLedgerEntry, MemoryRecord, UserMemoryDocument
+from memory.models import (
+    MemoryBackfillRun,
+    MemoryLedgerEntry,
+    MemoryRecord,
+    UserMemoryDocument,
+)
 from memory.services import consolidation
 from memory.services.edit import edit_doc_line, edit_record
 from memory.services.items import (
@@ -184,10 +196,19 @@ def search_items(user, query: str) -> Dict[str, Any]:
 
 
 def clear_store(user) -> Dict[str, Any]:
+    if MemoryBackfillRun.active_objects.filter(
+        user=user,
+        status__in=ACTIVE_BACKFILL_STATUSES,
+    ).exists():
+        raise MemoryConflict("Wait for memory building to finish before clearing it.")
+
     with transaction.atomic():
         records, _ = MemoryRecord.objects.filter(user=user).delete()
         MemoryLedgerEntry.objects.filter(user=user).delete()
         UserMemoryDocument.objects.filter(user=user).update(content="")
+        Message.active_objects.filter(conversation__user=user).exclude(
+            memory_write_data__isnull=True
+        ).update(memory_write_data=None)
 
     logger.info("[memory] user %s cleared memory (%s rows)", user.id, records)
     return {

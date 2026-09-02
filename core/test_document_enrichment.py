@@ -69,8 +69,11 @@ class DocumentEnrichmentTelemetryTests(SimpleTestCase):
             file=SimpleNamespace(name="files/article.pdf"),
             user=SimpleNamespace(id=3),
         )
-        self.model = SimpleNamespace(identifier="gemini-test")
-        self.credentials = SimpleNamespace()
+        self.route = SimpleNamespace(
+            model=SimpleNamespace(identifier="gemini-test"),
+            wallet_type="LITELLM",
+            litellm_key=None,
+        )
         self.service = DocumentEnrichmentService()
 
     @patch("core.services.document_enrichment_service.DocumentEnrichmentCache")
@@ -88,8 +91,7 @@ class DocumentEnrichmentTelemetryTests(SimpleTestCase):
             context={"page_no": 1},
             prompt="Describe",
             schema={"type": "object"},
-            model=self.model,
-            credentials=self.credentials,
+            route=self.route,
             ai_service=ai_service,
             output_limit=100,
             kind="figure_description",
@@ -123,8 +125,7 @@ class DocumentEnrichmentTelemetryTests(SimpleTestCase):
                 context={"page_no": 1},
                 prompt="Describe",
                 schema={"type": "object"},
-                model=self.model,
-                credentials=self.credentials,
+                route=self.route,
                 ai_service=ai_service,
                 output_limit=100,
                 kind="figure_description",
@@ -364,6 +365,7 @@ class DocumentEnrichmentOrchestrationTests(SimpleTestCase):
             user=SimpleNamespace(id=3),
         )
         self.model = SimpleNamespace(identifier="gemini-test", provider="gemini")
+        self.route = SimpleNamespace(model=self.model, litellm_key=None)
         self.credentials = SimpleNamespace(use_litellm_proxy=False)
 
     @patch(
@@ -413,7 +415,7 @@ class DocumentEnrichmentOrchestrationTests(SimpleTestCase):
         service = DocumentEnrichmentService()
 
         with (
-            patch.object(service, "_resolve_model", return_value=self.model),
+            patch.object(service, "_resolve_route", return_value=self.route),
             patch.object(service, "_build_ai_service", return_value=object()),
             patch.object(
                 service,
@@ -465,7 +467,7 @@ class DocumentEnrichmentOrchestrationTests(SimpleTestCase):
         service = DocumentEnrichmentService()
 
         with (
-            patch.object(service, "_resolve_model", return_value=self.model),
+            patch.object(service, "_resolve_route", return_value=self.route),
             patch.object(service, "_build_ai_service", return_value=object()),
             patch.object(
                 service,
@@ -518,7 +520,7 @@ class DocumentEnrichmentOrchestrationTests(SimpleTestCase):
             }
 
         with (
-            patch.object(service, "_resolve_model", return_value=self.model),
+            patch.object(service, "_resolve_route", return_value=self.route),
             patch.object(service, "_build_ai_service", return_value=object()),
             patch.object(service, "_transcribe_page", side_effect=transcribe) as call,
             patch.object(service, "_describe_figure") as describe,

@@ -1,4 +1,5 @@
 from decimal import Decimal
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -6,6 +7,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from rest_framework import status
 from rest_framework.test import APITestCase
 
+from core.services.vision_model_service import VisionModelNotOffered
 from files.constants import DocumentOcrStatus, FileStatus
 from files.models import DocumentOcrRequest, File
 
@@ -55,6 +57,45 @@ class DocumentOcrApprovalApiTests(APITestCase):
         self.assertEqual(self.file.status, FileStatus.PROCESSING)
         self.assertEqual(self.file.job_id, "ocr-job")
         enqueue.assert_called_once()
+
+    @patch("files.services.document_ocr_approval_service.select_vision_model")
+    @patch("files.services.document_ocr_approval_service.enqueue")
+    def test_owner_can_pick_the_vision_model_for_the_run(self, enqueue, resolve):
+        enqueue.return_value.id = "ocr-job"
+        resolve.return_value = SimpleNamespace(
+            model=SimpleNamespace(identifier="claude-haiku-4-5"),
+            estimated_cost_per_page=Decimal("0.004"),
+        )
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.post(
+            self.url,
+            {"pageLimit": 10, "modelIdentifier": "claude-haiku-4-5"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_202_ACCEPTED)
+        resolve.assert_called_once_with(self.user, "claude-haiku-4-5")
+        self.ocr_request.refresh_from_db()
+        self.assertEqual(self.ocr_request.model_identifier, "claude-haiku-4-5")
+        self.assertEqual(self.ocr_request.estimated_cost_per_page, Decimal("0.004"))
+        self.assertEqual(response.data["ocr"]["model_identifier"], "claude-haiku-4-5")
+
+    @patch("files.services.document_ocr_approval_service.select_vision_model")
+    def test_model_outside_the_wallet_is_rejected(self, select):
+        select.side_effect = VisionModelNotOffered("not offered")
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.post(
+            self.url,
+            {"pageLimit": 10, "modelIdentifier": "text-only-model"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.ocr_request.refresh_from_db()
+        self.assertEqual(self.ocr_request.status, DocumentOcrStatus.AWAITING_APPROVAL)
+        self.assertEqual(self.ocr_request.model_identifier, "gemini-vision")
 
     @patch("files.services.document_ocr_approval_service.enqueue")
     def test_partial_run_can_continue_with_additional_pages(self, enqueue):

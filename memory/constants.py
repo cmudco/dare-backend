@@ -42,6 +42,22 @@ class WriterAction(models.TextChoices):
     IMPORT = "import", _("Import")
 
 
+class MemoryBackfillStatus(models.TextChoices):
+    QUEUED = "queued", _("Queued")
+    RUNNING = "running", _("Running")
+    COMPLETED = "completed", _("Completed")
+    STOPPED = "stopped", _("Stopped")
+    FAILED = "failed", _("Failed")
+
+
+ACTIVE_BACKFILL_STATUSES = (
+    MemoryBackfillStatus.QUEUED,
+    MemoryBackfillStatus.RUNNING,
+)
+
+MEMORY_QUEUE = "memory"
+
+
 # Keys
 
 TOPICS = (

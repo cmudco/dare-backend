@@ -3,7 +3,7 @@ from django.db import models
 APP_NAME = "files"
 ALLOWED_FILES = [
     # Common extensions
-    'docx', 'doc', 'pdf', 'txt', 'md', 'json',
+    'docx', 'doc', 'pdf', 'txt', 'md', 'markdown', 'x-markdown', 'json',
     'csv', 'xls', 'xlsx', 'ipynb', 'x-ipynb+json',
     'pptx', 'ppt',
     'jpg', 'jpeg', 'png', 'gif', 'bmp', 'tiff', 'webp',
@@ -28,7 +28,7 @@ ALLOWED_FILES = [
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     'application/msword',
     'application/pdf',
-    'text/plain', 'text/html', 'text/xml', 'text/csv'
+    'text/plain', 'text/markdown', 'text/html', 'text/xml', 'text/csv'
 ]
 
 class FileStatus(models.IntegerChoices):

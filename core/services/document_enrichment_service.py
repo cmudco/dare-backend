@@ -11,20 +11,12 @@ import logging
 import time
 from copy import deepcopy
 from dataclasses import dataclass
-from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
 
 from asgiref.sync import async_to_sync
-from django.db import transaction
 from django.utils import timezone
 
-from api_keys.constants import BillingModeChoice
-from billing.constants import (
-    TransactionSourceChoice,
-    TransactionTypeChoice,
-    UserWalletPreferenceTypeChoice,
-)
-from billing.models import Transaction
+from billing.constants import UserWalletPreferenceTypeChoice
 from config import env
 from conversations.constants import Provider
 from conversations.models import LLM
@@ -39,12 +31,13 @@ from core.config.document_parsing import (
 )
 from core.services.api_key_service import get_dispatch_credentials_for_user_sync
 from core.services.billing_service import BillingService
+from core.services.claude_service import ClaudeService
 from core.services.document_crop_service import DocumentCropService
 from core.services.dtos.parsed_document_dto import ParsedDocument, ParsedElement
 from core.services.gemini_service import GeminiService
 from core.services.openai_service import OpenAIService
-from files.models import DocumentEnrichmentCache, File
-from users.constants import AuthSourceChoice
+from core.services.vision_model_service import VisionModelRoute, resolve_vision_model
+from files.models import DocumentEnrichmentCache, DocumentOcrRequest, File
 
 logger = logging.getLogger(__name__)
 
@@ -130,14 +123,15 @@ class DocumentEnrichmentService:
             return self._persist_not_needed(file, parsed, model_payload)
 
         started = time.time()
-        model = self._resolve_model(file)
-        if model is None:
+        route = self._resolve_route(file)
+        if route is None:
             return self._persist_unavailable(
                 file,
                 parsed,
                 model_payload,
-                "No enabled Gemini vision model is available.",
+                "No vision-capable model is available in the active wallet.",
             )
+        model = route.model
 
         try:
             credentials = get_dispatch_credentials_for_user_sync(
@@ -184,7 +178,7 @@ class DocumentEnrichmentService:
             telemetry.visual_operations += 1
             try:
                 page_results[page_no] = self._transcribe_page(
-                    file, page_no, model, credentials, ai_service, telemetry
+                    file, page_no, route, ai_service, telemetry
                 )
             except Exception as error:
                 telemetry.failed_operations += 1
@@ -228,8 +222,7 @@ class DocumentEnrichmentService:
                     element,
                     elements,
                     index,
-                    model,
-                    credentials,
+                    route,
                     ai_service,
                     telemetry,
                 )
@@ -327,17 +320,12 @@ class DocumentEnrichmentService:
         return bool(env.DOCUMENT_ENRICHMENT_ENABLED)
 
     @staticmethod
-    def _resolve_model(file: File) -> Optional[LLM]:
-        visible = LLM.visible_for_user(file.user).filter(
-            provider=Provider.GEMINI.value,
-            supports_vision=True,
-            is_image_generator=False,
-            is_audio_transcriber=False,
-        )
-        configured = visible.filter(identifier=env.DOCUMENT_ENRICHMENT_MODEL).first()
-        if configured:
-            return configured
-        return visible.order_by("input_token_rate_per_million", "id").first()
+    def _resolve_route(file: File) -> Optional[VisionModelRoute]:
+        try:
+            requested = file.ocr_request.model_identifier
+        except DocumentOcrRequest.DoesNotExist:
+            requested = ""
+        return resolve_vision_model(file.user, requested or file.user.vision_model)
 
     @staticmethod
     def _build_ai_service(model: LLM, credentials):
@@ -347,7 +335,14 @@ class DocumentEnrichmentService:
                 api_key=credentials.api_key,
                 base_url=credentials.base_url,
             )
-        return GeminiService(llm=model, api_key=credentials.api_key)
+        services = {
+            Provider.OPENAI.value: OpenAIService,
+            Provider.CLAUDE.value: ClaudeService,
+            Provider.GEMINI.value: GeminiService,
+        }
+        if model.provider not in services:
+            raise ValueError(f"{model.identifier} cannot run vision enrichment")
+        return services[model.provider](llm=model, api_key=credentials.api_key)
 
     def _describe_figure(
         self,
@@ -355,8 +350,7 @@ class DocumentEnrichmentService:
         element: ParsedElement,
         elements: List[ParsedElement],
         index: int,
-        model: LLM,
-        credentials,
+        route: VisionModelRoute,
         ai_service,
         telemetry: EnrichmentTelemetry,
     ) -> Dict[str, Any]:
@@ -387,8 +381,7 @@ class DocumentEnrichmentService:
             context=context,
             prompt=prompt,
             schema=FIGURE_SCHEMA,
-            model=model,
-            credentials=credentials,
+            route=route,
             ai_service=ai_service,
             output_limit=900,
             kind="figure_description",
@@ -402,7 +395,7 @@ class DocumentEnrichmentService:
                 result.get("visible_text"), FIGURE_OUTPUT_LIMIT
             ),
             "uncertainty": self._clean(result.get("uncertainty"), 800),
-            "model": model.identifier,
+            "model": route.model.identifier,
             "prompt_version": PROMPT_VERSION,
             "cache_hit": cache_hit,
             "generated_at": timezone.now().isoformat(),
@@ -413,8 +406,7 @@ class DocumentEnrichmentService:
         self,
         file: File,
         page_no: int,
-        model: LLM,
-        credentials,
+        route: VisionModelRoute,
         ai_service,
         telemetry: EnrichmentTelemetry,
     ) -> Dict[str, Any]:
@@ -431,8 +423,7 @@ class DocumentEnrichmentService:
             context=context,
             prompt=self._page_prompt(context),
             schema=PAGE_SCHEMA,
-            model=model,
-            credentials=credentials,
+            route=route,
             ai_service=ai_service,
             output_limit=8000,
             kind="page_transcription",
@@ -452,7 +443,7 @@ class DocumentEnrichmentService:
             "transcription_markdown": transcription,
             "summary": summary,
             "uncertainty": self._clean(result.get("uncertainty"), 1200),
-            "model": model.identifier,
+            "model": route.model.identifier,
             "prompt_version": PROMPT_VERSION,
             "cache_hit": cache_hit,
             "generated_at": timezone.now().isoformat(),
@@ -468,13 +459,13 @@ class DocumentEnrichmentService:
         context: Dict[str, Any],
         prompt: str,
         schema: Dict[str, Any],
-        model: LLM,
-        credentials,
+        route: VisionModelRoute,
         ai_service,
         output_limit: int,
         kind: str,
         telemetry: EnrichmentTelemetry,
     ) -> Tuple[Dict[str, Any], bool]:
+        model = route.model
         content_hash = (
             content_sha256 or hashlib.sha256(image, usedforsecurity=False).hexdigest()
         )
@@ -493,7 +484,7 @@ class DocumentEnrichmentService:
             telemetry.cache_hits += 1
             return dict(cache.result), True
 
-        self._check_credit(model, file, credentials, output_limit)
+        self._check_credit(route, file, output_limit)
         data_url = "data:image/jpeg;base64," + base64.b64encode(image).decode("ascii")
         messages = [
             {
@@ -511,7 +502,7 @@ class DocumentEnrichmentService:
             max_tokens=output_limit,
             temperature=0.1,
         )
-        self._record_usage(file, model, credentials, usage, kind)
+        self._record_usage(file, route, usage, kind)
         DocumentEnrichmentCache.objects.update_or_create(
             user=file.user,
             content_sha256=content_hash,
@@ -523,11 +514,11 @@ class DocumentEnrichmentService:
         return result, False
 
     @staticmethod
-    def _check_credit(model: LLM, file: File, credentials, output_limit: int) -> None:
-        if credentials.wallet_type != UserWalletPreferenceTypeChoice.DARE:
+    def _check_credit(route: VisionModelRoute, file: File, output_limit: int) -> None:
+        if route.wallet_type != UserWalletPreferenceTypeChoice.DARE:
             return
         estimated = BillingService()._calculate_estimated_cost(
-            model, input_tokens=5000, output_tokens=output_limit
+            route.model, input_tokens=5000, output_tokens=output_limit
         )
         try:
             wallet = file.user.wallet
@@ -538,35 +529,25 @@ class DocumentEnrichmentService:
 
     @staticmethod
     def _record_usage(
-        file: File, model: LLM, credentials, usage: Dict, kind: str
+        file: File, route: VisionModelRoute, usage: Dict, kind: str
     ) -> None:
-        input_tokens = int(usage.get("input_tokens", 0) or 0)
-        output_tokens = int(usage.get("output_tokens", 0) or 0)
-        cost = BillingService()._calculate_cost(model, input_tokens, output_tokens)
-        common = {
+        billing = BillingService()
+        call = {
             "user": file.user,
-            "llm": model,
-            "type": TransactionTypeChoice.DEBIT,
-            "source": TransactionSourceChoice.USAGE,
-            "message": f"Document enrichment ({kind}) for file {file.id}: {(file.name or file.file.name)[:100]}",
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "platform": AuthSourceChoice.DARE,
+            "input_tokens": int(usage.get("input_tokens", 0) or 0),
+            "output_tokens": int(usage.get("output_tokens", 0) or 0),
+            "description": f"Document enrichment ({kind}) for file {file.id}: {(file.name or file.file.name)[:100]}",
         }
-        if credentials.wallet_type == UserWalletPreferenceTypeChoice.BYO:
-            Transaction.objects.create(
-                amount=Decimal("0"), billing_mode=BillingModeChoice.OWN_API, **common
+        if route.wallet_type == UserWalletPreferenceTypeChoice.LITELLM:
+            billing.record_litellm_service_usage(
+                litellm_key=route.litellm_key,
+                model_name=route.model.identifier,
+                **call,
             )
-            return
-        if credentials.wallet_type == UserWalletPreferenceTypeChoice.LITELLM:
-            Transaction.objects.create(
-                amount=Decimal("0"), billing_mode=BillingModeChoice.LITELLM, **common
-            )
-            return
-        with transaction.atomic():
-            Transaction.objects.create(
-                amount=cost, billing_mode=BillingModeChoice.WALLET, **common
-            )
+        elif route.wallet_type == UserWalletPreferenceTypeChoice.BYO:
+            billing.record_byo_service_usage(llm=route.model, **call)
+        else:
+            billing.record_service_usage(llm=route.model, **call)
 
     @staticmethod
     def _picture_decision(element: ParsedElement, textless_pages: set) -> str:

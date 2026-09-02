@@ -29,6 +29,12 @@ from core.services.document_crop_service import (
 from core.services.document_processor import DocumentProcessor
 from core.services.file_processor import FileProcessor
 from core.services.file_upload_service import FileUploadService
+from core.services.vision_model_service import (
+    VisionModelNotOffered,
+    list_vision_models,
+    resolve_vision_model,
+    select_vision_model,
+)
 from core.storage.backends import SyftBoxStorage
 from core.storage.constants import StorageBackendChoice
 from core.storage.permission_service import SyftBoxPermissionService
@@ -46,6 +52,7 @@ from ..services.document_ocr_approval_service import (
     DocumentOcrApprovalCommand,
     DocumentOcrApprovalService,
     DocumentOcrInvalidState,
+    DocumentOcrModelError,
     DocumentOcrNotFound,
     DocumentOcrPageLimitError,
     DocumentOcrQueueError,
@@ -58,6 +65,8 @@ from .serializers import (
     FileStructureSerializer,
     FolderSerializer,
     TagSerializer,
+    VisionModelCandidateSerializer,
+    VisionModelSelectionSerializer,
 )
 
 logger = logging.getLogger(__name__)
@@ -132,6 +141,7 @@ class FileViewSet(viewsets.ModelViewSet):
             file_id=int(pk),
             user_id=request.user.id,
             page_limit=payload.validated_data["page_limit"],
+            model_identifier=payload.validated_data["model_identifier"],
         )
         try:
             file = DocumentOcrApprovalService().start(command)
@@ -139,7 +149,7 @@ class FileViewSet(viewsets.ModelViewSet):
             return Response(status=status.HTTP_404_NOT_FOUND)
         except DocumentOcrInvalidState as error:
             return Response({"error": str(error)}, status=status.HTTP_409_CONFLICT)
-        except DocumentOcrPageLimitError as error:
+        except (DocumentOcrPageLimitError, DocumentOcrModelError) as error:
             return Response({"error": str(error)}, status=status.HTTP_400_BAD_REQUEST)
         except DocumentOcrQueueError as error:
             return Response(
@@ -147,6 +157,41 @@ class FileViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
         return Response(self.get_serializer(file).data, status=status.HTTP_202_ACCEPTED)
+
+    @action(
+        detail=False,
+        methods=["get", "patch"],
+        url_path="vision-models",
+        parser_classes=[CamelCaseJSONParser],
+    )
+    def vision_models(self, request):
+        """Vision-capable models in the active wallet, and the user's default.
+
+        PATCH stores the default used for automatic scanned-page transcription
+        and figure description; an empty identifier restores the recommendation.
+        """
+        if request.method == "PATCH":
+            payload = VisionModelSelectionSerializer(data=request.data)
+            payload.is_valid(raise_exception=True)
+            identifier = payload.validated_data["model_identifier"]
+            if identifier:
+                try:
+                    select_vision_model(request.user, identifier)
+                except VisionModelNotOffered as error:
+                    return Response(
+                        {"error": str(error)}, status=status.HTTP_400_BAD_REQUEST
+                    )
+            request.user.vision_model = identifier
+            request.user.save(update_fields=["vision_model"])
+
+        candidates = list_vision_models(request.user)
+        selected = resolve_vision_model(request.user, request.user.vision_model)
+        return Response(
+            {
+                "models": VisionModelCandidateSerializer(candidates, many=True).data,
+                "selected": selected.model.identifier if selected else "",
+            }
+        )
 
     @action(
         detail=False,

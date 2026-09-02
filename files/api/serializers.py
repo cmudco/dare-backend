@@ -12,8 +12,6 @@ User = get_user_model()
 
 class DocumentOcrRequestSerializer(serializers.ModelSerializer):
     status_label = serializers.CharField(source="get_status_display", read_only=True)
-    estimated_selected_cost = serializers.SerializerMethodField()
-    estimated_max_cost = serializers.SerializerMethodField()
     selectable_pages = serializers.SerializerMethodField()
     automatic_page_limit = serializers.SerializerMethodField()
     remaining_pages = serializers.SerializerMethodField()
@@ -33,8 +31,6 @@ class DocumentOcrRequestSerializer(serializers.ModelSerializer):
             "remaining_pages",
             "can_continue",
             "estimated_cost_per_page",
-            "estimated_selected_cost",
-            "estimated_max_cost",
             "model_identifier",
             "approved_at",
         ]
@@ -58,18 +54,23 @@ class DocumentOcrRequestSerializer(serializers.ModelSerializer):
     def get_can_continue(obj):
         return obj.status == "partial" and obj.processed_pages < obj.detected_pages
 
-    @staticmethod
-    def get_estimated_selected_cost(obj):
-        return obj.estimated_cost_per_page * obj.page_limit
-
-    @staticmethod
-    def get_estimated_max_cost(obj):
-        remaining = max(obj.detected_pages - obj.processed_pages, 0)
-        return obj.estimated_cost_per_page * min(remaining, obj.max_page_limit)
-
 
 class DocumentOcrApprovalSerializer(serializers.Serializer):
     page_limit = serializers.IntegerField(min_value=1)
+    model_identifier = serializers.CharField(
+        required=False, allow_blank=True, default=""
+    )
+
+
+class VisionModelCandidateSerializer(serializers.Serializer):
+    identifier = serializers.CharField()
+    name = serializers.CharField()
+    estimated_cost_per_page = serializers.DecimalField(max_digits=12, decimal_places=8)
+    recommended = serializers.BooleanField()
+
+
+class VisionModelSelectionSerializer(serializers.Serializer):
+    model_identifier = serializers.CharField(allow_blank=True)
 
 
 class FileSerializer(serializers.ModelSerializer):

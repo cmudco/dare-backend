@@ -6,35 +6,25 @@ rewrite, and a HyDE passage. Any failure returns ``None`` so retrieval always
 proceeds on the raw query.
 """
 
-import json
 import logging
-from typing import Optional
+from typing import Literal, Optional
 
-import anthropic
+from asgiref.sync import async_to_sync
+from pydantic import BaseModel
 
-from conversations.constants import Provider
-from core.services.api_key_service import get_provider_api_key_sync
-from core.services.rag.config import setting
+from core.services.background_model_service import BackgroundModelService
 from core.services.rag.dtos import QueryPlan
+from users.models import User
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MODEL = "claude-haiku-4-5"
 
-_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "intent": {
-            "type": "string",
-            "enum": ["precise_lookup", "exploratory", "comparison"],
-        },
-        "keywords": {"type": "array", "items": {"type": "string"}},
-        "rewritten_query": {"type": "string"},
-        "hyde_passage": {"type": "string"},
-    },
-    "required": ["intent", "keywords", "rewritten_query", "hyde_passage"],
-    "additionalProperties": False,
-}
+class QueryPlanResponse(BaseModel):
+    intent: Literal["precise_lookup", "exploratory", "comparison"]
+    keywords: list[str]
+    rewritten_query: str
+    hyde_passage: str
+
 
 _SYSTEM = (
     "You are the query-analysis stage of a retrieval pipeline. For each user query "
@@ -48,17 +38,7 @@ _SYSTEM = (
 
 
 class QueryAnalyzer:
-    """Raw query -> QueryPlan, via a structured LLM call.
-
-    Credentials come from ``get_provider_api_key_sync`` — the same
-    database-first, env-fallback resolution every other Claude call in DARE
-    uses. Letting the SDK find its own key would make this stage depend on
-    ``ANTHROPIC_API_KEY`` alone, so it would sit dead in any environment that
-    configures Claude the normal way (admin key, or ``CLAUDE_API_KEY``).
-
-    A pipeline builds one analyzer per retrieval, so ``last_error`` describes
-    the most recent ``analyze`` call and is safe to read straight after it.
-    """
+    """Raw query -> QueryPlan through the user's background model."""
 
     def __init__(self) -> None:
         self.last_error: Optional[str] = None
@@ -67,46 +47,43 @@ class QueryAnalyzer:
         """Advanced RAG always feeds the rewritten/HyDE text into retrieval."""
         return True
 
-    def analyze(self, query: str) -> Optional[QueryPlan]:
+    def analyze(
+        self,
+        query: str,
+        payer_user_id: Optional[int] = None,
+        payer_bot_id: Optional[int] = None,
+    ) -> Optional[QueryPlan]:
         self.last_error = None
         if not query:
             return None
+        if payer_user_id is None and payer_bot_id is None:
+            self.last_error = "Query analysis requires a billing user"
+            return None
         try:
-            client = anthropic.Anthropic(
-                api_key=get_provider_api_key_sync(Provider.CLAUDE.value)
+            user = (
+                User.objects.get(pk=payer_user_id)
+                if payer_user_id is not None
+                else None
             )
-            model = setting("RAG_QUERY_ANALYSIS_MODEL", DEFAULT_MODEL)
-            data = self._call(client, model, query)
+            result = async_to_sync(BackgroundModelService().parse_structured)(
+                user=user,
+                messages=[
+                    {"role": "system", "content": _SYSTEM},
+                    {"role": "user", "content": query},
+                ],
+                response_model=QueryPlanResponse,
+                description="Advanced RAG query analysis",
+                max_tokens=512,
+                public_bot_id=payer_bot_id,
+            )
+            data = result.value
             return QueryPlan(
-                intent=data.get("intent", "precise_lookup"),
-                keywords=tuple(data.get("keywords", [])),
-                rewritten_query=data.get("rewritten_query", ""),
-                hyde_passage=data.get("hyde_passage", ""),
+                intent=data.intent,
+                keywords=tuple(data.keywords),
+                rewritten_query=data.rewritten_query,
+                hyde_passage=data.hyde_passage,
             )
         except Exception as exc:  # never let analysis break retrieval
             logger.warning("Query analysis failed; using raw query: %s", exc)
             self.last_error = str(exc)
             return None
-
-    def _call(self, client, model: str, query: str) -> dict:
-        """Ask for the plan under a schema the API enforces.
-
-        ``output_config`` goes through ``extra_body`` because the pinned SDK
-        has no typed argument for it — passing it directly raises TypeError
-        client-side, before any request is made. The wire field is real and
-        the API enforces it; only the Python signature lags. ``ClaudeService``
-        sends it the same way.
-
-        A model that rejects the field returns 400, which ``analyze`` already
-        turns into a raw-query retrieval.
-        """
-        response = client.messages.create(
-            model=model,
-            max_tokens=512,
-            system=_SYSTEM,
-            messages=[{"role": "user", "content": query}],
-            extra_body={
-                "output_config": {"format": {"type": "json_schema", "schema": _SCHEMA}}
-            },
-        )
-        return json.loads(next(b.text for b in response.content if b.type == "text"))

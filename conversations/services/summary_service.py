@@ -6,7 +6,7 @@ from asgiref.sync import async_to_sync
 
 from conversations.constants import SenderType
 from conversations.models import LLM, Conversation, Message
-from core.services.llm_service import LLMService
+from core.services.background_model_service import BackgroundModelService
 
 logger = logging.getLogger(__name__)
 
@@ -33,19 +33,12 @@ def generate_conversation_summary(
 ) -> ConversationSummaryResult:
     """Generate a rolling summary for a conversation up to the given threshold.
 
-    Routed through ``LLMService._get_ai_service`` with the conversation owner
-    so the call honors their active wallet (DARE / BYO / LITELLM) — pre-
-    wallet-refactor this always billed the system DARE wallet regardless of
-    the user's preference.
+    Model selection, wallet routing, billing, and cleanup are owned by the
+    background-model service.
     """
     transcripts = _build_transcript(conversation, completed_message_count)
     if not transcripts.strip():
         logger.warning("No transcript content available for conversation summary")
-        return ConversationSummaryResult(summary="", llm=None)
-
-    llm = LLM.get_default_chat_model()
-    if llm is None:
-        logger.warning("No chat-capable LLM available for conversation summary")
         return ConversationSummaryResult(summary="", llm=None)
 
     messages = [
@@ -60,17 +53,29 @@ def generate_conversation_summary(
     ]
 
     try:
-        summary = async_to_sync(_generate_summary_text)(
-            llm, messages, conversation.user
+        result = async_to_sync(BackgroundModelService().complete_text)(
+            user=conversation.user,
+            messages=messages,
+            description=f"Conversation summary for {conversation.conversation_id}",
+            max_tokens=SUMMARY_MAX_TOKENS,
+            temperature=SUMMARY_TEMPERATURE,
+            public_bot_id=(
+                conversation.bot_id if conversation.user_id is None else None
+            ),
         )
     except Exception:
         logger.exception(
             "Conversation summary generation failed for conversation %s",
             conversation.conversation_id,
         )
-        return ConversationSummaryResult(summary="", llm=llm)
+        return ConversationSummaryResult(summary="", llm=None)
 
-    return ConversationSummaryResult(summary=summary, llm=llm)
+    return ConversationSummaryResult(
+        summary=result.value,
+        llm=result.route.persisted_llm,
+        input_tokens=result.input_tokens,
+        output_tokens=result.output_tokens,
+    )
 
 
 def _build_transcript(
@@ -116,18 +121,3 @@ def _get_cutoff_message_id(
     if len(ai_message_rows) < completed_message_count:
         return None
     return ai_message_rows[-1]
-
-
-async def _generate_summary_text(
-    llm: LLM,
-    messages: list[dict[str, str]],
-    user: Optional[object] = None,
-) -> str:
-    """Run a non-streaming LLM call for grouped conversation summaries."""
-    llm_service = LLMService()
-    ai_service = await llm_service._get_ai_service(llm, user=user)
-    return await ai_service.get_chat_completion(
-        messages=messages,
-        max_tokens=SUMMARY_MAX_TOKENS,
-        temperature=SUMMARY_TEMPERATURE,
-    )

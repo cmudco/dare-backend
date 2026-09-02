@@ -829,6 +829,29 @@ class BillingService:
             platform=platform,
         )
 
+    def record_byo_service_usage(
+        self,
+        user: "User",
+        llm: LLM,
+        input_tokens: int,
+        output_tokens: int,
+        description: str,
+        platform: str = AuthSourceChoice.DARE,
+    ) -> Transaction:
+        """Record one background call paid directly through a user's API key."""
+        return Transaction.objects.create(
+            user=user,
+            amount=Decimal("0"),
+            llm=llm,
+            type=TransactionTypeChoice.DEBIT,
+            source=TransactionSourceChoice.USAGE,
+            message=description,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            billing_mode=BillingModeChoice.OWN_API,
+            platform=platform,
+        )
+
     @db_transaction.atomic
     def record_litellm_service_usage(
         self,

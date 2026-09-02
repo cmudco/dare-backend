@@ -9,7 +9,7 @@
 - We built the **Track A "Precision Retrofit" retrieval pipeline** end-to-end and verified each stage on real data.
 - The audit scored us **~2/10** on its production-mistakes checklist. We're now at **~9/10** — the one remaining item is reference resolution (a second-pass parsing feature).
 - Headline proof: for the query `pension certificate 366,181`, the chunk that literally holds `Ctf. # 366,181` moved from **rank #5 (dense, today's baseline) → #2 (hybrid) → #1 (after local reranking)**.
-- Everything new is **flag-gated and lazy**, with safe fallbacks. With flags off, behaviour is identical to before. Added cost per query ≈ **$0.002**, almost all of it one optional LLM call.
+- Everything new is **flag-gated and lazy**, with safe fallbacks. With flags off, behaviour is identical to before. Query-analysis cost follows the user's selected background model and wallet.
 - Chunking was sized to **match CMU's curated corpus (~350 tokens/chunk)**, not a generic textbook number.
 
 ---
@@ -18,7 +18,7 @@
 
 ```mermaid
 flowchart LR
-    Q["❓ query"] --> QA["🧠 query analysis<br/>(Haiku, opt-in)<br/>intent · keywords · HyDE"]
+    Q["❓ query"] --> QA["🧠 query analysis<br/>(background model)<br/>intent · keywords · HyDE"]
     QA --> HR["🔀 hybrid retrieve<br/>BM25 + dense + RRF<br/>wide candidate pool"]
     HR --> RR["🏆 rerank<br/>local cross-encoder<br/>true relevance"]
     RR --> MMR{"intent?"}
@@ -91,7 +91,7 @@ Document path (an uploaded HRM report), top score for an exact-phrase query:
 
 **Takeaway:** hybrid is a *strict* win — it rescues exact-term lookups and never regresses the easy cases. It needed **zero new infrastructure** (Weaviate already had a BM25 inverted index on both corpora). On the document path we fuse with `RELATIVE_SCORE` so scores stay 0–1 and the existing similarity threshold keeps working.
 
-### 3.2 Query analysis (Haiku 4.5, structured output)
+### 3.2 Query analysis (background model, structured output)
 
 Real plans returned for two queries:
 
@@ -100,7 +100,11 @@ Real plans returned for two queries:
 | `pension certificate 366,181…` | `precise_lookup` | `["366181", "minor children"]` | normalised `366,181` → `366181` (BM25-friendly) |
 | `how did a widow prove she was married…` | `exploratory` | `["widow","marriage","evidence",…]` | + a period-accurate HyDE passage |
 
-**Cost:** ~**$0.0019/query** (~$1.86 per 1,000). Haiku is the right tool — cheap, fast, structured output. (Note: the pinned `anthropic~=0.75.0` predates `output_config`, so the service falls back to strict tool-use — same result.)
+The query plan now uses the same background-model boundary as titles, summaries,
+and memory extraction. DARE defaults to GPT-5.6 Luna; LiteLLM wallets use the
+single background model selected for that proxy. Every call is attributed to the
+active wallet, and any resolution, transport, or parsing failure safely falls
+back to the raw query.
 
 ### 3.3 Reranker — the decisive lever
 
@@ -159,7 +163,8 @@ We bumped the document path from 500 chars (~96 tok) to **1,500 chars / 180 over
 | `core/services/file_processor.py` | structure-aware PDF parse (PyMuPDF, PyPDF2 fallback) |
 | `users/migrations/0035_bump_legacy_chunk_defaults.py` | legacy 500/100 user rows → CMU-matched defaults |
 | `core/services/reranker_service.py` | **NEW** — lazy, flag-gated local cross-encoder |
-| `core/services/query_analysis_service.py` | **NEW** — Haiku structured query plan |
+| `core/services/rag/query_analyzer.py` | structured query plan through the shared background-model service |
+| `core/services/background_model_service.py` | shared resolution, dispatch, billing, and cleanup boundary |
 | `core/services/rag_postprocess.py` | **NEW** — `mmr_diversify`, `answer_grounding` |
 | `libraries/services/weaviate_library_client.py` | hybrid + `include_vector` |
 | `libraries/services/library_store.py`, `library_search.py` | thread `query_text` / `include_vector` |
@@ -175,7 +180,7 @@ We bumped the document path from 500 chars (~96 tok) to **1,500 chars / 180 over
 | Flag | Default | Effect |
 |---|---|---|
 | `RAG_RERANKER_MODEL` | `BAAI/bge-reranker-v2-m3` | reranker model |
-| `RAG_QUERY_ANALYSIS_MODEL` | `claude-haiku-4-5` | analysis model |
+| `BACKGROUND_MODEL` | `gpt-5.6-luna` | DARE background model for titles, summaries, memory, and query analysis |
 | `RAG_GROUNDING_THRESHOLD` | model-specific | optional "not found" cutoff for the reranker score scale |
 | `RAG_CONTEXT_CHAR_BUDGET` | `12000` | max assembled context chars |
 | `RAG_CHUNK_SIZE` / `RAG_OVERLAP_SIZE` | `1500` / `180` | document-path chunking |
@@ -187,10 +192,10 @@ We bumped the document path from 500 chars (~96 tok) to **1,500 chars / 180 over
 | Component | Cost |
 |---|---|
 | Query embedding (OpenAI 3-large) | ~$0.0001 |
-| Query analysis (Haiku, optional) | ~$0.0019 |
+| Query analysis (optional) | provider/model dependent |
 | Hybrid retrieve | $0 (local Weaviate) |
 | Rerank | **$0 (local MPS)** |
-| **Total added** | **≈ $0.002 / query** |
+| **Total added** | background-model dependent |
 
 ---
 

@@ -5,9 +5,8 @@ from decimal import Decimal
 from typing import Optional
 
 from config import env
-from core.services.billing_service import BillingService
-from core.services.document_enrichment_service import DocumentEnrichmentService
 from core.services.dtos.parsed_document_dto import ParsedDocument
+from core.services.vision_model_service import resolve_vision_model
 from files.constants import DocumentOcrStatus
 from files.models import DocumentOcrRequest, File
 
@@ -35,8 +34,6 @@ class DocumentOcrWorkflowService:
         auto_limit = max(int(env.DOCUMENT_OCR_AUTO_PAGE_LIMIT), 1)
         max_limit = max(int(env.DOCUMENT_OCR_MAX_PAGE_LIMIT), auto_limit)
         selectable_pages = min(detected_pages, max_limit)
-        model = DocumentEnrichmentService._resolve_model(file)
-        cost_per_page = self._cost_per_page(model)
 
         request, created = DocumentOcrRequest.objects.get_or_create(
             file=file,
@@ -44,19 +41,25 @@ class DocumentOcrWorkflowService:
                 "detected_pages": detected_pages,
                 "page_limit": min(auto_limit, selectable_pages),
                 "max_page_limit": max_limit,
-                "estimated_cost_per_page": cost_per_page,
-                "model_identifier": model.identifier if model else "",
                 "chunk_size": chunk_size,
                 "overlap_size": overlap_size,
                 "parsed_text": parsed.text,
             },
         )
 
+        # A model chosen at approval time outranks the user's default; either
+        # falls back to the wallet's recommendation when no longer offered.
+        route = resolve_vision_model(
+            file.user, request.model_identifier or file.user.vision_model
+        )
+        request.model_identifier = route.model.identifier if route else ""
+        request.estimated_cost_per_page = (
+            route.estimated_cost_per_page if route else Decimal("0")
+        )
+
         if not created:
             request.detected_pages = detected_pages
             request.max_page_limit = max_limit
-            request.estimated_cost_per_page = cost_per_page
-            request.model_identifier = model.identifier if model else ""
             if request.chunk_size is None:
                 request.chunk_size = chunk_size
             if request.overlap_size is None:
@@ -64,7 +67,7 @@ class DocumentOcrWorkflowService:
             if request.parsed_text is None:
                 request.parsed_text = parsed.text
 
-        if model is None:
+        if route is None:
             request.status = DocumentOcrStatus.UNAVAILABLE
             request.page_limit = 0
             request.save()
@@ -133,16 +136,4 @@ class DocumentOcrWorkflowService:
             and parsed.parser == "docling"
             and parsed.is_page_based
             and (file.file.name or "").lower().endswith(".pdf")
-        )
-
-    @staticmethod
-    def _cost_per_page(model) -> Decimal:
-        if model is None:
-            return Decimal("0")
-        return BillingService()._calculate_estimated_cost(
-            model,
-            input_tokens=max(int(env.DOCUMENT_OCR_ESTIMATED_INPUT_TOKENS_PER_PAGE), 0),
-            output_tokens=max(
-                int(env.DOCUMENT_OCR_ESTIMATED_OUTPUT_TOKENS_PER_PAGE), 0
-            ),
         )

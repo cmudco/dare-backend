@@ -6,6 +6,7 @@ from django.test import SimpleTestCase, override_settings
 
 from core.services.document_ingestion_service import DocumentIngestionService
 from core.services.document_ocr_workflow_service import DocumentOcrWorkflowService
+from core.services.vision_model_service import _cost_per_page
 from files.constants import DocumentOcrStatus
 
 
@@ -13,7 +14,7 @@ def make_file():
     return SimpleNamespace(
         id=7,
         file=SimpleNamespace(name="files/scanned.pdf"),
-        user=SimpleNamespace(id=3),
+        user=SimpleNamespace(id=3, vision_model=""),
     )
 
 
@@ -52,14 +53,11 @@ class DocumentOcrWorkflowTests(SimpleTestCase):
     def setUp(self):
         self.service = DocumentOcrWorkflowService()
         self.model = SimpleNamespace(
-            identifier="gemini-vision",
-            input_token_rate_per_million=Decimal("0.10"),
-            output_token_rate_per_million=Decimal("0.40"),
+            model=SimpleNamespace(identifier="gemini-vision"),
+            estimated_cost_per_page=Decimal("0.0025"),
         )
 
-    @patch(
-        "core.services.document_ocr_workflow_service.DocumentEnrichmentService._resolve_model"
-    )
+    @patch("core.services.document_ocr_workflow_service.resolve_vision_model")
     @patch(
         "core.services.document_ocr_workflow_service.DocumentOcrRequest.objects.get_or_create"
     )
@@ -77,9 +75,7 @@ class DocumentOcrWorkflowTests(SimpleTestCase):
         self.assertEqual(get_or_create.call_args.kwargs["defaults"]["parsed_text"], "")
         request.save.assert_called_once()
 
-    @patch(
-        "core.services.document_ocr_workflow_service.DocumentEnrichmentService._resolve_model"
-    )
+    @patch("core.services.document_ocr_workflow_service.resolve_vision_model")
     @patch(
         "core.services.document_ocr_workflow_service.DocumentOcrRequest.objects.get_or_create"
     )
@@ -94,9 +90,7 @@ class DocumentOcrWorkflowTests(SimpleTestCase):
         self.assertEqual(plan.page_limit, 6)
         self.assertEqual(request.status, DocumentOcrStatus.PROCESSING)
 
-    @patch(
-        "core.services.document_ocr_workflow_service.DocumentEnrichmentService._resolve_model"
-    )
+    @patch("core.services.document_ocr_workflow_service.resolve_vision_model")
     @patch(
         "core.services.document_ocr_workflow_service.DocumentOcrRequest.objects.get_or_create"
     )
@@ -119,9 +113,7 @@ class DocumentOcrWorkflowTests(SimpleTestCase):
         self.assertEqual(request.page_limit, 10)
         self.assertEqual(request.status, DocumentOcrStatus.PARTIAL)
 
-    @patch(
-        "core.services.document_ocr_workflow_service.DocumentEnrichmentService._resolve_model"
-    )
+    @patch("core.services.document_ocr_workflow_service.resolve_vision_model")
     @patch(
         "core.services.document_ocr_workflow_service.DocumentOcrRequest.objects.get_or_create"
     )
@@ -136,17 +128,16 @@ class DocumentOcrWorkflowTests(SimpleTestCase):
         self.assertEqual(plan.page_limit, 25)
         self.assertEqual(request.status, DocumentOcrStatus.PROCESSING)
 
-    @patch(
-        "core.services.document_ocr_workflow_service.BillingService._calculate_estimated_cost"
-    )
-    def test_cost_estimate_uses_configured_per_page_token_budget(self, calculate):
-        calculate.return_value = Decimal("0.0042")
+    @patch("core.services.vision_model_service.BillingService")
+    def test_cost_estimate_uses_configured_per_page_token_budget(self, billing):
+        billing.return_value._calculate_estimated_cost.return_value = Decimal("0.0042")
+        rates = SimpleNamespace(identifier="gemini-vision")
 
-        result = self.service._cost_per_page(self.model)
+        result = _cost_per_page(rates)
 
         self.assertEqual(result, Decimal("0.0042"))
-        calculate.assert_called_once_with(
-            self.model, input_tokens=5000, output_tokens=2000
+        billing.return_value._calculate_estimated_cost.assert_called_once_with(
+            rates, input_tokens=5000, output_tokens=2000
         )
 
 

@@ -3,8 +3,7 @@ from unittest.mock import MagicMock, patch
 
 from django.test import SimpleTestCase
 
-from core.services.llm_helpers.semantic_context_helpers import \
-    run_document_search
+from core.services.llm_helpers.semantic_context_helpers import run_document_search
 from core.services.rag.dtos import RetrievalRequest
 from core.services.rag.retriever import DocumentRetriever
 
@@ -62,7 +61,9 @@ class AdvancedDocumentSearchTests(SimpleTestCase):
             processor,
             query="facts from all selected files",
             file_ids=[10, 20, 30],
-            user_id=7,
+            vector_user_id=7,
+            payer_user_id=9,
+            payer_bot_id=None,
             max_context_snippets=6,
             similarity_threshold=0.85,
             target=None,
@@ -71,5 +72,7 @@ class AdvancedDocumentSearchTests(SimpleTestCase):
         request = pipeline.run.call_args.args[0]
         self.assertEqual(result, ["context"])
         self.assertEqual(request.file_ids, (10, 20, 30))
+        self.assertEqual(request.user_id, 7)
+        self.assertEqual(request.payer_user_id, 9)
         self.assertEqual(request.top_k, 6)
         self.assertEqual(request.similarity_threshold, 0.0)
