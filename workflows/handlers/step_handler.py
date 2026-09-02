@@ -65,7 +65,10 @@ class StepNodeHandler(BaseExecutionHandler):
             response, token_usage = await self._call_llm(step_data, message, context, run_step, emitter, node.id)
 
             await self._save_web_search_sources(run_step, token_usage)
-            await self._bill(step_data, context.workflow_run, node, token_usage)
+            # A chat-driven run is billed once on the chat message, with every
+            # participant's own rates summed there.
+            if context.turn is None:
+                await self._bill(step_data, context.workflow_run, node, token_usage)
             await self._mark_completed(run_step, response)
 
             execution_time = (timezone.now() - start_time).total_seconds()
@@ -126,6 +129,9 @@ class StepNodeHandler(BaseExecutionHandler):
             }
 
         inputs = await database_sync_to_async(_get_message_inputs)()
+        if context.turn is not None:
+            # A chat-driven run: the person's message is the task.
+            inputs['text_input'] = context.turn.user_message
 
         return await StepMessagePreparer.prepare_message(
             prompt_content=inputs['prompt_content'],
@@ -147,28 +153,43 @@ class StepNodeHandler(BaseExecutionHandler):
         llm = await self._get_llm_for_step(step_data)
         config = await self._get_step_execution_config(step_data, context)
 
-        request = LLMQueryRequestBuilder.from_workflow_data(
-            message=message,
-            user=config['user'],
-            llm=llm,
-            file_ids=config['content_file_ids'] or None,
-            embedding_ids=config['embedding_file_ids'] or None,
-            tag_ids=config['tag_ids'] or None,
-            prompt_id=config['prompt_id'],
-            temperature=step_data.temperature,
-            max_tokens=step_data.max_tokens,
-            max_context_snippets=step_data.max_context_snippets,
-            document_similarity_threshold=step_data.document_similarity_threshold,
-            workflow_run_step_obj=run_step,
-            structured_spec=None,
-            web_search_enabled=config['enable_web_search'],
-            file_owner_id=None,
-            rag_mode=config['rag_mode'],
-            library_ids=config['library_ids'] or None,
-            web_fetch_enabled=config['enable_web_fetch'],
-            mcp_server_ids=config['mcp_server_ids'] or None,
-            artifacts_enabled=config['enable_artifacts'],
-        )
+        if context.turn is not None:
+            # Chat-driven: the step is a full chat agent over the person's
+            # own context — history, files, memory, tools — with this node's
+            # model and role instructions. The run step still records it.
+            turn = context.turn
+            request = LLMQueryRequestBuilder.from_message_data(
+                message=message,
+                user=turn.user,
+                message_data=turn.message_data_for(node_id),
+                conversation=turn.conversation,
+                llm=llm,
+                workflow_run_step_obj=run_step,
+                platform=turn.platform,
+            )
+        else:
+            request = LLMQueryRequestBuilder.from_workflow_data(
+                message=message,
+                user=config['user'],
+                llm=llm,
+                file_ids=config['content_file_ids'] or None,
+                embedding_ids=config['embedding_file_ids'] or None,
+                tag_ids=config['tag_ids'] or None,
+                prompt_id=config['prompt_id'],
+                temperature=step_data.temperature,
+                max_tokens=step_data.max_tokens,
+                max_context_snippets=step_data.max_context_snippets,
+                document_similarity_threshold=step_data.document_similarity_threshold,
+                workflow_run_step_obj=run_step,
+                structured_spec=None,
+                web_search_enabled=config['enable_web_search'],
+                file_owner_id=None,
+                rag_mode=config['rag_mode'],
+                library_ids=config['library_ids'] or None,
+                web_fetch_enabled=config['enable_web_fetch'],
+                mcp_server_ids=config['mcp_server_ids'] or None,
+                artifacts_enabled=config['enable_artifacts'],
+            )
 
         retrieval_scope = RetrievalScope(
             embedding_ids=tuple(request.context.embedding_ids or ()),

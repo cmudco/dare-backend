@@ -7,6 +7,7 @@ Provides type-safe extraction of message data with defaults.
 
 from typing import Dict, Any, List, Optional
 from conversations.constants import RagMode, SenderType
+from core.services.dtos.ensemble_dto import EnsembleRequest
 
 
 class MessageValidationService:
@@ -56,6 +57,8 @@ class MessageValidationService:
             # Opaque dispatch id from the FE — either a stringified LLM PK or
             # ``litellm:<key_pk>:<model_name>``. Inverted via ``parse_model_id``.
             "model_id": data.get("model_id"),
+            # Panel/council turns: several responder models plus a chairman.
+            "ensemble": EnsembleRequest.parse(data.get("ensemble")),
             "file_owner_id": data.get(
                 "file_owner_id"
             ),  # Bot creator's ID for shared access

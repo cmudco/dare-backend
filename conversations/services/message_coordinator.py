@@ -55,6 +55,7 @@ from conversations.services.message_helpers import (  # Database helpers; Learni
     run_learning_progress_stream,
     should_generate_title,
 )
+from conversations.services.ensemble_service import EnsembleTurnService
 from conversations.services.message_validation_service import MessageValidationService
 from conversations.services.tool_loop_binding import ChatToolLoopBinding
 from conversations.services.tool_loop_service import ToolLoopResult, ToolLoopService
@@ -321,8 +322,13 @@ class MessageCoordinator:
             The AI message object if successful, None otherwise
         """
         try:
+            # A panel or council answers through its chairman: that is the
+            # model the message is attributed to and pre-checked against.
+            ensemble = message_data.get("ensemble")
             descriptor = await self._get_descriptor(
-                model_id or message_data.get("model_id")
+                ensemble.chairman_id
+                if ensemble
+                else (model_id or message_data.get("model_id"))
             )
             if descriptor is None:
                 await self.send_error(
@@ -468,8 +474,11 @@ class MessageCoordinator:
             # Get descriptor: explicit override → existing message's recorded
             # model (real or LiteLLM-routed). For LITELLM messages the previous
             # dispatch is reconstructed from `litellm_key` + `litellm_model_name`.
+            ensemble = message_data.get("ensemble")
             descriptor = await self._get_descriptor(
-                model_id or message_data.get("model_id"),
+                ensemble.chairman_id
+                if ensemble
+                else (model_id or message_data.get("model_id")),
                 default=LLMDescriptor.from_message(ai_message),
             )
             if descriptor is None:
@@ -574,6 +583,8 @@ class MessageCoordinator:
         ai_message.context_trace = None
         ai_message.memory_context_data = []
         ai_message.usage_details = None
+        ai_message.deliberation = None
+        ai_message.workflow_run = None
         ai_message.save(
             update_fields=[
                 "original_message",
@@ -581,6 +592,8 @@ class MessageCoordinator:
                 "context_trace",
                 "memory_context_data",
                 "usage_details",
+                "deliberation",
+                "workflow_run",
             ]
         )
 
@@ -692,14 +705,31 @@ class MessageCoordinator:
                 billing_service=self.billing_service,
                 regenerate=regenerate,
             )
+            ensemble = message_data.get("ensemble")
             self._cancellable_message_ids.add(message_obj.id)
             try:
-                result = await self.tool_loop_service.run(
-                    request=request,
-                    binding=binding,
-                    retrieval_scope=retrieval_scope,
-                    regenerate=regenerate,
-                )
+                if ensemble:
+                    # Panel/council: the workflow engine fans the turn out to
+                    # the bench and the chairman streams the answer. Comes
+                    # back in the tool loop's shape so finalization is shared.
+                    result = await EnsembleTurnService(
+                        send=self.send, resolve_descriptor=self._get_descriptor
+                    ).run(
+                        ensemble=ensemble,
+                        message_data=message_data,
+                        message_obj=message_obj,
+                        conversation=self.conversation,
+                        user=self.user,
+                        platform=self.platform,
+                        regenerate=regenerate,
+                    )
+                else:
+                    result = await self.tool_loop_service.run(
+                        request=request,
+                        binding=binding,
+                        retrieval_scope=retrieval_scope,
+                        regenerate=regenerate,
+                    )
             finally:
                 self._cancellable_message_ids.discard(message_obj.id)
 

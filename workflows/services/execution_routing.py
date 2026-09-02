@@ -120,7 +120,8 @@ def get_dep_results(
             results[dep_id] = {
                 'output': r.output,
                 'metadata': r.metadata or {},
-                'node_type': graph.type_map.get(dep_id)
+                'node_type': graph.type_map.get(dep_id),
+                'label': _node_label(graph, dep_id),
             }
 
     # Bridge through chatOutput: downstream steps see the *original* producer,
@@ -140,6 +141,14 @@ def get_dep_results(
             'output': r.output,
             'metadata': r.metadata or {},
             'node_type': graph.type_map.get(src),
+            'label': _node_label(graph, src),
         }
 
     return results
+
+
+def _node_label(graph: WorkflowGraph, node_id: str) -> str:
+    """The producer's user-visible label, so downstream prompts can name it."""
+    node = graph.node_map.get(node_id)
+    data = getattr(node, '_prefetched_data_object', None) if node else None
+    return getattr(data, 'label', '') or ''
