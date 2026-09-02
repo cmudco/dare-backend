@@ -70,6 +70,21 @@ class DocumentOcrRequestSerializer(serializers.ModelSerializer):
 
 class DocumentOcrApprovalSerializer(serializers.Serializer):
     page_limit = serializers.IntegerField(min_value=1)
+    model_identifier = serializers.CharField(
+        required=False, allow_blank=True, default=""
+    )
+
+
+class VisionModelCandidateSerializer(serializers.Serializer):
+    identifier = serializers.CharField()
+    name = serializers.CharField()
+    provider = serializers.CharField()
+    estimated_cost_per_page = serializers.DecimalField(max_digits=12, decimal_places=8)
+    recommended = serializers.BooleanField()
+
+
+class VisionModelSelectionSerializer(serializers.Serializer):
+    model_identifier = serializers.CharField(allow_blank=True)
 
 
 class FileSerializer(serializers.ModelSerializer):

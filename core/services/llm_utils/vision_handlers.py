@@ -292,6 +292,31 @@ class ClaudeVisionHandler:
         return messages
 
     @staticmethod
+    def convert_image_parts(messages: List[Dict]) -> List[Dict]:
+        """Rewrite OpenAI-style ``image_url`` data-URL parts into Claude image blocks."""
+        converted = []
+        for message in messages:
+            content = message.get("content")
+            if isinstance(content, list):
+                content = [
+                    ClaudeVisionHandler._image_block(part["image_url"]["url"])
+                    if part.get("type") == "image_url"
+                    else part
+                    for part in content
+                ]
+            converted.append({**message, "content": content})
+        return converted
+
+    @staticmethod
+    def _image_block(data_url: str) -> Dict:
+        header, _, data = data_url.partition(",")
+        media_type = header.removeprefix("data:").split(";")[0]
+        return {
+            "type": "image",
+            "source": {"type": "base64", "media_type": media_type, "data": data},
+        }
+
+    @staticmethod
     def _extract_base64_data(preview: str) -> str:
         """
         Extract base64 data from data URL.

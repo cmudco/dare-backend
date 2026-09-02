@@ -1,6 +1,10 @@
 from django.test import SimpleTestCase
 
-from billing.litellm_model_policy import recommend_background_models
+from billing.litellm_model_policy import (
+    recommend_background_models,
+    recommend_vision_models,
+)
+from core.services.model_identity import supports_vision
 
 
 class BackgroundModelRecommendationTests(SimpleTestCase):
@@ -99,3 +103,47 @@ class BackgroundModelRecommendationTests(SimpleTestCase):
 
         self.assertEqual(recommend_background_models(models, limit=2), models[:2])
         self.assertEqual(recommend_background_models(models, limit=0), [])
+
+
+class VisionModelPolicyTests(SimpleTestCase):
+    def test_known_families_support_vision_and_special_purpose_models_do_not(self):
+        for model in (
+            "openai/gpt-5.6-luna",
+            "gpt-4.1-mini",
+            "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "anthropic/claude-fable-5-1",
+            "gemini/gemini-3.6-flash",
+            "mistral/pixtral-large-latest",
+        ):
+            self.assertTrue(supports_vision(model), model)
+        for model in (
+            "text-embedding-3-large",
+            "gpt-4o-mini-tts",
+            "gpt-4o-transcribe",
+            "o3-mini",
+            "deepseek/deepseek-r1",
+            "gpt-image-1",
+        ):
+            self.assertFalse(supports_vision(model), model)
+
+    def test_ranks_gemini_flash_then_luna_then_haiku_then_the_rest(self):
+        models = [
+            "anthropic/claude-sonnet-4-5",
+            "text-embedding-3-large",
+            "anthropic/claude-haiku-4-5",
+            "gpt-5.6-luna",
+            "gemini/gemini-3.5-flash",
+            "gemini/gemini-3.6-flash",
+            "deepseek/deepseek-r1",
+        ]
+
+        self.assertEqual(
+            recommend_vision_models(models),
+            [
+                "gemini/gemini-3.6-flash",
+                "gemini/gemini-3.5-flash",
+                "gpt-5.6-luna",
+                "anthropic/claude-haiku-4-5",
+                "anthropic/claude-sonnet-4-5",
+            ],
+        )

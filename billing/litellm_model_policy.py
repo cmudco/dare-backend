@@ -3,6 +3,8 @@
 import re
 from collections.abc import Iterable
 
+from core.services.model_identity import supports_vision
+
 MAX_BACKGROUND_MODEL_RECOMMENDATIONS = 4
 
 _LUNA = re.compile(r"(?:^|[/_.-])luna(?:$|[/_.-])", re.IGNORECASE)
@@ -62,6 +64,35 @@ def recommend_background_models(
         ),
     )
 
+    return _merge(groups, limit)
+
+
+def recommend_vision_models(models: Iterable[str]) -> list[str]:
+    """Every vision-capable model, best default first: Gemini Flash, Luna, Haiku."""
+    candidates = [
+        model for model in _unique_text_models(models) if supports_vision(model)
+    ]
+    groups = (
+        sorted(
+            (model for model in candidates if _GEMINI_FLASH.search(model)),
+            key=_gemini_rank,
+            reverse=True,
+        ),
+        sorted(
+            (model for model in candidates if _LUNA.search(model)),
+            key=_canonical_route_rank,
+        ),
+        sorted(
+            (model for model in candidates if _HAIKU.search(model)),
+            key=_haiku_rank,
+            reverse=True,
+        ),
+        sorted(candidates, key=_canonical_route_rank),
+    )
+    return _merge(groups)
+
+
+def _merge(groups: Iterable[Iterable[str]], limit: int | None = None) -> list[str]:
     recommendations: list[str] = []
     seen: set[str] = set()
     for group in groups:

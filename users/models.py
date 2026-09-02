@@ -188,6 +188,13 @@ class User(SyftBoxTokenMixin, AbstractUser, IsDeletedMixin):
         verbose_name=_("Overlap Size"),
         help_text=_("Size of overlap between text chunks")
     )
+    vision_model = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        verbose_name=_("Vision Model"),
+        help_text=_("Preferred model for scanned-page transcription and figure description; empty means the wallet's recommendation.")
+    )
     # Additional fields sourced from onboarding form
     role = models.TextField(
         blank=True,

@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from core.services.model_capabilities import family_supports_temperature
-from core.services.model_identity import resolve_family
+from core.services.model_identity import resolve_family, supports_vision
 
 
 @dataclass(frozen=True)
@@ -44,6 +44,7 @@ class LLMDescriptor:
     supports_temperature: bool = True
     supports_effort: bool = False
     supports_adaptive_thinking: bool = False
+    supports_vision: bool = True
     default_effort: str = "high"
     default_adaptive_thinking_enabled: bool = False
     is_image_generator: bool = False
@@ -65,6 +66,7 @@ class LLMDescriptor:
             supports_adaptive_thinking=bool(
                 getattr(llm, "supports_adaptive_thinking", False)
             ),
+            supports_vision=bool(getattr(llm, "supports_vision", True)),
             default_effort=getattr(llm, "default_effort", "high"),
             default_adaptive_thinking_enabled=bool(
                 getattr(llm, "default_adaptive_thinking_enabled", False)
@@ -117,6 +119,7 @@ class LLMDescriptor:
             supports_adaptive_thinking=bool(
                 family and family.supports_adaptive_thinking
             ),
+            supports_vision=supports_vision(model_name),
             default_effort="high",
             default_adaptive_thinking_enabled=False,
             litellm_key=litellm_key,
@@ -158,6 +161,7 @@ class LLMDescriptor:
             supports_temperature=self.supports_temperature,
             supports_effort=self.supports_effort,
             supports_adaptive_thinking=self.supports_adaptive_thinking,
+            supports_vision=self.supports_vision,
             default_effort=self.default_effort,
             default_adaptive_thinking_enabled=self.default_adaptive_thinking_enabled,
             is_image_generator=self.is_image_generator,

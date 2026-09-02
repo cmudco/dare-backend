@@ -6,6 +6,7 @@ from django.db import transaction
 from django.utils import timezone
 from django_rq import enqueue
 
+from core.services.vision_model_service import resolve_vision_model
 from files.constants import DocumentOcrStatus, FileProcessingStage, FileStatus
 from files.models import DocumentOcrRequest, File
 
@@ -26,6 +27,10 @@ class DocumentOcrPageLimitError(DocumentOcrApprovalError):
     pass
 
 
+class DocumentOcrModelError(DocumentOcrApprovalError):
+    pass
+
+
 class DocumentOcrQueueError(DocumentOcrApprovalError):
     pass
 
@@ -35,6 +40,7 @@ class DocumentOcrApprovalCommand:
     file_id: int
     user_id: int
     page_limit: int
+    model_identifier: str = ""
 
 
 class DocumentOcrApprovalService:
@@ -71,13 +77,29 @@ class DocumentOcrApprovalService:
                     f"pageLimit must be between 1 and {selectable_pages}."
                 )
 
+            if command.model_identifier:
+                route = resolve_vision_model(file.user, command.model_identifier)
+                if route is None or route.model.identifier != command.model_identifier:
+                    raise DocumentOcrModelError(
+                        "That model is not available for vision in your active wallet."
+                    )
+                ocr_request.model_identifier = route.model.identifier
+                ocr_request.estimated_cost_per_page = route.estimated_cost_per_page
+
             previous_ocr_status = ocr_request.status
             approved_at = timezone.now()
             ocr_request.page_limit = command.page_limit
             ocr_request.status = DocumentOcrStatus.APPROVED
             ocr_request.approved_at = approved_at
             ocr_request.save(
-                update_fields=["page_limit", "status", "approved_at", "updated_at"]
+                update_fields=[
+                    "page_limit",
+                    "status",
+                    "approved_at",
+                    "model_identifier",
+                    "estimated_cost_per_page",
+                    "updated_at",
+                ]
             )
 
             file.status = FileStatus.PROCESSING
