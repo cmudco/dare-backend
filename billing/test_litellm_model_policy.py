@@ -61,9 +61,28 @@ class BackgroundModelRecommendationTests(SimpleTestCase):
             ],
         )
 
+    def test_uses_newest_haiku_after_gemini(self):
+        models = [
+            "anthropic/claude-3-haiku-20240307",
+            "anthropic/claude-haiku-4-5",
+            "gemini/gemini-3.0-flash",
+            "anthropic/claude-3-5-haiku-20241022",
+            "anthropic/claude-sonnet-4-5",
+        ]
+
+        self.assertEqual(
+            recommend_background_models(models),
+            [
+                "gemini/gemini-3.0-flash",
+                "anthropic/claude-haiku-4-5",
+                "anthropic/claude-3-5-haiku-20241022",
+                "anthropic/claude-3-haiku-20240307",
+            ],
+        )
+
     def test_excludes_other_families_non_text_models_and_duplicates(self):
         models = [
-            "anthropic/claude-haiku-4-5",
+            "anthropic/claude-sonnet-4-5",
             "text-embedding-3-large",
             "openai/gpt-5.6-luna",
             "OPENAI/GPT-5.6-LUNA",

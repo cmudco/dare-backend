@@ -8,6 +8,10 @@ MAX_BACKGROUND_MODEL_RECOMMENDATIONS = 4
 _LUNA = re.compile(r"(?:^|[/_.-])luna(?:$|[/_.-])", re.IGNORECASE)
 _GEMINI = re.compile(r"(?:^|[/_.-])gemini(?:$|[/_.-]|\d)", re.IGNORECASE)
 _GEMINI_FLASH = re.compile(r"gemini.*flash", re.IGNORECASE)
+_HAIKU = re.compile(r"(?:^|[/_.-])haiku(?:$|[/_.-]|\d)", re.IGNORECASE)
+_HAIKU_VERSION = re.compile(
+    r"(?<!\d)(?P<major>\d{1,2})(?:[.\-_](?P<minor>\d{1,2}))?(?!\d)"
+)
 _GEMINI_VERSION = re.compile(
     r"gemini[\W_]*(?P<major>\d+)(?:[\W_]+(?P<minor>\d+))?",
     re.IGNORECASE,
@@ -25,7 +29,7 @@ def recommend_background_models(
     *,
     limit: int = MAX_BACKGROUND_MODEL_RECOMMENDATIONS,
 ) -> list[str]:
-    """Return a ranked shortlist from the explicitly recommended model families."""
+    """Return a ranked shortlist: Luna, then Gemini Flash, other Gemini, and Haiku."""
     if limit <= 0:
         return []
 
@@ -49,6 +53,11 @@ def recommend_background_models(
                 if _GEMINI.search(model) and not _GEMINI_FLASH.search(model)
             ),
             key=_gemini_rank,
+            reverse=True,
+        ),
+        sorted(
+            (model for model in candidates if _HAIKU.search(model)),
+            key=_haiku_rank,
             reverse=True,
         ),
     )
@@ -92,3 +101,10 @@ def _gemini_rank(model: str) -> tuple[int, int, int, int, str]:
     stable = 0 if "preview" in model.casefold() else 1
     full_model = 0 if "lite" in model.casefold() else 1
     return major, minor, stable, full_model, model.casefold()
+
+
+def _haiku_rank(model: str) -> tuple[int, int, str]:
+    match = _HAIKU_VERSION.search(model)
+    major = int(match.group("major")) if match else 0
+    minor = int(match.group("minor") or 0) if match else 0
+    return major, minor, model.casefold()
