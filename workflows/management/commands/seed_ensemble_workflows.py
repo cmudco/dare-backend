@@ -22,6 +22,7 @@ from workflows.services.ensemble_workflow_builder import (
     DEPTH_SINGLE,
     EnsembleSpec,
     build_ensemble_workflow,
+    reset_prompts,
 )
 
 # One everyday question per template, so a first run reads like a real chat.
@@ -95,12 +96,20 @@ class Command(BaseCommand):
         parser.add_argument(
             "--force", action="store_true", help="Replace existing templates"
         )
+        parser.add_argument(
+            "--reset-prompts",
+            action="store_true",
+            help="Rewrite the Ensemble role prompts from code (they are editable in the prompt library)",
+        )
 
     def handle(self, *args, **options):
         try:
             user = User.objects.get(email=options["user"])
         except User.DoesNotExist as exc:
             raise CommandError(f"No user with email {options['user']}") from exc
+
+        if options["reset_prompts"]:
+            self.stdout.write(f"reset {reset_prompts(user)} role prompt(s) from code")
 
         if options["responders"]:
             ids = [int(x) for x in options["responders"].split(",") if x.strip()]

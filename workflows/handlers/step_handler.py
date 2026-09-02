@@ -14,6 +14,7 @@ from django.utils import timezone
 from conversations.models import LLM
 from conversations.services.tool_loop_service import ToolLoopService
 from core.services.dtos import LLMQueryRequestBuilder
+from core.services.tool_loop.binding import ArtifactHost
 from dare_tools.services.retrieval_tool_executor import RetrievalScope
 from workflows.constants import WorkflowRunStepStatus
 from workflows.handlers.base import (ExecutionNode, NodeExecutionContext,
@@ -208,6 +209,13 @@ class StepNodeHandler(BaseExecutionHandler):
             emitter=emitter,
             send_callback=context.send_callback,
         )
+        turn = context.turn
+        if turn is not None and turn.message_obj is not None and turn.is_chairman(node_id):
+            # The chairman writes the chat's answer, so its artifacts belong
+            # to that message, not to the hidden run step.
+            binding.artifact_host = ArtifactHost(
+                message=turn.message_obj, conversation=turn.conversation
+            )
 
         # regenerate=True: a re-run reuses the same WorkflowRunStep, so its
         # previous tool-call rows must never survive into the new turn.

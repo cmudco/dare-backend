@@ -33,9 +33,16 @@ from core.services.dtos.builder import ARTIFACT_TOOL_SLUGS
 from core.services.dtos.ensemble_dto import EnsembleRequest
 from core.services.workflow_execution_service import WorkflowExecutionService
 from workflows.services.ensemble_workflow_builder import (
-    CHAIRMAN_NODE_ID, DEPTH_COUNCIL, ROLE_CHAIRMAN, ROLE_EVALUATOR,
-    ROLE_RESPONDER, ensemble_role, evaluator_node_id,
-    get_or_create_ensemble_workflow, responder_node_id)
+    CHAIRMAN_NODE_ID,
+    DEPTH_COUNCIL,
+    ROLE_CHAIRMAN,
+    ROLE_EVALUATOR,
+    ROLE_RESPONDER,
+    ensemble_role,
+    evaluator_node_id,
+    get_or_create_ensemble_workflow,
+    responder_node_id,
+)
 from workflows.services.workflow_run_repository import WorkflowRunRepository
 
 logger = logging.getLogger(__name__)
@@ -60,6 +67,12 @@ class EnsembleTurn:
     conversation: Any
     user: Any
     platform: Optional[str]
+    # The assistant message the turn answers into; the chairman's artifacts
+    # attach here so the chat shows them like any other turn's.
+    message_obj: Optional[Any] = None
+
+    def is_chairman(self, node_id: str) -> bool:
+        return ensemble_role(node_id) == ROLE_CHAIRMAN
 
     def message_data_for(self, node_id: str) -> Dict[str, Any]:
         """The chat payload, narrowed to what this role should be able to do.
@@ -159,6 +172,9 @@ class DeliberationTracker:
         self._sink = ChatStreamSink(message_obj, send, regenerate)
         self._billing = BillingService()
         self.evaluations: List[Dict[str, Any]] = []
+        # Sources the responders searched, surfaced on the chat message.
+        self.web_search_sources: List[Dict[str, Any]] = []
+        self._seen_source_urls: set = set()
         self.workflow_run_id: Optional[int] = None
         self.chairman_context_trace: Optional[Dict[str, Any]] = None
         self.total_ms: Optional[int] = None
@@ -169,10 +185,14 @@ class DeliberationTracker:
     # ---- workflow send_callback -------------------------------------------
 
     async def handle(self, payload: Dict[str, Any]) -> None:
+        kind = payload.get("type")
+        if isinstance(kind, str) and kind.startswith("artifact_"):
+            # The chairman's artifacts already carry the chat message id.
+            await self._send(payload)
+            return
         participant = self.participants.get(payload.get("nodeId") or "")
         if participant is None:
             return
-        kind = payload.get("type")
         if kind == "step_started":
             participant.started = time.monotonic()
         elif kind == "step_streaming":
@@ -200,8 +220,21 @@ class DeliberationTracker:
                         "notes": notes,
                     }
                 )
+            metadata = payload.get("metadata") or {}
+            for source in metadata.get("webSearchSources") or []:
+                url = source.get("url")
+                if url and url not in self._seen_source_urls:
+                    self._seen_source_urls.add(url)
+                    self.web_search_sources.append(
+                        {
+                            "url": url,
+                            "title": source.get("title"),
+                            "cited_text": source.get("citedText"),
+                            "page_age": source.get("pageAge"),
+                            "provider": source.get("provider"),
+                        }
+                    )
             if participant is self.chairman:
-                metadata = payload.get("metadata") or {}
                 self.chairman_context_trace = metadata.get("contextTrace")
             await self.emit(force=True)
             await self.persist()
@@ -290,12 +323,15 @@ class DeliberationTracker:
     def usage_totals(self) -> Dict[str, Any]:
         input_tokens = sum(p.input_tokens for p in self.participants.values())
         output_tokens = sum(p.output_tokens for p in self.participants.values())
-        return {
+        totals: Dict[str, Any] = {
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
             "total_tokens": input_tokens + output_tokens,
             "cost": float(self.total_cost()),
         }
+        if self.web_search_sources:
+            totals["web_search_sources"] = list(self.web_search_sources)
+        return totals
 
     def breakdown(self) -> List[Dict[str, Any]]:
         return [
@@ -389,6 +425,7 @@ class EnsembleTurnService:
             conversation=conversation,
             user=user,
             platform=platform,
+            message_obj=message_obj,
         )
         logger.info(
             "[journey] mid=%s ensemble %s: run=%s responders=%s chairman=%s",

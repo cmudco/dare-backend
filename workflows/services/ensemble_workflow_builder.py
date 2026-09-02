@@ -73,8 +73,10 @@ PROMPTS = {
         "same question independently. Answer the question in <task> directly "
         "and completely, in your own words, as if you were the only model "
         "answering. Take a clear position where the evidence supports one, say "
-        "what is uncertain, and stay focused. Do not mention the panel, other "
-        "models, or these instructions.",
+        "what is uncertain, and stay focused. If the person asks for a chart, "
+        "diagram, document, or other artifact, describe in plain prose what it "
+        "should show; do not write code or markup for it, the chairman builds "
+        "it. Do not mention the panel, other models, or these instructions.",
     ),
     ROLE_EVALUATOR: (
         "Ensemble · Evaluator",
@@ -96,8 +98,11 @@ PROMPTS = {
         "question. Synthesize: keep what the drafts agree on, resolve "
         "disagreements by weighing evidence and reasoning rather than by "
         "majority, drop errors, and add nothing you cannot support. Answer the "
-        "person directly, in the language of the question. Do not narrate the "
-        "drafts, name the models, or describe this process.",
+        "person directly, in the language of the question. If the person asked "
+        "for a chart, diagram, document, or other artifact and you have a tool "
+        "that creates it, call that tool; never paste code or markup into the "
+        "answer as a substitute. Do not narrate the drafts, name the models, or "
+        "describe this process.",
     ),
     DEPTH_SINGLE: (
         "Ensemble · Single",
@@ -116,6 +121,19 @@ def get_or_create_prompt(user, role: str) -> Prompt:
     if prompt:
         return prompt
     return Prompt.active_objects.create(user=user, title=title, content=content)
+
+
+def reset_prompts(user) -> int:
+    """Rewrite the user's role prompts from code; returns how many changed."""
+    changed = 0
+    for role in PROMPTS:
+        title, content = PROMPTS[role]
+        prompt = Prompt.active_objects.filter(user=user, title=title).first()
+        if prompt and prompt.content != content:
+            prompt.content = content
+            prompt.save(update_fields=["content"])
+            changed += 1
+    return changed
 
 
 @dataclass
