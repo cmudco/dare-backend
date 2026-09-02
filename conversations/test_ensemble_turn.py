@@ -2,8 +2,11 @@
 
 from django.test import SimpleTestCase, TestCase
 
-from conversations.services.ensemble_service import (EnsembleTurn,
-                                                     _parse_evaluation)
+from conversations.services.ensemble_service import (
+    EnsembleTurn,
+    _parse_evaluation,
+    ensemble_enabled_for,
+)
 from core.services.dtos.builder import ARTIFACT_TOOL_SLUGS
 from core.services.dtos.ensemble_dto import EnsembleRequest
 from feature_flags.models import FeatureFlag, UserFeatureOverride
