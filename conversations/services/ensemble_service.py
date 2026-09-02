@@ -300,7 +300,7 @@ class DeliberationTracker:
     def mark_stopped(self) -> None:
         for participant in self.participants.values():
             if participant.status in ("pending", "streaming"):
-                participant.status = "dropped"
+                participant.status = "stopped"
 
     async def finish(self) -> None:
         self.total_ms = int((time.monotonic() - self._started_at) * 1000)
