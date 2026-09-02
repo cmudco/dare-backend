@@ -54,6 +54,10 @@ class NodeExecutionContext:
     is_single_step_execution: bool = False
     batch_file_id: Optional[int] = None
     is_start_connected: bool = False
+    # Set when a chat turn drives the run: steps then build their request
+    # from the chat's context (history, files, memory, tools) instead of
+    # their own node configuration. See conversations.services.ensemble.
+    turn: Optional[Any] = None
 
 
 @dataclass

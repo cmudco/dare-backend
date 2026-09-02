@@ -1036,6 +1036,19 @@ class Message(BaseModel):
         blank=True,
         help_text="Per-round token/cost breakdown for multi-round tool responses; summed values live in input_tokens/output_tokens/cost.",
     )
+    deliberation = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="Panel/council behind this answer: every responder's draft, peer reviews, and the chairman, for the deliberation UI.",
+    )
+    workflow_run = models.ForeignKey(
+        "workflows.WorkflowRun",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="chat_messages",
+        help_text="The ensemble workflow run that produced this answer, when a panel or council answered.",
+    )
 
     # Content type for specialized rendering (diagrams, charts, etc.)
     content_type = models.CharField(

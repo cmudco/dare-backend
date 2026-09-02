@@ -173,6 +173,8 @@ class WebSocketResponseService:
             "memoryContextData": serialized_data.get("memory_context_data") or [],
             "retrievalTrace": serialized_data.get("retrieval_trace"),
             "contextTrace": serialized_data.get("context_trace"),
+            "deliberation": serialized_data.get("deliberation"),
+            "workflowRunId": serialized_data.get("workflow_run_id"),
         }
 
         return cls._dict_to_camel_case(response)

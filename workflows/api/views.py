@@ -3,6 +3,7 @@ import markdown
 import os
 import tempfile
 import traceback
+from workflows.constants import WorkflowKind
 
 import weasyprint
 from django.db import transaction
@@ -57,7 +58,8 @@ class WorkflowViewSet(viewsets.ModelViewSet):
             ).order_by('-published_at')
 
         return Workflow.active_objects.filter(
-            user=self.request.user
+            user=self.request.user,
+            kind=WorkflowKind.USER,
         ).select_related('root_start_node').prefetch_related(
             Prefetch('nodes', queryset=WorkflowNode.objects.select_related('data_content_type')),
             'edges',
