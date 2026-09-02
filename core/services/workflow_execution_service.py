@@ -218,6 +218,11 @@ class WorkflowExecutionService:
                 turn=turn,
                 node_timeout_seconds=node_timeout_seconds,
             )
+            # Same tell after the wave: a stop that landed mid-stream comes
+            # back as a finished-looking result, and the last wave has no
+            # next iteration to notice it.
+            if current is not None and current.cancelling():
+                raise asyncio.CancelledError()
 
             pending: Optional[tuple] = None
             for node, result in zip(runnable, results):
