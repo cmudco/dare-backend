@@ -7,6 +7,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from rest_framework import status
 from rest_framework.test import APITestCase
 
+from core.services.vision_model_service import VisionModelNotOffered
 from files.constants import DocumentOcrStatus, FileStatus
 from files.models import DocumentOcrRequest, File
 
@@ -57,7 +58,7 @@ class DocumentOcrApprovalApiTests(APITestCase):
         self.assertEqual(self.file.job_id, "ocr-job")
         enqueue.assert_called_once()
 
-    @patch("files.services.document_ocr_approval_service.resolve_vision_model")
+    @patch("files.services.document_ocr_approval_service.select_vision_model")
     @patch("files.services.document_ocr_approval_service.enqueue")
     def test_owner_can_pick_the_vision_model_for_the_run(self, enqueue, resolve):
         enqueue.return_value.id = "ocr-job"
@@ -80,12 +81,9 @@ class DocumentOcrApprovalApiTests(APITestCase):
         self.assertEqual(self.ocr_request.estimated_cost_per_page, Decimal("0.004"))
         self.assertEqual(response.data["ocr"]["model_identifier"], "claude-haiku-4-5")
 
-    @patch("files.services.document_ocr_approval_service.resolve_vision_model")
-    def test_model_outside_the_wallet_is_rejected(self, resolve):
-        resolve.return_value = SimpleNamespace(
-            model=SimpleNamespace(identifier="gemini-vision"),
-            estimated_cost_per_page=Decimal("0.001"),
-        )
+    @patch("files.services.document_ocr_approval_service.select_vision_model")
+    def test_model_outside_the_wallet_is_rejected(self, select):
+        select.side_effect = VisionModelNotOffered("not offered")
         self.client.force_authenticate(user=self.user)
 
         response = self.client.post(

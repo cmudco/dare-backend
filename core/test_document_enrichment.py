@@ -70,9 +70,10 @@ class DocumentEnrichmentTelemetryTests(SimpleTestCase):
             user=SimpleNamespace(id=3),
         )
         self.route = SimpleNamespace(
-            model=SimpleNamespace(identifier="gemini-test"), litellm_key=None
+            model=SimpleNamespace(identifier="gemini-test"),
+            wallet_type="LITELLM",
+            litellm_key=None,
         )
-        self.credentials = SimpleNamespace()
         self.service = DocumentEnrichmentService()
 
     @patch("core.services.document_enrichment_service.DocumentEnrichmentCache")
@@ -91,7 +92,6 @@ class DocumentEnrichmentTelemetryTests(SimpleTestCase):
             prompt="Describe",
             schema={"type": "object"},
             route=self.route,
-            credentials=self.credentials,
             ai_service=ai_service,
             output_limit=100,
             kind="figure_description",
@@ -126,7 +126,6 @@ class DocumentEnrichmentTelemetryTests(SimpleTestCase):
                 prompt="Describe",
                 schema={"type": "object"},
                 route=self.route,
-                credentials=self.credentials,
                 ai_service=ai_service,
                 output_limit=100,
                 kind="figure_description",

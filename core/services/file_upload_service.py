@@ -178,7 +178,9 @@ class FileUploadService:
             # Uploads are batched in one transaction; a job enqueued before it
             # commits can run against a row the worker cannot see yet.
             transaction.on_commit(
-                lambda: FileUploadService.enqueue_processing(file_instance, chunk_size, overlap_size)
+                lambda: FileUploadService.enqueue_processing(
+                    file_instance, chunk_size, overlap_size
+                )
             )
         elif is_media:
             logger.info(f"Media file '{file_name}' ({media_type}) uploaded successfully - skipping vectorization")
@@ -186,9 +188,15 @@ class FileUploadService:
         return file_instance
 
     @staticmethod
-    def enqueue_processing(file_instance: File, chunk_size: int | None = None, overlap_size: int | None = None) -> None:
+    def enqueue_processing(
+        file_instance: File,
+        chunk_size: int | None = None,
+        overlap_size: int | None = None,
+    ) -> None:
         try:
-            job = enqueue(process_file_embeddings, file_instance.id, chunk_size, overlap_size)
+            job = enqueue(
+                process_file_embeddings, file_instance.id, chunk_size, overlap_size
+            )
         except Exception as e:
             file_instance.status = FileStatus.FAILED
             file_instance.error_message = f"Could not queue processing: {e}"

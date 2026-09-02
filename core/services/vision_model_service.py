@@ -25,6 +25,10 @@ from core.services.model_identity import supports_vision
 from core.services.reference_pricing import reference_rates
 
 
+class VisionModelNotOffered(ValueError):
+    pass
+
+
 @dataclass(frozen=True)
 class VisionModelRoute:
     model: LLM
@@ -37,7 +41,6 @@ class VisionModelRoute:
 class VisionModelCandidate:
     identifier: str
     name: str
-    provider: str
     estimated_cost_per_page: Decimal
     recommended: bool
 
@@ -48,7 +51,6 @@ def list_vision_models(user) -> List[VisionModelCandidate]:
         VisionModelCandidate(
             identifier=route.model.identifier,
             name=route.model.name,
-            provider=route.model.provider,
             estimated_cost_per_page=route.estimated_cost_per_page,
             recommended=index == 0,
         )
@@ -63,6 +65,16 @@ def resolve_vision_model(user, requested: str = "") -> Optional[VisionModelRoute
         if requested and route.model.identifier == requested:
             return route
     return routes[0] if routes else None
+
+
+def select_vision_model(user, identifier: str) -> VisionModelRoute:
+    """The named model, or VisionModelNotOffered when the wallet lacks it."""
+    route = resolve_vision_model(user, identifier)
+    if route is None or route.model.identifier != identifier:
+        raise VisionModelNotOffered(
+            "That model is not available for vision in your active wallet."
+        )
+    return route
 
 
 def _routes(user) -> List[VisionModelRoute]:

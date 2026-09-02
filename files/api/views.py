@@ -29,7 +29,12 @@ from core.services.document_crop_service import (
 from core.services.document_processor import DocumentProcessor
 from core.services.file_processor import FileProcessor
 from core.services.file_upload_service import FileUploadService
-from core.services.vision_model_service import list_vision_models, resolve_vision_model
+from core.services.vision_model_service import (
+    VisionModelNotOffered,
+    list_vision_models,
+    resolve_vision_model,
+    select_vision_model,
+)
 from core.storage.backends import SyftBoxStorage
 from core.storage.constants import StorageBackendChoice
 from core.storage.permission_service import SyftBoxPermissionService
@@ -165,19 +170,21 @@ class FileViewSet(viewsets.ModelViewSet):
         PATCH stores the default used for automatic scanned-page transcription
         and figure description; an empty identifier restores the recommendation.
         """
-        candidates = list_vision_models(request.user)
         if request.method == "PATCH":
             payload = VisionModelSelectionSerializer(data=request.data)
             payload.is_valid(raise_exception=True)
             identifier = payload.validated_data["model_identifier"]
-            if identifier and identifier not in {c.identifier for c in candidates}:
-                return Response(
-                    {"error": "That model is not available for vision in your active wallet."},
-                    status=status.HTTP_400_BAD_REQUEST,
-                )
+            if identifier:
+                try:
+                    select_vision_model(request.user, identifier)
+                except VisionModelNotOffered as error:
+                    return Response(
+                        {"error": str(error)}, status=status.HTTP_400_BAD_REQUEST
+                    )
             request.user.vision_model = identifier
             request.user.save(update_fields=["vision_model"])
 
+        candidates = list_vision_models(request.user)
         selected = resolve_vision_model(request.user, request.user.vision_model)
         return Response(
             {

@@ -44,7 +44,6 @@ class LLMSerializer(serializers.ModelSerializer):
             "supports_temperature",
             "supports_effort",
             "supports_adaptive_thinking",
-            "supports_vision",
             "default_effort",
             "default_adaptive_thinking_enabled",
             "is_image_generator",

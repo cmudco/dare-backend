@@ -178,7 +178,7 @@ class DocumentEnrichmentService:
             telemetry.visual_operations += 1
             try:
                 page_results[page_no] = self._transcribe_page(
-                    file, page_no, route, credentials, ai_service, telemetry
+                    file, page_no, route, ai_service, telemetry
                 )
             except Exception as error:
                 telemetry.failed_operations += 1
@@ -223,7 +223,6 @@ class DocumentEnrichmentService:
                     elements,
                     index,
                     route,
-                    credentials,
                     ai_service,
                     telemetry,
                 )
@@ -352,7 +351,6 @@ class DocumentEnrichmentService:
         elements: List[ParsedElement],
         index: int,
         route: VisionModelRoute,
-        credentials,
         ai_service,
         telemetry: EnrichmentTelemetry,
     ) -> Dict[str, Any]:
@@ -384,7 +382,6 @@ class DocumentEnrichmentService:
             prompt=prompt,
             schema=FIGURE_SCHEMA,
             route=route,
-            credentials=credentials,
             ai_service=ai_service,
             output_limit=900,
             kind="figure_description",
@@ -410,7 +407,6 @@ class DocumentEnrichmentService:
         file: File,
         page_no: int,
         route: VisionModelRoute,
-        credentials,
         ai_service,
         telemetry: EnrichmentTelemetry,
     ) -> Dict[str, Any]:
@@ -428,7 +424,6 @@ class DocumentEnrichmentService:
             prompt=self._page_prompt(context),
             schema=PAGE_SCHEMA,
             route=route,
-            credentials=credentials,
             ai_service=ai_service,
             output_limit=8000,
             kind="page_transcription",
@@ -465,7 +460,6 @@ class DocumentEnrichmentService:
         prompt: str,
         schema: Dict[str, Any],
         route: VisionModelRoute,
-        credentials,
         ai_service,
         output_limit: int,
         kind: str,
@@ -490,7 +484,7 @@ class DocumentEnrichmentService:
             telemetry.cache_hits += 1
             return dict(cache.result), True
 
-        self._check_credit(model, file, credentials, output_limit)
+        self._check_credit(route, file, output_limit)
         data_url = "data:image/jpeg;base64," + base64.b64encode(image).decode("ascii")
         messages = [
             {
@@ -508,7 +502,7 @@ class DocumentEnrichmentService:
             max_tokens=output_limit,
             temperature=0.1,
         )
-        self._record_usage(file, route, credentials, usage, kind)
+        self._record_usage(file, route, usage, kind)
         DocumentEnrichmentCache.objects.update_or_create(
             user=file.user,
             content_sha256=content_hash,
@@ -520,11 +514,11 @@ class DocumentEnrichmentService:
         return result, False
 
     @staticmethod
-    def _check_credit(model: LLM, file: File, credentials, output_limit: int) -> None:
-        if credentials.wallet_type != UserWalletPreferenceTypeChoice.DARE:
+    def _check_credit(route: VisionModelRoute, file: File, output_limit: int) -> None:
+        if route.wallet_type != UserWalletPreferenceTypeChoice.DARE:
             return
         estimated = BillingService()._calculate_estimated_cost(
-            model, input_tokens=5000, output_tokens=output_limit
+            route.model, input_tokens=5000, output_tokens=output_limit
         )
         try:
             wallet = file.user.wallet
@@ -535,7 +529,7 @@ class DocumentEnrichmentService:
 
     @staticmethod
     def _record_usage(
-        file: File, route: VisionModelRoute, credentials, usage: Dict, kind: str
+        file: File, route: VisionModelRoute, usage: Dict, kind: str
     ) -> None:
         billing = BillingService()
         call = {
@@ -544,13 +538,13 @@ class DocumentEnrichmentService:
             "output_tokens": int(usage.get("output_tokens", 0) or 0),
             "description": f"Document enrichment ({kind}) for file {file.id}: {(file.name or file.file.name)[:100]}",
         }
-        if credentials.wallet_type == UserWalletPreferenceTypeChoice.LITELLM:
+        if route.wallet_type == UserWalletPreferenceTypeChoice.LITELLM:
             billing.record_litellm_service_usage(
                 litellm_key=route.litellm_key,
                 model_name=route.model.identifier,
                 **call,
             )
-        elif credentials.wallet_type == UserWalletPreferenceTypeChoice.BYO:
+        elif route.wallet_type == UserWalletPreferenceTypeChoice.BYO:
             billing.record_byo_service_usage(llm=route.model, **call)
         else:
             billing.record_service_usage(llm=route.model, **call)

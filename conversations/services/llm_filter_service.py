@@ -40,7 +40,7 @@ from billing.wallet_router import (
 from conversations.constants import Provider
 from conversations.models import LLM
 from core.services.model_capabilities import family_supports_temperature
-from core.services.model_identity import resolve_family, supports_vision
+from core.services.model_identity import resolve_family
 
 # === Wallet metadata wire shape ============================================
 #
@@ -108,7 +108,6 @@ def _llm_entry(model: LLM) -> Dict[str, Any]:
         "supports_temperature": model.supports_temperature,
         "supports_effort": model.supports_effort,
         "supports_adaptive_thinking": model.supports_adaptive_thinking,
-        "supports_vision": model.supports_vision,
         "reasoning_level": model.reasoning_level,
         "default_effort": model.default_effort,
         "default_adaptive_thinking_enabled": model.default_adaptive_thinking_enabled,
@@ -147,7 +146,6 @@ def _litellm_entry(litellm_key, probed) -> Dict[str, Any]:
         "supports_adaptive_thinking": bool(
             family and family.supports_adaptive_thinking
         ),
-        "supports_vision": supports_vision(probed.name),
         "default_effort": "high",
         "default_adaptive_thinking_enabled": False,
         "is_image_generator": False,

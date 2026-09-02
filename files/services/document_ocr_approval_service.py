@@ -6,7 +6,10 @@ from django.db import transaction
 from django.utils import timezone
 from django_rq import enqueue
 
-from core.services.vision_model_service import resolve_vision_model
+from core.services.vision_model_service import (
+    VisionModelNotOffered,
+    select_vision_model,
+)
 from files.constants import DocumentOcrStatus, FileProcessingStage, FileStatus
 from files.models import DocumentOcrRequest, File
 
@@ -78,11 +81,10 @@ class DocumentOcrApprovalService:
                 )
 
             if command.model_identifier:
-                route = resolve_vision_model(file.user, command.model_identifier)
-                if route is None or route.model.identifier != command.model_identifier:
-                    raise DocumentOcrModelError(
-                        "That model is not available for vision in your active wallet."
-                    )
+                try:
+                    route = select_vision_model(file.user, command.model_identifier)
+                except VisionModelNotOffered as error:
+                    raise DocumentOcrModelError(str(error)) from error
                 ocr_request.model_identifier = route.model.identifier
                 ocr_request.estimated_cost_per_page = route.estimated_cost_per_page
 

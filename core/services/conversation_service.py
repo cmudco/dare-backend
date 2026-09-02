@@ -11,6 +11,7 @@ from djangorestframework_camel_case.util import camelize
 from conversations.api.serializers import MessageSerializer
 from conversations.constants import SenderType, ToolCallOrigin
 from conversations.models import LLM, Artifact, Conversation, Message
+from core.services.background_model_service import BackgroundModelService
 from core.services.billing_service import BillingService
 from core.services.dtos import LLMDescriptor
 from files.models import File, Tag
@@ -241,8 +242,6 @@ class ConversationService:
         public_bot_id: Optional[int] = None,
     ) -> str:
         """Generate a concise title with the user's resolved background model."""
-        from core.services.background_model_service import BackgroundModelService
-
         messages = [
             {
                 "role": "system",

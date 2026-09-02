@@ -293,7 +293,7 @@ class ClaudeVisionHandler:
 
     @staticmethod
     def convert_image_parts(messages: List[Dict]) -> List[Dict]:
-        """Rewrite OpenAI-style ``image_url`` data-URL parts into Claude image blocks."""
+        """Rewrite OpenAI-style image_url data-URL parts into Claude image blocks."""
         converted = []
         for message in messages:
             content = message.get("content")

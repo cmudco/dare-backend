@@ -14,6 +14,7 @@ from config import env
 from conversations.models import LLM
 from core.services.billing_service import BillingService
 from core.services.dtos import LLMDescriptor, StreamEventKind
+from core.services.sb_client import SocraticBooksClient
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +96,7 @@ def resolve_background_model(
                 public_bot_id=public_bot_id,
             )
 
-        logger.warning(
+        logger.info(
             "LiteLLM key %s has no background model; using the DARE default",
             wallet.ref_id,
         )
@@ -263,18 +264,10 @@ class BackgroundModelService:
     async def _update_public_bot_budget(route, transaction):
         if route.public_bot_id is None or not transaction.amount:
             return
-        try:
-            from core.services.sb_client import SocraticBooksClient
-
-            await sync_to_async(SocraticBooksClient.update_bot_budget)(
-                route.public_bot_id,
-                transaction.amount,
-            )
-        except Exception:
-            logger.exception(
-                "Failed to update deployment budget for public bot %s",
-                route.public_bot_id,
-            )
+        await sync_to_async(SocraticBooksClient.update_bot_budget)(
+            route.public_bot_id,
+            transaction.amount,
+        )
 
     @staticmethod
     async def _close(service):
