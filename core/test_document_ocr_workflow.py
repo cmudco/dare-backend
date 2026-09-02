@@ -55,6 +55,7 @@ class DocumentOcrWorkflowTests(SimpleTestCase):
             identifier="gemini-vision",
             input_token_rate_per_million=Decimal("0.10"),
             output_token_rate_per_million=Decimal("0.40"),
+            cached_input_token_rate_per_million=None,
         )
 
     @patch(
