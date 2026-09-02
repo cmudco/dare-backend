@@ -27,16 +27,18 @@ from workflows.services.ensemble_workflow_builder import (
 # One everyday question per template, so a first run reads like a real chat.
 SAMPLE_TASKS = {
     DEPTH_SINGLE: (
-        "Recommend three books for someone who loved The Three-Body Problem, "
-        "and say in one line why each fits."
+        "In one paragraph: why does Imran Khan remain popular in Pakistan "
+        "despite being in prison?"
     ),
     DEPTH_PANEL: (
-        "Who is the greatest Test batter of all time: Tendulkar, Lara, or Kohli? "
-        "Pick one and defend the pick in two short paragraphs."
+        "Is PTI a stronger or weaker political force in Pakistan today than "
+        "when Imran Khan was removed from office in April 2022? Pick a side "
+        "and defend it in two short paragraphs."
     ),
     DEPTH_COUNCIL: (
-        "A college student has $1,000 and owns neither: should they buy an iPhone "
-        "or a Mac first? Pick one and justify it in two short paragraphs."
+        "A 26-year-old in Lahore has PKR 1,000,000 to invest for five years: "
+        "gold, a dollar account, or the KSE-100 index? Pick one and justify "
+        "it in two short paragraphs."
     ),
 }
 
