@@ -1,11 +1,9 @@
 """
 Ensemble workflows — the graph behind a Panel or Council answer.
 
-One builder serves two callers. The seed command creates visible templates a
-person can open in the builder; the chat path creates a hidden workflow per
-model line-up and runs it for every panel or council turn. Both produce the
-same graph, so what the picker does is exactly what the visible workflow
-shows:
+The chat path creates a hidden workflow per model line-up and runs it for
+every panel or council turn. The graph is a regular workflow, so an exported
+copy opens in the builder unchanged:
 
     start → responder-1..N          (one wave, concurrent)
           → evaluator-1..N          (council only; each ranks every draft)
@@ -14,7 +12,7 @@ shows:
 Node ids are fixed so a chat turn can tell roles apart without extra schema.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Optional
 
 from django.contrib.contenttypes.models import ContentType
@@ -31,7 +29,6 @@ from workflows.models import (
     WorkflowNode,
 )
 
-DEPTH_SINGLE = "single"
 DEPTH_PANEL = "panel"
 DEPTH_COUNCIL = "council"
 
@@ -104,10 +101,6 @@ PROMPTS = {
         "answer as a substitute. Do not narrate the drafts, name the models, or "
         "describe this process.",
     ),
-    DEPTH_SINGLE: (
-        "Ensemble · Single",
-        "Answer the question in <task> directly and completely.",
-    ),
 }
 
 
@@ -123,32 +116,15 @@ def get_or_create_prompt(user, role: str) -> Prompt:
     return Prompt.active_objects.create(user=user, title=title, content=content)
 
 
-def reset_prompts(user) -> int:
-    """Rewrite the user's role prompts from code; returns how many changed."""
-    changed = 0
-    for role in PROMPTS:
-        title, content = PROMPTS[role]
-        prompt = Prompt.active_objects.filter(user=user, title=title).first()
-        if prompt and prompt.content != content:
-            prompt.content = content
-            prompt.save(update_fields=["content"])
-            changed += 1
-    return changed
-
-
 @dataclass
 class EnsembleSpec:
     depth: str
     responders: List[LLM]
-    chairman: Optional[LLM]
+    chairman: LLM
     title: str
     description: str = ""
     kind: str = WorkflowKind.USER
     signature: Optional[str] = None
-    # Visible templates get a sample task so "Run" works straight away; chat
-    # turns leave it empty and inject the person's message at run time.
-    task_text: str = ""
-    responder_flags: dict = field(default_factory=dict)
 
 
 def _create_node(
@@ -193,21 +169,13 @@ def _create_edge(
 
 
 def _step(
-    user,
-    label: str,
-    llm: LLM,
-    role: str,
-    task_text: str,
-    use_previous_context: bool,
-    **flags,
+    user, label: str, llm: LLM, role: str, use_previous_context: bool
 ) -> StepNodeData:
     return StepNodeData.objects.create(
         label=label,
         llm=llm,
         prompt=get_or_create_prompt(user, role),
-        text_input=task_text,
         use_previous_context=use_previous_context,
-        **flags,
     )
 
 
@@ -234,40 +202,10 @@ def build_ensemble_workflow(user, spec: EnsembleSpec) -> Workflow:
     )
     _create_node(workflow, START_NODE_ID, "start", start, 0.0, mid_y)
 
-    if spec.depth == DEPTH_SINGLE:
-        only = spec.responders[0]
-        data = _step(user, only.name, only, DEPTH_SINGLE, spec.task_text, False)
-        _create_node(workflow, responder_node_id(1), "step", data, COLUMN_GAP, mid_y)
-        output = ChatOutputNodeData.objects.create(label=only.name)
-        _create_node(
-            workflow,
-            CHAIRMAN_OUTPUT_NODE_ID,
-            "chatOutput",
-            output,
-            COLUMN_GAP * 2,
-            mid_y,
-        )
-        _create_edge(
-            workflow, START_NODE_ID, responder_node_id(1), "output-1", "input-1"
-        )
-        _create_edge(
-            workflow, responder_node_id(1), CHAIRMAN_OUTPUT_NODE_ID, "default", None
-        )
-        workflow.resolve_root_start_node()
-        return workflow
-
     responder_ids = []
     for index, llm in enumerate(spec.responders, start=1):
         node_id = responder_node_id(index)
-        data = _step(
-            user,
-            llm.name,
-            llm,
-            ROLE_RESPONDER,
-            spec.task_text,
-            False,
-            **spec.responder_flags,
-        )
+        data = _step(user, llm.name, llm, ROLE_RESPONDER, False)
         _create_node(workflow, node_id, "step", data, COLUMN_GAP, (index - 1) * ROW_GAP)
         _create_edge(
             workflow, START_NODE_ID, node_id, f"output-{_slot(index - 1)}", "input-1"
@@ -280,9 +218,7 @@ def build_ensemble_workflow(user, spec: EnsembleSpec) -> Workflow:
         evaluator_ids = []
         for index, llm in enumerate(spec.responders, start=1):
             node_id = evaluator_node_id(index)
-            data = _step(
-                user, f"{llm.name} · review", llm, ROLE_EVALUATOR, spec.task_text, True
-            )
+            data = _step(user, f"{llm.name} · review", llm, ROLE_EVALUATOR, True)
             _create_node(
                 workflow,
                 node_id,
@@ -299,14 +235,9 @@ def build_ensemble_workflow(user, spec: EnsembleSpec) -> Workflow:
         upstream_of_chairman.extend(evaluator_ids)
         column += 1
 
-    chairman = spec.chairman or spec.responders[0]
+    chairman = spec.chairman
     chairman_data = _step(
-        user,
-        f"Chairman · {chairman.name}",
-        chairman,
-        ROLE_CHAIRMAN,
-        spec.task_text,
-        True,
+        user, f"Chairman · {chairman.name}", chairman, ROLE_CHAIRMAN, True
     )
     _create_node(
         workflow, CHAIRMAN_NODE_ID, "step", chairman_data, COLUMN_GAP * column, mid_y

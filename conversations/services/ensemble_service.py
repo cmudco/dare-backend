@@ -32,17 +32,11 @@ from core.services.billing_service import BillingService
 from core.services.dtos.builder import ARTIFACT_TOOL_SLUGS
 from core.services.dtos.ensemble_dto import EnsembleRequest
 from core.services.workflow_execution_service import WorkflowExecutionService
+from feature_flags.services import is_flag_enabled_for_user
 from workflows.services.ensemble_workflow_builder import (
-    CHAIRMAN_NODE_ID,
-    DEPTH_COUNCIL,
-    ROLE_CHAIRMAN,
-    ROLE_EVALUATOR,
-    ROLE_RESPONDER,
-    ensemble_role,
-    evaluator_node_id,
-    get_or_create_ensemble_workflow,
-    responder_node_id,
-)
+    CHAIRMAN_NODE_ID, DEPTH_COUNCIL, ROLE_CHAIRMAN, ROLE_EVALUATOR,
+    ROLE_RESPONDER, ensemble_role, evaluator_node_id,
+    get_or_create_ensemble_workflow, responder_node_id)
 from workflows.services.workflow_run_repository import WorkflowRunRepository
 
 logger = logging.getLogger(__name__)
@@ -52,6 +46,14 @@ logger = logging.getLogger(__name__)
 # stalled streams much sooner.
 NODE_TIMEOUT_SECONDS = 180.0
 SNAPSHOT_MIN_INTERVAL_SECONDS = 0.08
+
+
+ENSEMBLE_FLAG = "enable_ensemble"
+
+
+def ensemble_enabled_for(user) -> bool:
+    """Whether this user may run panel/council turns (per-user feature flag)."""
+    return user is not None and is_flag_enabled_for_user(user, ENSEMBLE_FLAG)
 
 
 class EnsembleError(ValueError):

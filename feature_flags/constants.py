@@ -68,4 +68,12 @@ DEFAULT_FLAG_DEFINITIONS = [
         "description": "Research Mode projects, agents, and research APIs.",
         "default_enabled": False,
     },
+    {
+        "key": "enable_ensemble",
+        "description": (
+            "Panel/council chat turns: the model picker's depth dial, the "
+            "multi-model bench, and the deliberation view."
+        ),
+        "default_enabled": False,
+    },
 ]

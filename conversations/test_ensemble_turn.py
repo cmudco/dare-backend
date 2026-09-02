@@ -1,11 +1,13 @@
 """Boundary and policy decisions behind a panel/council turn."""
 
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, TestCase
 
 from conversations.services.ensemble_service import (EnsembleTurn,
                                                      _parse_evaluation)
 from core.services.dtos.builder import ARTIFACT_TOOL_SLUGS
 from core.services.dtos.ensemble_dto import EnsembleRequest
+from feature_flags.models import FeatureFlag, UserFeatureOverride
+from users.models import User
 
 
 class EnsembleRequestTests(SimpleTestCase):
@@ -83,3 +85,21 @@ class EvaluationParsingTests(SimpleTestCase):
         ranking, notes = _parse_evaluation("I prefer the second draft.")
         self.assertEqual(ranking, [])
         self.assertEqual(notes, "I prefer the second draft.")
+
+
+class EnsembleFlagGateTests(TestCase):
+    """Panel/council turns are allowed only when the user's flag is on."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            email="ensemble-gate@example.com", password="password"
+        )
+        self.flag = FeatureFlag.objects.get(key="enable_ensemble")
+
+    def test_off_by_default(self):
+        self.assertFalse(ensemble_enabled_for(self.user))
+        self.assertFalse(ensemble_enabled_for(None))
+
+    def test_on_with_a_user_override(self):
+        UserFeatureOverride.objects.create(flag=self.flag, user=self.user, enabled=True)
+        self.assertTrue(ensemble_enabled_for(self.user))
