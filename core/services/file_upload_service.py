@@ -66,10 +66,23 @@ class FileUploadService:
             return False, "Empty file not allowed"
 
         file_type = uploaded_file.content_type
-        if file_type and file_type.split('/')[-1] not in ALLOWED_FILES:
+        if not FileUploadService.is_allowed_type(file_name, file_type):
             return False, f"File type {file_type} not allowed"
 
         return True, None
+
+    @staticmethod
+    def is_allowed_type(file_name: str, content_type: str | None) -> bool:
+        """Accept a file by its extension or by the MIME type the client sent.
+
+        Browsers disagree on MIME types for the same extension (.md arrives as
+        text/markdown, text/x-markdown, or application/octet-stream), so the
+        extension is the reliable signal and the MIME check is the fallback.
+        """
+        extension = Path(file_name).suffix.lstrip(".").lower()
+        if extension in ALLOWED_FILES:
+            return True
+        return not content_type or content_type.split("/")[-1] in ALLOWED_FILES
 
     @staticmethod
     def validate_file_metadata(
@@ -81,7 +94,7 @@ class FileUploadService:
         if not size or size == 0:
             return False, "Empty file not allowed"
 
-        if content_type and content_type.split("/")[-1] not in ALLOWED_FILES:
+        if not FileUploadService.is_allowed_type("", content_type):
             return False, f"File type {content_type} not allowed"
 
         return True, None
@@ -97,6 +110,7 @@ class FileUploadService:
         is_valid: bool,
         is_media: bool,
         media_type: str | None,
+        error_message: str | None = None,
     ) -> File:
         """Create a File row from computed metadata/status flags."""
         file_status = (
@@ -114,6 +128,7 @@ class FileUploadService:
             vector_db_source=user.vector_db if (is_valid and not is_media) else None,
             is_media=is_media,
             media_type=media_type,
+            error_message=error_message,
         )
 
     @staticmethod
@@ -148,6 +163,7 @@ class FileUploadService:
             is_valid=is_valid,
             is_media=is_media,
             media_type=media_type,
+            error_message=error_message,
         )
 
         file_instance.file.save(file_name, uploaded_file, save=False)
