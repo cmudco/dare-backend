@@ -22,30 +22,48 @@ from django.utils import timezone
 from djangorestframework_camel_case.util import camelize
 
 from conversations.api.serializers import ArtifactListSerializer
-from conversations.constants import (DEFAULT_AI_SENDER_NAME,
-                                     DEFAULT_CONVERSATION_TITLE,
-                                     ArtifactStatus, ErrorCode, ErrorMessage,
-                                     SenderType, ToolCallOrigin,
-                                     ToolCallStatus)
-from conversations.models import (LLM, Artifact, Conversation, Message,
-                                  MessageToolCall, Snippet, WebSearchSource)
-from conversations.services.image_generation_service import \
-    ImageGenerationService
+from conversations.constants import (
+    DEFAULT_AI_SENDER_NAME,
+    DEFAULT_CONVERSATION_TITLE,
+    ArtifactStatus,
+    ErrorCode,
+    ErrorMessage,
+    SenderType,
+    ToolCallOrigin,
+    ToolCallStatus,
+)
+from conversations.models import (
+    LLM,
+    Artifact,
+    Conversation,
+    Message,
+    MessageToolCall,
+    Snippet,
+    WebSearchSource,
+)
+from conversations.services.image_generation_service import ImageGenerationService
 from conversations.services.message_helpers import (  # Database helpers; Learning progress helpers; Billing helpers; Finalization helpers; Regeneration helpers
-    build_generated_image_data, build_transcription_data,
-    fetch_preceding_user_message, finalize_message, get_ai_message_by_id,
-    get_conversation_default_descriptor, handle_insufficient_balance,
-    parse_model_id, prepare_regeneration_data, run_learning_progress_stream,
-    should_generate_title)
-from conversations.services.message_validation_service import \
-    MessageValidationService
+    build_generated_image_data,
+    build_transcription_data,
+    fetch_preceding_user_message,
+    finalize_message,
+    get_ai_message_by_id,
+    get_conversation_default_descriptor,
+    handle_insufficient_balance,
+    parse_model_id,
+    prepare_regeneration_data,
+    run_learning_progress_stream,
+    should_generate_title,
+)
+from conversations.services.ensemble_service import (
+    EnsembleTurnService,
+    ensemble_enabled_for,
+)
+from conversations.services.message_validation_service import MessageValidationService
 from conversations.services.tool_loop_binding import ChatToolLoopBinding
-from conversations.services.tool_loop_service import (ToolLoopResult,
-                                                      ToolLoopService)
-from conversations.services.web_search_source_service import \
-    WebSearchSourceService
-from conversations.services.websocket_response_service import \
-    WebSocketResponseService
+from conversations.services.tool_loop_service import ToolLoopResult, ToolLoopService
+from conversations.services.web_search_source_service import WebSearchSourceService
+from conversations.services.websocket_response_service import WebSocketResponseService
 from core.services.billing_service import BillingService
 from core.services.conversation_service import ConversationService
 from core.services.dtos import LLMDescriptor, LLMQueryRequestBuilder
@@ -93,6 +111,10 @@ class MessageCoordinator:
 
         # Track active artifact generation tasks for cancellation
         self._artifact_tasks: Dict[str, asyncio.Task] = {}
+        # In-flight AI turns keyed by message id, plus the subset currently
+        # inside the tool loop (the only phase that knows how to unwind).
+        self._generation_tasks: Dict[int, asyncio.Task] = {}
+        self._cancellable_message_ids: set = set()
 
     async def send(self, data: Dict[str, Any]):
         """Send data through WebSocket if callback is available."""
@@ -303,8 +325,13 @@ class MessageCoordinator:
             The AI message object if successful, None otherwise
         """
         try:
+            # A panel or council answers through its chairman: that is the
+            # model the message is attributed to and pre-checked against.
+            ensemble = await self._ensemble_for_turn(message_data)
             descriptor = await self._get_descriptor(
-                model_id or message_data.get("model_id")
+                ensemble.chairman_id
+                if ensemble
+                else (model_id or message_data.get("model_id"))
             )
             if descriptor is None:
                 await self.send_error(
@@ -386,12 +413,10 @@ class MessageCoordinator:
 
             # Generate conversation title if first message (User + AI = 2 messages)
             if await should_generate_title(self.conversation):
-                asyncio.create_task(
-                    self._generate_conversation_title(llm=dispatch_handle)
-                )
+                asyncio.create_task(self._generate_conversation_title())
 
             # Stream AI response
-            await self.stream_ai_response(
+            await self._run_generation(
                 message_data=message_data,
                 message_obj=ai_message,
                 llm=dispatch_handle,
@@ -452,8 +477,11 @@ class MessageCoordinator:
             # Get descriptor: explicit override → existing message's recorded
             # model (real or LiteLLM-routed). For LITELLM messages the previous
             # dispatch is reconstructed from `litellm_key` + `litellm_model_name`.
+            ensemble = await self._ensemble_for_turn(message_data)
             descriptor = await self._get_descriptor(
-                model_id or message_data.get("model_id"),
+                ensemble.chairman_id
+                if ensemble
+                else (model_id or message_data.get("model_id")),
                 default=LLMDescriptor.from_message(ai_message),
             )
             if descriptor is None:
@@ -493,7 +521,7 @@ class MessageCoordinator:
             await self._send_regeneration_placeholder(ai_message)
 
             # Stream AI response into the EXISTING message (don't create new one)
-            await self.stream_ai_response(
+            await self._run_generation(
                 message_data=regeneration_message_data,
                 message_obj=ai_message,
                 llm=dispatch_handle,
@@ -558,6 +586,8 @@ class MessageCoordinator:
         ai_message.context_trace = None
         ai_message.memory_context_data = []
         ai_message.usage_details = None
+        ai_message.deliberation = None
+        ai_message.workflow_run = None
         ai_message.save(
             update_fields=[
                 "original_message",
@@ -565,8 +595,54 @@ class MessageCoordinator:
                 "context_trace",
                 "memory_context_data",
                 "usage_details",
+                "deliberation",
+                "workflow_run",
             ]
         )
+
+    async def _run_generation(self, message_obj: Message, **kwargs) -> None:
+        """Run ``stream_ai_response`` as an owned task so it can be cancelled."""
+        task = asyncio.create_task(
+            self.stream_ai_response(message_obj=message_obj, **kwargs)
+        )
+        self._generation_tasks[message_obj.id] = task
+        try:
+            await task
+        except asyncio.CancelledError:
+            if not task.cancelled():
+                raise
+            logger.info("[journey] mid=%s generation task cancelled", message_obj.id)
+        finally:
+            self._generation_tasks.pop(message_obj.id, None)
+
+    async def _ensemble_for_turn(self, message_data: Dict[str, Any]):
+        """The turn's ensemble request, or None when the feature is off for this user.
+
+        The picker cannot send one without the flag, so a payload that
+        arrives anyway is dropped in place: the turn runs single-model.
+        """
+        ensemble = message_data.get("ensemble")
+        if ensemble is None:
+            return None
+        if not await database_sync_to_async(ensemble_enabled_for)(self.user):
+            message_data["ensemble"] = None
+            return None
+        return ensemble
+
+    def cancel_generation(self, message_id: Optional[int] = None) -> bool:
+        """Cancel the in-flight AI turn; returns True when a cancel was issued."""
+        if message_id is None:
+            message_id = next(iter(self._cancellable_message_ids), None)
+        task = self._generation_tasks.get(message_id)
+        if (
+            task is None
+            or task.done()
+            or message_id not in self._cancellable_message_ids
+        ):
+            return False
+        self._cancellable_message_ids.discard(message_id)
+        task.cancel()
+        return True
 
     async def stream_ai_response(
         self,
@@ -646,12 +722,40 @@ class MessageCoordinator:
                 billing_service=self.billing_service,
                 regenerate=regenerate,
             )
-            result = await self.tool_loop_service.run(
-                request=request,
-                binding=binding,
-                retrieval_scope=retrieval_scope,
-                regenerate=regenerate,
-            )
+            ensemble = message_data.get("ensemble")
+            self._cancellable_message_ids.add(message_obj.id)
+            try:
+                if ensemble:
+                    # Panel/council: the workflow engine fans the turn out to
+                    # the bench and the chairman streams the answer. Comes
+                    # back in the tool loop's shape so finalization is shared.
+                    result = await EnsembleTurnService(
+                        send=self.send, resolve_descriptor=self._get_descriptor
+                    ).run(
+                        ensemble=ensemble,
+                        message_data=message_data,
+                        message_obj=message_obj,
+                        conversation=self.conversation,
+                        user=self.user,
+                        platform=self.platform,
+                        regenerate=regenerate,
+                    )
+                else:
+                    result = await self.tool_loop_service.run(
+                        request=request,
+                        binding=binding,
+                        retrieval_scope=retrieval_scope,
+                        regenerate=regenerate,
+                    )
+            finally:
+                self._cancellable_message_ids.discard(message_obj.id)
+
+            if result.cancelled:
+                # The loop swallowed the CancelledError; clear the task's
+                # pending-cancel state so finalization awaits run normally.
+                asyncio.current_task().uncancel()
+                await self._finalize_cancelled_turn(message_obj, result, regenerate)
+                return
 
             if result.interrupted:
                 await self._finalize_interrupted_turn(message_obj, result)
@@ -878,6 +982,26 @@ class MessageCoordinator:
         )
         await self.send_error(ErrorCode.STREAM_ERROR, ErrorMessage.STREAM_ERROR)
 
+    async def _finalize_cancelled_turn(
+        self, message_obj: Message, result: ToolLoopResult, regenerate: bool
+    ) -> None:
+        """Finalize a turn the user stopped: keep what streamed, bill what was observed."""
+        token_usage = result.token_usage
+        await self._save_usage_breakdown(message_obj, result.usage_breakdown)
+        if result.text.strip():
+            ai_response = f"{result.text}\n\n*Generation stopped.*"
+            await self._save_web_search_sources(message_obj, token_usage, regenerate)
+            await self._save_provider_tool_calls(message_obj, token_usage, regenerate)
+            await self._save_memory_context(message_obj, token_usage)
+        else:
+            ai_response = "*Generation stopped before a response was produced.*"
+        await self._finalize_message(
+            message_obj=message_obj,
+            ai_response=ai_response,
+            token_usage=token_usage,
+            regenerate=regenerate,
+        )
+
     async def _finalize_interrupted_turn(
         self, message_obj: Message, result: ToolLoopResult
     ) -> None:
@@ -1007,7 +1131,7 @@ class MessageCoordinator:
             get_llm_callback=self._fetch_progress_llm,
         )
 
-    async def _generate_conversation_title(self, llm=None):
+    async def _generate_conversation_title(self):
         """Generate conversation title asynchronously (fire and forget)."""
         try:
             # Refresh conversation from DB
@@ -1022,14 +1146,11 @@ class MessageCoordinator:
             if not user_message:
                 return
 
-            # Generate title — pass `user` so the title call honors the
-            # user's active wallet (DARE/BYO/LITELLM) just like the main chat,
-            # and the conversation's own model so titles never depend on some
-            # other provider being configured.
+            # The background-model service owns model, wallet, and billing.
             title = await self.conversation_service.generate_title(
                 user_message.message,
                 user=self.user,
-                llm=llm,
+                public_bot_id=(self.conversation.bot_id if self.user is None else None),
             )
 
             # Update conversation

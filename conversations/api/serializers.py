@@ -50,6 +50,7 @@ class LLMSerializer(serializers.ModelSerializer):
             "is_audio_transcriber",
             "input_token_rate_per_million",
             "output_token_rate_per_million",
+            "cached_input_token_rate_per_million",
             "tier",
         ]
 
@@ -438,6 +439,9 @@ class MessageSerializer(serializers.ModelSerializer):
         many=True, read_only=True, source="mcp_tool_calls"
     )
     energy_stats = serializers.SerializerMethodField()
+    workflow_run_id = serializers.PrimaryKeyRelatedField(
+        read_only=True, allow_null=True, source="workflow_run"
+    )
 
     class Meta:
         model = Message
@@ -478,6 +482,8 @@ class MessageSerializer(serializers.ModelSerializer):
             "memory_write_data",
             "retrieval_trace",
             "context_trace",
+            "deliberation",
+            "workflow_run_id",
         ]
         read_only_fields = [
             "id",
@@ -504,6 +510,8 @@ class MessageSerializer(serializers.ModelSerializer):
             "memory_write_data",
             "retrieval_trace",
             "context_trace",
+            "deliberation",
+            "workflow_run_id",
         ]
 
     def get_artifactId(self, obj):

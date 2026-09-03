@@ -4,8 +4,9 @@ Workflow Execution Service
 Thin orchestrator: load graph → order nodes → run loop → finalize.
 Graph loading, routing, and DB ops are delegated to dedicated modules.
 """
+import asyncio
 import logging
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from channels.db import database_sync_to_async
 from django.utils import timezone
@@ -17,7 +18,7 @@ from workflows.handlers import (
 )
 from workflows.models import WorkflowRun
 from workflows.services.execution_routing import should_execute, get_dep_results
-from workflows.services.workflow_graph import WorkflowGraph, load_graph, get_ordered_exec_nodes
+from workflows.services.workflow_graph import WorkflowGraph, load_graph, get_exec_waves
 from workflows.services.workflow_run_repository import WorkflowRunRepository
 
 logger = logging.getLogger(__name__)
@@ -33,9 +34,16 @@ class WorkflowExecutionService:
         workflow_run: WorkflowRun = None,
         workflow_run_id: int = None,
         send_callback=None,
-        batch_file_id: Optional[int] = None
+        batch_file_id: Optional[int] = None,
+        turn: Optional[Any] = None,
+        node_timeout_seconds: Optional[float] = None,
     ) -> ExecutionResult:
-        """Execute workflow from start or resume from where it left off."""
+        """Execute workflow from start or resume from where it left off.
+
+        Independent nodes (one dependency wave) run concurrently. When
+        ``node_timeout_seconds`` is set, a node that overruns it is failed and
+        the run continues without its output.
+        """
         try:
             if workflow_run is None:
                 workflow_run = await database_sync_to_async(
@@ -50,14 +58,16 @@ class WorkflowExecutionService:
             if effective_batch_file_id:
                 start_connected_step_node_ids = await self._get_start_connected_step_node_ids(graph, workflow)
 
-            exec_nodes = get_ordered_exec_nodes(graph)
-            if not exec_nodes:
+            waves = get_exec_waves(graph)
+            if not waves:
                 return ExecutionResult(success=False, error='No nodes found')
 
             result = await self._run_nodes(
-                workflow_run, graph, exec_nodes, send_callback,
+                workflow_run, graph, waves, send_callback,
                 batch_file_id=effective_batch_file_id,
                 start_connected_step_node_ids=start_connected_step_node_ids,
+                turn=turn,
+                node_timeout_seconds=node_timeout_seconds,
             )
 
             if not result.pending_human_input:
@@ -158,42 +168,89 @@ class WorkflowExecutionService:
         self,
         workflow_run,
         graph: WorkflowGraph,
-        nodes: List[ExecutionNode],
+        waves: List[List[ExecutionNode]],
         send_callback,
         batch_file_id: Optional[int] = None,
-        start_connected_step_node_ids: Optional[List[str]] = None
+        start_connected_step_node_ids: Optional[List[str]] = None,
+        turn: Optional[Any] = None,
+        node_timeout_seconds: Optional[float] = None,
     ) -> ExecutionResult:
-        """Main loop: iterate nodes, skip completed, check routing, execute."""
+        """Main loop: one dependency wave at a time, nodes within a wave concurrently."""
         executed, skipped, failed = 0, 0, 0
         start_connected_step_node_ids = start_connected_step_node_ids or []
         is_batch = bool(batch_file_id or getattr(workflow_run, 'batch_run_id', None))
 
         node_results = await WorkflowRunRepository.load_existing_results(workflow_run)
 
-        for node in nodes:
-            if node.id in node_results and not node_results[node.id].metadata.get('skipped'):
-                executed += 1
+        for wave in waves:
+            # A stop request lands inside the running node's stream, which
+            # returns partial output as if it finished. Without this check the
+            # next wave would start on a turn the user already stopped.
+            current = asyncio.current_task()
+            if current is not None and current.cancelling():
+                raise asyncio.CancelledError()
+
+            runnable: List[ExecutionNode] = []
+            for node in wave:
+                if node.id in node_results and not node_results[node.id].metadata.get('skipped'):
+                    executed += 1
+                    continue
+
+                if not should_execute(graph, node, node_results):
+                    skipped += 1
+                    node_results[node.id] = NodeExecutionResult(
+                        success=True, output=None,
+                        metadata={'skipped': True, 'reason': 'routing_decision'}
+                    )
+                    if node.type in ('step', 'structuredOutput'):
+                        await WorkflowRunRepository.mark_node_skipped(workflow_run, node.db_node)
+                    continue
+
+                runnable.append(node)
+
+            if not runnable:
                 continue
 
-            if not should_execute(graph, node, node_results):
-                skipped += 1
-                node_results[node.id] = NodeExecutionResult(
-                    success=True, output=None,
-                    metadata={'skipped': True, 'reason': 'routing_decision'}
-                )
-                if node.type in ('step', 'structuredOutput'):
-                    await WorkflowRunRepository.mark_node_skipped(workflow_run, node.db_node)
-                continue
-
-            result = await self._execute_node(
-                workflow_run, graph, node, node_results, send_callback,
+            results = await self._run_wave(
+                workflow_run, graph, runnable, node_results, send_callback,
                 batch_file_id=batch_file_id,
-                is_start_connected=node.id in start_connected_step_node_ids,
+                start_connected_step_node_ids=start_connected_step_node_ids,
+                turn=turn,
+                node_timeout_seconds=node_timeout_seconds,
             )
-            node_results[node.id] = result
-            executed += 1
+            # Same tell after the wave: a stop that landed mid-stream comes
+            # back as a finished-looking result, and the last wave has no
+            # next iteration to notice it.
+            if current is not None and current.cancelling():
+                raise asyncio.CancelledError()
 
-            if self._is_pending_human(result):
+            pending: Optional[tuple] = None
+            for node, result in zip(runnable, results):
+                node_results[node.id] = result
+                executed += 1
+
+                if self._is_pending_human(result):
+                    pending = pending or (node, result)
+                    continue
+
+                if not result.success:
+                    failed += 1
+                    timed_out = bool(result.metadata and result.metadata.get('timed_out'))
+                    # Step handlers persist their own failures; a timed-out
+                    # step was cut off before it could, so mark it here.
+                    if result.error and (node.type not in ('step', 'structuredOutput') or timed_out):
+                        await WorkflowRunRepository.mark_node_failed(
+                            workflow_run, node.db_node, result.error
+                        )
+                    if timed_out:
+                        await self._emit(send_callback, WebSocketResponseService.format_workflow_error(
+                            node_id=node.id,
+                            error=result.error,
+                            workflow_run_id=workflow_run.id,
+                        ))
+
+            if pending:
+                node, result = pending
                 if is_batch:
                     await WorkflowRunRepository.fail_pending_human_step(workflow_run, node.db_node)
                     await self._emit(send_callback, WebSocketResponseService.format_workflow_error(
@@ -221,23 +278,57 @@ class WorkflowExecutionService:
                     executed_nodes=executed, skipped_nodes=skipped,
                 )
 
-            if not result.success:
-                failed += 1
-                if result.error and node.type not in ('step', 'structuredOutput'):
-                    await WorkflowRunRepository.mark_node_failed(
-                        workflow_run, node.db_node, result.error
-                    )
-
         return ExecutionResult(
             success=failed == 0, executed_nodes=executed,
             skipped_nodes=skipped, failed_nodes=failed,
         )
+
+    async def _run_wave(
+        self,
+        workflow_run,
+        graph: WorkflowGraph,
+        nodes: List[ExecutionNode],
+        node_results,
+        send_callback,
+        batch_file_id: Optional[int],
+        start_connected_step_node_ids: List[str],
+        turn: Optional[Any],
+        node_timeout_seconds: Optional[float],
+    ) -> List[NodeExecutionResult]:
+        """Run one wave's nodes, concurrently when there is more than one."""
+
+        async def _run_one(node: ExecutionNode) -> NodeExecutionResult:
+            coro = self._execute_node(
+                workflow_run, graph, node, node_results, send_callback,
+                batch_file_id=batch_file_id,
+                is_start_connected=node.id in start_connected_step_node_ids,
+                turn=turn,
+            )
+            if not node_timeout_seconds:
+                return await coro
+            try:
+                return await asyncio.wait_for(coro, timeout=node_timeout_seconds)
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Node %s timed out after %ss (run %s)",
+                    node.id, node_timeout_seconds, workflow_run.id,
+                )
+                return NodeExecutionResult(
+                    success=False,
+                    error=f"Timed out after {node_timeout_seconds:g}s",
+                    metadata={'timed_out': True},
+                )
+
+        if len(nodes) == 1:
+            return [await _run_one(nodes[0])]
+        return list(await asyncio.gather(*(_run_one(node) for node in nodes)))
 
     async def _execute_node(
         self, workflow_run, graph: WorkflowGraph, node, node_results, send_callback,
         is_single_step_execution: bool = False,
         batch_file_id: Optional[int] = None,
         is_start_connected: bool = False,
+        turn: Optional[Any] = None,
     ) -> NodeExecutionResult:
         """Execute single node via handler registry."""
         previous = get_dep_results(graph, node, node_results)
@@ -248,6 +339,7 @@ class WorkflowExecutionService:
             is_single_step_execution=is_single_step_execution,
             batch_file_id=batch_file_id,
             is_start_connected=is_start_connected,
+            turn=turn,
         )
         return await node_handler_registry.execute_node(node, context)
 

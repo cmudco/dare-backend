@@ -9,6 +9,12 @@ class Mode(models.TextChoices):
     PARALLEL = 'parallel', 'Parallel'
 
 
+class WorkflowKind(models.TextChoices):
+    """Who authored the graph: a person in the builder, or the chat picker."""
+    USER = 'user', 'User'
+    ENSEMBLE = 'ensemble', 'Ensemble'
+
+
 class WorkflowRunStepStatus(models.TextChoices):
     PENDING = 'pending', 'Pending'
     RUNNING = 'running', 'Running'

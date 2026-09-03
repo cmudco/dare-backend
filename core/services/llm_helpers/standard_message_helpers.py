@@ -224,6 +224,11 @@ async def build_standard_messages(
             folder_ids=request.context.folder_ids,
             library_ids=request.context.library_ids,
             user_id=user_id,
+            payer_bot_id=(
+                request.conversation.bot_id
+                if request.conversation is not None and user_id is None
+                else None
+            ),
             file_owner_id=request.context.file_owner_id,
             is_socratic_mode=request.is_socratic_mode(),
             similarity_threshold=request.context.document_similarity_threshold,

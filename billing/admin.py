@@ -13,14 +13,25 @@ from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 from agents.models import Agent
-from billing.constants import (LiteLLMKeySourceChoice, TransactionSourceChoice,
-                               TransactionTypeChoice)
-from billing.group_wallet_service import (FundGroupBudgetRequest,
-                                          GroupWalletService,
-                                          UpdateGroupPolicyRequest)
-from billing.models import (GroupWallet, LiteLLMKey,
-                            SystemRefillPolicy, Transaction,
-                            UserRefillOverride, UserWalletPreference, Wallet)
+from billing.constants import (
+    LiteLLMKeySourceChoice,
+    TransactionSourceChoice,
+    TransactionTypeChoice,
+)
+from billing.group_wallet_service import (
+    FundGroupBudgetRequest,
+    GroupWalletService,
+    UpdateGroupPolicyRequest,
+)
+from billing.models import (
+    GroupWallet,
+    LiteLLMKey,
+    SystemRefillPolicy,
+    Transaction,
+    UserRefillOverride,
+    UserWalletPreference,
+    Wallet,
+)
 from billing.services import TransactionExportService
 from conversations.constants import ModelTier, Provider
 from conversations.models import Message
@@ -449,8 +460,6 @@ class UserRefillOverrideInline(admin.StackedInline):
     )
 
 
-
-
 # --- LiteLLM Key admin ----------------------------------------------------
 
 
@@ -506,7 +515,7 @@ class LiteLLMKeyAdmin(admin.ModelAdmin):
     raw_id_fields = ("owner_user", "assigned_user", "source_group", "created_by")
 
     fieldsets = (
-        (None, {"fields": ("label", "base_url", "api_key")}),
+        (None, {"fields": ("label", "base_url", "api_key", "background_model")}),
         (
             _("Source"),
             {
@@ -657,10 +666,15 @@ class UserWalletPreferenceAdmin(admin.ModelAdmin):
 # Usage Dashboard — module-level helpers (extracted to billing/admin_helpers.py)
 # ============================================================================
 
-from billing.admin_helpers import (_make_delta, _normalize_period,
-                                   _PERIOD_DAYS, _PERIOD_LABELS, _pct_delta,
-                                   _period_cutoff, _VALID_PERIODS)
-
+from billing.admin_helpers import (
+    _PERIOD_DAYS,
+    _PERIOD_LABELS,
+    _VALID_PERIODS,
+    _make_delta,
+    _normalize_period,
+    _pct_delta,
+    _period_cutoff,
+)
 
 # ============================================================================
 # Usage Dashboard — read-only aggregate admin view
@@ -1273,14 +1287,10 @@ class UsageBreakdownAdmin(admin.ModelAdmin):
             focus_id = None
 
         if focus_id is not None:
-            self.change_list_template = (
-                "admin/billing/usagebreakdown/detail.html"
-            )
+            self.change_list_template = "admin/billing/usagebreakdown/detail.html"
             ctx = self._get_detail_context(scope, focus_id, period)
         else:
-            self.change_list_template = (
-                "admin/billing/usagebreakdown/change_list.html"
-            )
+            self.change_list_template = "admin/billing/usagebreakdown/change_list.html"
             ctx = self._get_list_context(scope, period)
 
         extra_context = extra_context or {}
@@ -1309,8 +1319,14 @@ class UsageBreakdownAdmin(admin.ModelAdmin):
         fin_base = fin_base.exclude(billing_mode="litellm")
 
         if scope == "group":
-            return {"rows": self._list_groups(fin_base), "summary": self._list_summary(fin_base, scope)}
-        return {"rows": self._list_users(fin_base), "summary": self._list_summary(fin_base, scope)}
+            return {
+                "rows": self._list_groups(fin_base),
+                "summary": self._list_summary(fin_base, scope),
+            }
+        return {
+            "rows": self._list_users(fin_base),
+            "summary": self._list_summary(fin_base, scope),
+        }
 
     def _list_users(self, fin_qs) -> list:
         rows = list(
@@ -1330,7 +1346,9 @@ class UsageBreakdownAdmin(admin.ModelAdmin):
             .order_by("-total_cost")[:100]
         )
         for r in rows:
-            r["total_tokens"] = (r.get("input_tokens") or 0) + (r.get("output_tokens") or 0)
+            r["total_tokens"] = (r.get("input_tokens") or 0) + (
+                r.get("output_tokens") or 0
+            )
         return rows
 
     def _list_groups(self, fin_qs) -> list:
@@ -1364,7 +1382,9 @@ class UsageBreakdownAdmin(admin.ModelAdmin):
         }
         for r in rows:
             r["member_count"] = member_counts.get(r["user__access_code_group_id"], 0)
-            r["total_tokens"] = (r.get("input_tokens") or 0) + (r.get("output_tokens") or 0)
+            r["total_tokens"] = (r.get("input_tokens") or 0) + (
+                r.get("output_tokens") or 0
+            )
         return rows
 
     def _list_summary(self, fin_qs, scope: str) -> dict:
@@ -1414,9 +1434,16 @@ class UsageBreakdownAdmin(admin.ModelAdmin):
         return qs
 
     def _user_detail(self, user_id: int, period: str, cutoff) -> dict:
-        target = User.objects.filter(id=user_id).select_related("access_code_group").first()
+        target = (
+            User.objects.filter(id=user_id).select_related("access_code_group").first()
+        )
         if target is None:
-            return {"target": None, "kpis": {}, "model_breakdown": [], "daily_trend_json": "[]"}
+            return {
+                "target": None,
+                "kpis": {},
+                "model_breakdown": [],
+                "daily_trend_json": "[]",
+            }
 
         qs = self._scope_filtered_qs("user", user_id, cutoff)
         kpis = self._build_kpis(qs)
@@ -1446,7 +1473,13 @@ class UsageBreakdownAdmin(admin.ModelAdmin):
             .first()
         )
         if target is None:
-            return {"target": None, "kpis": {}, "model_breakdown": [], "members": [], "daily_trend_json": "[]"}
+            return {
+                "target": None,
+                "kpis": {},
+                "model_breakdown": [],
+                "members": [],
+                "daily_trend_json": "[]",
+            }
 
         qs = self._scope_filtered_qs("group", group_id, cutoff)
         kpis = self._build_kpis(qs)
@@ -1497,7 +1530,9 @@ class UsageBreakdownAdmin(admin.ModelAdmin):
             .order_by("-total_cost")
         )
         for r in rows:
-            r["total_tokens"] = (r.get("input_tokens") or 0) + (r.get("output_tokens") or 0)
+            r["total_tokens"] = (r.get("input_tokens") or 0) + (
+                r.get("output_tokens") or 0
+            )
             r["llm_name"] = r["llm_name"] or "—"
         return rows
 
@@ -1514,7 +1549,9 @@ class UsageBreakdownAdmin(admin.ModelAdmin):
             .order_by("-total_cost")
         )
         for r in rows:
-            r["total_tokens"] = (r.get("input_tokens") or 0) + (r.get("output_tokens") or 0)
+            r["total_tokens"] = (r.get("input_tokens") or 0) + (
+                r.get("output_tokens") or 0
+            )
         return rows
 
     def _daily_trend_json(self, qs) -> str:

@@ -1,15 +1,19 @@
 """HTTP endpoints for the memory feature."""
 
+from drf_spectacular.utils import extend_schema
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from memory.services import api_service as memory_service
-from memory.services import portability
+from memory.services import backfill, portability
 
 from .serializers import (
     ClearResponseSerializer,
+    MemoryBackfillRequestSerializer,
+    MemoryBackfillResponseSerializer,
+    MemoryBackfillRunSerializer,
     MemoryItemSerializer,
     MemorySearchRequestSerializer,
     MemorySearchResponseSerializer,
@@ -89,7 +93,10 @@ class MemoryViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=["delete"])
     def clear(self, request):
-        payload = memory_service.clear_store(request.user)
+        try:
+            payload = memory_service.clear_store(request.user)
+        except memory_service.MemoryServiceError as error:
+            return _service_error_response(error)
         return Response(ClearResponseSerializer(payload).data)
 
     def document(self, request):
@@ -174,3 +181,63 @@ class MemoryViewSet(viewsets.ViewSet):
         except memory_service.MemoryServiceError as error:
             return _service_error_response(error)
         return Response(payload)
+
+    @extend_schema(
+        methods=["GET"],
+        summary="Get historical memory build progress",
+        responses={200: MemoryBackfillResponseSerializer},
+    )
+    @extend_schema(
+        methods=["POST"],
+        summary="Build memory from historical conversations",
+        request=MemoryBackfillRequestSerializer,
+        responses={
+            200: MemoryBackfillResponseSerializer,
+            202: MemoryBackfillResponseSerializer,
+        },
+    )
+    @extend_schema(
+        methods=["DELETE"],
+        summary="Stop an active historical memory build",
+        responses={200: MemoryBackfillResponseSerializer},
+    )
+    def backfill(self, request):
+        if request.method.lower() == "get":
+            run = backfill.latest_run(request.user)
+            return Response(
+                {
+                    "run": (
+                        MemoryBackfillRunSerializer(run).data
+                        if run is not None
+                        else None
+                    )
+                }
+            )
+
+        if request.method.lower() == "delete":
+            run = backfill.stop_run(request.user)
+            return Response(
+                {
+                    "run": (
+                        MemoryBackfillRunSerializer(run).data
+                        if run is not None
+                        else None
+                    )
+                }
+            )
+
+        input_serializer = MemoryBackfillRequestSerializer(data=request.data)
+        input_serializer.is_valid(raise_exception=True)
+
+        try:
+            run, created = backfill.start_run(
+                request.user,
+                since=input_serializer.validated_data.get("since"),
+                until=input_serializer.validated_data.get("until"),
+            )
+        except memory_service.MemoryServiceError as error:
+            return _service_error_response(error)
+        return Response(
+            {"run": MemoryBackfillRunSerializer(run).data},
+            status=status.HTTP_202_ACCEPTED if created else status.HTTP_200_OK,
+        )

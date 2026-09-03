@@ -65,6 +65,9 @@ class DocumentProcessor:
         chunk_size=None,
         overlap_size=None,
         journey: Optional[FileProcessingJourney] = None,
+        parsed: Optional[ParsedDocument] = None,
+        ocr_page_limit: Optional[int] = None,
+        continue_existing_enrichment: bool = False,
     ) -> int:
         """Process a single file and create embeddings.
 
@@ -99,26 +102,18 @@ class DocumentProcessor:
                 overlap_size if overlap_size is not None else user_overlap_size
             )
 
-            with journey.stage("parsing") as stage:
-                parsed = self.parse_file(file)
-                classified_pictures = sum(
-                    1
-                    for element in parsed.elements
-                    if element.kind == "picture" and element.classifications
-                )
-                stage.add_details(
-                    parser=parsed.parser,
-                    pages=parsed.structure.pages,
-                    elements=len(parsed.elements),
-                    sections=parsed.structure.sections,
-                    tables=parsed.structure.tables,
-                    pictures=parsed.structure.pictures,
-                    classified_pictures=classified_pictures,
-                    parser_reported_seconds=round(parsed.duration_seconds, 3),
-                )
+            if parsed is None:
+                with journey.stage("parsing") as stage:
+                    parsed = self.parse_file(file)
+                    self._record_parse_details(stage, parsed)
 
             with journey.stage("enriching") as stage:
-                enrichment = self.enrichment_service.enrich(file, parsed)
+                enrichment = self.enrichment_service.enrich(
+                    file,
+                    parsed,
+                    page_limit=ocr_page_limit,
+                    continue_existing=continue_existing_enrichment,
+                )
                 content = enrichment.text
                 summary = enrichment.document_model.get("enrichment", {})
                 details = {
@@ -129,6 +124,9 @@ class DocumentProcessor:
                     "cache_hits": enrichment.cache_hits,
                     "described_figures": enrichment.described_figures,
                     "transcribed_pages": enrichment.transcribed_pages,
+                    "detected_textless_pages": summary.get("detected_textless_pages"),
+                    "selected_textless_pages": summary.get("selected_textless_pages"),
+                    "deferred_textless_pages": summary.get("deferred_textless_pages"),
                     "failed_calls": enrichment.failed_calls,
                 }
                 if summary.get("status") == "not_needed":
@@ -178,6 +176,24 @@ class DocumentProcessor:
         parsing the document a second time.
         """
         return self.parsing_service.parse_and_persist(file)
+
+    @staticmethod
+    def _record_parse_details(stage, parsed: ParsedDocument) -> None:
+        classified_pictures = sum(
+            1
+            for element in parsed.elements
+            if element.kind == "picture" and element.classifications
+        )
+        stage.add_details(
+            parser=parsed.parser,
+            pages=parsed.structure.pages,
+            elements=len(parsed.elements),
+            sections=parsed.structure.sections,
+            tables=parsed.structure.tables,
+            pictures=parsed.structure.pictures,
+            classified_pictures=classified_pictures,
+            parser_reported_seconds=round(parsed.duration_seconds, 3),
+        )
 
     def create_user_files_embeddings(self, user_id: int) -> bool:
         """Process all files belonging to a specific user"""

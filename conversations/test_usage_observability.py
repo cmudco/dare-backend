@@ -58,10 +58,10 @@ class ClaudeUsageObservabilityTests(SimpleTestCase):
             event async for event in ClaudeStreamProcessor.process_stream(stream())
         ]
 
-        self.assertEqual(len(events), 1)
-        self.assertIs(events[0].kind, StreamEventKind.USAGE)
-        self.assertEqual(events[0].usage["stop_reason"], "max_tokens")
-        self.assertEqual(events[0].usage["thinking_tokens"], 312)
+        self.assertEqual([event.kind for event in events], [StreamEventKind.USAGE] * 2)
+        self.assertTrue(events[0].usage["provisional"])
+        self.assertEqual(events[1].usage["stop_reason"], "max_tokens")
+        self.assertEqual(events[1].usage["thinking_tokens"], 312)
 
     async def test_streams_provider_thinking_summary_separately_from_answer(self):
         async def stream():

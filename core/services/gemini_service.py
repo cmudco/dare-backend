@@ -231,7 +231,8 @@ class GeminiService:
                 ),
                 "output_tokens": int(
                     getattr(usage_metadata, "candidates_token_count", 0) or 0
-                ),
+                )
+                + int(getattr(usage_metadata, "thoughts_token_count", 0) or 0),
             }
             return json.loads(content), usage
 

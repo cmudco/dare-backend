@@ -39,6 +39,18 @@ Tokens are obtained via `POST /users/api/dj-rest-auth/login/` and refreshed via 
 | Sharing | `/api/sharing/` | Conversation and workflow sharing |
 | API Keys | `/api/api-keys/` | External API key management |
 
+## LiteLLM background models
+
+LiteLLM wallets expose one optional `backgroundModel` setting through
+`/api/billing/wallets/litellm/`. DARE uses it for invisible text work such as
+conversation titles, summaries, memory extraction, and advanced RAG query
+analysis. An empty value falls back to DARE's configured background model.
+
+Both LiteLLM connection-test endpoints return `models` plus a nullable
+`suggestedModel`. The recommendation prefers GPT-5.6 Luna, then the newest
+Gemini Flash model, then another lightweight text model. Clients may highlight
+the recommendation, but the user remains free to select any returned model.
+
 ## Improving Documentation
 
 To add descriptions to endpoints, use `@extend_schema` decorators on custom `@action` methods:

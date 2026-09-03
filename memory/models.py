@@ -24,7 +24,9 @@ from pgvector.django import VectorField
 from common.managers import ActiveObjectsManager
 from common.models import BaseModel
 from memory.constants import (
+    ACTIVE_BACKFILL_STATUSES,
     EMBED_DIMS,
+    MemoryBackfillStatus,
     MemoryKind,
     MemoryState,
     Sensitivity,
@@ -298,3 +300,65 @@ class UserMemoryDocument(BaseModel):
 
     def __str__(self):
         return f"USER.md for user {self.user_id}"
+
+
+class MemoryBackfillRun(BaseModel):
+    """Progress for one user-requested pass over historical conversations."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="memory_backfill_runs",
+        help_text=_("The owner whose historical conversations are being reviewed."),
+    )
+    status = models.CharField(
+        max_length=16,
+        choices=MemoryBackfillStatus.choices,
+        default=MemoryBackfillStatus.QUEUED,
+        help_text=_("The lifecycle state of this historical memory build."),
+    )
+    cutoff_message_id = models.PositiveBigIntegerField(
+        default=0,
+        help_text=_("The newest assistant message included in this immutable run."),
+    )
+    since = models.DateField(
+        null=True,
+        blank=True,
+        help_text=_("Optional inclusive start date for historical chat turns."),
+    )
+    until = models.DateField(
+        null=True,
+        blank=True,
+        help_text=_("Optional inclusive end date for historical chat turns."),
+    )
+    total_turns = models.PositiveIntegerField(default=0)
+    processed_turns = models.PositiveIntegerField(default=0)
+    started_at = models.DateTimeField(null=True, blank=True)
+    completed_at = models.DateTimeField(null=True, blank=True)
+    error_message = models.CharField(max_length=255, blank=True, default="")
+
+    objects = models.Manager()
+    active_objects = ActiveObjectsManager()
+
+    class Meta:
+        indexes = [
+            models.Index(fields=["user", "-created_at"], name="membackfill_user_idx"),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user"],
+                condition=models.Q(
+                    status__in=ACTIVE_BACKFILL_STATUSES,
+                    is_active=True,
+                    is_deleted=False,
+                ),
+                name="one_active_memory_backfill_per_user",
+            ),
+        ]
+
+    def __str__(self):
+        return (
+            f"Memory backfill for user {self.user_id}: {self.status} "
+            f"({self.processed_turns}/{self.total_turns})"
+        )

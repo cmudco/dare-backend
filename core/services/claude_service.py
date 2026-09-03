@@ -158,40 +158,31 @@ class ClaudeService:
         temperature: float = 0.7,
         effort: Optional[str] = None,
     ) -> Dict:
-        """
-        Generate response matching a JSON schema using Claude's native structured outputs.
+        """Generate a response matching a JSON schema via Claude's structured outputs."""
+        result, _ = await self.generate_structured_output_with_usage(
+            messages, response_schema, max_tokens, temperature, effort
+        )
+        return result
 
-        Uses Claude's official structured outputs API (beta) for guaranteed JSON compliance.
-        Structured outputs require Claude 4.x models (Sonnet 4.5, Opus 4.1/4.5, Haiku 4.5).
-        If current model doesn't support it, falls back to claude-sonnet-4-5-20250514.
+    async def generate_structured_output_with_usage(
+        self,
+        messages: List[Dict[str, str]],
+        response_schema: Dict,
+        max_tokens: int = 2000,
+        temperature: float = 0.7,
+        effort: Optional[str] = None,
+    ) -> Tuple[Dict, Dict[str, int]]:
+        """Structured output plus normalized token usage for service billing.
 
-        Args:
-            messages: List of message dictionaries
-            response_schema: JSON Schema the response must match
-            max_tokens: Maximum tokens to generate
-            temperature: Controls randomness
-
-        Returns:
-            Parsed JSON response as dictionary
-
-        Raises:
-            ValueError: If schema validation fails or no response returned
+        Structured outputs need a Claude 4.x or newer model; a Claude 3 model
+        is swapped for Sonnet 4.5 for this call only.
         """
         logger.info(
             f"[Claude] generate_structured_output with schema: {list(response_schema.get('properties', {}).keys())}"
         )
 
-        # Models that support structured output (Claude 4.x only)
-        SUPPORTED_MODELS = [
-            "claude-sonnet-4-5-20250929",
-            "claude-opus-4-1-20250929",
-            "claude-opus-4-5-20250929",
-            "claude-haiku-4-5-20250929",
-        ]
-
-        # Use the configured model if it supports structured output, otherwise use Sonnet 4.5
         model_to_use = self.model
-        if not any(supported in self.model for supported in SUPPORTED_MODELS):
+        if "claude-3" in self.model:
             model_to_use = "claude-sonnet-4-5-20250929"
             logger.info(
                 f"[Claude] Model {self.model} doesn't support structured output, using {model_to_use}"
@@ -205,7 +196,7 @@ class ClaudeService:
         params = {
             "model": model_to_use,
             "max_tokens": max_tokens,
-            "messages": filtered_messages,
+            "messages": ClaudeVisionHandler.convert_image_parts(filtered_messages),
             "betas": ["structured-outputs-2025-11-13"],
             "output_format": {
                 "type": "json_schema",
@@ -226,12 +217,14 @@ class ClaudeService:
             if response.stop_reason == "refusal":
                 raise ValueError("Claude refused to generate structured output")
 
-            # Parse JSON from response content
-            if response.content and len(response.content) > 0:
-                content = response.content[0].text
-                return json.loads(content)
+            if not response.content:
+                raise ValueError("Empty response from Claude structured output")
 
-            raise ValueError("Empty response from Claude structured output")
+            usage = getattr(response, "usage", None)
+            return json.loads(response.content[0].text), {
+                "input_tokens": int(getattr(usage, "input_tokens", 0) or 0),
+                "output_tokens": int(getattr(usage, "output_tokens", 0) or 0),
+            }
 
         except Exception as e:
             logger.exception(f"[Claude] generate_structured_output error: {str(e)}")
@@ -319,7 +312,16 @@ class ClaudeService:
 
         # Add system message if present
         if system_message:
-            params["system"] = system_message
+            params["system"] = [
+                {
+                    "type": "text",
+                    "text": system_message,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
+        # A breakpoint on the latest turn caches the whole conversation
+        # prefix, so the next turn only pays full price for what is new.
+        self._mark_last_turn_cacheable(converted_messages)
 
         # Add tools if provided (convert from OpenAI format to Claude format)
         if tools:
@@ -335,6 +337,32 @@ class ClaudeService:
             # Let LLM decide when to use tools (auto is default, so no need to set explicitly)
 
         return params
+
+    @staticmethod
+    def _mark_last_turn_cacheable(messages: List[Dict]) -> None:
+        if not messages:
+            return
+        last = messages[-1]
+        content = last.get("content")
+        if isinstance(content, str):
+            if not content:
+                return
+            last["content"] = [
+                {
+                    "type": "text",
+                    "text": content,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ]
+        elif isinstance(content, list) and content:
+            block = content[-1]
+            if isinstance(block, dict) and block.get("type") in (
+                "text",
+                "tool_result",
+                "image",
+                "document",
+            ):
+                block["cache_control"] = {"type": "ephemeral"}
 
     def _apply_claude_sampling(
         self,

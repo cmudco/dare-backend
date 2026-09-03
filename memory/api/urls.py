@@ -63,4 +63,11 @@ urlpatterns = [
         MemoryViewSet.as_view({"get": "sessions"}),
         name="memory-v2-sessions",
     ),
+    path(
+        "v2/backfill/",
+        MemoryViewSet.as_view(
+            {"get": "backfill", "post": "backfill", "delete": "backfill"}
+        ),
+        name="memory-v2-backfill",
+    ),
 ]

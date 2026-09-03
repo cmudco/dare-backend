@@ -66,10 +66,23 @@ class FileUploadService:
             return False, "Empty file not allowed"
 
         file_type = uploaded_file.content_type
-        if file_type and file_type.split('/')[-1] not in ALLOWED_FILES:
+        if not FileUploadService.is_allowed_type(file_name, file_type):
             return False, f"File type {file_type} not allowed"
 
         return True, None
+
+    @staticmethod
+    def is_allowed_type(file_name: str, content_type: str | None) -> bool:
+        """Accept a file by its extension or by the MIME type the client sent.
+
+        Browsers disagree on MIME types for the same extension (.md arrives as
+        text/markdown, text/x-markdown, or application/octet-stream), so the
+        extension is the reliable signal and the MIME check is the fallback.
+        """
+        extension = Path(file_name).suffix.lstrip(".").lower()
+        if extension in ALLOWED_FILES:
+            return True
+        return not content_type or content_type.split("/")[-1] in ALLOWED_FILES
 
     @staticmethod
     def validate_file_metadata(
@@ -81,7 +94,7 @@ class FileUploadService:
         if not size or size == 0:
             return False, "Empty file not allowed"
 
-        if content_type and content_type.split("/")[-1] not in ALLOWED_FILES:
+        if not FileUploadService.is_allowed_type("", content_type):
             return False, f"File type {content_type} not allowed"
 
         return True, None
@@ -97,6 +110,7 @@ class FileUploadService:
         is_valid: bool,
         is_media: bool,
         media_type: str | None,
+        error_message: str | None = None,
     ) -> File:
         """Create a File row from computed metadata/status flags."""
         file_status = (
@@ -114,6 +128,7 @@ class FileUploadService:
             vector_db_source=user.vector_db if (is_valid and not is_media) else None,
             is_media=is_media,
             media_type=media_type,
+            error_message=error_message,
         )
 
     @staticmethod
@@ -148,6 +163,7 @@ class FileUploadService:
             is_valid=is_valid,
             is_media=is_media,
             media_type=media_type,
+            error_message=error_message,
         )
 
         file_instance.file.save(file_name, uploaded_file, save=False)
@@ -159,20 +175,37 @@ class FileUploadService:
 
         # Only queue background processing job for non-media files (documents)
         if is_valid and not is_media:
-            try:
-                job = enqueue(process_file_embeddings, file_instance.id, chunk_size, overlap_size)
-                file_instance.job_id = job.id
-                file_instance.save(update_fields=['job_id'])
-                logger.info(f"Queued document processing for file '{file_name}'")
-            except Exception as e:
-                file_instance.status = FileStatus.FAILED
-                file_instance.save(update_fields=['status'])
-                logger.error(f"Error processing file '{file_name}': {str(e)}")
-                raise Exception(f"Error processing file '{file_name}': {str(e)}")
+            # Uploads are batched in one transaction; a job enqueued before it
+            # commits can run against a row the worker cannot see yet.
+            transaction.on_commit(
+                lambda: FileUploadService.enqueue_processing(
+                    file_instance, chunk_size, overlap_size
+                )
+            )
         elif is_media:
             logger.info(f"Media file '{file_name}' ({media_type}) uploaded successfully - skipping vectorization")
 
         return file_instance
+
+    @staticmethod
+    def enqueue_processing(
+        file_instance: File,
+        chunk_size: int | None = None,
+        overlap_size: int | None = None,
+    ) -> None:
+        try:
+            job = enqueue(
+                process_file_embeddings, file_instance.id, chunk_size, overlap_size
+            )
+        except Exception as e:
+            file_instance.status = FileStatus.FAILED
+            file_instance.error_message = f"Could not queue processing: {e}"
+            file_instance.save(update_fields=['status', 'error_message'])
+            logger.error(f"Error queueing file '{file_instance.name}': {str(e)}")
+            return
+        file_instance.job_id = job.id
+        file_instance.save(update_fields=['job_id'])
+        logger.info(f"Queued document processing for file '{file_instance.name}'")
 
     @staticmethod
     def upload_files(uploaded_files: List, file_names: List[str], user, tag_ids: List[int] = None, *, chunk_size: int | None = None, overlap_size: int | None = None) -> List[File]:

@@ -512,6 +512,9 @@ class ClaudeStreamProcessor:
             # Extract input tokens from message start
             elif event.type == "message_start":
                 usage_extractor.extract_from_message_start(event)
+                provisional = usage_extractor.provisional_usage()
+                if provisional:
+                    yield LLMStreamEvent.usage_frame(provisional)
 
             # Extract usage from message delta
             elif event.type == "message_delta":
@@ -628,6 +631,9 @@ class GeminiStreamProcessor:
 
             # Update usage metadata
             usage_extractor.update_from_chunk(chunk)
+            provisional = usage_extractor.provisional_usage()
+            if provisional:
+                yield LLMStreamEvent.usage_frame(provisional)
 
         # Yield final usage frame with provider tool calls and web search sources
         usage = usage_extractor.get_final_usage() or {}

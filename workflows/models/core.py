@@ -4,7 +4,7 @@ from django.conf import settings
 from common.managers import ActiveObjectsManager
 from common.models import BaseModel, TimeStampMixin
 from files.models import File
-from workflows.constants import Mode, WorkflowRunStepStatus, BatchRunStatus
+from workflows.constants import Mode, WorkflowKind, WorkflowRunStepStatus, BatchRunStatus
 
 
 class Workflow(BaseModel):
@@ -67,6 +67,23 @@ class Workflow(BaseModel):
     display_order = models.PositiveIntegerField(
         default=0,
         help_text="Order in which workflows are displayed in the UI. Higher values appear later."
+    )
+    kind = models.CharField(
+        max_length=16,
+        choices=WorkflowKind.choices,
+        default=WorkflowKind.USER,
+        db_index=True,
+        help_text=(
+            "'user' workflows appear in the builder; 'ensemble' workflows are "
+            "compiled from the chat model picker and run behind panel/council turns."
+        )
+    )
+    ensemble_signature = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="Depth + model line-up an ensemble workflow was compiled from, for reuse across turns."
     )
 
     # Publishing / sharing fields

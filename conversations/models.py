@@ -125,6 +125,17 @@ class LLM(models.Model):
         validators=[MinValueValidator(0)],
         help_text="Cost per million output tokens in USD (e.g., 15.00 for $15 per 1M tokens).",
     )
+    cached_input_token_rate_per_million = models.DecimalField(
+        max_digits=10,
+        decimal_places=4,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0)],
+        help_text=(
+            "Cost per million prompt-cached input tokens in USD. Leave empty to "
+            "bill cached tokens at the full input rate."
+        ),
+    )
 
     def __str__(self):
         return self.name
@@ -1024,6 +1035,19 @@ class Message(BaseModel):
         null=True,
         blank=True,
         help_text="Per-round token/cost breakdown for multi-round tool responses; summed values live in input_tokens/output_tokens/cost.",
+    )
+    deliberation = models.JSONField(
+        null=True,
+        blank=True,
+        help_text="Panel/council behind this answer: every responder's draft, peer reviews, and the chairman, for the deliberation UI.",
+    )
+    workflow_run = models.ForeignKey(
+        "workflows.WorkflowRun",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="chat_messages",
+        help_text="The ensemble workflow run that produced this answer, when a panel or council answered.",
     )
 
     # Content type for specialized rendering (diagrams, charts, etc.)

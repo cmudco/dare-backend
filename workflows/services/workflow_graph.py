@@ -4,7 +4,6 @@ Workflow Graph — execution-time graph loading and topological ordering.
 Loads nodes and edges once per execution, builds lookup dicts,
 and produces a topologically sorted list of executable nodes.
 """
-import heapq
 import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -89,9 +88,8 @@ def _build_effective_edges(graph: WorkflowGraph, exec_ids: set) -> Dict[str, set
     return effective
 
 
-def get_ordered_exec_nodes(graph: WorkflowGraph) -> List[ExecutionNode]:
-    """Topological sort of executable nodes using Kahn's algorithm with heapq."""
-    exec_nodes = [
+def _exec_nodes(graph: WorkflowGraph) -> List[ExecutionNode]:
+    return [
         ExecutionNode(
             id=node.node_id,
             type=node.node_type,
@@ -102,6 +100,17 @@ def get_ordered_exec_nodes(graph: WorkflowGraph) -> List[ExecutionNode]:
         if node.node_type not in NON_EXECUTABLE_TYPES
     ]
 
+
+
+def get_exec_waves(graph: WorkflowGraph) -> List[List[ExecutionNode]]:
+    """
+    Executable nodes grouped into dependency waves (Kahn's algorithm by level).
+
+    Every node in a wave has all of its effective dependencies in earlier
+    waves, so the nodes of one wave are independent of each other and may run
+    concurrently. Within a wave, nodes are ordered by type priority then id.
+    """
+    exec_nodes = _exec_nodes(graph)
     exec_map = {n.id: n for n in exec_nodes}
     exec_ids = set(exec_map.keys())
 
@@ -113,23 +122,24 @@ def get_ordered_exec_nodes(graph: WorkflowGraph) -> List[ExecutionNode]:
         for tgt in targets:
             in_deg[tgt] += 1
 
-    # heapq entries: (type_priority, node_id)
-    heap = [
-        (TYPE_ORDER.get(exec_map[nid].type, 99), nid)
-        for nid, d in in_deg.items() if d == 0
-    ]
-    heapq.heapify(heap)
+    def _priority(nid: str):
+        return (TYPE_ORDER.get(exec_map[nid].type, 99), nid)
 
-    result = []
-    while heap:
-        _, nid = heapq.heappop(heap)
-        result.append(exec_map[nid])
-        for tgt in effective_edges.get(nid, set()):
-            in_deg[tgt] -= 1
-            if in_deg[tgt] == 0:
-                heapq.heappush(
-                    heap,
-                    (TYPE_ORDER.get(exec_map[tgt].type, 99), tgt)
-                )
+    frontier = sorted((nid for nid, d in in_deg.items() if d == 0), key=_priority)
+    waves: List[List[ExecutionNode]] = []
+    while frontier:
+        waves.append([exec_map[nid] for nid in frontier])
+        released = set()
+        for nid in frontier:
+            for tgt in effective_edges.get(nid, set()):
+                in_deg[tgt] -= 1
+                if in_deg[tgt] == 0:
+                    released.add(tgt)
+        frontier = sorted(released, key=_priority)
 
-    return result
+    return waves
+
+
+def get_ordered_exec_nodes(graph: WorkflowGraph) -> List[ExecutionNode]:
+    """Topological order of executable nodes: the waves, flattened."""
+    return [node for wave in get_exec_waves(graph) for node in wave]

@@ -3,8 +3,8 @@ from django.db import models
 APP_NAME = "files"
 ALLOWED_FILES = [
     # Common extensions
-    'docx', 'doc', 'pdf', 'txt', 'md', 'json',
-    'csv', 'xls', 'xlsx',
+    'docx', 'doc', 'pdf', 'txt', 'md', 'markdown', 'x-markdown', 'json',
+    'csv', 'xls', 'xlsx', 'ipynb', 'x-ipynb+json',
     'pptx', 'ppt',
     'jpg', 'jpeg', 'png', 'gif', 'bmp', 'tiff', 'webp',
 
@@ -28,7 +28,7 @@ ALLOWED_FILES = [
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     'application/msword',
     'application/pdf',
-    'text/plain', 'text/html', 'text/xml', 'text/csv'
+    'text/plain', 'text/markdown', 'text/html', 'text/xml', 'text/csv'
 ]
 
 class FileStatus(models.IntegerChoices):
@@ -39,6 +39,15 @@ class FileStatus(models.IntegerChoices):
     # text to embed. Distinct from FAILED (nothing went wrong) and from
     # PROCESSED (the file cannot answer questions yet).
     NEEDS_OCR = 3, "Needs OCR"
+
+
+class DocumentOcrStatus(models.TextChoices):
+    AWAITING_APPROVAL = "awaiting_approval", "Awaiting approval"
+    APPROVED = "approved", "Approved"
+    PROCESSING = "processing", "Processing"
+    COMPLETE = "complete", "Complete"
+    PARTIAL = "partial", "Partially complete"
+    UNAVAILABLE = "unavailable", "Unavailable"
 
 
 class FileProcessingStage(models.TextChoices):
