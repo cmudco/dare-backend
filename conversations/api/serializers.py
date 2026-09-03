@@ -5,12 +5,14 @@ from rest_framework import serializers
 
 from agents.models import Agent
 from conversations.constants import ToolCallOrigin
+from core.services.dtos.ensemble_dto import MAX_ANGLE_CHARS, MAX_BRIEF_CHARS
 from conversations.models import (
     LLM,
     Artifact,
     ArtifactCheckpoint,
     Conversation,
     ConversationSummary,
+    EnsemblePreset,
     Feedback,
     Message,
     MessageToolCall,
@@ -779,3 +781,34 @@ class ModelCardDataListSerializer(serializers.ModelSerializer):
 
     def get_has_public_feedback(self, obj):
         return bool(obj.public_feedback)
+
+
+class EnsemblePresetSerializer(serializers.ModelSerializer):
+    """A saved set of panel briefs; the owner comes from the request."""
+
+    responder = serializers.CharField(
+        max_length=MAX_BRIEF_CHARS, allow_blank=True, required=False
+    )
+    evaluator = serializers.CharField(
+        max_length=MAX_BRIEF_CHARS, allow_blank=True, required=False
+    )
+    chairman = serializers.CharField(
+        max_length=MAX_BRIEF_CHARS, allow_blank=True, required=False
+    )
+    angles = serializers.ListField(
+        child=serializers.CharField(max_length=MAX_ANGLE_CHARS, allow_blank=True),
+        required=False,
+    )
+
+    class Meta:
+        model = EnsemblePreset
+        fields = [
+            "id",
+            "name",
+            "responder",
+            "evaluator",
+            "chairman",
+            "angles",
+            "created_at",
+        ]
+        read_only_fields = ["id", "created_at"]
