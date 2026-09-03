@@ -61,6 +61,16 @@ def evaluator_node_id(index: int) -> str:
     return f"{EVALUATOR_PREFIX}{index}"
 
 
+def responder_seat(node_id: str) -> int:
+    """The 1-based seat of a responder node; 0 for any other node."""
+    if not node_id.startswith(RESPONDER_PREFIX):
+        return 0
+    try:
+        return int(node_id[len(RESPONDER_PREFIX) :])
+    except ValueError:
+        return 0
+
+
 # Role prompts live in the person's prompt library so they can be tuned.
 # Titles are the lookup key; content is only written on first creation.
 PROMPTS = {
@@ -114,6 +124,11 @@ def get_or_create_prompt(user, role: str) -> Prompt:
     if prompt:
         return prompt
     return Prompt.active_objects.create(user=user, title=title, content=content)
+
+
+def role_prompt_content(user, role: str) -> str:
+    """What a role is told when the person has not written their own brief."""
+    return get_or_create_prompt(user, role).content
 
 
 @dataclass
