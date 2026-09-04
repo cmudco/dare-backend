@@ -60,6 +60,7 @@ class PineconeClient:
         top_k: int = 5,
         namespace: Optional[str] = None,
         filter: Optional[Dict] = None,
+        include_vector: bool = False,
     ) -> List[Dict]:
         """Query similar vectors from Pinecone."""
         try:
@@ -69,8 +70,17 @@ class PineconeClient:
                 namespace=namespace,
                 filter=filter,
                 include_metadata=True,
+                include_values=include_vector,
             )
-            return results.matches
+            return [
+                {
+                    "id": match.id,
+                    "score": match.score,
+                    "metadata": match.metadata,
+                    "vector": list(match.values) if include_vector else None,
+                }
+                for match in results.matches
+            ]
         except Exception as e:
             raise Exception(f"Error querying vectors: {str(e)}")
 

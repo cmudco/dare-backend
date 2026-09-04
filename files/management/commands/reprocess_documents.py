@@ -4,12 +4,10 @@ Queue a re-embed for processed documents so they gain map rows.
 Files uploaded before the document map existed have vectors but no chunk or
 reference rows, so their citations carry no page or section and the Map tab
 shows headings only. This queues ``refresh_file_embeddings`` for them, which
-deletes the file's existing vectors and map rows before regenerating them.
+builds a replacement index before switching the file to it.
 Files whose OCR finished or partly finished are rebuilt from the stored
 transcriptions without re-running vision. A scanned PDF that never went
-through OCR approval has no transcription to rebuild from: it still loses its
-old vectors, then pauses for OCR approval like a first-time upload, so it is
-briefly unsearchable until that approval completes.
+through OCR approval pauses for approval while retaining any previous index.
 
     python manage.py reprocess_documents --user-id 3
     python manage.py reprocess_documents --file-id 42
@@ -27,8 +25,7 @@ class Command(BaseCommand):
     help = (
         "Queue refresh_file_embeddings for processed, non-media files. Files whose OCR "
         "finished or partly finished are rebuilt from the stored transcriptions without "
-        "re-running vision. A scanned PDF that never went through OCR approval loses its "
-        "old vectors and then pauses for approval, same as a first-time upload."
+        "re-running vision. Files awaiting OCR approval retain their previous index."
     )
 
     def add_arguments(self, parser):

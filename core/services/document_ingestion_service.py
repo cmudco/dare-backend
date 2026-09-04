@@ -3,8 +3,14 @@
 import logging
 from copy import deepcopy
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Optional, Tuple
+from uuid import uuid4
 
+from django.db.models import Q
+from django.utils import timezone
+
+from config import env
 from core.services.document_ocr_workflow_service import (
     DocumentOcrPlan,
     DocumentOcrWorkflowService,
@@ -65,6 +71,30 @@ class DocumentIngestionService:
     }
 
     def process(self, command: DocumentIngestionCommand) -> Optional[int]:
+        token = uuid4()
+        now = timezone.now()
+        expired = now - timedelta(seconds=env.DOCUMENT_OCR_JOB_TIMEOUT_SECONDS + 60)
+        acquired = (
+            File.active_objects.filter(pk=command.file_id)
+            .filter(
+                Q(ingestion_token__isnull=True) | Q(ingestion_started_at__lt=expired)
+            )
+            .update(ingestion_token=token, ingestion_started_at=now)
+        )
+        if not acquired:
+            logger.info(
+                "Document ingestion already running or file unavailable: %s",
+                command.file_id,
+            )
+            return None
+        try:
+            return self._process(command)
+        finally:
+            File._base_manager.filter(pk=command.file_id, ingestion_token=token).update(
+                ingestion_token=None, ingestion_started_at=None
+            )
+
+    def _process(self, command: DocumentIngestionCommand) -> Optional[int]:
         try:
             file = File.active_objects.select_related("user").get(id=command.file_id)
         except File.DoesNotExist:
@@ -145,14 +175,12 @@ class DocumentIngestionService:
                         "processed_pages", enrichment.get("transcribed_pages", 0)
                     ),
                 )
-            file.vector_db_source = file.user.vector_db
             file.status, file.error_message = self._resolve_status(file, vector_count)
             file.processing_stage = FileProcessingStage.COMPLETE
             file.save(
                 update_fields=[
                     "status",
                     "processing_stage",
-                    "vector_db_source",
                     "error_message",
                 ]
             )

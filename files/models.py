@@ -130,6 +130,31 @@ class File(BaseModel):
         verbose_name=_("Vector DB Source"),
         help_text=_("Vector database where this file's chunks are stored"),
     )
+    index_generation = models.CharField(
+        max_length=32,
+        blank=True,
+        default="",
+        help_text="Active vector generation; empty selects the legacy index.",
+    )
+    ingestion_token = models.UUIDField(
+        null=True,
+        blank=True,
+        editable=False,
+        help_text="Owner of the current document ingestion attempt.",
+    )
+    ingestion_started_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        editable=False,
+        help_text="Lease start for recovering interrupted ingestion attempts.",
+    )
+
+    @property
+    def vector_index_key(self):
+        # A generation is one opaque token: a legacy numeric file-id filter
+        # must not also match a staged generation in a tokenized text index.
+        return self.index_generation or str(self.pk)
+
     error_message = models.TextField(
         blank=True, null=True, help_text="Error message if file processing failed"
     )

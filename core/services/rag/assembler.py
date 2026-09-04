@@ -1,9 +1,10 @@
 """Format ranked chunks as cited, size-bounded model context."""
 
+from dataclasses import replace
 from typing import Callable, Dict, List, Optional, Tuple
 
 from core.services.rag.config import setting
-from core.services.rag.dtos import Grounding, RetrievedChunk
+from core.services.rag.dtos import CitationCounter, Grounding, RetrievedChunk
 
 DEFAULT_CHAR_BUDGET = 16000
 DEFAULT_SNIPPET_CAP = 2000
@@ -17,41 +18,55 @@ class ContextAssembler:
         chunks: List[RetrievedChunk],
         grounding: Optional[Grounding] = None,
         on_keep: Optional[Callable[[int, RetrievedChunk], None]] = None,
+        citations: Optional[CitationCounter] = None,
     ) -> List[str]:
         budget = int(setting("RAG_CONTEXT_CHAR_BUDGET", DEFAULT_CHAR_BUDGET))
         blocks: List[str] = []
 
-        if grounding is not None and not grounding.answer_found:
-            blocks.append(
-                "[grounding] Retrieval confidence is low "
-                f"(top score {grounding.top_score:.2f}). If the passages below do "
-                "not answer the question, say it is not in the sources."
-            )
+        blocks.extend(self.grounding_blocks(grounding))
         preamble = len(blocks)
 
-        tags = {(c.file_id, c.chunk_index): i for i, c in enumerate(chunks, 1)}
+        offset = citations.count if citations is not None else 0
+        tags = {(c.file_id, c.chunk_index): i for i, c in enumerate(chunks, offset + 1)}
         used = 0
         kept = 0
         for chunk in chunks:
-            block = self._format(kept + 1, chunk, tags)
+            cap = int(setting("RAG_SNIPPET_CHAR_CAP", DEFAULT_SNIPPET_CAP))
+            if len(chunk.text) > cap:
+                chunk = replace(chunk, text=chunk.text[:cap].rstrip() + " …")
+            block = self._format(offset + kept + 1, chunk, tags)
             if used + len(block) > budget and kept:
                 break  # stay within the prompt budget
             used += len(block)
             kept += 1
             blocks.append(block)
             if on_keep is not None:
-                on_keep(kept, chunk)
+                on_keep(offset + kept, chunk)
 
         # A hop whose source did not make the budget must not cite a tag the
         # model never sees.
-        for offset, chunk in enumerate(chunks[:kept]):
+        for position, chunk in enumerate(chunks[:kept]):
             if chunk.via is None:
                 continue
             source_file = chunk.via.source_file_id or chunk.file_id
             source_tag = tags.get((source_file, chunk.via.source_chunk_index))
-            if source_tag is not None and source_tag > kept:
-                blocks[preamble + offset] = self._format(offset + 1, chunk, {})
+            if source_tag is not None and source_tag > offset + kept:
+                blocks[preamble + position] = self._format(
+                    offset + position + 1, chunk, {}
+                )
+        if citations is not None:
+            citations.count += kept
         return blocks
+
+    @staticmethod
+    def grounding_blocks(grounding: Optional[Grounding]) -> List[str]:
+        if grounding is None or grounding.answer_found:
+            return []
+        return [
+            "[grounding] Retrieval confidence is low "
+            f"(top score {grounding.top_score:.2f}). If the passages below do "
+            "not answer the question, say it is not in the sources."
+        ]
 
     def _format(
         self, n: int, chunk: RetrievedChunk, tags: Dict[Tuple[str, int], int]

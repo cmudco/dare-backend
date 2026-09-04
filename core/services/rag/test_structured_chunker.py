@@ -270,10 +270,21 @@ class StructuredChunkerTests(SimpleTestCase):
         chunks = self.chunker.chunk(parsed, {})
 
         self.assertTrue(all(len(c.searchable_text) <= 200 for c in chunks))
-        self.assertLess(len(chunks), 6)
-        for c in chunks:
+        body_chunks = [c for c in chunks if c.element_kind == "text"]
+        self.assertLess(len(body_chunks), 6)
+        self.assertTrue(any(h1 in c.text for c in chunks))
+        for c in body_chunks:
             first_line = c.searchable_text.split("\n", 1)[0]
             self.assertTrue(first_line.endswith(h4) or first_line.endswith("…"))
+
+    def test_indexed_heading_is_not_recovered_as_a_bare_duplicate(self):
+        title = "Multiple Inheritance Problems"
+        body = "The diamond problem repeats initialization of the common base class."
+        parsed = doc([heading(1, title, 1), para(2, body, 1)])
+        chunks = self.chunker.chunk(parsed, {}, fallback_text=f"## {title}\n\n{body}")
+        self.assertEqual(len(chunks), 1)
+        self.assertIn(title, chunks[0].searchable_text)
+        self.assertEqual(chunks[0].text, body)
 
     def test_tiny_oversized_table_is_split_not_dropped(self):
         chunker = StructuredChunker(200, 40)

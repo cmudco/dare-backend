@@ -5,6 +5,7 @@ pipeline just hands over the stage lists, this turns them into the UI payload â€
 including each reranked chunk's rank movement vs. the hybrid stage.
 """
 
+from dataclasses import replace
 from typing import List, Optional, Tuple
 
 from core.services.rag.dtos import (
@@ -67,6 +68,8 @@ def build_trace(
     analysis_error: Optional[str] = None,
     expanded: Optional[List[RetrievedChunk]] = None,
     expand_applied: bool = False,
+    final: Optional[List[RetrievedChunk]] = None,
+    citation_offset: int = 0,
 ) -> RetrievalTrace:
     expanded = expanded or []
     pool_ranks = {_key(c): i for i, c in enumerate([*pool, *expanded], 1)}
@@ -85,4 +88,10 @@ def build_trace(
         analysis_error=analysis_error,
         expand_applied=expand_applied,
         expanded=_entries(expanded),
+        final=[
+            replace(entry, citation_id=f"S{citation_offset + index}")
+            for index, entry in enumerate(
+                _entries(final or [], use_rerank=rerank_applied), 1
+            )
+        ],
     )

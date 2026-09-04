@@ -154,12 +154,7 @@ def build_references(
     for index, chunk in enumerate(chunks):
         if chunk.element_kind == CHUNK_FLAT:
             continue
-        body = (
-            chunk.text.split("\n", 1)[1]
-            if chunk.heading_path and "\n" in chunk.text
-            else chunk.text
-        )
-        for pointer in extract_pointers(body):
+        for pointer in extract_pointers(chunk.text):
             reference = resolver.resolve(index, pointer)
             if reference is None:
                 continue

@@ -151,6 +151,7 @@ class WeaviateClient:
         user_id: str,
         top_k: int = 5,
         query_text: str = "",
+        include_vector: bool = False,
         file_ids: Optional[List[str]] = None,
     ) -> List[Dict]:
         try:
@@ -187,6 +188,7 @@ class WeaviateClient:
                     limit=top_k,
                     filters=query_filter,
                     fusion_type=weaviate.classes.query.HybridFusion.RELATIVE_SCORE,
+                    include_vector=include_vector,
                     return_metadata=weaviate.classes.query.MetadataQuery(score=True),
                 )
             else:
@@ -194,6 +196,7 @@ class WeaviateClient:
                     near_vector=vector,
                     limit=top_k,
                     filters=query_filter,
+                    include_vector=include_vector,
                     return_metadata=weaviate.classes.query.MetadataQuery(distance=True),
                 )
 
@@ -226,6 +229,15 @@ class WeaviateClient:
                         },
                         "score": cosine_similarity,
                         "raw_similarity": cosine_similarity,
+                        "vector": (
+                            (
+                                obj.vector.get("default")
+                                if isinstance(obj.vector, dict)
+                                else obj.vector
+                            )
+                            if include_vector
+                            else None
+                        ),
                     }
                 )
 
@@ -344,6 +356,7 @@ class WeaviateClient:
         namespace: Optional[str] = None,
         filter: Optional[Dict] = None,
         query_text: str = "",
+        include_vector: bool = False,
     ) -> List[Dict]:
         """Query similar vectors from Weaviate matching the vector service interface."""
         try:
@@ -362,6 +375,7 @@ class WeaviateClient:
                 top_k=top_k,
                 query_text=query_text,
                 file_ids=file_ids,
+                include_vector=include_vector,
             )
 
             formatted_results = []
@@ -377,6 +391,7 @@ class WeaviateClient:
                     {
                         "id": f"file_{file_id}_chunk_{chunk_index}",
                         "score": result.get("score", 0.0),
+                        "vector": result.get("vector"),
                         "metadata": {
                             "file_id": file_id,
                             "user_id": metadata.get("user_id"),

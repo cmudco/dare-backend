@@ -9,6 +9,7 @@ from core.config.processing import VECTOR_DIMENSION
 from core.config.vector_db import get_user_namespace
 from core.helpers.pinecone import PineconeClient
 from core.helpers.weaviate import WeaviateClient
+from files.models import File
 from users.constants import VectorDBChoice
 
 User = get_user_model()
@@ -46,6 +47,7 @@ class BaseVectorClient(ABC):
         namespace: Optional[str] = None,
         filter: Optional[Dict] = None,
         query_text: str = "",
+        include_vector: bool = False,
     ) -> List[Dict]:
         pass
 
@@ -84,6 +86,7 @@ class BaseVectorService(ABC):
         namespace: Optional[str] = None,
         filter: Optional[Dict] = None,
         query_text: str = "",
+        include_vector: bool = False,
     ) -> List[Dict]:
         """Query similar vectors from the vector database."""
         pass
@@ -105,6 +108,7 @@ class BaseVectorService(ABC):
         file_ids: List[int],
         top_k: int = 10,
         query_text: str = "",
+        include_vector: bool = False,
     ) -> List[Dict]:
         """
         Search for documents similar to the given vector.
@@ -113,18 +117,33 @@ class BaseVectorService(ABC):
         Passing ``query_text`` enables hybrid (BM25 + dense) retrieval on
         backends that support it (Weaviate); Pinecone stays dense-only.
         """
+        files = File.active_objects.filter(user_id=user_id, pk__in=file_ids).only(
+            "id", "index_generation"
+        )
+        keys = {file.vector_index_key: str(file.pk) for file in files}
+        if not keys:
+            return []
         filter_query = {
             "user_id": str(user_id),
-            "file_id": {"$in": [str(file_id) for file_id in file_ids]},
+            "file_id": {"$in": list(keys)},
         }
 
-        return self.query_vectors(
+        matches = self.query_vectors(
             vector=vector,
             top_k=top_k,
             namespace=get_user_namespace(user_id),
             filter=filter_query,
             query_text=query_text,
+            include_vector=include_vector,
         )
+        selected = []
+        for match in matches:
+            metadata = dict(match.get("metadata", {}))
+            logical_id = keys.get(str(metadata.get("file_id", "")))
+            if logical_id is not None:
+                metadata["file_id"] = logical_id
+                selected.append({**match, "metadata": metadata})
+        return selected
 
     def delete_file_vectors(self, file_id: int, user_id: int) -> bool:
         """
@@ -172,9 +191,12 @@ class PineconeVectorService(BaseVectorService):
         namespace: Optional[str] = None,
         filter: Optional[Dict] = None,
         query_text: str = "",
+        include_vector: bool = False,
     ) -> List[Dict]:
         # Pinecone path is dense-only here; query_text is accepted but unused.
-        return self.client.query_vectors(vector, top_k, namespace, filter)
+        return self.client.query_vectors(
+            vector, top_k, namespace, filter, include_vector=include_vector
+        )
 
     def delete_vectors(self, ids: List[str], namespace: Optional[str] = None) -> bool:
         return self.client.delete_vectors(ids, namespace)
@@ -212,9 +234,15 @@ class WeaviateVectorService(BaseVectorService):
         namespace: Optional[str] = None,
         filter: Optional[Dict] = None,
         query_text: str = "",
+        include_vector: bool = False,
     ) -> List[Dict]:
         return self.client.query_vectors(
-            vector, top_k, namespace, filter, query_text=query_text
+            vector,
+            top_k,
+            namespace,
+            filter,
+            query_text=query_text,
+            include_vector=include_vector,
         )
 
     @client_operation
@@ -230,10 +258,18 @@ class WeaviateVectorService(BaseVectorService):
         return self.client.delete_file_vectors(file_id=file_id, user_id=user_id)
 
 
-def get_vector_service(user_id: Optional[int] = None) -> BaseVectorService:
+def get_vector_service(
+    user_id: Optional[int] = None, *, backend: Optional[int] = None
+) -> BaseVectorService:
     """
     Factory function to get the appropriate vector service based on user preference.
     """
+    if backend is not None:
+        return (
+            PineconeVectorService()
+            if backend == VectorDBChoice.PINECONE
+            else WeaviateVectorService()
+        )
     if user_id is None:
         return WeaviateVectorService()
 

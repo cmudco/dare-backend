@@ -119,6 +119,7 @@ class DocumentRetriever(BaseRetriever):
                 file_ids=list(request.file_ids),
                 top_k=request.top_k,
                 query_text=query_text,
+                include_vector=want_vectors,
             )
         finally:
             service.close()
@@ -141,6 +142,7 @@ class DocumentRetriever(BaseRetriever):
                     source_type="document",
                     file_id=str(metadata.get("file_id", "")),
                     file_name=file_name,
+                    vector=m.get("vector"),
                     retrieval_text=(
                         retrieval_text if retrieval_text != body_text else ""
                     ),

@@ -62,6 +62,13 @@ class RetrievedChunk:
         return self.retrieval_text or self.text
 
 
+@dataclass
+class CitationCounter:
+    """Turn-owned citation sequence shared across sources and tool searches."""
+
+    count: int = 0
+
+
 @dataclass(frozen=True)
 class RetrievalRequest:
     """Everything the pipeline needs for one retrieval."""
@@ -75,6 +82,7 @@ class RetrievalRequest:
     payer_bot_id: Optional[int] = None  # public bot whose owner funds analysis
     similarity_threshold: float = 0.0
     trace: bool = False  # capture a per-stage RetrievalTrace for the UI
+    citations: Optional[CitationCounter] = None
 
 
 @dataclass(frozen=True)
@@ -104,6 +112,7 @@ class TraceEntry:
     section: str = ""
     via: Optional[str] = None  # raw pointer text for expanded entries
     via_kind: Optional[str] = None  # "entity", or the followed pointer's kind
+    citation_id: Optional[str] = None
 
     def to_payload(self) -> Dict[str, Any]:
         return {
@@ -117,6 +126,7 @@ class TraceEntry:
             "section": self.section,
             "via": self.via,
             "viaKind": self.via_kind,
+            "citationId": self.citation_id,
         }
 
 
@@ -138,6 +148,7 @@ class RetrievalTrace:
     analysis_error: Optional[str] = None
     expand_applied: bool = False
     expanded: List[TraceEntry] = field(default_factory=list)
+    final: List[TraceEntry] = field(default_factory=list)
 
     def to_payload(self) -> Dict[str, Any]:
         """Camelized payload for the frontend (rules.md §11: typed, no FE parsing)."""
@@ -179,6 +190,7 @@ class RetrievalTrace:
                 else None
             ),
             "finalSize": self.final_size,
+            "finalEvidence": [e.to_payload() for e in self.final],
         }
 
 

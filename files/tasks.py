@@ -32,13 +32,9 @@ def process_file_embeddings(file_id, chunk_size=None, overlap_size=None):
 
 @job
 def refresh_file_embeddings(file_id, user_id, chunk_size=None, overlap_size=None):
-    """Replace previous vectors and regenerate embeddings for a file."""
-    try:
-        delete_file_vectors(file_id, user_id)
-    except Exception:
-        # Proceed with regeneration even if cleanup fails.
-        pass
-    process_file_embeddings(file_id, chunk_size, overlap_size)
+    """Keep the active index until a complete replacement is published."""
+    if File.active_objects.filter(pk=file_id, user_id=user_id).exists():
+        return process_file_embeddings(file_id, chunk_size, overlap_size)
 
 
 @job
@@ -49,44 +45,20 @@ def delete_file_vectors(file_id, user_id):
     still surface, so they are deleted first and a failing map cleanup can
     never hold them back.
     """
+    file = File._base_manager.filter(pk=file_id, user_id=user_id).first()
+    service = None
     try:
-        # Try to get the file to check its vector_db_source
-        try:
-            file = File.active_objects.get(id=file_id)
-            vector_db_source = file.vector_db_source
-        except File.DoesNotExist:
-            # File already deleted from DB, we'll have to try with current user preference
-            vector_db_source = None
-
-        # Get user and current preference
-        User = get_user_model()
-        user = User.objects.get(id=user_id)
-        current_preference = user.vector_db
-
-        if vector_db_source:
-            # Temporarily set user's vector_db to match the file's source
-            user.vector_db = vector_db_source
-            user.save(update_fields=["vector_db"])
-
-            # Delete vectors using correct vector DB
-            processor = DocumentProcessor()
-            processor.update_vector_service(user_id)
-            result = processor.delete_file_vectors(file_id, user_id)
-
-            # Reset user's preference
-            user.vector_db = current_preference
-            user.save(update_fields=["vector_db"])
-
-        else:
-            # For older files with no recorded source, default to current preference
-            processor = DocumentProcessor()
-            processor.update_vector_service(user_id)
-            result = processor.delete_file_vectors(file_id, user_id)
-
-    except Exception as e:
-        logger.warning(
-            "Vector cleanup for file %s failed: %s", file_id, e, exc_info=True
+        service = get_vector_service(
+            user_id, backend=file.vector_db_source if file else None
         )
+        service.delete_file_vectors(
+            file.vector_index_key if file else str(file_id), user_id
+        )
+    except Exception:
+        logger.warning("Vector cleanup failed for file %s", file_id, exc_info=True)
+    finally:
+        if service is not None:
+            service.close()
 
     try:
         DocumentMapService.clear(file_id)

@@ -17,8 +17,12 @@ from typing import Any, Dict, Optional, Tuple
 from asgiref.sync import sync_to_async
 
 from core.services.document_processor import DocumentProcessor
+from core.services.llm_helpers.retrieval_targets import TransientRetrievalTarget
 from core.services.llm_helpers.semantic_context_helpers import (
-    collect_embedding_file_ids, run_document_search, run_library_search)
+    collect_embedding_file_ids,
+    run_document_search,
+    run_library_search,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +38,7 @@ class RetrievalScope:
     folder_ids: Tuple[int, ...] = ()
     library_ids: Tuple[int, ...] = ()
     user_id: Optional[int] = None
+    payer_bot_id: Optional[int] = None
     file_owner_id: Optional[int] = None
     max_context_snippets: int = 4
     similarity_threshold: float = 0.5
@@ -77,11 +82,12 @@ class RetrievalToolExecutor:
         # save_trace appends, so a trace left from a previous generation of
         # this turn must be cleared once per turn; multiple search calls
         # within the same turn keep appending.
-        if target is not None:
-            target.begin_agentic_search()
+        target = target if target is not None else TransientRetrievalTarget()
+        target.begin_agentic_search()
 
         document_processor = DocumentProcessor()
         blocks = []
+        failures = []
 
         if scope.embedding_ids or scope.tag_ids or scope.folder_ids:
             file_ids = await collect_embedding_file_ids(
@@ -94,16 +100,19 @@ class RetrievalToolExecutor:
                 try:
                     blocks.extend(
                         await sync_to_async(run_document_search)(
-                            document_processor,
-                            query,
-                            sorted(file_ids),
-                            scope.file_owner_id or scope.user_id,
-                            top_k,
-                            scope.similarity_threshold,
-                            target,
+                            document_processor=document_processor,
+                            query=query,
+                            file_ids=sorted(file_ids),
+                            vector_user_id=scope.file_owner_id or scope.user_id,
+                            payer_user_id=scope.user_id,
+                            payer_bot_id=scope.payer_bot_id,
+                            max_context_snippets=top_k,
+                            similarity_threshold=scope.similarity_threshold,
+                            target=target,
                         )
                     )
                 except Exception as exc:
+                    failures.append("Document search is unavailable. Retry the search.")
                     logger.warning(
                         "search_documents: document retrieval failed: %s", exc
                     )
@@ -112,20 +121,25 @@ class RetrievalToolExecutor:
             try:
                 blocks.extend(
                     await sync_to_async(run_library_search)(
-                        document_processor,
-                        query,
-                        list(scope.library_ids),
-                        top_k,
-                        target,
+                        document_processor=document_processor,
+                        query=query,
+                        library_ids=list(scope.library_ids),
+                        payer_user_id=scope.user_id,
+                        payer_bot_id=scope.payer_bot_id,
+                        max_context_snippets=top_k,
+                        target=target,
                     )
                 )
             except Exception as exc:
+                failures.append("Library search is unavailable. Retry the search.")
                 logger.warning("search_documents: library retrieval failed: %s", exc)
 
         return {
-            "success": True,
+            "success": not failures,
+            "partial": bool(failures and blocks),
+            "errors": failures,
             "query": query,
-            "passages_found": len(blocks),
+            "passages_found": sum(block.startswith("[S") for block in blocks),
             "blocks": blocks,
         }
 

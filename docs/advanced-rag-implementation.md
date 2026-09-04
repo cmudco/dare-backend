@@ -114,7 +114,7 @@ Measured locally on the M1 Pro (MPS), reranking a 20-candidate pool:
 | Model | params | latency / query | scores | both put answer at |
 |---|---|---|---|---|
 | `ms-marco-MiniLM-L-6-v2` | 22M | **~200–500 ms** (first call ~2.8 s = one-time MPS warmup) | raw logits | **#1** |
-| `bge-reranker-v2-m3` | 568M | ~1.7–3.3 s (avg 2.3 s) | **calibrated 0–1** (0.914, 0.962) | **#1** |
+| `bge-reranker-v2-m3` | 568M | ~1.7–3.3 s (avg 2.3 s) | **normalized 0–1** (0.914, 0.962) | **#1** |
 
 Both are **$0, fully local**. MiniLM is the sub-500 ms option currently used for local testing; its scores are raw logits, so they are useful for ranking but not as percentages. `bge` is the heavier quality/thresholding option if deployment latency allows it (optimise with fp16 / smaller pool / server GPU).
 
@@ -152,7 +152,7 @@ We bumped the document path from 500 chars (~96 tok) to **1,500 chars / 180 over
 - **MMR must be conditional.** Blanket MMR *causes* the quality dips. It belongs behind an intent gate, full stop.
 - **Match the data, not the textbook.** CMU curated this archive and landed on ~350 tokens/chunk; mirroring that is more defensible than chasing a generic 800–1000.
 - **Advanced mode is the product switch.** Query analysis, HyDE/rewrite retrieval input, tracing, reranking, and grounding run when the conversation is set to Advanced RAG. Failures degrade safely to the best available retrieval output.
-- **Advanced mode covers BOTH retrieval paths.** Uploaded documents run through the same pipeline as shared libraries (a `DocumentRetriever` behind the same `build_pipeline` factory); the legacy hybrid search remains the naive mode and the workflow-step path. A message that searches documents *and* libraries gets one trace per source (`{"traces": [...]}`); snippets carry the calibrated rerank score. Verified: verbatim chunk paste on an uploaded file → rerank 0.9868, grounded. Caveat: cross-encoders score markdown-table answers lower than prose (a correct table hit scored 0.22 on a natural-language question — still ranked #1 and cited, but below the 0.3 grounding note threshold).
+- **Advanced mode covers BOTH retrieval paths.** Uploaded documents run through the same pipeline as shared libraries (a `DocumentRetriever` behind the same `build_pipeline` factory); the legacy hybrid search remains the naive mode and the workflow-step path. A message that searches documents *and* libraries gets one trace per source (`{"traces": [...]}`); snippets carry the rerank relevance score. Verified: verbatim chunk paste on an uploaded file → rerank 0.9868, grounded. Caveat: cross-encoders score markdown-table answers lower than prose (a correct table hit scored 0.22 on a natural-language question — still ranked #1 and cited, but below the 0.3 grounding note threshold).
 - **Reranking stays lazy.** `torch` / `sentence-transformers` load only when advanced retrieval actually runs.
 
 ---
@@ -243,19 +243,19 @@ captions and pages (`DocumentReference`); unresolved pointers are kept so the
 resolution rate is visible. At query time the expand stage follows resolved
 pointers one hop, the reranker judges the pulled-in chunks like any other, and
 the citation header says `[S2] book.pdf · p. 204 · 7.2 Collisions · followed
-"section 7.2" from [S1]`. A followed pointer is placed directly after the
-chunk that pointed to it, whatever the reranker scored its text; on
-exploratory queries hops are appended after the diversified direct hits and
-are trimmed first. `references_resolved` counts pointers whose target heading
+"section 7.2" from [S1]`. A followed pointer is eligible only when its source survives selection. It
+can displace direct evidence only when the query names that exact reference
+or its reranker score is stronger. The final token budget determines which
+passages are actually cited. `references_resolved` counts pointers whose target heading
 or chunk was identified; only those with a target chunk can be followed. The
 file viewer's Map tab renders the section tree, chunks and references from
 `GET /api/files/{id}/map/`. Existing files
 gain map rows on their next reprocess: `python manage.py reprocess_documents
---user-id N`, which deletes the file's existing vectors and map rows before
-regenerating them. Files whose OCR finished or partly finished are rebuilt
+--user-id N`, which stages replacement vectors and map rows before publishing
+the new generation. Files whose OCR finished or partly finished are rebuilt
 from the stored transcriptions without re-running vision; a scanned PDF that
 never went through OCR approval has no transcription to rebuild from, so it
-loses its old vectors and then pauses for approval like a first-time upload.
+retains its old index and pauses for approval like a first-time upload.
 Design:
 `docs/superpowers/specs/2026-09-02-graph-reference-resolution-design.md`.
 
@@ -288,3 +288,33 @@ touching ingest. Design:
 [`2026-09-02-cross-document-links-design.md`](./superpowers/specs/2026-09-02-cross-document-links-design.md);
 spike with the extractor comparison:
 [`2026-09-02-entity-extraction-spike.md`](./superpowers/spikes/2026-09-02-entity-extraction-spike.md).
+
+
+### Evidence-integrity fixes (September 2026)
+
+Agentic `search_documents` calls the same Advanced RAG helpers, including the
+billing identity separately from the file owner. Search errors are reported as
+errors or partial results. Citation numbers are unique across searches in one
+turn; `finalEvidence` records exactly the budget-selected snippets and their
+citation IDs. Older traces have no final-evidence list and the UI says so.
+The confidence indicator describes retrieval relevance, not verified answer
+correctness. It uses the best reranker score among the evidence actually sent.
+
+Footnotes remain searchable. Recovery coverage is measured against emitted
+chunks, so discarded text is recovered. Small images are eligible for vision;
+only confidently decorative, uncaptioned figures are skipped. Headings already
+indexed with their body do not become duplicate recovery hits. OCR and figure
+uncertainty remains visible in the evidence. MMR requests actual candidate
+vectors and reports a skip if they are unavailable. Its relevance term retains
+the reranker scores instead of replacing them with dense similarity.
+
+Index replacement uses opaque generation keys, an ingestion lease, and a
+transactional switch of the active key and map rows. Failed embedding/indexing
+retains the previous generation. A failed cleanup leaves an unsearched retired
+index and a log entry. Existing files with no generation retain their legacy
+keys until reprocessed.
+
+Rollout: apply migration `files.0023`, then update all API and worker processes
+before reprocessing files. Drain old ingestion workers during this transition.
+Old code cannot read generation keys after publication; rollback requires
+coordinating readers/workers and restoring or rebuilding legacy indexes.

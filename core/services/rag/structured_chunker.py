@@ -395,13 +395,14 @@ class StructuredChunker:
         if not fallback_text.strip():
             return chunks
 
-        source_parts = [chunk.text for chunk in chunks]
+        # Heading prefixes are already indexed alongside their body. Counting
+        # them prevents bare duplicate headings from crowding out real evidence.
+        source_parts = [chunk.searchable_text for chunk in chunks]
         for element in parsed.elements:
-            source_parts.extend(
-                value
-                for value in (element.text, element.table_markdown, element.caption)
-                if value
-            )
+            # Intentionally excluded running furniture must not be recovered;
+            # all other coverage is measured against emitted evidence.
+            if element.is_furniture:
+                source_parts.append(element.text)
         recovered: List[StructuredChunk] = []
         seen = set()
         paragraphs = missing_text_blocks(
@@ -511,12 +512,16 @@ class StructuredChunker:
             parts.append(f"[Machine-generated page description: {summary}]")
         if transcription:
             parts.append(transcription)
+        uncertainty = str(result.get("uncertainty") or "").strip()
+        warning = (
+            f"[Transcription uncertainty: {uncertainty}]\n\n" if uncertainty else ""
+        )
         if not parts:
             return []
         orders = [element.order for element in elements if element.page_no == page_no]
         text = "\n\n".join(parts)
         prefix = self._prefix(path)
-        available = max(self.chunk_size - len(prefix), MIN_BODY_CHARS)
+        available = max(self.chunk_size - len(prefix) - len(warning), MIN_BODY_CHARS)
         pieces = (
             self._splitter_for(available).split_text(text)
             if len(text) > available
@@ -524,7 +529,7 @@ class StructuredChunker:
         )
         return [
             StructuredChunk(
-                text=piece,
+                text=warning + piece,
                 element_kind=CHUNK_PAGE,
                 page_start=page_no,
                 page_end=page_no,
@@ -533,7 +538,7 @@ class StructuredChunker:
                 heading_path=path,
                 order_start=min(orders) if orders else None,
                 order_end=max(orders) if orders else None,
-                retrieval_text=prefix + piece if prefix else "",
+                retrieval_text=prefix + warning + piece if prefix else "",
             )
             for piece in pieces
         ]
@@ -555,6 +560,9 @@ class StructuredChunker:
             parts.append(f"[Machine-generated figure description: {description}]")
         if visible:
             parts.append(f"Visible text in figure: {visible}")
+        uncertainty = str(result.get("uncertainty") or "").strip()
+        if uncertainty:
+            parts.insert(0, f"[Figure uncertainty: {uncertainty}]")
         body = "\n\n".join(parts)
         prefix = self._prefix(path)
         return StructuredChunk(
