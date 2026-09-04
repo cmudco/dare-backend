@@ -13,10 +13,13 @@ in hand.
 
 import io
 import logging
+import re
 import zipfile
+from collections import Counter
 from typing import List
 from xml.etree import ElementTree as ET
 
+import fitz
 import PyPDF2
 
 logger = logging.getLogger(__name__)
@@ -89,16 +92,48 @@ def read_ipynb(data: bytes) -> str:
     the parser package, whose ``__init__`` reaches back into this module
     through the legacy parser.
     """
-    from core.services.document_parsers.notebook_parser import \
-        notebook_markdown
+    from core.services.document_parsers.notebook_parser import notebook_markdown
 
     return notebook_markdown(data)
 
 
 def read_pdf(data: bytes) -> str:
-    """Flat text extraction via PyPDF2."""
-    reader = PyPDF2.PdfReader(io.BytesIO(data))
-    return " ".join(page.extract_text() or "" for page in reader.pages)
+    """Extract native PDF text as paragraph-like blocks.
+
+    PyMuPDF's blocks preserve enough separation to compare native text with
+    Docling's structured elements. PyPDF2 remains the compatibility fallback
+    for PDFs PyMuPDF cannot open.
+    """
+    try:
+        with fitz.open(stream=data, filetype="pdf") as document:
+            blocks = []
+            for page in document:
+                page_height = float(page.rect.height or 0)
+                for block in page.get_text("blocks"):
+                    text = str(block[4] or "").strip()
+                    if not text:
+                        continue
+                    near_margin = page_height and (
+                        float(block[1]) <= page_height * 0.12
+                        or float(block[3]) >= page_height * 0.88
+                    )
+                    signature = _pdf_furniture_signature(text) if near_margin else ""
+                    blocks.append((text, signature))
+        repeated = Counter(signature for _, signature in blocks if signature)
+        return "\n\n".join(
+            text
+            for text, signature in blocks
+            if not signature or repeated[signature] < 2
+        )
+    except (RuntimeError, ValueError, TypeError) as error:
+        logger.warning("PyMuPDF extraction failed; using PyPDF2: %s", error)
+        reader = PyPDF2.PdfReader(io.BytesIO(data))
+        return "\n\n".join(page.extract_text() or "" for page in reader.pages)
+
+
+def _pdf_furniture_signature(text: str) -> str:
+    """Comparable signature for repeated browser/PDF headers and footers."""
+    return " ".join(re.sub(r"\d+", "#", text.casefold()).split())
 
 
 def decode_text(data: bytes) -> str:

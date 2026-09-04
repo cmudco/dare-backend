@@ -1,8 +1,8 @@
 import logging
+from dataclasses import replace
 from typing import Dict, List, Optional, Tuple
 
 from channels.db import database_sync_to_async
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from conversations.models import Snippet
 from core.config.processing import (
@@ -15,13 +15,24 @@ from core.config.processing import (
 from core.config.vector_db import get_user_namespace
 from core.helpers.openai import OpenAIWrapper
 from core.services.document_enrichment_service import DocumentEnrichmentService
+from core.services.document_parsers.pdf_outline import extract_pdf_outline
 from core.services.document_parsing_service import DocumentParsingService
+from core.services.document_text_sanitizer import sanitize_document_text
 from core.services.dtos.parsed_document_dto import ParsedDocument
 from core.services.embedding_service import EmbeddingService
 from core.services.file_processing_journey import FileProcessingJourney
 from core.services.file_processor import FileProcessor
+from core.services.rag.entity_extractor import extract_entities
+from core.services.rag.reference_resolver import build_references
+from core.services.rag.structured_chunker import (
+    CHUNK_FLAT,
+    CHUNK_RECOVERED,
+    StructuredChunk,
+    StructuredChunker,
+)
 from core.services.vector_service import get_vector_service
 from files.models import File
+from files.services.document_map_service import DocumentMapService
 from workflows.models import WorkflowStepSnippet
 
 logger = logging.getLogger(__name__)
@@ -124,6 +135,8 @@ class DocumentProcessor:
                     "cache_hits": enrichment.cache_hits,
                     "described_figures": enrichment.described_figures,
                     "transcribed_pages": enrichment.transcribed_pages,
+                    "processed_pages": enrichment.processed_pages,
+                    "blank_pages": enrichment.blank_pages,
                     "detected_textless_pages": summary.get("detected_textless_pages"),
                     "selected_textless_pages": summary.get("selected_textless_pages"),
                     "deferred_textless_pages": summary.get("deferred_textless_pages"),
@@ -141,20 +154,26 @@ class DocumentProcessor:
                     stage.add_details(**details)
 
             with journey.stage("embedding") as stage:
-                vectors = self._process_chunks(
-                    content, file, effective_chunk_size, effective_overlap_size
+                vectors, structure_details = self._embed_with_structure(
+                    file,
+                    parsed,
+                    enrichment.document_model,
+                    content,
+                    effective_chunk_size,
+                    effective_overlap_size,
                 )
                 stage.add_details(
                     text_characters=len(content),
                     chunks=len(vectors),
                     chunk_size=effective_chunk_size,
                     overlap_size=effective_overlap_size,
+                    **structure_details,
                 )
 
             with journey.stage("indexing") as stage:
                 # Connect the vector backend late so its failures blame indexing, not parsing.
                 self.update_vector_service(file.user.id)
-                self._store_vectors(vectors, file.user.id)
+                self._store_vectors(vectors, file.user.id, file.id)
                 backend_name = type(self.vector_service).__name__.removesuffix(
                     "VectorService"
                 )
@@ -166,7 +185,7 @@ class DocumentProcessor:
         except Exception as e:
             if owns_journey:
                 journey.fail_attempt(e)
-            raise Exception(f"Error processing file: {str(e)}")
+            raise Exception(f"Error processing file: {sanitize_document_text(str(e))}")
 
     def parse_file(self, file: File) -> ParsedDocument:
         """Parse a file and persist its text and document model.
@@ -186,6 +205,8 @@ class DocumentProcessor:
         )
         stage.add_details(
             parser=parsed.parser,
+            fallback_from=parsed.fallback_from,
+            fallback_reason=parsed.fallback_reason,
             pages=parsed.structure.pages,
             elements=len(parsed.elements),
             sections=parsed.structure.sections,
@@ -215,54 +236,154 @@ class DocumentProcessor:
         except Exception as e:
             raise Exception(f"Error processing user files: {str(e)}")
 
-    def _chunk_text(
-        self, text: str, chunk_size: int = CHUNK_SIZE, overlap: int = OVERLAP_SIZE
-    ) -> List[str]:
-        """Split text into smaller chunks with overlap, using RecursiveCharacterTextSplitter.
+    def _embed_with_structure(
+        self,
+        file: File,
+        parsed: ParsedDocument,
+        document_model: Dict,
+        content: str,
+        chunk_size: int,
+        overlap_size: int,
+    ) -> Tuple[List[Tuple[str, List[float], Dict]], Dict]:
+        """Chunk on structure, embed, and persist the map rows.
 
-        This splitter is optimal for generic text, trying to keep paragraphs, sentences,
-        and words together as long as possible for better semantic coherence.
+        Chunk rows are written even when reference extraction fails, so a
+        resolver bug costs edges, never citations.
         """
-        if not text or not isinstance(text, str):
-            return []
-
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=chunk_size,
-            chunk_overlap=overlap,
-            length_function=len,
-            # Default separators: ["\n\n", "\n", " ", ""]
-            # separators for languages without word boundaries
-            separators=[
-                "\n\n",
-                "\n",
-                " ",
-                ".",
-                ",",
-                "\u200b",  # Zero-width space
-                "\uff0c",  # Fullwidth comma
-                "\u3001",  # Ideographic comma
-                "\uff0e",  # Fullwidth full stop
-                "\u3002",  # Ideographic full stop
-                "",
-            ],
+        chunker = StructuredChunker(chunk_size, overlap_size)
+        fallback_text = "\n\n".join(
+            part
+            for part in (content, parsed.embeddable_text, parsed.recovery_text)
+            if part and part.strip()
         )
+        structured = chunker.chunk(parsed, document_model, fallback_text=fallback_text)
+        vectors = self.embedding_service.create_embeddings_with_metadata(
+            [chunk.searchable_text for chunk in structured],
+            file.id,
+            file.user.id,
+            file.name or file.file.name,
+            file.file_type,
+        )
+        vectors = self._attach_source_text(vectors, structured)
+        indexed = self._align_chunks(structured, vectors)
+        recovered = [
+            (index, chunk)
+            for index, chunk in indexed
+            if chunk.element_kind == CHUNK_RECOVERED
+        ]
+        mapped = [
+            (index, chunk)
+            for index, chunk in indexed
+            if chunk.element_kind != CHUNK_RECOVERED
+        ]
+        is_structured = bool(mapped) and mapped[0][1].element_kind != CHUNK_FLAT
+        references = []
+        if is_structured:
+            try:
+                positional = build_references(
+                    parsed.elements,
+                    [chunk for _, chunk in mapped],
+                    extract_pdf_outline(file),
+                )
+                index_of = [index for index, _ in mapped]
+                references = [
+                    replace(
+                        reference,
+                        source_chunk_index=index_of[reference.source_chunk_index],
+                        target_chunk_index=(
+                            index_of[reference.target_chunk_index]
+                            if reference.target_chunk_index is not None
+                            else None
+                        ),
+                    )
+                    for reference in positional
+                ]
+            except Exception as error:
+                logger.warning(
+                    "Reference extraction failed for file %s: %s",
+                    file.id,
+                    error,
+                    exc_info=True,
+                )
+        found, resolved = DocumentMapService.replace(file, mapped, references)
+        DocumentMapService.write_chunk_indexes(file, mapped)
 
-        chunks = text_splitter.split_text(text)
-        return chunks
+        entities_found, entity_lanes, entities_error = 0, ["identifiers"], False
+        try:
+            mentions, entity_lanes = extract_entities(
+                [chunk.text for _, chunk in mapped]
+            )
+            entities_found = DocumentMapService.replace_entities(file, mapped, mentions)
+        except Exception as error:
+            entities_error = True
+            logger.warning(
+                "Entity extraction failed for file %s: %s",
+                file.id,
+                error,
+                exc_info=True,
+            )
 
-    def _process_chunks(
-        self, content: str, file: File, chunk_size=CHUNK_SIZE, overlap=OVERLAP_SIZE
+        return vectors, {
+            "structured": is_structured,
+            "minimum_retrieval_chars": chunker.minimum_text_size,
+            "contextualized_chunks": sum(
+                bool(chunk.retrieval_text) for _, chunk in mapped
+            ),
+            "recovered_chunks": len(recovered),
+            "recovered_characters": sum(len(chunk.text) for _, chunk in recovered),
+            "references_found": found,
+            "references_resolved": resolved,
+            "chunk_rows": len(mapped),
+            "entities_found": entities_found,
+            "entity_lanes": entity_lanes,
+            "entities_error": entities_error,
+        }
+
+    @staticmethod
+    def _attach_source_text(
+        vectors: List[Tuple[str, List[float], Dict]],
+        chunks: List[StructuredChunk],
     ) -> List[Tuple[str, List[float], Dict]]:
-        """Process file content into chunks and generate vectors."""
-        chunks = self._chunk_text(content, chunk_size=chunk_size, overlap=overlap)
-        return self.embedding_service.create_embeddings_with_metadata(
-            chunks, file.id, file.user.id, file.name or file.file.name, file.file_type
-        )
+        """Keep cited source text separate from the contextual embedding input."""
+        enriched = []
+        for vector_id, embedding, metadata in vectors:
+            try:
+                chunk = chunks[int(metadata["chunk_index"])]
+            except (IndexError, KeyError, TypeError, ValueError):
+                enriched.append((vector_id, embedding, metadata))
+                continue
+            enriched.append(
+                (
+                    vector_id,
+                    embedding,
+                    {**metadata, "body_text": chunk.text},
+                )
+            )
+        return enriched
+
+    @staticmethod
+    def _align_chunks(
+        chunks: List[StructuredChunk], vectors: List[Tuple[str, List[float], Dict]]
+    ) -> List[Tuple[int, StructuredChunk]]:
+        """Pair each stored vector with its chunk using the index the embedder assigned."""
+        indexed: List[Tuple[int, StructuredChunk]] = []
+        for _, _, metadata in vectors:
+            try:
+                position = int(metadata["chunk_index"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if 0 <= position < len(chunks):
+                indexed.append((position, chunks[position]))
+        return indexed
 
     def _store_vectors(
-        self, vectors: List[Tuple[str, List[float], Dict]], user_id: int
+        self,
+        vectors: List[Tuple[str, List[float], Dict]],
+        user_id: int,
+        file_id: int,
     ) -> bool:
-        """Store vectors in batches."""
+        """Replace one file's vectors, then store the current set in batches."""
+        self.vector_service.delete_file_vectors(file_id, user_id)
         for i in range(0, len(vectors), BATCH_SIZE):
             batch = vectors[i : i + BATCH_SIZE]
             self.vector_service.upsert_vectors(
@@ -385,7 +506,7 @@ class DocumentProcessor:
                 continue
 
             metadata = match.get("metadata", {})
-            text = metadata.get("text", "")
+            text = metadata.get("body_text") or metadata.get("text", "")
             file_id = metadata.get("file_id", "")
             file_name = metadata.get("file_name", "Unknown file")
             chunk_index = metadata.get("chunk_index", 0)

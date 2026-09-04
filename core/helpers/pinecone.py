@@ -1,7 +1,10 @@
 from typing import Dict, List, Optional, Tuple
-from pinecone import Pinecone
+
 from django.conf import settings
+from pinecone import Pinecone
+
 from config.env import PINECONE_API_KEY, PINECONE_INDEX_NAME
+
 
 class PineconeClient:
     def __init__(self):
@@ -11,28 +14,20 @@ class PineconeClient:
     def upsert_vectors(
         self,
         vectors: List[Tuple[str, List[float], Dict]],
-        namespace: Optional[str] = None
+        namespace: Optional[str] = None,
     ) -> bool:
         """Upsert vectors to Pinecone."""
         try:
             formatted_vectors = [
-                (id, vector, metadata)
-                for id, vector, metadata in vectors
+                (id, vector, metadata) for id, vector, metadata in vectors
             ]
 
-            self.index.upsert(
-                vectors=formatted_vectors,
-                namespace=namespace
-            )
+            self.index.upsert(vectors=formatted_vectors, namespace=namespace)
             return True
         except Exception as e:
             raise Exception(f"Error upserting vectors: {str(e)}")
 
-    def delete_vectors(
-        self,
-        ids: List[str],
-        namespace: Optional[str] = None
-    ) -> bool:
+    def delete_vectors(self, ids: List[str], namespace: Optional[str] = None) -> bool:
         """Delete vectors by their IDs."""
         try:
             self.index.delete(ids=ids, namespace=namespace)
@@ -40,12 +35,31 @@ class PineconeClient:
         except Exception as e:
             raise Exception(f"Error deleting vectors: {str(e)}")
 
+    def delete_file_vectors(
+        self,
+        file_id: int,
+        user_id: int,
+        namespace: Optional[str] = None,
+    ) -> bool:
+        """Delete every vector for one owned file without a result-count cap."""
+        try:
+            self.index.delete(
+                filter={
+                    "file_id": {"$eq": str(file_id)},
+                    "user_id": {"$eq": str(user_id)},
+                },
+                namespace=namespace,
+            )
+            return True
+        except Exception as e:
+            raise Exception(f"Error deleting file vectors: {str(e)}")
+
     def query_vectors(
         self,
         vector: List[float],
         top_k: int = 5,
         namespace: Optional[str] = None,
-        filter: Optional[Dict] = None
+        filter: Optional[Dict] = None,
     ) -> List[Dict]:
         """Query similar vectors from Pinecone."""
         try:
@@ -54,7 +68,7 @@ class PineconeClient:
                 top_k=top_k,
                 namespace=namespace,
                 filter=filter,
-                include_metadata=True
+                include_metadata=True,
             )
             return results.matches
         except Exception as e:

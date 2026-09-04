@@ -26,6 +26,17 @@ class QueryPlan:
 
 
 @dataclass(frozen=True)
+class ReferenceHop:
+    """How an expanded chunk got into the pool: the pointer that was followed."""
+
+    source_chunk_index: int
+    kind: str
+    key: str
+    raw_text: str
+    source_file_id: str = ""  # file the pointer was found in (entity hops cross files)
+
+
+@dataclass(frozen=True)
 class RetrievedChunk:
     """One retrieved passage and everything the pipeline learns about it."""
 
@@ -39,6 +50,16 @@ class RetrievedChunk:
     library: Optional[Any] = None  # SharedLibrary (Any avoids a circular import)
     vector: Optional[List[float]] = None  # populated only when MMR needs it
     rerank_score: Optional[float] = None  # set by the reranker
+    page_start: Optional[int] = None
+    page_end: Optional[int] = None
+    section: str = ""
+    via: Optional[ReferenceHop] = None  # set by the expand stage
+    retrieval_text: str = ""  # enriched text used for ranking, never for citation
+
+    @property
+    def searchable_text(self) -> str:
+        """Text used by relevance stages; ``text`` remains the source passage."""
+        return self.retrieval_text or self.text
 
 
 @dataclass(frozen=True)
@@ -79,6 +100,10 @@ class TraceEntry:
     rank: int
     prev_rank: Optional[int] = None  # rank in the previous stage (rank movement)
     preview: str = ""
+    page_no: Optional[int] = None
+    section: str = ""
+    via: Optional[str] = None  # raw pointer text for expanded entries
+    via_kind: Optional[str] = None  # "entity", or the followed pointer's kind
 
     def to_payload(self) -> Dict[str, Any]:
         return {
@@ -88,6 +113,10 @@ class TraceEntry:
             "rank": self.rank,
             "prevRank": self.prev_rank,
             "preview": self.preview,
+            "pageNo": self.page_no,
+            "section": self.section,
+            "via": self.via,
+            "viaKind": self.via_kind,
         }
 
 
@@ -107,6 +136,8 @@ class RetrievalTrace:
     grounding_threshold: float
     final_size: int
     analysis_error: Optional[str] = None
+    expand_applied: bool = False
+    expanded: List[TraceEntry] = field(default_factory=list)
 
     def to_payload(self) -> Dict[str, Any]:
         """Camelized payload for the frontend (rules.md §11: typed, no FE parsing)."""
@@ -132,6 +163,10 @@ class RetrievalTrace:
             "rerank": {
                 "applied": self.rerank_applied,
                 "results": [e.to_payload() for e in self.reranked],
+            },
+            "expand": {
+                "applied": self.expand_applied,
+                "added": [e.to_payload() for e in self.expanded],
             },
             "mmr": {"applied": self.mmr_applied, "reason": self.mmr_reason},
             "grounding": (

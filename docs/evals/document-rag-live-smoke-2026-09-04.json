@@ -1,0 +1,66 @@
+{
+  "run_type": "live_advanced_rag_smoke",
+  "run_date": "2026-09-04",
+  "implementation_revision": "pre-squash feature state from 2026-09-04",
+  "index_state": {
+    "description": "Existing local Weaviate document index. The source/body split was live, but file 47 had not yet been re-indexed with the target-first neighbourhood fix.",
+    "file_47_vectors": 918,
+    "file_47_old_exact_duplicate_members": 21,
+    "file_47_in_memory_rebuild_exact_duplicate_members": 0
+  },
+  "settings": {
+    "top_k": 4,
+    "candidate_pool": 20,
+    "grounding_threshold": 0.3,
+    "reranker": "BAAI/bge-reranker-v2-m3"
+  },
+  "results": [
+    {
+      "query": "Who is the instructor and when are office hours?",
+      "file_ids": [49],
+      "top_score": 0.662,
+      "intended_evidence_returned": true,
+      "grounded": true
+    },
+    {
+      "query": "Who won Super Bowl MVP and what historical milestone did he reach?",
+      "file_ids": [56],
+      "top_score": 0.800,
+      "intended_evidence_returned": true,
+      "grounded": true
+    },
+    {
+      "query": "What algorithm does Python use for method resolution order?",
+      "file_ids": [46],
+      "top_score": 0.998,
+      "intended_evidence_returned": true,
+      "grounded": true
+    },
+    {
+      "query": "Give an overview of Al Capone's life and downfall.",
+      "file_ids": [54],
+      "top_score": 0.896,
+      "intended_evidence_returned": true,
+      "grounded": true
+    },
+    {
+      "query": "Compare the 2004 Indian Ocean tsunami with the 2011 Japan tsunami.",
+      "file_ids": [58, 59],
+      "top_score": 0.577,
+      "intended_evidence_returned": true,
+      "grounded": true
+    },
+    {
+      "query": "Explain the major multiple-inheritance problems and solutions in this chapter.",
+      "file_ids": [46],
+      "top_score": 0.840,
+      "intended_evidence_returned": true,
+      "grounded": true
+    }
+  ],
+  "limitations": [
+    "This is a regression smoke run, not a controlled flat-versus-structured-versus-graph comparison.",
+    "Scores from different questions are not a quality percentage and should not be averaged into one.",
+    "The index must be rebuilt before measuring the target-first neighbourhood change in live retrieval."
+  ]
+}

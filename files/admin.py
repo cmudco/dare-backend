@@ -16,6 +16,10 @@ class FileAdmin(admin.ModelAdmin):
         "name",
         "user",
         "file_type",
+        "status",
+        "processing_stage",
+        "parser_name",
+        "parser_fallback_details",
         "size",
         "syftbox_etag",
         "display_tags",
@@ -25,9 +29,27 @@ class FileAdmin(admin.ModelAdmin):
         "vector_db_source",
     )
     search_fields = ("name", "user__email", "file_type", "syftbox_etag")
-    list_filter = ("file_type", "created_at", "vector_db_source", "storage_backend")
+    list_filter = (
+        "file_type",
+        "status",
+        "processing_stage",
+        "parser_name",
+        "created_at",
+        "vector_db_source",
+        "storage_backend",
+    )
     ordering = ("-created_at",)
     raw_id_fields = ("source_file",)
+    readonly_fields = ("parser_fallback_details",)
+
+    @admin.display(description="Parser fallback")
+    def parser_fallback_details(self, obj):
+        fallback = (obj.document_model or {}).get("parser_fallback") or {}
+        source = fallback.get("from")
+        if not source:
+            return "—"
+        reason = fallback.get("reason") or "Unknown parser failure"
+        return f"{source} → {obj.parser_name or 'unknown'}: {reason}"
 
     def display_tags(self, obj):
         """Helper method to display tags as a comma-separated string"""

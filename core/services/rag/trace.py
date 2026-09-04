@@ -43,6 +43,10 @@ def _entries(chunks: List[RetrievedChunk], prev_ranks=None, use_rerank=False):
                 rank=rank,
                 prev_rank=prev_ranks.get(_key(chunk)) if prev_ranks else None,
                 preview=_preview(chunk.text),
+                page_no=chunk.page_start,
+                section=chunk.section or "",
+                via=chunk.via.raw_text if chunk.via is not None else None,
+                via_kind=chunk.via.kind if chunk.via is not None else None,
             )
         )
     return entries
@@ -61,8 +65,11 @@ def build_trace(
     grounding_threshold: float,
     final_size: int,
     analysis_error: Optional[str] = None,
+    expanded: Optional[List[RetrievedChunk]] = None,
+    expand_applied: bool = False,
 ) -> RetrievalTrace:
-    pool_ranks = {_key(c): i for i, c in enumerate(pool, 1)}
+    expanded = expanded or []
+    pool_ranks = {_key(c): i for i, c in enumerate([*pool, *expanded], 1)}
     return RetrievalTrace(
         query=query,
         plan=plan,
@@ -76,4 +83,6 @@ def build_trace(
         grounding_threshold=grounding_threshold,
         final_size=final_size,
         analysis_error=analysis_error,
+        expand_applied=expand_applied,
+        expanded=_entries(expanded),
     )

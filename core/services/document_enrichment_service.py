@@ -33,6 +33,11 @@ from core.services.api_key_service import get_dispatch_credentials_for_user_sync
 from core.services.billing_service import BillingService
 from core.services.claude_service import ClaudeService
 from core.services.document_crop_service import DocumentCropService
+from core.services.document_text_composer import compose_document_text
+from core.services.document_text_sanitizer import (
+    sanitize_document_payload,
+    sanitize_document_text,
+)
 from core.services.dtos.parsed_document_dto import ParsedDocument, ParsedElement
 from core.services.gemini_service import GeminiService
 from core.services.openai_service import OpenAIService
@@ -74,6 +79,8 @@ class EnrichmentResult:
     document_model: Dict[str, Any]
     described_figures: int = 0
     transcribed_pages: int = 0
+    processed_pages: int = 0
+    blank_pages: int = 0
     attempted_calls: int = 0
     provider_requests: int = 0
     cache_hits: int = 0
@@ -108,11 +115,41 @@ class DocumentEnrichmentService:
         continue_existing: bool = False,
     ) -> EnrichmentResult:
         """Run applicable vision lanes, persist their model, and return text."""
-        model_payload = (
+        stored_payload = (
             deepcopy(file.document_model)
             if continue_existing and file.document_model
-            else parsed.to_dict()
+            else {}
         )
+        model_payload = parsed.to_dict()
+        if stored_payload:
+            # A fresh parse may be required to repair an older truncated model.
+            # Keep paid results, but rebuild the parser-owned structure from
+            # the complete parse instead of carrying the truncation forever.
+            if not parsed.elements:
+                model_payload = stored_payload
+            else:
+                model_payload["page_enrichments"] = deepcopy(
+                    stored_payload.get("page_enrichments", [])
+                )
+                if stored_payload.get("enrichment"):
+                    model_payload["enrichment"] = deepcopy(stored_payload["enrichment"])
+                stored_enrichment = {
+                    item.get("order"): deepcopy(item["enrichment"])
+                    for item in stored_payload.get("elements", [])
+                    if item.get("order") is not None
+                    and isinstance(item.get("enrichment"), dict)
+                }
+                for item in model_payload.get("elements", []):
+                    enrichment = stored_enrichment.get(item.get("order"))
+                    if enrichment:
+                        item["enrichment"] = enrichment
+        if continue_existing and page_limit == 0:
+            # No page may be transcribed and a continuation never revisits
+            # figures, so there is no vision work to buy. Rebuilding from the
+            # stored results here — rather than falling through to route
+            # resolution — keeps a wallet that no longer offers a vision model
+            # from costing the file the transcriptions it already paid for.
+            return self._reuse_stored(file, parsed, model_payload)
         if (
             not self._enabled()
             or parsed.parser != "docling"
@@ -157,6 +194,8 @@ class DocumentEnrichmentService:
             for row in model_payload.get("page_enrichments", [])
             if row.get("page_no") is not None
         }
+        if continue_existing:
+            self._replace_blank_stored_pages(file, page_results)
         element_results: Dict[int, Dict[str, Any]] = {
             int(element["order"]): deepcopy(element["enrichment"])
             for element in model_payload.get("elements", [])
@@ -245,9 +284,11 @@ class DocumentEnrichmentService:
             for page_no, result in sorted(page_results.items())
         ]
 
-        transcribed = sum(
-            1 for result in page_results.values() if result.get("status") == "complete"
+        processed = sum(
+            self._is_processed_page(result) for result in page_results.values()
         )
+        blank = sum(self._is_blank_result(result) for result in page_results.values())
+        transcribed = processed - blank
         described = sum(
             1
             for result in element_results.values()
@@ -257,10 +298,10 @@ class DocumentEnrichmentService:
         status = self._summary_status(
             telemetry.visual_operations,
             telemetry.failed_operations,
-            described + transcribed,
+            described + processed,
         )
-        pages_deferred = max(len(textless_pages) - transcribed, 0)
-        if pages_deferred and (described or transcribed):
+        pages_deferred = max(len(textless_pages) - processed, 0)
+        if pages_deferred and (described or processed):
             status = "partial"
         elif not pages_deferred and textless_pages:
             status = "complete"
@@ -275,6 +316,8 @@ class DocumentEnrichmentService:
             "prompt_version": PROMPT_VERSION,
             "described_figures": described,
             "transcribed_pages": transcribed,
+            "processed_pages": processed,
+            "blank_pages": blank,
             "detected_textless_pages": len(textless_pages),
             "selected_textless_pages": len(selected_textless_pages),
             "deferred_textless_pages": pages_deferred,
@@ -291,13 +334,15 @@ class DocumentEnrichmentService:
         }
         if pages_deferred:
             model_payload["enrichment"]["reason"] = (
-                f"{transcribed} of {len(textless_pages)} scanned pages are complete; "
+                f"{processed} of {len(textless_pages)} scanned pages are complete; "
                 f"{pages_deferred} remain."
             )
         model_payload.setdefault("counts", {}).update(
             {
                 "described_figures": described,
                 "transcribed_pages": transcribed,
+                "processed_pages": processed,
+                "blank_pages": blank,
                 "enrichment_failures": total_failures,
             }
         )
@@ -309,6 +354,8 @@ class DocumentEnrichmentService:
             document_model=model_payload,
             described_figures=described,
             transcribed_pages=transcribed,
+            processed_pages=processed,
+            blank_pages=blank,
             attempted_calls=telemetry.visual_operations,
             provider_requests=telemetry.provider_requests,
             cache_hits=telemetry.cache_hits,
@@ -411,6 +458,8 @@ class DocumentEnrichmentService:
         telemetry: EnrichmentTelemetry,
     ) -> Dict[str, Any]:
         image = self.crop_service.render_page(file, page_no)
+        if self.crop_service.is_blank_page(image):
+            return self._blank_page_result()
         context = {
             "document": file.name or file.file.name,
             "page_no": page_no,
@@ -642,14 +691,14 @@ class DocumentEnrichmentService:
             result.get("status") == "complete"
             for result in [*element_results.values(), *page_results.values()]
         ):
-            return parsed.embeddable_text
+            return compose_document_text(parsed, [parsed.embeddable_text])
 
         parts: List[str] = []
         emitted_pages = set()
         textless_complete_pages = {
             page_no
             for page_no, result in page_results.items()
-            if result.get("status") == "complete"
+            if cls._is_searchable_page_result(result)
         }
         for element in parsed.elements:
             page_no = element.page_no
@@ -684,12 +733,16 @@ class DocumentEnrichmentService:
 
         for page_no in sorted(textless_complete_pages - emitted_pages):
             parts.extend(cls._page_text_parts(page_no, page_results[page_no]))
-        return "\n\n".join(part.strip() for part in parts if part and part.strip())
+        return compose_document_text(parsed, parts)
 
     @staticmethod
     def _page_text_parts(page_no: int, result: Dict[str, Any]) -> List[str]:
-        """Searchable page text, including visual meaning when no words exist."""
-        parts = [f"## Page {page_no} — machine transcription"]
+        """Searchable page text, including visual meaning when no words exist.
+
+        The page number belongs in chunk metadata. Injecting it into content
+        makes our own label look like an author-written ``Page N`` pointer.
+        """
+        parts: List[str] = []
         summary = str(result.get("summary") or "").strip()
         transcription = str(result.get("transcription_markdown") or "").strip()
         if summary:
@@ -720,13 +773,145 @@ class DocumentEnrichmentService:
         return {
             "status": "error",
             "kind": kind,
-            "error": str(error)[:500],
+            "error": sanitize_document_text(str(error))[:500],
             "provenance": "machine_generated",
         }
 
     @staticmethod
     def _clean(value: Any, limit: int) -> str:
-        return str(value or "").strip()[:limit]
+        return sanitize_document_text(str(value or "")).strip()[:limit]
+
+    @staticmethod
+    def _blank_page_result() -> Dict[str, Any]:
+        return {
+            "status": "complete",
+            "kind": "blank_page",
+            "reason": "blank_page",
+            "transcription_markdown": "",
+            "summary": "",
+            "uncertainty": "none",
+            "provenance": "machine_routing",
+        }
+
+    @staticmethod
+    def _is_blank_result(result: Dict[str, Any]) -> bool:
+        return bool(
+            result.get("status") == "complete" and result.get("kind") == "blank_page"
+        )
+
+    @classmethod
+    def _is_processed_page(cls, result: Dict[str, Any]) -> bool:
+        return bool(
+            result.get("status") == "complete"
+            and result.get("kind") in {None, "page_transcription", "blank_page"}
+        )
+
+    @classmethod
+    def _is_searchable_page_result(cls, result: Dict[str, Any]) -> bool:
+        if not cls._is_processed_page(result) or cls._is_blank_result(result):
+            return False
+        return bool(
+            str(result.get("transcription_markdown") or "").strip()
+            or str(result.get("summary") or "").strip()
+        )
+
+    def _replace_blank_stored_pages(
+        self, file: File, page_results: Dict[int, Dict[str, Any]]
+    ) -> None:
+        """Invalidate old model output when the source raster is truly blank.
+
+        This repairs already-processed files on their next re-index. Rendering
+        failures are deliberately ignored: they must never erase a stored
+        transcription unless the source page was positively identified as blank.
+        """
+        for page_no, result in list(page_results.items()):
+            if result.get("status") != "complete" or self._is_blank_result(result):
+                continue
+            try:
+                image = self.crop_service.render_page(file, page_no)
+            except Exception:
+                continue
+            if self.crop_service.is_blank_page(image):
+                page_results[page_no] = self._blank_page_result()
+
+    def _reuse_stored(
+        self, file: File, parsed: ParsedDocument, payload: Dict[str, Any]
+    ) -> EnrichmentResult:
+        """Rebuild embeddable text from results already on the file.
+
+        Used when a run may transcribe nothing new: re-indexing a document
+        whose scanned pages are done, or one whose remaining pages are
+        deferred. The stored summary still describes the transcription state
+        and is kept; only the per-run counters are reset, because this run made
+        no vision call.
+        """
+        page_results = {
+            int(row["page_no"]): {
+                key: value for key, value in row.items() if key != "page_no"
+            }
+            for row in payload.get("page_enrichments", [])
+            if row.get("page_no") is not None
+        }
+        self._replace_blank_stored_pages(file, page_results)
+        payload["page_enrichments"] = [
+            {"page_no": page_no, **result}
+            for page_no, result in sorted(page_results.items())
+        ]
+        element_results = {
+            int(element["order"]): element["enrichment"]
+            for element in payload.get("elements", [])
+            if element.get("order") is not None
+            and isinstance(element.get("enrichment"), dict)
+        }
+        processed = sum(
+            self._is_processed_page(result) for result in page_results.values()
+        )
+        blank = sum(self._is_blank_result(result) for result in page_results.values())
+        transcribed = processed - blank
+        described = sum(
+            1
+            for result in element_results.values()
+            if result.get("kind") == "figure_description"
+            and result.get("status") == "complete"
+        )
+        summary = dict(payload.get("enrichment") or {})
+        summary.setdefault(
+            "status", "complete" if transcribed or described else "not_needed"
+        )
+        summary.update(
+            {
+                "described_figures": described,
+                "transcribed_pages": transcribed,
+                "processed_pages": processed,
+                "blank_pages": blank,
+                "attempted_calls": 0,
+                "visual_operations": 0,
+                "provider_requests": 0,
+                "cache_hits": 0,
+                "failed_calls": 0,
+                "reused_stored_results": True,
+                "provenance": "machine_generated",
+            }
+        )
+        payload["enrichment"] = summary
+        payload.setdefault("counts", {}).update(
+            {
+                "described_figures": described,
+                "transcribed_pages": transcribed,
+                "processed_pages": processed,
+                "blank_pages": blank,
+            }
+        )
+        text = self._rebuild_text(parsed, element_results, page_results)
+        self._persist(file, text, payload)
+        return EnrichmentResult(
+            text=text,
+            document_model=payload,
+            described_figures=described,
+            transcribed_pages=transcribed,
+            processed_pages=processed,
+            blank_pages=blank,
+        )
 
     def _persist_not_needed(
         self, file: File, parsed: ParsedDocument, payload: Dict[str, Any]
@@ -735,10 +920,13 @@ class DocumentEnrichmentService:
             "status": "not_needed",
             "described_figures": 0,
             "transcribed_pages": 0,
+            "processed_pages": 0,
+            "blank_pages": 0,
             "provenance": "machine_generated",
         }
-        self._persist(file, parsed.embeddable_text, payload)
-        return EnrichmentResult(text=parsed.embeddable_text, document_model=payload)
+        text = self._rebuild_text(parsed, {}, {})
+        self._persist(file, text, payload)
+        return EnrichmentResult(text=text, document_model=payload)
 
     def _persist_unavailable(
         self,
@@ -752,17 +940,20 @@ class DocumentEnrichmentService:
             "reason": reason[:500],
             "described_figures": 0,
             "transcribed_pages": 0,
+            "processed_pages": 0,
+            "blank_pages": 0,
             "provenance": "machine_generated",
         }
-        self._persist(file, parsed.embeddable_text, payload)
+        text = self._rebuild_text(parsed, {}, {})
+        self._persist(file, text, payload)
         return EnrichmentResult(
-            text=parsed.embeddable_text,
+            text=text,
             document_model=payload,
             failed_calls=1,
         )
 
     @staticmethod
     def _persist(file: File, text: str, payload: Dict[str, Any]) -> None:
-        file.extracted_text = text
-        file.document_model = payload
+        file.extracted_text = sanitize_document_text(text)
+        file.document_model = sanitize_document_payload(payload)
         file.save(update_fields=["extracted_text", "document_model", "updated_at"])

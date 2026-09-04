@@ -71,6 +71,11 @@ DARE supports both Pinecone (managed) and Weaviate (self-hosted). Either or both
 | `WEAVIATE_SKIP_INIT_CHECKS` | bool | `True` | Skip startup connectivity checks. |
 | `WEAVIATE_AUTOSCHEMA_ENABLED` | bool | `False` | Allow Weaviate to auto-create schema (not recommended for prod). |
 
+- `RAG_GRAPH_EXPAND_ENABLED` (default `true`): in Advanced RAG on the document path, follow stored in-document references ("see section 7.2") one hop from each retrieved chunk before reranking. Set to `false` to disable the expand stage without touching ingest.
+- `RAG_ENTITY_NER_ENABLED` (default `true`): run the GLiNER named-entity lane at ingest alongside the regex identifier lane. Set to `false` to turn it off; identifiers still run.
+- `RAG_ENTITY_MODEL` (default `urchade/gliner_small-v2.1`): the GLiNER checkpoint used by the NER lane, loaded lazily on first use.
+- `RAG_ENTITY_HOPS_ENABLED` (default `true`): in Advanced RAG, when at least two files are selected, follow a hit's rarest shared entity into one chunk of another selected file during the expand stage.
+
 ## Email
 
 | Variable | Type | Default | Description |

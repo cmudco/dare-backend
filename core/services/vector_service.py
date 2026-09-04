@@ -182,6 +182,13 @@ class PineconeVectorService(BaseVectorService):
     def delete_namespace(self, namespace: str) -> bool:
         return self.client.delete_namespace(namespace)
 
+    def delete_file_vectors(self, file_id: int, user_id: int) -> bool:
+        return self.client.delete_file_vectors(
+            file_id=file_id,
+            user_id=user_id,
+            namespace=get_user_namespace(user_id),
+        )
+
 
 class WeaviateVectorService(BaseVectorService):
     """Weaviate implementation of the vector service."""
@@ -217,6 +224,10 @@ class WeaviateVectorService(BaseVectorService):
     @client_operation
     def delete_namespace(self, namespace: str) -> bool:
         return self.client.delete_namespace(namespace)
+
+    @client_operation
+    def delete_file_vectors(self, file_id: int, user_id: int) -> bool:
+        return self.client.delete_file_vectors(file_id=file_id, user_id=user_id)
 
 
 def get_vector_service(user_id: Optional[int] = None) -> BaseVectorService:

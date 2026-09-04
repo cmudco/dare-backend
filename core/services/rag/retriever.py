@@ -1,17 +1,15 @@
-"""Retrieve stage (audit mistakes #5/#6) — hybrid BM25 + dense + RRF.
+"""Hybrid keyword and vector retrieval with reciprocal-rank fusion."""
 
-Each retriever owns its own embedding and vector-store access, so it is
-"powerful enough to call its respective database queries" rather than leaning on
-the orchestrator. An abstract base with per-source implementations and a factory,
-mirroring the ``vector_service`` reference pattern (rules.md §2/§10).
-"""
-
+import logging
 from abc import ABC, abstractmethod
+from dataclasses import replace
 from typing import List, Optional, Tuple
 
 from core.helpers.openai import OpenAIWrapper
 from core.services.rag.dtos import RetrievalRequest, RetrievedChunk
 from libraries.services.library_search import search_libraries
+
+logger = logging.getLogger(__name__)
 
 
 class BaseRetriever(ABC):
@@ -32,6 +30,40 @@ class BaseRetriever(ABC):
         want_vectors: bool,
     ) -> List[RetrievedChunk]:
         """Hybrid search; ``query_text`` drives BM25, ``query_vector`` the dense leg."""
+
+
+def attach_structure(
+    chunks: List[RetrievedChunk], user_id: Optional[int]
+) -> List[RetrievedChunk]:
+    """Fill page and section on document hits from the chunk table. Best effort.
+
+    ``user_id`` scopes the lookup to the files that user owns.
+    """
+    keys = [
+        (chunk.file_id, chunk.chunk_index)
+        for chunk in chunks
+        if chunk.source_type == "document" and chunk.file_id
+    ]
+    if not keys:
+        return chunks
+    # Local import: the map service pulls in Django models at import time.
+    from files.services.document_map_service import DocumentMapService
+
+    try:
+        found = DocumentMapService.load_structure(keys, user_id)
+    except Exception as error:
+        logger.warning("Could not attach chunk structure: %s", error)
+        return chunks
+    for position, chunk in enumerate(chunks):
+        structure = found.get((chunk.file_id, chunk.chunk_index))
+        if structure is not None:
+            chunks[position] = replace(
+                chunk,
+                page_start=structure.page_start,
+                page_end=structure.page_end,
+                section=structure.section,
+            )
+    return chunks
 
 
 class LibraryRetriever(BaseRetriever):
@@ -96,18 +128,25 @@ class DocumentRetriever(BaseRetriever):
                 continue
             metadata = m.get("metadata", {})
             file_name = metadata.get("file_name", "")
+            retrieval_text = metadata.get("retrieval_text") or metadata.get("text", "")
+            body_text = (
+                metadata.get("body_text") or metadata.get("text") or retrieval_text
+            )
             chunks.append(
                 RetrievedChunk(
-                    text=metadata.get("text", ""),
+                    text=body_text,
                     source_ref=file_name,  # trace rows label entries by source_ref
                     score=m.get("score", 0.0),
                     chunk_index=metadata.get("chunk_index", 0),
                     source_type="document",
                     file_id=str(metadata.get("file_id", "")),
                     file_name=file_name,
+                    retrieval_text=(
+                        retrieval_text if retrieval_text != body_text else ""
+                    ),
                 )
             )
-        return chunks
+        return attach_structure(chunks, request.user_id)
 
 
 _RETRIEVERS = {"library": LibraryRetriever, "document": DocumentRetriever}
