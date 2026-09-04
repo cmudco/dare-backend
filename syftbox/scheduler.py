@@ -1,10 +1,11 @@
 import logging
 from datetime import timedelta
 
-from config import env
+from django.conf import settings
 from django.utils import timezone
 from django_rq import get_scheduler
 
+from config import env
 from syftbox.tasks import sync_syftbox_datasites
 
 logger = logging.getLogger(__name__)
@@ -19,6 +20,15 @@ class SyftBoxDatasiteScheduler:
         self.interval_seconds = env.SYFTBOX_SYNC_INTERVAL_SECONDS
 
     def start(self) -> dict:
+        if not settings.SYFTBOX.get("ENABLED", False):
+            stop_result = self.stop()
+            logger.info("SyftBox sync is disabled; recurring schedule is stopped.")
+            return {
+                "status": "disabled",
+                "job_id": self.job_id,
+                "stop_result": stop_result,
+            }
+
         try:
             self.stop()
             self.scheduler.schedule(
@@ -73,6 +83,12 @@ class SyftBoxDatasiteScheduler:
             return {"status": "error", "message": str(error)}
 
     def restart(self) -> dict:
+        if not settings.SYFTBOX.get("ENABLED", False):
+            return {
+                "status": "disabled",
+                "stop_result": self.stop(),
+            }
+
         return {
             "status": "restarted",
             "stop_result": self.stop(),
@@ -80,6 +96,12 @@ class SyftBoxDatasiteScheduler:
         }
 
     def run_now(self, delay_seconds: int = 5) -> dict:
+        if not settings.SYFTBOX.get("ENABLED", False):
+            return {
+                "status": "disabled",
+                "reason": "syftbox_disabled",
+            }
+
         try:
             test_job_id = (
                 f"{self.job_id}_test_{timezone.now().strftime('%Y%m%d_%H%M%S')}"
