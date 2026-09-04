@@ -1,9 +1,11 @@
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from django.test import SimpleTestCase
+from PIL import Image, ImageDraw
 
 from core.config.document_parsing import ElementKind, ElementLabel
+from core.services.document_crop_service import DocumentCropService
 from core.services.document_enrichment_service import (
     DocumentEnrichmentService,
     EnrichmentTelemetry,
@@ -60,6 +62,61 @@ class DocumentEnrichmentRoutingTests(SimpleTestCase):
             "describe",
         )
 
+    def test_provider_control_characters_are_removed_before_persistence(self):
+        file = SimpleNamespace(save=Mock())
+        payload = {"elements": [{"description": "figure\x00text"}]}
+
+        DocumentEnrichmentService._persist(file, "page\x00text", payload)
+
+        self.assertEqual(file.extracted_text, "page text")
+        self.assertEqual(
+            file.document_model["elements"][0]["description"], "figure text"
+        )
+
+
+class BlankPageDetectionTests(SimpleTestCase):
+    def test_only_an_effectively_white_raster_is_blank(self):
+        white = Image.new("RGB", (100, 100), "white")
+        marked = white.copy()
+        ImageDraw.Draw(marked).text((10, 10), "faint scan", fill=(210, 210, 210))
+
+        self.assertTrue(
+            DocumentCropService.is_blank_page(DocumentCropService._encode(white))
+        )
+        self.assertFalse(
+            DocumentCropService.is_blank_page(DocumentCropService._encode(marked))
+        )
+
+    def test_reuse_replaces_a_stored_hallucination_with_blank_result(self):
+        crop = SimpleNamespace(
+            render_page=lambda *_args: b"blank",
+            is_blank_page=lambda _image: True,
+        )
+        service = DocumentEnrichmentService(crop_service=crop)
+        parsed = ParsedDocument(parser="docling", structure=DocumentStructure(pages=1))
+        payload = {
+            **parsed.to_dict(),
+            "page_enrichments": [
+                {
+                    "page_no": 1,
+                    "status": "complete",
+                    "kind": "page_transcription",
+                    "transcription_markdown": "Invented content",
+                }
+            ],
+        }
+
+        with patch.object(service, "_persist"):
+            result = service._reuse_stored(SimpleNamespace(), parsed, payload)
+
+        self.assertEqual(
+            result.document_model["page_enrichments"][0]["kind"], "blank_page"
+        )
+        self.assertEqual(result.processed_pages, 1)
+        self.assertEqual(result.blank_pages, 1)
+        self.assertEqual(result.transcribed_pages, 0)
+        self.assertEqual(result.text, "")
+
 
 class DocumentEnrichmentTelemetryTests(SimpleTestCase):
     def setUp(self):
@@ -75,6 +132,24 @@ class DocumentEnrichmentTelemetryTests(SimpleTestCase):
             litellm_key=None,
         )
         self.service = DocumentEnrichmentService()
+
+    def test_blank_page_never_reaches_the_vision_provider(self):
+        crop = SimpleNamespace(
+            render_page=lambda *_args: b"blank",
+            is_blank_page=lambda _image: True,
+        )
+        service = DocumentEnrichmentService(crop_service=crop)
+        telemetry = EnrichmentTelemetry()
+        ai_service = SimpleNamespace(generate_structured_output_with_usage=AsyncMock())
+
+        result = service._transcribe_page(
+            self.file, 11, self.route, ai_service, telemetry
+        )
+
+        self.assertEqual(result["kind"], "blank_page")
+        self.assertEqual(result["provenance"], "machine_routing")
+        self.assertEqual(telemetry.provider_requests, 0)
+        ai_service.generate_structured_output_with_usage.assert_not_called()
 
     @patch("core.services.document_enrichment_service.DocumentEnrichmentCache")
     def test_cache_hit_is_not_counted_as_provider_request(self, cache_model):
@@ -180,6 +255,50 @@ class DocumentEnrichmentReadingOrderTests(SimpleTestCase):
         self.assertLess(text.index("line chart"), text.index("discussion"))
         self.assertIn("Machine-generated figure description", text)
 
+    def test_rebuild_keeps_native_paragraph_that_docling_clipped(self):
+        complete = (
+            "Kenneth Walker earned the Super Bowl MVP award — making him the first "
+            "running back to win Super Bowl MVP since Terrell Davis 28 years ago."
+        )
+        parsed = ParsedDocument(
+            text=complete[:80],
+            recovery_text=complete,
+            parser="docling",
+            structure=DocumentStructure(
+                pages=1, pictures=1, content_chars=len(complete)
+            ),
+            elements=(
+                ParsedElement(
+                    order=1,
+                    kind=ElementKind.TEXT,
+                    label=ElementLabel.TEXT,
+                    page_no=1,
+                    text=complete[:80],
+                ),
+                ParsedElement(
+                    order=2,
+                    kind=ElementKind.PICTURE,
+                    label="picture",
+                    page_no=1,
+                ),
+            ),
+        )
+
+        text = DocumentEnrichmentService._rebuild_text(
+            parsed,
+            {
+                2: {
+                    "status": "complete",
+                    "description": "A football player carries the ball.",
+                    "visible_text": "",
+                }
+            },
+            {},
+        )
+
+        self.assertIn("first running back to win Super Bowl MVP", text)
+        self.assertIn("Machine-generated figure description", text)
+
     def test_full_page_transcription_replaces_scan_regions_once(self):
         parsed = ParsedDocument(
             parser="docling",
@@ -210,7 +329,7 @@ class DocumentEnrichmentReadingOrderTests(SimpleTestCase):
             },
         )
 
-        self.assertEqual(text.count("machine transcription"), 1)
+        self.assertNotIn("Page 1", text)
         self.assertIn("Archive letter", text)
 
     def test_visual_summary_is_searchable_when_scan_contains_no_text(self):
@@ -257,6 +376,15 @@ class DocumentModelContextTests(SimpleTestCase):
                         "enrichment": {"status": "complete"},
                     }
                 ],
+                "chunk_elements": [
+                    {
+                        "order": 1,
+                        "kind": "picture",
+                        "label": "picture",
+                        "page_no": 2,
+                    }
+                ],
+                "chunk_elements_lossless": True,
             },
         )
 

@@ -16,6 +16,7 @@ from users.constants import VectorDBChoice
 
 from .constants import FileStatus
 from .models import File
+from .services.document_map_service import DocumentMapService
 from .utils import migrate_file_to_target_storage
 
 logger = logging.getLogger(__name__)
@@ -42,7 +43,12 @@ def refresh_file_embeddings(file_id, user_id, chunk_size=None, overlap_size=None
 
 @job
 def delete_file_vectors(file_id, user_id):
-    """Delete file vectors from the correct vector DB."""
+    """Delete the file's vectors, then its map rows.
+
+    The two cleanups are independent: the vectors are what a stale search can
+    still surface, so they are deleted first and a failing map cleanup can
+    never hold them back.
+    """
     try:
         # Try to get the file to check its vector_db_source
         try:
@@ -78,7 +84,16 @@ def delete_file_vectors(file_id, user_id):
             result = processor.delete_file_vectors(file_id, user_id)
 
     except Exception as e:
-        pass
+        logger.warning(
+            "Vector cleanup for file %s failed: %s", file_id, e, exc_info=True
+        )
+
+    try:
+        DocumentMapService.clear(file_id)
+    except Exception as e:
+        logger.warning(
+            "Document map cleanup for file %s failed: %s", file_id, e, exc_info=True
+        )
 
 
 # @job("default", timeout=3600)

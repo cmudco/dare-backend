@@ -16,3 +16,11 @@ def setting(name: str, default: Any) -> Any:
     if value is not None and value != "":
         return value
     return default
+
+
+def flag(name: str, default: bool) -> bool:
+    """Boolean reading of ``setting``: "0", "false", "no", "off" disable."""
+    value = setting(name, default)
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() not in {"0", "false", "no", "off", ""}

@@ -1,10 +1,4 @@
-"""Answer-grounding stage (audit mistakes #9/#10).
-
-Derives a confidence flag from the reranker score: did retrieval find something
-genuinely on-topic, or should the model say "not in the sources"? Cheap to
-compute and only trusted when the reranker actually ran. Different rerankers use
-different score scales, so the cutoff comes from the configured reranker.
-"""
+"""Derive answer confidence from the best available retrieval score."""
 
 from typing import List
 

@@ -1,6 +1,9 @@
 from typing import Dict, List, Tuple
+
 import tiktoken
+
 from core.config.vector_db import create_vector_id
+
 
 class EmbeddingService:
     """Service for creating and managing embeddings."""
@@ -15,8 +18,8 @@ class EmbeddingService:
         self.tokenizer = tiktoken.get_encoding("cl100k_base")
 
     def _count_tokens(self, text: str) -> int:
-        """Count tokens in a text string using tiktoken."""
-        return len(self.tokenizer.encode(text))
+        """Count document text without interpreting tokenizer sentinel strings."""
+        return len(self.tokenizer.encode(text, disallowed_special=()))
 
     def _batch_chunks_by_tokens(self, chunks: List[str]) -> List[List[str]]:
         """
@@ -38,7 +41,10 @@ class EmbeddingService:
                 batches.append([chunk])
                 continue
 
-            if current_batch and (current_batch_tokens + chunk_tokens) > self.max_tokens_per_request:
+            if (
+                current_batch
+                and (current_batch_tokens + chunk_tokens) > self.max_tokens_per_request
+            ):
                 batches.append(current_batch)
                 current_batch = [chunk]
                 current_batch_tokens = chunk_tokens
@@ -57,7 +63,7 @@ class EmbeddingService:
         file_id: int,
         user_id: int,
         file_name: str,
-        file_type: str
+        file_type: str,
     ) -> List[Tuple[str, List[float], Dict]]:
         """Create embeddings for text chunks with metadata, processing in token-safe batches."""
         if not chunks:
@@ -78,15 +84,17 @@ class EmbeddingService:
                     chunk_tokens = self._count_tokens(chunk)
                     if chunk_tokens <= self.max_tokens_per_request:
                         try:
-                            single_embedding = self.embedding_client.create_batch_embeddings([chunk])
+                            single_embedding = (
+                                self.embedding_client.create_batch_embeddings([chunk])
+                            )
                             vector_id = create_vector_id(file_id, chunk_index)
                             metadata = {
-                                'file_id': str(file_id),
-                                'user_id': str(user_id),
-                                'file_name': file_name,
-                                'file_type': file_type,
-                                'text': chunk,
-                                'chunk_index': chunk_index
+                                "file_id": str(file_id),
+                                "user_id": str(user_id),
+                                "file_name": file_name,
+                                "file_type": file_type,
+                                "text": chunk,
+                                "chunk_index": chunk_index,
                             }
                             vectors.append((vector_id, single_embedding[0], metadata))
                             chunk_index += 1
@@ -97,22 +105,26 @@ class EmbeddingService:
                 continue
 
             try:
-                batch_embeddings = self.embedding_client.create_batch_embeddings(batch_chunks)
+                batch_embeddings = self.embedding_client.create_batch_embeddings(
+                    batch_chunks
+                )
 
                 for chunk, embedding in zip(batch_chunks, batch_embeddings):
                     vector_id = create_vector_id(file_id, chunk_index)
                     metadata = {
-                        'file_id': str(file_id),
-                        'user_id': str(user_id),
-                        'file_name': file_name,
-                        'file_type': file_type,
-                        'text': chunk,
-                        'chunk_index': chunk_index
+                        "file_id": str(file_id),
+                        "user_id": str(user_id),
+                        "file_name": file_name,
+                        "file_type": file_type,
+                        "text": chunk,
+                        "chunk_index": chunk_index,
                     }
                     vectors.append((vector_id, embedding, metadata))
                     chunk_index += 1
 
             except Exception as e:
-                raise Exception(f"Error processing batch {batch_num + 1}/{len(chunk_batches)}: {str(e)}")
+                raise Exception(
+                    f"Error processing batch {batch_num + 1}/{len(chunk_batches)}: {str(e)}"
+                )
 
         return vectors

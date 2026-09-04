@@ -8,6 +8,14 @@ from weaviate.classes.config import Configure, DataType, Property
 
 logger = logging.getLogger(__name__)
 
+BODY_TEXT_PROPERTY = Property(
+    name="body_text",
+    data_type=DataType.TEXT,
+    description="Original source passage returned for display and citation.",
+    index_filterable=False,
+    index_searchable=False,
+)
+
 
 class WeaviateClient:
     def __init__(self):
@@ -75,14 +83,31 @@ class WeaviateClient:
                     properties=[
                         Property(name="title", data_type=DataType.TEXT),
                         Property(name="content", data_type=DataType.TEXT),
+                        BODY_TEXT_PROPERTY,
                         Property(name="user_id", data_type=DataType.TEXT),
                         Property(name="file_id", data_type=DataType.TEXT),
                         Property(name="chunk_index", data_type=DataType.INT),
                         Property(name="original_id", data_type=DataType.TEXT),
                     ],
                 )
+            else:
+                self._ensure_body_text_property()
         except Exception as e:
             raise
+
+    def _ensure_body_text_property(self) -> None:
+        """Add the non-searchable source passage field to existing collections."""
+        collection = self.client.collections.get(self.collection_name)
+        names = {prop.name for prop in collection.config.get().properties}
+        if BODY_TEXT_PROPERTY.name in names:
+            return
+        try:
+            collection.config.add_property(BODY_TEXT_PROPERTY)
+        except Exception:
+            # Multiple workers may discover an old schema at the same time.
+            refreshed = {prop.name for prop in collection.config.get().properties}
+            if BODY_TEXT_PROPERTY.name not in refreshed:
+                raise
 
     def upsert_document(
         self, doc_id: str, vector: List[float], metadata: Dict[str, Any], user_id: str
@@ -93,6 +118,7 @@ class WeaviateClient:
             properties = {
                 "title": metadata.get("title", ""),
                 "content": metadata.get("content", ""),
+                "body_text": metadata.get("body_text") or metadata.get("content", ""),
                 "user_id": user_id,
                 "file_id": metadata.get("file_id", ""),
                 "chunk_index": metadata.get("chunk_index", 0),
@@ -156,6 +182,7 @@ class WeaviateClient:
                 response = collection.query.hybrid(
                     query=query_text,
                     vector=vector,
+                    query_properties=["content", "title"],
                     alpha=0.5,
                     limit=top_k,
                     filters=query_filter,
@@ -192,6 +219,8 @@ class WeaviateClient:
                         "metadata": {
                             "title": properties.get("title"),
                             "content": properties.get("content"),
+                            "body_text": properties.get("body_text")
+                            or properties.get("content"),
                             "user_id": properties.get("user_id"),
                             "chunk_index": chunk_index,
                         },
@@ -247,6 +276,15 @@ class WeaviateClient:
         except Exception as e:
             raise
 
+    def delete_file_vectors(self, file_id: int, user_id: int) -> bool:
+        """Delete every vector for one owned file without a result-count cap."""
+        collection = self.client.collections.get(self.collection_name)
+        document_filter = weaviate.classes.query.Filter.by_property("file_id").equal(
+            str(file_id)
+        ) & weaviate.classes.query.Filter.by_property("user_id").equal(str(user_id))
+        collection.data.delete_many(where=document_filter)
+        return True
+
     def upsert_vectors(
         self,
         vectors: List[Tuple[str, List[float], Dict]],
@@ -281,6 +319,7 @@ class WeaviateClient:
                 weaviate_metadata = {
                     "title": metadata.get("file_name", ""),
                     "content": metadata.get("text", ""),
+                    "body_text": metadata.get("body_text") or metadata.get("text", ""),
                     "user_id": user_id,
                     "file_id": doc_id,
                     "chunk_index": chunk_index,
@@ -342,7 +381,9 @@ class WeaviateClient:
                             "file_id": file_id,
                             "user_id": metadata.get("user_id"),
                             "file_name": metadata.get("title"),
-                            "text": metadata.get("content"),
+                            "text": metadata.get("body_text")
+                            or metadata.get("content"),
+                            "retrieval_text": metadata.get("content"),
                             "chunk_index": chunk_index,
                         },
                     }

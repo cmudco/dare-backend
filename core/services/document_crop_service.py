@@ -16,6 +16,7 @@ import threading
 from typing import Any, Dict, Tuple
 
 import pypdfium2 as pdfium
+from PIL import Image, ImageStat
 
 from files.models import File
 
@@ -95,6 +96,24 @@ class DocumentCropService:
         with file.file.open("rb") as handle:
             data = handle.read()
         return self._render_page(data, page_no)
+
+    @staticmethod
+    def is_blank_page(image: bytes) -> bool:
+        """Return true only for an effectively empty white page.
+
+        This is intentionally conservative. A faint scan must still reach the
+        vision model, while a raster that contains no ink at all must not be
+        given a document name and page number that a model can elaborate into
+        plausible-but-invented content.
+        """
+        try:
+            with Image.open(io.BytesIO(image)) as rendered:
+                grayscale = rendered.convert("L")
+                minimum, maximum = grayscale.getextrema()
+                mean = ImageStat.Stat(grayscale).mean[0]
+        except Exception:
+            return False
+        return minimum >= 250 and maximum >= 250 and mean >= 254.5
 
     # ------------------------------------------------------------------
     # Private helpers

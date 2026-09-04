@@ -61,13 +61,44 @@ class FileProcessingJourneyTests(SimpleTestCase):
         self.assertEqual(attempt["stages"][0]["status"], "failed")
         self.assertEqual(attempt["stages"][0]["error"], "Docling stopped")
 
+    @patch("core.services.file_processing_journey.File.active_objects.filter")
+    def test_invalid_controls_cannot_break_failure_persistence(self, _mocked_filter):
+        file = make_file()
+        journey = FileProcessingJourney(file)
+        journey.begin_attempt()
+
+        with self.assertRaises(RuntimeError):
+            with journey.stage("parsing") as stage:
+                stage.add_details(parser_message="bad\x00detail")
+                raise RuntimeError("bad\x00document")
+
+        journey.fail_attempt("bad\x00document")
+        attempt = file.processing_journey["attempts"][0]
+        self.assertEqual(attempt["error"], "bad document")
+        self.assertEqual(attempt["stages"][0]["error"], "bad document")
+        self.assertEqual(
+            attempt["stages"][0]["details"]["parser_message"], "bad detail"
+        )
+
 
 class DocumentProcessorJourneyTests(SimpleTestCase):
     @patch("core.services.file_processing_journey.File.active_objects.filter")
-    def test_vector_failure_is_attributed_to_indexing(self, _mocked_filter):
+    @patch.object(
+        DocumentProcessor,
+        "_embed_with_structure",
+        return_value=(
+            [("Useful document text", [0.1, 0.2], {"file_id": 42})],
+            {"structured": False, "references_found": 0, "references_resolved": 0},
+        ),
+    )
+    def test_vector_failure_is_attributed_to_indexing(
+        self, _mocked_embed_with_structure, _mocked_filter
+    ):
         file = make_file()
         parsed = SimpleNamespace(
             parser="docling",
+            fallback_from=None,
+            fallback_reason=None,
             duration_seconds=1.25,
             elements=[
                 SimpleNamespace(
@@ -92,12 +123,11 @@ class DocumentProcessorJourneyTests(SimpleTestCase):
             cache_hits=0,
             described_figures=0,
             transcribed_pages=0,
+            processed_pages=0,
+            blank_pages=0,
             failed_calls=0,
         )
         embedding_service = MagicMock()
-        embedding_service.create_embeddings_with_metadata.return_value = [
-            ("Useful document text", [0.1, 0.2], {"file_id": 42})
-        ]
         vector_service = MagicMock()
         vector_service.upsert_vectors.side_effect = RuntimeError("Weaviate unavailable")
         processor = DocumentProcessor(

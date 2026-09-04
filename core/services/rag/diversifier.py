@@ -1,10 +1,4 @@
-"""Diversity stage — Maximal Marginal Relevance (audit mistake #7).
-
-Trades a little relevance for novelty so the final set isn't near-duplicates.
-Helps *exploratory* queries; hurts *precise* lookups (it can diversify the answer
-away), so the pipeline only invokes it when the QueryPlan intent is exploratory.
-Needs candidate embeddings; a safe no-op if they're absent.
-"""
+"""Select a diverse result set with Maximal Marginal Relevance."""
 
 import math
 from typing import List

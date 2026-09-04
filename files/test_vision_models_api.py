@@ -6,7 +6,10 @@ from django.contrib.auth import get_user_model
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from core.services.vision_model_service import VisionModelCandidate
+from core.services.vision_model_service import (
+    VisionModelCandidate,
+    VisionModelNotOffered,
+)
 
 CANDIDATES = [
     VisionModelCandidate(
@@ -26,6 +29,10 @@ def route_for(identifier):
         requested or "gemini-3.1-flash-lite"
     ),
 )
+@patch(
+    "files.api.views.select_vision_model",
+    side_effect=lambda user, identifier: route_for(identifier),
+)
 @patch("files.api.views.list_vision_models", return_value=CANDIDATES)
 class VisionModelsApiTests(APITestCase):
     url = "/api/files/vision-models/"
@@ -35,13 +42,13 @@ class VisionModelsApiTests(APITestCase):
             email="vision@example.com", password="pw"
         )
 
-    def test_requires_authentication(self, _list, _resolve):
+    def test_requires_authentication(self, _list, _select, _resolve):
         self.assertEqual(
             self.client.get(self.url).status_code, status.HTTP_401_UNAUTHORIZED
         )
 
     def test_lists_candidates_and_the_recommendation_when_nothing_is_chosen(
-        self, _list, _resolve
+        self, _list, _select, _resolve
     ):
         self.client.force_authenticate(user=self.user)
 
@@ -57,7 +64,9 @@ class VisionModelsApiTests(APITestCase):
             response.data["models"][1]["estimated_cost_per_page"], "0.00195000"
         )
 
-    def test_patch_stores_an_offered_model_as_the_default(self, _list, _resolve):
+    def test_patch_stores_an_offered_model_as_the_default(
+        self, _list, _select, _resolve
+    ):
         self.client.force_authenticate(user=self.user)
 
         response = self.client.patch(
@@ -69,7 +78,10 @@ class VisionModelsApiTests(APITestCase):
         self.user.refresh_from_db()
         self.assertEqual(self.user.vision_model, "gpt-4o-mini")
 
-    def test_patch_rejects_a_model_the_wallet_does_not_offer(self, _list, _resolve):
+    def test_patch_rejects_a_model_the_wallet_does_not_offer(
+        self, _list, select, _resolve
+    ):
+        select.side_effect = VisionModelNotOffered("text-only is unavailable")
         self.client.force_authenticate(user=self.user)
 
         response = self.client.patch(

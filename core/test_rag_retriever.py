@@ -48,6 +48,76 @@ class DocumentRetrieverResourceTests(SimpleTestCase):
 
         service.close.assert_called_once_with()
 
+    @patch(
+        "core.services.rag.retriever.attach_structure", side_effect=lambda rows, _: rows
+    )
+    @patch("core.services.vector_service.get_vector_service")
+    def test_keeps_source_body_separate_from_retrieval_context(
+        self, get_service, _attach_structure
+    ):
+        service = MagicMock()
+        service.search_documents.return_value = [
+            {
+                "score": 0.9,
+                "metadata": {
+                    "file_id": "4",
+                    "file_name": "chapter.pdf",
+                    "chunk_index": 2,
+                    "text": "The original paragraph.",
+                    "retrieval_text": (
+                        "Chapter 1 > Properties\nThe original paragraph."
+                    ),
+                },
+            }
+        ]
+        get_service.return_value = service
+
+        result = DocumentRetriever().search(
+            self.request,
+            query_vector=[0.1],
+            query_text="properties",
+            want_vectors=False,
+        )
+
+        self.assertEqual(result[0].text, "The original paragraph.")
+        self.assertEqual(
+            result[0].searchable_text,
+            "Chapter 1 > Properties\nThe original paragraph.",
+        )
+
+    @patch("core.services.rag.retriever.attach_structure", side_effect=lambda rows, _: rows)
+    @patch("core.services.vector_service.get_vector_service")
+    def test_supports_pinecone_metadata_contract(
+        self, get_service, _attach_structure
+    ):
+        service = MagicMock()
+        service.search_documents.return_value = [
+            {
+                "score": 0.9,
+                "metadata": {
+                    "file_id": "4",
+                    "file_name": "chapter.pdf",
+                    "chunk_index": 2,
+                    "text": "Chapter 1 > Properties\nThe original paragraph.",
+                    "body_text": "The original paragraph.",
+                },
+            }
+        ]
+        get_service.return_value = service
+
+        result = DocumentRetriever().search(
+            self.request,
+            query_vector=[0.1],
+            query_text="properties",
+            want_vectors=False,
+        )
+
+        self.assertEqual(result[0].text, "The original paragraph.")
+        self.assertEqual(
+            result[0].searchable_text,
+            "Chapter 1 > Properties\nThe original paragraph.",
+        )
+
 
 class AdvancedDocumentSearchTests(SimpleTestCase):
     @patch("core.services.llm_helpers.semantic_context_helpers.build_pipeline")

@@ -43,11 +43,9 @@ from syftbox.services.syftbox_permission_service import (
     SyftBoxPermissionService as SyftBoxApiPermissionService,
 )
 
-from ..constants import (
-    ALLOWED_FILES,
-    FileStatus,
-)
-from ..models import File, FileShare, Folder, Tag
+from ..constants import ALLOWED_FILES, FileStatus
+from ..models import DocumentChunk, File, FileShare, Folder, Tag
+from ..services.document_map_service import DocumentMapService
 from ..services.document_ocr_approval_service import (
     DocumentOcrApprovalCommand,
     DocumentOcrApprovalService,
@@ -636,6 +634,34 @@ class FileViewSet(viewsets.ModelViewSet):
 
         serializer = FileStructureSerializer(file_obj, context={"page_no": page_no})
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["get"], url_path="map")
+    def document_map(self, request, pk=None):
+        """
+        Return the document map for a file: the section tree derived from the
+        parsed headings, the embedded chunks with their page and section, and
+        the in-document references between chunks.
+
+        Response: {"id", "name", "structured", "sections", "chunks", "references", "counts"}
+        """
+        return Response(
+            DocumentMapService.build_map(self.get_object()), status=status.HTTP_200_OK
+        )
+
+    @action(
+        detail=True,
+        methods=["get"],
+        url_path=r"map/chunks/(?P<chunk_index>\d+)",
+    )
+    def document_map_chunk(self, request, pk=None, chunk_index=None):
+        """Return the complete stored text for one chunk in the Map tab."""
+        try:
+            payload = DocumentMapService.build_chunk_detail(
+                self.get_object(), int(chunk_index)
+            )
+        except DocumentChunk.DoesNotExist as error:
+            raise Http404("Chunk not found.") from error
+        return Response(payload, status=status.HTTP_200_OK)
 
     @action(detail=True, methods=["get"], url_path="processing-journey")
     def processing_journey(self, request, pk=None):
