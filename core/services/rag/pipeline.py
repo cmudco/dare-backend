@@ -11,7 +11,6 @@ query analysis, reranking, grounding, and trace capture; failures degrade safely
 """
 
 import logging
-import re
 from dataclasses import replace
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -23,6 +22,7 @@ from core.services.rag.dtos import RetrievalRequest, RetrievalResult, RetrievedC
 from core.services.rag.expander import GraphExpander
 from core.services.rag.grounding import GroundingChecker
 from core.services.rag.query_analyzer import QueryAnalyzer
+from core.services.rag.reference_extractor import extract_pointers
 from core.services.rag.reranker import Reranker
 from core.services.rag.retriever import BaseRetriever, get_retriever
 from core.services.rag.trace import build_trace
@@ -120,7 +120,13 @@ class RetrievalPipeline:
         reranked = ranked_candidates[:working_k]
         direct = [chunk for chunk in ranked_candidates if chunk.via is None]
         hops = [chunk for chunk in ranked_candidates if chunk.via is not None]
-        if exploratory:
+        mmr_applied = (
+            exploratory
+            and bool(query_vector)
+            and bool(direct)
+            and all(c.vector for c in direct[:working_k])
+        )
+        if mmr_applied:
             picked = self.diversifier.diversify(
                 query_vector, direct[:working_k], request.top_k
             )
@@ -134,16 +140,30 @@ class RetrievalPipeline:
             rerank_applied=rerank_applied,
         )
 
-        # 5) Grounding (trusted only when the reranker actually produced scores).
+        # 5) Assemble cited, budget-bounded context.
+        kept = []
+        citation_offset = (
+            request.citations.count if request.citations is not None else 0
+        )
+
+        def record_kept(position, chunk):
+            kept.append(chunk)
+            if on_keep is not None:
+                on_keep(position, chunk)
+
+        blocks = self.assembler.assemble(
+            final, on_keep=record_kept, citations=request.citations
+        )
+        final = kept
+
+        # 6) Confidence describes only the evidence that fits in the context.
         grounding_threshold = self.reranker.grounding_threshold()
         grounding = (
             self.grounding.check(final, threshold=grounding_threshold)
             if rerank_applied
             else None
         )
-
-        # 6) Assemble cited, budget-bounded context.
-        blocks = self.assembler.assemble(final, grounding, on_keep=on_keep)
+        blocks = ContextAssembler.grounding_blocks(grounding) + blocks
 
         # 7) Per-stage trace for the UI.
         trace = None
@@ -154,9 +174,11 @@ class RetrievalPipeline:
                 pool=pool,
                 reranked=reranked,
                 rerank_applied=rerank_applied,
-                mmr_applied=exploratory,
-                mmr_reason=self._mmr_reason(
-                    plan, exploratory, self.analyzer.last_error
+                mmr_applied=mmr_applied,
+                mmr_reason=(
+                    self._mmr_reason(plan, mmr_applied, self.analyzer.last_error)
+                    if not exploratory or mmr_applied
+                    else "skipped — candidate vectors unavailable"
                 ),
                 analysis_error=self.analyzer.last_error,
                 grounding=grounding,
@@ -164,6 +186,8 @@ class RetrievalPipeline:
                 final_size=len(final),
                 expanded=expanded,
                 expand_applied=expand_applied,
+                final=final,
+                citation_offset=citation_offset,
             )
 
         return RetrievalResult(
@@ -315,15 +339,10 @@ class RetrievalPipeline:
     def _query_names_hop(query: str, hop: RetrievedChunk) -> bool:
         if hop.via is None:
             return False
-        query_key = RetrievalPipeline._normalise_reference_text(query)
-        reference_key = RetrievalPipeline._normalise_reference_text(
-            f"{hop.via.kind} {hop.via.key}"
+        return any(
+            pointer.kind == hop.via.kind and pointer.key == hop.via.key
+            for pointer in extract_pointers(query)
         )
-        return bool(reference_key and reference_key in query_key)
-
-    @staticmethod
-    def _normalise_reference_text(value: str) -> str:
-        return " ".join(re.findall(r"[a-z0-9]+", (value or "").casefold()))
 
 
 def _load_hops(keys, user_id):

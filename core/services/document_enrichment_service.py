@@ -23,8 +23,8 @@ from conversations.models import LLM
 from core.config.document_parsing import (
     FURNITURE_LABELS,
     MIN_CHARS_PER_PAGE,
-    MIN_PICTURE_AREA_RATIO,
     NEIGHBOR_TEXT_LIMIT,
+    PICTURE_SKIP_CONFIDENCE,
     SKIPPED_PICTURE_CLASSES,
     ElementKind,
     ElementLabel,
@@ -604,11 +604,14 @@ class DocumentEnrichmentService:
             return "full_page_transcription"
         if element.page_no is None or element.bbox is None:
             return "missing_page_position"
-        if element.bbox.width * element.bbox.height < MIN_PICTURE_AREA_RATIO:
-            return "small_picture"
         if element.classifications:
-            top_class = element.classifications[0].get("label")
-            if top_class in SKIPPED_PICTURE_CLASSES:
+            prediction = element.classifications[0]
+            top_class = prediction.get("label")
+            if (
+                top_class in SKIPPED_PICTURE_CLASSES
+                and prediction.get("confidence", 0) >= PICTURE_SKIP_CONFIDENCE
+                and not element.caption
+            ):
                 return f"class:{top_class}"
         return "describe"
 
@@ -713,6 +716,9 @@ class DocumentEnrichmentService:
             if element.kind == ElementKind.PICTURE:
                 result = element_results.get(element.order, {})
                 if result.get("status") == "complete":
+                    uncertainty = result.get("uncertainty", "")
+                    if uncertainty:
+                        parts.append(f"[Figure uncertainty: {uncertainty}]")
                     description = result.get("description", "")
                     visible_text = result.get("visible_text", "")
                     parts.append(
@@ -749,6 +755,9 @@ class DocumentEnrichmentService:
             parts.append(f"[Machine-generated page description: {summary}]")
         if transcription:
             parts.append(transcription)
+        uncertainty = str(result.get("uncertainty") or "").strip()
+        if uncertainty:
+            parts.insert(0, f"[Transcription uncertainty: {uncertainty}]")
         return parts
 
     @staticmethod

@@ -11,7 +11,9 @@ class GroundingChecker:
     def check(self, chunks: List[RetrievedChunk], threshold: float = 0.3) -> Grounding:
         if not chunks:
             return Grounding(answer_found=False, top_score=0.0)
-        top = chunks[0]
-        top_score = top.rerank_score if top.rerank_score is not None else top.score
+        top_score = max(
+            chunk.rerank_score if chunk.rerank_score is not None else chunk.score
+            for chunk in chunks
+        )
         top_score = float(top_score or 0.0)
         return Grounding(answer_found=top_score >= threshold, top_score=top_score)

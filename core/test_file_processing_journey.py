@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -18,6 +19,9 @@ def make_file():
         user=user,
         processing_journey={},
         processing_stage="parsing",
+        vector_index_key="42",
+        vector_db_source=None,
+        ingestion_token=None,
     )
 
 
@@ -139,7 +143,17 @@ class DocumentProcessorJourneyTests(SimpleTestCase):
             user_id=file.user.id,
         )
 
-        with self.assertRaisesRegex(Exception, "Weaviate unavailable"):
+        with (
+            patch(
+                "core.services.document_processor.transaction.atomic",
+                return_value=nullcontext(),
+            ),
+            patch(
+                "core.services.document_processor.File.active_objects.select_for_update"
+            ) as locked,
+            self.assertRaisesRegex(Exception, "Weaviate unavailable"),
+        ):
+            locked.return_value.get.return_value = file
             processor.create_file_embeddings(file)
 
         attempt = file.processing_journey["attempts"][0]

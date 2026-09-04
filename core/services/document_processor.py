@@ -1,8 +1,10 @@
 import logging
 from dataclasses import replace
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
+from uuid import uuid4
 
 from channels.db import database_sync_to_async
+from django.db import transaction
 
 from conversations.models import Snippet
 from core.config.processing import (
@@ -22,6 +24,7 @@ from core.services.dtos.parsed_document_dto import ParsedDocument
 from core.services.embedding_service import EmbeddingService
 from core.services.file_processing_journey import FileProcessingJourney
 from core.services.file_processor import FileProcessor
+from core.services.rag.dtos import CitationCounter
 from core.services.rag.entity_extractor import extract_entities
 from core.services.rag.reference_resolver import build_references
 from core.services.rag.structured_chunker import (
@@ -66,7 +69,9 @@ class DocumentProcessor:
 
     def update_vector_service(self, user_id):
         """Update the vector service if the user has changed."""
-        if user_id and (not hasattr(self, "user_id") or self.user_id != user_id):
+        if user_id and (self.vector_service is None or self.user_id != user_id):
+            if self.vector_service is not None:
+                self.vector_service.close()
             self.user_id = user_id
             self.vector_service = get_vector_service(user_id)
 
@@ -153,31 +158,52 @@ class DocumentProcessor:
                 else:
                     stage.add_details(**details)
 
-            with journey.stage("embedding") as stage:
-                vectors, structure_details = self._embed_with_structure(
-                    file,
-                    parsed,
-                    enrichment.document_model,
-                    content,
-                    effective_chunk_size,
-                    effective_overlap_size,
-                )
-                stage.add_details(
-                    text_characters=len(content),
-                    chunks=len(vectors),
-                    chunk_size=effective_chunk_size,
-                    overlap_size=effective_overlap_size,
-                    **structure_details,
-                )
+            generation = uuid4().hex
+            staging_key = generation
+            previous_key = file.vector_index_key
+            previous_backend = file.vector_db_source
+            with transaction.atomic():
+                current = File.active_objects.select_for_update().get(pk=file.pk)
+                if current.ingestion_token != file.ingestion_token:
+                    raise RuntimeError("Document ingestion lease was replaced")
+                with journey.stage("embedding") as stage:
+                    vectors, structure_details = self._embed_with_structure(
+                        file,
+                        parsed,
+                        enrichment.document_model,
+                        content,
+                        effective_chunk_size,
+                        effective_overlap_size,
+                    )
+                    stage.add_details(
+                        text_characters=len(content),
+                        chunks=len(vectors),
+                        chunk_size=effective_chunk_size,
+                        overlap_size=effective_overlap_size,
+                        **structure_details,
+                    )
 
-            with journey.stage("indexing") as stage:
-                # Connect the vector backend late so its failures blame indexing, not parsing.
-                self.update_vector_service(file.user.id)
-                self._store_vectors(vectors, file.user.id, file.id)
-                backend_name = type(self.vector_service).__name__.removesuffix(
-                    "VectorService"
+                with journey.stage("indexing") as stage:
+                    # Connect the vector backend late so its failures blame indexing, not parsing.
+                    self.update_vector_service(file.user.id)
+                    if vectors:
+                        self._store_vectors(vectors, file.user.id, staging_key)
+                        file.index_generation = generation
+                        file.vector_db_source = file.user.vector_db
+                        file.save(
+                            update_fields=["index_generation", "vector_db_source"]
+                        )
+                    backend_name = type(self.vector_service).__name__.removesuffix(
+                        "VectorService"
+                    )
+                    stage.add_details(backend=backend_name, vectors=len(vectors))
+
+            if vectors:
+                transaction.on_commit(
+                    lambda: self._retire_index(
+                        previous_key, file.user.id, previous_backend
+                    )
                 )
-                stage.add_details(backend=backend_name, vectors=len(vectors))
 
             if owns_journey:
                 journey.complete_attempt()
@@ -186,6 +212,10 @@ class DocumentProcessor:
             if owns_journey:
                 journey.fail_attempt(e)
             raise Exception(f"Error processing file: {sanitize_document_text(str(e))}")
+        finally:
+            if self.vector_service is not None:
+                self.vector_service.close()
+                self.vector_service = None
 
     def parse_file(self, file: File) -> ParsedDocument:
         """Parse a file and persist its text and document model.
@@ -264,6 +294,19 @@ class DocumentProcessor:
             file.name or file.file.name,
             file.file_type,
         )
+        if not vectors:
+            return [], {
+                "structured": False,
+                "chunk_rows": 0,
+                "references_found": 0,
+                "references_resolved": 0,
+                "entities_found": 0,
+                "entity_lanes": [],
+                "entities_error": False,
+                "recovered_chunks": 0,
+                "recovered_characters": 0,
+                "contextualized_chunks": 0,
+            }
         vectors = self._attach_source_text(vectors, structured)
         indexed = self._align_chunks(structured, vectors)
         recovered = [
@@ -380,16 +423,36 @@ class DocumentProcessor:
         self,
         vectors: List[Tuple[str, List[float], Dict]],
         user_id: int,
-        file_id: int,
+        file_id: Union[int, str],
     ) -> bool:
-        """Replace one file's vectors, then store the current set in batches."""
-        self.vector_service.delete_file_vectors(file_id, user_id)
+        """Write an isolated generation; the File row publishes it after success."""
+        vectors = [
+            (f"{vector_id}:{file_id}", embedding, {**metadata, "file_id": str(file_id)})
+            for vector_id, embedding, metadata in vectors
+        ]
         for i in range(0, len(vectors), BATCH_SIZE):
             batch = vectors[i : i + BATCH_SIZE]
-            self.vector_service.upsert_vectors(
+            stored = self.vector_service.upsert_vectors(
                 vectors=batch, namespace=get_user_namespace(user_id)
             )
+            if stored is False:
+                raise RuntimeError("Vector backend rejected the replacement batch")
         return True
+
+    @staticmethod
+    def _retire_index(index_key, user_id, backend):
+        service = None
+        try:
+            service = get_vector_service(user_id, backend=backend)
+            service.delete_file_vectors(index_key, user_id)
+        except Exception:
+            # Retired generations are never searched, even when cleanup is unavailable.
+            logger.warning(
+                "Could not retire document index %s", index_key, exc_info=True
+            )
+        finally:
+            if service is not None:
+                service.close()
 
     async def _save_snippets(self, snippets_to_save, message_obj):
         """Save retrieved snippets to the database."""
@@ -459,6 +522,7 @@ class DocumentProcessor:
         message_obj=None,
         workflow_run_step_obj=None,
         failures: Optional[List[str]] = None,
+        citations: Optional[CitationCounter] = None,
     ) -> str:
         """Search for similar documents based on the query text.
 
@@ -470,9 +534,11 @@ class DocumentProcessor:
             return ""
 
         try:
-            query_embedding = self.openai_client.create_embeddings(query_text)
+            query_embedding = await database_sync_to_async(
+                self.openai_client.create_embeddings
+            )(query_text)
 
-            results = self.vector_service.search_documents(
+            results = await database_sync_to_async(self._query_document_vectors)(
                 vector=query_embedding,
                 user_id=user_id,
                 file_ids=file_ids,
@@ -481,7 +547,11 @@ class DocumentProcessor:
             )
 
             return await self._process_search_results(
-                results, similarity_threshold, message_obj, workflow_run_step_obj
+                results,
+                similarity_threshold,
+                message_obj,
+                workflow_run_step_obj,
+                citations,
             )
         except Exception as e:
             logger.warning("Document similarity search failed: %s", e)
@@ -489,12 +559,18 @@ class DocumentProcessor:
                 failures.append(f"documents: {e}")
             return ""
 
+    def _query_document_vectors(self, *, user_id: int, **kwargs) -> List[Dict]:
+        """Run backend selection and active-generation lookup outside the event loop."""
+        self.update_vector_service(user_id)
+        return self.vector_service.search_documents(user_id=user_id, **kwargs)
+
     async def _process_search_results(
         self,
         results: List[Dict],
         similarity_threshold: float,
         message_obj=None,
         workflow_run_step_obj=None,
+        citations: Optional[CitationCounter] = None,
     ) -> str:
         """Process search results and collect context."""
         context_parts = []
@@ -514,7 +590,8 @@ class DocumentProcessor:
 
             if text:
                 # Numbered [S#] tag so the model can cite the exact source inline.
-                tag = f"S{len(context_parts) + 1}"
+                offset = citations.count if citations is not None else 0
+                tag = f"S{offset + len(context_parts) + 1}"
                 context_parts.append(f"[{tag}] {file_name}:\n{text}")
 
                 if message_obj:
@@ -546,6 +623,8 @@ class DocumentProcessor:
                 snippets_to_save, workflow_run_step_obj
             )
 
+        if citations is not None:
+            citations.count += len(context_parts)
         return "\n\n".join(context_parts)
 
     def delete_file_vectors(self, file_id: int, user_id: int) -> bool:

@@ -38,13 +38,13 @@ class DocumentEnrichmentRoutingTests(SimpleTestCase):
         decision = DocumentEnrichmentService._picture_decision(self.picture(), {1})
         self.assertEqual(decision, "full_page_transcription")
 
-    def test_small_picture_is_skipped_before_paid_call(self):
+    def test_small_picture_is_preserved_for_description(self):
         picture = self.picture(
             bbox=BoundingBox(left=0.1, top=0.1, width=0.1, height=0.1)
         )
         self.assertEqual(
             DocumentEnrichmentService._picture_decision(picture, set()),
-            "small_picture",
+            "describe",
         )
 
     def test_logo_is_skipped_after_local_classification(self):
@@ -565,7 +565,7 @@ class DocumentEnrichmentOrchestrationTests(SimpleTestCase):
         small = next(
             row for row in result.document_model["elements"] if row["order"] == 4
         )
-        self.assertEqual(small["enrichment"]["reason"], "small_picture")
+        self.assertEqual(small["enrichment"]["reason"], "class:logo")
 
     @patch(
         "core.services.document_enrichment_service.get_dispatch_credentials_for_user_sync"

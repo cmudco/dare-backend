@@ -15,25 +15,55 @@ trace exactly once even when the model searches repeatedly in a turn.
 import logging
 from typing import Any
 
-from core.services.llm_helpers.db_helpers import (save_document_snippet,
-                                                  save_library_snippet,
-                                                  save_retrieval_trace)
+from core.services.llm_helpers.db_helpers import (
+    save_document_snippet,
+    save_library_snippet,
+    save_retrieval_trace,
+)
+from core.services.rag.dtos import CitationCounter
 from files.models import File
 from workflows.models import WorkflowStepSnippet
 
 logger = logging.getLogger(__name__)
 
 
-class ChatRetrievalTarget:
+class TransientRetrievalTarget:
+    """Own citations when retrieval has no persisted chat or workflow host."""
+
+    def __init__(self):
+        self.citations = CitationCounter()
+        self._agentic_reset_done = False
+
+    def reset_trace(self):
+        self.citations.count = 0
+
+    def begin_agentic_search(self):
+        if not self._agentic_reset_done:
+            self.reset_trace()
+            self._agentic_reset_done = True
+
+    def save_document_snippet(self, chunk):
+        pass
+
+    def save_library_snippet(self, chunk):
+        pass
+
+    def save_trace(self, payload):
+        pass
+
+
+class ChatRetrievalTarget(TransientRetrievalTarget):
     """Persists snippets and trace on a chat ``Message``."""
 
     def __init__(self, message: Any) -> None:
+        super().__init__()
         self.message = message
         self._agentic_reset_done = False
 
     def reset_trace(self) -> None:
         """In-memory clear; ``save_trace`` persists whatever comes next."""
         self.message.retrieval_trace = None
+        super().reset_trace()
 
     def begin_agentic_search(self) -> None:
         """Clear the previous generation's trace, once per turn."""
@@ -52,15 +82,17 @@ class ChatRetrievalTarget:
         save_retrieval_trace(self.message, payload)
 
 
-class WorkflowRetrievalTarget:
+class WorkflowRetrievalTarget(TransientRetrievalTarget):
     """Persists snippets and trace on a ``WorkflowRunStep``."""
 
     def __init__(self, run_step: Any) -> None:
+        super().__init__()
         self.run_step = run_step
         self._agentic_reset_done = False
 
     def reset_trace(self) -> None:
         self.run_step.retrieval_trace = None
+        super().reset_trace()
 
     def begin_agentic_search(self) -> None:
         if self._agentic_reset_done:

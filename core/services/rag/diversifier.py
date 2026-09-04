@@ -27,7 +27,16 @@ class MMRDiversifier:
         if not usable or not query_vector:
             return chunks[:top_k]
 
-        rel = {id(c): _cosine(query_vector, c.vector) for c in usable}
+        # Preserve the reranker's relevance judgment. Dense similarity alone
+        # would undo reranking and favor passages resembling the HyDE guess.
+        rel = {
+            id(c): (
+                c.rerank_score
+                if c.rerank_score is not None
+                else _cosine(query_vector, c.vector)
+            )
+            for c in usable
+        }
         picked: List[RetrievedChunk] = []
         pool = list(usable)
         while pool and len(picked) < top_k:
