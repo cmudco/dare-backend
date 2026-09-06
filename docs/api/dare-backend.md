@@ -26,6 +26,7 @@ Tokens are obtained via `POST /users/api/dj-rest-auth/login/` and refreshed via 
 |---|---|---|
 | Auth | `/users/api/dj-rest-auth/` | Login, registration, password management |
 | Conversations | `/api/conversations/` | Chat CRUD, messages, cloning, sharing |
+| Ensemble presets | `/api/ensemble-presets/` | Private saved role briefs and per-seat angles |
 | Files | `/api/files/` | Upload, processing, folders, tags |
 | Workflows | `/api/workflows/` | Workflow CRUD, runs, versions |
 | Prompts | `/api/prompts/` | Prompt template management |
@@ -38,6 +39,21 @@ Tokens are obtained via `POST /users/api/dj-rest-auth/login/` and refreshed via 
 | Memory | `/api/items/` | Context memory management |
 | Sharing | `/api/sharing/` | Conversation and workflow sharing |
 | API Keys | `/api/api-keys/` | External API key management |
+
+## Ensemble briefs and presets
+
+`GET /api/ensemble-presets/defaults/` returns the authenticated user's effective
+`responder`, `evaluator`, and `chairman` role instructions. The preset collection
+supports paginated listing and creation; detail endpoints support retrieval,
+updates, and soft deletion. Presets are private to their owner.
+
+Preset names accept up to 80 characters, role briefs up to 4,000 characters, and
+each positional seat angle up to 300 characters. Empty role text uses the default
+instructions. Multiple presets may share a name; clients identify them by ID.
+
+Apply migration `conversations.0100_ensemble_preset` before deploying the briefs
+frontend. It adds a table without changing existing conversations. Panel/council
+execution remains controlled by the existing `enable_ensemble` feature flag.
 
 ## LiteLLM background models
 

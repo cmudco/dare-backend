@@ -1,12 +1,16 @@
 """Panel briefs: the defaults each role runs under, and the person's saved presets."""
 
+from drf_spectacular.utils import extend_schema
 from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from common.permissions import IsOwner
-from conversations.api.serializers import EnsemblePresetSerializer
+from conversations.api.serializers import (
+    EnsembleDefaultsSerializer,
+    EnsemblePresetSerializer,
+)
 from conversations.models import EnsemblePreset
 from core.services.dtos.ensemble_dto import BRIEF_ROLES
 from workflows.services.ensemble_workflow_builder import role_prompt_content
@@ -27,6 +31,7 @@ class EnsemblePresetViewSet(viewsets.ModelViewSet):
     def perform_destroy(self, instance):
         instance.soft_delete()
 
+    @extend_schema(responses=EnsembleDefaultsSerializer)
     @action(detail=False, methods=["get"])
     def defaults(self, request):
         """What each role is told when no brief overrides it."""

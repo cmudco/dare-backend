@@ -5,7 +5,6 @@ from rest_framework import serializers
 
 from agents.models import Agent
 from conversations.constants import ToolCallOrigin
-from core.services.dtos.ensemble_dto import MAX_ANGLE_CHARS, MAX_BRIEF_CHARS
 from conversations.models import (
     LLM,
     Artifact,
@@ -22,6 +21,7 @@ from conversations.models import (
     Snippet,
     WebSearchSource,
 )
+from core.services.dtos.ensemble_dto import MAX_ANGLE_CHARS, MAX_BRIEF_CHARS
 from core.services.energy_service import compute_relatable_stats
 from dare_tools.models import DareTool
 from files.api.serializers import FileSerializer, TagSerializer
@@ -781,6 +781,12 @@ class ModelCardDataListSerializer(serializers.ModelSerializer):
 
     def get_has_public_feedback(self, obj):
         return bool(obj.public_feedback)
+
+
+class EnsembleDefaultsSerializer(serializers.Serializer):
+    responder = serializers.CharField()
+    evaluator = serializers.CharField()
+    chairman = serializers.CharField()
 
 
 class EnsemblePresetSerializer(serializers.ModelSerializer):
