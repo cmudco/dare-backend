@@ -27,7 +27,7 @@ FROM python:3.13-slim
 #   libpq5              = PostgreSQL client lib — psycopg2 needs this to talk to Postgres
 #   ffmpeg              = Video/audio processing — used by ffmpeg-python for frame extraction
 #   libglib2.0-0        = GLib library — required by OpenCV (opencv-python) at runtime
-#   libgl1              = OpenGL — required by OpenCV for image processing
+#   libgl1              = OpenGL — linked by the regular OpenCV wheel, even without a display
 #   libpango-1.0-0      = Text layout engine — required by WeasyPrint for PDF generation
 #   libpangocairo-1.0-0 = Pango + Cairo bridge — WeasyPrint renders PDFs through Cairo
 #   libharfbuzz0b       = Text shaping — WeasyPrint uses this for font rendering
@@ -54,6 +54,8 @@ WORKDIR /app
 
 
 COPY . .
+
+RUN python devops/check_document_runtime.py
 
 
 RUN mkdir -p /app/static /app/media

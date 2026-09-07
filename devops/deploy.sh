@@ -14,8 +14,11 @@ git pull origin main
 echo "Activating the virtual environment..."
 source .venv/bin/activate
 
+bash devops/install_document_runtime.sh
+
 echo "Installing dependencies..."
 pip install -r requirements/prod.txt
+python devops/check_document_runtime.py
 
 echo "Applying database migrations..."
 python manage.py migrate
