@@ -6,7 +6,7 @@ from django.db import migrations
 #
 # Gemini 3.8 Flash (2026-09-02) supersedes 3.7 Flash as the workhorse Flash
 # model: better accuracy at higher token consumption, with the same
-# thinking_level effort control (minimal/low/medium/high, MEDIUM default).
+# thinking_level effort control (low/medium/high, MEDIUM default).
 # Its rates are introductory and expire 2026-12-31, after which input/output
 # double to 1.50 / 7.50 and cached input to 0.15 -- revisit then.
 #
@@ -35,9 +35,7 @@ def seed_gemini_3_8_flash(apps, schema_editor):
     _, created = LLM.objects.get_or_create(
         identifier=GEMINI_3_8_FLASH["identifier"],
         defaults={
-            key: value
-            for key, value in GEMINI_3_8_FLASH.items()
-            if key != "identifier"
+            key: value for key, value in GEMINI_3_8_FLASH.items() if key != "identifier"
         },
     )
 
@@ -90,7 +88,7 @@ def reverse_seed_gemini_3_8_flash(apps, schema_editor):
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("conversations", "0098_update_gpt_5_6_sol_rates"),
+        ("conversations", "0099_message_deliberation"),
     ]
 
     operations = [
