@@ -265,7 +265,9 @@ class File(BaseModel):
         blank=True,
         null=True,
         verbose_name=_("Parser"),
-        help_text=_("Parser that produced the extracted text (docling or legacy)"),
+        help_text=_(
+            "Parser that produced the extracted text (basic, docling, or notebook)"
+        ),
     )
 
     # Lineage tracking

@@ -21,8 +21,8 @@ from core.services.document_parsers import (
     get_docling_unavailable_reason,
     get_document_parsers,
 )
+from core.services.document_parsers.basic_parser import BasicDocumentParser
 from core.services.document_parsers.constants import DOCLING_EXTENSIONS
-from core.services.document_parsers.legacy_parser import LegacyDocumentParser
 from core.services.document_text_composer import compose_document_text
 from core.services.document_text_sanitizer import (
     sanitize_document_text,
@@ -68,7 +68,7 @@ class DocumentParsingService:
         fallback_from: Optional[str] = None
         fallback_reason: Optional[str] = None
         basic = file.processing_mode == DocumentProcessingMode.BASIC
-        parsers = [LegacyDocumentParser()] if basic else self._parsers_for(filename)
+        parsers = [BasicDocumentParser()] if basic else self._parsers_for(filename)
         suffix = filename.lower().rsplit(".", 1)[-1]
         if not basic and self._parsers is None and suffix in DOCLING_EXTENSIONS:
             unavailable_reason = get_docling_unavailable_reason()
@@ -88,7 +88,7 @@ class DocumentParsingService:
                         fallback_reason=fallback_reason,
                     )
                 if filename.lower().endswith(".pdf") and not isinstance(
-                    parser, LegacyDocumentParser
+                    parser, BasicDocumentParser
                 ):
                     parsed = self._with_native_pdf_recovery_text(
                         parsed, data, filename, file.id
@@ -213,7 +213,7 @@ class DocumentParsingService:
 
         try:
             return sanitize_document_text(
-                LegacyDocumentParser()
+                BasicDocumentParser()
                 .parse(self._read_bytes(file), self._filename(file))
                 .text
             )

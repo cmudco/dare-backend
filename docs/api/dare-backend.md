@@ -87,4 +87,12 @@ callers that omit the option retain Advanced behavior. The mode cannot be change
 with a file metadata PATCH; upload another copy to compare both approaches.
 Apply `files.0024_file_processing_mode` before deploying the new upload UI and
 restart API/worker processes. The stored `parser_name` remains parser provenance
-(`legacy`, `docling`, or another parser), separate from the requested processing mode.
+(`basic`, `docling`, or another parser), separate from the requested processing mode.
+
+The authenticated `GET /api/files/{id}/viewer-capabilities/` endpoint returns
+`structure` and `map` booleans. Both require a persisted structured parse from
+Docling or the notebook parser, including document elements. Basic uploads,
+text-only fallbacks, and files awaiting parsing expose neither view. The frontend
+uses these capabilities rather than inferring them from the requested mode.
+Migration 0025 normalizes historical `legacy` parser identifiers to `basic` in
+file metadata and the stored document model; processing history remains an audit record.

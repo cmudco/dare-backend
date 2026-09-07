@@ -517,7 +517,7 @@ class StructuredChunkerTests(SimpleTestCase):
         self.assertNotIn("Running head", chunks[0].text)
 
     def test_no_elements_falls_back_to_flat_chunks(self):
-        parsed = ParsedDocument(text="", elements=(), parser="legacy")
+        parsed = ParsedDocument(text="", elements=(), parser="basic")
         chunks = self.chunker.chunk(parsed, {}, fallback_text="alpha " * 100)
 
         self.assertGreater(len(chunks), 1)

@@ -56,7 +56,7 @@ class ProcessingModeTests(APITestCase):
         with patch.object(service, "_read_bytes", return_value=b"pdf"), patch.object(
             service, "_filename", return_value="notes.pdf"
         ), patch.object(service, "_parsers_for") as advanced, patch(
-            "core.services.document_parsers.legacy_parser.read_bytes_as_text",
+            "core.services.document_parsers.basic_parser.read_bytes_as_text",
             return_value="Text only",
         ):
             for _ in range(2):

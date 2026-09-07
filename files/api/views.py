@@ -10,7 +10,8 @@ from django.db.models.functions import Lower
 from django.http import FileResponse, Http404, HttpResponse
 from django_rq import get_queue
 from djangorestframework_camel_case.parser import CamelCaseJSONParser
-from rest_framework import status, viewsets
+from drf_spectacular.utils import extend_schema, inline_serializer
+from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
@@ -616,6 +617,35 @@ class FileViewSet(viewsets.ModelViewSet):
         )
         serializer = self.get_serializer(refreshed)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+    @extend_schema(
+        responses=inline_serializer(
+            name="FileViewerCapabilities",
+            fields={
+                "structure": serializers.BooleanField(),
+                "map": serializers.BooleanField(),
+            },
+        )
+    )
+    @action(detail=True, methods=["get"], url_path="viewer-capabilities")
+    def viewer_capabilities(self, request, pk=None):
+        from core.services.document_parsers.constants import (
+            PARSER_DOCLING,
+            PARSER_NOTEBOOK,
+        )
+        from files.constants import DocumentProcessingMode
+
+        file_obj = self.get_object()
+        document = file_obj.document_model or {}
+        # Requested Advanced mode can fall back to Basic extraction. Only expose
+        # rich views when the persisted result actually contains structure.
+        structured = (
+            file_obj.processing_mode != DocumentProcessingMode.BASIC
+            and file_obj.parser_name in {PARSER_DOCLING, PARSER_NOTEBOOK}
+            and document.get("parser") == file_obj.parser_name
+            and bool(document.get("elements"))
+        )
+        return Response({"structure": structured, "map": structured})
 
     @action(detail=True, methods=["get"], url_path="structure")
     def structure(self, request, pk=None):
