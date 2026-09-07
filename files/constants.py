@@ -108,3 +108,13 @@ class ReferenceKind(models.TextChoices):
     CHAPTER = "chapter", "Chapter"
     APPENDIX = "appendix", "Appendix"
     PAGE = "page", "Page"
+
+
+class DocumentProcessingMode(models.TextChoices):
+    BASIC = "basic", "Basic (text only)"
+    ADVANCED = "advanced", "Advanced (Docling)"
+
+
+class DocumentReprocessingAction(models.TextChoices):
+    REPARSE = "reparse", "Reprocess document"
+    RETRY_IMAGES = "retry_images", "Retry failed image descriptions"

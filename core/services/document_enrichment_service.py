@@ -113,6 +113,7 @@ class DocumentEnrichmentService:
         parsed: ParsedDocument,
         page_limit: Optional[int] = None,
         continue_existing: bool = False,
+        retry_failed_images: bool = False,
     ) -> EnrichmentResult:
         """Run applicable vision lanes, persist their model, and return text."""
         stored_payload = (
@@ -143,7 +144,7 @@ class DocumentEnrichmentService:
                     enrichment = stored_enrichment.get(item.get("order"))
                     if enrichment:
                         item["enrichment"] = enrichment
-        if continue_existing and page_limit == 0:
+        if continue_existing and page_limit == 0 and not retry_failed_images:
             # No page may be transcribed and a continuation never revisits
             # figures, so there is no vision work to buy. Rebuilding from the
             # stored results here — rather than falling through to route
@@ -157,11 +158,19 @@ class DocumentEnrichmentService:
             or not (file.file.name or "").lower().endswith(".pdf")
             or not (parsed.structure.pictures or parsed.structure.pages_without_text)
         ):
+            if retry_failed_images:
+                raise RuntimeError(
+                    "Vision enrichment is not available for this document."
+                )
             return self._persist_not_needed(file, parsed, model_payload)
 
         started = time.time()
         route = self._resolve_route(file)
         if route is None:
+            if retry_failed_images:
+                raise RuntimeError(
+                    "No vision-capable model is available in the active wallet."
+                )
             return self._persist_unavailable(
                 file,
                 parsed,
@@ -179,6 +188,10 @@ class DocumentEnrichmentService:
             logger.warning(
                 "Vision credentials unavailable for file %s: %s", file.id, error
             )
+            if retry_failed_images:
+                raise RuntimeError(
+                    "Vision credentials are unavailable. Check your wallet settings."
+                ) from error
             return self._persist_unavailable(file, parsed, model_payload, str(error))
 
         page_characters = self._page_characters(parsed)
@@ -194,7 +207,7 @@ class DocumentEnrichmentService:
             for row in model_payload.get("page_enrichments", [])
             if row.get("page_no") is not None
         }
-        if continue_existing:
+        if continue_existing and not retry_failed_images:
             self._replace_blank_stored_pages(file, page_results)
         element_results: Dict[int, Dict[str, Any]] = {
             int(element["order"]): deepcopy(element["enrichment"])
@@ -232,7 +245,14 @@ class DocumentEnrichmentService:
         considered = 0
         max_figures = max(int(env.DOCUMENT_ENRICHMENT_MAX_FIGURES), 0)
         elements = list(parsed.elements)
-        for index, element in enumerate(elements if not continue_existing else []):
+        for index, element in enumerate(
+            elements if not continue_existing or retry_failed_images else []
+        ):
+            if (
+                retry_failed_images
+                and element_results.get(element.order, {}).get("status") != "error"
+            ):
+                continue
             if element.kind != ElementKind.PICTURE:
                 continue
             decision = self._picture_decision(element, textless_pages)

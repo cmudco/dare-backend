@@ -67,3 +67,60 @@ from drf_spectacular.utils import extend_schema, OpenApiParameter
 def export_pdf(self, request, pk=None):
     ...
 ```
+
+## Document upload processing
+
+`POST /api/files/` accepts multipart `files` and matching `names`, plus optional
+`processing_mode`: `basic` or `advanced` (default). Multipart field names use
+underscores; the JSON response exposes the saved choice as `processingMode`.
+Invalid processing modes return HTTP 400 before any file is created.
+
+- **Basic (text only):** uses flat-text extraction and skips Docling layout and
+  visual extraction. Scanned documents without embedded text need Advanced.
+- **Advanced (Docling):** preserves document structure, tables, and images for
+  supported document formats and uses the existing visual enrichment workflow.
+  Plain-text formats use text extraction; existing fallback diagnostics remain
+  visible if Docling cannot parse a document. Standalone media handling is unchanged.
+
+The mode is stored per file and reused when reprocessing. Existing files and
+callers that omit the option retain Advanced behavior. The mode cannot be changed
+with a file metadata PATCH; upload another copy to compare both approaches.
+Apply `files.0024_file_processing_mode` before deploying the new upload UI and
+restart API/worker processes. The stored `parser_name` remains parser provenance
+(`basic`, `docling`, or another parser), separate from the requested processing mode.
+
+The authenticated `GET /api/files/{id}/viewer-capabilities/` endpoint returns
+`structure` and `map` booleans. Both require a persisted structured parse from
+Docling or the notebook parser, including document elements. Basic uploads,
+text-only fallbacks, and files awaiting parsing expose neither view. The frontend
+uses these capabilities rather than inferring them from the requested mode.
+Migration 0025 normalizes historical `legacy` parser identifiers to `basic` in
+file metadata and the stored document model; processing history remains an audit record.
+
+### Reprocess a stored document
+
+`POST /api/files/{id}/reprocess/` accepts JSON `{ "action": "reparse",
+"processingMode": "basic" | "advanced" }` or `{ "action": "retry_images" }`.
+It returns the updated file with HTTP 202 and a job ID. Only the owner can start
+work. Media, missing originals, and already-running work are rejected with 409;
+queue failures return 503 and restore the previous file status. Poll the existing
+job-status endpoint, then refresh file metadata when processing finishes.
+
+Reparse retains the file ID and original bytes, honors the newly selected mode,
+and renews scanned-page approval if needed. Image retry uses the saved lossless
+Docling parse, retries only failed figure descriptions, and preserves completed
+figures and page transcriptions. Older incomplete document models must first be
+reprocessed with Advanced. `failedImageCount` in file metadata identifies retryable
+figure failures. Existing wallet selection, billing, caches, and processing traces
+apply; image retries also rebuild embeddings to make recovered descriptions searchable.
+
+The active index stays searchable while replacement is built. New vectors use a
+separate generation; chunks and the generation pointer publish transactionally,
+then old vectors are retired. Empty or failed replacements retain the previous
+parse and index. Failed staged-vector cleanup is logged; unpublished generations
+are excluded from retrieval. Duplicate delivery of a completed job does not rerun it.
+A failed reprocess keeps its failure trace and reports that the previous document
+was retained. Scanned documents may pause for the existing OCR approval workflow.
+
+The existing conversation tool-call activity and retrieval trace expose actual
+retrieval steps and sources. This feature adds no agentic whole-file-context tool.

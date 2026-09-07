@@ -74,7 +74,7 @@ FLAT_PARSED = ParsedDocument(
     text=FLAT_TEXT,
     elements=(),
     structure=DocumentStructure(pages=1, content_chars=400),
-    parser="legacy",
+    parser="basic",
 )
 
 EMPTY_PARSED = ParsedDocument(

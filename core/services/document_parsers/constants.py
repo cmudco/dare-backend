@@ -2,7 +2,7 @@
 
 PARSER_DOCLING = "docling"
 PARSER_NOTEBOOK = "notebook"
-PARSER_LEGACY = "legacy"
+PARSER_BASIC = "basic"
 
 # Formats Docling handles natively. Plain text, markdown, JSON and CSV are
 # deliberately absent: they need decoding, not parsing, and the legacy reader

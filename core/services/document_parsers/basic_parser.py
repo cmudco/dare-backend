@@ -1,5 +1,5 @@
 """
-Legacy Document Parser
+Basic Document Parser
 
 Wraps the pre-Docling extraction path (PyPDF2, zipfile/ElementTree for DOCX,
 openpyxl and xlrd for spreadsheets, encoding-sniffing for text) behind the
@@ -15,18 +15,17 @@ import logging
 import time
 
 from core.services.document_parsers.base import BaseDocumentParser
-from core.services.document_parsers.constants import PARSER_LEGACY
-from core.services.dtos.parsed_document_dto import (ParsedDocument,
-                                                    text_only_document)
+from core.services.document_parsers.constants import PARSER_BASIC
+from core.services.dtos.parsed_document_dto import ParsedDocument, text_only_document
 from core.services.file_readers import read_bytes_as_text
 
 logger = logging.getLogger(__name__)
 
 
-class LegacyDocumentParser(BaseDocumentParser):
+class BasicDocumentParser(BaseDocumentParser):
     """Flat-text extraction with no document model."""
 
-    name = PARSER_LEGACY
+    name = PARSER_BASIC
 
     def supports(self, filename: str) -> bool:
         """Accepts anything — this is the last resort."""
