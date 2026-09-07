@@ -3,8 +3,9 @@ from rest_framework import serializers
 
 from config import env
 from core.config.document_parsing import HEADING_LABELS
+from files.services.document_reprocessing_service import failed_image_count
 
-from ..constants import DocumentProcessingMode, FileStatus
+from ..constants import DocumentProcessingMode, DocumentReprocessingAction, FileStatus
 from ..models import DocumentOcrRequest, File, FileShare, Folder, Tag
 
 User = get_user_model()
@@ -73,6 +74,32 @@ class VisionModelSelectionSerializer(serializers.Serializer):
     model_identifier = serializers.CharField(allow_blank=True)
 
 
+class FileReprocessingSerializer(serializers.Serializer):
+    action = serializers.ChoiceField(choices=DocumentReprocessingAction.choices)
+    processing_mode = serializers.ChoiceField(
+        choices=DocumentProcessingMode.choices, required=False
+    )
+
+    def validate(self, attrs):
+        if (
+            attrs["action"] == DocumentReprocessingAction.REPARSE
+            and "processing_mode" not in attrs
+        ):
+            raise serializers.ValidationError(
+                {"processing_mode": "Choose Basic or Advanced."}
+            )
+        if (
+            attrs["action"] == DocumentReprocessingAction.RETRY_IMAGES
+            and "processing_mode" in attrs
+        ):
+            raise serializers.ValidationError(
+                {
+                    "processing_mode": "Image retries retain the existing processing mode."
+                }
+            )
+        return attrs
+
+
 class FileUploadOptionsSerializer(serializers.Serializer):
     processing_mode = serializers.ChoiceField(
         choices=DocumentProcessingMode.choices,
@@ -99,6 +126,7 @@ class FileSerializer(serializers.ModelSerializer):
     parser_name = serializers.CharField(read_only=True, allow_null=True)
     # Headline counts only. The elements themselves are large, so the full
     # document model is served by the dedicated `structure` endpoint.
+    failed_image_count = serializers.SerializerMethodField()
     structure_counts = serializers.SerializerMethodField()
     ocr = serializers.SerializerMethodField()
 
@@ -132,10 +160,14 @@ class FileSerializer(serializers.ModelSerializer):
             "parser_name",
             "processing_mode",
             "structure_counts",
+            "failed_image_count",
             "ocr",
             "created_at",
             "updated_at",
         ]
+
+    def get_failed_image_count(self, obj) -> int:
+        return failed_image_count(obj)
 
     def get_structure_counts(self, obj):
         """Pages, sections, tables and pictures — or None if never parsed."""

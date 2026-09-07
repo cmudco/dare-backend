@@ -56,9 +56,16 @@ from ..services.document_ocr_approval_service import (
     DocumentOcrPageLimitError,
     DocumentOcrQueueError,
 )
+from ..services.document_reprocessing_service import (
+    DocumentReprocessingCommand,
+    DocumentReprocessingService,
+    ReprocessingQueueError,
+    ReprocessingUnavailable,
+)
 from .serializers import (
     DocumentOcrApprovalSerializer,
     FileProcessingJourneySerializer,
+    FileReprocessingSerializer,
     FileSerializer,
     FileShareSerializer,
     FileStructureSerializer,
@@ -646,6 +653,33 @@ class FileViewSet(viewsets.ModelViewSet):
             and bool(document.get("elements"))
         )
         return Response({"structure": structured, "map": structured})
+
+    @extend_schema(request=FileReprocessingSerializer, responses={202: FileSerializer})
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="reprocess",
+        parser_classes=[CamelCaseJSONParser],
+    )
+    def reprocess(self, request, pk=None):
+        file = self.get_object()
+        serializer = FileReprocessingSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            file = DocumentReprocessingService().start(
+                DocumentReprocessingCommand(
+                    file.pk, request.user.pk, **serializer.validated_data
+                )
+            )
+        except File.DoesNotExist:
+            raise Http404
+        except ReprocessingUnavailable as error:
+            return Response({"detail": str(error)}, status=status.HTTP_409_CONFLICT)
+        except ReprocessingQueueError as error:
+            return Response(
+                {"detail": str(error)}, status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
+        return Response(self.get_serializer(file).data, status=status.HTTP_202_ACCEPTED)
 
     @action(detail=True, methods=["get"], url_path="structure")
     def structure(self, request, pk=None):

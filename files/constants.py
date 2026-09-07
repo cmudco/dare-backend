@@ -113,3 +113,8 @@ class ReferenceKind(models.TextChoices):
 class DocumentProcessingMode(models.TextChoices):
     BASIC = "basic", "Basic (text only)"
     ADVANCED = "advanced", "Advanced (Docling)"
+
+
+class DocumentReprocessingAction(models.TextChoices):
+    REPARSE = "reparse", "Reprocess document"
+    RETRY_IMAGES = "retry_images", "Retry failed image descriptions"

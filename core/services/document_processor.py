@@ -84,6 +84,8 @@ class DocumentProcessor:
         parsed: Optional[ParsedDocument] = None,
         ocr_page_limit: Optional[int] = None,
         continue_existing_enrichment: bool = False,
+        retry_failed_images: bool = False,
+        require_vectors: bool = False,
     ) -> int:
         """Process a single file and create embeddings.
 
@@ -91,6 +93,8 @@ class DocumentProcessor:
         a file that carries no text — an image-only PDF — and the caller is
         responsible for reporting that honestly rather than as success.
         """
+        staging_key = None
+        published = False
         owns_journey = journey is None
         journey = journey or FileProcessingJourney(file)
         if owns_journey:
@@ -129,6 +133,7 @@ class DocumentProcessor:
                     parsed,
                     page_limit=ocr_page_limit,
                     continue_existing=continue_existing_enrichment,
+                    **({"retry_failed_images": True} if retry_failed_images else {}),
                 )
                 content = enrichment.text
                 summary = enrichment.document_model.get("enrichment", {})
@@ -159,7 +164,6 @@ class DocumentProcessor:
                     stage.add_details(**details)
 
             generation = uuid4().hex
-            staging_key = generation
             previous_key = file.vector_index_key
             previous_backend = file.vector_db_source
             with transaction.atomic():
@@ -175,6 +179,10 @@ class DocumentProcessor:
                         effective_chunk_size,
                         effective_overlap_size,
                     )
+                    if require_vectors and not vectors:
+                        raise RuntimeError(
+                            "No searchable text was produced; the previous index was retained."
+                        )
                     stage.add_details(
                         text_characters=len(content),
                         chunks=len(vectors),
@@ -187,6 +195,7 @@ class DocumentProcessor:
                     # Connect the vector backend late so its failures blame indexing, not parsing.
                     self.update_vector_service(file.user.id)
                     if vectors:
+                        staging_key = generation
                         self._store_vectors(vectors, file.user.id, staging_key)
                         file.index_generation = generation
                         file.vector_db_source = file.user.vector_db
@@ -198,6 +207,7 @@ class DocumentProcessor:
                     )
                     stage.add_details(backend=backend_name, vectors=len(vectors))
 
+            published = bool(vectors)
             if vectors:
                 transaction.on_commit(
                     lambda: self._retire_index(
@@ -209,6 +219,15 @@ class DocumentProcessor:
                 journey.complete_attempt()
             return len(vectors)
         except Exception as e:
+            if staging_key and not published and self.vector_service is not None:
+                try:
+                    self.vector_service.delete_file_vectors(staging_key, file.user.id)
+                except Exception:
+                    logger.warning(
+                        "Could not clean staged document index %s",
+                        staging_key,
+                        exc_info=True,
+                    )
             if owns_journey:
                 journey.fail_attempt(e)
             raise Exception(f"Error processing file: {sanitize_document_text(str(e))}")
