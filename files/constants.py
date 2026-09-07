@@ -108,3 +108,8 @@ class ReferenceKind(models.TextChoices):
     CHAPTER = "chapter", "Chapter"
     APPENDIX = "appendix", "Appendix"
     PAGE = "page", "Page"
+
+
+class DocumentProcessingMode(models.TextChoices):
+    BASIC = "basic", "Basic (text only)"
+    ADVANCED = "advanced", "Advanced (Docling)"

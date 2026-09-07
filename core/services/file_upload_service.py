@@ -1,17 +1,18 @@
+import base64
 import json
 import logging
-import base64
 import uuid
-from pathlib import Path
-from typing import List, Dict, Any, Optional
 from datetime import datetime
-from django.db import transaction
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
 from django.core.files.base import ContentFile
+from django.db import transaction
 from django_rq import enqueue
 
 from core.storage.constants import StorageBackendChoice
+from files.constants import ALLOWED_FILES, DocumentProcessingMode, FileStatus
 from files.models import File, Folder, Tag
-from files.constants import ALLOWED_FILES, FileStatus
 from files.tasks import process_file_embeddings
 
 logger = logging.getLogger(__name__)
@@ -19,9 +20,35 @@ logger = logging.getLogger(__name__)
 
 # Media file MIME type prefixes
 MEDIA_MIME_TYPES = {
-    'image': ['image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/bmp', 'image/tiff', 'image/svg+xml'],
-    'video': ['video/mp4', 'video/webm', 'video/quicktime', 'video/x-msvideo', 'video/mpeg', 'video/ogg'],
-    'audio': ['audio/mpeg', 'audio/wav', 'audio/x-wav', 'audio/mp4', 'audio/x-m4a', 'audio/flac', 'audio/aac', 'audio/x-ms-wma', 'audio/opus', 'audio/ogg']
+    "image": [
+        "image/jpeg",
+        "image/png",
+        "image/gif",
+        "image/webp",
+        "image/bmp",
+        "image/tiff",
+        "image/svg+xml",
+    ],
+    "video": [
+        "video/mp4",
+        "video/webm",
+        "video/quicktime",
+        "video/x-msvideo",
+        "video/mpeg",
+        "video/ogg",
+    ],
+    "audio": [
+        "audio/mpeg",
+        "audio/wav",
+        "audio/x-wav",
+        "audio/mp4",
+        "audio/x-m4a",
+        "audio/flac",
+        "audio/aac",
+        "audio/x-ms-wma",
+        "audio/opus",
+        "audio/ogg",
+    ],
 }
 
 
@@ -45,10 +72,12 @@ class FileUploadService:
             return False, None
 
         for media_type, mime_types in MEDIA_MIME_TYPES.items():
-            if content_type in mime_types or any(content_type.startswith(mt.split('/')[0] + '/') for mt in mime_types):
+            if content_type in mime_types or any(
+                content_type.startswith(mt.split("/")[0] + "/") for mt in mime_types
+            ):
                 return True, media_type
 
-        return False, 'document'
+        return False, "document"
 
     @staticmethod
     def validate_file(uploaded_file, file_name: str) -> tuple[bool, Optional[str]]:
@@ -132,7 +161,16 @@ class FileUploadService:
         )
 
     @staticmethod
-    def create_file_instance(uploaded_file, file_name: str, user, tag_ids: List[int] = None, *, chunk_size: int | None = None, overlap_size: int | None = None) -> File:
+    def create_file_instance(
+        uploaded_file,
+        file_name: str,
+        user,
+        tag_ids: List[int] = None,
+        *,
+        chunk_size: int | None = None,
+        overlap_size: int | None = None,
+        processing_mode: str = DocumentProcessingMode.ADVANCED,
+    ) -> File:
         """
         Create a file instance in the database.
 
@@ -145,13 +183,17 @@ class FileUploadService:
         Returns:
             File instance
         """
-        is_valid, error_message = FileUploadService.validate_file(uploaded_file, file_name)
+        is_valid, error_message = FileUploadService.validate_file(
+            uploaded_file, file_name
+        )
 
         # Detect if this is a media file (image/video)
-        is_media, media_type = FileUploadService.detect_media_type(uploaded_file.content_type)
+        is_media, media_type = FileUploadService.detect_media_type(
+            uploaded_file.content_type
+        )
 
         # Get storage backend based on user preference
-        storage_backend = getattr(user, 'storage_backend', StorageBackendChoice.LOCAL)
+        storage_backend = getattr(user, "storage_backend", StorageBackendChoice.LOCAL)
 
         # Create File instance (without saving uploaded bytes yet)
         file_instance = FileUploadService.create_file_record(
@@ -166,6 +208,7 @@ class FileUploadService:
             error_message=error_message,
         )
 
+        file_instance.processing_mode = processing_mode
         file_instance.file.save(file_name, uploaded_file, save=False)
         file_instance.save()
 
@@ -183,7 +226,9 @@ class FileUploadService:
                 )
             )
         elif is_media:
-            logger.info(f"Media file '{file_name}' ({media_type}) uploaded successfully - skipping vectorization")
+            logger.info(
+                f"Media file '{file_name}' ({media_type}) uploaded successfully - skipping vectorization"
+            )
 
         return file_instance
 
@@ -200,15 +245,24 @@ class FileUploadService:
         except Exception as e:
             file_instance.status = FileStatus.FAILED
             file_instance.error_message = f"Could not queue processing: {e}"
-            file_instance.save(update_fields=['status', 'error_message'])
+            file_instance.save(update_fields=["status", "error_message"])
             logger.error(f"Error queueing file '{file_instance.name}': {str(e)}")
             return
         file_instance.job_id = job.id
-        file_instance.save(update_fields=['job_id'])
+        file_instance.save(update_fields=["job_id"])
         logger.info(f"Queued document processing for file '{file_instance.name}'")
 
     @staticmethod
-    def upload_files(uploaded_files: List, file_names: List[str], user, tag_ids: List[int] = None, *, chunk_size: int | None = None, overlap_size: int | None = None) -> List[File]:
+    def upload_files(
+        uploaded_files: List,
+        file_names: List[str],
+        user,
+        tag_ids: List[int] = None,
+        *,
+        chunk_size: int | None = None,
+        overlap_size: int | None = None,
+        processing_mode: str = DocumentProcessingMode.ADVANCED,
+    ) -> List[File]:
         """
         Upload multiple files and create file instances.
 
@@ -231,8 +285,13 @@ class FileUploadService:
                 file_name = file_names[idx]
                 try:
                     file_instance = FileUploadService.create_file_instance(
-                        uploaded_file, file_name, user, tag_ids,
-                        chunk_size=chunk_size, overlap_size=overlap_size
+                        uploaded_file,
+                        file_name,
+                        user,
+                        tag_ids,
+                        chunk_size=chunk_size,
+                        overlap_size=overlap_size,
+                        processing_mode=processing_mode,
                     )
                     file_instances.append(file_instance)
                 except Exception as e:
@@ -242,8 +301,17 @@ class FileUploadService:
         return file_instances
 
     @staticmethod
-    def upload_folder_with_files(folder_name: str, uploaded_files: List, file_names: List[str],
-                                user, tag_ids: List[int] = None, *, chunk_size: int | None = None, overlap_size: int | None = None) -> tuple[Folder, List[File]]:
+    def upload_folder_with_files(
+        folder_name: str,
+        uploaded_files: List,
+        file_names: List[str],
+        user,
+        tag_ids: List[int] = None,
+        *,
+        chunk_size: int | None = None,
+        overlap_size: int | None = None,
+        processing_mode: str = DocumentProcessingMode.ADVANCED,
+    ) -> tuple[Folder, List[File]]:
         """
         Create a folder and upload files to it.
 
@@ -263,8 +331,13 @@ class FileUploadService:
 
             # Upload files
             file_instances = FileUploadService.upload_files(
-                uploaded_files, file_names, user, tag_ids,
-                chunk_size=chunk_size, overlap_size=overlap_size
+                uploaded_files,
+                file_names,
+                user,
+                tag_ids,
+                chunk_size=chunk_size,
+                overlap_size=overlap_size,
+                processing_mode=processing_mode,
             )
 
             # Add files to folder
@@ -295,7 +368,7 @@ class FileUploadService:
         filename: str,
         mime_type: str,
         user=None,
-        is_public: bool = False
+        is_public: bool = False,
     ) -> Optional[File]:
         """
         Save a base64-encoded image as a File object.
@@ -314,11 +387,11 @@ class FileUploadService:
         try:
             # Extract base64 data if it includes a data URL prefix
             # Format: data:image/jpeg;base64,/9j/4AAQ...
-            if ',' in base64_data:
+            if "," in base64_data:
                 # Extract MIME type from data URL if present
-                header, base64_data = base64_data.split(',', 1)
-                if 'data:' in header and ';base64' in header:
-                    extracted_mime = header.replace('data:', '').replace(';base64', '')
+                header, base64_data = base64_data.split(",", 1)
+                if "data:" in header and ";base64" in header:
+                    extracted_mime = header.replace("data:", "").replace(";base64", "")
                     if extracted_mime:
                         mime_type = extracted_mime
 
@@ -327,7 +400,7 @@ class FileUploadService:
 
             # Generate a unique filename if needed
             if not filename:
-                ext = mime_type.split('/')[-1] if mime_type else 'png'
+                ext = mime_type.split("/")[-1] if mime_type else "png"
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 filename = f"chat_upload_{timestamp}_{uuid.uuid4().hex[:8]}.{ext}"
 
@@ -336,7 +409,9 @@ class FileUploadService:
 
             storage_backend = StorageBackendChoice.LOCAL
             if user:
-                storage_backend = getattr(user, 'storage_backend', StorageBackendChoice.LOCAL)
+                storage_backend = getattr(
+                    user, "storage_backend", StorageBackendChoice.LOCAL
+                )
 
             # Create File object
             file_obj = File(
@@ -346,7 +421,7 @@ class FileUploadService:
                 size=len(image_bytes),
                 status=FileStatus.PROCESSED,  # Media files don't need processing
                 is_media=is_media,
-                media_type=media_type or 'image',
+                media_type=media_type or "image",
                 is_generated=False,  # User-uploaded, not AI-generated
                 storage_backend=storage_backend,
             )
@@ -355,7 +430,9 @@ class FileUploadService:
             file_obj.file.save(filename, ContentFile(image_bytes), save=False)
             file_obj.save()
 
-            log_msg = f"Saved uploaded image as File ID: {file_obj.id}, name: {filename}"
+            log_msg = (
+                f"Saved uploaded image as File ID: {file_obj.id}, name: {filename}"
+            )
             if is_public:
                 log_msg += " (public bot)"
             logger.info(log_msg)
@@ -369,9 +446,7 @@ class FileUploadService:
 
     @staticmethod
     def save_base64_images(
-        images: List[Dict[str, Any]],
-        user=None,
-        is_public: bool = False
+        images: List[Dict[str, Any]], user=None, is_public: bool = False
     ) -> List[File]:
         """
         Save multiple base64-encoded images as File objects.
@@ -387,9 +462,9 @@ class FileUploadService:
         saved_files = []
 
         for image_data in images:
-            preview = image_data.get('preview', '')
-            name = image_data.get('name', '')
-            mime_type = image_data.get('type', 'image/png')
+            preview = image_data.get("preview", "")
+            name = image_data.get("name", "")
+            mime_type = image_data.get("type", "image/png")
 
             if not preview:
                 logger.warning(f"Skipping image with no preview data: {name}")
@@ -400,7 +475,7 @@ class FileUploadService:
                 filename=name,
                 mime_type=mime_type,
                 user=user,
-                is_public=is_public
+                is_public=is_public,
             )
 
             if file_obj:

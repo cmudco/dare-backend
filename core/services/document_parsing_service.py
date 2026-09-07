@@ -30,6 +30,7 @@ from core.services.document_text_sanitizer import (
 )
 from core.services.dtos.parsed_document_dto import ParsedDocument
 from core.services.file_readers import read_bytes_as_text
+from files.constants import DocumentProcessingMode
 from files.models import File
 
 logger = logging.getLogger(__name__)
@@ -66,9 +67,10 @@ class DocumentParsingService:
         last_error: Optional[Exception] = None
         fallback_from: Optional[str] = None
         fallback_reason: Optional[str] = None
-        parsers = self._parsers_for(filename)
+        basic = file.processing_mode == DocumentProcessingMode.BASIC
+        parsers = [LegacyDocumentParser()] if basic else self._parsers_for(filename)
         suffix = filename.lower().rsplit(".", 1)[-1]
-        if self._parsers is None and suffix in DOCLING_EXTENSIONS:
+        if not basic and self._parsers is None and suffix in DOCLING_EXTENSIONS:
             unavailable_reason = get_docling_unavailable_reason()
             if unavailable_reason:
                 fallback_from = "docling"

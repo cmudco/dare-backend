@@ -4,7 +4,7 @@ from rest_framework import serializers
 from config import env
 from core.config.document_parsing import HEADING_LABELS
 
-from ..constants import FileStatus
+from ..constants import DocumentProcessingMode, FileStatus
 from ..models import DocumentOcrRequest, File, FileShare, Folder, Tag
 
 User = get_user_model()
@@ -73,6 +73,13 @@ class VisionModelSelectionSerializer(serializers.Serializer):
     model_identifier = serializers.CharField(allow_blank=True)
 
 
+class FileUploadOptionsSerializer(serializers.Serializer):
+    processing_mode = serializers.ChoiceField(
+        choices=DocumentProcessingMode.choices,
+        default=DocumentProcessingMode.ADVANCED,
+    )
+
+
 class FileSerializer(serializers.ModelSerializer):
     size = serializers.SerializerMethodField()
     user = serializers.PrimaryKeyRelatedField(read_only=True)
@@ -88,6 +95,7 @@ class FileSerializer(serializers.ModelSerializer):
     # Populated via queryset annotations (Exists subquery) to avoid N+1
     is_shared_by_me = serializers.BooleanField(read_only=True, default=False)
     is_shared_publicly = serializers.BooleanField(read_only=True, default=False)
+    processing_mode = serializers.CharField(read_only=True)
     parser_name = serializers.CharField(read_only=True, allow_null=True)
     # Headline counts only. The elements themselves are large, so the full
     # document model is served by the dedicated `structure` endpoint.
@@ -122,6 +130,7 @@ class FileSerializer(serializers.ModelSerializer):
             "page_count",
             "pages_without_text",
             "parser_name",
+            "processing_mode",
             "structure_counts",
             "ocr",
             "created_at",

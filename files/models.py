@@ -13,6 +13,7 @@ from users.constants import VectorDBChoice
 from .constants import (
     ChunkKind,
     DocumentOcrStatus,
+    DocumentProcessingMode,
     FileProcessingStage,
     FileStatus,
     ReferenceKind,
@@ -249,6 +250,14 @@ class File(BaseModel):
         verbose_name=_("Pages Without Text"),
         help_text=_(
             "Pages that yielded no readable text, i.e. scans awaiting transcription"
+        ),
+    )
+    processing_mode = models.CharField(
+        max_length=16,
+        choices=DocumentProcessingMode.choices,
+        default=DocumentProcessingMode.ADVANCED,
+        help_text=_(
+            "Basic extracts text only; Advanced preserves document structure with Docling where supported."
         ),
     )
     parser_name = models.CharField(

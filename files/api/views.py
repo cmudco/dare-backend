@@ -61,6 +61,7 @@ from .serializers import (
     FileSerializer,
     FileShareSerializer,
     FileStructureSerializer,
+    FileUploadOptionsSerializer,
     FolderSerializer,
     TagSerializer,
     VisionModelCandidateSerializer,
@@ -102,6 +103,8 @@ class FileViewSet(viewsets.ModelViewSet):
                 {"error": "No files uploaded."}, status=status.HTTP_400_BAD_REQUEST
             )
 
+        options = FileUploadOptionsSerializer(data=request.data)
+        options.is_valid(raise_exception=True)
         tags_data = request.data.get("tags", "[]")
         tag_ids = FileUploadService.parse_tags(tags_data)
         chunk_size = request.data.get("chunk_size")
@@ -115,6 +118,7 @@ class FileViewSet(viewsets.ModelViewSet):
                 tag_ids,
                 chunk_size=chunk_size,
                 overlap_size=overlap_size,
+                processing_mode=options.validated_data["processing_mode"],
             )
             serializer = self.get_serializer(file_instances, many=True)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -855,6 +859,7 @@ class FileViewSet(viewsets.ModelViewSet):
             file_type=original.file_type,
             storage_backend=StorageBackendChoice.SYFTBOX,
             source_file=original,
+            processing_mode=original.processing_mode,
             is_media=original.is_media,
             media_type=original.media_type,
             status=FileStatus.PROCESSING,

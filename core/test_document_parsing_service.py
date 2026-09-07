@@ -26,7 +26,7 @@ class DocumentParsingServiceTests(SimpleTestCase):
         read_legacy.return_value = "Flat recovery text"
         get_parsers.return_value = [LegacyDocumentParser()]
         service = DocumentParsingService()
-        file = SimpleNamespace(id=62, save=Mock())
+        file = SimpleNamespace(processing_mode="advanced", id=62, save=Mock())
 
         with (
             patch.object(service, "_read_bytes", return_value=b"pdf"),
@@ -54,7 +54,7 @@ class DocumentParsingServiceTests(SimpleTestCase):
         failure = RuntimeError("layout model unavailable")
         docling.parse.side_effect = failure
         service = DocumentParsingService(parsers=[docling, LegacyDocumentParser()])
-        file = SimpleNamespace(id=61, save=Mock())
+        file = SimpleNamespace(processing_mode="advanced", id=61, save=Mock())
 
         with (
             patch.object(service, "_read_bytes", return_value=b"pdf"),
@@ -91,7 +91,7 @@ class DocumentParsingServiceTests(SimpleTestCase):
             parser="docling",
         )
         service = DocumentParsingService(parsers=[parser])
-        file = SimpleNamespace(id=56)
+        file = SimpleNamespace(processing_mode="advanced", id=56)
 
         with (
             patch.object(service, "_read_bytes", return_value=b"pdf"),
@@ -105,7 +105,7 @@ class DocumentParsingServiceTests(SimpleTestCase):
         self.assertEqual(parsed.parser, "docling")
         read_native.assert_called_once_with(b"pdf", "example.pdf")
 
-        persisted = SimpleNamespace(id=56, save=Mock())
+        persisted = SimpleNamespace(processing_mode="advanced", id=56, save=Mock())
         service.persist(persisted, parsed)
         self.assertIn(complete, persisted.extracted_text)
 
@@ -126,7 +126,7 @@ class DocumentParsingServiceTests(SimpleTestCase):
             parser="docling",
         )
         service = DocumentParsingService(parsers=[parser])
-        file = SimpleNamespace(id=57, save=Mock())
+        file = SimpleNamespace(processing_mode="advanced", id=57, save=Mock())
 
         with (
             patch.object(service, "_read_bytes", return_value=b"pdf"),
@@ -154,7 +154,7 @@ class DocumentParsingServiceTests(SimpleTestCase):
             patch.object(service, "_read_bytes", return_value=b"pdf"),
             patch.object(service, "_filename", return_value="scan.pdf"),
         ):
-            parsed = service.parse(SimpleNamespace(id=7))
+            parsed = service.parse(SimpleNamespace(processing_mode="advanced", id=7))
 
         self.assertEqual(parsed.text, "Docling text")
         self.assertEqual(parsed.recovery_text, "")
@@ -175,7 +175,7 @@ class DocumentParsingServiceTests(SimpleTestCase):
             patch.object(service, "_read_bytes", return_value=b"pdf"),
             patch.object(service, "_filename", return_value="damaged.pdf"),
         ):
-            parsed = service.parse(SimpleNamespace(id=58))
+            parsed = service.parse(SimpleNamespace(processing_mode="advanced", id=58))
 
         self.assertEqual(parsed.text, "Docling still recovered the document.")
         self.assertEqual(parsed.recovery_text, "")
@@ -197,7 +197,7 @@ class DocumentParsingServiceTests(SimpleTestCase):
             parser="docling",
         )
         service = DocumentParsingService(parsers=[parser])
-        file = SimpleNamespace(id=59, save=Mock())
+        file = SimpleNamespace(processing_mode="advanced", id=59, save=Mock())
 
         with (
             patch.object(service, "_read_bytes", return_value=b"pdf"),
@@ -236,7 +236,7 @@ class DocumentParsingServiceTests(SimpleTestCase):
             parser="docling",
         )
         service = DocumentParsingService(parsers=[parser])
-        file = SimpleNamespace(id=60, save=Mock())
+        file = SimpleNamespace(processing_mode="advanced", id=60, save=Mock())
 
         with (
             patch.object(service, "_read_bytes", return_value=b"pdf"),

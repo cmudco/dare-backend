@@ -67,3 +67,24 @@ from drf_spectacular.utils import extend_schema, OpenApiParameter
 def export_pdf(self, request, pk=None):
     ...
 ```
+
+## Document upload processing
+
+`POST /api/files/` accepts multipart `files` and matching `names`, plus optional
+`processing_mode`: `basic` or `advanced` (default). Multipart field names use
+underscores; the JSON response exposes the saved choice as `processingMode`.
+Invalid processing modes return HTTP 400 before any file is created.
+
+- **Basic (text only):** uses flat-text extraction and skips Docling layout and
+  visual extraction. Scanned documents without embedded text need Advanced.
+- **Advanced (Docling):** preserves document structure, tables, and images for
+  supported document formats and uses the existing visual enrichment workflow.
+  Plain-text formats use text extraction; existing fallback diagnostics remain
+  visible if Docling cannot parse a document. Standalone media handling is unchanged.
+
+The mode is stored per file and reused when reprocessing. Existing files and
+callers that omit the option retain Advanced behavior. The mode cannot be changed
+with a file metadata PATCH; upload another copy to compare both approaches.
+Apply `files.0024_file_processing_mode` before deploying the new upload UI and
+restart API/worker processes. The stored `parser_name` remains parser provenance
+(`legacy`, `docling`, or another parser), separate from the requested processing mode.
