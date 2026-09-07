@@ -68,6 +68,10 @@ class ParsedElement:
     heading_context: Tuple[Dict[str, Any], ...] = ()
     classifications: Tuple[Dict[str, Any], ...] = ()
     content_sha256: Optional[str] = None
+    level: Optional[int] = None
+    parent_order: Optional[int] = None
+    number: Optional[str] = None
+    chunk_index: Optional[int] = None
 
     @property
     def is_furniture(self) -> bool:
@@ -104,6 +108,42 @@ class ParsedElement:
             payload["classifications"] = list(self.classifications)
         if self.content_sha256:
             payload["content_sha256"] = self.content_sha256
+        if self.level is not None:
+            payload["level"] = self.level
+        if self.parent_order is not None:
+            payload["parent_order"] = self.parent_order
+        if self.number:
+            payload["number"] = self.number
+        if self.chunk_index is not None:
+            payload["chunk_index"] = self.chunk_index
+        return payload
+
+    def to_chunk_dict(self) -> Dict[str, Any]:
+        """Compact lossless form used to rebuild structure-aware chunks.
+
+        The public structure view can cap and trim element previews, but a
+        later re-index must retain every paragraph and complete table. Visual
+        coordinates and classifications are intentionally omitted here.
+        """
+        payload: Dict[str, Any] = {
+            "order": self.order,
+            "kind": self.kind,
+            "label": self.label,
+            "page_no": self.page_no,
+        }
+        for key, value in (
+            ("text", self.text),
+            ("caption", self.caption),
+            ("table_markdown", self.table_markdown),
+        ):
+            if value:
+                payload[key] = value
+        if self.level is not None:
+            payload["level"] = self.level
+        if self.parent_order is not None:
+            payload["parent_order"] = self.parent_order
+        if self.number:
+            payload["number"] = self.number
         return payload
 
 
@@ -139,6 +179,9 @@ class ParsedDocument:
     structure: DocumentStructure = field(default_factory=DocumentStructure)
     parser: str = "unknown"
     duration_seconds: float = 0.0
+    recovery_text: str = ""
+    fallback_from: Optional[str] = None
+    fallback_reason: Optional[str] = None
 
     @property
     def has_text(self) -> bool:
@@ -190,15 +233,46 @@ class ParsedDocument:
 
     def to_dict(self) -> Dict[str, Any]:
         """The document model as stored on ``File.document_model``."""
-        return {
+        stored = list(self.elements[:MAX_STORED_ELEMENTS])
+        stored_orders = {element.order for element in stored}
+        # Keep the row bounded for ordinary body text, but never cut off the
+        # outline or the visual/table anchors that the Map and enrichment
+        # layers depend on. Large books commonly cross the body-text cap long
+        # before their final chapters.
+        stored.extend(
+            element
+            for element in self.elements[MAX_STORED_ELEMENTS:]
+            if element.order not in stored_orders
+            and (
+                element.is_heading
+                or element.kind in {ElementKind.TABLE, ElementKind.PICTURE}
+            )
+        )
+        payload = {
             "parser": self.parser,
             "duration_seconds": round(self.duration_seconds, 3),
             "counts": self.structure.to_dict(),
-            "elements": [
-                element.to_dict() for element in self.elements[:MAX_STORED_ELEMENTS]
-            ],
+            "elements": [element.to_dict() for element in stored],
             "elements_truncated": len(self.elements) > MAX_STORED_ELEMENTS,
+            "elements_stored": len(stored),
         }
+        if self.fallback_from:
+            payload["parser_fallback"] = {
+                "from": self.fallback_from,
+                "reason": self.fallback_reason or "Unknown parser failure",
+            }
+        # ``elements`` is a bounded UI representation: individual text fields
+        # are deliberately shortened by ``ParsedElement.to_dict``.  Chunking
+        # must never rebuild from those previews, even for a small document,
+        # because a 401-character paragraph would otherwise silently lose its
+        # tail on an OCR continuation or re-index.  Keep the complete, compact
+        # chunking representation private in the stored model; serializers
+        # expose only ``elements`` to the frontend.
+        payload["chunk_elements"] = [
+            element.to_chunk_dict() for element in self.elements
+        ]
+        payload["chunk_elements_lossless"] = True
+        return payload
 
     @classmethod
     def from_persisted(
@@ -220,8 +294,18 @@ class ParsedDocument:
             content_chars=int(counts.get("content_chars") or 0),
         )
 
+        display_by_order = {
+            int(item.get("order") or 0): item for item in payload.get("elements") or []
+        }
         elements = []
-        for item in payload.get("elements") or []:
+        for chunk_item in payload.get("chunk_elements") or []:
+            # The compact chunk representation owns complete text.  Merge in
+            # preview-only annotations such as bounding boxes, classifications
+            # and the last written chunk index when they are available.
+            item = {
+                **display_by_order.get(int(chunk_item.get("order") or 0), {}),
+                **chunk_item,
+            }
             bbox_payload = item.get("bbox") or None
             bbox = None
             if bbox_payload:
@@ -250,6 +334,20 @@ class ParsedDocument:
                     heading_context=tuple(item.get("heading_context") or ()),
                     classifications=tuple(item.get("classifications") or ()),
                     content_sha256=item.get("content_sha256"),
+                    level=(
+                        int(item["level"]) if item.get("level") is not None else None
+                    ),
+                    parent_order=(
+                        int(item["parent_order"])
+                        if item.get("parent_order") is not None
+                        else None
+                    ),
+                    number=item.get("number") or None,
+                    chunk_index=(
+                        int(item["chunk_index"])
+                        if item.get("chunk_index") is not None
+                        else None
+                    ),
                 )
             )
 
@@ -259,6 +357,8 @@ class ParsedDocument:
             structure=structure,
             parser=str(payload.get("parser") or "unknown"),
             duration_seconds=float(payload.get("duration_seconds") or 0),
+            fallback_from=(payload.get("parser_fallback") or {}).get("from"),
+            fallback_reason=(payload.get("parser_fallback") or {}).get("reason"),
         )
 
 

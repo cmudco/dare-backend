@@ -27,6 +27,7 @@ from core.services.document_parsers.constants import (
     NOTEBOOK_EXTENSIONS,
     PARSER_NOTEBOOK,
 )
+from core.services.document_parsers.headings import HeadingStack, heading_number
 from core.services.dtos.parsed_document_dto import (
     DocumentStructure,
     ParsedDocument,
@@ -36,7 +37,7 @@ from core.services.dtos.parsed_document_dto import (
 logger = logging.getLogger(__name__)
 
 ANSI_PATTERN = re.compile(r"\x1b\[[0-9;]*[a-zA-Z]")
-HEADING_LINE_PATTERN = re.compile(r"^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$")
+HEADING_LINE_PATTERN = re.compile(r"^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$")
 FENCE_PATTERN = re.compile(r"^\s{0,3}(```|~~~)")
 DEFAULT_LANGUAGE = "python"
 TRUNCATION_MARKER = "\n... output truncated"
@@ -101,6 +102,7 @@ def _walk(
     pictures = 0
     section: Optional[str] = None
     order = 0
+    stack = HeadingStack()
 
     for cell in cells:
         if not isinstance(cell, dict):
@@ -112,9 +114,16 @@ def _walk(
             continue
 
         if cell_type == "markdown":
-            for heading, text in _split_markdown(source):
+            for heading, level, text in _split_markdown(source):
                 section = heading or section
                 order += 1
+                parent_order = stack.current_order
+                element_level: Optional[int] = None
+                number: Optional[str] = None
+                if heading:
+                    element_level = level
+                    number = heading_number(heading)
+                    parent_order = stack.push(level, order, heading)
                 elements.append(
                     ParsedElement(
                         order=order,
@@ -126,6 +135,9 @@ def _walk(
                         ),
                         text=text,
                         section=section,
+                        level=element_level,
+                        parent_order=parent_order,
+                        number=number,
                     )
                 )
             blocks.append(source)
@@ -142,6 +154,7 @@ def _walk(
                 label=ElementLabel.CODE,
                 text=source,
                 section=section,
+                parent_order=stack.current_order,
             )
         )
         blocks.append(f"```{language}\n{source}\n```")
@@ -157,6 +170,7 @@ def _walk(
                     label=ElementLabel.CODE_OUTPUT,
                     text=output,
                     section=section,
+                    parent_order=stack.current_order,
                 )
             )
             blocks.append(f"Output:\n\n```\n{output}\n```")
@@ -219,7 +233,7 @@ def _language(notebook: Dict[str, Any]) -> str:
     return str(name).lower() if name else DEFAULT_LANGUAGE
 
 
-def _split_markdown(source: str) -> List[Tuple[Optional[str], str]]:
+def _split_markdown(source: str) -> List[Tuple[Optional[str], int, str]]:
     """Split a markdown cell into heading and prose segments.
 
     A cell is not an outline entry: lab notebooks routinely open with a title
@@ -227,7 +241,7 @@ def _split_markdown(source: str) -> List[Tuple[Optional[str], str]]:
     heading makes the document outline unreadable. Fenced code is skipped so a
     ``# comment`` line inside an example is not mistaken for a heading.
     """
-    segments: List[Tuple[Optional[str], str]] = []
+    segments: List[Tuple[Optional[str], int, str]] = []
     prose: List[str] = []
     in_fence = False
 
@@ -235,7 +249,7 @@ def _split_markdown(source: str) -> List[Tuple[Optional[str], str]]:
         text = "\n".join(prose).strip()
         prose.clear()
         if text:
-            segments.append((None, text))
+            segments.append((None, 0, text))
 
     for line in source.splitlines():
         if FENCE_PATTERN.match(line):
@@ -246,8 +260,8 @@ def _split_markdown(source: str) -> List[Tuple[Optional[str], str]]:
         match = None if in_fence else HEADING_LINE_PATTERN.match(line)
         if match:
             flush()
-            heading = match.group(1).strip()
-            segments.append((heading, heading))
+            heading = match.group(2).strip()
+            segments.append((heading, len(match.group(1)), heading))
         else:
             prose.append(line)
 

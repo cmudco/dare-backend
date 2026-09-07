@@ -3,33 +3,68 @@ from django.db import models
 APP_NAME = "files"
 ALLOWED_FILES = [
     # Common extensions
-    'docx', 'doc', 'pdf', 'txt', 'md', 'markdown', 'x-markdown', 'json',
-    'csv', 'xls', 'xlsx', 'ipynb', 'x-ipynb+json',
-    'pptx', 'ppt',
-    'jpg', 'jpeg', 'png', 'gif', 'bmp', 'tiff', 'webp',
-
+    "docx",
+    "doc",
+    "pdf",
+    "txt",
+    "md",
+    "markdown",
+    "x-markdown",
+    "json",
+    "csv",
+    "xls",
+    "xlsx",
+    "ipynb",
+    "x-ipynb+json",
+    "pptx",
+    "ppt",
+    "jpg",
+    "jpeg",
+    "png",
+    "gif",
+    "bmp",
+    "tiff",
+    "webp",
     # Video extensions (no vectorization - media files only)
-    'mp4', 'webm', 'quicktime', 'x-msvideo', 'mpeg', 'ogg',
-
+    "mp4",
+    "webm",
+    "quicktime",
+    "x-msvideo",
+    "mpeg",
+    "ogg",
     # Audio extensions (no vectorization - media files only)
-    'mp3', 'mpeg', 'wav', 'x-wav', 'x-m4a', 'flac', 'aac', 'x-ms-wma', 'opus',
-
+    "mp3",
+    "mpeg",
+    "wav",
+    "x-wav",
+    "x-m4a",
+    "flac",
+    "aac",
+    "x-ms-wma",
+    "opus",
     # MIME suffixes
-    'plain', 'rtf', 'html', 'xml',
-    'vnd.openxmlformats-officedocument.wordprocessingml.document',
-    'vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    'vnd.ms-excel',
-
+    "plain",
+    "rtf",
+    "html",
+    "xml",
+    "vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "vnd.ms-excel",
     # Full MIME types
-    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    'application/vnd.ms-excel',
-    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-    'application/vnd.ms-powerpoint',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    'application/msword',
-    'application/pdf',
-    'text/plain', 'text/markdown', 'text/html', 'text/xml', 'text/csv'
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "application/vnd.ms-powerpoint",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/msword",
+    "application/pdf",
+    "text/plain",
+    "text/markdown",
+    "text/html",
+    "text/xml",
+    "text/csv",
 ]
+
 
 class FileStatus(models.IntegerChoices):
     PROCESSING = 0, "Processing"
@@ -56,3 +91,20 @@ class FileProcessingStage(models.TextChoices):
     EMBEDDING = "embedding", "Creating embeddings"
     INDEXING = "indexing", "Storing search index"
     COMPLETE = "complete", "Complete"
+
+
+class ChunkKind(models.TextChoices):
+    TEXT = "text", "Text"
+    TABLE = "table", "Table"
+    FIGURE = "figure", "Figure"
+    PAGE_TRANSCRIPTION = "page_transcription", "Page transcription"
+    FLAT = "flat", "Flat text"
+
+
+class ReferenceKind(models.TextChoices):
+    SECTION = "section", "Section"
+    FIGURE = "figure", "Figure"
+    TABLE = "table", "Table"
+    CHAPTER = "chapter", "Chapter"
+    APPENDIX = "appendix", "Appendix"
+    PAGE = "page", "Page"

@@ -1,10 +1,4 @@
-"""Query analysis stage (audit mistake #4).
-
-A fast, cheap LLM turns a raw question into a structured QueryPlan — intent
-(which gates conditional MMR), exact keywords (for the BM25 leg), a cleaned
-rewrite, and a HyDE passage. Any failure returns ``None`` so retrieval always
-proceeds on the raw query.
-"""
+"""Build an optional retrieval plan from a user's question."""
 
 import logging
 from typing import Literal, Optional

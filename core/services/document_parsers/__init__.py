@@ -9,15 +9,18 @@ turn so a Docling failure degrades to flat text rather than failing the upload.
 import logging
 from typing import List, Optional
 
+import sentry_sdk
+
 from core.services.document_parsers.base import BaseDocumentParser
-from core.services.document_parsers.constants import (DOCLING_EXTENSIONS,
-                                                      NOTEBOOK_EXTENSIONS,
-                                                      PARSER_DOCLING,
-                                                      PARSER_LEGACY,
-                                                      PARSER_NOTEBOOK)
+from core.services.document_parsers.constants import (
+    DOCLING_EXTENSIONS,
+    NOTEBOOK_EXTENSIONS,
+    PARSER_DOCLING,
+    PARSER_LEGACY,
+    PARSER_NOTEBOOK,
+)
 from core.services.document_parsers.legacy_parser import LegacyDocumentParser
-from core.services.document_parsers.notebook_parser import \
-    NotebookDocumentParser
+from core.services.document_parsers.notebook_parser import NotebookDocumentParser
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +28,7 @@ logger = logging.getLogger(__name__)
 # converter is reused across files.
 _docling_parser: Optional[BaseDocumentParser] = None
 _docling_unavailable = False
+_docling_unavailable_reason: Optional[str] = None
 
 
 def get_docling_parser() -> Optional[BaseDocumentParser]:
@@ -35,23 +39,29 @@ def get_docling_parser() -> Optional[BaseDocumentParser]:
     paying in an RQ worker that is about to parse a document and wasteful in
     an ASGI process that only ever reads ``File.extracted_text``.
     """
-    global _docling_parser, _docling_unavailable
+    global _docling_parser, _docling_unavailable, _docling_unavailable_reason
 
     if _docling_parser is not None or _docling_unavailable:
         return _docling_parser
 
     try:
-        from core.services.document_parsers.docling_parser import \
-            DoclingDocumentParser
+        from core.services.document_parsers.docling_parser import DoclingDocumentParser
 
         _docling_parser = DoclingDocumentParser()
     except Exception as error:
         _docling_unavailable = True
+        _docling_unavailable_reason = str(error)
+        sentry_sdk.capture_exception(error)
         logger.warning(
             f"Docling is unavailable, falling back to flat text extraction: {error}"
         )
 
     return _docling_parser
+
+
+def get_docling_unavailable_reason() -> Optional[str]:
+    """Why this worker could not construct Docling, if startup failed."""
+    return _docling_unavailable_reason
 
 
 def get_document_parsers(filename: str) -> List[BaseDocumentParser]:
@@ -76,9 +86,10 @@ def get_document_parsers(filename: str) -> List[BaseDocumentParser]:
 
 def reset_parser_cache() -> None:
     """Drop the cached Docling parser. Used by tests and management commands."""
-    global _docling_parser, _docling_unavailable
+    global _docling_parser, _docling_unavailable, _docling_unavailable_reason
     _docling_parser = None
     _docling_unavailable = False
+    _docling_unavailable_reason = None
 
 
 __all__ = [
@@ -91,6 +102,7 @@ __all__ = [
     "PARSER_LEGACY",
     "PARSER_NOTEBOOK",
     "get_docling_parser",
+    "get_docling_unavailable_reason",
     "get_document_parsers",
     "reset_parser_cache",
 ]

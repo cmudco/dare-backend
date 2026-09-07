@@ -111,7 +111,7 @@ class GeminiService:
 
             # Step 2: Create streaming response
             response_stream = await self._create_stream(
-                prepared_messages, max_tokens, temperature, tools
+                prepared_messages, max_tokens, temperature, tools, effort
             )
 
             # Step 3: Process and yield stream events
@@ -279,6 +279,7 @@ class GeminiService:
         max_tokens: int,
         temperature: float,
         tools: Optional[List[Dict]],
+        effort: Optional[str] = None,
     ):
         """
         Create Gemini streaming response using native async interface.
@@ -300,7 +301,7 @@ class GeminiService:
         # parts, replacing the legacy role-prefixed string flattening.
         system_instruction, contents = GeminiMessageConverter.convert(messages)
         config = self._build_generation_config(
-            max_tokens, temperature, tools, system_instruction
+            max_tokens, temperature, tools, system_instruction, effort
         )
 
         # Use native async interface for true real-time streaming
@@ -316,6 +317,7 @@ class GeminiService:
         temperature: float,
         tools: Optional[List[Dict]],
         system_instruction: Optional[str] = None,
+        effort: Optional[str] = None,
     ) -> types.GenerateContentConfig:
         """
         Build Gemini generation configuration.
@@ -335,6 +337,15 @@ class GeminiService:
             config_kwargs["temperature"] = temperature
         if system_instruction:
             config_kwargs["system_instruction"] = system_instruction
+        if self.model_identifier.startswith("gemini-3"):
+            thinking_level = self.capabilities.resolve_effort(effort)
+            if thinking_level is not None:
+                # Older clients can retain effort levels from other providers.
+                if thinking_level in {"xhigh", "max"}:
+                    thinking_level = "high"
+                config_kwargs["thinking_config"] = types.ThinkingConfig(
+                    thinking_level=thinking_level.upper()
+                )
         config = types.GenerateContentConfig(**config_kwargs)
 
         native_tools = self._build_native_tools(tools)

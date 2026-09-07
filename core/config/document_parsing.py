@@ -18,12 +18,10 @@ class ElementKind:
     PICTURE = "picture"
 
 
-# Figure enrichment policy: the 5% floor and skipped classes were validated on the sample corpus.
-MIN_PICTURE_AREA_RATIO = 0.05
+# Skip only confidently decorative figures; size alone does not establish relevance.
+PICTURE_SKIP_CONFIDENCE = 0.9
 PICTURE_CLASSIFICATION_TOP_K = 5
-SKIPPED_PICTURE_CLASSES = frozenset(
-    {"logo", "icon", "stamp", "page_thumbnail", "qr_code", "bar_code"}
-)
+SKIPPED_PICTURE_CLASSES = frozenset({"logo", "icon", "page_thumbnail"})
 
 # Crop context: heading_context stores candidates because Docling mislabels bylines as headings.
 HEADING_CONTEXT_LIMIT = 3
@@ -51,9 +49,7 @@ HEADING_LABELS = frozenset({ElementLabel.TITLE, ElementLabel.SECTION_HEADER})
 # Running heads, footers and page numbers. Repeated on every page and carrying
 # no content, so they are dropped before chunking instead of polluting every
 # chunk that straddles a page break.
-FURNITURE_LABELS = frozenset(
-    {ElementLabel.PAGE_HEADER, ElementLabel.PAGE_FOOTER, ElementLabel.FOOTNOTE}
-)
+FURNITURE_LABELS = frozenset({ElementLabel.PAGE_HEADER, ElementLabel.PAGE_FOOTER})
 
 # A page yielding fewer characters than this is treated as having no text at
 # all. Scanned pages routinely leak a stray glyph or two from a stamp or a

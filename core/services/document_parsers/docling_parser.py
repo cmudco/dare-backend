@@ -9,6 +9,7 @@ import io
 import logging
 import re
 import time
+from dataclasses import replace
 from typing import Any, Dict, List, Optional, Tuple
 
 from docling.datamodel.base_models import DocumentStream, InputFormat
@@ -24,6 +25,11 @@ from core.config.document_parsing import (
 )
 from core.services.document_parsers.base import BaseDocumentParser
 from core.services.document_parsers.constants import DOCLING_EXTENSIONS, PARSER_DOCLING
+from core.services.document_parsers.headings import (
+    HeadingStack,
+    heading_number,
+    infer_flat_chapter_hierarchy,
+)
 from core.services.dtos.parsed_document_dto import (
     BoundingBox,
     DocumentStructure,
@@ -104,15 +110,28 @@ class DoclingDocumentParser(BaseDocumentParser):
         elements: List[ParsedElement] = []
         section: Optional[str] = None
         headings: List[Dict[str, Any]] = []
+        stack = HeadingStack()
         order = 0
 
         for item, tree_depth in document.iterate_items():
             order += 1
             label = str(getattr(item, "label", "") or ElementLabel.TEXT)
             page_no, bbox = self._provenance(item, document)
+            text = (getattr(item, "text", "") or "").strip()
+            level: Optional[int] = None
+            number: Optional[str] = None
+            parent_order = stack.current_order
 
             if label in (ElementLabel.TITLE, ElementLabel.SECTION_HEADER):
-                section = (getattr(item, "text", "") or "").strip() or section
+                level = (
+                    0
+                    if label == ElementLabel.TITLE
+                    else int(getattr(item, "level", 1) or 1)
+                )
+                number = heading_number(text)
+                if text:
+                    parent_order = stack.push(level, order, text)
+                section = text or section
                 if section:
                     headings.append(
                         {"order": order, "page_no": page_no, "text": section}
@@ -125,7 +144,7 @@ class DoclingDocumentParser(BaseDocumentParser):
                     kind=kind,
                     label=label,
                     page_no=page_no,
-                    text=(getattr(item, "text", "") or "").strip(),
+                    text=text,
                     section=section,
                     caption=self._caption_of(item, document),
                     table_markdown=self._table_markdown(item, document, kind),
@@ -134,10 +153,57 @@ class DoclingDocumentParser(BaseDocumentParser):
                     heading_context=tuple(headings[-HEADING_CONTEXT_LIMIT:]),
                     classifications=self._classifications_of(item),
                     content_sha256=self._content_sha256(item, document, kind),
+                    level=level,
+                    parent_order=parent_order,
+                    number=number,
                 )
             )
 
-        return elements
+        return self._repair_flat_heading_hierarchy(elements)
+
+    @staticmethod
+    def _repair_flat_heading_hierarchy(
+        elements: List[ParsedElement],
+    ) -> List[ParsedElement]:
+        """Recover hierarchy when Docling flattened a numbered chapter."""
+        headings = [
+            (element.order, element.text, element.level or 1, element.label)
+            for element in elements
+            if element.is_heading and element.text
+        ]
+        inferred = infer_flat_chapter_hierarchy(headings)
+        if not inferred:
+            return elements
+
+        by_order = {element.order: element for element in elements}
+        stack = HeadingStack()
+        repaired: List[ParsedElement] = []
+        for element in elements:
+            level = element.level
+            if element.is_heading and element.text:
+                level, parent_order = inferred[element.order]
+                stack.push(level, element.order, element.text)
+            else:
+                parent_order = stack.current_order
+
+            heading_context = tuple(
+                {
+                    "order": order,
+                    "page_no": by_order[order].page_no,
+                    "text": text,
+                }
+                for _, order, text in stack.entries[-HEADING_CONTEXT_LIMIT:]
+            )
+            repaired.append(
+                replace(
+                    element,
+                    level=level,
+                    parent_order=parent_order,
+                    section=stack.path[-1] if stack.path else element.section,
+                    heading_context=heading_context,
+                )
+            )
+        return repaired
 
     @staticmethod
     def _kind_of(item: Any) -> str:

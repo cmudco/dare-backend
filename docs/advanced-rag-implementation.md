@@ -7,7 +7,7 @@
 ## 0. TL;DR
 
 - We built the **Track A "Precision Retrofit" retrieval pipeline** end-to-end and verified each stage on real data.
-- The audit scored us **~2/10** on its production-mistakes checklist. We're now at **~9/10** — the one remaining item is reference resolution (a second-pass parsing feature).
+- The audit scored us **~2/10** on its production-mistakes checklist. All **10/10 checklist capabilities** are now present, including Docling-backed structure-aware chunks and one-hop internal-reference resolution. This is a capability score, not a claim that retrieval quality is perfect.
 - Headline proof: for the query `pension certificate 366,181`, the chunk that literally holds `Ctf. # 366,181` moved from **rank #5 (dense, today's baseline) → #2 (hybrid) → #1 (after local reranking)**.
 - Everything new is **flag-gated and lazy**, with safe fallbacks. With flags off, behaviour is identical to before. Query-analysis cost follows the user's selected background model and wallet.
 - Chunking was sized to **match CMU's curated corpus (~350 tokens/chunk)**, not a generic textbook number.
@@ -34,6 +34,7 @@ flowchart LR
 |---|---|---|
 | Query analysis | Turns a raw question into `intent` + exact `keywords` + a HyDE passage. `intent` gates MMR. | enabled in Advanced RAG |
 | Hybrid retrieve | Runs keyword (BM25) **and** vector search, fuses with Reciprocal Rank Fusion. Catches exact terms vector search misses. | **landed (default)** |
+| Graph expand | Follows stored in-document pointers (section, figure, table, chapter, appendix, page) one hop from each document hit and adds the targets to the candidate pool with the pointer recorded. | **landed (document path, flag-gated)** |
 | Rerank | A cross-encoder reads (query, chunk) together and re-sorts; the true answer rises to the top. | enabled in Advanced RAG |
 | Conditional MMR | Diversifies results — **only for exploratory queries**; precise lookups are left alone. | auto (gated on intent) |
 | Grounding | Flags low retrieval confidence so the model can say "not in the sources." | auto (when reranker on) |
@@ -52,12 +53,12 @@ flowchart LR
 | 5 | Embeddings-only (misses exact terms) | ❌ | ✅ BM25 keyword leg |
 | 6 | Vector-only retrieval | ❌ | ✅ hybrid + RRF |
 | 7 | Chunk granularity | ⚠ | ✅ rerank + conditional MMR |
-| 8 | Unresolved internal references | ❌ | ❌ *(parsing track)* |
+| 8 | Unresolved internal references | ❌ | ✅ stored pointers + one-hop expand |
 | 9 | No answer verification (chat path) | ❌ | ✅ grounding flag |
 | 10 | No absence proof (chat path) | ❌ | ✅ "not in sources" threshold |
 | — | Citations saved but not shown to model | ❌ | ✅ inline `[S#]` tags |
 
-**Score: 2/10 → 9/10.** The one open item (#8, reference resolution) needs a second retrieval pass — a feature, not a parsing fix.
+**Capability score: 2/10 → 10/10.** Item #8 is implemented by storing internal pointers during ingest and following a resolved target one hop during Advanced RAG retrieval. Corpus-specific quality still depends on the document exposing trustworthy headings, bookmarks, captions, or page anchors.
 
 ### The parsing upgrade (mistake #1), verified
 
@@ -113,7 +114,7 @@ Measured locally on the M1 Pro (MPS), reranking a 20-candidate pool:
 | Model | params | latency / query | scores | both put answer at |
 |---|---|---|---|---|
 | `ms-marco-MiniLM-L-6-v2` | 22M | **~200–500 ms** (first call ~2.8 s = one-time MPS warmup) | raw logits | **#1** |
-| `bge-reranker-v2-m3` | 568M | ~1.7–3.3 s (avg 2.3 s) | **calibrated 0–1** (0.914, 0.962) | **#1** |
+| `bge-reranker-v2-m3` | 568M | ~1.7–3.3 s (avg 2.3 s) | **normalized 0–1** (0.914, 0.962) | **#1** |
 
 Both are **$0, fully local**. MiniLM is the sub-500 ms option currently used for local testing; its scores are raw logits, so they are useful for ranking but not as percentages. `bge` is the heavier quality/thresholding option if deployment latency allows it (optimise with fp16 / smaller pool / server GPU).
 
@@ -151,7 +152,7 @@ We bumped the document path from 500 chars (~96 tok) to **1,500 chars / 180 over
 - **MMR must be conditional.** Blanket MMR *causes* the quality dips. It belongs behind an intent gate, full stop.
 - **Match the data, not the textbook.** CMU curated this archive and landed on ~350 tokens/chunk; mirroring that is more defensible than chasing a generic 800–1000.
 - **Advanced mode is the product switch.** Query analysis, HyDE/rewrite retrieval input, tracing, reranking, and grounding run when the conversation is set to Advanced RAG. Failures degrade safely to the best available retrieval output.
-- **Advanced mode covers BOTH retrieval paths.** Uploaded documents run through the same pipeline as shared libraries (a `DocumentRetriever` behind the same `build_pipeline` factory); the legacy hybrid search remains the naive mode and the workflow-step path. A message that searches documents *and* libraries gets one trace per source (`{"traces": [...]}`); snippets carry the calibrated rerank score. Verified: verbatim chunk paste on an uploaded file → rerank 0.9868, grounded. Caveat: cross-encoders score markdown-table answers lower than prose (a correct table hit scored 0.22 on a natural-language question — still ranked #1 and cited, but below the 0.3 grounding note threshold).
+- **Advanced mode covers BOTH retrieval paths.** Uploaded documents run through the same pipeline as shared libraries (a `DocumentRetriever` behind the same `build_pipeline` factory); the legacy hybrid search remains the naive mode and the workflow-step path. A message that searches documents *and* libraries gets one trace per source (`{"traces": [...]}`); snippets carry the rerank relevance score. Verified: verbatim chunk paste on an uploaded file → rerank 0.9868, grounded. Caveat: cross-encoders score markdown-table answers lower than prose (a correct table hit scored 0.22 on a natural-language question — still ranked #1 and cited, but below the 0.3 grounding note threshold).
 - **Reranking stays lazy.** `torch` / `sentence-transformers` load only when advanced retrieval actually runs.
 
 ---
@@ -201,7 +202,10 @@ We bumped the document path from 500 chars (~96 tok) to **1,500 chars / 180 over
 
 ## 7. What's open
 
-- **#8 — reference resolution.** A document says "see Section 4.2"; we retrieve the pointer but not the target. Needs a second resolution pass.
+- **Reference-quality evaluation.** The #8 capability is landed, but resolution quality should be measured on each corpus. Docling headings are the primary anchors; native PDF bookmarks are a fallback when visible headings omit their numbers.
+- **Parser noise.** Docling can occasionally label bylines or photo credits as headings. The stored structure remains inspectable in the Map tab, but a future heading-confidence layer would improve noisy newsletters.
+- **Flattened chapter hierarchy.** When Docling reports every section at level 1 but the text contains both `Chapter N` and dotted headings such as `1.5`, a conservative fallback reconstructs the numbered hierarchy. It does not override documents where Docling supplied more than one useful section level.
+- **Cross-document aliases.** Deterministic identifiers link reliably, while person-name variants still need an alias strategy before they should be treated as equivalent.
 
 **Idea for existing docs:** rather than bulk re-embedding, expose a per-document **"re-parse / re-index"** action (or let the user simply re-upload). The current small-chunk docs aren't a big deal — they upgrade naturally as files are re-processed, and new uploads now get both the PyMuPDF parse and the CMU-matched chunking.
 
@@ -229,3 +233,88 @@ venv/bin/python -m compileall core/services/rag core/services/llm_helpers
 venv/bin/python manage.py import_library --library civil-war-pensions \
   --backend weaviate --dry-run
 ```
+
+## 9. Document map (rung 0 and 1 of the graph track)
+
+Chunks are now cut on Docling elements instead of flat text, and every chunk
+knows its pages, nearest heading and heading path (`DocumentChunk`). Pointers
+inside a document are extracted with regexes and resolved against headings,
+captions and pages (`DocumentReference`); unresolved pointers are kept so the
+resolution rate is visible. At query time the expand stage follows resolved
+pointers one hop, the reranker judges the pulled-in chunks like any other, and
+the citation header says `[S2] book.pdf · p. 204 · 7.2 Collisions · followed
+"section 7.2" from [S1]`. A followed pointer is eligible only when its source survives selection. It
+can displace direct evidence only when the query names that exact reference
+or its reranker score is stronger. The final token budget determines which
+passages are actually cited. `references_resolved` counts pointers whose target heading
+or chunk was identified; only those with a target chunk can be followed. The
+file viewer's Map tab renders the section tree, chunks and references from
+`GET /api/files/{id}/map/`. Existing files
+gain map rows on their next reprocess: `python manage.py reprocess_documents
+--user-id N`, which stages replacement vectors and map rows before publishing
+the new generation. Files whose OCR finished or partly finished are rebuilt
+from the stored transcriptions without re-running vision; a scanned PDF that
+never went through OCR approval has no transcription to rebuild from, so it
+retains its old index and pauses for approval like a first-time upload.
+Design:
+`docs/superpowers/specs/2026-09-02-graph-reference-resolution-design.md`.
+
+Every chunk also gets entity mentions from two local, free lanes at ingest
+(`core/services/rag/entity_extractor.py`, patterns in `core/config/entities.py`):
+a regex lane for identifiers (case numbers, certificate numbers, URLs, dates)
+and a GLiNER named-entity lane (`urchade/gliner_small-v2.1`, labels person,
+organization, location, law, identifier, threshold 0.5), stored as
+`DocumentEntity` rows (chunk, key, kind, raw text, mention count). During
+Advanced RAG the expand stage runs the pointer hop above first, then, once at
+least two files are selected, follows the hit's rarest shared entity into one
+chunk of another selected file. Rarity is weighted `log(N / df)` over the
+user's whole indexed file set, not just the selection: an entity is
+boilerplate and never links once the user has four or more indexed files and
+the entity appears in more than sixty percent of them; dates never link; and
+a link still needs the entity to occur in at least two of the *selected*
+files. An entity hop is anchored directly after its source in the ranking,
+the same pure reorder as a pointer hop, and its citation header reads `[S4]
+Abbs Wilkins Declaration.pdf · p. 2 · shares "Wilkins Abbs" with [S1]`, while
+a pointer hop still reads `followed "section 2.1" from [S1]`; the retrieval
+trace's expand entries carry `viaKind` — the hop's own kind, so `entity` for
+an entity hop and the pointer's own kind (`section`, `chapter`, `figure`,
+`table`, …) for a pointer hop — so the frontend can word the chip. The Map tab's chunk detail lists `Names & identifiers`
+pills per chunk — kind, occurrence count, and `also in N documents` when the
+key recurs elsewhere in the user's library. Three flags gate this:
+`RAG_ENTITY_NER_ENABLED` turns the GLiNER lane off while identifiers keep
+running, `RAG_ENTITY_MODEL` picks the checkpoint (loaded lazily on first
+use), and `RAG_ENTITY_HOPS_ENABLED` turns off the cross-file hop without
+touching ingest. Design:
+[`2026-09-02-cross-document-links-design.md`](./superpowers/specs/2026-09-02-cross-document-links-design.md);
+spike with the extractor comparison:
+[`2026-09-02-entity-extraction-spike.md`](./superpowers/spikes/2026-09-02-entity-extraction-spike.md).
+
+
+### Evidence-integrity fixes (September 2026)
+
+Agentic `search_documents` calls the same Advanced RAG helpers, including the
+billing identity separately from the file owner. Search errors are reported as
+errors or partial results. Citation numbers are unique across searches in one
+turn; `finalEvidence` records exactly the budget-selected snippets and their
+citation IDs. Older traces have no final-evidence list and the UI says so.
+The confidence indicator describes retrieval relevance, not verified answer
+correctness. It uses the best reranker score among the evidence actually sent.
+
+Footnotes remain searchable. Recovery coverage is measured against emitted
+chunks, so discarded text is recovered. Small images are eligible for vision;
+only confidently decorative, uncaptioned figures are skipped. Headings already
+indexed with their body do not become duplicate recovery hits. OCR and figure
+uncertainty remains visible in the evidence. MMR requests actual candidate
+vectors and reports a skip if they are unavailable. Its relevance term retains
+the reranker scores instead of replacing them with dense similarity.
+
+Index replacement uses opaque generation keys, an ingestion lease, and a
+transactional switch of the active key and map rows. Failed embedding/indexing
+retains the previous generation. A failed cleanup leaves an unsearched retired
+index and a log entry. Existing files with no generation retain their legacy
+keys until reprocessed.
+
+Rollout: apply migration `files.0023`, then update all API and worker processes
+before reprocessing files. Drain old ingestion workers during this transition.
+Old code cannot read generation keys after publication; rollback requires
+coordinating readers/workers and restoring or rebuilding legacy indexes.

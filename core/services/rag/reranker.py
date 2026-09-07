@@ -1,10 +1,4 @@
-"""Rerank stage (audit mistake #7) — the highest precision-per-dollar lever.
-
-A cross-encoder reads (query, chunk) together and scores true relevance, then we
-keep the best few. Fully local (no API). The torch/sentence-transformers import
-is lazy so the backend only loads it when advanced retrieval runs. Any failure is
-a safe no-op (original order kept).
-"""
+"""Rerank document candidates with a local cross-encoder."""
 
 import logging
 from dataclasses import replace
@@ -51,7 +45,7 @@ class Reranker:
             return chunks[:top_k]
         try:
             model = self._get_model()
-            pairs = [(query, (c.text or "")[:2000]) for c in chunks]
+            pairs = [(query, (c.searchable_text or "")[:2000]) for c in chunks]
             scores = model.predict(pairs)
             ranked = sorted(zip(chunks, scores), key=lambda pair: pair[1], reverse=True)
             return [

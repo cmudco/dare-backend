@@ -12,6 +12,7 @@ from typing import Any, Dict, Optional
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
+from core.services.document_text_sanitizer import sanitize_document_text
 from files.constants import FileProcessingStage
 from files.models import File
 
@@ -48,7 +49,9 @@ def _duration_seconds(started_at: Optional[str], completed_at: str) -> float:
 
 def _json_value(value: Any) -> Any:
     """Keep stage details JSON-safe without hiding useful scalar metrics."""
-    if value is None or isinstance(value, (str, int, float, bool)):
+    if isinstance(value, str):
+        return sanitize_document_text(value)
+    if value is None or isinstance(value, (int, float, bool)):
         return value
     if isinstance(value, datetime):
         return value.isoformat()
@@ -56,7 +59,7 @@ def _json_value(value: Any) -> Any:
         return {str(key): _json_value(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
         return [_json_value(item) for item in value]
-    return str(value)
+    return sanitize_document_text(str(value))
 
 
 class FileProcessingJourney:
@@ -136,7 +139,7 @@ class FileProcessingJourney:
                 "duration_seconds": _duration_seconds(
                     attempt.get("started_at"), completed_at
                 ),
-                "error": str(error)[:MAX_ERROR_LENGTH],
+                "error": sanitize_document_text(str(error))[:MAX_ERROR_LENGTH],
             }
         )
         self._persist()
@@ -174,7 +177,7 @@ class FileProcessingJourney:
             }
         )
         if error is not None:
-            stage["error"] = str(error)[:MAX_ERROR_LENGTH]
+            stage["error"] = sanitize_document_text(str(error))[:MAX_ERROR_LENGTH]
         self._persist()
 
     def _require_attempt(self) -> Dict[str, Any]:

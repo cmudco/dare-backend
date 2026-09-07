@@ -22,7 +22,11 @@ from core.services.vector_service import get_vector_service_async
 from libraries.services.library_search import search_libraries
 
 from .db_helpers import get_files_from_folders, get_files_from_tags
-from .retrieval_targets import ChatRetrievalTarget, WorkflowRetrievalTarget
+from .retrieval_targets import (
+    ChatRetrievalTarget,
+    TransientRetrievalTarget,
+    WorkflowRetrievalTarget,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +127,7 @@ async def add_semantic_context_to_messages(
     # Fresh turn: documents and libraries each save their own trace below, and
     # save_trace appends to whatever is on the host — so clear any trace left
     # from a previous generation of this turn first.
-    target = None
+    target = TransientRetrievalTarget()
     if message_obj is not None:
         target = ChatRetrievalTarget(message_obj)
     elif workflow_run_step_obj is not None:
@@ -176,6 +180,7 @@ async def add_semantic_context_to_messages(
                 message_obj=message_obj,
                 workflow_run_step_obj=workflow_run_step_obj,
                 failures=failures,
+                citations=target.citations,
             )
 
         if context and context.strip():
@@ -241,6 +246,7 @@ def run_library_search(
         payer_user_id=payer_user_id,
         payer_bot_id=payer_bot_id,
         trace=True,
+        citations=target.citations if target is not None else None,
     )
     pipeline = build_pipeline("library", document_processor.openai_client)
 
@@ -285,6 +291,7 @@ def run_document_search(
         payer_bot_id=payer_bot_id,
         similarity_threshold=0.0,
         trace=True,
+        citations=target.citations if target is not None else None,
     )
     pipeline = build_pipeline("document", document_processor.openai_client)
 
@@ -369,7 +376,11 @@ def _run_naive_library_search(
         if target:
             target.save_library_snippet(chunk)
 
-    return ContextAssembler().assemble(chunks, on_keep=_persist)
+    return ContextAssembler().assemble(
+        chunks,
+        on_keep=_persist,
+        citations=target.citations if target is not None else None,
+    )
 
 
 async def _search_libraries_for_query(

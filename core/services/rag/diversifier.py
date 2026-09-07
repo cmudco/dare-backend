@@ -1,10 +1,4 @@
-"""Diversity stage — Maximal Marginal Relevance (audit mistake #7).
-
-Trades a little relevance for novelty so the final set isn't near-duplicates.
-Helps *exploratory* queries; hurts *precise* lookups (it can diversify the answer
-away), so the pipeline only invokes it when the QueryPlan intent is exploratory.
-Needs candidate embeddings; a safe no-op if they're absent.
-"""
+"""Select a diverse result set with Maximal Marginal Relevance."""
 
 import math
 from typing import List
@@ -33,7 +27,16 @@ class MMRDiversifier:
         if not usable or not query_vector:
             return chunks[:top_k]
 
-        rel = {id(c): _cosine(query_vector, c.vector) for c in usable}
+        # Preserve the reranker's relevance judgment. Dense similarity alone
+        # would undo reranking and favor passages resembling the HyDE guess.
+        rel = {
+            id(c): (
+                c.rerank_score
+                if c.rerank_score is not None
+                else _cosine(query_vector, c.vector)
+            )
+            for c in usable
+        }
         picked: List[RetrievedChunk] = []
         pool = list(usable)
         while pool and len(picked) < top_k:

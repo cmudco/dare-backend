@@ -41,6 +41,10 @@ from conversations.models import (
     Snippet,
     WebSearchSource,
 )
+from conversations.services.ensemble_service import (
+    EnsembleTurnService,
+    ensemble_enabled_for,
+)
 from conversations.services.image_generation_service import ImageGenerationService
 from conversations.services.message_helpers import (  # Database helpers; Learning progress helpers; Billing helpers; Finalization helpers; Regeneration helpers
     build_generated_image_data,
@@ -54,10 +58,6 @@ from conversations.services.message_helpers import (  # Database helpers; Learni
     prepare_regeneration_data,
     run_learning_progress_stream,
     should_generate_title,
-)
-from conversations.services.ensemble_service import (
-    EnsembleTurnService,
-    ensemble_enabled_for,
 )
 from conversations.services.message_validation_service import MessageValidationService
 from conversations.services.tool_loop_binding import ChatToolLoopBinding
@@ -479,9 +479,11 @@ class MessageCoordinator:
             # dispatch is reconstructed from `litellm_key` + `litellm_model_name`.
             ensemble = await self._ensemble_for_turn(message_data)
             descriptor = await self._get_descriptor(
-                ensemble.chairman_id
-                if ensemble
-                else (model_id or message_data.get("model_id")),
+                (
+                    ensemble.chairman_id
+                    if ensemble
+                    else (model_id or message_data.get("model_id"))
+                ),
                 default=LLMDescriptor.from_message(ai_message),
             )
             if descriptor is None:
@@ -708,6 +710,7 @@ class MessageCoordinator:
                 folder_ids=tuple(request.context.folder_ids or ()),
                 library_ids=tuple(request.context.library_ids or ()),
                 user_id=self.user.id if self.user else None,
+                payer_bot_id=self.conversation.bot_id if self.user is None else None,
                 file_owner_id=request.context.file_owner_id,
                 max_context_snippets=request.context.max_context_snippets,
                 similarity_threshold=request.context.document_similarity_threshold,

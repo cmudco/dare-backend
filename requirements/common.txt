@@ -45,7 +45,9 @@ httpx~=0.28.1
 # in, so it is imported lazily and only ever reached in the RQ worker that
 # parses uploads — see core/services/document_parsers/__init__.py.
 docling~=2.117.0
-# PyPDF2 remains the flat-text fallback when a Docling conversion fails.
+# Independent native-text safety lane used to detect content Docling omitted.
+PyMuPDF~=1.28.0
+# PyPDF2 remains the compatibility fallback when PyMuPDF cannot read a PDF.
 PyPDF2~=3.0.1
 # Renders a page region back to an image, so a picture the parser located can
 # be cropped out of the original on demand instead of being stored twice.
@@ -86,6 +88,17 @@ weaviate-client==4.14.1
 # Local cross-encoder reranker (Track A). Imported lazily when advanced retrieval
 # runs; pulls in torch transitively (~CPU/MPS build).
 sentence-transformers~=5.6.0
+
+# Pinned so the resolver can't move it while satisfying gliner, sentence-transformers
+# and docling-ibm-models at once; all three accept this version.
+transformers==5.8.1
+
+# Zero-shot named entities for cross-document links; rides on the torch and
+# transformers stack the reranker already needs. sentencepiece and onnxruntime
+# below are its runtime dependencies.
+gliner==0.2.28
+sentencepiece==0.2.2
+onnxruntime==1.29.0
 
 #email
 resend~=2.7.0
