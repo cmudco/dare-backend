@@ -1,10 +1,11 @@
 """Socratic Bots agentic-RAG enablement and defensive gating."""
 
+from dataclasses import replace
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from asgiref.sync import async_to_sync
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, TransactionTestCase
 
 from conversations.constants import RagMode
 from core.services.dtos.builder import LLMQueryRequestBuilder
@@ -14,8 +15,10 @@ from core.services.dtos.media_dto import MediaConfig
 from core.services.dtos.request_dto import LLMQueryRequest
 from core.services.dtos.socratic_dto import SocraticConfig
 from core.services.llm_helpers.socratic_helpers import (
-    AGENTIC_RETRIEVAL_DIRECTIVE, build_advanced_socratic_messages,
-    build_classic_socratic_messages)
+    AGENTIC_RETRIEVAL_DIRECTIVE,
+    build_advanced_socratic_messages,
+    build_classic_socratic_messages,
+)
 from users.constants import AuthSourceChoice
 
 
@@ -104,6 +107,17 @@ def _socratic_request(rag_mode):
 
 class SocraticBuilderAgenticSkipTests(SimpleTestCase):
     def setUp(self):
+        async def retrieve(**kwargs):
+            kwargs["messages"].append({"role": "user", "content": "snippet text"})
+            return []
+
+        self.retrieval = AsyncMock(side_effect=retrieve)
+        patcher = patch(
+            "core.services.llm_helpers.socratic_helpers.add_semantic_context_to_messages",
+            self.retrieval,
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.processor = SimpleNamespace(
             user_id=1,
             vector_service=None,
@@ -119,7 +133,7 @@ class SocraticBuilderAgenticSkipTests(SimpleTestCase):
         result = async_to_sync(build_classic_socratic_messages)(
             _socratic_request(RagMode.AGENTIC), self.processor
         )
-        self.processor.search_similar_documents.assert_not_called()
+        self.retrieval.assert_not_called()
         self.assertIn(AGENTIC_RETRIEVAL_DIRECTIVE, result.messages[1]["content"])
         retrieval = self._stage(result, "retrieval")
         self.assertTrue(retrieval["deferredToTool"])
@@ -128,7 +142,7 @@ class SocraticBuilderAgenticSkipTests(SimpleTestCase):
         result = async_to_sync(build_classic_socratic_messages)(
             _socratic_request(RagMode.ADVANCED), self.processor
         )
-        self.processor.search_similar_documents.assert_called_once()
+        self.retrieval.assert_awaited_once()
         self.assertIn("snippet text", result.messages[1]["content"])
         retrieval = self._stage(result, "retrieval")
         self.assertEqual(retrieval["mode"], RagMode.ADVANCED)
@@ -138,7 +152,7 @@ class SocraticBuilderAgenticSkipTests(SimpleTestCase):
         result = async_to_sync(build_advanced_socratic_messages)(
             _socratic_request(RagMode.AGENTIC), self.processor
         )
-        self.processor.search_similar_documents.assert_not_called()
+        self.retrieval.assert_not_called()
         self.assertIn(AGENTIC_RETRIEVAL_DIRECTIVE, result.messages[0]["content"])
         retrieval = self._stage(result, "retrieval")
         self.assertTrue(retrieval["deferredToTool"])
@@ -147,7 +161,7 @@ class SocraticBuilderAgenticSkipTests(SimpleTestCase):
         result = async_to_sync(build_advanced_socratic_messages)(
             _socratic_request(RagMode.ADVANCED), self.processor
         )
-        self.processor.search_similar_documents.assert_called_once()
+        self.retrieval.assert_awaited_once()
         self.assertIn("snippet text", result.messages[0]["content"])
 
     def test_trace_records_prompt_stage(self):
@@ -157,3 +171,69 @@ class SocraticBuilderAgenticSkipTests(SimpleTestCase):
         prompt = self._stage(result, "prompt")
         self.assertGreater(prompt["chars"], 0)
         self.assertIn("totalMs", result.context_trace)
+
+    def test_each_preinjected_mode_uses_shared_pipeline_and_owner_scope(self):
+        for mode in (RagMode.NAIVE, RagMode.ADVANCED):
+            for builder in (
+                build_classic_socratic_messages,
+                build_advanced_socratic_messages,
+            ):
+                with self.subTest(mode=mode, builder=builder.__name__):
+                    self.retrieval.reset_mock()
+                    request = _socratic_request(mode)
+                    request = replace(
+                        request, context=replace(request.context, file_owner_id=42)
+                    )
+                    result = async_to_sync(builder)(request, self.processor)
+                    kwargs = self.retrieval.call_args.kwargs
+                    self.assertEqual(kwargs["rag_mode"], mode)
+                    self.assertEqual(kwargs["file_owner_id"], 42)
+                    self.assertEqual(kwargs["user_id"], 1)
+                    self.assertTrue(
+                        any("snippet text" in msg["content"] for msg in result.messages)
+                    )
+
+    def test_public_retrieval_preserves_bot_payer_and_creator_scope(self):
+        request = _socratic_request(RagMode.ADVANCED)
+        request = replace(
+            request,
+            user=None,
+            conversation=SimpleNamespace(bot_id=7, title="Public tutor"),
+            context=replace(request.context, file_owner_id=42),
+        )
+        with patch(
+            "core.services.llm_helpers.socratic_helpers.get_conversation_history",
+            new=AsyncMock(return_value=[]),
+        ):
+            async_to_sync(build_advanced_socratic_messages)(request, self.processor)
+        self.assertEqual(self.retrieval.call_args.kwargs["payer_bot_id"], 7)
+        self.assertIsNone(self.retrieval.call_args.kwargs["user_id"])
+        self.assertEqual(self.retrieval.call_args.kwargs["file_owner_id"], 42)
+
+
+class SocraticHistoryTraceTests(TransactionTestCase):
+    def test_socket_history_preserves_saved_traces(self):
+        from conversations.constants import SenderType
+        from conversations.models import Conversation, Message
+        from core.services.conversation_service import ConversationService
+        from users.models import User
+
+        user = User.objects.create_user(
+            email="trace@example.test", password="test-only"
+        )
+        conversation = Conversation.active_objects.create(user=user, title="Trace QA")
+        trace = {"totalMs": 12, "stages": [{"name": "retrieval", "ms": 10}]}
+        retrieval = {"source": "documents", "stages": []}
+        message = Message.active_objects.create(
+            conversation=conversation,
+            sender_type=SenderType.AI_ASSISTANT,
+            message="Saved answer",
+            context_trace=trace,
+            retrieval_trace=retrieval,
+        )
+        history = async_to_sync(ConversationService().fetch_chat_history_from_db)(
+            conversation
+        )
+        self.assertEqual(history[0]["id"], message.id)
+        self.assertEqual(history[0]["contextTrace"], trace)
+        self.assertEqual(history[0]["retrievalTrace"], retrieval)

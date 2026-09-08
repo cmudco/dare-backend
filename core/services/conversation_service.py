@@ -82,6 +82,8 @@ class ConversationService:
                 "artifactId": msg.get("artifactId", None),
                 "artifactIds": msg.get("artifactIds", []),
                 "memoryContextData": msg.get("memory_context_data") or [],
+                "contextTrace": msg.get("context_trace"),
+                "retrievalTrace": msg.get("retrieval_trace"),
                 # Keep socket fallback history aligned with the REST message
                 # serializer; the client camelizes this to `toolCalls`.
                 "tool_calls": [
