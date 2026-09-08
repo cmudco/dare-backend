@@ -10,7 +10,8 @@ from django.db.models.functions import Lower
 from django.http import FileResponse, Http404, HttpResponse
 from django_rq import get_queue
 from djangorestframework_camel_case.parser import CamelCaseJSONParser
-from rest_framework import status, viewsets
+from drf_spectacular.utils import extend_schema, inline_serializer
+from rest_framework import serializers, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
@@ -55,12 +56,20 @@ from ..services.document_ocr_approval_service import (
     DocumentOcrPageLimitError,
     DocumentOcrQueueError,
 )
+from ..services.document_reprocessing_service import (
+    DocumentReprocessingCommand,
+    DocumentReprocessingService,
+    ReprocessingQueueError,
+    ReprocessingUnavailable,
+)
 from .serializers import (
     DocumentOcrApprovalSerializer,
     FileProcessingJourneySerializer,
+    FileReprocessingSerializer,
     FileSerializer,
     FileShareSerializer,
     FileStructureSerializer,
+    FileUploadOptionsSerializer,
     FolderSerializer,
     TagSerializer,
     VisionModelCandidateSerializer,
@@ -102,6 +111,8 @@ class FileViewSet(viewsets.ModelViewSet):
                 {"error": "No files uploaded."}, status=status.HTTP_400_BAD_REQUEST
             )
 
+        options = FileUploadOptionsSerializer(data=request.data)
+        options.is_valid(raise_exception=True)
         tags_data = request.data.get("tags", "[]")
         tag_ids = FileUploadService.parse_tags(tags_data)
         chunk_size = request.data.get("chunk_size")
@@ -115,6 +126,7 @@ class FileViewSet(viewsets.ModelViewSet):
                 tag_ids,
                 chunk_size=chunk_size,
                 overlap_size=overlap_size,
+                processing_mode=options.validated_data["processing_mode"],
             )
             serializer = self.get_serializer(file_instances, many=True)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -613,6 +625,62 @@ class FileViewSet(viewsets.ModelViewSet):
         serializer = self.get_serializer(refreshed)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
+    @extend_schema(
+        responses=inline_serializer(
+            name="FileViewerCapabilities",
+            fields={
+                "structure": serializers.BooleanField(),
+                "map": serializers.BooleanField(),
+            },
+        )
+    )
+    @action(detail=True, methods=["get"], url_path="viewer-capabilities")
+    def viewer_capabilities(self, request, pk=None):
+        from core.services.document_parsers.constants import (
+            PARSER_DOCLING,
+            PARSER_NOTEBOOK,
+        )
+        from files.constants import DocumentProcessingMode
+
+        file_obj = self.get_object()
+        document = file_obj.document_model or {}
+        # Requested Advanced mode can fall back to Basic extraction. Only expose
+        # rich views when the persisted result actually contains structure.
+        structured = (
+            file_obj.processing_mode != DocumentProcessingMode.BASIC
+            and file_obj.parser_name in {PARSER_DOCLING, PARSER_NOTEBOOK}
+            and document.get("parser") == file_obj.parser_name
+            and bool(document.get("elements"))
+        )
+        return Response({"structure": structured, "map": structured})
+
+    @extend_schema(request=FileReprocessingSerializer, responses={202: FileSerializer})
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="reprocess",
+        parser_classes=[CamelCaseJSONParser],
+    )
+    def reprocess(self, request, pk=None):
+        file = self.get_object()
+        serializer = FileReprocessingSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            file = DocumentReprocessingService().start(
+                DocumentReprocessingCommand(
+                    file.pk, request.user.pk, **serializer.validated_data
+                )
+            )
+        except File.DoesNotExist:
+            raise Http404
+        except ReprocessingUnavailable as error:
+            return Response({"detail": str(error)}, status=status.HTTP_409_CONFLICT)
+        except ReprocessingQueueError as error:
+            return Response(
+                {"detail": str(error)}, status=status.HTTP_503_SERVICE_UNAVAILABLE
+            )
+        return Response(self.get_serializer(file).data, status=status.HTTP_202_ACCEPTED)
+
     @action(detail=True, methods=["get"], url_path="structure")
     def structure(self, request, pk=None):
         """
@@ -855,6 +923,7 @@ class FileViewSet(viewsets.ModelViewSet):
             file_type=original.file_type,
             storage_backend=StorageBackendChoice.SYFTBOX,
             source_file=original,
+            processing_mode=original.processing_mode,
             is_media=original.is_media,
             media_type=original.media_type,
             status=FileStatus.PROCESSING,

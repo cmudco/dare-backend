@@ -4,7 +4,7 @@ from django.test import SimpleTestCase
 
 from core.config.document_parsing import NOTEBOOK_OUTPUT_LIMIT, ElementLabel
 from core.services.document_parsers import get_document_parsers
-from core.services.document_parsers.constants import PARSER_LEGACY, PARSER_NOTEBOOK
+from core.services.document_parsers.constants import PARSER_BASIC, PARSER_NOTEBOOK
 from core.services.document_parsers.notebook_parser import (
     NotebookDocumentParser,
     notebook_markdown,
@@ -51,7 +51,7 @@ class NotebookParserTests(SimpleTestCase):
 
     def test_registry_prefers_notebook_parser_over_legacy(self):
         names = [parser.name for parser in get_document_parsers("lab.ipynb")]
-        self.assertEqual(names, [PARSER_NOTEBOOK, PARSER_LEGACY])
+        self.assertEqual(names, [PARSER_NOTEBOOK, PARSER_BASIC])
 
     def test_registry_leaves_other_formats_alone(self):
         names = [parser.name for parser in get_document_parsers("notes.json")]

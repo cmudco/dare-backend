@@ -29,6 +29,10 @@ from core.services.llm_utils import (
     StreamAggregator,
 )
 from core.services.model_capabilities import ModelCapabilities
+from core.services.structured_output_error import (
+    StructuredOutputError,
+    StructuredOutputFailure,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -274,22 +278,32 @@ class OpenAIService:
 
         self._apply_openai_sampling(params, temperature, effort)
 
+        response = await self.client.chat.completions.create(**params)
+        provider_usage = getattr(response, "usage", None)
+        usage = {
+            "input_tokens": int(getattr(provider_usage, "prompt_tokens", 0) or 0),
+            "output_tokens": int(getattr(provider_usage, "completion_tokens", 0) or 0),
+        }
+        choice = response.choices[0] if response.choices else None
+        if choice is None:
+            raise StructuredOutputError(StructuredOutputFailure.EMPTY, usage)
+        if getattr(choice.message, "refusal", None):
+            raise StructuredOutputError(StructuredOutputFailure.REFUSAL, usage)
+        if choice.finish_reason == "content_filter":
+            raise StructuredOutputError(StructuredOutputFailure.FILTERED, usage)
+        if choice.finish_reason == "length":
+            raise StructuredOutputError(StructuredOutputFailure.LENGTH, usage)
+        content = choice.message.content
+        if not content:
+            raise StructuredOutputError(StructuredOutputFailure.EMPTY, usage)
         try:
-            response = await self.client.chat.completions.create(**params)
-            content = response.choices[0].message.content
-
-            if not content:
-                raise ValueError("Empty response from OpenAI structured output")
-
-            usage = getattr(response, "usage", None)
-            return json.loads(content), {
-                "input_tokens": int(getattr(usage, "prompt_tokens", 0) or 0),
-                "output_tokens": int(getattr(usage, "completion_tokens", 0) or 0),
-            }
-
-        except Exception as e:
-            logger.exception(f"[OpenAI] generate_structured_output error: {str(e)}")
-            raise ValueError(f"Structured output generation failed: {str(e)}")
+            result = json.loads(content)
+        except json.JSONDecodeError:
+            # Never attach provider content (which can contain document text) to logs.
+            raise StructuredOutputError(
+                StructuredOutputFailure.INVALID_JSON, usage
+            ) from None
+        return result, usage
 
     async def parse_structured_output(
         self,

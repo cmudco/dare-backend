@@ -13,6 +13,7 @@ from users.constants import VectorDBChoice
 from .constants import (
     ChunkKind,
     DocumentOcrStatus,
+    DocumentProcessingMode,
     FileProcessingStage,
     FileStatus,
     ReferenceKind,
@@ -251,12 +252,22 @@ class File(BaseModel):
             "Pages that yielded no readable text, i.e. scans awaiting transcription"
         ),
     )
+    processing_mode = models.CharField(
+        max_length=16,
+        choices=DocumentProcessingMode.choices,
+        default=DocumentProcessingMode.ADVANCED,
+        help_text=_(
+            "Basic extracts text only; Advanced preserves document structure with Docling where supported."
+        ),
+    )
     parser_name = models.CharField(
         max_length=32,
         blank=True,
         null=True,
         verbose_name=_("Parser"),
-        help_text=_("Parser that produced the extracted text (docling or legacy)"),
+        help_text=_(
+            "Parser that produced the extracted text (basic, docling, or notebook)"
+        ),
     )
 
     # Lineage tracking

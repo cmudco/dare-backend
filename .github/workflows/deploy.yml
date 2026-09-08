@@ -40,8 +40,10 @@ jobs:
           echo "Activating virtual environment..."
           source .venv/bin/activate
           
+          bash devops/install_document_runtime.sh
           echo "Installing dependencies..."
           pip install -r requirements/prod.txt
+          python devops/check_document_runtime.py
           
           echo "Applying database migrations..."
           python manage.py migrate
@@ -52,6 +54,7 @@ jobs:
           echo "Restarting services..."
           sudo systemctl restart dare
           sudo systemctl restart nginx
+          sudo systemctl restart rqworker1 rqworker2 rqworker3 rqworker4 rqscheduler
           
           echo "Backend deployment successful!"
           EOF

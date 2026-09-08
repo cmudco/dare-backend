@@ -12,14 +12,14 @@ from typing import List, Optional
 import sentry_sdk
 
 from core.services.document_parsers.base import BaseDocumentParser
+from core.services.document_parsers.basic_parser import BasicDocumentParser
 from core.services.document_parsers.constants import (
     DOCLING_EXTENSIONS,
     NOTEBOOK_EXTENSIONS,
+    PARSER_BASIC,
     PARSER_DOCLING,
-    PARSER_LEGACY,
     PARSER_NOTEBOOK,
 )
-from core.services.document_parsers.legacy_parser import LegacyDocumentParser
 from core.services.document_parsers.notebook_parser import NotebookDocumentParser
 
 logger = logging.getLogger(__name__)
@@ -80,7 +80,7 @@ def get_document_parsers(filename: str) -> List[BaseDocumentParser]:
     if notebook.supports(filename):
         parsers.append(notebook)
 
-    parsers.append(LegacyDocumentParser())
+    parsers.append(BasicDocumentParser())
     return parsers
 
 
@@ -94,12 +94,12 @@ def reset_parser_cache() -> None:
 
 __all__ = [
     "BaseDocumentParser",
-    "LegacyDocumentParser",
+    "BasicDocumentParser",
     "NotebookDocumentParser",
     "DOCLING_EXTENSIONS",
     "NOTEBOOK_EXTENSIONS",
     "PARSER_DOCLING",
-    "PARSER_LEGACY",
+    "PARSER_BASIC",
     "PARSER_NOTEBOOK",
     "get_docling_parser",
     "get_docling_unavailable_reason",

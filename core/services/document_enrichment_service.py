@@ -41,12 +41,21 @@ from core.services.document_text_sanitizer import (
 from core.services.dtos.parsed_document_dto import ParsedDocument, ParsedElement
 from core.services.gemini_service import GeminiService
 from core.services.openai_service import OpenAIService
-from core.services.vision_model_service import VisionModelRoute, resolve_vision_model
+from core.services.structured_output_error import (
+    StructuredOutputError,
+    StructuredOutputFailure,
+)
+from core.services.vision_model_service import (
+    VisionModelRoute,
+    resolve_vision_model,
+    select_vision_model,
+)
 from files.models import DocumentEnrichmentCache, DocumentOcrRequest, File
 
 logger = logging.getLogger(__name__)
 
 PROMPT_VERSION = "docling-context-v1"
+STRUCTURED_OUTPUT_ATTEMPTS = 2
 FIGURE_OUTPUT_LIMIT = 2400
 TRANSCRIPTION_OUTPUT_LIMIT = 50000
 
@@ -113,6 +122,8 @@ class DocumentEnrichmentService:
         parsed: ParsedDocument,
         page_limit: Optional[int] = None,
         continue_existing: bool = False,
+        retry_failed_images: bool = False,
+        model_identifier: str = "",
     ) -> EnrichmentResult:
         """Run applicable vision lanes, persist their model, and return text."""
         stored_payload = (
@@ -143,7 +154,7 @@ class DocumentEnrichmentService:
                     enrichment = stored_enrichment.get(item.get("order"))
                     if enrichment:
                         item["enrichment"] = enrichment
-        if continue_existing and page_limit == 0:
+        if continue_existing and page_limit == 0 and not retry_failed_images:
             # No page may be transcribed and a continuation never revisits
             # figures, so there is no vision work to buy. Rebuilding from the
             # stored results here — rather than falling through to route
@@ -157,11 +168,23 @@ class DocumentEnrichmentService:
             or not (file.file.name or "").lower().endswith(".pdf")
             or not (parsed.structure.pictures or parsed.structure.pages_without_text)
         ):
+            if retry_failed_images:
+                raise RuntimeError(
+                    "Vision enrichment is not available for this document."
+                )
             return self._persist_not_needed(file, parsed, model_payload)
 
         started = time.time()
-        route = self._resolve_route(file)
+        route = (
+            select_vision_model(file.user, model_identifier)
+            if model_identifier
+            else self._resolve_route(file)
+        )
         if route is None:
+            if retry_failed_images:
+                raise RuntimeError(
+                    "No vision-capable model is available in the active wallet."
+                )
             return self._persist_unavailable(
                 file,
                 parsed,
@@ -179,6 +202,10 @@ class DocumentEnrichmentService:
             logger.warning(
                 "Vision credentials unavailable for file %s: %s", file.id, error
             )
+            if retry_failed_images:
+                raise RuntimeError(
+                    "Vision credentials are unavailable. Check your wallet settings."
+                ) from error
             return self._persist_unavailable(file, parsed, model_payload, str(error))
 
         page_characters = self._page_characters(parsed)
@@ -194,7 +221,7 @@ class DocumentEnrichmentService:
             for row in model_payload.get("page_enrichments", [])
             if row.get("page_no") is not None
         }
-        if continue_existing:
+        if continue_existing and not retry_failed_images:
             self._replace_blank_stored_pages(file, page_results)
         element_results: Dict[int, Dict[str, Any]] = {
             int(element["order"]): deepcopy(element["enrichment"])
@@ -232,7 +259,14 @@ class DocumentEnrichmentService:
         considered = 0
         max_figures = max(int(env.DOCUMENT_ENRICHMENT_MAX_FIGURES), 0)
         elements = list(parsed.elements)
-        for index, element in enumerate(elements if not continue_existing else []):
+        for index, element in enumerate(
+            elements if not continue_existing or retry_failed_images else []
+        ):
+            if (
+                retry_failed_images
+                and element_results.get(element.order, {}).get("status") != "error"
+            ):
+                continue
             if element.kind != ElementKind.PICTURE:
                 continue
             decision = self._picture_decision(element, textless_pages)
@@ -533,7 +567,6 @@ class DocumentEnrichmentService:
             telemetry.cache_hits += 1
             return dict(cache.result), True
 
-        self._check_credit(route, file, output_limit)
         data_url = "data:image/jpeg;base64," + base64.b64encode(image).decode("ascii")
         messages = [
             {
@@ -544,14 +577,34 @@ class DocumentEnrichmentService:
                 ],
             }
         ]
-        telemetry.provider_requests += 1
-        result, usage = async_to_sync(ai_service.generate_structured_output_with_usage)(
-            messages=messages,
-            response_schema=schema,
-            max_tokens=output_limit,
-            temperature=0.1,
-        )
-        self._record_usage(file, route, usage, kind)
+        request_limit = output_limit
+        for attempt in range(STRUCTURED_OUTPUT_ATTEMPTS):
+            self._check_credit(route, file, request_limit)
+            telemetry.provider_requests += 1
+            try:
+                result, usage = async_to_sync(
+                    ai_service.generate_structured_output_with_usage
+                )(
+                    messages=messages,
+                    response_schema=schema,
+                    max_tokens=request_limit,
+                    temperature=0.1,
+                )
+            except StructuredOutputError as error:
+                self._record_usage(file, route, error.usage, kind)
+                if not error.retryable or attempt + 1 == STRUCTURED_OUTPUT_ATTEMPTS:
+                    raise
+                if error.reason == StructuredOutputFailure.LENGTH:
+                    request_limit = output_limit * 2
+                logger.warning(
+                    "Retrying document enrichment for file %s after %s (attempt %s)",
+                    file.id,
+                    error.reason.value,
+                    attempt + 2,
+                )
+            else:
+                self._record_usage(file, route, usage, kind)
+                break
         DocumentEnrichmentCache.objects.update_or_create(
             user=file.user,
             content_sha256=content_hash,

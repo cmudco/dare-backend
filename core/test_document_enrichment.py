@@ -666,3 +666,97 @@ class DocumentEnrichmentOrchestrationTests(SimpleTestCase):
         )
         self.assertIn("Already complete", result.text)
         self.assertIn("Page 2", result.text)
+
+
+class FailedImageRetryTests(SimpleTestCase):
+    @patch(
+        "core.services.document_enrichment_service.get_dispatch_credentials_for_user_sync"
+    )
+    def test_only_failed_figures_are_retried_and_paid_successes_are_retained(
+        self, credentials
+    ):
+        parsed = ParsedDocument(
+            parser="docling",
+            text="Surrounding text " * 20,
+            structure=DocumentStructure(pages=1, pictures=3),
+            elements=(
+                ParsedElement(
+                    order=0,
+                    kind=ElementKind.TEXT,
+                    label=ElementLabel.TEXT,
+                    page_no=1,
+                    text="Surrounding text " * 20,
+                ),
+                *(
+                    ParsedElement(
+                        order=n,
+                        kind=ElementKind.PICTURE,
+                        label="picture",
+                        page_no=1,
+                        bbox=BoundingBox(0.1, 0.1, 0.5, 0.4),
+                    )
+                    for n in (1, 2, 3)
+                ),
+            ),
+        )
+        payload = parsed.to_dict()
+        results = [
+            {
+                "status": "complete",
+                "kind": "figure_description",
+                "description": "Paid successful description",
+            },
+            {"status": "error", "kind": "figure_description", "error": "provider down"},
+            {"status": "skipped", "kind": "figure_description", "reason": "class:logo"},
+        ]
+        for element, result in zip(payload["elements"][1:], results):
+            element["enrichment"] = result
+        file = SimpleNamespace(
+            id=1,
+            name="figures.pdf",
+            file=SimpleNamespace(name="figures.pdf"),
+            user=SimpleNamespace(id=1),
+            document_model=payload,
+        )
+        service = DocumentEnrichmentService()
+        route = SimpleNamespace(
+            model=SimpleNamespace(identifier="vision", provider="gemini")
+        )
+        with (
+            patch.object(service, "_enabled", return_value=True),
+            patch.object(service, "_resolve_route") as saved_route,
+            patch(
+                "core.services.document_enrichment_service.select_vision_model",
+                return_value=route,
+            ) as selected_route,
+            patch.object(service, "_build_ai_service"),
+            patch.object(service, "_persist"),
+            patch.object(service, "_replace_blank_stored_pages"),
+            patch.object(service, "_transcribe_page") as transcribe,
+            patch.object(
+                service,
+                "_describe_figure",
+                return_value={
+                    "status": "complete",
+                    "kind": "figure_description",
+                    "description": "Recovered description",
+                },
+            ) as describe,
+        ):
+            result = service.enrich(
+                file,
+                parsed,
+                page_limit=0,
+                continue_existing=True,
+                retry_failed_images=True,
+                model_identifier="alternate-vision",
+            )
+        selected_route.assert_called_once_with(file.user, "alternate-vision")
+        saved_route.assert_not_called()
+        describe.assert_called_once()
+        self.assertEqual(describe.call_args.args[1].order, 2)
+        transcribe.assert_not_called()
+        self.assertEqual(result.document_model["elements"][1]["enrichment"], results[0])
+        self.assertEqual(result.document_model["elements"][3]["enrichment"], results[2])
+        self.assertIn("Paid successful description", result.text)
+        self.assertIn("Recovered description", result.text)

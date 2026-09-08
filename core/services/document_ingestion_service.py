@@ -19,7 +19,12 @@ from core.services.document_processor import DocumentProcessor
 from core.services.document_text_sanitizer import sanitize_document_text
 from core.services.dtos.parsed_document_dto import ParsedDocument
 from core.services.file_processing_journey import FileProcessingJourney
-from files.constants import DocumentOcrStatus, FileProcessingStage, FileStatus
+from files.constants import (
+    DocumentOcrStatus,
+    DocumentReprocessingAction,
+    FileProcessingStage,
+    FileStatus,
+)
 from files.models import DocumentOcrRequest, File
 
 logger = logging.getLogger(__name__)
@@ -30,6 +35,11 @@ class DocumentIngestionCommand:
     file_id: int
     chunk_size: Optional[int] = None
     overlap_size: Optional[int] = None
+    expected_job_id: Optional[str] = None
+    reprocessing_action: Optional[str] = None
+    processing_mode: Optional[str] = None
+    previous_status: Optional[int] = None
+    model_identifier: str = ""
 
     @classmethod
     def from_raw(cls, file_id, chunk_size=None, overlap_size=None):
@@ -74,13 +84,14 @@ class DocumentIngestionService:
         token = uuid4()
         now = timezone.now()
         expired = now - timedelta(seconds=env.DOCUMENT_OCR_JOB_TIMEOUT_SECONDS + 60)
-        acquired = (
-            File.active_objects.filter(pk=command.file_id)
-            .filter(
-                Q(ingestion_token__isnull=True) | Q(ingestion_started_at__lt=expired)
+        candidates = File.active_objects.filter(pk=command.file_id)
+        if command.expected_job_id:
+            candidates = candidates.filter(
+                job_id=command.expected_job_id, status=FileStatus.PROCESSING
             )
-            .update(ingestion_token=token, ingestion_started_at=now)
-        )
+        acquired = candidates.filter(
+            Q(ingestion_token__isnull=True) | Q(ingestion_started_at__lt=expired)
+        ).update(ingestion_token=token, ingestion_started_at=now)
         if not acquired:
             logger.info(
                 "Document ingestion already running or file unavailable: %s",
@@ -103,8 +114,46 @@ class DocumentIngestionService:
         if file.is_media:
             return None
 
+        snapshot = (
+            {
+                name: deepcopy(getattr(file, name))
+                for name in (
+                    "processing_mode",
+                    "parser_name",
+                    "document_model",
+                    "extracted_text",
+                    "page_count",
+                    "pages_without_text",
+                    "status",
+                    "processing_stage",
+                    "error_message",
+                )
+            }
+            if command.reprocessing_action
+            else {}
+        )
+        previous_generation = (
+            file.index_generation if command.reprocessing_action else None
+        )
+        retry_images = (
+            command.reprocessing_action == DocumentReprocessingAction.RETRY_IMAGES
+        )
+        reparse = command.reprocessing_action == DocumentReprocessingAction.REPARSE
         ocr_request = DocumentOcrRequest.objects.filter(file=file).first()
-        if ocr_request and ocr_request.status in self.SKIPPED_OCR_STATES:
+        ocr_snapshot = (
+            {
+                field.attname: deepcopy(getattr(ocr_request, field.attname))
+                for field in DocumentOcrRequest._meta.concrete_fields
+            }
+            if reparse and ocr_request
+            else None
+        )
+        if (
+            not retry_images
+            and not reparse
+            and ocr_request
+            and ocr_request.status in self.SKIPPED_OCR_STATES
+        ):
             logger.info(
                 "Skipping file %s because OCR is in state %s",
                 file.id,
@@ -113,7 +162,9 @@ class DocumentIngestionService:
             return None
 
         reusing_transcriptions = bool(
-            ocr_request and ocr_request.status in self.REUSED_TRANSCRIPTION_STATES
+            not reparse
+            and ocr_request
+            and ocr_request.status in self.REUSED_TRANSCRIPTION_STATES
         )
 
         journey = FileProcessingJourney(file)
@@ -124,13 +175,28 @@ class DocumentIngestionService:
         file.save(update_fields=["status", "processing_stage", "error_message"])
 
         try:
+            if reparse:
+                file.processing_mode = command.processing_mode
+                file.save(update_fields=["processing_mode"])
+                DocumentOcrRequest.objects.filter(file=file).delete()
+                ocr_request = None
             processor = DocumentProcessor()
-            parsed, continuing = self._load_or_parse(
-                file, ocr_request, processor, journey
-            )
+            if retry_images:
+                with journey.stage("parsing") as stage:
+                    parsed = ParsedDocument.from_persisted(
+                        file.extracted_text or "", file.document_model
+                    )
+                    stage.skip(
+                        "Reused document structure to retry failed image descriptions."
+                    )
+                continuing = True
+            else:
+                parsed, continuing = self._load_or_parse(
+                    file, ocr_request, processor, journey
+                )
 
             ocr_workflow = DocumentOcrWorkflowService()
-            if reusing_transcriptions:
+            if reusing_transcriptions or retry_images:
                 # `prepare` would pause this run — a complete request has no
                 # remaining pages and a partial one waits on the user — and
                 # would rewrite the request's page limit on the way. There is
@@ -143,6 +209,11 @@ class DocumentIngestionService:
                     parsed,
                     chunk_size=command.chunk_size,
                     overlap_size=command.overlap_size,
+                    **(
+                        {"model_identifier": command.model_identifier}
+                        if command.model_identifier
+                        else {}
+                    ),
                 )
             if ocr_plan.should_pause:
                 request = file.ocr_request
@@ -164,10 +235,17 @@ class DocumentIngestionService:
                 parsed=parsed,
                 ocr_page_limit=ocr_plan.page_limit,
                 continue_existing_enrichment=continuing or reusing_transcriptions,
+                **({"retry_failed_images": True} if retry_images else {}),
+                **({"require_vectors": True} if command.reprocessing_action else {}),
+                **(
+                    {"model_identifier": command.model_identifier}
+                    if command.model_identifier
+                    else {}
+                ),
             )
 
             ocr_status = None
-            if not reusing_transcriptions:
+            if not reusing_transcriptions and not retry_images:
                 enrichment = (file.document_model or {}).get("enrichment", {})
                 ocr_status = ocr_workflow.finish(
                     file,
@@ -193,6 +271,28 @@ class DocumentIngestionService:
             return vector_count
         except Exception as error:
             journey.fail_attempt(error)
+            if command.reprocessing_action:
+                file.refresh_from_db(fields=["index_generation"])
+                if file.index_generation != previous_generation:
+                    File.active_objects.filter(pk=file.pk).update(
+                        status=FileStatus.PROCESSED,
+                        error_message="Search index updated, but processing status could not be finalized.",
+                    )
+                    raise
+                snapshot["status"] = command.previous_status
+                snapshot["processing_stage"] = FileProcessingStage.COMPLETE
+                snapshot["error_message"] = (
+                    "Reprocessing failed; the previous document and search index were retained."
+                )
+                File.active_objects.filter(
+                    pk=file.pk, ingestion_token=file.ingestion_token
+                ).update(**snapshot)
+                if reparse:
+                    DocumentOcrRequest.objects.filter(file_id=file.pk).delete()
+                    if ocr_snapshot:
+                        DocumentOcrRequest.objects.create(**ocr_snapshot)
+                logger.exception("Document reprocessing failed for file %s", file.id)
+                raise
             file.status = FileStatus.FAILED
             file.error_message = sanitize_document_text(str(error))
             file.save(update_fields=["status", "error_message"])
