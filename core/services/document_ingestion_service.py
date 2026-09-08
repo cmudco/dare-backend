@@ -39,6 +39,7 @@ class DocumentIngestionCommand:
     reprocessing_action: Optional[str] = None
     processing_mode: Optional[str] = None
     previous_status: Optional[int] = None
+    model_identifier: str = ""
 
     @classmethod
     def from_raw(cls, file_id, chunk_size=None, overlap_size=None):
@@ -208,6 +209,11 @@ class DocumentIngestionService:
                     parsed,
                     chunk_size=command.chunk_size,
                     overlap_size=command.overlap_size,
+                    **(
+                        {"model_identifier": command.model_identifier}
+                        if command.model_identifier
+                        else {}
+                    ),
                 )
             if ocr_plan.should_pause:
                 request = file.ocr_request
@@ -231,6 +237,11 @@ class DocumentIngestionService:
                 continue_existing_enrichment=continuing or reusing_transcriptions,
                 **({"retry_failed_images": True} if retry_images else {}),
                 **({"require_vectors": True} if command.reprocessing_action else {}),
+                **(
+                    {"model_identifier": command.model_identifier}
+                    if command.model_identifier
+                    else {}
+                ),
             )
 
             ocr_status = None

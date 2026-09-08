@@ -177,7 +177,9 @@ def migrate_user_files_to_syftbox(user_id: int) -> dict:
 
 
 @job("default", timeout=env.DOCUMENT_OCR_JOB_TIMEOUT_SECONDS)
-def reprocess_document(file_id, job_id, action, processing_mode, previous_status):
+def reprocess_document(
+    file_id, job_id, action, processing_mode, previous_status, model_identifier=""
+):
     return DocumentIngestionService().process(
         DocumentIngestionCommand(
             file_id=file_id,
@@ -185,5 +187,6 @@ def reprocess_document(file_id, job_id, action, processing_mode, previous_status
             reprocessing_action=action,
             processing_mode=processing_mode,
             previous_status=previous_status,
+            model_identifier=model_identifier,
         )
     )

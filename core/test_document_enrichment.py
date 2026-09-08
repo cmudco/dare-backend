@@ -724,7 +724,11 @@ class FailedImageRetryTests(SimpleTestCase):
         )
         with (
             patch.object(service, "_enabled", return_value=True),
-            patch.object(service, "_resolve_route", return_value=route),
+            patch.object(service, "_resolve_route") as saved_route,
+            patch(
+                "core.services.document_enrichment_service.select_vision_model",
+                return_value=route,
+            ) as selected_route,
             patch.object(service, "_build_ai_service"),
             patch.object(service, "_persist"),
             patch.object(service, "_replace_blank_stored_pages"),
@@ -745,7 +749,10 @@ class FailedImageRetryTests(SimpleTestCase):
                 page_limit=0,
                 continue_existing=True,
                 retry_failed_images=True,
+                model_identifier="alternate-vision",
             )
+        selected_route.assert_called_once_with(file.user, "alternate-vision")
+        saved_route.assert_not_called()
         describe.assert_called_once()
         self.assertEqual(describe.call_args.args[1].order, 2)
         transcribe.assert_not_called()

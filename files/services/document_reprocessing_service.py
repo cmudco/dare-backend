@@ -9,6 +9,10 @@ from django.utils.translation import gettext_lazy as _
 from django_rq import enqueue
 
 from core.services.document_parsers.constants import PARSER_DOCLING
+from core.services.vision_model_service import (
+    VisionModelNotOffered,
+    select_vision_model,
+)
 from files.constants import DocumentReprocessingAction, FileProcessingStage, FileStatus
 from files.models import File
 
@@ -35,6 +39,7 @@ class DocumentReprocessingCommand:
     user_id: int
     action: str
     processing_mode: Optional[str] = None
+    model_identifier: str = ""
 
 
 class DocumentReprocessingService:
@@ -69,6 +74,11 @@ class DocumentReprocessingService:
                         "Reprocess this older document with Advanced before retrying images."
                     )
                 )
+            if command.model_identifier:
+                try:
+                    select_vision_model(file.user, command.model_identifier)
+                except VisionModelNotOffered as error:
+                    raise ReprocessingUnavailable(str(error)) from error
             previous_status = file.status
             previous_stage = file.processing_stage
             previous_job = file.job_id
@@ -88,6 +98,7 @@ class DocumentReprocessingService:
                 action,
                 processing_mode,
                 previous_status,
+                model_identifier=command.model_identifier,
                 job_id=job_id,
             )
         except Exception as error:

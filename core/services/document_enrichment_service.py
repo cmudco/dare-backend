@@ -45,7 +45,11 @@ from core.services.structured_output_error import (
     StructuredOutputError,
     StructuredOutputFailure,
 )
-from core.services.vision_model_service import VisionModelRoute, resolve_vision_model
+from core.services.vision_model_service import (
+    VisionModelRoute,
+    resolve_vision_model,
+    select_vision_model,
+)
 from files.models import DocumentEnrichmentCache, DocumentOcrRequest, File
 
 logger = logging.getLogger(__name__)
@@ -119,6 +123,7 @@ class DocumentEnrichmentService:
         page_limit: Optional[int] = None,
         continue_existing: bool = False,
         retry_failed_images: bool = False,
+        model_identifier: str = "",
     ) -> EnrichmentResult:
         """Run applicable vision lanes, persist their model, and return text."""
         stored_payload = (
@@ -170,7 +175,11 @@ class DocumentEnrichmentService:
             return self._persist_not_needed(file, parsed, model_payload)
 
         started = time.time()
-        route = self._resolve_route(file)
+        route = (
+            select_vision_model(file.user, model_identifier)
+            if model_identifier
+            else self._resolve_route(file)
+        )
         if route is None:
             if retry_failed_images:
                 raise RuntimeError(

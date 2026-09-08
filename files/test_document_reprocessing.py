@@ -37,6 +37,51 @@ class DocumentReprocessingTests(APITestCase):
         self.url = f"/api/files/{self.file.pk}/reprocess/"
 
     @patch("files.services.document_reprocessing_service.enqueue")
+    @patch("files.services.document_reprocessing_service.select_vision_model")
+    def test_selected_vision_model_is_queued_without_changing_default(
+        self, select_model, enqueue
+    ):
+        before = self.user.vision_model
+        response = self.client.post(
+            self.url,
+            {
+                "action": "reparse",
+                "processingMode": "advanced",
+                "modelIdentifier": "alternate-vision",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 202, response.data)
+        select_model.assert_called_once_with(self.user, "alternate-vision")
+        self.assertEqual(
+            enqueue.call_args.kwargs["model_identifier"], "alternate-vision"
+        )
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.vision_model, before)
+
+    @patch("files.services.document_reprocessing_service.enqueue")
+    @patch("files.services.document_reprocessing_service.select_vision_model")
+    def test_unavailable_model_does_not_queue_or_change_file(
+        self, select_model, enqueue
+    ):
+        from core.services.vision_model_service import VisionModelNotOffered
+
+        select_model.side_effect = VisionModelNotOffered("Model is unavailable")
+        response = self.client.post(
+            self.url,
+            {
+                "action": "reparse",
+                "processingMode": "advanced",
+                "modelIdentifier": "missing",
+            },
+            format="json",
+        )
+        self.assertEqual(response.status_code, 409)
+        enqueue.assert_not_called()
+        self.file.refresh_from_db()
+        self.assertEqual(self.file.status, FileStatus.PROCESSED)
+
+    @patch("files.services.document_reprocessing_service.enqueue")
     def test_queue_and_duplicate_request(self, enqueue):
         response = self.client.post(
             self.url, {"action": "reparse", "processingMode": "advanced"}, format="json"

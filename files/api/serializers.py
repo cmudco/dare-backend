@@ -75,6 +75,7 @@ class VisionModelSelectionSerializer(serializers.Serializer):
 
 
 class FileReprocessingSerializer(serializers.Serializer):
+    model_identifier = serializers.CharField(required=False, max_length=255)
     action = serializers.ChoiceField(choices=DocumentReprocessingAction.choices)
     processing_mode = serializers.ChoiceField(
         choices=DocumentProcessingMode.choices, required=False
