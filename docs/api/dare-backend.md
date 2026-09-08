@@ -51,6 +51,22 @@ Both LiteLLM connection-test endpoints return `models` plus a nullable
 Gemini Flash model, then another lightweight text model. Clients may highlight
 the recommendation, but the user remains free to select any returned model.
 
+## Document reprocessing and vision model selection
+
+`POST /api/files/{id}/reprocess/` accepts these camelCase JSON fields:
+
+| Field | Behavior |
+|---|---|
+| `action` | `reparse` processes the stored original; `retry_images` retries failed figure descriptions only. |
+| `processingMode` | Required for `reparse`: `basic` or `advanced`. Omit for `retry_images`, which retains the existing mode. |
+| `modelIdentifier` | Optional vision model for this run. Used for Advanced reprocessing or failed-image retries without changing the upload preference. |
+
+The selected model must be available for vision in the authenticated user's active wallet. An unavailable selection returns `409` without queuing work; the worker also checks availability before making model calls. Requests without `modelIdentifier` retain existing model-resolution behavior for older clients.
+
+Failed-image retries preserve successful descriptions. Full Advanced reprocessing uses the selected model for applicable scanned-page transcription and figure descriptions; scanned-page approval limits still apply. Cached outputs are scoped by user, image content, context, model, and prompt version, so changing models cannot reuse a different model's cached description.
+
+Deploy the API and restart background workers before releasing a frontend that sends `modelIdentifier`. This is an additive request field and requires no database migration.
+
 ## Improving Documentation
 
 To add descriptions to endpoints, use `@extend_schema` decorators on custom `@action` methods:

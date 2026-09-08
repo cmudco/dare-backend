@@ -6,7 +6,7 @@ from typing import Optional
 
 from config import env
 from core.services.dtos.parsed_document_dto import ParsedDocument
-from core.services.vision_model_service import resolve_vision_model
+from core.services.vision_model_service import resolve_vision_model, select_vision_model
 from files.constants import DocumentOcrStatus
 from files.models import DocumentOcrRequest, File
 
@@ -26,6 +26,7 @@ class DocumentOcrWorkflowService:
         parsed: ParsedDocument,
         chunk_size: Optional[int] = None,
         overlap_size: Optional[int] = None,
+        model_identifier: str = "",
     ) -> DocumentOcrPlan:
         detected_pages = int(parsed.structure.pages_without_text or 0)
         if not self._applies(file, parsed, detected_pages):
@@ -49,8 +50,12 @@ class DocumentOcrWorkflowService:
 
         # A model chosen at approval time outranks the user's default; either
         # falls back to the wallet's recommendation when no longer offered.
-        route = resolve_vision_model(
-            file.user, request.model_identifier or file.user.vision_model
+        route = (
+            select_vision_model(file.user, model_identifier)
+            if model_identifier
+            else resolve_vision_model(
+                file.user, request.model_identifier or file.user.vision_model
+            )
         )
         request.model_identifier = route.model.identifier if route else ""
         request.estimated_cost_per_page = (

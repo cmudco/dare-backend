@@ -86,6 +86,7 @@ class DocumentProcessor:
         continue_existing_enrichment: bool = False,
         retry_failed_images: bool = False,
         require_vectors: bool = False,
+        model_identifier: str = "",
     ) -> int:
         """Process a single file and create embeddings.
 
@@ -134,6 +135,11 @@ class DocumentProcessor:
                     page_limit=ocr_page_limit,
                     continue_existing=continue_existing_enrichment,
                     **({"retry_failed_images": True} if retry_failed_images else {}),
+                    **(
+                        {"model_identifier": model_identifier}
+                        if model_identifier
+                        else {}
+                    ),
                 )
                 content = enrichment.text
                 summary = enrichment.document_model.get("enrichment", {})
