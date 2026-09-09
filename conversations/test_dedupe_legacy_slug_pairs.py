@@ -25,13 +25,14 @@ PRIMARY_LLM_ID = "test-dedupe-primary-llm"
 OTHER_LLM_ID = "test-dedupe-other-llm"
 
 
-def make_card(slug, *, llm=None, reasoning=ModelReasoningLevel.NONE):
+def make_card(slug, *, llm=None, reasoning=ModelReasoningLevel.NONE, feedback=None):
     return ModelCardData.objects.create(
         name=slug,
         slug=slug,
         provider_name="test-provider",
         llm=llm,
         reasoning_level=reasoning,
+        public_feedback=feedback or {},
     )
 
 
@@ -49,13 +50,15 @@ class DedupeLegacySlugPairsTests(TestCase):
             llm=self.llm,
             reasoning=ModelReasoningLevel.COST_UNCONSTRAINED,
         )
-        self.linked_survivor = make_card(LINKED[1])
+        self.linked_survivor = make_card(LINKED[1], feedback={"summary": "keep me"})
 
         # Unlinked pair: loser has a real reasoning_level, no link either side.
         self.unlinked_loser = make_card(
             UNLINKED[0], reasoning=ModelReasoningLevel.COST_PREDICTABLE
         )
-        self.unlinked_survivor = make_card(UNLINKED[1])
+        self.unlinked_survivor = make_card(
+            UNLINKED[1], feedback={"summary": "keep me too"}
+        )
 
     def _run(self, *args):
         out = StringIO()
@@ -91,6 +94,7 @@ class DedupeLegacySlugPairsTests(TestCase):
 
         # Linked survivor received the link and the loser's reasoning_level.
         self.linked_survivor.refresh_from_db()
+        self.assertEqual(self.linked_survivor.public_feedback, {"summary": "keep me"})
         self.assertEqual(self.linked_survivor.llm_id, self.llm.id)
         self.assertEqual(
             self.linked_survivor.reasoning_level,
@@ -103,6 +107,9 @@ class DedupeLegacySlugPairsTests(TestCase):
 
         # Unlinked survivor carried the loser's reasoning_level.
         self.unlinked_survivor.refresh_from_db()
+        self.assertEqual(
+            self.unlinked_survivor.public_feedback, {"summary": "keep me too"}
+        )
         self.assertEqual(
             self.unlinked_survivor.reasoning_level,
             ModelReasoningLevel.COST_PREDICTABLE,
