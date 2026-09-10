@@ -25,6 +25,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from google.genai import types
 
+from .vision_handlers import ClaudeVisionHandler
+
 logger = logging.getLogger(__name__)
 
 # Google's documented bypass signature for function calls in histories that
@@ -124,8 +126,16 @@ class ClaudeMessageConverter:
                 converted.append({"role": "assistant", "content": blocks})
                 continue
 
-            # Plain user/assistant turns (string or vision content) pass through.
-            converted.append(message)
+            # Restored history uses OpenAI image parts; Anthropic also rejects
+            # empty text blocks on otherwise valid image-only turns.
+            normalized = ClaudeVisionHandler.convert_image_parts([message])[0]
+            if isinstance(normalized.get("content"), list):
+                normalized["content"] = [
+                    part
+                    for part in normalized["content"]
+                    if part.get("type") != "text" or part.get("text", "").strip()
+                ]
+            converted.append(normalized)
 
         _flush_tool_results()
         return system_message, converted

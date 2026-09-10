@@ -11,13 +11,14 @@ These functions handle:
 """
 
 import logging
-from typing import Dict, Any, Optional, Tuple, Callable, Awaitable
+from typing import Any, Awaitable, Callable, Dict, Optional, Tuple
 
-from channels.db import database_sync_to_async
-
-from conversations.models import Message, LLM
 from conversations.constants import ErrorCode
-from conversations.services.message_helpers.db_helpers import get_message_media_file_ids
+from conversations.models import LLM, Message
+from conversations.services.message_helpers.db_helpers import (
+    get_message_image_file_ids,
+    get_message_media_file_ids,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -75,5 +76,9 @@ async def prepare_regeneration_data(
     else:
         regeneration_message_data["image_generation_enabled"] = False
         regeneration_message_data["audio_transcription_enabled"] = False
+        image_ids = await get_message_image_file_ids(preceding_user_message)
+        regeneration_message_data["media_ids"] = list(
+            dict.fromkeys((message_data.get("media_ids") or []) + image_ids)
+        )
 
     return llm, regeneration_message_data

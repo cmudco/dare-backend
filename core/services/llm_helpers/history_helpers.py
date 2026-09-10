@@ -18,6 +18,7 @@ from channels.db import database_sync_to_async
 from conversations.constants import SenderType
 from conversations.models import Artifact, Conversation, Message
 
+from .db_helpers import convert_file_to_base64_dict
 from .tool_turn_helpers import build_history_tool_turns, summarize_tool_usage
 
 logger = logging.getLogger(__name__)
@@ -51,7 +52,9 @@ def get_conversation_history(conversation: Conversation, limit: int = 10) -> lis
     """
     messages = (
         Message.active_objects.filter(conversation=conversation)
-        .prefetch_related("mcp_tool_calls", "artifacts__artifact_group__latest_version")
+        .prefetch_related(
+            "files", "mcp_tool_calls", "artifacts__artifact_group__latest_version"
+        )
         .order_by("-created_at")
     )
 
@@ -76,7 +79,36 @@ def get_conversation_history(conversation: Conversation, limit: int = 10) -> lis
     result: List[Dict[str, Any]] = []
     for msg in ordered:
         if msg.sender_type != SenderType.AI_ASSISTANT:
-            result.append({"role": "user", "content": msg.message})
+            parts = (
+                [{"type": "text", "text": msg.message}] if msg.message.strip() else []
+            )
+            for attachment in msg.files.all():
+                if (
+                    attachment.media_type != "image"
+                    or attachment.is_deleted
+                    or not attachment.is_active
+                ):
+                    continue
+                image = convert_file_to_base64_dict(attachment)
+                if image:
+                    parts.append(
+                        {"type": "image_url", "image_url": {"url": image["preview"]}}
+                    )
+                else:
+                    parts.append(
+                        {
+                            "type": "text",
+                            "text": f"[Image attachment unavailable: {attachment.name}]",
+                        }
+                    )
+            if not parts:
+                continue
+            content = (
+                parts
+                if any(part["type"] == "image_url" for part in parts)
+                else "\n".join(part["text"] for part in parts)
+            )
+            result.append({"role": "user", "content": content})
             continue
 
         content = msg.message

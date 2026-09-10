@@ -64,6 +64,16 @@ def get_message_media_file_ids(message: Message) -> List[int]:
     )
 
 
+@database_sync_to_async
+def get_message_image_file_ids(message: Message) -> List[int]:
+    """Restore live image attachments from the authorized original turn."""
+    return list(
+        message.files.filter(
+            media_type="image", is_active=True, is_deleted=False
+        ).values_list("id", flat=True)
+    )
+
+
 def _resolve_litellm_ref(
     key_id: str, model_name: str, user=None
 ) -> Optional[LLMDescriptor]:
