@@ -537,7 +537,9 @@ class BillingService:
                                     message=transaction_message,
                                     input_tokens=message_obj.input_tokens,
                                     output_tokens=message_obj.output_tokens,
-                                    cached_input_tokens=cached_prompt_tokens(message_obj),
+                                    cached_input_tokens=cached_prompt_tokens(
+                                        message_obj
+                                    ),
                                     billing_mode=BillingModeChoice.OWN_API,
                                     platform=transaction_platform,
                                     **energy_data,
@@ -581,7 +583,9 @@ class BillingService:
                                     message=transaction_message,
                                     input_tokens=message_obj.input_tokens,
                                     output_tokens=message_obj.output_tokens,
-                                    cached_input_tokens=cached_prompt_tokens(message_obj),
+                                    cached_input_tokens=cached_prompt_tokens(
+                                        message_obj
+                                    ),
                                     billing_mode=BillingModeChoice.WALLET,
                                     platform=transaction_platform,
                                     **energy_data,
@@ -892,11 +896,12 @@ class BillingService:
         try:
             wallet = await database_sync_to_async(lambda: user.wallet)()
             return wallet
-        except user.wallet.RelatedObjectDoesNotExist:
-            logger.warning(f"Creating wallet for user: {user.id}")
-            wallet = await database_sync_to_async(
-                lambda: Wallet.objects.create(user=user, balance=Decimal("5.00"))
-            )()
+        except Wallet.DoesNotExist:
+            wallet, created = await database_sync_to_async(
+                Wallet.objects.get_or_create
+            )(user=user, defaults={"balance": Decimal("5.00")})
+            if created:
+                logger.warning("Created missing wallet for user: %s", user.id)
             return wallet
 
     async def _send_error(self, code: str, message: str, details: Dict = None):
