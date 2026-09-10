@@ -62,7 +62,9 @@ class LLMQueryRequest:
 
     def __post_init__(self):
         """Validate request data."""
-        if not self.message or not self.message.strip():
+        if (
+            not self.message or not self.message.strip()
+        ) and not self.media.has_media():
             raise ValueError("Message cannot be empty")
         # User can be None for public bot conversations
         # Validation: user is required UNLESS conversation has no user (public bot)
