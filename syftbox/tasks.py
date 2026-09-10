@@ -1,11 +1,12 @@
 import logging
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db.models import Q
 from django_rq import enqueue, job
 
 from core.storage.constants import StorageBackendChoice
-from syftbox.services.syftbox_datasite_sync_service import SyftBoxDatasitePollService
+from syftbox.services import syftbox_datasite_sync_service
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +18,17 @@ def sync_user_datasite(user_id: int) -> dict:
 
     Intended to be enqueued manually first, then reused by a scheduler.
     """
+    if not settings.SYFTBOX.get("ENABLED", False):
+        logger.info(
+            "Skipping datasite poll for user_id=%s: SyftBox sync is disabled.",
+            user_id,
+        )
+        return {
+            "status": "skipped",
+            "user_id": user_id,
+            "reason": "syftbox_disabled",
+        }
+
     user_model = get_user_model()
 
     try:
@@ -29,7 +41,7 @@ def sync_user_datasite(user_id: int) -> dict:
             "reason": "user_not_found",
         }
 
-    service = SyftBoxDatasitePollService()
+    service = syftbox_datasite_sync_service.SyftBoxDatasitePollService()
     result = service.sync_user_datasite(user)
 
     payload = {
@@ -51,6 +63,16 @@ def sync_user_datasite(user_id: int) -> dict:
 @job
 def sync_syftbox_datasites() -> dict:
     """Enqueue one datasite sync job per eligible SyftBox user."""
+    if not settings.SYFTBOX.get("ENABLED", False):
+        payload = {
+            "status": "skipped",
+            "reason": "syftbox_disabled",
+            "eligible_users": 0,
+            "enqueued_jobs": 0,
+        }
+        logger.info("Skipping SyftBox datasite sync dispatch: sync is disabled.")
+        return payload
+
     user_model = get_user_model()
     users = (
         user_model.active_objects.filter(storage_backend=StorageBackendChoice.SYFTBOX)

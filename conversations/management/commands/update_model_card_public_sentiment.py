@@ -42,6 +42,7 @@ try:
 except ImportError:
     HAS_ANTHROPIC = False
 
+CRAWL_MODEL = "claude-sonnet-5"
 
 # Map model names to provider
 PROVIDER_MAP = {
@@ -800,7 +801,7 @@ Focus on authentic user experiences, not marketing content. Provide at least 5-1
 
         try:
             response = client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model=CRAWL_MODEL,
                 max_tokens=4096,
                 tools=[{
                     "type": "web_search_20250305",
@@ -897,7 +898,7 @@ Focus on authentic user experiences, not marketing content. Provide at least 5-1
 
         try:
             response = client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model=CRAWL_MODEL,
                 max_tokens=4096,
                 messages=[{
                     "role": "user",
