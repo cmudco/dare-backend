@@ -336,6 +336,11 @@ CHANNEL_LAYERS = {
     }
 }
 
+# Keep optional rolling summaries off the ingestion queue unless explicitly enabled.
+CONVERSATION_SUMMARY_JOBS_ENABLED = env.env.bool(
+    "CONVERSATION_SUMMARY_JOBS_ENABLED", default=False
+)
+
 RQ_QUEUES = {
     'default': {
         'HOST': REDIS_HOST,
