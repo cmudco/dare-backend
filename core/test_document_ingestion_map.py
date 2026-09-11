@@ -414,6 +414,35 @@ class DocumentIngestionMapTests(TestCase):
         self.assertGreater(stage["details"]["recovered_characters"], 400)
         self.assertEqual(stage["details"]["chunk_rows"], 1)
 
+    def test_basic_uses_exact_windows_without_structured_chunker(self):
+        self.file.processing_mode = "basic"
+        self.file.save(update_fields=["processing_mode"])
+        text = FLAT_TEXT * 3
+        parsed = ParsedDocument(
+            text=text,
+            elements=(),
+            structure=DocumentStructure(content_chars=len(text)),
+            parser="basic",
+        )
+        with patched_ingestion(parsed_document=parsed), patch(
+            "core.services.document_processor.StructuredChunker",
+            side_effect=AssertionError(
+                "Basic must not construct the structured chunker"
+            ),
+        ):
+            self._process()
+        rows = list(
+            DocumentChunk.objects.filter(file=self.file).order_by("chunk_index")
+        )
+        self.assertEqual(rows[0].text, text[:300])
+        self.assertTrue(all(len(row.text) == 300 for row in rows[:-1]))
+        self.assertTrue(
+            all(a.text[-40:] == b.text[:40] for a, b in zip(rows, rows[1:]))
+        )
+        self.assertEqual(
+            rows[0].text + "".join(row.text[40:] for row in rows[1:]), text
+        )
+
     def test_flat_fallback_records_unstructured(self):
         with patched_ingestion(parsed_document=FLAT_PARSED):
             self._process()

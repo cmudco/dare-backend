@@ -26,6 +26,7 @@ from core.services.file_processing_journey import FileProcessingJourney
 from core.services.file_processor import FileProcessor
 from core.services.rag.dtos import CitationCounter
 from core.services.rag.entity_extractor import extract_entities
+from core.services.rag.raw_chunker import split_raw_text
 from core.services.rag.reference_resolver import build_references
 from core.services.rag.structured_chunker import (
     CHUNK_FLAT,
@@ -34,6 +35,7 @@ from core.services.rag.structured_chunker import (
     StructuredChunker,
 )
 from core.services.vector_service import get_vector_service
+from files.constants import DocumentProcessingMode
 from files.models import File
 from files.services.document_map_service import DocumentMapService
 from workflows.models import WorkflowStepSnippet
@@ -311,13 +313,27 @@ class DocumentProcessor:
         Chunk rows are written even when reference extraction fails, so a
         resolver bug costs edges, never citations.
         """
-        chunker = StructuredChunker(chunk_size, overlap_size)
-        fallback_text = "\n\n".join(
-            part
-            for part in (content, parsed.embeddable_text, parsed.recovery_text)
-            if part and part.strip()
+        basic = (
+            file.processing_mode == DocumentProcessingMode.BASIC
+            or parsed.parser == "basic"
         )
-        structured = chunker.chunk(parsed, document_model, fallback_text=fallback_text)
+        if basic:
+            structured = [
+                StructuredChunk(text=piece, element_kind=CHUNK_FLAT)
+                for piece in split_raw_text(content, chunk_size, overlap_size)
+            ]
+            minimum_retrieval_chars = None
+        else:
+            chunker = StructuredChunker(chunk_size, overlap_size)
+            fallback_text = "\n\n".join(
+                part
+                for part in (content, parsed.embeddable_text, parsed.recovery_text)
+                if part and part.strip()
+            )
+            structured = chunker.chunk(
+                parsed, document_model, fallback_text=fallback_text
+            )
+            minimum_retrieval_chars = chunker.minimum_text_size
         vectors = self.embedding_service.create_embeddings_with_metadata(
             [chunk.searchable_text for chunk in structured],
             file.id,
@@ -399,7 +415,10 @@ class DocumentProcessor:
 
         return vectors, {
             "structured": is_structured,
-            "minimum_retrieval_chars": chunker.minimum_text_size,
+            "minimum_retrieval_chars": minimum_retrieval_chars,
+            "chunking_strategy": (
+                "Fixed character windows" if basic else "Document structure"
+            ),
             "contextualized_chunks": sum(
                 bool(chunk.retrieval_text) for _, chunk in mapped
             ),
