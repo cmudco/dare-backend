@@ -36,7 +36,11 @@ from core.services.rag.structured_chunker import (
     StructuredChunk,
     StructuredChunker,
 )
-from core.services.vector_integrity import validate_generated, verify_stored
+from core.services.vector_integrity import (
+    VectorIntegrityError,
+    validate_generated,
+    verify_stored,
+)
 from core.services.vector_service import get_vector_service
 from files.constants import DocumentProcessingMode
 from files.models import File, VectorIndexAttempt
@@ -255,7 +259,7 @@ class DocumentProcessor:
                 self.index_attempt.status = "published" if published else "failed"
                 self.index_attempt.error = (
                     f"{type(e).__name__}: {str(e)}"[:2000]
-                    if isinstance(e, ValueError)
+                    if isinstance(e, VectorIntegrityError)
                     else f"{type(e).__name__}: Index creation failed; see correlated worker logs."
                 )
                 self.index_attempt.save()
@@ -388,7 +392,7 @@ class DocumentProcessor:
             or metadata.get("file_type") != file.file_type
             for _, _, metadata in vectors
         ):
-            raise ValueError("Embedding file metadata does not match")
+            raise VectorIntegrityError("Embedding file metadata does not match")
         if not vectors:
             return [], {
                 "structured": False,

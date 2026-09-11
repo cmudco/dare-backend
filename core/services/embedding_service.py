@@ -3,6 +3,7 @@ from typing import Dict, List, Tuple
 import tiktoken
 
 from core.config.vector_db import create_vector_id
+from core.services.vector_integrity import VectorIntegrityError
 
 
 class EmbeddingService:
@@ -76,7 +77,9 @@ class EmbeddingService:
                 self._count_tokens(chunk) > self.max_tokens_per_request
                 for chunk in batch
             ):
-                error = ValueError("A chunk exceeds the embedding request token limit")
+                error = VectorIntegrityError(
+                    "A chunk exceeds the embedding request token limit"
+                )
                 error.generated_count = len(vectors)
                 raise error
             try:
@@ -85,7 +88,7 @@ class EmbeddingService:
                 error.generated_count = len(vectors)
                 raise
             if len(embeddings) != len(batch):
-                error = ValueError(
+                error = VectorIntegrityError(
                     "Embedding provider returned an incomplete or excessive batch"
                 )
                 error.generated_count = len(vectors) + len(embeddings)
