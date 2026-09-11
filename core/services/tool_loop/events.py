@@ -16,8 +16,8 @@ for chat, ``{"workflow_run_id", "node_id", "run_step_id"}`` for workflow
 steps — so both surfaces consume one payload shape. Payload keys are
 camelized before send; the ``origin`` field routes the result into exactly
 one typed field (``dareResult`` / ``mcpResult`` / ``providerResult``),
-matching the persisted-history payload shape from
-``conversation_service._build_tool_call_payload``.
+the same fields ``MessageToolCallSerializer`` emits for persisted tool calls
+in REST and socket history.
 """
 
 import logging

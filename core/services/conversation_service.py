@@ -9,7 +9,7 @@ from django.db.models import Prefetch
 from djangorestframework_camel_case.util import camelize
 
 from conversations.api.serializers import MessageSerializer
-from conversations.constants import SenderType, ToolCallOrigin
+from conversations.constants import SenderType
 from conversations.models import LLM, Artifact, Conversation, Message
 from core.services.background_model_service import BackgroundModelService
 from core.services.billing_service import BillingService
@@ -26,7 +26,13 @@ class ConversationService:
     async def fetch_chat_history_from_db(
         self, conversation: Conversation, limit: int = 50
     ):
-        """Fetches recent chat history for AI context."""
+        """Recent messages for the socket ``conversation_history`` event.
+
+        The rows are the REST ``MessageSerializer`` output, camelized. The
+        socket transport carries the same message contract as the messages
+        API, so a field added to the serializer reaches both clients without a
+        second, hand-maintained field list.
+        """
 
         messages = await database_sync_to_async(
             lambda: list(
@@ -48,87 +54,7 @@ class ConversationService:
         serialized_messages = await database_sync_to_async(
             lambda: MessageSerializer(reversed(messages), many=True).data
         )()
-
-        user_email = await self.get_user_email(conversation)
-
-        history = [
-            {
-                "id": msg["id"],
-                "message": msg["message"],
-                "sender": msg["sender_name"],
-                "sender_type": msg["sender_type"],
-                "created_at": msg["created_at"],
-                "llm": msg["llm"],
-                # LiteLLM provenance — populated when the message was
-                # dispatched through a proxy (llm is null in that case).
-                "litellmModelName": msg.get("litellm_model_name"),
-                "files": msg.get("files", []),
-                "tags": msg.get("tags", []),
-                "snippets": msg.get("snippets", []),
-                "webSearchSources": msg.get("web_search_sources", []),
-                "feedbackType": msg.get("feedback_type", None),
-                "feedbackText": msg.get("feedback_text", None),
-                "isEdited": msg.get("is_edited", False),
-                "isRegenerated": msg.get("is_regenerated", False),
-                "originalMessage": msg.get("original_message", None),
-                "cost": msg.get("cost", None),
-                "inputTokens": msg.get("input_tokens", None),
-                "outputTokens": msg.get("output_tokens", None),
-                "usageDetails": msg.get("usage_details", None),
-                "energyWh": msg.get("energy_wh", None),
-                "carbonG": msg.get("carbon_g", None),
-                "waterMl": msg.get("water_ml", None),
-                "energyStats": msg.get("energy_stats", None),
-                "artifactId": msg.get("artifactId", None),
-                "artifactIds": msg.get("artifactIds", []),
-                "memoryContextData": msg.get("memory_context_data") or [],
-                "contextTrace": msg.get("context_trace"),
-                "retrievalTrace": msg.get("retrieval_trace"),
-                # Keep socket fallback history aligned with the REST message
-                # serializer; the client camelizes this to `toolCalls`.
-                "tool_calls": [
-                    self._build_tool_call_payload(tc)
-                    for tc in msg.get("tool_calls", [])
-                ],
-            }
-            for msg in serialized_messages
-        ]
-        return camelize(history)
-
-    def _build_tool_call_payload(self, tc: dict) -> dict:
-        """
-        Build a properly typed tool call payload for FE.
-
-        Separates DARE results from MCP results into different fields
-        for clean, zero-confusion typing on FE side.
-        """
-        origin = tc.get("origin") or ToolCallOrigin.MCP
-
-        payload = {
-            "id": tc["id"],
-            "toolName": tc["tool_name"],
-            "serverSlug": tc["server_slug"],
-            "origin": origin,
-            "status": tc["status"],
-            "round": tc.get("round", 0),
-            "arguments": tc.get("arguments") or {},
-            "error": tc.get("error"),
-        }
-
-        if origin == ToolCallOrigin.DARE:
-            payload["dareResult"] = tc.get("dare_result")
-        elif origin == ToolCallOrigin.PROVIDER:
-            payload["providerResult"] = tc.get("provider_result")
-        else:
-            payload["mcpResult"] = tc.get("mcp_result")
-
-        return payload
-
-    async def get_user_email(self, conversation: Conversation) -> str:
-        """Fetch user email associated with the conversation."""
-        return await database_sync_to_async(
-            lambda: getattr(conversation.user, "email", "")
-        )()
+        return camelize(serialized_messages)
 
     async def create_message(
         self,
