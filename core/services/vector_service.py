@@ -23,7 +23,9 @@ def client_operation(func):
             return func(*args, **kwargs)
         except Exception as e:
             operation_name = func.__name__
-            raise Exception(f"Error in {operation_name}: {str(e)}")
+            error = RuntimeError(f"Vector operation failed: {operation_name}")
+            error.acknowledged_count = getattr(e, "acknowledged_count", 0)
+            raise error from e
 
     return wrapper
 
@@ -100,6 +102,10 @@ class BaseVectorService(ABC):
     def delete_namespace(self, namespace: str) -> bool:
         """Delete an entire namespace."""
         pass
+
+    def read_generation(self, generation, user_id, logical_file_id):
+        """Read all generation objects directly; never use ranked retrieval."""
+        return self.client.read_generation(generation, user_id, logical_file_id)
 
     def search_documents(
         self,

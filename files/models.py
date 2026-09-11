@@ -588,3 +588,58 @@ class DocumentEntity(TimeStampMixin):
 
     def __str__(self):
         return f"{self.kind} {self.key} in chunk {self.chunk_id}"
+
+
+class VectorIndexAttempt(TimeStampMixin):
+    """Durable evidence for a staged index, independent of the publication transaction."""
+
+    file = models.ForeignKey(
+        File,
+        on_delete=models.CASCADE,
+        related_name="vector_attempts",
+        help_text="File whose index is being replaced.",
+    )
+    generation = models.CharField(
+        max_length=32, unique=True, help_text="Unique staged generation identifier."
+    )
+    owner_id = models.PositiveBigIntegerField(
+        help_text="Owner at the time of ingestion."
+    )
+    backend = models.IntegerField(help_text="Vector backend used for this attempt.")
+    status = models.CharField(
+        max_length=16,
+        default="running",
+        help_text="running, empty, published, or failed.",
+    )
+    expected_count = models.PositiveIntegerField(
+        default=0, help_text="Expected chunks before embedding."
+    )
+    generated_count = models.PositiveIntegerField(
+        default=0, help_text="Embedding results generated."
+    )
+    attempted_count = models.PositiveIntegerField(
+        default=0, help_text="Vectors submitted for writing."
+    )
+    acknowledged_count = models.PositiveIntegerField(
+        default=0,
+        help_text="Writes explicitly acknowledged; a lower bound on interrupted batches.",
+    )
+    verified_count = models.PositiveIntegerField(
+        default=0, help_text="Objects passing complete generation verification."
+    )
+    verified_at = models.DateTimeField(
+        null=True, blank=True, help_text="Time read-back verification succeeded."
+    )
+    verification_seconds = models.FloatField(
+        default=0,
+        help_text="Duration of read-back verification including bounded retries.",
+    )
+    error = models.TextField(
+        blank=True, help_text="Failure type and safe diagnostic reason."
+    )
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"File {self.file_id}: {self.generation} ({self.status})"

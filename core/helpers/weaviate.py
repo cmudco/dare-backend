@@ -17,6 +17,14 @@ BODY_TEXT_PROPERTY = Property(
 )
 
 
+FILE_TYPE_PROPERTY = Property(
+    name="file_type",
+    data_type=DataType.TEXT,
+    index_filterable=False,
+    index_searchable=False,
+)
+
+
 class WeaviateClient:
     def __init__(self):
         self.collection_name = settings.WEAVIATE.get("COLLECTION_NAME", "Document")
@@ -84,6 +92,7 @@ class WeaviateClient:
                         Property(name="title", data_type=DataType.TEXT),
                         Property(name="content", data_type=DataType.TEXT),
                         BODY_TEXT_PROPERTY,
+                        FILE_TYPE_PROPERTY,
                         Property(name="user_id", data_type=DataType.TEXT),
                         Property(name="file_id", data_type=DataType.TEXT),
                         Property(name="chunk_index", data_type=DataType.INT),
@@ -99,15 +108,16 @@ class WeaviateClient:
         """Add the non-searchable source passage field to existing collections."""
         collection = self.client.collections.get(self.collection_name)
         names = {prop.name for prop in collection.config.get().properties}
-        if BODY_TEXT_PROPERTY.name in names:
-            return
-        try:
-            collection.config.add_property(BODY_TEXT_PROPERTY)
-        except Exception:
-            # Multiple workers may discover an old schema at the same time.
-            refreshed = {prop.name for prop in collection.config.get().properties}
-            if BODY_TEXT_PROPERTY.name not in refreshed:
-                raise
+        for prop in (BODY_TEXT_PROPERTY, FILE_TYPE_PROPERTY):
+            if prop.name in names:
+                continue
+            try:
+                collection.config.add_property(prop)
+            except Exception:
+                # Multiple workers may discover an old schema at the same time.
+                refreshed = {item.name for item in collection.config.get().properties}
+                if prop.name not in refreshed:
+                    raise
 
     def upsert_document(
         self, doc_id: str, vector: List[float], metadata: Dict[str, Any], user_id: str
@@ -123,6 +133,7 @@ class WeaviateClient:
                 "file_id": metadata.get("file_id", ""),
                 "chunk_index": metadata.get("chunk_index", 0),
                 "original_id": doc_id,
+                "file_type": metadata.get("file_type", ""),
             }
 
             weaviate_uuid = str(uuid.uuid5(uuid.NAMESPACE_DNS, doc_id))
@@ -297,6 +308,43 @@ class WeaviateClient:
         collection.data.delete_many(where=document_filter)
         return True
 
+    def read_generation(self, generation, user_id, logical_file_id):
+        collection = self.client.collections.get(self.collection_name)
+        filters = weaviate.classes.query.Filter.by_property("file_id").equal(
+            str(generation)
+        ) & weaviate.classes.query.Filter.by_property("user_id").equal(str(user_id))
+        objects = []
+        offset = 0
+        while True:
+            response = collection.query.fetch_objects(
+                filters=filters, limit=100, offset=offset, include_vector=True
+            )
+            for obj in response.objects:
+                properties = obj.properties
+                index = properties.get("chunk_index")
+                expected_id = f"{generation}_{index}"
+                if properties.get("original_id") != expected_id or str(obj.uuid) != str(
+                    uuid.uuid5(uuid.NAMESPACE_DNS, expected_id)
+                ):
+                    raise ValueError("Stored Weaviate object identity mismatch")
+                objects.append(
+                    {
+                        "metadata": {
+                            "file_id": properties.get("file_id"),
+                            "user_id": properties.get("user_id"),
+                            "chunk_index": index,
+                            "file_name": properties.get("title"),
+                            "file_type": properties.get("file_type"),
+                            "text": properties.get("content"),
+                            "body_text": properties.get("body_text"),
+                        },
+                        "vector": obj.vector.get("default", []),
+                    }
+                )
+            if len(response.objects) < 100:
+                return objects
+            offset += len(response.objects)
+
     def upsert_vectors(
         self,
         vectors: List[Tuple[str, List[float], Dict]],
@@ -335,6 +383,7 @@ class WeaviateClient:
                     "body_text": metadata.get("body_text") or metadata.get("text", ""),
                     "user_id": user_id,
                     "file_id": doc_id,
+                    "file_type": metadata.get("file_type", ""),
                     "chunk_index": chunk_index,
                 }
 
@@ -365,7 +414,9 @@ class WeaviateClient:
                 acknowledged,
                 namespace,
             )
-            raise Exception(f"Error upserting vectors to Weaviate: {str(e)}")
+            error = RuntimeError("Weaviate write failed")
+            error.acknowledged_count = acknowledged
+            raise error from e
 
     def query_vectors(
         self,
