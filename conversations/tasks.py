@@ -24,6 +24,8 @@ def refresh_conversation_summary_for_conversation(
     conversation_pk: int,
 ) -> dict[str, Any]:
     """Create or update the rolling summary for a single conversation."""
+    if not settings.CONVERSATION_SUMMARY_JOBS_ENABLED:
+        return {"status": "skipped", "reason": "summary_jobs_disabled"}
     try:
         conversation = Conversation.active_objects.get(pk=conversation_pk)
     except Conversation.DoesNotExist:
