@@ -303,6 +303,7 @@ class WeaviateClient:
         namespace: Optional[str] = None,
     ) -> bool:
         """Upsert vectors to Weaviate."""
+        acknowledged = 0
         try:
             if not namespace:
                 raise ValueError(
@@ -339,14 +340,31 @@ class WeaviateClient:
 
                 full_doc_id = f"{doc_id}_{chunk_index}"
 
-                self.upsert_document(
+                written = self.upsert_document(
                     doc_id=full_doc_id,
                     vector=embedding,
                     metadata=weaviate_metadata,
                     user_id=user_id,
                 )
+                if written is not True:
+                    raise RuntimeError(
+                        "Weaviate did not acknowledge the document write"
+                    )
+                acknowledged += 1
+            logger.info(
+                "Weaviate batch acknowledged: attempted=%s acknowledged=%s user_id=%s",
+                len(vectors),
+                acknowledged,
+                user_id,
+            )
             return True
         except Exception as e:
+            logger.exception(
+                "Weaviate batch failed: attempted=%s acknowledged=%s namespace=%s",
+                len(vectors),
+                acknowledged,
+                namespace,
+            )
             raise Exception(f"Error upserting vectors to Weaviate: {str(e)}")
 
     def query_vectors(

@@ -652,7 +652,12 @@ class FileViewSet(viewsets.ModelViewSet):
             and document.get("parser") == file_obj.parser_name
             and bool(document.get("elements"))
         )
-        return Response({"structure": structured, "map": structured})
+        return Response(
+            {
+                "structure": structured,
+                "map": structured or DocumentChunk.objects.filter(file=file_obj).exists(),
+            }
+        )
 
     @extend_schema(request=FileReprocessingSerializer, responses={202: FileSerializer})
     @action(

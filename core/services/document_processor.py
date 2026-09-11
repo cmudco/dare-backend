@@ -202,7 +202,13 @@ class DocumentProcessor:
                     self.update_vector_service(file.user.id)
                     if vectors:
                         staging_key = generation
-                        self._store_vectors(vectors, file.user.id, staging_key)
+                        confirmed_vectors = self._store_vectors(
+                            vectors, file.user.id, staging_key
+                        )
+                        stage.add_details(
+                            attempted_vectors=len(vectors),
+                            acknowledged_vectors=confirmed_vectors,
+                        )
                         file.index_generation = generation
                         file.vector_db_source = file.user.vector_db
                         file.save(
@@ -449,7 +455,7 @@ class DocumentProcessor:
         vectors: List[Tuple[str, List[float], Dict]],
         user_id: int,
         file_id: Union[int, str],
-    ) -> bool:
+    ) -> int:
         """Write an isolated generation; the File row publishes it after success."""
         vectors = [
             (f"{vector_id}:{file_id}", embedding, {**metadata, "file_id": str(file_id)})
@@ -462,7 +468,7 @@ class DocumentProcessor:
             )
             if stored is False:
                 raise RuntimeError("Vector backend rejected the replacement batch")
-        return True
+        return len(vectors)
 
     @staticmethod
     def _retire_index(index_key, user_id, backend):
