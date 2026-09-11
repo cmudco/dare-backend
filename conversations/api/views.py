@@ -11,7 +11,7 @@ import markdown
 import weasyprint
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Count, OuterRef, Subquery
+from django.db.models import Count, OuterRef, Prefetch, Subquery
 from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404
 from django.template.loader import render_to_string
@@ -116,6 +116,18 @@ class ConversationViewSet(ConversationSharingMixin, viewsets.ModelViewSet):
         )
         return queryset.annotate(_fallback_llm_id=Subquery(latest_llm))
 
+    @staticmethod
+    def _with_list_relations(queryset):
+        """Everything ConversationSerializer reads per row, loaded up front."""
+        return queryset.select_related(
+            "selected_model",
+            "prompt",
+            "prompt__user",
+            "prompt__published",
+            "user",
+            "selected_agent",
+        ).prefetch_related("selected_mcp_servers", "selected_dare_tools")
+
     def get_queryset(self):
         platform_source = detect_platform_from_request(self.request)
 
@@ -135,7 +147,7 @@ class ConversationViewSet(ConversationSharingMixin, viewsets.ModelViewSet):
                     is_published=True, source=platform_source
                 )
             return self._annotate_fallback_llm(
-                queryset.select_related("selected_model", "prompt", "user")
+                self._with_list_relations(queryset)
             ).order_by("-published_at")
 
         anonymous_session_id = self.request.query_params.get(
@@ -164,7 +176,7 @@ class ConversationViewSet(ConversationSharingMixin, viewsets.ModelViewSet):
             queryset = queryset.filter(bot_id=bot_id)
 
         return self._annotate_fallback_llm(
-            queryset.select_related("selected_model", "prompt")
+            self._with_list_relations(queryset)
         ).order_by("sort_order", "-created_at")
 
     def perform_create(self, serializer):
@@ -435,6 +447,7 @@ class ConversationViewSet(ConversationSharingMixin, viewsets.ModelViewSet):
                 "snippets__file",
                 "web_search_sources",
                 "mcp_tool_calls",
+                Prefetch("artifacts", queryset=Artifact.active_objects.all()),
             )
             .order_by("created_at")
         )
