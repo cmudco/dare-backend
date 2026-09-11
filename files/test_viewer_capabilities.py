@@ -64,6 +64,16 @@ class ViewerCapabilitiesTests(APITestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["text"], "The complete rulebook passage.")
 
+    def test_status_poll_includes_recorded_parser(self):
+        file = File.active_objects.create(
+            user=self.user, name="rules.txt", parser_name="basic"
+        )
+        response = self.client.post(
+            "/api/files/job-statuses/", {"fileIds": [file.pk]}, format="json"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data[0]["parserName"], "basic")
+
     def test_owner_and_authentication_required(self):
         other = get_user_model().objects.create_user(
             email="other@example.com", password="test"

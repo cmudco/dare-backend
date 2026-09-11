@@ -230,6 +230,7 @@ class FileViewSet(viewsets.ModelViewSet):
                     "status": file.get_status_display(),
                     "statusCode": file.status,
                     "processingStage": file.processing_stage,
+                    "parserName": file.parser_name,
                 }
                 if job:
                     status_data["jobStatus"] = job.get_status()
