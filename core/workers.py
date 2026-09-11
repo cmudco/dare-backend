@@ -15,11 +15,14 @@ class InspectableWorker(Worker):
 
     def work(self, *args, **kwargs):
         # A worker that restarts after a crash is the first to know its
-        # predecessor's jobs are dead; sweep them before taking new work.
+        # predecessor's jobs are dead: sweep them before taking new work, and
+        # (re)register the recurring sweep so the existing rqscheduler process
+        # keeps running it without any deployment change.
         try:
             from core.services.ingestion_reconciliation import (
                 reconcile_interrupted_ingestions,
             )
+            from files.scheduler import IngestionReconciliationScheduler
 
             summary = reconcile_interrupted_ingestions()
             if summary.interrupted or summary.retained:
@@ -28,6 +31,10 @@ class InspectableWorker(Worker):
                     summary.interrupted,
                     summary.retained,
                 )
+            logger.info(
+                "Ingestion reconciliation schedule: %s",
+                IngestionReconciliationScheduler().start(),
+            )
         except Exception:
             logger.exception("Startup ingestion sweep failed; worker continues")
         return super().work(*args, **kwargs)

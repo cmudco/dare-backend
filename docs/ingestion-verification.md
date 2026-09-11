@@ -46,12 +46,21 @@ published generation is still active. RQ itself only expires a dead worker's
 "started" registry entry after the job's own timeout, which is why a queue
 dashboard can show dozens of running jobs with no worker alive.
 
-The sweep runs in three places: every worker runs it once at startup (a
-restarted worker is the first to know its predecessor's jobs are dead), the
-scheduler runner repeats it every `INGESTION_RECONCILE_INTERVAL_SECONDS`
-(default 300; 0 disables), and `python manage.py reconcile_ingestion` runs it
-by hand. Worker job failures are also reported to Sentry through the RQ
-integration.
+The sweep runs in three places, none of which needs a new process or a
+deployment change: every worker runs it once at startup (a restarted worker is
+the first to know its predecessor's jobs are dead) and at the same time
+(re)registers a recurring job with rq-scheduler, which the already-running
+`rqscheduler` process enqueues on the default queue every
+`INGESTION_RECONCILE_INTERVAL_SECONDS` (default 300; 0 disables); and
+`python manage.py reconcile_ingestion` runs it by hand. Registration is
+idempotent (fixed job id, cancelled and re-added on each worker start). Worker
+job failures are also reported to Sentry through the RQ integration.
+
+Detection latency depends on RQ's worker heartbeat: a forking worker (the
+default-queue workers) refreshes its key every 30 s with a 90 s TTL while
+running a job, so a dead worker is recognised within about two minutes. A
+`SimpleWorker` heartbeats once per job with the job's timeout as TTL, so on
+that class detection waits for the job timeout.
 
 ## Live index health
 

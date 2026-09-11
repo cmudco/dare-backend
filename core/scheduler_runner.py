@@ -16,7 +16,6 @@ logger = logging.getLogger(__name__)
 
 from config.environment import config, features
 from billing.scheduler import WalletTopupScheduler
-from files.scheduler import IngestionReconciliationScheduler
 
 def run_all_schedulers():
     logger.info(
@@ -30,9 +29,6 @@ def run_all_schedulers():
         logger.info("Wallet topup scheduler started.")
     else:
         logger.info("Wallet topup scheduler DISABLED for this environment.")
-
-    result = IngestionReconciliationScheduler().start()
-    logger.info("Ingestion reconciliation scheduler: %s", result)
 
     logger.info("Scheduler startup complete.")
 
