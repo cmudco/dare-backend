@@ -63,7 +63,7 @@ class StepNodeHandler(BaseExecutionHandler):
             started_at = await self._mark_running(run_step)
             await emitter.step_started(node.id, node.label, "step", started_at)
 
-            message = await self._prepare_message(step_data, context)
+            message = await self._prepare_message(step_data, context, node.id)
             response, token_usage = await self._call_llm(step_data, message, context, run_step, emitter, node.id)
 
             await self._save_web_search_sources(run_step, token_usage)
@@ -120,6 +120,7 @@ class StepNodeHandler(BaseExecutionHandler):
         self,
         step_data: StepNodeData,
         context: NodeExecutionContext,
+        node_id: str,
     ) -> str:
         """Prepare the message for the LLM from prompt + text_input + previous results."""
         def _get_message_inputs():
@@ -132,8 +133,12 @@ class StepNodeHandler(BaseExecutionHandler):
 
         inputs = await database_sync_to_async(_get_message_inputs)()
         if context.turn is not None:
-            # A chat-driven run: the person's message is the task.
+            # A chat-driven run: the person's message is the task, and the
+            # role instructions are theirs to override per turn and per seat.
             inputs['text_input'] = context.turn.user_message
+            inputs['prompt_content'] = context.turn.instructions_for(
+                node_id, inputs['prompt_content']
+            )
 
         return await StepMessagePreparer.prepare_message(
             prompt_content=inputs['prompt_content'],

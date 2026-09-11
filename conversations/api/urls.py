@@ -13,6 +13,7 @@ from conversations.api.views import (
     ModelCardDataViewSet,
     AnonymousConversationsView,
 )
+from conversations.api.ensemble_views import EnsemblePresetViewSet
 from conversations.api.internal_views import (
     InternalUserConversationsView,
     InternalConversationMessagesView,
@@ -27,6 +28,7 @@ router.register(r'messages', MessageViewSet, basename='message')
 router.register(r'llms', LLMViewSet, basename='llm')
 router.register(r'feedback', FeedbackViewSet, basename='feedback')
 router.register(r'model-cards', ModelCardDataViewSet, basename='model-card')
+router.register(r'ensemble-presets', EnsemblePresetViewSet, basename='ensemble-preset')
 
 app_name = APP_NAME
 

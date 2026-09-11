@@ -30,13 +30,14 @@ from conversations.services.tool_loop_binding import ChatStreamSink
 from conversations.services.tool_loop_service import ToolLoopResult
 from core.services.billing_service import BillingService
 from core.services.dtos.builder import ARTIFACT_TOOL_SLUGS
-from core.services.dtos.ensemble_dto import EnsembleRequest
+from core.services.dtos.ensemble_dto import EnsembleBriefs, EnsembleRequest
 from core.services.workflow_execution_service import WorkflowExecutionService
 from feature_flags.services import is_flag_enabled_for_user
 from workflows.services.ensemble_workflow_builder import (
     CHAIRMAN_NODE_ID, DEPTH_COUNCIL, ROLE_CHAIRMAN, ROLE_EVALUATOR,
     ROLE_RESPONDER, ensemble_role, evaluator_node_id,
-    get_or_create_ensemble_workflow, responder_node_id)
+    get_or_create_ensemble_workflow, responder_node_id, responder_seat,
+    role_prompt_content)
 from workflows.services.workflow_run_repository import WorkflowRunRepository
 
 logger = logging.getLogger(__name__)
@@ -72,9 +73,37 @@ class EnsembleTurn:
     # The assistant message the turn answers into; the chairman's artifacts
     # attach here so the chat shows them like any other turn's.
     message_obj: Optional[Any] = None
+    briefs: EnsembleBriefs = field(default_factory=EnsembleBriefs)
 
     def is_chairman(self, node_id: str) -> bool:
         return ensemble_role(node_id) == ROLE_CHAIRMAN
+
+    def instructions_for(self, node_id: str, default: str) -> str:
+        """The role instructions this node runs under.
+
+        The person's brief for the role replaces the library prompt; a
+        responder's seat angle is appended to whichever applies, so three
+        models given one brief can still be told to disagree on purpose.
+        """
+        role = ensemble_role(node_id)
+        custom = {
+            ROLE_RESPONDER: self.briefs.responder,
+            ROLE_EVALUATOR: self.briefs.evaluator,
+            ROLE_CHAIRMAN: self.briefs.chairman,
+        }.get(role)
+        instructions = custom or default
+        angle = (
+            self.briefs.angle_for(responder_seat(node_id))
+            if role == ROLE_RESPONDER
+            else ""
+        )
+        if angle:
+            instructions = (
+                f"{instructions}\n\nYour seat on the panel has an assigned "
+                f"angle: {angle}\nAnswer from that angle throughout, and be "
+                "honest about what it cannot explain."
+            )
+        return instructions
 
     def message_data_for(self, node_id: str) -> Dict[str, Any]:
         """The chat payload, narrowed to what this role should be able to do.
@@ -119,6 +148,7 @@ class Participant:
     ms: Optional[int] = None
     input_tokens: int = 0
     output_tokens: int = 0
+    angle: str = ""
 
     def snapshot(self, cost: Optional[str]) -> Dict[str, Any]:
         return {
@@ -130,6 +160,7 @@ class Participant:
             "text": self.text,
             "ms": self.ms,
             "cost": cost,
+            "angle": self.angle or None,
         }
 
 
@@ -163,8 +194,11 @@ class DeliberationTracker:
         message_obj: Message,
         send: Callable[[Dict[str, Any]], Awaitable[None]],
         regenerate: bool,
+        briefs: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.depth = depth
+        # What each role was told, so the deliberation shows it verbatim.
+        self.briefs = briefs
         self.participants = {p.node_id: p for p in participants}
         self.responders = [p for p in participants if p.role == ROLE_RESPONDER]
         self.evaluators = [p for p in participants if p.role == ROLE_EVALUATOR]
@@ -273,6 +307,7 @@ class DeliberationTracker:
             "cost": f"{self.total_cost():.6f}" if self.total_ms is not None else None,
             "verdict": self.verdict,
             "workflowRunId": self.workflow_run_id,
+            "briefs": self.briefs,
         }
 
     async def emit(self, force: bool = False) -> None:
@@ -398,8 +433,11 @@ class EnsembleTurnService:
         if workflow_run is None:
             raise EnsembleError("The panel could not be started.")
 
+        briefs = ensemble.briefs
         participants = [
-            Participant(responder_node_id(i), ROLE_RESPONDER, llm)
+            Participant(
+                responder_node_id(i), ROLE_RESPONDER, llm, angle=briefs.angle_for(i)
+            )
             for i, llm in enumerate(responders, start=1)
         ]
         if depth == DEPTH_COUNCIL:
@@ -415,6 +453,9 @@ class EnsembleTurnService:
             message_obj=message_obj,
             send=self._send,
             regenerate=regenerate,
+            briefs=await database_sync_to_async(self._briefs_snapshot)(
+                user, depth, briefs
+            ),
         )
         tracker.workflow_run_id = workflow_run.id
         await self._link_run(message_obj, workflow_run)
@@ -428,14 +469,16 @@ class EnsembleTurnService:
             user=user,
             platform=platform,
             message_obj=message_obj,
+            briefs=briefs,
         )
         logger.info(
-            "[journey] mid=%s ensemble %s: run=%s responders=%s chairman=%s",
+            "[journey] mid=%s ensemble %s: run=%s responders=%s chairman=%s custom_briefs=%s",
             message_obj.id,
             depth,
             workflow_run.id,
             [llm.name for llm in responders],
             chairman.name,
+            briefs.is_custom,
         )
 
         try:
@@ -466,6 +509,24 @@ class EnsembleTurnService:
             usage_breakdown=tracker.breakdown(),
             rounds_used=3 if depth == DEPTH_COUNCIL else 2,
         )
+
+    @staticmethod
+    def _briefs_snapshot(user, depth: str, briefs: EnsembleBriefs) -> Dict[str, Any]:
+        """The effective instructions per role, flagged when the person wrote them."""
+
+        def entry(role: str, custom: Optional[str]) -> Dict[str, Any]:
+            return {
+                "text": custom or role_prompt_content(user, role),
+                "custom": bool(custom),
+            }
+
+        snapshot = {
+            "responder": entry(ROLE_RESPONDER, briefs.responder),
+            "chairman": entry(ROLE_CHAIRMAN, briefs.chairman),
+        }
+        if depth == DEPTH_COUNCIL:
+            snapshot["evaluator"] = entry(ROLE_EVALUATOR, briefs.evaluator)
+        return snapshot
 
     @staticmethod
     @database_sync_to_async
