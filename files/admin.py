@@ -1,5 +1,7 @@
 from django.contrib import admin, messages
 
+from core.services.index_health import check_index_health
+
 from .models import File, FileShare, Tag, VectorIndexAttempt
 
 HEALTH_MESSAGE_LEVELS = {
@@ -52,8 +54,6 @@ class FileAdmin(admin.ModelAdmin):
 
     @admin.action(description="Check search index health now")
     def check_index_health(self, request, queryset):
-        from core.services.index_health import check_index_health
-
         for file in queryset:
             health = check_index_health(file)
             detail = (

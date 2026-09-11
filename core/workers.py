@@ -5,6 +5,9 @@ import logging
 from django.conf import settings
 from rq import Worker
 
+from core.services.ingestion_reconciliation import reconcile_interrupted_ingestions
+from files.scheduler import IngestionReconciliationScheduler
+
 logger = logging.getLogger(__name__)
 
 
@@ -14,16 +17,11 @@ class InspectableWorker(Worker):
         super().__init__(*args, **kwargs)
 
     def work(self, *args, **kwargs):
-        # A worker that restarts after a crash is the first to know its
-        # predecessor's jobs are dead: sweep them before taking new work, and
-        # (re)register the recurring sweep so the existing rqscheduler process
-        # keeps running it without any deployment change.
+        # A restarted worker is the first to know its predecessor's jobs are
+        # dead, so sweep before taking new work. RQ still lists a dead worker
+        # until its heartbeat expires, so the scheduler also gets a one-off
+        # follow-up sweep after that window plus the recurring schedule.
         try:
-            from core.services.ingestion_reconciliation import (
-                reconcile_interrupted_ingestions,
-            )
-            from files.scheduler import IngestionReconciliationScheduler
-
             summary = reconcile_interrupted_ingestions()
             if summary.interrupted or summary.retained:
                 logger.warning(

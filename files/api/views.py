@@ -30,6 +30,7 @@ from core.services.document_crop_service import (
 from core.services.document_processor import DocumentProcessor
 from core.services.file_processor import FileProcessor
 from core.services.file_upload_service import FileUploadService
+from core.services.index_health import check_index_health
 from core.services.vision_model_service import (
     VisionModelNotOffered,
     list_vision_models,
@@ -746,8 +747,6 @@ class FileViewSet(viewsets.ModelViewSet):
         Response: {"state", "expected", "present", "missingCount", "missingChunks",
         "unexpected", "generation", "backend", "checkedAt", "error"}
         """
-        from core.services.index_health import check_index_health
-
         return Response(
             check_index_health(self.get_object()).as_dict(), status=status.HTTP_200_OK
         )

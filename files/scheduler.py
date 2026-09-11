@@ -1,16 +1,17 @@
-import logging
+from datetime import timedelta
 
 from django.utils import timezone
 from django_rq import get_scheduler
 
 from config import env
+from core.services.ingestion_reconciliation import reconcile_interrupted_ingestions
 
-logger = logging.getLogger(__name__)
+# RQ lists a dead forking worker for up to 90 s (30 s heartbeat, 60 s grace),
+# so a sweep queued after that window catches what a startup sweep cannot.
+FOLLOW_UP_DELAY = timedelta(seconds=120)
 
 
 def reconcile_interrupted_ingestions_job():
-    from core.services.ingestion_reconciliation import reconcile_interrupted_ingestions
-
     summary = reconcile_interrupted_ingestions()
     return {
         "checked": summary.checked,
@@ -23,8 +24,9 @@ def reconcile_interrupted_ingestions_job():
 class IngestionReconciliationScheduler:
     """Recurring sweep for files stranded in Processing by a dead worker.
 
-    Runs on the default queue so the same workers that ingest documents also
-    reconcile them; no extra queue needs a listener.
+    Registered by every worker at startup (idempotent: fixed job id), and run
+    on the default queue so the ingestion workers execute it and no extra
+    process is needed beyond the existing rq-scheduler.
     """
 
     def __init__(self, queue_name: str = "default"):
@@ -35,8 +37,8 @@ class IngestionReconciliationScheduler:
     def start(self) -> dict:
         self.stop()
         if self.interval_seconds <= 0:
-            logger.info("Ingestion reconciliation sweep is disabled.")
             return {"status": "disabled", "job_id": self.job_id}
+        self.scheduler.enqueue_in(FOLLOW_UP_DELAY, reconcile_interrupted_ingestions_job)
         self.scheduler.schedule(
             scheduled_time=timezone.now(),
             func=reconcile_interrupted_ingestions_job,
@@ -52,8 +54,5 @@ class IngestionReconciliationScheduler:
         }
 
     def stop(self) -> dict:
-        try:
-            self.scheduler.cancel(self.job_id)
-        except Exception:
-            pass
+        self.scheduler.cancel(self.job_id)
         return {"status": "stopped", "job_id": self.job_id}

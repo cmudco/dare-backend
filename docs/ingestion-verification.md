@@ -53,8 +53,11 @@ the first to know its predecessor's jobs are dead) and at the same time
 `rqscheduler` process enqueues on the default queue every
 `INGESTION_RECONCILE_INTERVAL_SECONDS` (default 300; 0 disables); and
 `python manage.py reconcile_ingestion` runs it by hand. Registration is
-idempotent (fixed job id, cancelled and re-added on each worker start). Worker
-job failures are also reported to Sentry through the RQ integration.
+idempotent (fixed job id, cancelled and re-added on each worker start) and
+also queues one follow-up sweep two minutes later, because a worker that
+systemd restarts within seconds of a crash still sees its predecessor listed
+as alive. Worker job failures are also reported to Sentry through the RQ
+integration.
 
 Detection latency depends on RQ's worker heartbeat: a forking worker (the
 default-queue workers) refreshes its key every 30 s with a 90 s TTL while
