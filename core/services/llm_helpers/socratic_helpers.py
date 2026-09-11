@@ -7,25 +7,47 @@ document context retrieval, and prompt assembly.
 """
 
 import logging
-from typing import List, Dict, Any, Optional
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
 
-from core.services.dtos import LLMQueryRequest
+from conversations.constants import RagMode
 from core.services.document_processor import DocumentProcessor
-from core.services.vector_service import get_vector_service_async
-from .history_helpers import get_conversation_history
+from core.services.dtos import LLMQueryRequest
 
+from .context_trace import ContextTraceRecorder
+from .history_helpers import get_conversation_history
+from .semantic_context_helpers import add_semantic_context_to_messages
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class SocraticBuildResult:
+    """Messages plus the context-assembly trace for a socratic turn."""
+
+    messages: List[Dict[str, str]] = field(default_factory=list)
+    context_trace: Optional[Dict[str, Any]] = None
+
+
+# Under agentic RAG the model retrieves on demand via the search_documents
+# tool, so the builders skip their similarity-search pre-injection and hand
+# the model this directive instead.
+AGENTIC_RETRIEVAL_DIRECTIVE = (
+    "Document context is not pre-loaded. Call the search_documents tool to "
+    "retrieve relevant passages from the attached course materials before "
+    "answering questions about their content."
+)
 
 
 # ============================================================================
 # Public API - These are the only exports
 # ============================================================================
 
+
 async def build_classic_socratic_messages(
     request: LLMQueryRequest,
     document_processor: DocumentProcessor,
-) -> List[Dict[str, str]]:
+) -> SocraticBuildResult:
     """
     Build complete message array for classic SocraticBooks mode.
 
@@ -38,14 +60,14 @@ async def build_classic_socratic_messages(
         document_processor: DocumentProcessor for vector similarity search
 
     Returns:
-        List of message dicts ready for LLM API: [system_message, user_message]
+        SocraticBuildResult with [system_message, user_message] and the
+        context-assembly trace.
     """
     # Extract Socratic metadata from request
     subject = request.socratic.get_subject()
     topic = request.socratic.get_topic()
     learning_goals = request.socratic.get_learning_goals()
     chat_prompt = request.socratic.get_chat_prompt()
-    user_id = request.user.id if request.user else None
 
     _log_socratic_components(
         mode="classic",
@@ -55,35 +77,49 @@ async def build_classic_socratic_messages(
         learning_goals=learning_goals,
     )
 
-    system_prompt = _build_classic_system_prompt(
-        subject=subject,
-        topic=topic,
-        chat_prompt=chat_prompt,
-        learning_goals=learning_goals,
-    )
+    trace = ContextTraceRecorder()
 
-    history_list = await get_conversation_history(
-        request.conversation,
-        limit=request.context.history_limit
-    ) if request.conversation else []
+    with trace.stage("prompt") as stage:
+        system_prompt = _build_classic_system_prompt(
+            subject=subject,
+            topic=topic,
+            chat_prompt=chat_prompt,
+            learning_goals=learning_goals,
+        )
+        stage["chars"] = len(system_prompt)
 
-    conversation_history = _format_transcript(history_list)
+    with trace.stage("history") as stage:
+        history_list = (
+            await get_conversation_history(
+                request.conversation, limit=request.context.history_limit
+            )
+            if request.conversation
+            else []
+        )
+        conversation_history = _format_transcript(history_list)
+        if history_list:
+            stage["turns"] = len(history_list)
+            stage["limit"] = request.context.history_limit
 
-    # Classic mode uses file_owner_id for shared boards (deployed Socratic bots)
-    vector_user_id = request.context.file_owner_id or user_id
+    with trace.stage("retrieval") as stage:
+        if request.context.rag_mode == RagMode.AGENTIC:
+            file_context = AGENTIC_RETRIEVAL_DIRECTIVE
+            stage["mode"] = RagMode.AGENTIC
+            stage["deferredToTool"] = True
+        elif request.context.embedding_ids:
+            doc_context = await _retrieve_document_context(request, document_processor)
 
-    doc_context = await _retrieve_document_context(
-        document_processor=document_processor,
-        query=request.message,
-        file_ids=request.context.embedding_ids,
-        user_id=vector_user_id,
-        top_k=request.context.max_context_snippets,
-        similarity_threshold=request.context.document_similarity_threshold,
-        message_obj=request.message_obj,
-        workflow_run_step_obj=request.workflow_run_step_obj,
-    )
-
-    file_context = _format_document_snippets(doc_context, fallback="No relevant file content found.")
+            file_context = _format_document_snippets(
+                doc_context, fallback="No relevant file content found."
+            )
+            stage["mode"] = request.context.rag_mode
+            stage["threshold"] = request.context.document_similarity_threshold
+            stage["topK"] = request.context.max_context_snippets
+            stage["chars"] = len(doc_context or "")
+        else:
+            file_context = _format_document_snippets(
+                "", fallback="No relevant file content found."
+            )
 
     user_message = _build_classic_user_message(
         document_context=file_context,
@@ -91,16 +127,19 @@ async def build_classic_socratic_messages(
         question=request.message,
     )
 
-    return [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_message},
-    ]
+    return SocraticBuildResult(
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message},
+        ],
+        context_trace=trace.to_payload(),
+    )
 
 
 async def build_advanced_socratic_messages(
     request: LLMQueryRequest,
     document_processor: DocumentProcessor,
-) -> List[Dict[str, str]]:
+) -> SocraticBuildResult:
     """
     Build complete message array for advanced SocraticBooks mode.
 
@@ -113,7 +152,8 @@ async def build_advanced_socratic_messages(
         document_processor: DocumentProcessor for vector similarity search
 
     Returns:
-        List of message dicts ready for LLM API: [system_message, user_message]
+        SocraticBuildResult with [system_message, user_message] and the
+        context-assembly trace.
     """
     # Extract Socratic metadata from request
     title = request.socratic.get_title() or (
@@ -125,7 +165,6 @@ async def build_advanced_socratic_messages(
     topic = request.socratic.get_topic()
     learning_goals = request.socratic.get_learning_goals()
     chat_prompt = request.socratic.get_chat_prompt()
-    user_id = request.user.id if request.user else None
 
     _log_socratic_components(
         mode="advanced",
@@ -136,50 +175,67 @@ async def build_advanced_socratic_messages(
         learning_goals=learning_goals,
     )
 
-    history_list = await get_conversation_history(
-        request.conversation,
-        limit=request.context.history_limit
-    ) if request.conversation else []
+    trace = ContextTraceRecorder()
 
-    conversation_history = _format_transcript(history_list)
+    with trace.stage("history") as stage:
+        history_list = (
+            await get_conversation_history(
+                request.conversation, limit=request.context.history_limit
+            )
+            if request.conversation
+            else []
+        )
+        conversation_history = _format_transcript(history_list)
+        if history_list:
+            stage["turns"] = len(history_list)
+            stage["limit"] = request.context.history_limit
 
-    # Like classic mode, use file_owner_id for shared/public bots: anonymous
-    # visitors have no user, and vectors are stored under the bot creator's id
-    vector_user_id = request.context.file_owner_id or user_id
+    with trace.stage("retrieval") as stage:
+        if request.context.rag_mode == RagMode.AGENTIC:
+            relevant_content = AGENTIC_RETRIEVAL_DIRECTIVE
+            stage["mode"] = RagMode.AGENTIC
+            stage["deferredToTool"] = True
+        elif request.context.embedding_ids:
+            doc_context = await _retrieve_document_context(request, document_processor)
 
-    doc_context = await _retrieve_document_context(
-        document_processor=document_processor,
-        query=request.message,
-        file_ids=request.context.embedding_ids,
-        user_id=vector_user_id,
-        top_k=request.context.max_context_snippets,
-        similarity_threshold=request.context.document_similarity_threshold,
-        message_obj=request.message_obj,
-        workflow_run_step_obj=request.workflow_run_step_obj,
+            relevant_content = _format_document_snippets(
+                doc_context, fallback="No relevant external content found."
+            )
+            stage["mode"] = request.context.rag_mode
+            stage["threshold"] = request.context.document_similarity_threshold
+            stage["topK"] = request.context.max_context_snippets
+            stage["chars"] = len(doc_context or "")
+        else:
+            relevant_content = _format_document_snippets(
+                "", fallback="No relevant external content found."
+            )
+
+    with trace.stage("prompt") as stage:
+        system_prompt = _build_advanced_system_prompt(
+            title=title,
+            subject=subject,
+            topic=topic,
+            learning_goals=learning_goals,
+            chat_prompt=chat_prompt,
+            conversation_history=conversation_history,
+            relevant_content=relevant_content,
+            user_message=request.message,
+        )
+        stage["chars"] = len(system_prompt)
+
+    return SocraticBuildResult(
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": request.message},
+        ],
+        context_trace=trace.to_payload(),
     )
-
-    relevant_content = _format_document_snippets(doc_context, fallback="No relevant external content found.")
-
-    system_prompt = _build_advanced_system_prompt(
-        title=title,
-        subject=subject,
-        topic=topic,
-        learning_goals=learning_goals,
-        chat_prompt=chat_prompt,
-        conversation_history=conversation_history,
-        relevant_content=relevant_content,
-        user_message=request.message,
-    )
-
-    return [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": request.message},
-    ]
 
 
 # ============================================================================
 # Private Helpers - Internal to this module
 # ============================================================================
+
 
 def _log_socratic_components(
     mode: str,
@@ -225,7 +281,9 @@ def _format_transcript(history: List[Dict[str, str]]) -> str:
         if content:
             transcript_parts.append(f"{role_name}: {content}")
 
-    return "\n\n".join(transcript_parts) if transcript_parts else "No previous messages."
+    return (
+        "\n\n".join(transcript_parts) if transcript_parts else "No previous messages."
+    )
 
 
 def _format_document_snippets(raw_context: str, fallback: str) -> str:
@@ -238,33 +296,39 @@ def _format_document_snippets(raw_context: str, fallback: str) -> str:
 
 
 async def _retrieve_document_context(
+    request: LLMQueryRequest,
     document_processor: DocumentProcessor,
-    query: str,
-    file_ids: List[int],
-    user_id: Optional[int],
-    top_k: int,
-    similarity_threshold: float,
-    message_obj: Optional[Any] = None,
-    workflow_run_step_obj: Optional[Any] = None,
 ) -> str:
-    """Retrieve relevant document snippets via vector similarity search."""
-    if not file_ids:
-        return ""
-
-    # Initialize vector service if user context changed
-    if user_id and user_id != document_processor.user_id:
-        document_processor.user_id = user_id
-        document_processor.vector_service = await get_vector_service_async(user_id)
-
-    return await document_processor.search_similar_documents(
-        query_text=query,
-        file_ids=file_ids,
-        user_id=user_id,
-        top_k=top_k,
-        similarity_threshold=similarity_threshold,
-        message_obj=message_obj,
-        workflow_run_step_obj=workflow_run_step_obj,
+    """Use DARE's retrieval pipeline without changing the Socratic teaching prompt."""
+    context_messages = []
+    failures = await add_semantic_context_to_messages(
+        document_processor=document_processor,
+        messages=context_messages,
+        query=request.message,
+        embedding_ids=request.context.embedding_ids,
+        tag_ids=request.context.tag_ids,
+        folder_ids=request.context.folder_ids,
+        library_ids=request.context.library_ids,
+        user_id=request.user.id if request.user else None,
+        payer_bot_id=(
+            getattr(request.conversation, "bot_id", None)
+            if request.user is None
+            else None
+        ),
+        file_owner_id=request.context.file_owner_id,
+        is_socratic_mode=True,
+        similarity_threshold=request.context.document_similarity_threshold,
+        max_context_snippets=request.context.max_context_snippets,
+        rag_mode=request.context.rag_mode,
+        message_obj=request.message_obj,
+        workflow_run_step_obj=request.workflow_run_step_obj,
     )
+    parts = [message["content"] for message in context_messages]
+    if failures:
+        parts.append(
+            "Some document retrieval failed. Do not claim the unavailable sources were searched."
+        )
+    return "\n\n".join(parts)
 
 
 def _build_classic_system_prompt(
@@ -281,8 +345,10 @@ def _build_classic_system_prompt(
     )
     return (
         prompt_start
-        + "\n\nTeaching Style:\n" + chat_prompt
-        + "\n\nLearning Goals:\n" + learning_goals
+        + "\n\nTeaching Style:\n"
+        + chat_prompt
+        + "\n\nLearning Goals:\n"
+        + learning_goals
     )
 
 
@@ -317,6 +383,6 @@ def _build_advanced_system_prompt(
         f"This is a conversation on {title} (Subject: {subject}, Topic: {topic}).\n"
         f"We are trying to teach the following learning goals:\n{learning_goals}\n\n"
         f"{relevant_content}\n"
-        f"The latest user message was: \"{user_message}\"\n\n"
+        f'The latest user message was: "{user_message}"\n\n'
         f"Please respond according to these directions:\n{chat_prompt}"
     )

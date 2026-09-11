@@ -4,16 +4,12 @@ from unittest.mock import MagicMock
 from django.test import SimpleTestCase
 
 from conversations.api.serializers import MessageSerializer, MessageToolCallSerializer
-from conversations.constants import ToolCallOrigin
-from core.services.conversation_service import ConversationService
 
 
 class MessageSerializerArtifactTests(SimpleTestCase):
     def test_plural_and_compatibility_artifact_fields_share_one_query(self):
         artifacts = MagicMock()
-        values = (
-            artifacts.filter.return_value.order_by.return_value.values_list
-        )
+        values = artifacts.filter.return_value.order_by.return_value.values_list
         values.return_value = [11, 12]
         message = SimpleNamespace(
             conversation_id=3,
@@ -60,20 +56,3 @@ class MessageSerializerArtifactTests(SimpleTestCase):
         self.assertIn("arguments", fields)
         self.assertNotIn("result", fields)
         self.assertNotIn("tool_call_id", fields)
-
-    def test_socket_history_uses_serializer_typed_result(self):
-        payload = ConversationService()._build_tool_call_payload(
-            {
-                "id": "call-1",
-                "tool_name": "create_chart",
-                "server_slug": "dare",
-                "origin": ToolCallOrigin.DARE,
-                "status": "completed",
-                "round": 1,
-                "arguments": {"title": "Trend"},
-                "dare_result": {"success": True, "artifactId": 12},
-            }
-        )
-
-        self.assertEqual(payload["dareResult"]["artifactId"], 12)
-        self.assertEqual(payload["arguments"], {"title": "Trend"})

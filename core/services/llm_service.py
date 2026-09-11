@@ -277,13 +277,15 @@ class LLMService:
             List of message dictionaries
         """
         if request.is_advanced_mode():
-            return await build_advanced_socratic_messages(
+            result = await build_advanced_socratic_messages(
                 request, self.document_processor
             )
         else:
-            return await build_classic_socratic_messages(
+            result = await build_classic_socratic_messages(
                 request, self.document_processor
             )
+        self._pending_context_trace = result.context_trace
+        return result.messages
 
     async def _build_standard_messages(
         self, request: LLMQueryRequest
