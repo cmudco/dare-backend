@@ -146,6 +146,7 @@ class DocumentProcessorJourneyTests(SimpleTestCase):
 
         with (
             patch("core.services.document_processor.VectorIndexAttempt.objects.create"),
+            patch("core.services.document_processor.VectorIndexAttempt.objects.filter"),
             patch(
                 "core.services.document_processor.transaction.atomic",
                 return_value=nullcontext(),
