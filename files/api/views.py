@@ -737,6 +737,21 @@ class FileViewSet(viewsets.ModelViewSet):
             raise Http404("Chunk not found.") from error
         return Response(payload, status=status.HTTP_200_OK)
 
+    @action(detail=True, methods=["get"], url_path="index-health")
+    def index_health(self, request, pk=None):
+        """
+        Compare the chunks this file should have in its search index with the
+        chunk identities the vector database holds right now.
+
+        Response: {"state", "expected", "present", "missingCount", "missingChunks",
+        "unexpected", "generation", "backend", "checkedAt", "error"}
+        """
+        from core.services.index_health import check_index_health
+
+        return Response(
+            check_index_health(self.get_object()).as_dict(), status=status.HTTP_200_OK
+        )
+
     @action(detail=True, methods=["get"], url_path="processing-journey")
     def processing_journey(self, request, pk=None):
         """Return persisted attempts, stage timings, and failure attribution."""

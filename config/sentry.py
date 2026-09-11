@@ -3,6 +3,7 @@
 import sentry_sdk
 from django.core.exceptions import DisallowedHost
 from sentry_sdk.integrations.django import DjangoIntegration
+from sentry_sdk.integrations.rq import RqIntegration
 
 
 def init_sentry(*, dsn, environment="development", traces_sample_rate=0.1):
@@ -20,6 +21,7 @@ def init_sentry(*, dsn, environment="development", traces_sample_rate=0.1):
         dsn=dsn,
         integrations=[
             DjangoIntegration(),
+            RqIntegration(),
         ],
         environment=environment,
         traces_sample_rate=traces_sample_rate,

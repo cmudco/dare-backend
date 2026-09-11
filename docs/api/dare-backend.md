@@ -131,6 +131,21 @@ uses these capabilities rather than inferring them from the requested mode.
 Migration 0025 normalizes historical `legacy` parser identifiers to `basic` in
 file metadata and the stored document model; processing history remains an audit record.
 
+### Search index health
+
+`GET /api/files/{id}/index-health/` compares the chunks a file should have in
+its search index (its stored map rows) with the chunk identities the vector
+database holds right now, and returns `state`, `expected`, `present`,
+`missingCount`, `missingChunks` (first 100), `unexpected`, `generation`,
+`backend`, `checkedAt`, and `error`. States: `verified` (every expected chunk
+present), `incomplete` (some missing, duplicated, or unexpected), `missing`
+(none present), `unavailable` (the vector database could not be reached, which
+is deliberately distinct from confirmed loss), `unverifiable` (indexed before
+map rows existed, so only presence is known), `not_indexed`, and `processing`.
+Owner only. The check reads identities, not vectors or text, so it is cheap
+enough for the Map tab to run on open; the full content comparison happens
+once at publication (see `docs/ingestion-verification.md`).
+
 ### Reprocess a stored document
 
 `POST /api/files/{id}/reprocess/` accepts JSON `{ "action": "reparse",
