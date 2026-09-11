@@ -74,9 +74,9 @@ class LiteLLMCohortKeyInline(admin.TabularInline):
 @admin.register(AccessCodeGroup)
 class AccessCodeGroupAdmin(admin.ModelAdmin):
     list_display = ('access_code', 'default_role', 'group_owner', 'model_group', 'initial_wallet_credit', 'usage_display', 'expiration_status', 'is_active', 'user_count', 'created_at')
-    list_filter = ('is_active', 'default_role', 'created_at', 'model_group')
+    list_filter = ('is_active', 'default_role', 'provisioned_by', 'created_at', 'model_group')
     search_fields = ('access_code', 'group_owner__email')
-    readonly_fields = ('current_usage', 'created_at', 'updated_at')
+    readonly_fields = ('current_usage', 'provisioned_by', 'created_at', 'updated_at')
     list_editable = ('is_active',)
     raw_id_fields = ('group_owner',)
     inlines = [GroupWalletInline, UserInline, LiteLLMCohortKeyInline]
@@ -120,7 +120,7 @@ class AccessCodeGroupAdmin(admin.ModelAdmin):
 
     fieldsets = (
         (None, {
-            'fields': ('access_code', 'max_capacity', 'is_active', 'expires_at', 'notes')
+            'fields': ('access_code', 'max_capacity', 'is_active', 'expires_at', 'notes', 'provisioned_by')
         }),
         (_('Group Owner'), {
             'fields': ('group_owner',),

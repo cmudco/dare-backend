@@ -10,7 +10,7 @@ from core.fields import EncryptedCharField
 from syftbox.mixins import SyftBoxTokenMixin
 from core.storage.constants import StorageBackendChoice
 from users.managers import UserManager
-from users.constants import VectorDBChoice, AuthSourceChoice, RoleChoice
+from users.constants import VectorDBChoice, AuthSourceChoice, RoleChoice, AccessCodeProvisionerChoice
 from prompts.models import Prompt
 from api_keys.constants import BillingModeChoice
 
@@ -98,6 +98,14 @@ class AccessCodeGroup(TimeStampMixin):
         related_name="owned_access_code_groups",
         verbose_name=_("Group Owner"),
         help_text=_("User who manages this group's wallet and refill policy (e.g. the professor or lab lead).")
+    )
+    provisioned_by = models.CharField(
+        max_length=30,
+        choices=AccessCodeProvisionerChoice.choices,
+        default=AccessCodeProvisionerChoice.ADMIN,
+        verbose_name=_("Provisioned By"),
+        help_text=_("Who created this group. Service-provisioned groups (e.g. SocraticBooks voice assignment codes) "
+                    "are managed by that service and are refused to other callers."),
     )
 
     class Meta:

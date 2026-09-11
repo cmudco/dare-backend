@@ -29,6 +29,17 @@ class RoleChoice(models.TextChoices):
     SB_USER = "SB_USER", _("SocraticBots User")
 
 
+class AccessCodeProvisionerChoice(models.TextChoices):
+    """Who created an AccessCodeGroup. Service-provisioned groups are managed
+    by that service and must never be overwritten by another caller."""
+
+    ADMIN = "ADMIN", _("DARE admin")
+    SOCRATIC_VOICE = "SOCRATIC_VOICE", _("SocraticBooks voice assignment")
+
+
+VOICE_ACCESS_CODE_CAPACITY = 9999
+
+
 # Available preset avatar identifiers - alternating male/female + thumbs
 PRESET_AVATARS = [
     "m1",
