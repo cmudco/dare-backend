@@ -1,5 +1,6 @@
 import logging
 
+from django.conf import settings
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 
@@ -18,6 +19,8 @@ def enqueue_conversation_summary_refresh(
     **kwargs,
 ) -> None:
     """Enqueue rolling summary generation after a new AI message is saved."""
+    if not settings.CONVERSATION_SUMMARY_JOBS_ENABLED:
+        return
     if not created or instance.sender_type != SenderType.AI_ASSISTANT:
         return
 

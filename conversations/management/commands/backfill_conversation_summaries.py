@@ -14,6 +14,7 @@ Usage:
 
 import logging
 
+from django.conf import settings
 from django.core.management.base import BaseCommand, CommandParser
 from django.db.models import Count, Q
 
@@ -45,6 +46,11 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options) -> None:
+        if not settings.CONVERSATION_SUMMARY_JOBS_ENABLED:
+            self.stdout.write(
+                "Conversation summary jobs are disabled; nothing enqueued."
+            )
+            return
         dry_run: bool = options["dry_run"]
         batch_size: int = options["batch_size"]
 
@@ -92,7 +98,11 @@ class Command(BaseCommand):
             .annotate(
                 ai_message_count=Count(
                     "messages",
-                    filter=Q(messages__sender_type=SenderType.AI_ASSISTANT, messages__is_active=True, messages__is_deleted=False),
+                    filter=Q(
+                        messages__sender_type=SenderType.AI_ASSISTANT,
+                        messages__is_active=True,
+                        messages__is_deleted=False,
+                    ),
                 )
             )
             .filter(ai_message_count__gte=MESSAGES_PER_SUMMARY)
