@@ -93,6 +93,7 @@ class FileViewSet(viewsets.ModelViewSet):
         return (
             File.active_objects.filter(user=self.request.user)
             .select_related("ocr_request")
+            .prefetch_related("tags")
             .annotate(
                 is_shared_by_me=Exists(FileShare.objects.filter(file=OuterRef("pk"))),
                 is_shared_publicly=Exists(
@@ -1080,7 +1081,12 @@ class FolderViewSet(viewsets.ModelViewSet):
         return (
             Folder.objects.filter(user=self.request.user)
             .prefetch_related(
-                Prefetch("files", queryset=File.active_objects.prefetch_related("tags"))
+                Prefetch(
+                    "files",
+                    queryset=File.active_objects.select_related(
+                        "ocr_request"
+                    ).prefetch_related("tags"),
+                )
             )
             .annotate(
                 file_count=Count(
