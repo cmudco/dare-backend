@@ -28,7 +28,6 @@ from core.services.file_processing_journey import FileProcessingJourney
 from core.services.file_processor import FileProcessor
 from core.services.rag.dtos import CitationCounter
 from core.services.rag.entity_extractor import extract_entities
-from core.services.rag.raw_chunker import split_raw_text
 from core.services.rag.reference_resolver import build_references
 from core.services.rag.structured_chunker import (
     CHUNK_FLAT,
@@ -343,27 +342,21 @@ class DocumentProcessor:
         Chunk rows are written even when reference extraction fails, so a
         resolver bug costs edges, never citations.
         """
+        # Basic parses carry no elements, so the chunker's flat path applies:
+        # LangChain's recursive splitter cutting on paragraph, line and
+        # sentence boundaries with the configured overlap.
         basic = (
             file.processing_mode == DocumentProcessingMode.BASIC
             or parsed.parser == "basic"
         )
-        if basic:
-            structured = [
-                StructuredChunk(text=piece, element_kind=CHUNK_FLAT)
-                for piece in split_raw_text(content, chunk_size, overlap_size)
-            ]
-            minimum_retrieval_chars = None
-        else:
-            chunker = StructuredChunker(chunk_size, overlap_size)
-            fallback_text = "\n\n".join(
-                part
-                for part in (content, parsed.embeddable_text, parsed.recovery_text)
-                if part and part.strip()
-            )
-            structured = chunker.chunk(
-                parsed, document_model, fallback_text=fallback_text
-            )
-            minimum_retrieval_chars = chunker.minimum_text_size
+        chunker = StructuredChunker(chunk_size, overlap_size)
+        fallback_text = "\n\n".join(
+            part
+            for part in (content, parsed.embeddable_text, parsed.recovery_text)
+            if part and part.strip()
+        )
+        structured = chunker.chunk(parsed, document_model, fallback_text=fallback_text)
+        minimum_retrieval_chars = chunker.minimum_text_size
         attempt = getattr(self, "index_attempt", None)
         if attempt is not None:
             attempt.expected_count = len(structured)
@@ -468,9 +461,7 @@ class DocumentProcessor:
         return vectors, {
             "structured": is_structured,
             "minimum_retrieval_chars": minimum_retrieval_chars,
-            "chunking_strategy": (
-                "Fixed character windows" if basic else "Document structure"
-            ),
+            "chunking_strategy": ("Text boundaries" if basic else "Document structure"),
             "contextualized_chunks": sum(
                 bool(chunk.retrieval_text) for _, chunk in mapped
             ),

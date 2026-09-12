@@ -1,6 +1,6 @@
 # Verified document index publication
 
-Basic and Advanced uploads use the same indexing contract after chunking. Basic still uses fixed character windows; Advanced keeps its structural chunking.
+Basic and Advanced uploads use the same indexing contract after chunking. Basic text is cut by LangChain's recursive splitter on paragraph, line and sentence boundaries with the configured overlap; Advanced keeps its structural chunking.
 
 1. The complete embedding result must contain exactly one result per expected chunk. IDs, owner, logical file, chunk index, input text, filename and file type must match. Embeddings must have the configured 3,072 dimensions and contain only finite numeric values. Duplicate chunk identities fail; identical vector values for legitimately repeated text are allowed.
 2. Writes target a fresh generation. Every write batch must return an explicit acknowledgement. Failed Weaviate batches report how many individual inserts were acknowledged before failure.

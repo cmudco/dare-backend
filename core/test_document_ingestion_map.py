@@ -374,7 +374,7 @@ class DocumentIngestionMapTests(TestCase):
         self.assertGreater(stage["details"]["recovered_characters"], 400)
         self.assertEqual(stage["details"]["chunk_rows"], 1)
 
-    def test_basic_uses_exact_windows_without_structured_chunker(self):
+    def test_basic_chunks_with_the_recursive_splitter(self):
         self.file.processing_mode = "basic"
         self.file.save(update_fields=["processing_mode"])
         text = FLAT_TEXT * 3
@@ -384,23 +384,18 @@ class DocumentIngestionMapTests(TestCase):
             structure=DocumentStructure(content_chars=len(text)),
             parser="basic",
         )
-        with patched_ingestion(parsed_document=parsed), patch(
-            "core.services.document_processor.StructuredChunker",
-            side_effect=AssertionError(
-                "Basic must not construct the structured chunker"
-            ),
-        ):
+        with patched_ingestion(parsed_document=parsed):
             self._process()
         rows = list(
             DocumentChunk.objects.filter(file=self.file).order_by("chunk_index")
         )
-        self.assertEqual(rows[0].text, text[:300])
-        self.assertTrue(all(len(row.text) == 300 for row in rows[:-1]))
-        self.assertTrue(
-            all(a.text[-40:] == b.text[:40] for a, b in zip(rows, rows[1:]))
-        )
+        self.assertGreater(len(rows), 1)
+        self.assertTrue(all(len(row.text) <= 300 for row in rows))
+        self.assertTrue(all(row.element_kind == "flat" for row in rows))
+        self.file.refresh_from_db()
         self.assertEqual(
-            rows[0].text + "".join(row.text[40:] for row in rows[1:]), text
+            _embedding_stage(self.file)["details"]["chunking_strategy"],
+            "Text boundaries",
         )
 
     def test_flat_fallback_records_unstructured(self):
