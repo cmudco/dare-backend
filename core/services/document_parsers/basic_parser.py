@@ -6,7 +6,7 @@ openpyxl and xlrd for spreadsheets, encoding-sniffing for text) behind the
 ``BaseDocumentParser`` interface.
 
 This is the fallback: it runs for the formats Docling does not cover — plain
-text, markdown, JSON, CSV — and whenever a Docling conversion fails outright,
+text, JSON, CSV — and whenever a Docling conversion fails outright,
 so a parser problem degrades to the old behaviour instead of failing the
 upload.
 """

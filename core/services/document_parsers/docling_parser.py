@@ -64,7 +64,13 @@ class DoclingDocumentParser(BaseDocumentParser):
     def parse(self, data: bytes, filename: str) -> ParsedDocument:
         """Convert raw bytes into a ParsedDocument."""
         started = time.time()
-        source = DocumentStream(name=filename, stream=io.BytesIO(data))
+        # Docling recognizes .md; normalize the equivalent upload extension.
+        source_name = (
+            filename[:-9] + ".md"
+            if filename.lower().endswith(".markdown")
+            else filename
+        )
+        source = DocumentStream(name=source_name, stream=io.BytesIO(data))
         try:
             document = self._get_converter().convert(source).document
         except Exception as error:
@@ -77,7 +83,7 @@ class DoclingDocumentParser(BaseDocumentParser):
                 filename,
                 error,
             )
-            retry_source = DocumentStream(name=filename, stream=io.BytesIO(data))
+            retry_source = DocumentStream(name=source_name, stream=io.BytesIO(data))
             document = (
                 self._get_classification_fallback_converter()
                 .convert(retry_source)

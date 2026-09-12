@@ -9,9 +9,10 @@ from core.services.file_processing_journey import FileProcessingJourney
 
 
 def make_file():
-    user = SimpleNamespace(id=7, chunk_size=1000, overlap_size=100)
+    user = SimpleNamespace(id=7, chunk_size=1000, overlap_size=100, vector_db=1)
     return SimpleNamespace(
         pk=42,
+        user_id=7,
         id=42,
         name="journey.pdf",
         file=SimpleNamespace(name="journey.pdf"),
@@ -144,6 +145,7 @@ class DocumentProcessorJourneyTests(SimpleTestCase):
         )
 
         with (
+            patch("core.services.document_processor.VectorIndexAttempt.objects.create"),
             patch(
                 "core.services.document_processor.transaction.atomic",
                 return_value=nullcontext(),

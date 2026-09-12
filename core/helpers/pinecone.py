@@ -1,3 +1,4 @@
+import math
 from typing import Dict, List, Optional, Tuple
 
 from django.conf import settings
@@ -26,6 +27,30 @@ class PineconeClient:
             return True
         except Exception as e:
             raise Exception(f"Error upserting vectors: {str(e)}")
+
+    def read_generation(self, generation, user_id, logical_file_id):
+        namespace = f"user_{user_id}"
+        objects = []
+        for ids in self.index.list(namespace=namespace):
+            response = self.index.fetch(ids=ids, namespace=namespace)
+            for vector_id, record in response.vectors.items():
+                metadata = dict(record.metadata or {})
+                if metadata.get("file_id") != str(generation):
+                    continue
+                index = metadata.get("chunk_index")
+                if (
+                    isinstance(index, bool)
+                    or not isinstance(index, (int, float))
+                    or not math.isfinite(index)
+                    or int(index) != index
+                ):
+                    raise ValueError("Stored Pinecone chunk index is invalid")
+                metadata["chunk_index"] = int(index)
+                expected_id = f"file_{logical_file_id}_chunk_{int(index)}:{generation}"
+                if vector_id != expected_id:
+                    raise ValueError("Stored Pinecone object identity mismatch")
+                objects.append({"metadata": metadata, "vector": list(record.values)})
+        return objects
 
     def delete_vectors(self, ids: List[str], namespace: Optional[str] = None) -> bool:
         """Delete vectors by their IDs."""

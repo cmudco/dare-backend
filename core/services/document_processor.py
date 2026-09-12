@@ -1,10 +1,12 @@
 import logging
+import time
 from dataclasses import replace
 from typing import Dict, List, Optional, Tuple, Union
 from uuid import uuid4
 
 from channels.db import database_sync_to_async
 from django.db import transaction
+from django.utils import timezone
 
 from conversations.models import Snippet
 from core.config.processing import (
@@ -33,8 +35,14 @@ from core.services.rag.structured_chunker import (
     StructuredChunk,
     StructuredChunker,
 )
+from core.services.vector_integrity import (
+    VectorIntegrityError,
+    validate_generated,
+    verify_stored,
+)
 from core.services.vector_service import get_vector_service
-from files.models import File
+from files.constants import DocumentProcessingMode
+from files.models import File, VectorIndexAttempt
 from files.services.document_map_service import DocumentMapService
 from workflows.models import WorkflowStepSnippet
 
@@ -95,6 +103,7 @@ class DocumentProcessor:
         responsible for reporting that honestly rather than as success.
         """
         staging_key = None
+        self.index_attempt = None
         published = False
         owns_journey = journey is None
         journey = journey or FileProcessingJourney(file)
@@ -170,6 +179,12 @@ class DocumentProcessor:
                     stage.add_details(**details)
 
             generation = uuid4().hex
+            self.index_attempt = VectorIndexAttempt.objects.create(
+                file=file,
+                generation=generation,
+                owner_id=file.user_id,
+                backend=file.user.vector_db,
+            )
             previous_key = file.vector_index_key
             previous_backend = file.vector_db_source
             with transaction.atomic():
@@ -202,12 +217,26 @@ class DocumentProcessor:
                     self.update_vector_service(file.user.id)
                     if vectors:
                         staging_key = generation
-                        self._store_vectors(vectors, file.user.id, staging_key)
+                        confirmed_vectors = self._store_vectors(
+                            vectors, file.user.id, staging_key
+                        )
+                        stage.add_details(
+                            attempted_vectors=len(vectors),
+                            acknowledged_vectors=confirmed_vectors,
+                            expected_vectors=self.index_attempt.expected_count,
+                            generated_vectors=self.index_attempt.generated_count,
+                            verified_vectors=self.index_attempt.verified_count,
+                            verified_at=self.index_attempt.verified_at,
+                            verification_seconds=self.index_attempt.verification_seconds,
+                            generation=generation,
+                        )
                         file.index_generation = generation
                         file.vector_db_source = file.user.vector_db
                         file.save(
                             update_fields=["index_generation", "vector_db_source"]
                         )
+                    self.index_attempt.status = "published" if vectors else "empty"
+                    self.index_attempt.save()
                     backend_name = type(self.vector_service).__name__.removesuffix(
                         "VectorService"
                     )
@@ -225,6 +254,14 @@ class DocumentProcessor:
                 journey.complete_attempt()
             return len(vectors)
         except Exception as e:
+            if self.index_attempt is not None:
+                self.index_attempt.status = "published" if published else "failed"
+                self.index_attempt.error = (
+                    f"{type(e).__name__}: {str(e)}"[:2000]
+                    if isinstance(e, VectorIntegrityError)
+                    else f"{type(e).__name__}: Index creation failed; see correlated worker logs."
+                )
+                self.index_attempt.save()
             if staging_key and not published and self.vector_service is not None:
                 try:
                     self.vector_service.delete_file_vectors(staging_key, file.user.id)
@@ -305,6 +342,13 @@ class DocumentProcessor:
         Chunk rows are written even when reference extraction fails, so a
         resolver bug costs edges, never citations.
         """
+        # Basic parses carry no elements, so the chunker's flat path applies:
+        # LangChain's recursive splitter cutting on paragraph, line and
+        # sentence boundaries with the configured overlap.
+        basic = (
+            file.processing_mode == DocumentProcessingMode.BASIC
+            or parsed.parser == "basic"
+        )
         chunker = StructuredChunker(chunk_size, overlap_size)
         fallback_text = "\n\n".join(
             part
@@ -312,13 +356,36 @@ class DocumentProcessor:
             if part and part.strip()
         )
         structured = chunker.chunk(parsed, document_model, fallback_text=fallback_text)
-        vectors = self.embedding_service.create_embeddings_with_metadata(
+        minimum_retrieval_chars = chunker.minimum_text_size
+        attempt = getattr(self, "index_attempt", None)
+        if attempt is not None:
+            attempt.expected_count = len(structured)
+        try:
+            vectors = self.embedding_service.create_embeddings_with_metadata(
+                [chunk.searchable_text for chunk in structured],
+                file.id,
+                file.user.id,
+                file.name or file.file.name,
+                file.file_type,
+            )
+        except Exception as error:
+            if attempt is not None:
+                attempt.generated_count = getattr(error, "generated_count", 0)
+            raise
+        if attempt is not None:
+            attempt.generated_count = len(vectors)
+        validate_generated(
+            vectors,
             [chunk.searchable_text for chunk in structured],
             file.id,
             file.user.id,
-            file.name or file.file.name,
-            file.file_type,
         )
+        if any(
+            metadata.get("file_name") != (file.name or file.file.name)
+            or metadata.get("file_type") != file.file_type
+            for _, _, metadata in vectors
+        ):
+            raise VectorIntegrityError("Embedding file metadata does not match")
         if not vectors:
             return [], {
                 "structured": False,
@@ -393,7 +460,8 @@ class DocumentProcessor:
 
         return vectors, {
             "structured": is_structured,
-            "minimum_retrieval_chars": chunker.minimum_text_size,
+            "minimum_retrieval_chars": minimum_retrieval_chars,
+            "chunking_strategy": ("Text boundaries" if basic else "Document structure"),
             "contextualized_chunks": sum(
                 bool(chunk.retrieval_text) for _, chunk in mapped
             ),
@@ -449,20 +517,53 @@ class DocumentProcessor:
         vectors: List[Tuple[str, List[float], Dict]],
         user_id: int,
         file_id: Union[int, str],
-    ) -> bool:
+    ) -> int:
         """Write an isolated generation; the File row publishes it after success."""
         vectors = [
             (f"{vector_id}:{file_id}", embedding, {**metadata, "file_id": str(file_id)})
             for vector_id, embedding, metadata in vectors
         ]
+        attempt = getattr(self, "index_attempt", None)
         for i in range(0, len(vectors), BATCH_SIZE):
             batch = vectors[i : i + BATCH_SIZE]
-            stored = self.vector_service.upsert_vectors(
-                vectors=batch, namespace=get_user_namespace(user_id)
-            )
-            if stored is False:
+            if attempt is not None:
+                attempt.attempted_count += len(batch)
+            try:
+                stored = self.vector_service.upsert_vectors(
+                    vectors=batch, namespace=get_user_namespace(user_id)
+                )
+            except Exception as error:
+                if attempt is not None:
+                    attempt.acknowledged_count += getattr(
+                        error, "acknowledged_count", 0
+                    )
+                raise
+            if stored is not True:
                 raise RuntimeError("Vector backend rejected the replacement batch")
-        return True
+            if attempt is not None:
+                attempt.acknowledged_count += len(batch)
+        if vectors:
+            started = time.monotonic()
+            try:
+                logical_id = attempt.file_id if attempt else vectors[0][0].split("_")[1]
+                for retry in range(3):
+                    objects = self.vector_service.read_generation(
+                        file_id, user_id, logical_id
+                    )
+                    try:
+                        verify_stored(vectors, objects)
+                        break
+                    except ValueError:
+                        if retry == 2:
+                            raise
+                        time.sleep(0.5 * (retry + 1))
+                if attempt is not None:
+                    attempt.verified_count = len(objects)
+                    attempt.verified_at = timezone.now()
+            finally:
+                if attempt is not None:
+                    attempt.verification_seconds = round(time.monotonic() - started, 3)
+        return len(vectors)
 
     @staticmethod
     def _retire_index(index_key, user_id, backend):

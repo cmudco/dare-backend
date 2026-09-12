@@ -230,6 +230,7 @@ class FileViewSet(viewsets.ModelViewSet):
                     "status": file.get_status_display(),
                     "statusCode": file.status,
                     "processingStage": file.processing_stage,
+                    "parserName": file.parser_name,
                 }
                 if job:
                     status_data["jobStatus"] = job.get_status()
@@ -652,7 +653,12 @@ class FileViewSet(viewsets.ModelViewSet):
             and document.get("parser") == file_obj.parser_name
             and bool(document.get("elements"))
         )
-        return Response({"structure": structured, "map": structured})
+        return Response(
+            {
+                "structure": structured,
+                "map": structured or DocumentChunk.objects.filter(file=file_obj).exists(),
+            }
+        )
 
     @extend_schema(request=FileReprocessingSerializer, responses={202: FileSerializer})
     @action(

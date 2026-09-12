@@ -341,6 +341,12 @@ CONVERSATION_SUMMARY_JOBS_ENABLED = env.env.bool(
     "CONVERSATION_SUMMARY_JOBS_ENABLED", default=False
 )
 
+# Retain completed work for incident review across every queue.
+RQ = {
+    "DEFAULT_RESULT_TTL": 7 * 24 * 60 * 60,
+    "WORKER_CLASS": "core.workers.InspectableWorker",
+}
+
 RQ_QUEUES = {
     'default': {
         'HOST': REDIS_HOST,

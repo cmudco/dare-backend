@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import File, FileShare, Tag
+from .models import File, FileShare, Tag, VectorIndexAttempt
 
 
 @admin.register(Tag)
@@ -64,3 +64,28 @@ class FileShareAdmin(admin.ModelAdmin):
     search_fields = ("file__name", "shared_by__email", "shared_with__email")
     list_filter = ("created_at",)
     raw_id_fields = ("file", "shared_by", "shared_with")
+
+
+@admin.register(VectorIndexAttempt)
+class VectorIndexAttemptAdmin(admin.ModelAdmin):
+    list_display = (
+        "file_id",
+        "generation",
+        "owner_id",
+        "status",
+        "expected_count",
+        "generated_count",
+        "acknowledged_count",
+        "verified_count",
+        "verified_at",
+        "created_at",
+    )
+    list_filter = ("status", "backend", "created_at")
+    search_fields = ("generation", "file__name")
+    readonly_fields = tuple(field.name for field in VectorIndexAttempt._meta.fields)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
