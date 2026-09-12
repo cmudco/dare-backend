@@ -13,6 +13,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
 from core.services.document_text_sanitizer import sanitize_document_text
+from core.services.process_memory import current_rss_mb, peak_rss_mb, reset_peak
 from files.constants import FileProcessingStage
 from files.models import File
 
@@ -21,7 +22,7 @@ MAX_ATTEMPTS = 10
 MAX_ERROR_LENGTH = 2000
 
 STAGE_LABELS = {
-    "parsing": "Docling parsing & classification",
+    "parsing": "Document parsing",
     "enriching": "Visual enrichment",
     "embedding": "Embedding generation",
     "indexing": "Vector indexing",
@@ -98,6 +99,7 @@ class FileProcessingJourney:
             )
 
         next_number = (previous or {}).get("number", 0) + 1
+        reset_peak()
         self.attempts.append(
             {
                 "number": next_number,
@@ -166,6 +168,10 @@ class FileProcessingJourney:
         error: Optional[Exception | str] = None,
     ) -> None:
         completed_at = _iso_now()
+        memory = {"peak_memory_mb": peak_rss_mb()}
+        current = current_rss_mb()
+        if current is not None:
+            memory["memory_mb"] = current
         stage.update(
             {
                 "status": status,
@@ -173,7 +179,7 @@ class FileProcessingJourney:
                 "duration_seconds": _duration_seconds(
                     stage.get("started_at"), completed_at
                 ),
-                "details": _json_value(details),
+                "details": _json_value({**details, **memory}),
             }
         )
         if error is not None:
