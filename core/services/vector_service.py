@@ -107,6 +107,12 @@ class BaseVectorService(ABC):
         """Read all generation objects directly; never use ranked retrieval."""
         return self.client.read_generation(generation, user_id, logical_file_id)
 
+    def list_generation_chunk_indexes(self, generation, user_id, logical_file_id):
+        """Identities only: the cheap check that stored chunks still exist."""
+        return self.client.list_generation_chunk_indexes(
+            generation, user_id, logical_file_id
+        )
+
     def search_documents(
         self,
         vector: List[float],

@@ -19,3 +19,63 @@ The initial attempt row is created before the publication transaction. A killed 
 Apply `files.0026_vectorindexattempt` before restarting the API and all ingestion workers. The table is additive and does not modify existing indexes. Weaviate initialization adds a non-searchable `file_type` property if missing; old objects do not require rewriting. Rolling back application code can leave the additive table/property in place.
 
 Existing uploads are unchanged until explicitly reprocessed. Verification proves consistency at publication time, not indefinite durability. This change does not implement periodic drift detection, bulk repair, or automatic recovery of attempts abandoned by killed workers. It does not establish the cause of historical production data loss.
+
+## Generation lifecycle
+
+An attempt row follows its generation for as long as the file exists:
+`running` while the worker holds it, then `published`, `empty`, or `failed`.
+When a later generation is published for the same file the previous row
+becomes `retired` and `finished_at` is stamped, so the table reads as a history:
+a row that is still `published` while the vector database holds nothing for it
+is an unexplained loss, not a replacement or a deletion. A `running` row whose
+worker stopped becomes `abandoned` (see below), and a new attempt starting on
+the same file abandons any older `running` row first. Deleting a file removes
+its rows with it.
+
+## Interrupted ingestions
+
+A file only leaves Processing when its job finishes, so a killed worker used to
+leave it there forever; the lease on the File row is only reclaimed by the next
+explicit reprocess. `core.services.ingestion_reconciliation` asks RQ whether
+each Processing file's job is still alive (queued, or started on a worker that
+is still heartbeating) and, when it is not, records the interruption: the
+journey attempt is failed, `running` attempt rows become `abandoned`, and the
+file becomes **Failed** with an "interrupted" message, or **Processed** with a
+"previous index retained" note when the interrupted run was a replacement and a
+published generation is still active. RQ itself only expires a dead worker's
+"started" registry entry after the job's own timeout, which is why a queue
+dashboard can show dozens of running jobs with no worker alive.
+
+The sweep runs in three places, none of which needs a new process or a
+deployment change: every worker runs it once at startup (a restarted worker is
+the first to know its predecessor's jobs are dead) and at the same time
+(re)registers a recurring job with rq-scheduler, which the already-running
+`rqscheduler` process enqueues on the default queue every
+`INGESTION_RECONCILE_INTERVAL_SECONDS` (default 300; 0 disables); and
+`python manage.py reconcile_ingestion` runs it by hand. Registration is
+idempotent (fixed job id, cancelled and re-added on each worker start) and
+also queues one follow-up sweep two minutes later, because a worker that
+systemd restarts within seconds of a crash still sees its predecessor listed
+as alive. Worker job failures are also reported to Sentry through the RQ
+integration.
+
+Detection latency depends on RQ's worker heartbeat: a forking worker (the
+default-queue workers) refreshes its key every 30 s with a 90 s TTL while
+running a job, so a dead worker is recognised within about two minutes. A
+`SimpleWorker` heartbeats once per job with the job's timeout as TTL, so on
+that class detection waits for the job timeout.
+
+## Live index health
+
+Publication verifies a generation once. `GET /api/files/{id}/index-health/`
+answers the later question of whether the vectors are still there by listing
+the chunk identities stored for the active generation and comparing them with
+the file's map rows. The Map tab shows the result and lets the user re-check;
+the Files admin has a "Check search index health now" action. Identities only:
+the content comparison already happened at publication, and a listing without
+vectors or text stays cheap for large documents. A `verified` result means the
+index is complete right now; `incomplete` or `missing` means reprocess the
+file; `unavailable` means the database could not be reached and says nothing
+about the vectors. Apply `files.0027_vectorindexattempt_finished_at` with this
+change.
+

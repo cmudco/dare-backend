@@ -80,6 +80,11 @@ DOCUMENT_OCR_ESTIMATED_OUTPUT_TOKENS_PER_PAGE = env.int(
 DOCUMENT_OCR_JOB_TIMEOUT_SECONDS = env.int(
     "DOCUMENT_OCR_JOB_TIMEOUT_SECONDS", default=3600
 )
+# How often the scheduler sweeps files stranded in Processing by a dead
+# worker; 0 disables the recurring sweep (workers still sweep at startup).
+INGESTION_RECONCILE_INTERVAL_SECONDS = env.int(
+    "INGESTION_RECONCILE_INTERVAL_SECONDS", default=300
+)
 
 # redis
 REDIS_HOST = os.getenv("REDIS_HOST")

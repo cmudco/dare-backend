@@ -1,6 +1,15 @@
-from django.contrib import admin
+from django.contrib import admin, messages
+
+from core.services.index_health import check_index_health
 
 from .models import File, FileShare, Tag, VectorIndexAttempt
+
+HEALTH_MESSAGE_LEVELS = {
+    "verified": messages.SUCCESS,
+    "processing": messages.WARNING,
+    "not_indexed": messages.WARNING,
+    "unverifiable": messages.WARNING,
+}
 
 
 @admin.register(Tag)
@@ -41,6 +50,23 @@ class FileAdmin(admin.ModelAdmin):
     ordering = ("-created_at",)
     raw_id_fields = ("source_file",)
     readonly_fields = ("parser_fallback_details",)
+    actions = ("check_index_health",)
+
+    @admin.action(description="Check search index health now")
+    def check_index_health(self, request, queryset):
+        for file in queryset:
+            health = check_index_health(file)
+            detail = (
+                f"{health.present}/{health.expected}"
+                if health.expected is not None
+                else f"{health.present} present"
+            )
+            self.message_user(
+                request,
+                f"{file.name} (#{file.pk}): {health.state} — {detail}"
+                + (f" — {health.error}" if health.error else ""),
+                level=HEALTH_MESSAGE_LEVELS.get(health.state, messages.ERROR),
+            )
 
     @admin.display(description="Parser fallback")
     def parser_fallback_details(self, obj):
@@ -79,8 +105,9 @@ class VectorIndexAttemptAdmin(admin.ModelAdmin):
         "verified_count",
         "verified_at",
         "created_at",
+        "finished_at",
     )
-    list_filter = ("status", "backend", "created_at")
+    list_filter = ("status", "backend", "created_at", "finished_at")
     search_fields = ("generation", "file__name")
     readonly_fields = tuple(field.name for field in VectorIndexAttempt._meta.fields)
 

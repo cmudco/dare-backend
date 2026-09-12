@@ -179,6 +179,11 @@ class DocumentProcessor:
                     stage.add_details(**details)
 
             generation = uuid4().hex
+            VectorIndexAttempt.objects.filter(file=file, status="running").update(
+                status="abandoned",
+                finished_at=timezone.now(),
+                error="A newer attempt started before this one finished.",
+            )
             self.index_attempt = VectorIndexAttempt.objects.create(
                 file=file,
                 generation=generation,
@@ -245,8 +250,8 @@ class DocumentProcessor:
             published = bool(vectors)
             if vectors:
                 transaction.on_commit(
-                    lambda: self._retire_index(
-                        previous_key, file.user.id, previous_backend
+                    lambda: self._retire_generation(
+                        file, previous_key, file.user.id, previous_backend
                     )
                 )
 
@@ -256,6 +261,8 @@ class DocumentProcessor:
         except Exception as e:
             if self.index_attempt is not None:
                 self.index_attempt.status = "published" if published else "failed"
+                if not published:
+                    self.index_attempt.finished_at = timezone.now()
                 self.index_attempt.error = (
                     f"{type(e).__name__}: {str(e)}"[:2000]
                     if isinstance(e, VectorIntegrityError)
@@ -564,6 +571,14 @@ class DocumentProcessor:
                 if attempt is not None:
                     attempt.verification_seconds = round(time.monotonic() - started, 3)
         return len(vectors)
+
+    @classmethod
+    def _retire_generation(cls, file, index_key, user_id, backend):
+        """Drop the replaced vectors and close the book on their attempt row."""
+        cls._retire_index(index_key, user_id, backend)
+        VectorIndexAttempt.objects.filter(
+            file=file, generation=index_key, status="published"
+        ).update(status="retired", finished_at=timezone.now())
 
     @staticmethod
     def _retire_index(index_key, user_id, backend):

@@ -8,6 +8,8 @@ from weaviate.classes.config import Configure, DataType, Property
 
 logger = logging.getLogger(__name__)
 
+HEALTH_PAGE_SIZE = 500
+
 BODY_TEXT_PROPERTY = Property(
     name="body_text",
     data_type=DataType.TEXT,
@@ -307,6 +309,38 @@ class WeaviateClient:
         ) & weaviate.classes.query.Filter.by_property("user_id").equal(str(user_id))
         collection.data.delete_many(where=document_filter)
         return True
+
+    def list_generation_chunk_indexes(self, generation, user_id, logical_file_id):
+        """Chunk indexes stored for one owned generation, without vectors or text.
+
+        Pages by ``chunk_index`` instead of an offset so the scan is not capped by
+        Weaviate's maximum offset window on very large documents.
+        """
+        collection = self.client.collections.get(self.collection_name)
+        owner = weaviate.classes.query.Filter.by_property("file_id").equal(
+            str(generation)
+        ) & weaviate.classes.query.Filter.by_property("user_id").equal(str(user_id))
+        indexes = []
+        last = None
+        while True:
+            filters = owner
+            if last is not None:
+                filters = owner & weaviate.classes.query.Filter.by_property(
+                    "chunk_index"
+                ).greater_than(last)
+            response = collection.query.fetch_objects(
+                filters=filters,
+                limit=HEALTH_PAGE_SIZE,
+                sort=weaviate.classes.query.Sort.by_property("chunk_index"),
+                return_properties=["chunk_index"],
+            )
+            for obj in response.objects:
+                indexes.append(obj.properties.get("chunk_index"))
+            if len(response.objects) < HEALTH_PAGE_SIZE:
+                return indexes
+            last = response.objects[-1].properties.get("chunk_index")
+            if last is None:
+                return indexes
 
     def read_generation(self, generation, user_id, logical_file_id):
         collection = self.client.collections.get(self.collection_name)
