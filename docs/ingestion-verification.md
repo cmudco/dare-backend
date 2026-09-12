@@ -81,9 +81,11 @@ change.
 
 ## Memory per stage
 
-Every finished journey stage records `peak_memory_mb` (the worker process's
-high-water mark so far, from `getrusage`) and, where the platform exposes it,
-`memory_mb` (resident size at the end of the stage). They appear in the
+Every finished journey stage records `memory_mb` (the worker process's
+resident size at the end of the stage) and `peak_memory_mb` (its high-water
+mark). On Linux the peak is reset when an attempt begins, so it is the peak
+of that attempt; on macOS it is the process-lifetime peak, which a
+long-lived development worker carries over from earlier jobs. They appear in the
 Metadata tab and in the stored journey, so a production upload says what each
 phase cost on the production box rather than on a developer laptop.
 
