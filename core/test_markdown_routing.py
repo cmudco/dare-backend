@@ -7,12 +7,13 @@ from django.test import SimpleTestCase
 from core.services.document_parsing_service import DocumentParsingService
 
 MARKDOWN = b"# Guide\n\n## Prices\n\n| Item | Price |\n| --- | --- |\n| Apple | 3 |\n\n- First item\n- Second item\n"
+CSV = b"item,price\napple,3\npear,4\n"
 
 
 class MarkdownRoutingTests(SimpleTestCase):
-    def file(self, mode, name):
+    def file(self, mode, name, data=MARKDOWN):
         return SimpleNamespace(
-            id=1, processing_mode=mode, file=ContentFile(MARKDOWN, name=name)
+            id=1, processing_mode=mode, file=ContentFile(data, name=name)
         )
 
     def test_advanced_markdown_preserves_headings_and_table(self):
@@ -32,8 +33,17 @@ class MarkdownRoutingTests(SimpleTestCase):
         select.assert_not_called()
         self.assertEqual(parsed.parser, "basic")
 
-    def test_plain_text_stays_basic_in_advanced_mode(self):
-        parsed = DocumentParsingService().parse(self.file("advanced", "guide.txt"))
+    def test_plain_text_and_csv_use_docling_in_advanced_mode(self):
+        for name, data in (("guide.txt", MARKDOWN), ("sales.csv", CSV)):
+            with self.subTest(name=name):
+                parsed = DocumentParsingService().parse(
+                    self.file("advanced", name, data)
+                )
+                self.assertEqual(parsed.parser, "docling")
+                self.assertGreater(len(parsed.elements), 0)
+
+    def test_json_keeps_the_basic_reader_in_advanced_mode(self):
+        parsed = DocumentParsingService().parse(self.file("advanced", "data.json"))
         self.assertEqual(parsed.parser, "basic")
 
     def test_failed_docling_conversion_records_basic_fallback(self):

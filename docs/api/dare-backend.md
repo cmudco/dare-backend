@@ -111,7 +111,9 @@ Invalid processing modes return HTTP 400 before any file is created.
   visual extraction. Scanned documents without embedded text need Advanced.
 - **Advanced (Docling):** preserves document structure, tables, and images for
   supported document formats and uses the existing visual enrichment workflow.
-  Plain-text formats use text extraction; existing fallback diagnostics remain
+  Plain text and CSV go through Docling as well (read as Markdown and as a
+  table), so Advanced always means "find the structure"; JSON has no Docling
+  backend and keeps text extraction. Existing fallback diagnostics remain
   visible if Docling cannot parse a document. Standalone media handling is unchanged.
 
 The mode is stored per file and reused when reprocessing. Existing files and
