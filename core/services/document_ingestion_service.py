@@ -15,6 +15,7 @@ from core.services.document_ocr_workflow_service import (
     DocumentOcrPlan,
     DocumentOcrWorkflowService,
 )
+from core.services.document_parsers import release_parser_models
 from core.services.document_processor import DocumentProcessor
 from core.services.document_text_sanitizer import sanitize_document_text
 from core.services.dtos.parsed_document_dto import ParsedDocument
@@ -194,6 +195,7 @@ class DocumentIngestionService:
                 parsed, continuing = self._load_or_parse(
                     file, ocr_request, processor, journey
                 )
+                release_parser_models()
 
             ocr_workflow = DocumentOcrWorkflowService()
             if reusing_transcriptions or retry_images:

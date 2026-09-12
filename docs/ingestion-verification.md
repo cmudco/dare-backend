@@ -79,3 +79,19 @@ file; `unavailable` means the database could not be reached and says nothing
 about the vectors. Apply `files.0027_vectorindexattempt_finished_at` with this
 change.
 
+## Memory per stage
+
+Every finished journey stage records `peak_memory_mb` (the worker process's
+high-water mark so far, from `getrusage`) and, where the platform exposes it,
+`memory_mb` (resident size at the end of the stage). They appear in the
+Metadata tab and in the stored journey, so a production upload says what each
+phase cost on the production box rather than on a developer laptop.
+
+Docling's layout, table and picture models are only needed while parsing, but
+they weigh several hundred MB and the enrichment phase that follows can wait
+minutes on a vision provider. Ingestion therefore releases the converters
+(`release_parser_models`) as soon as the parse is over; a forking worker's
+horse exits after the job anyway, and a long-lived worker reloads them on its
+next parse (about 20 s). Bulk commands such as `backfill_document_models` keep
+the models loaded between files.
+
