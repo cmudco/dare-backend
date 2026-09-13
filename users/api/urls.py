@@ -10,6 +10,7 @@ from users.api.views import (
     AvatarViewSet,
     InternalSetRoleView,
     InternalAccessCodeSyncView,
+    InternalVoiceAccessCodeView,
     token_health_check,
 )
 from users.constants import APP_NAME
@@ -33,6 +34,7 @@ urlpatterns = [
     path("access-codes/check/", AccessCodeCheckView.as_view(), name="access-code-check"),
     path("internal/set-role/", InternalSetRoleView.as_view(), name="internal-set-role"),
     path("internal/sync-access-code/", InternalAccessCodeSyncView.as_view(), name="internal-sync-access-code"),
+    path("internal/voice-access-codes/", InternalVoiceAccessCodeView.as_view(), name="internal-voice-access-codes"),
 
     path("", include(router.urls)),
 ]

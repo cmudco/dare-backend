@@ -40,12 +40,11 @@ class LearningProgressService:
 
         Uses system + user message format for better AI comprehension.
         """
-        try:
-            if not learning_goals or not learning_goals.strip():
-                raise ValueError("Learning goals cannot be empty")
-            if not tracking_prompt or not tracking_prompt.strip():
-                raise ValueError("Tracking prompt cannot be empty")
+        # Progress tracking is optional. Incomplete bot setup is not a provider error.
+        if not (learning_goals or "").strip() or not (tracking_prompt or "").strip():
+            return
 
+        try:
             if not llm:
                 llm = await self._get_default_progress_llm()
 

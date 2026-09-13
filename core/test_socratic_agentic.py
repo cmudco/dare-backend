@@ -1,0 +1,239 @@
+"""Socratic Bots agentic-RAG enablement and defensive gating."""
+
+from dataclasses import replace
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+
+from asgiref.sync import async_to_sync
+from django.test import SimpleTestCase, TransactionTestCase
+
+from conversations.constants import RagMode
+from core.services.dtos.builder import LLMQueryRequestBuilder
+from core.services.dtos.context_dto import ContextConfig
+from core.services.dtos.generation_dto import GenerationConfig
+from core.services.dtos.media_dto import MediaConfig
+from core.services.dtos.request_dto import LLMQueryRequest
+from core.services.dtos.socratic_dto import SocraticConfig
+from core.services.llm_helpers.socratic_helpers import (
+    AGENTIC_RETRIEVAL_DIRECTIVE,
+    build_advanced_socratic_messages,
+    build_classic_socratic_messages,
+)
+from users.constants import AuthSourceChoice
+
+
+def _llm(provider="openai"):
+    return SimpleNamespace(provider=provider)
+
+
+class SocraticBuilderGatingTests(SimpleTestCase):
+    def _build(self, *, user=SimpleNamespace(id=1), **payload):
+        message_data = {
+            "embedding_ids": [4, 5],
+            "is_advanced": True,
+            **payload,
+        }
+        return LLMQueryRequestBuilder.from_message_data(
+            message="what does the reading say?",
+            user=user,
+            message_data=message_data,
+            llm=_llm(),
+            platform=AuthSourceChoice.SOCRATIC_BOTS,
+        )
+
+    def test_agentic_socratic_exposes_search_documents(self):
+        request = self._build(rag_mode=RagMode.AGENTIC)
+        self.assertEqual(request.context.rag_mode, RagMode.AGENTIC)
+        self.assertEqual(request.dare_tool_slugs, ("search_documents",))
+        self.assertTrue(request.socratic.enabled)
+
+    def test_default_rag_mode_stays_advanced_with_no_tools(self):
+        request = self._build()
+        self.assertEqual(request.context.rag_mode, RagMode.ADVANCED)
+        self.assertEqual(request.dare_tool_slugs, ())
+
+    def test_anonymous_session_downgrades_agentic_to_advanced(self):
+        request = self._build(user=None, rag_mode=RagMode.AGENTIC)
+        self.assertEqual(request.context.rag_mode, RagMode.ADVANCED)
+        self.assertEqual(request.dare_tool_slugs, ())
+
+    def test_artifacts_and_mcp_are_stripped_for_socratic(self):
+        request = self._build(
+            rag_mode=RagMode.AGENTIC,
+            artifacts_enabled=True,
+            mcp_server_ids=[3, 9],
+            dare_tool_slugs=["create_chart", "search_documents", "generate_image"],
+        )
+        self.assertFalse(request.generation.artifacts_enabled)
+        self.assertEqual(request.mcp_server_ids, ())
+        self.assertEqual(request.dare_tool_slugs, ("search_documents",))
+
+    def test_non_socratic_chat_keeps_artifacts_and_mcp(self):
+        request = LLMQueryRequestBuilder.from_message_data(
+            message="make a chart",
+            user=SimpleNamespace(id=1),
+            message_data={
+                "artifacts_enabled": True,
+                "mcp_server_ids": [3],
+            },
+            llm=_llm(),
+            platform=None,
+        )
+        self.assertTrue(request.generation.artifacts_enabled)
+        self.assertEqual(request.mcp_server_ids, (3,))
+
+
+def _socratic_request(rag_mode):
+    return LLMQueryRequest(
+        message="what is chapter two about?",
+        conversation=None,
+        user=SimpleNamespace(id=1),
+        llm=_llm(),
+        context=ContextConfig(embedding_ids=[4], rag_mode=rag_mode),
+        generation=GenerationConfig(),
+        media=MediaConfig(),
+        socratic=SocraticConfig(
+            enabled=True,
+            advanced_mode=False,
+            bot_meta={
+                "subject": "history",
+                "topic": "ww2",
+                "learning_goals": "causes",
+                "chat_prompt": "be socratic",
+            },
+        ),
+    )
+
+
+class SocraticBuilderAgenticSkipTests(SimpleTestCase):
+    def setUp(self):
+        async def retrieve(**kwargs):
+            kwargs["messages"].append({"role": "user", "content": "snippet text"})
+            return []
+
+        self.retrieval = AsyncMock(side_effect=retrieve)
+        patcher = patch(
+            "core.services.llm_helpers.socratic_helpers.add_semantic_context_to_messages",
+            self.retrieval,
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.processor = SimpleNamespace(
+            user_id=1,
+            vector_service=None,
+            search_similar_documents=AsyncMock(return_value="snippet text"),
+        )
+
+    def _stage(self, result, kind):
+        return next(
+            (s for s in result.context_trace["stages"] if s["kind"] == kind), None
+        )
+
+    def test_classic_agentic_skips_pre_injection(self):
+        result = async_to_sync(build_classic_socratic_messages)(
+            _socratic_request(RagMode.AGENTIC), self.processor
+        )
+        self.retrieval.assert_not_called()
+        self.assertIn(AGENTIC_RETRIEVAL_DIRECTIVE, result.messages[1]["content"])
+        retrieval = self._stage(result, "retrieval")
+        self.assertTrue(retrieval["deferredToTool"])
+
+    def test_classic_non_agentic_still_pre_injects(self):
+        result = async_to_sync(build_classic_socratic_messages)(
+            _socratic_request(RagMode.ADVANCED), self.processor
+        )
+        self.retrieval.assert_awaited_once()
+        self.assertIn("snippet text", result.messages[1]["content"])
+        retrieval = self._stage(result, "retrieval")
+        self.assertEqual(retrieval["mode"], RagMode.ADVANCED)
+        self.assertEqual(retrieval["chars"], len("snippet text"))
+
+    def test_advanced_agentic_skips_pre_injection(self):
+        result = async_to_sync(build_advanced_socratic_messages)(
+            _socratic_request(RagMode.AGENTIC), self.processor
+        )
+        self.retrieval.assert_not_called()
+        self.assertIn(AGENTIC_RETRIEVAL_DIRECTIVE, result.messages[0]["content"])
+        retrieval = self._stage(result, "retrieval")
+        self.assertTrue(retrieval["deferredToTool"])
+
+    def test_advanced_non_agentic_still_pre_injects(self):
+        result = async_to_sync(build_advanced_socratic_messages)(
+            _socratic_request(RagMode.ADVANCED), self.processor
+        )
+        self.retrieval.assert_awaited_once()
+        self.assertIn("snippet text", result.messages[0]["content"])
+
+    def test_trace_records_prompt_stage(self):
+        result = async_to_sync(build_advanced_socratic_messages)(
+            _socratic_request(RagMode.ADVANCED), self.processor
+        )
+        prompt = self._stage(result, "prompt")
+        self.assertGreater(prompt["chars"], 0)
+        self.assertIn("totalMs", result.context_trace)
+
+    def test_each_preinjected_mode_uses_shared_pipeline_and_owner_scope(self):
+        for mode in (RagMode.NAIVE, RagMode.ADVANCED):
+            for builder in (
+                build_classic_socratic_messages,
+                build_advanced_socratic_messages,
+            ):
+                with self.subTest(mode=mode, builder=builder.__name__):
+                    self.retrieval.reset_mock()
+                    request = _socratic_request(mode)
+                    request = replace(
+                        request, context=replace(request.context, file_owner_id=42)
+                    )
+                    result = async_to_sync(builder)(request, self.processor)
+                    kwargs = self.retrieval.call_args.kwargs
+                    self.assertEqual(kwargs["rag_mode"], mode)
+                    self.assertEqual(kwargs["file_owner_id"], 42)
+                    self.assertEqual(kwargs["user_id"], 1)
+                    self.assertTrue(
+                        any("snippet text" in msg["content"] for msg in result.messages)
+                    )
+
+    def test_public_retrieval_preserves_bot_payer_and_creator_scope(self):
+        request = _socratic_request(RagMode.ADVANCED)
+        request = replace(
+            request,
+            user=None,
+            conversation=SimpleNamespace(bot_id=7, title="Public tutor"),
+            context=replace(request.context, file_owner_id=42),
+        )
+        with patch(
+            "core.services.llm_helpers.socratic_helpers.get_conversation_history",
+            new=AsyncMock(return_value=[]),
+        ):
+            async_to_sync(build_advanced_socratic_messages)(request, self.processor)
+        self.assertEqual(self.retrieval.call_args.kwargs["payer_bot_id"], 7)
+        self.assertIsNone(self.retrieval.call_args.kwargs["user_id"])
+        self.assertEqual(self.retrieval.call_args.kwargs["file_owner_id"], 42)
+
+
+class SocraticHistoryTraceTests(TransactionTestCase):
+    def test_socket_history_preserves_saved_traces(self):
+        from conversations.constants import SenderType
+        from conversations.models import Conversation, Message
+        from core.services.conversation_service import ConversationService
+        from users.models import User
+
+        user = User.objects.create_user(
+            email="trace@example.test", password="test-only"
+        )
+        conversation = Conversation.active_objects.create(user=user, title="Trace QA")
+        trace = {"totalMs": 12, "stages": [{"name": "retrieval", "ms": 10}]}
+        retrieval = {"source": "documents", "stages": []}
+        message = Message.active_objects.create(
+            conversation=conversation,
+            sender_type=SenderType.AI_ASSISTANT,
+            message="Saved answer",
+            context_trace=trace,
+            retrieval_trace=retrieval,
+        )
+        history = async_to_sync(ConversationService().fetch_chat_history_from_db)(
+            conversation
+        )
+        self.assertEqual(history[0]["id"], message.id)
+        self.assertEqual(history[0]["contextTrace"], trace)
+        self.assertEqual(history[0]["retrievalTrace"], retrieval)

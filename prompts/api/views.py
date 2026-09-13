@@ -31,7 +31,11 @@ class PromptViewSet(viewsets.ModelViewSet):
         )
 
     def get_queryset(self):
-        return Prompt.active_objects.filter(user=self.request.user).order_by('-created_at')
+        return (
+            Prompt.active_objects.filter(user=self.request.user)
+            .select_related('user', 'published')
+            .order_by('-created_at')
+        )
 
     def perform_destroy(self, instance):
         """Override delete to recursively delete all parent prompts."""

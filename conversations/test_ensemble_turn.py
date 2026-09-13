@@ -1,6 +1,7 @@
 """Boundary and policy decisions behind a panel/council turn."""
 
 from django.test import SimpleTestCase, TestCase
+from rest_framework.test import APIClient
 
 from conversations.services.ensemble_service import (
     EnsembleTurn,
@@ -106,3 +107,72 @@ class EnsembleFlagGateTests(TestCase):
     def test_on_with_a_user_override(self):
         UserFeatureOverride.objects.create(flag=self.flag, user=self.user, enabled=True)
         self.assertTrue(ensemble_enabled_for(self.user))
+
+
+class EnsembleBriefTests(SimpleTestCase):
+    def _request(self, briefs):
+        return EnsembleRequest.parse(
+            {
+                "depth": "panel",
+                "responder_ids": [29, 31, 34],
+                "chairman_id": 29,
+                "briefs": briefs,
+            }
+        )
+
+    def test_angles_align_with_the_line_up_and_blank_briefs_mean_default(self):
+        request = self._request(
+            {"responder": "  ", "chairman": "Fuse it.", "angles": ["Skeptic"]}
+        )
+        self.assertIsNone(request.briefs.responder)
+        self.assertEqual(request.briefs.chairman, "Fuse it.")
+        self.assertEqual(request.briefs.angles, ("Skeptic", "", ""))
+        self.assertTrue(request.briefs.is_custom)
+        self.assertFalse(self._request(None).briefs.is_custom)
+
+    def test_seat_angle_is_appended_to_the_brief_that_applies(self):
+        turn = EnsembleTurn(
+            message_data={"message": "q"},
+            user_message="q",
+            conversation=None,
+            user=None,
+            platform=None,
+            briefs=self._request(
+                {"responder": "Be brief.", "angles": ["", "Lead with data"]}
+            ).briefs,
+        )
+        self.assertEqual(turn.instructions_for("responder-1", "LIB"), "Be brief.")
+        seat_two = turn.instructions_for("responder-2", "LIB")
+        self.assertTrue(seat_two.startswith("Be brief.\n\n"))
+        self.assertIn("Lead with data", seat_two)
+        self.assertEqual(turn.instructions_for("chairman", "LIB"), "LIB")
+        self.assertNotIn("Lead with data", turn.instructions_for("evaluator-2", "LIB"))
+
+
+class EnsemblePresetApiTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(email="briefs@example.com", password="x")
+        self.client = APIClient()
+        self.client.force_authenticate(self.user)
+
+    def test_defaults_come_from_the_role_prompts(self):
+        self.assertEqual(
+            APIClient().get("/api/ensemble-presets/defaults/").status_code, 401
+        )
+        response = self.client.get("/api/ensemble-presets/defaults/")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("panel", response.json()["responder"])
+        self.assertIn("chairman", response.json()["chairman"])
+
+    def test_presets_are_private_to_their_owner(self):
+        created = self.client.post(
+            "/api/ensemble-presets/",
+            {"name": "Debate", "angles": ["For", "Against"]},
+            format="json",
+        )
+        self.assertEqual(created.status_code, 201, created.content)
+        other = User.objects.create_user(email="other@example.com", password="x")
+        self.client.force_authenticate(other)
+        self.assertEqual(
+            self.client.get("/api/ensemble-presets/").json()["results"], []
+        )

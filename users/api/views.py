@@ -26,7 +26,13 @@ from conversations.constants import SenderType
 from conversations.models import Conversation, Message
 from files.models import File
 from prompts.models import Prompt
-from users.constants import AuthSourceChoice, RoleChoice, VectorDBChoice
+from users.constants import (
+    VOICE_ACCESS_CODE_CAPACITY,
+    AccessCodeProvisionerChoice,
+    AuthSourceChoice,
+    RoleChoice,
+    VectorDBChoice,
+)
 from users.models import AccessCodeGroup
 from users.services import AvatarService, AvatarValidationError
 from users.services.account_deletion_service import (
@@ -383,6 +389,7 @@ class AccessCodeCheckView(APIView):
                     {
                         "exists": True,
                         "default_role": code_group.default_role,
+                        "provisioned_by": code_group.provisioned_by,
                         "available_slots": 0,
                         "message": message,
                     }
@@ -395,6 +402,7 @@ class AccessCodeCheckView(APIView):
                 {
                     "exists": True,
                     "default_role": code_group.default_role,
+                    "provisioned_by": code_group.provisioned_by,
                     "available_slots": available_slots,
                     "message": f"Access code is available with {code_group.get_default_role_display()} role",
                 }
@@ -405,6 +413,7 @@ class AccessCodeCheckView(APIView):
                 {
                     "exists": False,
                     "default_role": None,
+                    "provisioned_by": None,
                     "available_slots": 0,
                     "message": "Access code not found",
                 }
@@ -645,6 +654,96 @@ class InternalAccessCodeSyncView(APIView):
                 "max_capacity": code_group.max_capacity,
                 "default_role": code_group.default_role,
                 "is_active": code_group.is_active,
+            }
+        )
+
+
+class InternalVoiceAccessCodeView(APIView):
+    """
+    Service-to-service endpoint for SocraticBooks voice-assignment access codes.
+
+    A voice assignment code is registered here as a RESEARCHER access-code group so
+    that DARE's normal registration path assigns the role. Groups provisioned by
+    this endpoint are marked ``provisioned_by=SOCRATIC_VOICE``; any other group with
+    the same code is a collision and is never modified.
+
+    Authenticated via X-Internal-Key header (shared secret).
+
+    POST body:
+    {
+        "access_code": "VOICE-1",
+        "action": "ensure" | "deactivate",
+        "activate": false        # ensure only: re-activate a deactivated voice group
+    }
+    """
+
+    permission_classes = [AllowAny]
+
+    def post(self, request, *args, **kwargs):
+        internal_key = request.headers.get("X-Internal-Key", "")
+        expected_key = getattr(settings, "DARE_INTERNAL_KEY", "")
+        if not expected_key or internal_key != expected_key:
+            return Response({"error": "Unauthorized"}, status=status.HTTP_403_FORBIDDEN)
+
+        access_code = str(request.data.get("access_code", "")).strip()
+        action_name = request.data.get("action", "ensure")
+        if not access_code:
+            return Response(
+                {"error": "access_code is required"}, status=status.HTTP_400_BAD_REQUEST
+            )
+        if action_name not in ("ensure", "deactivate"):
+            return Response(
+                {"error": "action must be 'ensure' or 'deactivate'"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if action_name == "deactivate":
+            group = AccessCodeGroup.objects.filter(access_code=access_code).first()
+            if group is None:
+                return Response({"success": True, "action": "not_found"})
+            if group.provisioned_by != AccessCodeProvisionerChoice.SOCRATIC_VOICE:
+                return Response(
+                    {
+                        "conflict": True,
+                        "message": "Access code is not a voice assignment code",
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+            if group.is_active:
+                group.is_active = False
+                group.save(update_fields=["is_active"])
+            return Response({"success": True, "action": "deactivated"})
+
+        activate = bool(request.data.get("activate", False))
+        group, created = AccessCodeGroup.objects.get_or_create(
+            access_code=access_code,
+            defaults={
+                "max_capacity": VOICE_ACCESS_CODE_CAPACITY,
+                "default_role": RoleChoice.RESEARCHER,
+                "provisioned_by": AccessCodeProvisionerChoice.SOCRATIC_VOICE,
+                "notes": "SocraticBooks voice assignment code (managed by SocraticBooks)",
+            },
+        )
+        if group.provisioned_by != AccessCodeProvisionerChoice.SOCRATIC_VOICE:
+            return Response(
+                {
+                    "conflict": True,
+                    "message": "Access code is already in use by a different registration group",
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+        if activate and not group.is_active:
+            group.is_active = True
+            group.save(update_fields=["is_active"])
+
+        return Response(
+            {
+                "success": True,
+                "created": created,
+                "default_role": group.default_role,
+                "is_active": group.is_active,
+                "is_available": group.is_available,
+                "available_slots": max(group.max_capacity - group.current_usage, 0),
             }
         )
 

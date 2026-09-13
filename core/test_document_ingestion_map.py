@@ -88,8 +88,8 @@ EMPTY_PARSED = ParsedDocument(
 def fake_embeddings(chunks, file_id, user_id, file_name, file_type):
     return [
         (
-            f"{file_id}_{index}",
-            [0.1, 0.2, 0.3],
+            f"file_{file_id}_chunk_{index}",
+            [0.1] * 3072,
             {
                 "file_id": str(file_id),
                 "user_id": str(user_id),
@@ -277,56 +277,16 @@ class DocumentIngestionMapTests(TestCase):
         self.assertEqual(stage["details"]["references_found"], 0)
         self.assertEqual(stage["details"]["references_resolved"], 0)
 
-    def test_skipped_embedding_keeps_rows_aligned_with_vectors(self):
-        """A chunk the embedder drops must not shift the rows after it.
+    def test_missing_embedding_fails_without_publishing_partial_chunks(self):
+        def incomplete(chunks, *args):
+            return fake_embeddings(chunks, *args)[::2]
 
-        The fake embedder below mimics ``EmbeddingService`` under a
-        per-chunk failure: it advances ``chunk_index`` for every source
-        chunk but only returns a vector for the ones that succeeded, so the
-        surviving indexes have a gap (0, 2) rather than being consecutive.
-        """
-        captured_chunk_texts = []
-
-        def embed_dropping_second_chunk(chunks, file_id, user_id, file_name, file_type):
-            captured_chunk_texts.extend(chunks)
-            return [
-                (
-                    f"{file_id}_{index}",
-                    [0.1, 0.2, 0.3],
-                    {
-                        "file_id": str(file_id),
-                        "user_id": str(user_id),
-                        "file_name": file_name,
-                        "file_type": file_type,
-                        "text": chunk,
-                        "chunk_index": index,
-                    },
-                )
-                for index, chunk in enumerate(chunks)
-                if index != 1
-            ]
-
-        with patched_ingestion(embed_side_effect=embed_dropping_second_chunk):
-            self._process()
-
-        rows = list(
-            DocumentChunk.objects.filter(file=self.file).order_by("chunk_index")
-        )
-        self.assertEqual([row.chunk_index for row in rows], [0, 2])
-        self.assertEqual(
-            rows[1].text,
-            "Deletion is tricky here; see section 2 for tombstones and Figure 9.",
-        )
-        self.assertTrue(captured_chunk_texts[2].endswith(rows[1].text))
-
-        references = list(
-            DocumentReference.objects.filter(file=self.file).order_by("id")
-        )
-        section_ref = next(r for r in references if r.kind == "section")
-        self.assertEqual(section_ref.source_chunk.chunk_index, 2)
-        self.assertEqual(section_ref.target_order, 3)
-        self.assertIsNone(section_ref.target_chunk)
-        self.assertTrue(section_ref.resolved)
+        with patched_ingestion(embed_side_effect=incomplete):
+            with self.assertRaisesRegex(Exception, "count does not match"):
+                self._process()
+        self.assertFalse(DocumentChunk.objects.filter(file=self.file).exists())
+        self.file.refresh_from_db()
+        self.assertEqual(self.file.status, FileStatus.FAILED)
 
     def test_small_sections_embed_neighbor_context_but_keep_exact_map_text(self):
         elements = (
@@ -413,6 +373,30 @@ class DocumentIngestionMapTests(TestCase):
         self.assertEqual(stage["details"]["recovered_chunks"], 1)
         self.assertGreater(stage["details"]["recovered_characters"], 400)
         self.assertEqual(stage["details"]["chunk_rows"], 1)
+
+    def test_basic_chunks_with_the_recursive_splitter(self):
+        self.file.processing_mode = "basic"
+        self.file.save(update_fields=["processing_mode"])
+        text = FLAT_TEXT * 3
+        parsed = ParsedDocument(
+            text=text,
+            elements=(),
+            structure=DocumentStructure(content_chars=len(text)),
+            parser="basic",
+        )
+        with patched_ingestion(parsed_document=parsed):
+            self._process()
+        rows = list(
+            DocumentChunk.objects.filter(file=self.file).order_by("chunk_index")
+        )
+        self.assertGreater(len(rows), 1)
+        self.assertTrue(all(len(row.text) <= 300 for row in rows))
+        self.assertTrue(all(row.element_kind == "flat" for row in rows))
+        self.file.refresh_from_db()
+        self.assertEqual(
+            _embedding_stage(self.file)["details"]["chunking_strategy"],
+            "Text boundaries",
+        )
 
     def test_flat_fallback_records_unstructured(self):
         with patched_ingestion(parsed_document=FLAT_PARSED):

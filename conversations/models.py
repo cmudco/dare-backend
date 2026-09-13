@@ -1692,3 +1692,31 @@ class ConversationSummary(BaseModel):
 
     def __str__(self):
         return f"Summary for {self.conversation.conversation_id}"
+
+
+class EnsemblePreset(BaseModel):
+    """A saved set of panel briefs: role instructions plus per-seat angles.
+
+    Empty role text means the library prompt for that role applies; angles
+    are positional, so a preset carries over to any line-up of the same size.
+    """
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="ensemble_presets",
+    )
+    name = models.CharField(max_length=80)
+    responder = models.TextField(blank=True)
+    evaluator = models.TextField(blank=True)
+    chairman = models.TextField(blank=True)
+    angles = models.JSONField(default=list, blank=True)
+
+    objects = models.Manager()
+    active_objects = ActiveObjectsManager()
+
+    class Meta:
+        ordering = ["name"]
+
+    def __str__(self):
+        return self.name

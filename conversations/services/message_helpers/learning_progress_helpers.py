@@ -61,8 +61,19 @@ async def run_learning_progress_stream(
         send_callback: Async callback for sending WebSocket messages
         get_llm_callback: Async callback for fetching LLM by ID
     """
+    # Skip optional, incomplete tracking before resolving models or billing.
+    bot_meta = message_data.get("bot_meta") or {}
+    learning_goals = (bot_meta.get("learning_goals") or "").strip()
+    tracking_prompt = (bot_meta.get("tracking_prompt") or "").strip()
+    if not learning_goals or not tracking_prompt:
+        return
+
     try:
-        progress_llm_id = message_data.get("progress_llm_id") or llm.id
+        progress_llm_id = message_data.get("progress_llm_id") or getattr(
+            llm, "id", None
+        )
+        if not progress_llm_id:
+            return
         progress_llm = await get_llm_callback(progress_llm_id)
 
         if not progress_llm:
@@ -71,11 +82,6 @@ async def run_learning_progress_stream(
 
         progress_accumulator = ""
         last_usage = None
-
-        # All Socratic bot data comes from bot_meta (single source of truth)
-        bot_meta = message_data.get("bot_meta", {})
-        learning_goals = bot_meta.get("learning_goals", "")
-        tracking_prompt = bot_meta.get("tracking_prompt", "")
 
         # Stream progress assessment
         async for chunk, usage in learning_progress_service.assess_learning_progress(
@@ -90,6 +96,14 @@ async def run_learning_progress_stream(
             bot_meta=bot_meta,
             user=user,
         ):
+            if usage and usage.get("error"):
+                await send_callback(
+                    WebSocketResponseService.format_progress_error(
+                        "Learning progress could not be assessed. Please try again later."
+                    )
+                )
+                return
+
             # Track usage for billing (authenticated users only)
             if usage:
                 last_usage = usage
