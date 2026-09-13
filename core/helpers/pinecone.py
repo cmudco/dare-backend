@@ -52,6 +52,25 @@ class PineconeClient:
                 objects.append({"metadata": metadata, "vector": list(record.values)})
         return objects
 
+    def list_generation_chunk_indexes(self, generation, user_id, logical_file_id):
+        """Chunk indexes stored for one owned generation, from vector IDs alone."""
+        namespace = f"user_{user_id}"
+        prefix = f"file_{logical_file_id}_chunk_"
+        suffix = "" if str(generation) == str(logical_file_id) else f":{generation}"
+        indexes = []
+        for ids in self.index.list(prefix=prefix, namespace=namespace):
+            for vector_id in ids:
+                if suffix and not vector_id.endswith(suffix):
+                    continue
+                if not suffix and ":" in vector_id:
+                    continue
+                body = vector_id[len(prefix) : len(vector_id) - len(suffix)]
+                try:
+                    indexes.append(int(body))
+                except ValueError:
+                    indexes.append(None)
+        return indexes
+
     def delete_vectors(self, ids: List[str], namespace: Optional[str] = None) -> bool:
         """Delete vectors by their IDs."""
         try:

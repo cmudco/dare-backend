@@ -4,6 +4,7 @@ OCR is deliberately off: local OCR misreads archival scans as confident
 nonsense, so scanned pages route to NEEDS_OCR and the vision layer instead.
 """
 
+import gc
 import hashlib
 import io
 import logging
@@ -60,6 +61,32 @@ class DoclingDocumentParser(BaseDocumentParser):
 
     def supports(self, filename: str) -> bool:
         return (filename or "").lower().rsplit(".", 1)[-1] in DOCLING_EXTENSIONS
+
+    def release(self) -> None:
+        """Drop the converters and their torch models.
+
+        The layout, table and picture models weigh several hundred MB and
+        are only needed while parsing; the enrichment phase that follows can
+        wait minutes on a vision provider. The next parse reloads them.
+        """
+        if self._converter_was_injected:
+            return
+        self._converter = None
+        self._classification_fallback_converter = None
+        gc.collect()
+        logger.info("Released Docling models after parsing")
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            elif (
+                getattr(torch.backends, "mps", None)
+                and torch.backends.mps.is_available()
+            ):
+                torch.mps.empty_cache()
+        except Exception:
+            logger.debug("Could not release accelerator cache", exc_info=True)
 
     def parse(self, data: bytes, filename: str) -> ParsedDocument:
         """Convert raw bytes into a ParsedDocument."""

@@ -609,7 +609,11 @@ class VectorIndexAttempt(TimeStampMixin):
     status = models.CharField(
         max_length=16,
         default="running",
-        help_text="running, empty, published, or failed.",
+        help_text=(
+            "running, empty, published, or failed while the attempt is the "
+            "newest; retired once a later generation replaced it; abandoned "
+            "when the worker stopped before finishing."
+        ),
     )
     expected_count = models.PositiveIntegerField(
         default=0, help_text="Expected chunks before embedding."
@@ -636,6 +640,11 @@ class VectorIndexAttempt(TimeStampMixin):
     )
     error = models.TextField(
         blank=True, help_text="Failure type and safe diagnostic reason."
+    )
+    finished_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When the generation stopped being current: retired, abandoned, or failed.",
     )
 
     class Meta:

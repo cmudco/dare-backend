@@ -225,6 +225,50 @@ class PublicationTests(TestCase):
         )
 
 
+class LifecycleTests(PublicationTests):
+    def test_replacement_retires_the_previous_generation(self):
+        stale = VectorIndexAttempt.objects.create(
+            file=self.file,
+            generation="stale-running",
+            owner_id=self.file.user_id,
+            backend=1,
+        )
+        with patch(
+            "core.services.document_processor.get_vector_service",
+            return_value=self.service,
+        ):
+            with self.captureOnCommitCallbacks(execute=True):
+                self.run_processor()
+            stale.refresh_from_db()
+            self.assertEqual(stale.status, "abandoned")
+            self.assertIsNotNone(stale.finished_at)
+            first = VectorIndexAttempt.objects.get(file=self.file, status="published")
+
+            self.written.clear()
+            self.processor.vector_service = self.service
+            with self.captureOnCommitCallbacks(execute=True):
+                self.run_processor()
+
+        first.refresh_from_db()
+        self.assertEqual(first.status, "retired")
+        self.assertIsNotNone(first.finished_at)
+        self.service.delete_file_vectors.assert_any_call(
+            first.generation, self.file.user_id
+        )
+        current = VectorIndexAttempt.objects.get(file=self.file, status="published")
+        self.file.refresh_from_db()
+        self.assertEqual(self.file.index_generation, current.generation)
+        self.assertIsNone(current.finished_at)
+
+    def test_failed_attempts_are_stamped(self):
+        self.service.read_generation.side_effect = lambda *args: []
+        with self.assertRaises(Exception):
+            self.run_processor()
+        attempt = VectorIndexAttempt.objects.get(file=self.file)
+        self.assertEqual(attempt.status, "failed")
+        self.assertIsNotNone(attempt.finished_at)
+
+
 class PineconeReadbackTests(SimpleTestCase):
     def test_owner_namespace_and_all_pages_are_read_with_integer_metadata(self):
         client = object.__new__(PineconeClient)
