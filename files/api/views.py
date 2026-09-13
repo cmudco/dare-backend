@@ -30,6 +30,7 @@ from core.services.document_crop_service import (
 from core.services.document_processor import DocumentProcessor
 from core.services.file_processor import FileProcessor
 from core.services.file_upload_service import FileUploadService
+from core.services.index_health import check_index_health
 from core.services.vision_model_service import (
     VisionModelNotOffered,
     list_vision_models,
@@ -231,6 +232,7 @@ class FileViewSet(viewsets.ModelViewSet):
                     "status": file.get_status_display(),
                     "statusCode": file.status,
                     "processingStage": file.processing_stage,
+                    "parserName": file.parser_name,
                 }
                 if job:
                     status_data["jobStatus"] = job.get_status()
@@ -653,7 +655,12 @@ class FileViewSet(viewsets.ModelViewSet):
             and document.get("parser") == file_obj.parser_name
             and bool(document.get("elements"))
         )
-        return Response({"structure": structured, "map": structured})
+        return Response(
+            {
+                "structure": structured,
+                "map": structured or DocumentChunk.objects.filter(file=file_obj).exists(),
+            }
+        )
 
     @extend_schema(request=FileReprocessingSerializer, responses={202: FileSerializer})
     @action(
@@ -731,6 +738,19 @@ class FileViewSet(viewsets.ModelViewSet):
         except DocumentChunk.DoesNotExist as error:
             raise Http404("Chunk not found.") from error
         return Response(payload, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=["get"], url_path="index-health")
+    def index_health(self, request, pk=None):
+        """
+        Compare the chunks this file should have in its search index with the
+        chunk identities the vector database holds right now.
+
+        Response: {"state", "expected", "present", "missingCount", "missingChunks",
+        "unexpected", "generation", "backend", "checkedAt", "error"}
+        """
+        return Response(
+            check_index_health(self.get_object()).as_dict(), status=status.HTTP_200_OK
+        )
 
     @action(detail=True, methods=["get"], url_path="processing-journey")
     def processing_journey(self, request, pk=None):

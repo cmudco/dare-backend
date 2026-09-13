@@ -103,6 +103,6 @@ class WeaviateSelectedFileFilterTests(SimpleTestCase):
 
         WeaviateClient()
 
-        added = collection.config.add_property.call_args.args[0]
-        self.assertEqual(added.name, "body_text")
-        self.assertFalse(added.indexSearchable)
+        added = [call.args[0] for call in collection.config.add_property.call_args_list]
+        self.assertEqual([prop.name for prop in added], ["body_text", "file_type"])
+        self.assertTrue(all(not prop.indexSearchable for prop in added))

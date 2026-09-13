@@ -4,6 +4,7 @@ OCR is deliberately off: local OCR misreads archival scans as confident
 nonsense, so scanned pages route to NEEDS_OCR and the vision layer instead.
 """
 
+import gc
 import hashlib
 import io
 import logging
@@ -61,10 +62,42 @@ class DoclingDocumentParser(BaseDocumentParser):
     def supports(self, filename: str) -> bool:
         return (filename or "").lower().rsplit(".", 1)[-1] in DOCLING_EXTENSIONS
 
+    def release(self) -> None:
+        """Drop the converters and their torch models.
+
+        The layout, table and picture models weigh several hundred MB and
+        are only needed while parsing; the enrichment phase that follows can
+        wait minutes on a vision provider. The next parse reloads them.
+        """
+        if self._converter_was_injected:
+            return
+        self._converter = None
+        self._classification_fallback_converter = None
+        gc.collect()
+        logger.info("Released Docling models after parsing")
+        try:
+            import torch
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            elif (
+                getattr(torch.backends, "mps", None)
+                and torch.backends.mps.is_available()
+            ):
+                torch.mps.empty_cache()
+        except Exception:
+            logger.debug("Could not release accelerator cache", exc_info=True)
+
     def parse(self, data: bytes, filename: str) -> ParsedDocument:
         """Convert raw bytes into a ParsedDocument."""
         started = time.time()
-        source = DocumentStream(name=filename, stream=io.BytesIO(data))
+        # Docling recognizes .md; normalize the equivalent upload extension.
+        source_name = (
+            filename[:-9] + ".md"
+            if filename.lower().endswith(".markdown")
+            else filename
+        )
+        source = DocumentStream(name=source_name, stream=io.BytesIO(data))
         try:
             document = self._get_converter().convert(source).document
         except Exception as error:
@@ -77,7 +110,7 @@ class DoclingDocumentParser(BaseDocumentParser):
                 filename,
                 error,
             )
-            retry_source = DocumentStream(name=filename, stream=io.BytesIO(data))
+            retry_source = DocumentStream(name=source_name, stream=io.BytesIO(data))
             document = (
                 self._get_classification_fallback_converter()
                 .convert(retry_source)

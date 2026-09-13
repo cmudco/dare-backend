@@ -4,12 +4,18 @@ PARSER_DOCLING = "docling"
 PARSER_NOTEBOOK = "notebook"
 PARSER_BASIC = "basic"
 
-# Formats Docling handles natively. Plain text, markdown, JSON and CSV are
-# deliberately absent: they need decoding, not parsing, and the legacy reader
-# already handles encoding detection better than a document converter would.
+# Formats routed through Docling in Advanced mode. Advanced means "let
+# Docling find the structure", so plain text and CSV go through it too:
+# Docling reads .txt as Markdown (headings, lists, tables when present) and
+# .csv as a table. JSON has no Docling backend and keeps the basic reader.
 DOCLING_EXTENSIONS = frozenset(
     {
         "pdf",
+        "md",
+        "markdown",
+        "txt",
+        "text",
+        "csv",
         "docx",
         "xlsx",
         "pptx",

@@ -7,9 +7,7 @@ enrichment service already produces.
 """
 
 from dataclasses import dataclass, field, replace
-from typing import Any, Dict, List, Optional, Sequence, Tuple
-
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
 
 from core.config.document_parsing import ElementKind
 from core.services.document_text_coverage import (
@@ -17,6 +15,10 @@ from core.services.document_text_coverage import (
     missing_text_blocks,
 )
 from core.services.dtos.parsed_document_dto import ParsedDocument, ParsedElement
+
+if TYPE_CHECKING:
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+
 
 CHUNK_TEXT = "text"
 CHUNK_TABLE = "table"
@@ -113,22 +115,35 @@ class _Run:
             self.pages.append(element.page_no)
 
 
+def _recursive_splitter():
+    """Import LangChain's splitter on first use only.
+
+    Importing ``langchain_text_splitters`` pulls in sentence-transformers and
+    torch (about 700 MB resident) whether or not they are used, and this
+    module is imported by every Django process at startup. Only a running
+    ingestion job should pay for that.
+    """
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+    return RecursiveCharacterTextSplitter
+
+
 class StructuredChunker:
     """Elements plus enrichment results -> chunks that know where they live."""
 
     def __init__(self, chunk_size: int, overlap: int):
         self.chunk_size = max(int(chunk_size), MIN_CHUNK_SIZE)
         self.overlap = max(min(int(overlap), self.chunk_size // 2), 0)
-        self._splitter = RecursiveCharacterTextSplitter(
+        self._splitter = _recursive_splitter()(
             chunk_size=self.chunk_size,
             chunk_overlap=self.overlap,
             length_function=len,
             separators=SPLIT_SEPARATORS,
         )
 
-    def _splitter_for(self, budget: int) -> RecursiveCharacterTextSplitter:
+    def _splitter_for(self, budget: int) -> "RecursiveCharacterTextSplitter":
         size = max(int(budget), MIN_BODY_CHARS)
-        return RecursiveCharacterTextSplitter(
+        return _recursive_splitter()(
             chunk_size=size,
             chunk_overlap=min(self.overlap, size // 4),
             length_function=len,

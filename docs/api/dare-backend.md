@@ -111,7 +111,9 @@ Invalid processing modes return HTTP 400 before any file is created.
   visual extraction. Scanned documents without embedded text need Advanced.
 - **Advanced (Docling):** preserves document structure, tables, and images for
   supported document formats and uses the existing visual enrichment workflow.
-  Plain-text formats use text extraction; existing fallback diagnostics remain
+  Plain text and CSV go through Docling as well (read as Markdown and as a
+  table), so Advanced always means "find the structure"; JSON has no Docling
+  backend and keeps text extraction. Existing fallback diagnostics remain
   visible if Docling cannot parse a document. Standalone media handling is unchanged.
 
 The mode is stored per file and reused when reprocessing. Existing files and
@@ -128,6 +130,21 @@ text-only fallbacks, and files awaiting parsing expose neither view. The fronten
 uses these capabilities rather than inferring them from the requested mode.
 Migration 0025 normalizes historical `legacy` parser identifiers to `basic` in
 file metadata and the stored document model; processing history remains an audit record.
+
+### Search index health
+
+`GET /api/files/{id}/index-health/` compares the chunks a file should have in
+its search index (its stored map rows) with the chunk identities the vector
+database holds right now, and returns `state`, `expected`, `present`,
+`missingCount`, `missingChunks` (first 100), `unexpected`, `generation`,
+`backend`, `checkedAt`, and `error`. States: `verified` (every expected chunk
+present), `incomplete` (some missing, duplicated, or unexpected), `missing`
+(none present), `unavailable` (the vector database could not be reached, which
+is deliberately distinct from confirmed loss), `unverifiable` (indexed before
+map rows existed, so only presence is known), `not_indexed`, and `processing`.
+Owner only. The check reads identities, not vectors or text, so it is cheap
+enough for the Map tab to run on open; the full content comparison happens
+once at publication (see `docs/ingestion-verification.md`).
 
 ### Reprocess a stored document
 

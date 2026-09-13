@@ -9,9 +9,10 @@ from core.services.file_processing_journey import FileProcessingJourney
 
 
 def make_file():
-    user = SimpleNamespace(id=7, chunk_size=1000, overlap_size=100)
+    user = SimpleNamespace(id=7, chunk_size=1000, overlap_size=100, vector_db=1)
     return SimpleNamespace(
         pk=42,
+        user_id=7,
         id=42,
         name="journey.pdf",
         file=SimpleNamespace(name="journey.pdf"),
@@ -26,6 +27,18 @@ def make_file():
 
 
 class FileProcessingJourneyTests(SimpleTestCase):
+    @patch("core.services.file_processing_journey.File.active_objects.filter")
+    def test_every_finished_stage_records_memory(self, _mocked_filter):
+        journey = FileProcessingJourney(make_file())
+        journey.begin_attempt()
+        with journey.stage("parsing") as stage:
+            stage.add_details(pages=3)
+        details = journey.current_attempt["stages"][0]["details"]
+        self.assertEqual(details["pages"], 3)
+        self.assertGreater(details["peak_memory_mb"], 0)
+        if "memory_mb" in details:
+            self.assertGreater(details["memory_mb"], 0)
+
     @patch("core.services.file_processing_journey.File.active_objects.filter")
     def test_records_stage_metrics_and_preserves_retries(self, mocked_filter):
         file = make_file()
@@ -144,6 +157,8 @@ class DocumentProcessorJourneyTests(SimpleTestCase):
         )
 
         with (
+            patch("core.services.document_processor.VectorIndexAttempt.objects.create"),
+            patch("core.services.document_processor.VectorIndexAttempt.objects.filter"),
             patch(
                 "core.services.document_processor.transaction.atomic",
                 return_value=nullcontext(),

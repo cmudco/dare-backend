@@ -17,9 +17,13 @@ class DocumentVectorReplacementTests(SimpleTestCase):
         )
         self.processor.vector_service.upsert_vectors.side_effect = (
             lambda vectors, namespace: calls.append(("upsert", len(vectors), namespace))
+            or True
         )
-        vectors = [("file_7_chunk_0", [0.1], {"chunk_index": 0})]
+        vectors = [("file_7_chunk_0", [0.1] * 3072, {"chunk_index": 0})]
 
+        self.processor.vector_service.read_generation.return_value = [
+            {"metadata": {"file_id": "7", "chunk_index": 0}, "vector": [0.1] * 3072}
+        ]
         self.processor._store_vectors(vectors, user_id=3, file_id=7)
 
         self.assertEqual(
@@ -37,7 +41,7 @@ class DocumentVectorReplacementTests(SimpleTestCase):
         self.processor.vector_service.upsert_vectors.return_value = False
         with self.assertRaisesRegex(RuntimeError, "rejected"):
             self.processor._store_vectors(
-                [("file_7_chunk_0", [0.1], {"chunk_index": 0})],
+                [("file_7_chunk_0", [0.1] * 3072, {"chunk_index": 0})],
                 user_id=3,
                 file_id="staged-generation",
             )
