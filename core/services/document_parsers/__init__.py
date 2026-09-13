@@ -59,6 +59,12 @@ def get_docling_parser() -> Optional[BaseDocumentParser]:
     return _docling_parser
 
 
+def release_parser_models() -> None:
+    """Free the Docling models once a job's parse is over; see ``DoclingDocumentParser.release``."""
+    if _docling_parser is not None:
+        _docling_parser.release()
+
+
 def get_docling_unavailable_reason() -> Optional[str]:
     """Why this worker could not construct Docling, if startup failed."""
     return _docling_unavailable_reason
@@ -103,6 +109,7 @@ __all__ = [
     "PARSER_NOTEBOOK",
     "get_docling_parser",
     "get_docling_unavailable_reason",
+    "release_parser_models",
     "get_document_parsers",
     "reset_parser_cache",
 ]
