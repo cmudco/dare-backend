@@ -9,11 +9,13 @@ import hashlib
 import json
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from asgiref.sync import async_to_sync
+from django.db import connections
 from django.utils import timezone
 
 from billing.constants import UserWalletPreferenceTypeChoice
@@ -113,6 +115,13 @@ class EnrichmentTelemetry:
     provider_requests: int = 0
     cache_hits: int = 0
     failed_operations: int = 0
+
+
+@dataclass(frozen=True)
+class VisionOperation:
+    kind: str
+    key: int
+    element_index: Optional[int] = None
 
 
 class DocumentEnrichmentService:
@@ -245,25 +254,10 @@ class DocumentEnrichmentService:
         if page_limit is not None:
             selected_textless_pages = selected_textless_pages[: max(page_limit, 0)]
 
-        for page_no in selected_textless_pages:
-            ensure_ingestion_owner(file)
-            telemetry.visual_operations += 1
-            try:
-                page_results[page_no] = self._transcribe_page(
-                    file, page_no, route, ai_service, telemetry
-                )
-            except IngestionCancelled:
-                raise
-            except Exception as error:
-                ensure_ingestion_owner(file)
-                telemetry.failed_operations += 1
-                logger.warning(
-                    "Page enrichment failed for file %s page %s: %s",
-                    file.id,
-                    page_no,
-                    error,
-                )
-                page_results[page_no] = self._error_result("page_transcription", error)
+        operations = [
+            VisionOperation("page_transcription", page_no)
+            for page_no in selected_textless_pages
+        ]
 
         considered = 0
         max_figures = max(int(env.DOCUMENT_ENRICHMENT_MAX_FIGURES), 0)
@@ -296,34 +290,24 @@ class DocumentEnrichmentService:
                 }
                 continue
 
-            ensure_ingestion_owner(file)
             considered += 1
-            telemetry.visual_operations += 1
-            try:
-                result = self._describe_figure(
-                    file,
-                    element,
-                    elements,
-                    index,
-                    route,
-                    ai_service,
-                    telemetry,
-                )
-                element_results[element.order] = result
-            except IngestionCancelled:
-                raise
-            except Exception as error:
-                ensure_ingestion_owner(file)
-                telemetry.failed_operations += 1
-                logger.warning(
-                    "Figure enrichment failed for file %s order %s: %s",
-                    file.id,
-                    element.order,
-                    error,
-                )
-                element_results[element.order] = self._error_result(
-                    "figure_description", error
-                )
+            operations.append(
+                VisionOperation("figure_description", element.order, index)
+            )
+
+        for operation, result, counts in self._run_operations(
+            operations, file, elements, route, credentials, ai_service
+        ):
+            target = (
+                page_results
+                if operation.kind == "page_transcription"
+                else element_results
+            )
+            target[operation.key] = result
+            telemetry.visual_operations += counts.visual_operations
+            telemetry.provider_requests += counts.provider_requests
+            telemetry.cache_hits += counts.cache_hits
+            telemetry.failed_operations += counts.failed_operations
 
         self._attach_element_results(model_payload, element_results)
         model_payload["page_enrichments"] = [
@@ -408,6 +392,98 @@ class DocumentEnrichmentService:
             cache_hits=telemetry.cache_hits,
             failed_calls=telemetry.failed_operations,
         )
+
+    def _run_operations(
+        self, operations, file, elements, route, credentials, ai_service
+    ):
+        concurrency = env.DOCUMENT_ENRICHMENT_CONCURRENCY
+        if concurrency == 1 or len(operations) < 2:
+            for operation in operations:
+                yield self._execute_operation(
+                    operation, file, elements, route, ai_service
+                )
+            return
+        with ThreadPoolExecutor(
+            max_workers=concurrency, thread_name_prefix="document-vision"
+        ) as executor:
+            # Submit only one bounded batch, so cancellation cannot leave a
+            # whole document's paid requests waiting in the executor queue.
+            for start in range(0, len(operations), concurrency):
+                ensure_ingestion_owner(file)
+                futures = [
+                    executor.submit(
+                        self._thread_operation,
+                        operation,
+                        file.pk,
+                        file.ingestion_token,
+                        elements,
+                        route,
+                        credentials,
+                    )
+                    for operation in operations[start : start + concurrency]
+                ]
+                for future in futures:
+                    yield future.result()
+
+    def _thread_operation(
+        self, operation, file_id, token, elements, route, credentials
+    ):
+        try:
+            file = (
+                File.active_objects.select_related("user")
+                .filter(pk=file_id, ingestion_token=token)
+                .first()
+            )
+            if file is None:
+                raise IngestionCancelled("File removed or ingestion attempt replaced")
+            service = self._build_ai_service(route.model, credentials)
+            return self._execute_operation(operation, file, elements, route, service)
+        finally:
+            connections.close_all()
+
+    def _execute_operation(self, operation, file, elements, route, ai_service):
+        ensure_ingestion_owner(file)
+        telemetry = EnrichmentTelemetry(visual_operations=1)
+        try:
+            if operation.kind == "page_transcription":
+                result = self._transcribe_page(
+                    file, operation.key, route, ai_service, telemetry
+                )
+            else:
+                result = self._describe_figure(
+                    file,
+                    elements[operation.element_index],
+                    elements,
+                    operation.element_index,
+                    route,
+                    ai_service,
+                    telemetry,
+                )
+        except IngestionCancelled:
+            raise
+        except Exception as error:
+            ensure_ingestion_owner(file)
+            telemetry.failed_operations += 1
+            logger.warning(
+                "Document vision operation failed: file=%s kind=%s item=%s error=%s",
+                file.pk,
+                operation.kind,
+                operation.key,
+                type(error).__name__,
+            )
+            result = self._error_result(operation.kind, error)
+        return operation, result, telemetry
+
+    @staticmethod
+    async def _request_vision(ai_service, **kwargs):
+        try:
+            return await ai_service.generate_structured_output_with_usage(**kwargs)
+        finally:
+            # async_to_sync owns this loop; close its client before the loop
+            # exits, including on structured-output retries.
+            close = getattr(ai_service, "close", None)
+            if close is not None:
+                await close()
 
     @staticmethod
     def _enabled() -> bool:
@@ -596,9 +672,8 @@ class DocumentEnrichmentService:
             self._check_credit(route, file, request_limit)
             telemetry.provider_requests += 1
             try:
-                result, usage = async_to_sync(
-                    ai_service.generate_structured_output_with_usage
-                )(
+                result, usage = async_to_sync(self._request_vision)(
+                    ai_service,
                     messages=messages,
                     response_schema=schema,
                     max_tokens=request_limit,
@@ -663,7 +738,7 @@ class DocumentEnrichmentService:
         elif route.wallet_type == UserWalletPreferenceTypeChoice.BYO:
             billing.record_byo_service_usage(llm=route.model, **call)
         else:
-            billing.record_service_usage(llm=route.model, **call)
+            billing.record_service_usage(llm=route.model, allow_overdraft=True, **call)
 
     @staticmethod
     def _picture_decision(element: ParsedElement, textless_pages: set) -> str:

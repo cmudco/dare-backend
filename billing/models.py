@@ -481,7 +481,7 @@ class Transaction(TimeStampMixin):
             return None
         return format_usd(self.reference_amount)
 
-    def save(self, *args, **kwargs):
+    def save(self, *args, allow_overdraft=False, **kwargs):
         """
         Override save to debit/credit the wallet atomically alongside the row insert.
 
@@ -497,7 +497,7 @@ class Transaction(TimeStampMixin):
         Concurrency: the wallet mutation is wrapped in `transaction.atomic()` with
         `select_for_update()` on the Wallet row and an F() expression for the
         balance change so two concurrent debits cannot both pass the balance
-        check and overspend.
+        check and overspend unless explicitly settling an already incurred charge.
         """
         is_new = self.pk is None
 
@@ -532,7 +532,7 @@ class Transaction(TimeStampMixin):
                 wallet = Wallet.objects.select_for_update().get(user=self.user)
 
             if self.type == TransactionTypeChoice.DEBIT:
-                if wallet.balance < self.amount:
+                if wallet.balance < self.amount and not allow_overdraft:
                     raise ValidationError(
                         {
                             "error": ["insufficient_balance"],

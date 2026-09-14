@@ -80,6 +80,17 @@ class GeminiService:
         """
         return self.client.aio
 
+    async def close(self) -> None:
+        """Release the client in the event loop that owns this service."""
+        if self._client is None:
+            return
+        client, self._client = self._client, None
+        try:
+            await client.aio.aclose()
+            client.close()
+        except Exception:
+            logger.warning("Failed to close document provider client", exc_info=True)
+
     async def stream_chat_completion(
         self,
         messages: List[Dict[str, str]],
