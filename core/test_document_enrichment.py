@@ -66,7 +66,8 @@ class DocumentEnrichmentRoutingTests(SimpleTestCase):
         file = SimpleNamespace(save=Mock())
         payload = {"elements": [{"description": "figure\x00text"}]}
 
-        DocumentEnrichmentService._persist(file, "page\x00text", payload)
+        with patch("core.services.document_enrichment_service.persist_ingestion_file"):
+            DocumentEnrichmentService._persist(file, "page\x00text", payload)
 
         self.assertEqual(file.extracted_text, "page text")
         self.assertEqual(
@@ -120,6 +121,10 @@ class BlankPageDetectionTests(SimpleTestCase):
 
 class DocumentEnrichmentTelemetryTests(SimpleTestCase):
     def setUp(self):
+        self.addCleanup(patch.stopall)
+        patch(
+            "core.services.document_enrichment_service.ensure_ingestion_owner"
+        ).start()
         self.file = SimpleNamespace(
             id=7,
             name="article.pdf",
@@ -486,6 +491,10 @@ class DocumentModelContextTests(SimpleTestCase):
 
 class DocumentEnrichmentOrchestrationTests(SimpleTestCase):
     def setUp(self):
+        self.addCleanup(patch.stopall)
+        patch(
+            "core.services.document_enrichment_service.ensure_ingestion_owner"
+        ).start()
         self.file = SimpleNamespace(
             id=7,
             name="article.pdf",
@@ -671,6 +680,10 @@ class DocumentEnrichmentOrchestrationTests(SimpleTestCase):
 class FailedImageRetryTests(SimpleTestCase):
     @patch(
         "core.services.document_enrichment_service.get_dispatch_credentials_for_user_sync"
+    )
+    @patch(
+        "core.services.document_enrichment_service.ensure_ingestion_owner",
+        new=lambda file: None,
     )
     def test_only_failed_figures_are_retried_and_paid_successes_are_retained(
         self, credentials

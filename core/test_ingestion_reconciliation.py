@@ -1,6 +1,7 @@
 from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+from uuid import uuid4
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -147,3 +148,20 @@ class IngestionReconciliationTests(TestCase):
         summary = self.reconcile()
 
         self.assertEqual(summary.checked, 0)
+
+    def test_new_attempt_is_not_reconciled_from_an_old_observation(self):
+        file = self.make_file("old-job")
+        new_token = uuid4()
+
+        def fetch(job_id):
+            File.active_objects.filter(pk=file.pk).update(
+                job_id="new-job", ingestion_token=new_token
+            )
+            return fake_job(job_id, "failed")
+
+        self.queue.fetch_job.side_effect = fetch
+        summary = self.reconcile()
+        self.assertEqual(summary.interrupted, [])
+        file.refresh_from_db()
+        self.assertEqual(file.ingestion_token, new_token)
+        self.assertEqual(file.status, FileStatus.PROCESSING)

@@ -30,6 +30,7 @@ from core.services.document_text_sanitizer import (
 )
 from core.services.dtos.parsed_document_dto import ParsedDocument
 from core.services.file_readers import read_bytes_as_text
+from core.services.ingestion_lifecycle import persist_ingestion_file
 from files.constants import DocumentProcessingMode
 from files.models import File
 
@@ -179,7 +180,8 @@ class DocumentParsingService:
         file.page_count = parsed.structure.pages or None
         file.pages_without_text = parsed.structure.pages_without_text
         file.parser_name = parsed.parser
-        file.save(
+        persist_ingestion_file(
+            file,
             update_fields=[
                 "extracted_text",
                 "document_model",
@@ -187,7 +189,7 @@ class DocumentParsingService:
                 "pages_without_text",
                 "parser_name",
                 "updated_at",
-            ]
+            ],
         )
 
     def get_text(self, file: File) -> str:

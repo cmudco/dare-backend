@@ -3,6 +3,7 @@ from datetime import datetime
 
 from django.contrib.auth import get_user_model
 from django_rq import job
+from rq import Retry
 
 from config import env
 from core.services.document_ingestion_service import (
@@ -37,35 +38,34 @@ def refresh_file_embeddings(file_id, user_id, chunk_size=None, overlap_size=None
         return process_file_embeddings(file_id, chunk_size, overlap_size)
 
 
-@job
-def delete_file_vectors(file_id, user_id):
+@job("default", retry=Retry(max=3))
+def delete_file_vectors(file_id, user_id, index_targets=None):
     """Delete the file's vectors, then its map rows.
 
     The two cleanups are independent: the vectors are what a stale search can
     still surface, so they are deleted first and a failing map cleanup can
     never hold them back.
     """
-    file = File._base_manager.filter(pk=file_id, user_id=user_id).first()
-    service = None
+    # Accept jobs queued before deletion snapshots were introduced.
+    if index_targets is None:
+        file = File._base_manager.filter(pk=file_id, user_id=user_id).first()
+        index_targets = [
+            (
+                (file.vector_index_key, file.vector_db_source)
+                if file
+                else (str(file_id), None)
+            )
+        ]
     try:
-        service = get_vector_service(
-            user_id, backend=file.vector_db_source if file else None
-        )
-        service.delete_file_vectors(
-            file.vector_index_key if file else str(file_id), user_id
-        )
-    except Exception:
-        logger.warning("Vector cleanup failed for file %s", file_id, exc_info=True)
+        for index_key, backend in index_targets:
+            service = get_vector_service(user_id, backend=backend)
+            try:
+                if service.delete_file_vectors(index_key, user_id) is False:
+                    raise RuntimeError("Vector backend rejected file cleanup")
+            finally:
+                service.close()
     finally:
-        if service is not None:
-            service.close()
-
-    try:
         DocumentMapService.clear(file_id)
-    except Exception as e:
-        logger.warning(
-            "Document map cleanup for file %s failed: %s", file_id, e, exc_info=True
-        )
 
 
 # @job("default", timeout=3600)

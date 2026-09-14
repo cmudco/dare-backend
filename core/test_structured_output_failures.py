@@ -75,6 +75,13 @@ class StructuredOutputTests(SimpleTestCase):
 
 
 class EnrichmentRetryTests(SimpleTestCase):
+    def setUp(self):
+        patcher = patch(
+            "core.services.document_enrichment_service.ensure_ingestion_owner"
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     @patch("core.services.document_enrichment_service.DocumentEnrichmentCache")
     def test_bounded_retry_bills_each_response_and_never_caches_failure(self, cache):
         for reason in StructuredOutputFailure:

@@ -13,6 +13,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
 from core.services.document_text_sanitizer import sanitize_document_text
+from core.services.ingestion_lifecycle import owned_file
 from core.services.process_memory import current_rss_mb, peak_rss_mb, reset_peak
 from files.constants import FileProcessingStage
 from files.models import File
@@ -196,7 +197,7 @@ class FileProcessingJourney:
         update_fields: Dict[str, Any] = {"processing_journey": self.payload}
         if processing_stage is not None:
             update_fields["processing_stage"] = processing_stage
-        File.active_objects.filter(pk=self.file.pk).update(**update_fields)
+        owned_file(self.file).update(**update_fields)
         self.file.processing_journey = deepcopy(self.payload)
 
 
