@@ -396,13 +396,7 @@ class DocumentEnrichmentService:
     def _run_operations(
         self, operations, file, elements, route, credentials, ai_service
     ):
-        # Platform credit checks do not reserve money for concurrent requests.
-        # Keep that lane serial until the billing layer supports reservations.
-        concurrency = (
-            1
-            if route.wallet_type == UserWalletPreferenceTypeChoice.DARE
-            else env.DOCUMENT_ENRICHMENT_CONCURRENCY
-        )
+        concurrency = env.DOCUMENT_ENRICHMENT_CONCURRENCY
         if concurrency == 1 or len(operations) < 2:
             for operation in operations:
                 yield self._execute_operation(
@@ -744,7 +738,7 @@ class DocumentEnrichmentService:
         elif route.wallet_type == UserWalletPreferenceTypeChoice.BYO:
             billing.record_byo_service_usage(llm=route.model, **call)
         else:
-            billing.record_service_usage(llm=route.model, **call)
+            billing.record_service_usage(llm=route.model, allow_overdraft=True, **call)
 
     @staticmethod
     def _picture_decision(element: ParsedElement, textless_pages: set) -> str:

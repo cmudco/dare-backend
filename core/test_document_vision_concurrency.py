@@ -1,13 +1,18 @@
+from decimal import Decimal
 from threading import Barrier, Lock
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 from uuid import uuid4
 
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.db import connection
 from django.test import TransactionTestCase
 
 from billing.constants import UserWalletPreferenceTypeChoice
+from billing.models import Transaction, Wallet
+from conversations.models import LLM
+from core.services.billing_service import BillingService
 from core.services.document_enrichment_service import (
     DocumentEnrichmentService,
     VisionOperation,
@@ -31,6 +36,12 @@ class VisionConcurrencyTests(TransactionTestCase):
         self.service = DocumentEnrichmentService()
 
     def test_parallel_operations_have_isolated_state_and_bounded_concurrency(self):
+        for wallet_type in UserWalletPreferenceTypeChoice.values:
+            with self.subTest(wallet_type=wallet_type):
+                self.route.wallet_type = wallet_type
+                self._assert_parallel_operations()
+
+    def _assert_parallel_operations(self):
         barrier, lock = Barrier(2), Lock()
         active, peak = 0, 0
         file_objects = []
@@ -88,9 +99,12 @@ class VisionConcurrencyTests(TransactionTestCase):
                 )
         self.assertLessEqual(calls.call_count, 2)
 
-    def test_platform_wallet_stays_on_serial_credit_check_lane(self):
+    def test_concurrency_one_runs_serially(self):
         self.route.wallet_type = UserWalletPreferenceTypeChoice.DARE
         with patch(
+            "core.services.document_enrichment_service.env.DOCUMENT_ENRICHMENT_CONCURRENCY",
+            1,
+        ), patch(
             "core.services.document_enrichment_service.ThreadPoolExecutor"
         ) as pool, patch.object(
             self.service, "_transcribe_page", return_value={"status": "complete"}
@@ -125,3 +139,84 @@ class VisionConcurrencyTests(TransactionTestCase):
             )
         self.assertEqual(sum(row[2].failed_operations for row in results), 1)
         self.assertEqual(sum(row[1]["status"] == "complete" for row in results), 7)
+
+    def test_parallel_platform_charges_are_recorded_even_if_balance_goes_negative(self):
+        model = LLM.objects.create(
+            name="Vision billing test",
+            identifier="vision-billing-test",
+            provider="openai",
+        )
+        self.route.model = model
+        self.route.wallet_type = UserWalletPreferenceTypeChoice.DARE
+        wallet, _ = Wallet.objects.update_or_create(
+            user=self.user, defaults={"balance": Decimal("0.010000")}
+        )
+        barrier = Barrier(2)
+        usage = {"input_tokens": 10, "output_tokens": 20}
+
+        def transcribe(file, page, route, service, telemetry):
+            self.service._check_credit(route, file, 100)
+            barrier.wait(timeout=10)
+            self.service._record_usage(file, route, usage, "page_transcription")
+            return {"status": "complete"}
+
+        with patch(
+            "core.services.document_enrichment_service.env.DOCUMENT_ENRICHMENT_CONCURRENCY",
+            2,
+        ), patch.object(
+            self.service, "_build_ai_service", return_value=Mock()
+        ), patch.object(
+            self.service, "_transcribe_page", side_effect=transcribe
+        ), patch.object(
+            BillingService,
+            "_calculate_estimated_cost",
+            return_value=Decimal("0.006000"),
+        ), patch.object(
+            BillingService, "_calculate_cost", return_value=Decimal("0.006000")
+        ):
+            results = list(
+                self.service._run_operations(
+                    self.operations[:2], self.file, [], self.route, None, None
+                )
+            )
+            # A later operation reloads the user/wallet and stops before a paid call.
+            fresh = File.active_objects.select_related("user").get(pk=self.file.pk)
+            with self.assertRaisesRegex(ValueError, "Insufficient DARE wallet"):
+                self.service._check_credit(self.route, fresh, 100)
+
+        self.assertTrue(all(result[1]["status"] == "complete" for result in results))
+        wallet.refresh_from_db()
+        self.assertEqual(wallet.balance, Decimal("-0.002000"))
+        charges = Transaction.objects.filter(user=self.user, llm=model)
+        self.assertEqual(charges.count(), 2)
+        self.assertTrue(all(charge.amount == Decimal("0.006000") for charge in charges))
+        self.assertTrue(
+            all(
+                charge.input_tokens == 10 and charge.output_tokens == 20
+                for charge in charges
+            )
+        )
+
+    def test_other_service_billing_still_rejects_insufficient_balance(self):
+        model = LLM.objects.create(
+            name="Standard billing test",
+            identifier="standard-billing-test",
+            provider="openai",
+        )
+        wallet, _ = Wallet.objects.update_or_create(
+            user=self.user, defaults={"balance": Decimal("0.001000")}
+        )
+        with patch.object(
+            BillingService, "_calculate_cost", return_value=Decimal("0.006000")
+        ):
+            with self.assertRaises(ValidationError):
+                BillingService().record_service_usage(
+                    user=self.user,
+                    llm=model,
+                    input_tokens=10,
+                    output_tokens=20,
+                    description="Ordinary service call",
+                )
+        wallet.refresh_from_db()
+        self.assertEqual(wallet.balance, Decimal("0.001000"))
+        self.assertFalse(Transaction.objects.filter(user=self.user, llm=model).exists())

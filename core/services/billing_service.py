@@ -816,11 +816,13 @@ class BillingService:
         output_tokens: int,
         description: str,
         platform: str = AuthSourceChoice.DARE,
+        *,
+        allow_overdraft: bool = False,
     ) -> Transaction:
-        """Record one platform-funded LLM call."""
+        """Record a completed call; document vision may settle in-flight overspend."""
         cost = self._calculate_cost(llm, input_tokens, output_tokens)
 
-        return Transaction.objects.create(
+        payment = Transaction(
             user=user,
             amount=cost,
             llm=llm,
@@ -832,6 +834,8 @@ class BillingService:
             billing_mode=BillingModeChoice.WALLET,
             platform=platform,
         )
+        payment.save(force_insert=True, allow_overdraft=allow_overdraft)
+        return payment
 
     def record_byo_service_usage(
         self,
