@@ -899,7 +899,8 @@ Focus on authentic user experiences, not marketing content. Provide at least 5-1
         try:
             response = client.messages.create(
                 model=CRAWL_MODEL,
-                max_tokens=4096,
+                max_tokens=16384,
+                thinking={"type": "disabled"},
                 messages=[{
                     "role": "user",
                     "content": prompt
@@ -928,6 +929,9 @@ Focus on authentic user experiences, not marketing content. Provide at least 5-1
 
         except json.JSONDecodeError as e:
             self.stderr.write(self.style.ERROR(f'    JSON parse error: {e}'))
+            self.stderr.write(
+                f"    stop_reason={response.stop_reason} text_head={response_text[:300]!r}"
+            )
             analysis = {
                 "model_name": model_name,
                 "analysis_date": datetime.now().isoformat(),
