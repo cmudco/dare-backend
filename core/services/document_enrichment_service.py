@@ -40,6 +40,11 @@ from core.services.document_text_sanitizer import (
 )
 from core.services.dtos.parsed_document_dto import ParsedDocument, ParsedElement
 from core.services.gemini_service import GeminiService
+from core.services.ingestion_lifecycle import (
+    IngestionCancelled,
+    ensure_ingestion_owner,
+    persist_ingestion_file,
+)
 from core.services.openai_service import OpenAIService
 from core.services.structured_output_error import (
     StructuredOutputError,
@@ -241,12 +246,16 @@ class DocumentEnrichmentService:
             selected_textless_pages = selected_textless_pages[: max(page_limit, 0)]
 
         for page_no in selected_textless_pages:
+            ensure_ingestion_owner(file)
             telemetry.visual_operations += 1
             try:
                 page_results[page_no] = self._transcribe_page(
                     file, page_no, route, ai_service, telemetry
                 )
+            except IngestionCancelled:
+                raise
             except Exception as error:
+                ensure_ingestion_owner(file)
                 telemetry.failed_operations += 1
                 logger.warning(
                     "Page enrichment failed for file %s page %s: %s",
@@ -287,6 +296,7 @@ class DocumentEnrichmentService:
                 }
                 continue
 
+            ensure_ingestion_owner(file)
             considered += 1
             telemetry.visual_operations += 1
             try:
@@ -300,7 +310,10 @@ class DocumentEnrichmentService:
                     telemetry,
                 )
                 element_results[element.order] = result
+            except IngestionCancelled:
+                raise
             except Exception as error:
+                ensure_ingestion_owner(file)
                 telemetry.failed_operations += 1
                 logger.warning(
                     "Figure enrichment failed for file %s order %s: %s",
@@ -579,6 +592,7 @@ class DocumentEnrichmentService:
         ]
         request_limit = output_limit
         for attempt in range(STRUCTURED_OUTPUT_ATTEMPTS):
+            ensure_ingestion_owner(file)
             self._check_credit(route, file, request_limit)
             telemetry.provider_requests += 1
             try:
@@ -1018,4 +1032,6 @@ class DocumentEnrichmentService:
     def _persist(file: File, text: str, payload: Dict[str, Any]) -> None:
         file.extracted_text = sanitize_document_text(text)
         file.document_model = sanitize_document_payload(payload)
-        file.save(update_fields=["extracted_text", "document_model", "updated_at"])
+        persist_ingestion_file(
+            file, update_fields=["extracted_text", "document_model", "updated_at"]
+        )

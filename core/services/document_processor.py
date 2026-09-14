@@ -1,11 +1,11 @@
 import logging
 import time
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from typing import Dict, List, Optional, Tuple, Union
 from uuid import uuid4
 
 from channels.db import database_sync_to_async
-from django.db import transaction
+from django.db import DatabaseError, transaction
 from django.utils import timezone
 
 from conversations.models import Snippet
@@ -26,9 +26,15 @@ from core.services.dtos.parsed_document_dto import ParsedDocument
 from core.services.embedding_service import EmbeddingService
 from core.services.file_processing_journey import FileProcessingJourney
 from core.services.file_processor import FileProcessor
+from core.services.ingestion_lifecycle import (
+    IngestionCancelled,
+    ensure_ingestion_owner,
+    locked_ingestion_file,
+    persist_ingestion_file,
+)
 from core.services.rag.dtos import CitationCounter
-from core.services.rag.entity_extractor import extract_entities
-from core.services.rag.reference_resolver import build_references
+from core.services.rag.entity_extractor import EntityMention, extract_entities
+from core.services.rag.reference_resolver import ResolvedReference, build_references
 from core.services.rag.structured_chunker import (
     CHUNK_FLAT,
     CHUNK_RECOVERED,
@@ -47,6 +53,16 @@ from files.services.document_map_service import DocumentMapService
 from workflows.models import WorkflowStepSnippet
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class PreparedDocumentMap:
+    """Unpublished map data prepared without holding the File row lock."""
+
+    chunks: List[Tuple[int, StructuredChunk]] = field(default_factory=list)
+    references: List[ResolvedReference] = field(default_factory=list)
+    mentions: List[List[EntityMention]] = field(default_factory=list)
+    details: Dict = field(default_factory=dict)
 
 
 class DocumentProcessor:
@@ -75,13 +91,13 @@ class DocumentProcessor:
         if self.vector_service is None:
             self.vector_service = get_vector_service(self.user_id)
 
-    def update_vector_service(self, user_id):
+    def update_vector_service(self, user_id, *, backend=None):
         """Update the vector service if the user has changed."""
         if user_id and (self.vector_service is None or self.user_id != user_id):
             if self.vector_service is not None:
                 self.vector_service.close()
             self.user_id = user_id
-            self.vector_service = get_vector_service(user_id)
+            self.vector_service = get_vector_service(user_id, backend=backend)
 
     def create_file_embeddings(
         self,
@@ -179,75 +195,88 @@ class DocumentProcessor:
                     stage.add_details(**details)
 
             generation = uuid4().hex
-            VectorIndexAttempt.objects.filter(file=file, status="running").update(
-                status="abandoned",
-                finished_at=timezone.now(),
-                error="A newer attempt started before this one finished.",
-            )
-            self.index_attempt = VectorIndexAttempt.objects.create(
-                file=file,
-                generation=generation,
-                owner_id=file.user_id,
-                backend=file.user.vector_db,
-            )
-            previous_key = file.vector_index_key
-            previous_backend = file.vector_db_source
-            with transaction.atomic():
-                current = File.active_objects.select_for_update().get(pk=file.pk)
-                if current.ingestion_token != file.ingestion_token:
-                    raise RuntimeError("Document ingestion lease was replaced")
-                with journey.stage("embedding") as stage:
-                    vectors, structure_details = self._embed_with_structure(
-                        file,
-                        parsed,
-                        enrichment.document_model,
-                        content,
-                        effective_chunk_size,
-                        effective_overlap_size,
+            with locked_ingestion_file(file):
+                VectorIndexAttempt.objects.filter(file=file, status="running").update(
+                    status="abandoned",
+                    finished_at=timezone.now(),
+                    error="A newer attempt started before this one finished.",
+                )
+                self.index_attempt = VectorIndexAttempt.objects.create(
+                    file=file,
+                    generation=generation,
+                    owner_id=file.user_id,
+                    backend=file.user.vector_db,
+                )
+            with journey.stage("embedding") as stage:
+                vectors, prepared_map = self._embed_with_structure(
+                    file,
+                    parsed,
+                    enrichment.document_model,
+                    content,
+                    effective_chunk_size,
+                    effective_overlap_size,
+                )
+                if require_vectors and not vectors:
+                    raise RuntimeError(
+                        "No searchable text was produced; the previous index was retained."
                     )
-                    if require_vectors and not vectors:
-                        raise RuntimeError(
-                            "No searchable text was produced; the previous index was retained."
-                        )
-                    stage.add_details(
-                        text_characters=len(content),
-                        chunks=len(vectors),
-                        chunk_size=effective_chunk_size,
-                        overlap_size=effective_overlap_size,
-                        **structure_details,
-                    )
+                stage.add_details(
+                    text_characters=len(content),
+                    chunks=len(vectors),
+                    chunk_size=effective_chunk_size,
+                    overlap_size=effective_overlap_size,
+                    **prepared_map.details,
+                )
 
-                with journey.stage("indexing") as stage:
-                    # Connect the vector backend late so its failures blame indexing, not parsing.
-                    self.update_vector_service(file.user.id)
+            with journey.stage("indexing") as stage:
+                ensure_ingestion_owner(file)
+                self.update_vector_service(
+                    file.user.id, backend=self.index_attempt.backend
+                )
+                if vectors:
+                    staging_key = generation
+                    confirmed_vectors = self._store_vectors(
+                        vectors, file.user.id, staging_key
+                    )
+                    stage.add_details(
+                        attempted_vectors=len(vectors),
+                        acknowledged_vectors=confirmed_vectors,
+                        expected_vectors=self.index_attempt.expected_count,
+                        generated_vectors=self.index_attempt.generated_count,
+                        verified_vectors=self.index_attempt.verified_count,
+                        verified_at=self.index_attempt.verified_at,
+                        verification_seconds=self.index_attempt.verification_seconds,
+                        generation=generation,
+                    )
+                # The map and generation pointer change together, only after
+                # external writes are verified and this attempt still owns the file.
+                with locked_ingestion_file(file) as current:
+                    previous_key = current.vector_index_key
+                    previous_backend = current.vector_db_source
                     if vectors:
-                        staging_key = generation
-                        confirmed_vectors = self._store_vectors(
-                            vectors, file.user.id, staging_key
+                        DocumentMapService.replace(
+                            file, prepared_map.chunks, prepared_map.references
                         )
-                        stage.add_details(
-                            attempted_vectors=len(vectors),
-                            acknowledged_vectors=confirmed_vectors,
-                            expected_vectors=self.index_attempt.expected_count,
-                            generated_vectors=self.index_attempt.generated_count,
-                            verified_vectors=self.index_attempt.verified_count,
-                            verified_at=self.index_attempt.verified_at,
-                            verification_seconds=self.index_attempt.verification_seconds,
-                            generation=generation,
+                        DocumentMapService.replace_entities(
+                            file, prepared_map.chunks, prepared_map.mentions
+                        )
+                        DocumentMapService.write_chunk_indexes(
+                            file, prepared_map.chunks
                         )
                         file.index_generation = generation
-                        file.vector_db_source = file.user.vector_db
-                        file.save(
-                            update_fields=["index_generation", "vector_db_source"]
+                        file.vector_db_source = self.index_attempt.backend
+                        persist_ingestion_file(
+                            file, ["index_generation", "vector_db_source"]
                         )
                     self.index_attempt.status = "published" if vectors else "empty"
                     self.index_attempt.save()
-                    backend_name = type(self.vector_service).__name__.removesuffix(
+                published = bool(vectors)
+                stage.add_details(
+                    backend=type(self.vector_service).__name__.removesuffix(
                         "VectorService"
-                    )
-                    stage.add_details(backend=backend_name, vectors=len(vectors))
-
-            published = bool(vectors)
+                    ),
+                    vectors=len(vectors),
+                )
             if vectors:
                 transaction.on_commit(
                     lambda: self._retire_generation(
@@ -258,17 +287,8 @@ class DocumentProcessor:
             if owns_journey:
                 journey.complete_attempt()
             return len(vectors)
-        except Exception as e:
-            if self.index_attempt is not None:
-                self.index_attempt.status = "published" if published else "failed"
-                if not published:
-                    self.index_attempt.finished_at = timezone.now()
-                self.index_attempt.error = (
-                    f"{type(e).__name__}: {str(e)}"[:2000]
-                    if isinstance(e, VectorIntegrityError)
-                    else f"{type(e).__name__}: Index creation failed; see correlated worker logs."
-                )
-                self.index_attempt.save()
+        except Exception as error:
+            # Cleanup must still run if deletion has cascaded the attempt row.
             if staging_key and not published and self.vector_service is not None:
                 try:
                     self.vector_service.delete_file_vectors(staging_key, file.user.id)
@@ -278,9 +298,52 @@ class DocumentProcessor:
                         staging_key,
                         exc_info=True,
                     )
+            cancelled = isinstance(error, IngestionCancelled)
+            if not cancelled and not isinstance(error, DatabaseError):
+                try:
+                    ensure_ingestion_owner(file)
+                except IngestionCancelled:
+                    cancelled = True
+            if self.index_attempt is not None:
+                attempt = self.index_attempt
+                attempt.status = (
+                    "published"
+                    if published
+                    else ("abandoned" if cancelled else "failed")
+                )
+                attempt.finished_at = None if published else timezone.now()
+                attempt.error = (
+                    "File removed or ingestion attempt replaced"
+                    if cancelled
+                    else (
+                        f"{type(error).__name__}: {str(error)}"[:2000]
+                        if isinstance(error, VectorIntegrityError)
+                        else f"{type(error).__name__}: Index creation failed; see correlated worker logs."
+                    )
+                )
+                try:
+                    VectorIndexAttempt.objects.filter(
+                        pk=attempt.pk, status="running"
+                    ).update(
+                        **{
+                            field.name: getattr(attempt, field.name)
+                            for field in attempt._meta.concrete_fields
+                            if field.name not in {"id", "file", "created_at"}
+                        }
+                    )
+                except DatabaseError:
+                    logger.exception(
+                        "Could not record index attempt failure for file %s", file.pk
+                    )
+            if cancelled:
+                raise IngestionCancelled(
+                    "File removed or ingestion attempt replaced"
+                ) from error
             if owns_journey:
-                journey.fail_attempt(e)
-            raise Exception(f"Error processing file: {sanitize_document_text(str(e))}")
+                journey.fail_attempt(error)
+            raise RuntimeError(
+                f"Error processing file: {sanitize_document_text(str(error))}"
+            ) from error
         finally:
             if self.vector_service is not None:
                 self.vector_service.close()
@@ -343,11 +406,10 @@ class DocumentProcessor:
         content: str,
         chunk_size: int,
         overlap_size: int,
-    ) -> Tuple[List[Tuple[str, List[float], Dict]], Dict]:
-        """Chunk on structure, embed, and persist the map rows.
+    ) -> Tuple[List[Tuple[str, List[float], Dict]], PreparedDocumentMap]:
+        """Chunk, embed and prepare the map without publishing any rows.
 
-        Chunk rows are written even when reference extraction fails, so a
-        resolver bug costs edges, never citations.
+        Publication persists the map only after the vectors have been verified.
         """
         # Basic parses carry no elements, so the chunker's flat path applies:
         # LangChain's recursive splitter cutting on paragraph, line and
@@ -394,18 +456,21 @@ class DocumentProcessor:
         ):
             raise VectorIntegrityError("Embedding file metadata does not match")
         if not vectors:
-            return [], {
-                "structured": False,
-                "chunk_rows": 0,
-                "references_found": 0,
-                "references_resolved": 0,
-                "entities_found": 0,
-                "entity_lanes": [],
-                "entities_error": False,
-                "recovered_chunks": 0,
-                "recovered_characters": 0,
-                "contextualized_chunks": 0,
-            }
+            return [], PreparedDocumentMap(
+                details={
+                    "structured": False,
+                    "chunk_rows": 0,
+                    "references_found": 0,
+                    "references_resolved": 0,
+                    "entities_found": 0,
+                    "entity_lanes": [],
+                    "entities_error": False,
+                    "recovered_chunks": 0,
+                    "recovered_characters": 0,
+                    "contextualized_chunks": 0,
+                }
+            )
+
         vectors = self._attach_source_text(vectors, structured)
         indexed = self._align_chunks(structured, vectors)
         recovered = [
@@ -447,15 +512,21 @@ class DocumentProcessor:
                     error,
                     exc_info=True,
                 )
-        found, resolved = DocumentMapService.replace(file, mapped, references)
-        DocumentMapService.write_chunk_indexes(file, mapped)
+        found = len(references)
+        resolved = sum(
+            reference.target_chunk_index is not None for reference in references
+        )
 
         entities_found, entity_lanes, entities_error = 0, ["identifiers"], False
+        mentions = []
         try:
             mentions, entity_lanes = extract_entities(
                 [chunk.text for _, chunk in mapped]
             )
-            entities_found = DocumentMapService.replace_entities(file, mapped, mentions)
+            entities_found = sum(
+                len({(mention.kind, mention.key) for mention in group})
+                for group in mentions
+            )
         except Exception as error:
             entities_error = True
             logger.warning(
@@ -465,22 +536,29 @@ class DocumentProcessor:
                 exc_info=True,
             )
 
-        return vectors, {
-            "structured": is_structured,
-            "minimum_retrieval_chars": minimum_retrieval_chars,
-            "chunking_strategy": ("Text boundaries" if basic else "Document structure"),
-            "contextualized_chunks": sum(
-                bool(chunk.retrieval_text) for _, chunk in mapped
-            ),
-            "recovered_chunks": len(recovered),
-            "recovered_characters": sum(len(chunk.text) for _, chunk in recovered),
-            "references_found": found,
-            "references_resolved": resolved,
-            "chunk_rows": len(mapped),
-            "entities_found": entities_found,
-            "entity_lanes": entity_lanes,
-            "entities_error": entities_error,
-        }
+        return vectors, PreparedDocumentMap(
+            chunks=mapped,
+            references=references,
+            mentions=mentions,
+            details={
+                "structured": is_structured,
+                "minimum_retrieval_chars": minimum_retrieval_chars,
+                "chunking_strategy": (
+                    "Text boundaries" if basic else "Document structure"
+                ),
+                "contextualized_chunks": sum(
+                    bool(chunk.retrieval_text) for _, chunk in mapped
+                ),
+                "recovered_chunks": len(recovered),
+                "recovered_characters": sum(len(chunk.text) for _, chunk in recovered),
+                "references_found": found,
+                "references_resolved": resolved,
+                "chunk_rows": len(mapped),
+                "entities_found": entities_found,
+                "entity_lanes": entity_lanes,
+                "entities_error": entities_error,
+            },
+        )
 
     @staticmethod
     def _attach_source_text(
