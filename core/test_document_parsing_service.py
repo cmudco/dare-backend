@@ -14,6 +14,11 @@ from core.services.dtos.parsed_document_dto import (
 
 
 class DocumentParsingServiceTests(SimpleTestCase):
+    def setUp(self):
+        patcher = patch("core.services.document_parsing_service.persist_ingestion_file")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     @patch(
         "core.services.document_parsing_service.get_docling_unavailable_reason",
         return_value="missing layout dependency",

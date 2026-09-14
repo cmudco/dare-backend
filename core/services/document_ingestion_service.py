@@ -1,12 +1,14 @@
 """Application service for one document ingestion or OCR continuation run."""
 
 import logging
+import sys
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Optional, Tuple
 from uuid import uuid4
 
+from django.db import DatabaseError
 from django.db.models import Q
 from django.utils import timezone
 
@@ -20,6 +22,12 @@ from core.services.document_processor import DocumentProcessor
 from core.services.document_text_sanitizer import sanitize_document_text
 from core.services.dtos.parsed_document_dto import ParsedDocument
 from core.services.file_processing_journey import FileProcessingJourney
+from core.services.ingestion_lifecycle import (
+    IngestionCancelled,
+    ensure_ingestion_owner,
+    locked_ingestion_file,
+    persist_ingestion_file,
+)
 from files.constants import (
     DocumentOcrStatus,
     DocumentReprocessingAction,
@@ -100,15 +108,28 @@ class DocumentIngestionService:
             )
             return None
         try:
-            return self._process(command)
+            return self._process(command, token)
+        except IngestionCancelled:
+            logger.info("Document ingestion cancelled for file %s", command.file_id)
+            return None
         finally:
-            File._base_manager.filter(pk=command.file_id, ingestion_token=token).update(
-                ingestion_token=None, ingestion_started_at=None
-            )
+            original_error = sys.exception()
+            try:
+                File._base_manager.filter(
+                    pk=command.file_id, ingestion_token=token
+                ).update(ingestion_token=None, ingestion_started_at=None)
+            except DatabaseError:
+                if original_error is None:
+                    raise
+                logger.exception(
+                    "Could not release ingestion lease for file %s", command.file_id
+                )
 
-    def _process(self, command: DocumentIngestionCommand) -> Optional[int]:
+    def _process(self, command: DocumentIngestionCommand, token) -> Optional[int]:
         try:
-            file = File.active_objects.select_related("user").get(id=command.file_id)
+            file = File.active_objects.select_related("user").get(
+                id=command.file_id, ingestion_token=token
+            )
         except File.DoesNotExist:
             return None
 
@@ -173,12 +194,14 @@ class DocumentIngestionService:
         file.status = FileStatus.PROCESSING
         file.processing_stage = FileProcessingStage.PARSING
         file.error_message = None
-        file.save(update_fields=["status", "processing_stage", "error_message"])
+        persist_ingestion_file(
+            file, update_fields=["status", "processing_stage", "error_message"]
+        )
 
         try:
             if reparse:
                 file.processing_mode = command.processing_mode
-                file.save(update_fields=["processing_mode"])
+                persist_ingestion_file(file, update_fields=["processing_mode"])
                 DocumentOcrRequest.objects.filter(file=file).delete()
                 ocr_request = None
             processor = DocumentProcessor()
@@ -197,6 +220,7 @@ class DocumentIngestionService:
                 )
                 release_parser_models()
 
+            ensure_ingestion_owner(file)
             ocr_workflow = DocumentOcrWorkflowService()
             if reusing_transcriptions or retry_images:
                 # `prepare` would pause this run — a complete request has no
@@ -206,17 +230,18 @@ class DocumentIngestionService:
                 # page and leaves the request exactly as the user left it.
                 ocr_plan = DocumentOcrPlan(should_pause=False, page_limit=0)
             else:
-                ocr_plan = ocr_workflow.prepare(
-                    file,
-                    parsed,
-                    chunk_size=command.chunk_size,
-                    overlap_size=command.overlap_size,
-                    **(
-                        {"model_identifier": command.model_identifier}
-                        if command.model_identifier
-                        else {}
-                    ),
-                )
+                with locked_ingestion_file(file):
+                    ocr_plan = ocr_workflow.prepare(
+                        file,
+                        parsed,
+                        chunk_size=command.chunk_size,
+                        overlap_size=command.overlap_size,
+                        **(
+                            {"model_identifier": command.model_identifier}
+                            if command.model_identifier
+                            else {}
+                        ),
+                    )
             if ocr_plan.should_pause:
                 request = file.ocr_request
                 file.status = FileStatus.NEEDS_OCR
@@ -225,7 +250,9 @@ class DocumentIngestionService:
                     f"{request.detected_pages} scanned pages need vision transcription. "
                     "Review the estimated cost and choose how many pages to process."
                 )
-                file.save(update_fields=["status", "processing_stage", "error_message"])
+                persist_ingestion_file(
+                    file, update_fields=["status", "processing_stage", "error_message"]
+                )
                 journey.complete_attempt(outcome="awaiting_ocr_approval")
                 return None
 
@@ -249,20 +276,22 @@ class DocumentIngestionService:
             ocr_status = None
             if not reusing_transcriptions and not retry_images:
                 enrichment = (file.document_model or {}).get("enrichment", {})
-                ocr_status = ocr_workflow.finish(
-                    file,
-                    enrichment.get(
-                        "processed_pages", enrichment.get("transcribed_pages", 0)
-                    ),
-                )
+                with locked_ingestion_file(file):
+                    ocr_status = ocr_workflow.finish(
+                        file,
+                        enrichment.get(
+                            "processed_pages", enrichment.get("transcribed_pages", 0)
+                        ),
+                    )
             file.status, file.error_message = self._resolve_status(file, vector_count)
             file.processing_stage = FileProcessingStage.COMPLETE
-            file.save(
+            persist_ingestion_file(
+                file,
                 update_fields=[
                     "status",
                     "processing_stage",
                     "error_message",
-                ]
+                ],
             )
             outcome = (
                 "ocr_partial"
@@ -271,33 +300,35 @@ class DocumentIngestionService:
             )
             journey.complete_attempt(outcome=outcome)
             return vector_count
+        except (IngestionCancelled, DatabaseError):
+            raise
         except Exception as error:
+            ensure_ingestion_owner(file)
             journey.fail_attempt(error)
             if command.reprocessing_action:
-                file.refresh_from_db(fields=["index_generation"])
-                if file.index_generation != previous_generation:
-                    File.active_objects.filter(pk=file.pk).update(
-                        status=FileStatus.PROCESSED,
-                        error_message="Search index updated, but processing status could not be finalized.",
-                    )
-                    raise
-                snapshot["status"] = command.previous_status
-                snapshot["processing_stage"] = FileProcessingStage.COMPLETE
-                snapshot["error_message"] = (
-                    "Reprocessing failed; the previous document and search index were retained."
-                )
-                File.active_objects.filter(
-                    pk=file.pk, ingestion_token=file.ingestion_token
-                ).update(**snapshot)
-                if reparse:
-                    DocumentOcrRequest.objects.filter(file_id=file.pk).delete()
-                    if ocr_snapshot:
-                        DocumentOcrRequest.objects.create(**ocr_snapshot)
+                with locked_ingestion_file(file) as current:
+                    if current.index_generation != previous_generation:
+                        current.status = FileStatus.PROCESSED
+                        current.error_message = "Search index updated, but processing status could not be finalized."
+                        persist_ingestion_file(current, ["status", "error_message"])
+                    else:
+                        snapshot["status"] = command.previous_status
+                        snapshot["processing_stage"] = FileProcessingStage.COMPLETE
+                        snapshot["error_message"] = (
+                            "Reprocessing failed; the previous document and search index were retained."
+                        )
+                        for name, value in snapshot.items():
+                            setattr(file, name, value)
+                        persist_ingestion_file(file, snapshot)
+                        if reparse:
+                            DocumentOcrRequest.objects.filter(file_id=file.pk).delete()
+                            if ocr_snapshot:
+                                DocumentOcrRequest.objects.create(**ocr_snapshot)
                 logger.exception("Document reprocessing failed for file %s", file.id)
                 raise
             file.status = FileStatus.FAILED
             file.error_message = sanitize_document_text(str(error))
-            file.save(update_fields=["status", "error_message"])
+            persist_ingestion_file(file, update_fields=["status", "error_message"])
             logger.exception("Document ingestion failed for file %s", file.id)
             raise
 
@@ -336,8 +367,9 @@ class DocumentIngestionService:
             processor._record_parse_details(stage, parsed)
         if ocr_request and previous_model:
             DocumentIngestionService._restore_enrichment_results(file, previous_model)
-            ocr_request.parsed_text = parsed.text
-            ocr_request.save(update_fields=["parsed_text", "updated_at"])
+            with locked_ingestion_file(file):
+                ocr_request.parsed_text = parsed.text
+                ocr_request.save(update_fields=["parsed_text", "updated_at"])
         return parsed, False
 
     @staticmethod
@@ -359,7 +391,7 @@ class DocumentIngestionService:
             if enrichment:
                 item["enrichment"] = enrichment
         file.document_model = fresh
-        file.save(update_fields=["document_model", "updated_at"])
+        persist_ingestion_file(file, update_fields=["document_model", "updated_at"])
 
     @staticmethod
     def _resolve_status(file: File, vector_count: int) -> Tuple[int, Optional[str]]:
