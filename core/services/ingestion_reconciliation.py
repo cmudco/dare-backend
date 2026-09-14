@@ -85,13 +85,19 @@ def reconcile_interrupted_ingestions(
     if file_ids is not None:
         candidates = candidates.filter(pk__in=file_ids)
     for file in candidates.only(
-        "id", "job_id", "updated_at", "status", "index_generation"
+        "id",
+        "job_id",
+        "updated_at",
+        "status",
+        "index_generation",
+        "ingestion_token",
+        "user_id",
     ):
         summary.checked += 1
         job = queue.fetch_job(file.job_id) if file.job_id else None
         if _job_is_alive(file, job, running, now):
             continue
-        result = _mark_interrupted(file.pk, now)
+        result = _mark_interrupted(file, now)
         if result is None:
             continue
         retained, abandoned = result
@@ -100,11 +106,18 @@ def reconcile_interrupted_ingestions(
     return summary
 
 
-def _mark_interrupted(file_id: int, now):
+def _mark_interrupted(observed: File, now):
+    file_id = observed.pk
     with transaction.atomic():
         file = (
             File.active_objects.select_for_update()
-            .filter(pk=file_id, status=FileStatus.PROCESSING)
+            .filter(
+                pk=file_id,
+                status=FileStatus.PROCESSING,
+                job_id=observed.job_id,
+                ingestion_token=observed.ingestion_token,
+                updated_at=observed.updated_at,
+            )
             .first()
         )
         if file is None:

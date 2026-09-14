@@ -3,6 +3,7 @@
 import logging
 
 from django.conf import settings
+from django.db import connections
 from rq import Worker
 
 from core.services.ingestion_reconciliation import reconcile_interrupted_ingestions
@@ -35,4 +36,12 @@ class InspectableWorker(Worker):
             )
         except Exception:
             logger.exception("Startup ingestion sweep failed; worker continues")
+        finally:
+            connections.close_all()
         return super().work(*args, **kwargs)
+
+    def fork_work_horse(self, job, queue):
+        # Parent-side ORM work must never leak a PostgreSQL/TLS socket into
+        # successive children, even when a future startup hook opens one.
+        connections.close_all()
+        return super().fork_work_horse(job, queue)

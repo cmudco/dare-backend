@@ -1,4 +1,4 @@
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -183,6 +183,10 @@ class DocumentIngestionResumeTests(SimpleTestCase):
         processor.parse_file.assert_not_called()
         stage.skip.assert_called_once()
 
+    @patch(
+        "core.services.document_ingestion_service.locked_ingestion_file",
+        new=lambda file: nullcontext(file),
+    )
     def test_legacy_truncated_chunk_elements_are_reparsed_once(self):
         file = SimpleNamespace(
             document_model={

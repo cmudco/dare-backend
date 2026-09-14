@@ -66,7 +66,8 @@ class DocumentEnrichmentRoutingTests(SimpleTestCase):
         file = SimpleNamespace(save=Mock())
         payload = {"elements": [{"description": "figure\x00text"}]}
 
-        DocumentEnrichmentService._persist(file, "page\x00text", payload)
+        with patch("core.services.document_enrichment_service.persist_ingestion_file"):
+            DocumentEnrichmentService._persist(file, "page\x00text", payload)
 
         self.assertEqual(file.extracted_text, "page text")
         self.assertEqual(
@@ -120,6 +121,14 @@ class BlankPageDetectionTests(SimpleTestCase):
 
 class DocumentEnrichmentTelemetryTests(SimpleTestCase):
     def setUp(self):
+        self.addCleanup(patch.stopall)
+        patch(
+            "core.services.document_enrichment_service.ensure_ingestion_owner"
+        ).start()
+        patch(
+            "core.services.document_enrichment_service.env.DOCUMENT_ENRICHMENT_CONCURRENCY",
+            1,
+        ).start()
         self.file = SimpleNamespace(
             id=7,
             name="article.pdf",
@@ -486,6 +495,14 @@ class DocumentModelContextTests(SimpleTestCase):
 
 class DocumentEnrichmentOrchestrationTests(SimpleTestCase):
     def setUp(self):
+        self.addCleanup(patch.stopall)
+        patch(
+            "core.services.document_enrichment_service.ensure_ingestion_owner"
+        ).start()
+        patch(
+            "core.services.document_enrichment_service.env.DOCUMENT_ENRICHMENT_CONCURRENCY",
+            1,
+        ).start()
         self.file = SimpleNamespace(
             id=7,
             name="article.pdf",
@@ -493,7 +510,9 @@ class DocumentEnrichmentOrchestrationTests(SimpleTestCase):
             user=SimpleNamespace(id=3),
         )
         self.model = SimpleNamespace(identifier="gemini-test", provider="gemini")
-        self.route = SimpleNamespace(model=self.model, litellm_key=None)
+        self.route = SimpleNamespace(
+            model=self.model, litellm_key=None, wallet_type="LITELLM"
+        )
         self.credentials = SimpleNamespace(use_litellm_proxy=False)
 
     @patch(
@@ -672,6 +691,10 @@ class FailedImageRetryTests(SimpleTestCase):
     @patch(
         "core.services.document_enrichment_service.get_dispatch_credentials_for_user_sync"
     )
+    @patch(
+        "core.services.document_enrichment_service.ensure_ingestion_owner",
+        new=lambda file: None,
+    )
     def test_only_failed_figures_are_retried_and_paid_successes_are_retained(
         self, credentials
     ):
@@ -720,7 +743,8 @@ class FailedImageRetryTests(SimpleTestCase):
         )
         service = DocumentEnrichmentService()
         route = SimpleNamespace(
-            model=SimpleNamespace(identifier="vision", provider="gemini")
+            model=SimpleNamespace(identifier="vision", provider="gemini"),
+            wallet_type="LITELLM",
         )
         with (
             patch.object(service, "_enabled", return_value=True),
@@ -760,3 +784,26 @@ class FailedImageRetryTests(SimpleTestCase):
         self.assertEqual(result.document_model["elements"][3]["enrichment"], results[2])
         self.assertIn("Paid successful description", result.text)
         self.assertIn("Recovered description", result.text)
+
+
+class VisionClientLifecycleTests(SimpleTestCase):
+    async def test_client_closes_in_request_loop_after_success(self):
+        service = SimpleNamespace(
+            generate_structured_output_with_usage=AsyncMock(return_value=({}, {})),
+            close=AsyncMock(),
+        )
+        self.assertEqual(
+            await DocumentEnrichmentService._request_vision(service), ({}, {})
+        )
+        service.close.assert_awaited_once()
+
+    async def test_client_closes_in_request_loop_after_failure(self):
+        service = SimpleNamespace(
+            generate_structured_output_with_usage=AsyncMock(
+                side_effect=RuntimeError("provider failed")
+            ),
+            close=AsyncMock(),
+        )
+        with self.assertRaisesRegex(RuntimeError, "provider failed"):
+            await DocumentEnrichmentService._request_vision(service)
+        service.close.assert_awaited_once()

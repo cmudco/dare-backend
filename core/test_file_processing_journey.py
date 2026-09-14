@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 from django.test import SimpleTestCase
 
-from core.services.document_processor import DocumentProcessor
+from core.services.document_processor import DocumentProcessor, PreparedDocumentMap
 from core.services.file_processing_journey import FileProcessingJourney
 
 
@@ -105,7 +105,13 @@ class DocumentProcessorJourneyTests(SimpleTestCase):
         "_embed_with_structure",
         return_value=(
             [("Useful document text", [0.1, 0.2], {"file_id": 42})],
-            {"structured": False, "references_found": 0, "references_resolved": 0},
+            PreparedDocumentMap(
+                details={
+                    "structured": False,
+                    "references_found": 0,
+                    "references_resolved": 0,
+                }
+            ),
         ),
     )
     def test_vector_failure_is_attributed_to_indexing(
@@ -163,12 +169,10 @@ class DocumentProcessorJourneyTests(SimpleTestCase):
                 "core.services.document_processor.transaction.atomic",
                 return_value=nullcontext(),
             ),
-            patch(
-                "core.services.document_processor.File.active_objects.select_for_update"
-            ) as locked,
+            patch("core.services.document_processor.locked_ingestion_file") as locked,
             self.assertRaisesRegex(Exception, "Weaviate unavailable"),
         ):
-            locked.return_value.get.return_value = file
+            locked.side_effect = lambda _: nullcontext(file)
             processor.create_file_embeddings(file)
 
         attempt = file.processing_journey["attempts"][0]

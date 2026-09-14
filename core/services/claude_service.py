@@ -68,6 +68,16 @@ class ClaudeService:
             self._client = AsyncAnthropic(api_key=self.api_key)
         return self._client
 
+    async def close(self) -> None:
+        """Release the client in the event loop that owns this service."""
+        if self._client is None:
+            return
+        client, self._client = self._client, None
+        try:
+            await client.close()
+        except Exception:
+            logger.warning("Failed to close document provider client", exc_info=True)
+
     async def stream_chat_completion(
         self,
         messages: List[Dict[str, str]],
