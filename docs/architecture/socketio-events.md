@@ -320,6 +320,13 @@ Confirmation that a message was edited.
 
 Learning progress assessment streaming (Socratic Books feature).
 
+`conversationId` is the public `Conversation.conversation_id` used by
+`subscribe_conversation` and `send_message` (for example, `OQ48N`), never the
+database primary key. This also applies to `latest_progress` on subscription
+or reconnect, including an empty assessment. Clients use this ID to reject
+events from other conversations. Progress streams after the assistant response
+finishes; `messageId` remains the assessed message's database ID as a string.
+
 ```typescript
 // Streaming
 { type: 'progress_stream', conversationId: string, messageId: string, chunk: string }
