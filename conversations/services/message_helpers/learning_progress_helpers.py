@@ -124,7 +124,7 @@ async def run_learning_progress_stream(
             if chunk:
                 progress_accumulator += chunk
                 progress_payload = WebSocketResponseService.format_progress_chunk(
-                    conversation_id=str(conversation.id),
+                    conversation_id=conversation.conversation_id,
                     message_id=str(message_obj.id),
                     chunk=chunk,
                 )
@@ -162,7 +162,7 @@ async def run_learning_progress_stream(
 
             # Send completion notification
             completion_payload = WebSocketResponseService.format_progress_complete(
-                conversation_id=str(conversation.id),
+                conversation_id=conversation.conversation_id,
                 message_id=str(message_obj.id),
                 input_tokens=last_usage.get("input_tokens") if last_usage else None,
                 output_tokens=last_usage.get("output_tokens") if last_usage else None,
