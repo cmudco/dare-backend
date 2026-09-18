@@ -1246,7 +1246,7 @@ class MessageCoordinator:
             )
             payload = {
                 "type": "latest_progress",
-                "conversationId": str(self.conversation.id),
+                "conversationId": self.conversation.conversation_id,
                 "assessment": latest,  # None or dict
             }
             await self.send(payload)
@@ -1256,7 +1256,7 @@ class MessageCoordinator:
             # Non-fatal; send None assessment
             payload = {
                 "type": "latest_progress",
-                "conversationId": str(self.conversation.id),
+                "conversationId": self.conversation.conversation_id,
                 "assessment": None,
             }
             await self.send(payload)
