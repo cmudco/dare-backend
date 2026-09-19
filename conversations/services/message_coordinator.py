@@ -815,9 +815,13 @@ class MessageCoordinator:
                     )
             elif result.tool_calls_made:
                 # Edge case: tools ran but the model produced no text.
-                logger.warning(
+                logger.error(
                     "[MessageCoordinator] Tools ran but no response was generated; "
-                    "finalizing with fallback message."
+                    "finalizing with fallback message.",
+                    extra={
+                        "stream_failure": "empty_response",
+                        "message_id": message_obj.id,
+                    },
                 )
                 await self._finalize_message(
                     message_obj=message_obj,
@@ -832,9 +836,13 @@ class MessageCoordinator:
                 # Some provider streams can close cleanly without yielding a
                 # token or an exception. Treat that as a completed failure,
                 # otherwise the original empty placeholder remains forever.
-                logger.warning(
+                logger.error(
                     "[MessageCoordinator] Provider stream ended without text "
-                    "or tool calls; finalizing with retry guidance."
+                    "or tool calls; finalizing with retry guidance.",
+                    extra={
+                        "stream_failure": "empty_response",
+                        "message_id": message_obj.id,
+                    },
                 )
                 await self._finalize_message(
                     message_obj=message_obj,

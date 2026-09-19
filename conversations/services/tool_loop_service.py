@@ -315,12 +315,23 @@ class ToolLoopService:
                 # already read, usage already billed, and tool work already
                 # persisted must survive a stalled provider stream.
                 result.timed_out = True
-                logger.warning(
+                # Error-level logging creates a Sentry event even though the
+                # timeout is handled so partial output can be preserved.
+                logger.error(
                     "[ToolLoopService] %s (round %s, turn %s) — "
                     "finishing with the partial turn",
                     exc,
                     round_index,
                     turn_key,
+                    extra={
+                        "stream_failure": "timeout",
+                        "model": prepared.llm.identifier,
+                        "provider": prepared.llm.provider,
+                        "turn_id": turn_key,
+                        "round_index": round_index,
+                        "idle_timeout_seconds": self.stream_idle_timeout_seconds,
+                        "has_partial_text": bool(text_accum),
+                    },
                 )
                 break
             except asyncio.CancelledError:
