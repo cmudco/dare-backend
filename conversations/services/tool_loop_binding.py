@@ -14,11 +14,9 @@ from typing import Any, Callable, Dict, Optional, Tuple
 from channels.db import database_sync_to_async
 from django.utils import timezone
 
-from conversations.constants import (DEFAULT_AI_SENDER_NAME, SenderType,
-                                     ToolCallOrigin)
+from conversations.constants import DEFAULT_AI_SENDER_NAME, SenderType, ToolCallOrigin
 from conversations.models import MessageToolCall
-from conversations.services.websocket_response_service import \
-    WebSocketResponseService
+from conversations.services.websocket_response_service import WebSocketResponseService
 from core.services.llm_helpers.retrieval_targets import ChatRetrievalTarget
 from core.services.tool_loop.binding import ArtifactHost
 from core.services.tool_loop.persistence import serialize_persisted_result
@@ -87,8 +85,11 @@ class ChatToolLoopStore:
                 executed_at=timezone.now(),
                 round_index=round_index,
             )
-        except Exception as exc:
-            logger.error("Failed to save MessageToolCall: %s", exc)
+        except Exception:
+            logger.exception(
+                "Failed to save MessageToolCall",
+                extra={"message_id": self._message.id},
+            )
 
 
 class ChatStreamSink:

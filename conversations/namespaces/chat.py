@@ -702,8 +702,13 @@ class ChatNamespace(socketio.AsyncNamespace):
             try:
                 data = json.loads(message) if isinstance(message, str) else message
                 await sio.emit('message', data, room=f'conversation_{conv_id}', namespace='/chat')
-            except Exception as e:
-                logger.debug(f"Send callback failed (client may have disconnected): {e}")
+            except ConnectionError:
+                logger.debug("Client disconnected while emitting chat message")
+            except Exception:
+                logger.exception(
+                    "Failed to emit chat message",
+                    extra={"conversation_id": conv_id},
+                )
         
         return send_callback
     

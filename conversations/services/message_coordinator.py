@@ -121,11 +121,10 @@ class MessageCoordinator:
         if self.send_callback:
             try:
                 await self.send_callback(json.dumps(camelize(data)))
-            except Exception as e:
-                # Log but don't raise - client may have disconnected
-                logger.debug(
-                    f"Failed to send WebSocket message (client may have disconnected): {type(e).__name__}"
-                )
+            except ConnectionError:
+                logger.debug("Client disconnected while sending WebSocket message")
+            except Exception:
+                logger.exception("Failed to send WebSocket message")
 
     async def send_error(
         self, error_code: str, error_message: str, details: Optional[Dict] = None
@@ -1035,8 +1034,11 @@ class MessageCoordinator:
         try:
             message_obj.usage_details = usage_breakdown
             message_obj.save(update_fields=["usage_details"])
-        except Exception as exc:
-            logger.warning("Failed to save usage breakdown: %s", exc)
+        except Exception:
+            logger.exception(
+                "Failed to save usage breakdown",
+                extra={"message_id": message_obj.id},
+            )
 
     async def _finalize_message(
         self,

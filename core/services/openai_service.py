@@ -342,7 +342,7 @@ class OpenAIService:
         try:
             await self._client.close()
         except Exception:
-            logger.warning("[OpenAI] Failed to close async client", exc_info=True)
+            logger.exception("[OpenAI] Failed to close async client")
         finally:
             self._client = None
 

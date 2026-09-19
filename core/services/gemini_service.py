@@ -89,7 +89,7 @@ class GeminiService:
             await client.aio.aclose()
             client.close()
         except Exception:
-            logger.warning("Failed to close document provider client", exc_info=True)
+            logger.exception("Failed to close document provider client")
 
     async def stream_chat_completion(
         self,
@@ -130,7 +130,7 @@ class GeminiService:
                 yield event
 
         except Exception as e:
-            logger.error(f"Error in Gemini stream_chat_completion: {e}")
+            logger.exception("Error in Gemini stream_chat_completion")
             error_message = GeminiErrorHandler.format_error(e)
             yield LLMStreamEvent.text_delta(f"Error: {error_message}")
 

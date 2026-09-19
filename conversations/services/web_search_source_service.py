@@ -6,7 +6,8 @@ Works in conjunction with the stream processors that extract sources during stre
 """
 
 import logging
-from typing import List, Dict, Any
+from typing import Any, Dict, List
+
 from channels.db import database_sync_to_async
 
 from conversations.models import Message, WebSearchSource
@@ -77,12 +78,17 @@ class WebSearchSourceService:
                     provider=provider[:20],
                 )
                 saved_count += 1
-            except Exception as e:
-                logger.warning(f"Failed to save web search source {url}: {e}")
+            except Exception:
+                logger.exception(
+                    "Failed to save web search source",
+                    extra={"message_id": message.id},
+                )
                 continue
 
         if saved_count > 0:
-            logger.info(f"Saved {saved_count} web search sources for message {message.id}")
+            logger.info(
+                f"Saved {saved_count} web search sources for message {message.id}"
+            )
 
         return saved_count
 
@@ -100,7 +106,11 @@ class WebSearchSourceService:
         Returns:
             Number of sources deleted
         """
-        deleted_count, _ = WebSearchSource.active_objects.filter(message=message).delete()
+        deleted_count, _ = WebSearchSource.active_objects.filter(
+            message=message
+        ).delete()
         if deleted_count > 0:
-            logger.info(f"Deleted {deleted_count} web search sources for message {message.id}")
+            logger.info(
+                f"Deleted {deleted_count} web search sources for message {message.id}"
+            )
         return deleted_count
