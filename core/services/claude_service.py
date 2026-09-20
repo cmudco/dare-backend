@@ -76,7 +76,7 @@ class ClaudeService:
         try:
             await client.close()
         except Exception:
-            logger.warning("Failed to close document provider client", exc_info=True)
+            logger.exception("Failed to close document provider client")
 
     async def stream_chat_completion(
         self,

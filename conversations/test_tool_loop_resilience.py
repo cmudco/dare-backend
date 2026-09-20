@@ -115,6 +115,7 @@ class ToolLoopResilienceTests(SimpleTestCase):
             async def prepare_chat(self, request):
                 return SimpleNamespace(
                     messages=[{"role": "user", "content": "long question"}],
+                    llm=SimpleNamespace(identifier="test-model", provider="gemini"),
                     tools=None,
                     memory_context=[],
                     context_trace=None,

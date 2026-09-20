@@ -252,7 +252,7 @@ class CustomLLMService:
         try:
             await self.client.close()
         except Exception:
-            logger.warning("[Custom LLM] Failed to close async client", exc_info=True)
+            logger.exception("[Custom LLM] Failed to close async client")
 
     # ==================== Private Methods ====================
 
