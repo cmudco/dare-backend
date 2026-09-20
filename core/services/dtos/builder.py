@@ -13,8 +13,7 @@ from .request_dto import LLMQueryRequest
 from .socratic_dto import SocraticConfig
 
 # Socratic models need room for a full answer; reasoning shares the output budget.
-SOCRATIC_MIN_MAX_TOKENS = 8000
-SOCRATIC_REASONING_MIN_MAX_TOKENS = 32000
+SOCRATIC_MIN_MAX_TOKENS = 32000
 
 # Artifact-creating DARE tools require large output budgets because the entire
 # artifact payload (docx blocks, mermaid code, React component, etc.) is
@@ -148,12 +147,7 @@ class LLMQueryRequestBuilder:
         max_tokens = message_data.get("max_tokens", 8000)
 
         if is_socratic_bots:
-            socratic_min_tokens = (
-                SOCRATIC_REASONING_MIN_MAX_TOKENS
-                if getattr(llm, "is_reasoning", False)
-                else SOCRATIC_MIN_MAX_TOKENS
-            )
-            max_tokens = max(max_tokens, socratic_min_tokens)
+            max_tokens = max(max_tokens, SOCRATIC_MIN_MAX_TOKENS)
 
         # The Artifacts toggle injects the full artifact toolkit (see the slug
         # union below). The artifact token floor must therefore apply whenever the

@@ -1,4 +1,4 @@
-"""Socratic reasoning has headroom without raising legacy or regular chat limits."""
+"""All Socratic models have headroom without raising regular chat limits."""
 
 from types import SimpleNamespace
 
@@ -45,8 +45,8 @@ class SocraticTokenBudgetTests(SimpleTestCase):
     def test_higher_explicit_allowance_is_preserved(self):
         self.assertEqual(self.request(max_tokens=40000).generation.max_tokens, 40000)
 
-    def test_non_reasoning_socratic_retains_existing_floor(self):
-        self.assertEqual(self.request(reasoning=False).generation.max_tokens, 8000)
+    def test_non_reasoning_socratic_uses_same_floor(self):
+        self.assertEqual(self.request(reasoning=False).generation.max_tokens, 32000)
 
     def test_regular_chat_retains_default_and_explicit_allowances(self):
         self.assertEqual(self.request(platform=None).generation.max_tokens, 2048)
