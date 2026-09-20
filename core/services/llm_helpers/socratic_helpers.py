@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 class SocraticBuildResult:
     """Messages plus the context-assembly trace for a socratic turn."""
 
-    messages: List[Dict[str, str]] = field(default_factory=list)
+    messages: List[Dict[str, Any]] = field(default_factory=list)
     context_trace: Optional[Dict[str, Any]] = None
 
 
@@ -60,8 +60,8 @@ async def build_classic_socratic_messages(
         document_processor: DocumentProcessor for vector similarity search
 
     Returns:
-        SocraticBuildResult with [system_message, user_message] and the
-        context-assembly trace.
+        SocraticBuildResult with system context, earlier image turns, the
+        current user message, and the context-assembly trace.
     """
     # Extract Socratic metadata from request
     subject = request.socratic.get_subject()
@@ -130,6 +130,7 @@ async def build_classic_socratic_messages(
     return SocraticBuildResult(
         messages=[
             {"role": "system", "content": system_prompt},
+            *_history_image_messages(history_list),
             {"role": "user", "content": user_message},
         ],
         context_trace=trace.to_payload(),
@@ -152,8 +153,8 @@ async def build_advanced_socratic_messages(
         document_processor: DocumentProcessor for vector similarity search
 
     Returns:
-        SocraticBuildResult with [system_message, user_message] and the
-        context-assembly trace.
+        SocraticBuildResult with system context, earlier image turns, the
+        current user message, and the context-assembly trace.
     """
     # Extract Socratic metadata from request
     title = request.socratic.get_title() or (
@@ -226,6 +227,7 @@ async def build_advanced_socratic_messages(
     return SocraticBuildResult(
         messages=[
             {"role": "system", "content": system_prompt},
+            *_history_image_messages(history_list),
             {"role": "user", "content": request.message},
         ],
         context_trace=trace.to_payload(),
@@ -269,7 +271,7 @@ def _log_socratic_components(
     )
 
 
-def _format_transcript(history: List[Dict[str, str]]) -> str:
+def _format_transcript(history: List[Dict[str, Any]]) -> str:
     """Format message history as readable transcript."""
     if not history:
         return "No previous messages."
@@ -277,13 +279,42 @@ def _format_transcript(history: List[Dict[str, str]]) -> str:
     transcript_parts = []
     for h in history:
         role_name = "User" if h["role"] == "user" else "Assistant"
-        content = (h["content"] or "").strip()
+        content = h["content"] or ""
+        if isinstance(content, list):
+            # History preserves image attachments as typed blocks. Keep binary
+            # payloads out of the prose transcript; replay them separately below.
+            content = "\n".join(
+                part["text"] if part["type"] == "text" else "[Image attachment]"
+                for part in content
+                if part["type"] in ("text", "image_url")
+            )
+        content = content.strip()
         if content:
             transcript_parts.append(f"{role_name}: {content}")
 
     return (
         "\n\n".join(transcript_parts) if transcript_parts else "No previous messages."
     )
+
+
+def _history_image_messages(history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Preserve earlier images as provider-readable user turns with their captions."""
+    return [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": f"Image context from earlier conversation turn {index + 1}:",
+                },
+                *message["content"],
+            ],
+        }
+        for index, message in enumerate(history)
+        if message["role"] == "user"
+        and isinstance(message["content"], list)
+        and any(part["type"] == "image_url" for part in message["content"])
+    ]
 
 
 def _format_document_snippets(raw_context: str, fallback: str) -> str:
