@@ -24,7 +24,7 @@ class LearningProgressService:
         tracking_prompt: str,
         last_message: Message = None,
         llm: LLM = None,
-        max_tokens: int = 2048,
+        max_tokens: int = 32000,
         temperature: float = 0.7,
         conversation_history_limit: int = 80,
         # New: include bot metadata for subject/topic/title
