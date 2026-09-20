@@ -139,6 +139,10 @@ class LLMQueryRequestBuilder:
         )
         bot_meta = message_data.get("bot_meta", {})
         socratic_enabled = is_socratic_bots and not message_data.get("prompt_id")
+        if is_socratic_bots:
+            # Reflective interviews need earlier answers throughout the session.
+            # Zero selects all prior messages in the shared history loader.
+            context = replace(context, history_limit=0)
 
         # Get max_tokens from message_data with default
         max_tokens = message_data.get("max_tokens", 8000)
