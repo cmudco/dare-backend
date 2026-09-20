@@ -12,9 +12,8 @@ from .media_dto import MediaConfig
 from .request_dto import LLMQueryRequest
 from .socratic_dto import SocraticConfig
 
-# Minimum max_tokens for Socratic bots to prevent truncated responses
-# This is a hotfix - the proper solution is to make this configurable per bot
-SOCRATIC_MIN_MAX_TOKENS = 8000
+# Socratic models need room for a full answer; reasoning shares the output budget.
+SOCRATIC_MIN_MAX_TOKENS = 32000
 
 # Artifact-creating DARE tools require large output budgets because the entire
 # artifact payload (docx blocks, mermaid code, React component, etc.) is
@@ -139,15 +138,16 @@ class LLMQueryRequestBuilder:
         )
         bot_meta = message_data.get("bot_meta", {})
         socratic_enabled = is_socratic_bots and not message_data.get("prompt_id")
+        if is_socratic_bots:
+            # Reflective interviews need earlier answers throughout the session.
+            # Zero selects all prior messages in the shared history loader.
+            context = replace(context, history_limit=0)
 
         # Get max_tokens from message_data with default
         max_tokens = message_data.get("max_tokens", 8000)
 
-        # HOTFIX: Enforce minimum max_tokens for Socratic bots to prevent truncated responses
-        # Socratic bot conversations created without explicit config get conversation.max_tokens=2048
-        # which is too low for detailed tutoring responses
-        if is_socratic_bots and max_tokens < SOCRATIC_MIN_MAX_TOKENS:
-            max_tokens = SOCRATIC_MIN_MAX_TOKENS
+        if is_socratic_bots:
+            max_tokens = max(max_tokens, SOCRATIC_MIN_MAX_TOKENS)
 
         # The Artifacts toggle injects the full artifact toolkit (see the slug
         # union below). The artifact token floor must therefore apply whenever the

@@ -26,7 +26,7 @@ class OptionalLearningProgressTests(SimpleTestCase):
 
     def run_progress(self, meta, service=None):
         async_to_sync(run_learning_progress_stream)(
-            conversation=SimpleNamespace(id=1),
+            conversation=SimpleNamespace(id=1, conversation_id="QA"),
             message_data={"bot_meta": meta},
             message_obj=SimpleNamespace(id=2),
             llm=SimpleNamespace(id=1),
@@ -97,6 +97,40 @@ class OptionalLearningProgressTests(SimpleTestCase):
         result = async_to_sync(collect)()
         self.assertTrue(any(text == "Making progress" for text, usage in result))
         self.service._get_ai_service.assert_awaited_once()
+
+    def test_live_path_uses_larger_budget_and_preserves_progress_context(self):
+        from core.services.dtos import LLMStreamEvent
+
+        captured = {}
+
+        async def chunks(**kwargs):
+            captured.update(kwargs)
+            yield LLMStreamEvent.text_delta("Updated assessment")
+
+        self.service._get_ai_service.return_value = SimpleNamespace(
+            stream_chat_completion=chunks
+        )
+        with patch(
+            "conversations.services.message_helpers.learning_progress_helpers."
+            "update_message_learning_progress",
+            new_callable=AsyncMock,
+        ):
+            self.run_progress({"learning_goals": "Learn", "tracking_prompt": "Track"})
+
+        self.assertEqual(captured["max_tokens"], 32000)
+        self.service._get_conversation_history.assert_awaited_once_with(
+            SimpleNamespace(id=1, conversation_id="QA"), limit=80
+        )
+        self.service._get_previous_assessment.assert_awaited_once()
+        self.assertIn("User: hello", captured["messages"][1]["content"])
+        self.assertIn("No assessment", captured["messages"][1]["content"])
+        self.assertIn("Learn", captured["messages"][0]["content"])
+        self.assertIn("Track", captured["messages"][0]["content"])
+        self.assertEqual(
+            self.service._save_progress_assessment.call_args.kwargs["content"],
+            "Updated assessment",
+        )
+        self.assertEqual(self.send.call_args.args[0]["type"], "progress_complete")
 
     def test_provider_error_is_not_billed_or_saved_as_an_assessment(self):
         async def failed(**kwargs):
