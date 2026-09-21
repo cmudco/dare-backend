@@ -55,6 +55,21 @@ Apply migration `conversations.0100_ensemble_preset` before deploying the briefs
 frontend. It adds a table without changing existing conversations. Panel/council
 execution remains controlled by the existing `enable_ensemble` feature flag.
 
+## Transaction history and exports
+
+`GET /api/billing/transactions/` returns the authenticated user's transactions.
+`page_size` defaults to 10 and accepts up to 500 rows for full-history loading.
+Clients must follow `next` until it is null. Results are ordered newest first,
+with the transaction ID breaking timestamp ties.
+
+Transactions include `amount` and nullable `referenceAmount` as decimal strings
+with six decimal places. Use these values for calculations and exports;
+`displayAmount` and `displayReferenceAmount` are formatted presentation values.
+Reference costs are estimates and must remain separate from wallet charges.
+
+Deploy this API before the transaction export frontend. The response additions
+are backward compatible and require no database migration.
+
 ## LiteLLM background models
 
 LiteLLM wallets expose one optional `backgroundModel` setting through

@@ -125,13 +125,17 @@ def _model_stat_row(
     }
 
 
+class TransactionHistoryPagination(CustomPageNumberPagination):
+    max_page_size = 500
+
+
 class BillingViewSet(viewsets.ViewSet):
     """
     ViewSet for billing-related operations.
     """
 
     permission_classes = [IsAuthenticated]
-    pagination_class = CustomPageNumberPagination
+    pagination_class = TransactionHistoryPagination
 
     @action(detail=False, methods=["get"])
     def wallet(self, request):
@@ -185,7 +189,9 @@ class BillingViewSet(viewsets.ViewSet):
             "litellm": base_qs.filter(billing_mode=BillingModeChoice.LITELLM).count(),
         }
 
-        queryset = base_qs.order_by("-created_at")
+        queryset = base_qs.select_related("llm", "related_group").order_by(
+            "-created_at", "-pk"
+        )
         if billing_mode_param in BillingModeChoice.values:
             queryset = queryset.filter(billing_mode=billing_mode_param)
 

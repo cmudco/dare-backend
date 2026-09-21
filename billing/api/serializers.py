@@ -44,6 +44,8 @@ class TransactionSerializer(serializers.ModelSerializer):
         model = Transaction
         fields = [
             "id",
+            "amount",
+            "reference_amount",
             "display_amount",
             "display_reference_amount",
             "type",
