@@ -57,18 +57,22 @@ execution remains controlled by the existing `enable_ensemble` feature flag.
 
 ## Transaction history and exports
 
-`GET /api/billing/transactions/` returns the authenticated user's transactions.
-`page_size` defaults to 10 and accepts up to 500 rows for full-history loading.
-Clients must follow `next` until it is null. Results are ordered newest first,
-with the transaction ID breaking timestamp ties.
+`GET /api/billing/transactions/` pages the authenticated user's transactions,
+newest first. `GET /api/billing/transactions/export/` returns every matching
+row as CSV, with costs at full six-decimal precision. Both accept the same
+optional query parameters; an invalid value returns 400.
 
-Transactions include `amount` and nullable `referenceAmount` as decimal strings
-with six decimal places. Use these values for calculations and exports;
-`displayAmount` and `displayReferenceAmount` are formatted presentation values.
-Reference costs are estimates and must remain separate from wallet charges.
+| Parameter | Values |
+| --- | --- |
+| `platform` | `ALL`, `DARE`, `SocraticBots`; defaults to the caller's sign-in platform |
+| `billing_mode` | `wallet`, `own_api`, `litellm` |
+| `model` | an exact model name from `models` |
+| `created_after` | ISO 8601 datetime, inclusive |
+| `created_before` | ISO 8601 datetime, exclusive; must follow `created_after` |
 
-Deploy this API before the transaction export frontend. The response additions
-are backward compatible and require no database migration.
+The list response adds `summary`, counts per billing mode under every filter
+except `billing_mode`, and `models`, the model names on the selected platform.
+Deploy this API before the matching frontend. No migration is required.
 
 ## LiteLLM background models
 

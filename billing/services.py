@@ -1,13 +1,15 @@
 import csv
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Optional
 
 from django.db import transaction
+from django.db.models import Count, Q, QuerySet
 from django.http import HttpResponse
 from django.utils import timezone
 
+from api_keys.constants import BillingModeChoice
 from billing.constants import (
     PolicySourceChoice,
     TransactionSourceChoice,
@@ -40,16 +42,12 @@ class TransactionExportService:
     """
 
     @staticmethod
-    def export_to_csv(queryset, filename=None):
+    def export_to_csv(queryset, *, include_owner=False, filename=None):
         """
-        Export a queryset of transactions to CSV format.
+        Export a queryset of transactions as a CSV attachment.
 
-        Args:
-            queryset: QuerySet of Transaction objects
-            filename: Optional custom filename (defaults to transaction-history-YYYY-MM-DD.csv)
-
-        Returns:
-            HttpResponse with CSV content
+        ``include_owner`` adds the user's email and related group, for exports
+        that span several users.
         """
         timestamp = timezone.now().strftime('%Y-%m-%d')
         if filename is None:
@@ -59,57 +57,117 @@ class TransactionExportService:
         response['Content-Disposition'] = f'attachment; filename="{filename}"'
         writer = csv.writer(response)
 
-        writer.writerow([
-            'User Email',
-            'Amount',
+        owner_headers = ['User Email', 'Related Group'] if include_owner else []
+        writer.writerow(owner_headers + [
+            'Charged (USD)',
+            'Estimated Cost (USD)',
             'Type',
             'Source',
             'Message',
             'LLM',
             'Input Tokens',
             'Output Tokens',
+            'Cached Input Tokens',
             'Billing Mode',
             'Platform',
-            'Related Group',
-            'Date',
+            'Date (UTC)',
         ])
 
         optimized_queryset = queryset.select_related('user', 'llm', 'related_group')
 
-        for txn in optimized_queryset:
-            writer.writerow([
-                txn.user.email,
-                txn.display_amount,
+        # Raw decimals, not display_amount: sub-cent costs round to $0.00 there.
+        # An estimate exists only for externally billed calls, which charge 0.
+        for txn in optimized_queryset.iterator(chunk_size=2000):
+            owner = (
+                [
+                    txn.user.email,
+                    txn.related_group.access_code if txn.related_group else 'N/A',
+                ]
+                if include_owner
+                else []
+            )
+            writer.writerow(owner + [
+                txn.amount,
+                '' if txn.reference_amount is None else txn.reference_amount,
                 txn.get_type_display(),
                 txn.get_source_display(),
                 txn.message or '',
                 txn.llm_name or 'N/A',
                 txn.input_tokens if txn.input_tokens is not None else 'N/A',
                 txn.output_tokens if txn.output_tokens is not None else 'N/A',
+                txn.cached_input_tokens if txn.cached_input_tokens is not None else 'N/A',
                 txn.get_billing_mode_display(),
                 txn.get_platform_display(),
-                txn.related_group.access_code if txn.related_group else 'N/A',
-                txn.created_at.strftime('%Y-%m-%d %H:%M:%S'),
+                # ISO text: spreadsheets parse the spaced form as a date and
+                # render it as ### in a default-width column.
+                txn.created_at.strftime('%Y-%m-%dT%H:%M:%SZ'),
             ])
 
         return response
 
+
+@dataclass(frozen=True)
+class TransactionHistoryQuery:
+    """Filters for one user's transaction history. ``None`` means unfiltered."""
+
+    platform: Optional[str]
+    billing_mode: Optional[str]
+    model: Optional[str]
+    created_after: Optional[datetime]
+    created_before: Optional[datetime]
+
+
+class TransactionHistoryService:
+    """Reads a user's transaction history for the list view and its CSV export."""
+
     @staticmethod
-    def export_user_transactions(user, platform=None, start_date=None, end_date=None, filename=None):
-        """
-        Export transactions for a specific user with optional filters.
-        """
+    def transactions(user, query: TransactionHistoryQuery) -> QuerySet[Transaction]:
+        queryset = TransactionHistoryService._matching(user, query)
+        if query.billing_mode:
+            queryset = queryset.filter(billing_mode=query.billing_mode)
+        # pk breaks created_at ties so page boundaries are stable.
+        return queryset.select_related("llm", "related_group").order_by(
+            "-created_at", "-pk"
+        )
+
+    @staticmethod
+    def summary(user, query: TransactionHistoryQuery) -> dict[str, int]:
+        """Counts per billing mode, so every tab badge reflects the other filters."""
+        return TransactionHistoryService._matching(user, query).aggregate(
+            all=Count("pk"),
+            **{
+                mode: Count("pk", filter=Q(billing_mode=mode))
+                for mode in BillingModeChoice.values
+            },
+        )
+
+    @staticmethod
+    def models(user, query: TransactionHistoryQuery) -> list[str]:
+        """Model names on the platform, independent of the other filters."""
+        names = (
+            TransactionHistoryService._on_platform(user, query.platform)
+            .exclude(llm_name__isnull=True)
+            .values_list("llm_name", flat=True)
+            .distinct()
+        )
+        return sorted(names, key=str.casefold)
+
+    @staticmethod
+    def _on_platform(user, platform: Optional[str]) -> QuerySet[Transaction]:
         queryset = Transaction.objects.filter(user=user)
+        return queryset if platform is None else queryset.filter(platform=platform)
 
-        if platform:
-            queryset = queryset.filter(platform=platform)
-        if start_date:
-            queryset = queryset.filter(created_at__gte=start_date)
-        if end_date:
-            queryset = queryset.filter(created_at__lte=end_date)
-
-        queryset = queryset.order_by('-created_at')
-        return TransactionExportService.export_to_csv(queryset, filename)
+    @staticmethod
+    def _matching(user, query: TransactionHistoryQuery) -> QuerySet[Transaction]:
+        """Every filter except billing mode, which the summary breaks down."""
+        queryset = TransactionHistoryService._on_platform(user, query.platform)
+        if query.model:
+            queryset = queryset.filter(llm_name=query.model)
+        if query.created_after:
+            queryset = queryset.filter(created_at__gte=query.created_after)
+        if query.created_before:
+            queryset = queryset.filter(created_at__lt=query.created_before)
+        return queryset
 
 
 class WalletService:
