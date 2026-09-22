@@ -28,6 +28,7 @@ from billing.api.serializers import (
     OwnedGroupSerializer,
     SetActiveWalletRequestSerializer,
     SystemRefillPolicySerializer,
+    TransactionHistoryQuerySerializer,
     TransactionSerializer,
     UpsertUserOverrideSerializer,
     UserRefillOverrideSerializer,
@@ -35,6 +36,7 @@ from billing.api.serializers import (
     WalletsListResponseSerializer,
 )
 from billing.constants import (
+    ALL_PLATFORMS,
     LiteLLMKeySourceChoice,
     TransactionTypeChoice,
     UserWalletPreferenceTypeChoice,
@@ -59,14 +61,18 @@ from billing.models import (
     Wallet,
     format_usd,
 )
-from billing.services import WalletService
+from billing.services import (
+    TransactionExportService,
+    TransactionHistoryQuery,
+    TransactionHistoryService,
+    WalletService,
+)
 from common.pagination import CustomPageNumberPagination
 from common.permissions import IsSuperAdmin
 from conversations.constants import Provider
 from conversations.models import Message
 from core.services.energy_service import compute_relatable_stats
 from feature_flags.services import is_flag_enabled_for_user
-from users.constants import AuthSourceChoice
 from users.models import User
 from users.utils import detect_platform_from_request
 
@@ -125,6 +131,22 @@ def _model_stat_row(
     }
 
 
+def _transaction_history_query(request) -> TransactionHistoryQuery:
+    params = TransactionHistoryQuerySerializer(data=request.query_params)
+    params.is_valid(raise_exception=True)
+    data = params.validated_data
+    # Without an explicit platform, callers see the platform they signed in on;
+    # the SocraticBots backend relies on this.
+    platform = data.get("platform") or detect_platform_from_request(request)
+    return TransactionHistoryQuery(
+        platform=None if platform == ALL_PLATFORMS else platform,
+        billing_mode=data.get("billing_mode"),
+        model=data.get("model"),
+        created_after=data.get("created_after"),
+        created_before=data.get("created_before"),
+    )
+
+
 class BillingViewSet(viewsets.ViewSet):
     """
     ViewSet for billing-related operations.
@@ -151,53 +173,30 @@ class BillingViewSet(viewsets.ViewSet):
     @action(detail=False, methods=["get"])
     def transactions(self, request):
         """
-        List the authenticated user's transactions, paginated and filtered.
-
-        Query params (all optional):
-            platform:     "ALL" | "DARE" | "SocraticBots"
-                          When omitted, defaults to the platform detected from
-                          the auth scope (preserves the SocraticBots backend's
-                          behavior when it calls without the param).
-            billing_mode: "wallet" | "own_api"
-                          Filter results to a single billing mode.
-
-        The response wraps DRF's standard paginated payload and adds a
-        `summary` object with counts per billing mode under the current
-        platform filter, so tab badges in the UI can display accurate totals
-        across all pages rather than just the current page.
+        List the caller's transactions, newest first, filtered by
+        TransactionHistoryQuerySerializer. Adds `summary` (counts per billing
+        mode) and `models` (model names on the platform) for the filter UI.
         """
-        platform_param = request.query_params.get("platform")
-        billing_mode_param = request.query_params.get("billing_mode")
+        query = _transaction_history_query(request)
+        page = self.paginate_queryset(
+            TransactionHistoryService.transactions(request.user, query)
+        )
+        response = self.get_paginated_response(
+            TransactionSerializer(page, many=True).data
+        )
+        response.data["summary"] = TransactionHistoryService.summary(
+            request.user, query
+        )
+        response.data["models"] = TransactionHistoryService.models(request.user, query)
+        return response
 
-        base_qs = Transaction.objects.filter(user=request.user)
-
-        if platform_param == "ALL":
-            pass
-        elif platform_param in AuthSourceChoice.values:
-            base_qs = base_qs.filter(platform=platform_param)
-        else:
-            base_qs = base_qs.filter(platform=detect_platform_from_request(request))
-
-        summary = {
-            "all": base_qs.count(),
-            "wallet": base_qs.filter(billing_mode=BillingModeChoice.WALLET).count(),
-            "ownApi": base_qs.filter(billing_mode=BillingModeChoice.OWN_API).count(),
-            "litellm": base_qs.filter(billing_mode=BillingModeChoice.LITELLM).count(),
-        }
-
-        queryset = base_qs.order_by("-created_at")
-        if billing_mode_param in BillingModeChoice.values:
-            queryset = queryset.filter(billing_mode=billing_mode_param)
-
-        page = self.paginate_queryset(queryset)
-        if page is not None:
-            serializer = TransactionSerializer(page, many=True)
-            response = self.get_paginated_response(serializer.data)
-            response.data["summary"] = summary
-            return response
-
-        serializer = TransactionSerializer(queryset, many=True)
-        return Response({"results": serializer.data, "summary": summary})
+    @action(detail=False, methods=["get"], url_path="transactions/export")
+    def export_transactions(self, request):
+        """Every transaction matching the list filters, as CSV."""
+        query = _transaction_history_query(request)
+        return TransactionExportService.export_to_csv(
+            TransactionHistoryService.transactions(request.user, query)
+        )
 
     @action(detail=False, methods=["get"])
     def model_stats(self, request):

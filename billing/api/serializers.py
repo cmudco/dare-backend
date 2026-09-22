@@ -1,6 +1,9 @@
+from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
 
+from api_keys.constants import BillingModeChoice
 from billing.constants import (
+    ALL_PLATFORMS,
     LiteLLMKeySourceChoice,
     PolicySourceChoice,
     UserWalletPreferenceTypeChoice,
@@ -15,6 +18,7 @@ from billing.models import (
 )
 from billing.services import WalletService
 from conversations.api.serializers import LLMSerializer
+from users.constants import AuthSourceChoice
 from users.models import AccessCodeGroup, User
 
 
@@ -60,6 +64,26 @@ class TransactionSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+
+
+class TransactionHistoryQuerySerializer(serializers.Serializer):
+    platform = serializers.ChoiceField(
+        choices=[ALL_PLATFORMS, *AuthSourceChoice.values], required=False
+    )
+    billing_mode = serializers.ChoiceField(
+        choices=BillingModeChoice.values, required=False
+    )
+    model = serializers.CharField(required=False)
+    created_after = serializers.DateTimeField(required=False)
+    created_before = serializers.DateTimeField(required=False)
+
+    def validate(self, attrs):
+        after, before = attrs.get("created_after"), attrs.get("created_before")
+        if after and before and after >= before:
+            raise serializers.ValidationError(
+                _("The start of the date range must be before its end.")
+            )
+        return attrs
 
 
 # --- System refill policy -------------------------------------------------

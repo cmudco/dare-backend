@@ -59,6 +59,7 @@ Responses and events must have explicit serializers or schemas. Never make the f
 
 - A rule, threshold, mapping, or state transition has one owner.
 - Derived state is computed, not stored in parallel representations.
+- A list endpoint and its export share one validated query and one service queryset.
 - Shared policy used by read and write paths lives in one pure module.
 - Compatibility code must be an isolated adapter with a documented removal condition.
 - Do not duplicate old and new architectures throughout the feature.
