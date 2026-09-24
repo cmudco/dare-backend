@@ -32,6 +32,19 @@ def _conversation_was_deleted(conversation_id) -> bool:
     return not Conversation._base_manager.filter(pk=conversation_id).exists()
 
 
+@database_sync_to_async
+def _refresh_deletion_flags(message_obj: Message) -> bool:
+    """Reload delete flags so finalize's full save() keeps a mid-stream delete.
+
+    Returns False when the row was hard-deleted.
+    """
+    try:
+        message_obj.refresh_from_db(fields=["is_active", "is_deleted"])
+    except Message.DoesNotExist:
+        return False
+    return True
+
+
 async def finalize_message(
     message_obj: Message,
     ai_response: str,
@@ -86,6 +99,12 @@ async def finalize_message(
             )
             return
 
+        if not await _refresh_deletion_flags(message_obj):
+            logger.error(
+                "Message %s row vanished mid-stream; finalize skipped.", message_obj.id
+            )
+            return
+
         # Save original message content on first regeneration
         if regenerate and not message_obj.original_message:
             message_obj.original_message = message_obj.message
@@ -111,6 +130,14 @@ async def finalize_message(
 
         if regenerate:
             await mark_as_regenerated_callback(finalized_message)
+
+        # The user deleted this answer mid-stream: it is billed, but re-sending
+        # it would put it back on their screen.
+        if message_obj.is_deleted:
+            logger.info(
+                "Message %s was deleted mid-stream; billed, not sent.", message_obj.id
+            )
+            return
 
         # Send final message to client
         final_payload = await WebSocketResponseService.format_message(

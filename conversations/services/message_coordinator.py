@@ -1033,7 +1033,15 @@ class MessageCoordinator:
             return
         try:
             message_obj.usage_details = usage_breakdown
-            message_obj.save(update_fields=["usage_details"])
+            updated = Message._base_manager.filter(pk=message_obj.pk).update(
+                usage_details=usage_breakdown
+            )
+            # Clients soft-delete, so a vanished row is an anomaly worth a Sentry event.
+            if not updated:
+                logger.error(
+                    "Message %s row vanished mid-stream; usage breakdown dropped.",
+                    message_obj.id,
+                )
         except Exception:
             logger.exception(
                 "Failed to save usage breakdown",
