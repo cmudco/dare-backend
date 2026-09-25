@@ -149,13 +149,23 @@ class ScheduledRefillCapTests(TestCase):
             ).exists()
         )
 
-    def test_without_a_cap_refills_still_add_the_full_amount(self):
+    def test_without_a_cap_refills_top_up_to_the_refill_amount(self):
         self.group_wallet.refill_cap = None
         self.group_wallet.save()
-        member = make_user("rich@example.com", self.group, balance="40.00")
+        spent = make_user("spent@example.com", self.group, balance="4.00")
+        rich = make_user("rich@example.com", self.group, balance="40.00")
         self._refill()
 
-        self.assertEqual(Wallet.objects.get(user=member).balance, Decimal("45"))
+        self.assertEqual(Wallet.objects.get(user=spent).balance, Decimal("5"))
+        self.assertEqual(Wallet.objects.get(user=rich).balance, Decimal("40"))
+
+    def test_an_explicit_cap_above_the_amount_lets_refills_accumulate(self):
+        self.group_wallet.refill_cap = Decimal("20")
+        self.group_wallet.save()
+        member = make_user("saver@example.com", self.group, balance="10.00")
+        self._refill()
+
+        self.assertEqual(Wallet.objects.get(user=member).balance, Decimal("15"))
 
     def test_member_override_cap_beats_the_group_cap(self):
         member = make_user("ta@example.com", self.group, balance="5.00")
@@ -452,9 +462,24 @@ class EffectivePolicyCapTests(TestCase):
             (policy.cap, policy.cap_source), (Decimal("3"), PolicySourceChoice.USER)
         )
 
-    def test_no_cap_anywhere_resolves_to_none(self):
-        loner = make_user("none@example.com")
-        self.assertIsNone(WalletService.get_effective_refill_policy(loner).cap)
+    def test_no_cap_anywhere_defaults_to_the_refill_amount(self):
+        group = AccessCodeGroup.objects.create(access_code="TIER-2", max_capacity=5)
+        GroupWallet.objects.create(group=group, refill_amount=Decimal("20"))
+        member = make_user("none@example.com", group)
+
+        policy = WalletService.get_effective_refill_policy(member)
+        self.assertEqual(
+            (policy.cap, policy.cap_source), (Decimal("20"), PolicySourceChoice.GROUP)
+        )
+
+    def test_dare_wallet_row_reports_its_refill_ceiling(self):
+        user = make_user("chip@example.com", balance="4.00")
+        client = APIClient()
+        client.force_authenticate(user)
+
+        wallets = client.get("/api/billing/wallets/").json()["wallets"]
+        dare = next(w for w in wallets if w["type"] == "DARE")
+        self.assertEqual(Decimal(dare["status"]["ceiling"]), Decimal("5"))
 
 
 class GroupOwnerKeyTests(TestCase):

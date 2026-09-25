@@ -76,7 +76,7 @@ Group owners manage two per-member ceilings through
 | Field (group / override) | Meaning |
 |---|---|
 | `litellmMemberCap` / `litellmCap` | Most a member may spend, in total, through the group's LiteLLM keys. Measured at DARE's reference rates. Unset means no limit. |
-| `refillCap` / `refillCap` | Scheduled refills top a DARE wallet up to this balance instead of adding the full amount. The group budget is charged only for what is added. Unset inherits the next tier (user → group → system). |
+| `refillCap` / `refillCap` | Scheduled refills top a DARE wallet up to this balance instead of adding the full amount. The group budget is charged only for what is added. Unset inherits the next tier (user → group → system); when no tier sets it, the refill amount is the ceiling, so balances never stack. |
 
 Each field has a matching `clear*` flag (`clearLitellmMemberCap`,
 `clearLitellmCap`, `clearRefillCap`) that unsets it. Amounts must be

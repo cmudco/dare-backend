@@ -696,6 +696,7 @@ class BillingViewSet(viewsets.ViewSet):
                 "status": {
                     "kind": "BALANCE",
                     "balance": str(dare_wallet.balance) if dare_wallet else "0.00",
+                    "ceiling": str(WalletService.get_effective_refill_policy(user).cap),
                     "last_refill_at": (
                         dare_wallet.last_refill_at if dare_wallet else None
                     ),

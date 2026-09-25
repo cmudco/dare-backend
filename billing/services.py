@@ -49,8 +49,8 @@ class EffectiveRefillPolicy:
     period_days: int
     amount_source: str   # PolicySourceChoice value
     period_source: str   # PolicySourceChoice value
-    cap: Optional[Decimal] = None
-    cap_source: str = PolicySourceChoice.SYSTEM
+    cap: Decimal
+    cap_source: str
 
 
 class TransactionExportService:
@@ -145,6 +145,9 @@ class WalletService:
         3-tier hierarchy with field-level fallthrough:
 
             user.refill_override.<field> -> group.group_wallet.<field> -> system
+
+        With no cap set at any tier, the cap is the refill amount: a refill
+        tops the wallet up to that amount instead of stacking on top of it.
         """
         override = WalletService._override_for(user)
         group_wallet = WalletService.get_group_wallet_for_user(user)
@@ -164,6 +167,8 @@ class WalletService:
         amount, amount_source = resolve("refill_amount")
         period, period_source = resolve("refill_period_days")
         cap, cap_source = resolve("refill_cap")
+        if cap is None:
+            cap, cap_source = amount, amount_source
         return EffectiveRefillPolicy(
             amount=amount,
             period_days=period,

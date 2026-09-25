@@ -60,7 +60,7 @@ class SystemRefillPolicy(TimeStampMixin):
         verbose_name=_("Default Refill Cap (USD)"),
         help_text=_(
             "Scheduled refills top a wallet up to this balance and never past it. "
-            "Blank means no cap: every refill adds the full amount."
+            "Blank means the refill amount is the ceiling, so balances never stack."
         ),
     )
 

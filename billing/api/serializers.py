@@ -108,7 +108,7 @@ class EffectivePolicySerializer(serializers.Serializer):
     period_days = serializers.IntegerField()
     amount_source = serializers.ChoiceField(choices=PolicySourceChoice.choices)
     period_source = serializers.ChoiceField(choices=PolicySourceChoice.choices)
-    cap = serializers.DecimalField(max_digits=10, decimal_places=6, allow_null=True)
+    cap = serializers.DecimalField(max_digits=10, decimal_places=6)
     cap_source = serializers.ChoiceField(choices=PolicySourceChoice.choices)
 
 
@@ -315,6 +315,9 @@ class WalletStatusSerializer(serializers.Serializer):
 
     kind = serializers.CharField()  # "BALANCE" or "EXTERNAL"
     balance = serializers.CharField(required=False, allow_null=True)  # BALANCE only
+    ceiling = serializers.CharField(
+        required=False, allow_null=True
+    )  # BALANCE only: the balance scheduled refills top up to
     last_refill_at = serializers.DateTimeField(
         required=False, allow_null=True
     )  # BALANCE only
