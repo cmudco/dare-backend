@@ -67,6 +67,38 @@ Both LiteLLM connection-test endpoints return `models` plus a nullable
 Gemini Flash model, then another lightweight text model. Clients may highlight
 the recommendation, but the user remains free to select any returned model.
 
+## Group spend limits and refill caps
+
+Group owners manage two per-member ceilings through
+`PATCH /api/billing/group-wallets/{id}/` and the member override endpoint
+`PUT /api/billing/group-wallets/{id}/members/{userId}/override/`:
+
+| Field (group / override) | Meaning |
+|---|---|
+| `litellmMemberCap` / `litellmCap` | Most a member may spend, in total, through the group's LiteLLM keys. Measured at DARE's reference rates. Unset means no limit. |
+| `refillCap` / `refillCap` | Scheduled refills top a DARE wallet up to this balance instead of adding the full amount. The group budget is charged only for what is added. Unset inherits the next tier (user → group → system). |
+
+Each field has a matching `clear*` flag (`clearLitellmMemberCap`,
+`clearLitellmCap`, `clearRefillCap`) that unsets it. Amounts must be
+non-negative.
+
+Member rows carry `spendLimit` (`limit`, `used`, `remaining`, `source`,
+`isReached`), or `null` when no limit applies. The group wallet carries
+`gatewayKeys`: for each of the group's keys, the gateway-reported spend and
+budget (read from `x-litellm-key-*` response headers) beside DARE's estimate,
+so the two can be reconciled without a gateway admin key. The student's
+`GET /api/billing/wallets/` row for a group key includes the same `spendLimit`.
+
+The group's owner sees the group's key without joining the group, is moved
+onto it when a key is issued or when they are assigned as owner, and is never
+held to the member limit.
+
+A member who has used their limit cannot dispatch through the group key. Chat
+answers with the socket error `spend_limit_reached`; other paths raise
+`PaymentRequiredError` with code `LITELLM_SPEND_LIMIT_REACHED`. Every LiteLLM
+call is sent with the OpenAI `user` field set to `dare-user-<id>`, so the
+gateway can attribute spend per DARE user.
+
 ## Document reprocessing and vision model selection
 
 `POST /api/files/{id}/reprocess/` accepts these camelCase JSON fields:

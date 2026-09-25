@@ -43,9 +43,13 @@ class UpdateGroupPolicyRequest:
     owner: Any
     refill_amount: Optional[Decimal] = None
     refill_period_days: Optional[int] = None
+    refill_cap: Optional[Decimal] = None
+    litellm_member_cap: Optional[Decimal] = None
     is_active: Optional[bool] = None
     clear_amount: bool = False
     clear_period: bool = False
+    clear_refill_cap: bool = False
+    clear_litellm_member_cap: bool = False
 
 
 @dataclass(frozen=True)
@@ -54,9 +58,31 @@ class UpsertUserOverrideRequest:
     target_user_id: int
     refill_amount: Optional[Decimal] = None
     refill_period_days: Optional[int] = None
+    refill_cap: Optional[Decimal] = None
+    litellm_cap: Optional[Decimal] = None
     reason: str = ""
     clear_amount: bool = False
     clear_period: bool = False
+    clear_refill_cap: bool = False
+    clear_litellm_cap: bool = False
+
+
+def _apply_optional_fields(instance, changes) -> list:
+    """Set or clear each nullable policy field; return the fields that changed.
+
+    ``changes`` maps field name to ``(clear, value)``: clear wins, a value sets,
+    and ``None`` without clear leaves the field as it was.
+    """
+    changed = []
+    for field, (clear, value) in changes.items():
+        if clear:
+            setattr(instance, field, None)
+        elif value is not None:
+            setattr(instance, field, value)
+        else:
+            continue
+        changed.append(field)
+    return changed
 
 
 # --- Service --------------------------------------------------------------
@@ -92,7 +118,12 @@ class GroupWalletService:
         return (
             AccessCodeGroup.objects.filter(group_owner=owner, is_active=True)
             .select_related("group_wallet")
-            .prefetch_related("users", "users__wallet", "users__refill_override")
+            .prefetch_related(
+                "users",
+                "users__wallet",
+                "users__refill_override",
+                "users__litellm_spend__litellm_key",
+            )
         )
 
     # --- Writes ------------------------------------------------------------
@@ -186,8 +217,9 @@ class GroupWalletService:
     @staticmethod
     def update_group_policy(req: UpdateGroupPolicyRequest) -> GroupWallet:
         """
-        Owner/admin updates the group's refill amount/period/active flag.
-        Pass clear_amount or clear_period to unset (fall back to system default).
+        Owner/admin updates the group's refill policy, member spend limit and
+        active flag. A ``clear_*`` flag unsets its field (inherit / no limit).
+        Values arrive validated from the API serializer.
         """
         with db_transaction.atomic():
             group_wallet = GroupWallet.objects.select_for_update().select_related("group").get(
@@ -195,25 +227,18 @@ class GroupWalletService:
             )
             GroupWalletService.assert_owner_or_admin(group_wallet, req.owner)
 
-            update_fields = []
-
-            if req.clear_amount:
-                group_wallet.refill_amount = None
-                update_fields.append("refill_amount")
-            elif req.refill_amount is not None:
-                if req.refill_amount < 0:
-                    raise ValidationError({"refill_amount": "Refill amount cannot be negative."})
-                group_wallet.refill_amount = req.refill_amount
-                update_fields.append("refill_amount")
-
-            if req.clear_period:
-                group_wallet.refill_period_days = None
-                update_fields.append("refill_period_days")
-            elif req.refill_period_days is not None:
-                if req.refill_period_days < 1:
-                    raise ValidationError({"refill_period_days": "Refill period must be at least 1 day."})
-                group_wallet.refill_period_days = req.refill_period_days
-                update_fields.append("refill_period_days")
+            update_fields = _apply_optional_fields(
+                group_wallet,
+                {
+                    "refill_amount": (req.clear_amount, req.refill_amount),
+                    "refill_period_days": (req.clear_period, req.refill_period_days),
+                    "refill_cap": (req.clear_refill_cap, req.refill_cap),
+                    "litellm_member_cap": (
+                        req.clear_litellm_member_cap,
+                        req.litellm_member_cap,
+                    ),
+                },
+            )
 
             if req.is_active is not None:
                 group_wallet.is_active = req.is_active
@@ -238,11 +263,6 @@ class GroupWalletService:
         actor = req.owner_or_admin
         is_admin = GroupWalletService.is_admin(actor)
 
-        if req.refill_amount is not None and req.refill_amount < 0:
-            raise ValidationError({"refill_amount": "Refill amount cannot be negative."})
-        if req.refill_period_days is not None and req.refill_period_days < 1:
-            raise ValidationError({"refill_period_days": "Refill period must be at least 1 day."})
-
         with db_transaction.atomic():
             target_user = User.objects.select_related("access_code_group").get(pk=req.target_user_id)
 
@@ -253,34 +273,24 @@ class GroupWalletService:
 
             override, _created = UserRefillOverride.objects.get_or_create(user=target_user)
 
-            update_fields = ["updated_at", "set_by"]
-
-            if req.clear_amount:
-                override.refill_amount = None
-                update_fields.append("refill_amount")
-            elif req.refill_amount is not None:
-                override.refill_amount = req.refill_amount
-                update_fields.append("refill_amount")
-
-            if req.clear_period:
-                override.refill_period_days = None
-                update_fields.append("refill_period_days")
-            elif req.refill_period_days is not None:
-                override.refill_period_days = req.refill_period_days
-                update_fields.append("refill_period_days")
+            update_fields = ["updated_at", "set_by"] + _apply_optional_fields(
+                override,
+                {
+                    "refill_amount": (req.clear_amount, req.refill_amount),
+                    "refill_period_days": (req.clear_period, req.refill_period_days),
+                    "refill_cap": (req.clear_refill_cap, req.refill_cap),
+                    "litellm_cap": (req.clear_litellm_cap, req.litellm_cap),
+                },
+            )
 
             if req.reason:
                 override.reason = req.reason
                 update_fields.append("reason")
 
             override.set_by = actor
-            override.save(update_fields=list(dict.fromkeys(update_fields)))
+            override.save(update_fields=update_fields)
 
-            if (
-                override.refill_amount is None
-                and override.refill_period_days is None
-                and not override.reason
-            ):
+            if override.is_empty:
                 override.delete()
                 return None
             return override
