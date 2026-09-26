@@ -48,15 +48,24 @@ class BillingService:
         Returns empty dict if computation is not applicable.
         """
         llm = message_obj.llm
-        output_tokens = message_obj.output_tokens
-        if not llm or not output_tokens:
+        if not llm:
+            return {}
+        return BillingService._energy_fields(
+            llm.provider, llm.identifier, message_obj.output_tokens
+        )
+
+    @staticmethod
+    def _energy_fields(
+        provider_name: Optional[str], model_name: str, output_tokens: int
+    ) -> dict:
+        if not model_name or not output_tokens:
             return {}
 
         try:
             impact = compute_impact(
                 output_tokens=output_tokens,
-                provider_name=llm.provider,
-                model_name=llm.identifier,
+                provider_name=provider_name,
+                model_name=model_name,
             )
             if impact.energy_wh == 0.0:
                 return {}
@@ -387,7 +396,9 @@ class BillingService:
     ) -> Transaction:
         """Persist one externally billed call without touching DARE credit."""
         self._accumulate_litellm_spend(user, litellm_key.pk, reference_amount)
+        energy_data = self._energy_fields(None, model_name, output_tokens)
         return Transaction.objects.create(
+            **energy_data,
             user=user,
             amount=Decimal("0.00"),
             reference_amount=reference_amount,
@@ -442,10 +453,13 @@ class BillingService:
                 # LLMDescriptor). DARE never debits its own wallet for these
                 # — the user pays the proxy externally — but we still emit a
                 # Transaction row for attribution + Recent Transactions
-                # visibility, and capture proxy-reported energy if present.
+                # visibility, and an EcoLogits energy estimate from the proxy model name.
                 if message_obj.litellm_key_id is not None:
                     reference_llm = reference_rates(message_obj.litellm_model_name)
-                    self._record_litellm_transaction(message_obj, reference_llm)
+                    txn = self._record_litellm_transaction(message_obj, reference_llm)
+                    message_obj.energy_wh = txn.energy_wh
+                    message_obj.carbon_g = txn.carbon_g
+                    message_obj.water_ml = txn.water_ml
                     if reference_llm is not None:
                         message_obj.cost = self._calculate_cost(
                             reference_llm,
