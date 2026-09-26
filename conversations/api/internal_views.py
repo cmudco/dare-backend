@@ -5,16 +5,19 @@ These views use X-Internal-Key authentication for trusted backend-to-backend cal
 where JWT authentication is not appropriate (e.g., viewing student data on behalf of professors).
 """
 
+import hmac
 import logging
 
 from django.conf import settings
 from django.db.models import Count
-from rest_framework import status
-from rest_framework.permissions import AllowAny
+from rest_framework import serializers, status
+from rest_framework.permissions import AllowAny, BasePermission
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from conversations.models import Conversation, Message
+from conversations.services.llm_filter_service import bot_model_problem
+from users.models import User
 
 logger = logging.getLogger(__name__)
 
@@ -152,3 +155,55 @@ class InternalConversationMessagesView(APIView):
             'messages': message_list,
             'total_count': len(message_list),
         })
+
+
+class HasInternalKey(BasePermission):
+    """Trusted service-to-service caller presenting ``DARE_INTERNAL_KEY``."""
+
+    def has_permission(self, request, view):
+        expected = getattr(settings, "DARE_INTERNAL_KEY", "")
+        provided = request.headers.get("X-Internal-Key", "")
+        return bool(expected) and hmac.compare_digest(provided, expected)
+
+
+class BotModelCheckRequestSerializer(serializers.Serializer):
+    owner_dare_user_id = serializers.IntegerField()
+    chat_model_dare_id = serializers.CharField(required=False, allow_null=True)
+    tracking_model_dare_id = serializers.CharField(required=False, allow_null=True)
+
+
+class InternalBotModelCheckView(APIView):
+    """Tell SocraticBooks whether a bot's owner may save these models on it.
+
+    Called on bot save. The response carries one problem code per field, or
+    ``null`` when that model is fine; SocraticBooks turns codes into messages.
+    """
+
+    permission_classes = [HasInternalKey]
+
+    def post(self, request):
+        command = BotModelCheckRequestSerializer(data=request.data)
+        command.is_valid(raise_exception=True)
+        data = command.validated_data
+        owner = User.objects.filter(pk=data["owner_dare_user_id"]).first()
+        if owner is None:
+            return Response(
+                {"error": "Owner not found"}, status=status.HTTP_404_NOT_FOUND
+            )
+
+        chat_ref = data.get("chat_model_dare_id")
+        tracking_ref = data.get("tracking_model_dare_id")
+        return Response(
+            {
+                "chat_model_problem": (
+                    bot_model_problem(owner, chat_ref, is_tracking=False)
+                    if chat_ref
+                    else None
+                ),
+                "tracking_model_problem": (
+                    bot_model_problem(owner, tracking_ref, is_tracking=True)
+                    if tracking_ref
+                    else None
+                ),
+            }
+        )

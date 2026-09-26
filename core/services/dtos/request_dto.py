@@ -6,6 +6,7 @@ from typing import Any, Optional
 
 from .context_dto import ContextConfig
 from .generation_dto import GenerationConfig
+from .llm_descriptor_dto import litellm_picker_id
 from .media_dto import MediaConfig
 from .socratic_dto import SocraticConfig
 
@@ -75,6 +76,23 @@ class LLMQueryRequest:
             and self.conversation.user is not None
         ):
             raise ValueError("User is required for authenticated conversations")
+
+    @property
+    def bot_id(self) -> Optional[int]:
+        """SocraticBooks bot this turn belongs to, if any."""
+        return self.conversation.bot_id if self.conversation is not None else None
+
+    @property
+    def litellm_model_ref(self) -> Optional[str]:
+        """Picker id of the LiteLLM model the reply is recorded against.
+
+        Read from the AI message so the key a turn is sent through is the key
+        billing charges; ``None`` for DARE catalog models.
+        """
+        message = self.message_obj
+        if message is None or message.litellm_key_id is None:
+            return None
+        return litellm_picker_id(message.litellm_key_id, message.litellm_model_name)
 
     def is_socratic_mode(self) -> bool:
         """Check if Socratic mode is enabled."""

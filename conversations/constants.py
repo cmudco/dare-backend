@@ -173,6 +173,7 @@ class ErrorCode:
     INSUFFICIENT_CREDITS = "insufficient_credits"
     INSUFFICIENT_BALANCE = "insufficient_balance"
     SPEND_LIMIT_REACHED = "spend_limit_reached"
+    BOT_MODEL_UNAVAILABLE = "bot_model_unavailable"
 
     # Processing errors
     PROCESSING_ERROR = "processing_error"

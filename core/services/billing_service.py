@@ -13,9 +13,8 @@ from billing.exceptions import PaymentRequiredError
 from billing.models import LiteLLMSpend, Transaction, Wallet
 from billing.wallet_router import (
     BOT_WALLET_BYO,
-    BOT_WALLET_DARE,
-    BOT_WALLET_LITELLM,
     ResolvedBotWallet,
+    load_bot_billing,
     resolve_active_wallet_for_bot,
 )
 from conversations.models import LLM, Message
@@ -269,16 +268,6 @@ class BillingService:
             )
             return
 
-        if resolved.type == BOT_WALLET_LITELLM:
-            Transaction.objects.create(
-                user=resolved.payer_user,
-                amount=Decimal("0.00"),
-                message=f"{message_text} (LiteLLM key — Cost: ${cost})",
-                billing_mode=BillingModeChoice.LITELLM,
-                **common_kwargs,
-            )
-            return
-
         # BOT_WALLET_DARE — debit a real DARE wallet (the chatter's, or the
         # bot owner's for anonymous public-bot traffic). Force platform=DARE
         # on the Transaction so Transaction.save() runs the atomic
@@ -335,8 +324,15 @@ class BillingService:
             if reference_llm is not None
             else None
         )
+        # A bot's LiteLLM model is sponsored by its owner: the call spends the
+        # owner's allowance on the key, while the row stays with the chatter so
+        # the owner's per-bot usage shows who used it.
+        bot_owner = None
+        if conversation.bot_id is not None:
+            _config, bot_owner = load_bot_billing(conversation.bot_id)
         return self._record_litellm_usage(
             user=conversation.user,
+            spender=bot_owner or conversation.user,
             litellm_key=message_obj.litellm_key,
             model_name=message_obj.litellm_model_name,
             input_tokens=message_obj.input_tokens,
@@ -349,6 +345,8 @@ class BillingService:
             ),
             platform=conversation.source,
             reference_amount=reference_amount,
+            bot_id=conversation.bot_id,
+            bot_owner=bot_owner,
         )
 
     @staticmethod
@@ -360,7 +358,7 @@ class BillingService:
         get slower for exactly the heaviest users. F() expressions keep
         concurrent turns from clobbering each other.
         """
-        if amount is None:
+        if amount is None or user is None:
             return
 
         spend, _created = LiteLLMSpend.objects.get_or_create(
@@ -375,7 +373,7 @@ class BillingService:
     def _record_litellm_usage(
         self,
         *,
-        user: "User",
+        user: Optional["User"],
         litellm_key,
         model_name: str,
         input_tokens: int,
@@ -384,11 +382,22 @@ class BillingService:
         platform: str,
         reference_amount,
         cached_input_tokens: int = 0,
+        spender: Optional["User"] = None,
+        bot_id: Optional[int] = None,
+        bot_owner: Optional["User"] = None,
     ) -> Transaction:
-        """Persist one externally billed call without touching DARE credit."""
-        self._accumulate_litellm_spend(user, litellm_key.pk, reference_amount)
+        """Persist one externally billed call without touching DARE credit.
+
+        ``user`` owns the row; ``spender`` (default ``user``) is whose
+        allowance on the key the call counts against.
+        """
+        self._accumulate_litellm_spend(
+            spender or user, litellm_key.pk, reference_amount
+        )
         return Transaction.objects.create(
             user=user,
+            bot_id=bot_id,
+            bot_owner=bot_owner,
             amount=Decimal("0.00"),
             reference_amount=reference_amount,
             llm=None,
@@ -411,9 +420,10 @@ class BillingService:
 
         Routing strategy:
             - When the conversation has a ``bot_id``, always dispatch through
-              ``wallet_router.resolve_active_wallet_for_bot``. The chatter pays
-              from their active wallet; for anonymous public-bot traffic the
-              bot owner's active wallet pays. The Transaction is stamped with
+              ``wallet_router.resolve_active_wallet_for_bot``. For a DARE
+              catalog model the chatter pays (their DARE wallet, or BYO key);
+              for anonymous public-bot traffic the bot owner pays. LiteLLM
+              models never reach this path: the owner's key sponsors them. The Transaction is stamped with
               ``bot_id`` + ``bot_owner`` for per-(user, bot) attribution.
             - Non-bot DARE conversations continue through the standard user
               billing path keyed off ``user.billing_mode``.
@@ -488,9 +498,9 @@ class BillingService:
                         # for non-bot DARE conversations.
                         if conversation.bot_id is not None:
                             resolved = resolve_active_wallet_for_bot(
-                                bot_id=conversation.bot_id,
-                                calling_user=conversation.user,
-                                conversation=conversation,
+                                conversation.bot_id,
+                                conversation.user,
+                                requested_provider=llm.provider,
                             )
                             if resolved is not None:
                                 self._finalize_via_bot_router(

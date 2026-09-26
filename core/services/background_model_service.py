@@ -15,6 +15,7 @@ from config import env
 from conversations.models import LLM
 from core.services.billing_service import BillingService
 from core.services.dtos import LLMDescriptor, StreamEventKind
+from core.services.dtos.llm_descriptor_dto import litellm_picker_id
 from core.services.sb_client import SocraticBooksClient
 
 logger = logging.getLogger(__name__)
@@ -209,9 +210,16 @@ class BackgroundModelService:
         # LLMService imports the RAG pipeline, whose analyzer calls back here.
         from core.services.llm_service import LLMService
 
+        litellm_model_ref = (
+            litellm_picker_id(route.litellm_key.pk, route.model.identifier)
+            if route.litellm_key is not None
+            else None
+        )
         try:
             return await LLMService()._get_ai_service(
-                route.model, user=route.dispatch_user
+                route.model,
+                user=route.dispatch_user,
+                litellm_model_ref=litellm_model_ref,
             )
         except PaymentRequiredError as error:
             raise BackgroundModelUnavailable(

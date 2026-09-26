@@ -37,6 +37,9 @@ class BotBillingConfig:
     budget_used: Decimal
     is_publicly_deployed: bool
     is_active: bool
+    # Picker id of the chat model the owner saved on the bot: the only model
+    # the owner's LiteLLM key may be spent on inside its conversations.
+    chat_model_ref: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -111,24 +114,62 @@ class SocraticBooksClient:
     @classmethod
     def get_model_dependencies(cls, model_id: int) -> SocraticModelDependencies:
         """Return Socratic bots that currently store the DARE model ID."""
+        bots = cls._get_dependencies(
+            f"/api/bots/internal/model-dependents/{model_id}/",
+            subject=f"model {model_id}",
+        )
+        return SocraticModelDependencies(model_id=model_id, bots=bots)
+
+    @classmethod
+    def get_litellm_key_dependencies(
+        cls, key_id: str
+    ) -> tuple[SocraticBotDependency, ...]:
+        """Return Socratic bots whose model routes through the LiteLLM key."""
+        return cls._get_dependencies(
+            f"/api/bots/internal/litellm-key-dependents/{key_id}/",
+            subject=f"LiteLLM key {key_id}",
+        )
+
+    @classmethod
+    def nullify_model_references(
+        cls,
+        model_id: int,
+    ) -> SocraticNullificationResult:
+        """Clear a deleted DARE model from Socratic bots and deactivate them."""
+        return cls._nullify(
+            f"/api/bots/internal/nullify-model/{model_id}/",
+            subject=f"model {model_id}",
+        )
+
+    @classmethod
+    def nullify_litellm_key_references(cls, key_id: str) -> SocraticNullificationResult:
+        """Clear a deleted LiteLLM key's models from bots and deactivate them."""
+        return cls._nullify(
+            f"/api/bots/internal/nullify-litellm-key/{key_id}/",
+            subject=f"LiteLLM key {key_id}",
+        )
+
+    @classmethod
+    def _get_dependencies(
+        cls, path: str, *, subject: str
+    ) -> tuple[SocraticBotDependency, ...]:
         base_url, headers = cls._required_connection()
-        url = f"{base_url}/api/bots/internal/model-dependents/{model_id}/"
         try:
             response = requests.get(
-                url,
+                f"{base_url}{path}",
                 headers=headers,
                 timeout=cls.REQUEST_TIMEOUT,
             )
         except requests.RequestException as exc:
             raise SocraticBooksRequestError(
-                f"Could not check SocraticBooks model dependencies: {exc}"
+                f"Could not check SocraticBooks dependencies: {exc}"
             ) from exc
 
         if response.status_code != 200:
             logger.error(
-                "model-dependents returned %s for model %s: %s",
+                "dependency check returned %s for %s: %s",
                 response.status_code,
-                model_id,
+                subject,
                 response.text[:200],
             )
             raise SocraticBooksRequestError(
@@ -170,20 +211,14 @@ class SocraticBooksClient:
             raise SocraticBooksRequestError(
                 "SocraticBooks returned an invalid dependency response."
             ) from exc
-
-        return SocraticModelDependencies(model_id=model_id, bots=tuple(bots))
+        return tuple(bots)
 
     @classmethod
-    def nullify_model_references(
-        cls,
-        model_id: int,
-    ) -> SocraticNullificationResult:
-        """Clear a deleted DARE model from Socratic bots and deactivate them."""
+    def _nullify(cls, path: str, *, subject: str) -> SocraticNullificationResult:
         base_url, headers = cls._required_connection()
-        url = f"{base_url}/api/bots/internal/nullify-model/{model_id}/"
         try:
             response = requests.post(
-                url,
+                f"{base_url}{path}",
                 headers=headers,
                 timeout=cls.REQUEST_TIMEOUT,
             )
@@ -194,9 +229,9 @@ class SocraticBooksClient:
 
         if response.status_code != 200:
             logger.error(
-                "nullify-model returned %s for model %s: %s",
+                "reference cleanup returned %s for %s: %s",
                 response.status_code,
-                model_id,
+                subject,
                 response.text[:200],
             )
             raise SocraticBooksRequestError(
@@ -282,6 +317,7 @@ class SocraticBooksClient:
                 budget_used=Decimal(body.get("budgetUsed") or "0"),
                 is_publicly_deployed=bool(body.get("isPubliclyDeployed", False)),
                 is_active=bool(body.get("isActive", True)),
+                chat_model_ref=body.get("chatModelDareId"),
             )
         except (KeyError, TypeError, ValueError) as exc:
             logger.error("billing-config payload malformed for bot %s: %s", bot_id, exc)

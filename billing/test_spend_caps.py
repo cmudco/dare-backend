@@ -33,8 +33,10 @@ from billing.models import (
 from billing.services import WalletService
 from billing.tasks import process_scheduled_refills
 from conversations.models import LLM
-from conversations.services.message_coordinator import MessageCoordinator
-from core.services.api_key_service import get_dispatch_credentials_for_user_sync
+from core.services.api_key_service import (
+    get_chat_dispatch_credentials_sync,
+    get_dispatch_credentials_for_user_sync,
+)
 from core.services.background_model_service import (
     BackgroundModelRoute,
     BackgroundModelService,
@@ -277,12 +279,13 @@ class SpendLimitGateTests(TestCase):
         self.assertEqual(creds.litellm_key_id, str(self.key.pk))
 
     def test_chat_preflight_reports_the_limit_and_passes_otherwise(self):
-        self.assertIsNone(MessageCoordinator._spend_limit_error(self.student))
+        get_chat_dispatch_credentials_sync("custom", self.student)
 
         record_spend(self.student, self.key, "15")
-        error = MessageCoordinator._spend_limit_error(self.student)
-        self.assertEqual(error.code, LITELLM_SPEND_LIMIT_REACHED)
-        self.assertIn("$15.00", str(error))
+        with self.assertRaises(PaymentRequiredError) as refused:
+            get_chat_dispatch_credentials_sync("custom", self.student)
+        self.assertEqual(refused.exception.code, LITELLM_SPEND_LIMIT_REACHED)
+        self.assertIn("$15.00", str(refused.exception))
 
     def test_background_work_reports_unavailable_instead_of_billing_errors(self):
         route = BackgroundModelRoute(

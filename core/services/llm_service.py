@@ -7,7 +7,7 @@ from conversations.constants import Provider, SenderType
 from conversations.models import LLM, Conversation, Message
 from core.integrations import ToolFetcher
 from core.services.api_key_service import (
-    get_dispatch_credentials_for_user,
+    get_chat_dispatch_credentials,
     get_provider_api_key,
 )
 from core.services.claude_service import ClaudeService
@@ -181,7 +181,12 @@ class LLMService:
                 )
             context_trace["totalMs"] += media_ms + tools_ms
 
-        ai_service = await self._get_ai_service(llm, request.user)
+        ai_service = await self._get_ai_service(
+            llm,
+            request.user,
+            bot_id=request.bot_id,
+            litellm_model_ref=request.litellm_model_ref,
+        )
 
         return PreparedChat(
             messages=messages,
@@ -337,7 +342,12 @@ class LLMService:
         Yields:
             Tuple of (chunk: str, usage: Dict)
         """
-        ai_service = await self._get_ai_service(llm, request.user)
+        ai_service = await self._get_ai_service(
+            llm,
+            request.user,
+            bot_id=request.bot_id,
+            litellm_model_ref=request.litellm_model_ref,
+        )
 
         # Extract DALL-E model from LLM identifier
         model = (
@@ -389,7 +399,12 @@ class LLMService:
                 all_images, messages, request.user
             )
 
-        ai_service = await self._get_ai_service(llm, request.user)
+        ai_service = await self._get_ai_service(
+            llm,
+            request.user,
+            bot_id=request.bot_id,
+            litellm_model_ref=request.litellm_model_ref,
+        )
 
         llm_tools = self._append_web_tools(request, llm, tools)
 
@@ -463,27 +478,37 @@ class LLMService:
         """Add video transcriptions to message context for LLMs."""
         return await add_video_transcriptions_to_messages(media_items, messages, user)
 
-    async def _get_ai_service(self, llm: LLM, user=None) -> AIService:
+    async def _get_ai_service(
+        self,
+        llm: LLM,
+        user=None,
+        *,
+        bot_id: Optional[int] = None,
+        litellm_model_ref: Optional[str] = None,
+    ) -> AIService:
         """Build the AI service that will dispatch this call.
 
-        Resolution path:
-          - With ``user``: read the wallet-aware ``ResolvedDispatchCredentials``
-            from ``api_key_service``. When the user's active wallet is LITELLM,
-            ``creds.use_litellm_proxy`` is True and we route every provider
-            through ``OpenAIService`` configured with the proxy ``base_url`` —
-            LiteLLM is OpenAI-compatible at ``<base>/v1/...``, so a single
-            client suffices regardless of the underlying model's nominal
-            provider. Provider-native paths (Anthropic, Gemini, Llama) only
-            run on DARE / BYO wallets.
-          - Without ``user``: legacy system-key path (DARE only).
+        Credentials come from ``get_chat_dispatch_credentials``: a LiteLLM
+        model is sent through the key in ``litellm_model_ref``, a bot turn is
+        paid as the bot router decides, and anything else through the user's
+        active wallet. A LiteLLM route goes through ``CustomLLMService`` with the
+        proxy ``base_url`` — LiteLLM is OpenAI-compatible whatever vendor is
+        behind it. Without a user or bot, the system key pays (DARE only).
 
         Args:
             llm: The LLM model to use. May be a real DB row or an unsaved stub
                 materialized from a synthetic LiteLLM descriptor.
             user: Optional user instance for wallet-aware credential resolution.
+            bot_id: SocraticBooks bot the call belongs to, if any.
+            litellm_model_ref: Picker id when ``llm`` is a LiteLLM stub.
         """
-        if user:
-            creds = await get_dispatch_credentials_for_user(llm.provider, user)
+        if user or bot_id is not None:
+            creds = await get_chat_dispatch_credentials(
+                llm.provider,
+                user,
+                bot_id=bot_id,
+                litellm_model_ref=litellm_model_ref,
+            )
         else:
             creds = ResolvedDispatchCredentials(
                 api_key=await get_provider_api_key(llm.provider),

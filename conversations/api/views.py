@@ -1076,7 +1076,8 @@ class LLMViewSet(viewsets.ModelViewSet):
         """
         Standard list returns the access-code-group filtered catalog.
 
-        When `?wallet_scope=active` or `?wallet_scope=bot:<id>` is supplied,
+        When `?wallet_scope=active`, `?wallet_scope=bot:<id>` or
+        `?wallet_scope=bot:new` is supplied,
         the response is wrapped as `{models: [...], wallet: {...}}` filtered
         by the wallet that will pay (per the wallet router). Legacy callers
         omitting the param get the historical flat list shape unchanged.
@@ -1088,10 +1089,15 @@ class LLMViewSet(viewsets.ModelViewSet):
         base_qs = self.get_queryset()
         if scope.kind == "active":
             models, meta = filter_for_active_wallet(request.user, base_qs)
-        else:  # scope.kind == "bot"
-            config = SocraticBooksClient.get_bot_billing_config(scope.bot_id)
-            if config is None or config.owner_dare_user_id != getattr(
-                request.user, "id", None
+        else:  # scope.kind == "bot"; a bot being created is the caller's own
+            config = (
+                SocraticBooksClient.get_bot_billing_config(scope.bot_id)
+                if scope.bot_id is not None
+                else None
+            )
+            if scope.bot_id is not None and (
+                config is None
+                or config.owner_dare_user_id != getattr(request.user, "id", None)
             ):
                 return Response(
                     {"detail": "Not authorized for this bot."},
