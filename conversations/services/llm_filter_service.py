@@ -95,6 +95,11 @@ class WalletMeta:
 LITELLM_ID_PREFIX = "litellm:"
 
 
+def litellm_picker_id(litellm_key_id, model_name: str) -> str:
+    """Picker id of a LiteLLM-routed model; ``parse_model_id`` inverts it."""
+    return f"{LITELLM_ID_PREFIX}{litellm_key_id}:{model_name}"
+
+
 def _llm_entry(model: LLM) -> Dict[str, Any]:
     """Flat picker entry for a DB-backed LLM. ``id`` is the stringified PK."""
     return {
@@ -133,7 +138,7 @@ def _litellm_entry(litellm_key, probed) -> Dict[str, Any]:
     family = resolve_family(probed.name)
     is_reasoning = bool(family and family.is_reasoning)
     return {
-        "id": f"{LITELLM_ID_PREFIX}{litellm_key.pk}:{probed.name}",
+        "id": litellm_picker_id(litellm_key.pk, probed.name),
         "name": probed.name,
         "identifier": probed.name,
         "provider": provider,

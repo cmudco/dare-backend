@@ -2,23 +2,40 @@ import csv
 from dataclasses import dataclass
 from datetime import timedelta
 from decimal import Decimal
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from django.db import transaction
+from django.db.models import Prefetch
 from django.http import HttpResponse
 from django.utils import timezone
+from django.utils.translation import gettext as _
 
+from billing.caps import SpendLimit
 from billing.constants import (
+    LITELLM_SPEND_LIMIT_REACHED,
+    LiteLLMKeySourceChoice,
     PolicySourceChoice,
     TransactionSourceChoice,
     TransactionTypeChoice,
+    UserWalletPreferenceTypeChoice,
 )
+from billing.exceptions import PaymentRequiredError
 from billing.models import (
     GroupWallet,
+    LiteLLMSpend,
     SystemRefillPolicy,
     Transaction,
     UserRefillOverride,
     Wallet,
+)
+from users.models import User
+
+if TYPE_CHECKING:
+    from billing.wallet_router import ResolvedWallet
+
+# Lets get_litellm_spend_limit read a page of members without a query each.
+MEMBER_SPEND_PREFETCH = Prefetch(
+    "litellm_spend", queryset=LiteLLMSpend.objects.select_related("litellm_key")
 )
 
 
@@ -32,6 +49,8 @@ class EffectiveRefillPolicy:
     period_days: int
     amount_source: str   # PolicySourceChoice value
     period_source: str   # PolicySourceChoice value
+    cap: Decimal
+    cap_source: str
 
 
 class TransactionExportService:
@@ -122,50 +141,117 @@ class WalletService:
     @staticmethod
     def get_effective_refill_policy(user) -> EffectiveRefillPolicy:
         """
-        Resolve the user's effective refill amount and period using the 3-tier
-        hierarchy with field-level fallthrough:
+        Resolve the user's effective refill amount, period and cap using the
+        3-tier hierarchy with field-level fallthrough:
 
-            user.refill_override.refill_amount      -> group.group_wallet.refill_amount      -> system
-            user.refill_override.refill_period_days -> group.group_wallet.refill_period_days -> system
+            user.refill_override.<field> -> group.group_wallet.<field> -> system
+
+        With no cap set at any tier, the cap is the refill amount: a refill
+        tops the wallet up to that amount instead of stacking on top of it.
         """
-        system_policy = SystemRefillPolicy.load()
-        amount: Optional[Decimal] = None
-        period: Optional[int] = None
-        amount_source = PolicySourceChoice.SYSTEM
-        period_source = PolicySourceChoice.SYSTEM
-
-        override = getattr(user, "refill_override", None) or (
-            UserRefillOverride.objects.filter(user=user).first()
+        override = WalletService._override_for(user)
+        group_wallet = WalletService.get_group_wallet_for_user(user)
+        tiers = (
+            (PolicySourceChoice.USER, override),
+            (PolicySourceChoice.GROUP, group_wallet),
+            (PolicySourceChoice.SYSTEM, SystemRefillPolicy.load()),
         )
-        if override:
-            if override.refill_amount is not None:
-                amount = override.refill_amount
-                amount_source = PolicySourceChoice.USER
-            if override.refill_period_days is not None:
-                period = override.refill_period_days
-                period_source = PolicySourceChoice.USER
 
-        if amount is None or period is None:
-            group_wallet = WalletService.get_group_wallet_for_user(user)
-            if group_wallet is not None:
-                if amount is None and group_wallet.refill_amount is not None:
-                    amount = group_wallet.refill_amount
-                    amount_source = PolicySourceChoice.GROUP
-                if period is None and group_wallet.refill_period_days is not None:
-                    period = group_wallet.refill_period_days
-                    period_source = PolicySourceChoice.GROUP
+        def resolve(field):
+            for source, tier in tiers:
+                value = getattr(tier, field, None) if tier is not None else None
+                if value is not None:
+                    return value, source
+            return None, PolicySourceChoice.SYSTEM
 
-        if amount is None:
-            amount = system_policy.refill_amount
-        if period is None:
-            period = system_policy.refill_period_days
-
+        amount, amount_source = resolve("refill_amount")
+        period, period_source = resolve("refill_period_days")
+        cap, cap_source = resolve("refill_cap")
+        if cap is None:
+            cap, cap_source = amount, amount_source
         return EffectiveRefillPolicy(
             amount=amount,
             period_days=period,
             amount_source=amount_source,
             period_source=period_source,
+            cap=cap,
+            cap_source=cap_source,
         )
+
+    @staticmethod
+    def get_litellm_spend_limit(user) -> Optional[SpendLimit]:
+        """The member's spend limit on their group's LiteLLM keys, or None.
+
+        The limit is the user override, else the group's per-member limit.
+        Spend is summed across every key the group has been issued, so
+        rotating the key does not hand members a fresh allowance.
+        """
+        group = getattr(user, "access_code_group", None)
+        # The owner runs the course; the per-member limit is for members.
+        if group is None or group.group_owner_id == user.pk:
+            return None
+        group_id = group.pk
+
+        override = WalletService._override_for(user)
+        group_wallet = WalletService.get_group_wallet_for_user(user)
+        if override is not None and override.litellm_cap is not None:
+            limit, source = override.litellm_cap, PolicySourceChoice.USER
+        elif group_wallet is not None and group_wallet.litellm_member_cap is not None:
+            limit, source = group_wallet.litellm_member_cap, PolicySourceChoice.GROUP
+        else:
+            return None
+
+        # .all() reuses a `litellm_spend__litellm_key` prefetch when the caller made one.
+        used = sum(
+            (
+                spend.total_reference_amount
+                for spend in user.litellm_spend.all()
+                if spend.litellm_key.source == LiteLLMKeySourceChoice.ADMIN_GROUP
+                and spend.litellm_key.source_group_id == group_id
+            ),
+            Decimal("0"),
+        )
+        return SpendLimit(limit=limit, used=used, source=source)
+
+    @staticmethod
+    def assert_dispatch_allowed(user, wallet: "ResolvedWallet") -> None:
+        """Refuse a group-key dispatch once the member has used their limit.
+
+        Only a group-issued key carries a group, and the limit applies to that
+        group's members; a user's own key, and an owner's use of their own
+        group's key, are theirs to spend.
+        """
+        if wallet.type != UserWalletPreferenceTypeChoice.LITELLM or wallet.group is None:
+            return
+        # Reloaded rather than read off `user`: a chat socket holds its user for
+        # the whole session, and a limit the instructor changes must apply now.
+        member = (
+            User.objects.select_related(
+                "refill_override", "access_code_group__group_wallet"
+            )
+            .prefetch_related(MEMBER_SPEND_PREFETCH)
+            .get(pk=user.pk)
+        )
+        if wallet.group.pk != member.access_code_group_id:
+            return
+        spend_limit = WalletService.get_litellm_spend_limit(member)
+        if spend_limit is None or not spend_limit.is_reached:
+            return
+        raise PaymentRequiredError(
+            _(
+                "You have used your ${limit} allowance on your group's AI gateway. "
+                "Ask your instructor to raise your limit."
+            ).format(limit=f"{spend_limit.limit:.2f}"),
+            code=LITELLM_SPEND_LIMIT_REACHED,
+            details={"limit": str(spend_limit.limit), "used": str(spend_limit.used)},
+        )
+
+    @staticmethod
+    def _override_for(user) -> Optional[UserRefillOverride]:
+        try:
+            return user.refill_override
+        except UserRefillOverride.DoesNotExist:
+            return None
 
     @staticmethod
     def is_user_due_for_refill(user, *, now=None) -> bool:

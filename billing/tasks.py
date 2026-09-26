@@ -6,6 +6,7 @@ from django.db import transaction as db_transaction
 from django.utils import timezone
 from django_rq import job
 
+from billing.caps import refill_credit
 from billing.constants import TransactionSourceChoice, TransactionTypeChoice
 from billing.models import GroupWallet, Transaction, Wallet
 from billing.services import WalletService
@@ -32,6 +33,7 @@ def process_scheduled_refills():
         "no_wallet": 0,
         "group_inactive": 0,
         "budget_exhausted": 0,
+        "at_cap": 0,
         "total_users_checked": 0,
     }
 
@@ -58,12 +60,15 @@ def process_user_topup(user_id):
         return "User not found or inactive"
 
     stats = {"refilled": 0, "failed": 0, "not_due": 0, "inactive_user": 0,
-             "no_wallet": 0, "group_inactive": 0, "budget_exhausted": 0, "total_users_checked": 1}
+             "no_wallet": 0, "group_inactive": 0, "budget_exhausted": 0, "at_cap": 0,
+             "total_users_checked": 1}
     _topup_single_user(user, timezone.now(), stats)
     if stats["refilled"]:
         return f"Top-up successful for {user.email}"
     if stats["not_due"]:
         return f"{user.email} is not yet due for a refill"
+    if stats["at_cap"]:
+        return f"{user.email} is already at their refill cap"
     if stats["budget_exhausted"]:
         return f"Group budget exhausted for {user.email}"
     if stats["group_inactive"]:
@@ -95,17 +100,26 @@ def _topup_single_user(user, now, stats):
         return
 
     group_wallet = WalletService.get_group_wallet_for_user(user)
+    if group_wallet is not None and not group_wallet.is_active:
+        stats["group_inactive"] += 1
+        return
+
+    credit = refill_credit(policy.amount, policy.cap, wallet.balance)
+    if credit <= 0:
+        # The period still counts as served, so a member who later spends down
+        # is topped up on their normal schedule rather than the next daily run.
+        wallet.last_refill_at = now
+        wallet.save(update_fields=["last_refill_at", "updated_at"])
+        stats["at_cap"] += 1
+        return
 
     if group_wallet is not None:
-        if not group_wallet.is_active:
-            stats["group_inactive"] += 1
-            return
-        _refill_from_group_budget(user, wallet, group_wallet, policy, now, stats)
+        _refill_from_group_budget(user, wallet, group_wallet, credit, now, stats)
     else:
-        _refill_from_system(user, wallet, policy, now, stats)
+        _refill_from_system(user, wallet, credit, now, stats)
 
 
-def _refill_from_group_budget(user, wallet, group_wallet, policy, now, stats):
+def _refill_from_group_budget(user, wallet, group_wallet, credit, now, stats):
     """Debit the group budget and credit the member in a single atomic block.
 
     When the group has an owner, write an informational zero-amount DEBIT row
@@ -121,10 +135,10 @@ def _refill_from_group_budget(user, wallet, group_wallet, policy, now, stats):
             .select_related("group", "group__group_owner")
             .get(pk=group_wallet.pk)
         )
-        if gw.budget_balance < policy.amount:
+        if gw.budget_balance < credit:
             stats["budget_exhausted"] += 1
             return
-        gw.budget_balance -= policy.amount
+        gw.budget_balance -= credit
         gw.save(update_fields=["budget_balance", "updated_at"])
 
         owner_row = None
@@ -135,12 +149,12 @@ def _refill_from_group_budget(user, wallet, group_wallet, policy, now, stats):
                 type=TransactionTypeChoice.DEBIT,
                 source=TransactionSourceChoice.SCHEDULED_REFILL,
                 related_group=gw.group,
-                message=f"Scheduled refill: ${policy.amount} from group budget to {user.email}",
+                message=f"Scheduled refill: ${credit} from group budget to {user.email}",
             )
 
         member_row = Transaction.objects.create(
             user=user,
-            amount=policy.amount,
+            amount=credit,
             type=TransactionTypeChoice.CREDIT,
             source=TransactionSourceChoice.SCHEDULED_REFILL,
             related_group=gw.group,
@@ -156,15 +170,15 @@ def _refill_from_group_budget(user, wallet, group_wallet, policy, now, stats):
         stats["refilled"] += 1
 
 
-def _refill_from_system(user, wallet, policy, now, stats):
+def _refill_from_system(user, wallet, credit, now, stats):
     """Platform-funded refill (user has no group). Credits wallet directly."""
     with db_transaction.atomic():
         Transaction.objects.create(
             user=user,
-            amount=policy.amount,
+            amount=credit,
             type=TransactionTypeChoice.CREDIT,
             source=TransactionSourceChoice.SCHEDULED_REFILL,
-            message=f"Scheduled refill: ${policy.amount}",
+            message=f"Scheduled refill: ${credit}",
         )
         wallet.last_refill_at = now
         wallet.save(update_fields=["last_refill_at", "updated_at"])

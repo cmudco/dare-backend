@@ -53,15 +53,16 @@ def group_default_key(group) -> Optional[LiteLLMKey]:
     return keys[0]
 
 
-def adopt_group_wallet(user) -> bool:
-    """Point a member's wallet at their group's key. Returns whether it moved.
+def adopt_group_wallet(user, group=None) -> bool:
+    """Point a user's wallet at a group's key. Returns whether it moved.
 
-    Only members sitting on the DARE default are moved, so a deliberate BYO or
-    personal-key choice is never overwritten. A member who switched back to
-    DARE is re-defaulted the next time their group is issued a key — that is a
-    provisioning event, and the switch remains available to them.
+    ``group`` defaults to the group the user belongs to; pass it explicitly
+    for a group the user owns. Only users sitting on the DARE default are
+    moved, so a deliberate BYO or personal-key choice is never overwritten. A
+    user who switched back to DARE is re-defaulted only on a provisioning
+    event (a key issued, an owner assigned); the switch remains theirs.
     """
-    group = getattr(user, "access_code_group", None)
+    group = group or getattr(user, "access_code_group", None)
     key = group_default_key(group)
     if key is None:
         return False

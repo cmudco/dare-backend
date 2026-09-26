@@ -499,6 +499,8 @@ class LLMService:
                 llm=llm,
                 api_key=creds.api_key,
                 base_url=creds.base_url,
+                litellm_key_id=creds.litellm_key_id,
+                gateway_user=creds.gateway_user,
             )
 
         api_key = creds.api_key

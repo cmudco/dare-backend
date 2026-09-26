@@ -11,7 +11,7 @@ import markdown
 import weasyprint
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Count, OuterRef, Prefetch, Subquery
+from django.db.models import Count, OuterRef, Prefetch, Q, Subquery
 from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404
 from django.template.loader import render_to_string
@@ -98,23 +98,32 @@ class ConversationViewSet(ConversationSharingMixin, viewsets.ModelViewSet):
 
     @staticmethod
     def _annotate_fallback_llm(queryset):
-        """Annotate `_fallback_llm_id` from the latest message's llm.
+        """Annotate the model the conversation last used, from its messages.
 
         The conversation's own `selected_model` was historically not
         updated when users sent messages, so older conversations read
         back as null and the UI re-prompts for a model. Every Message
-        still records the llm it used, so we surface the most recent
-        non-null one as a per-row fallback the serializer can use.
+        still records what answered it: `_fallback_llm_id` is the most
+        recent DARE model, and `_last_litellm_key_id` /
+        `_last_litellm_model` are set when the most recent answer came
+        through a LiteLLM key, which has no LLM row to point at.
         """
+        messages = Message.active_objects.filter(conversation=OuterRef("pk"))
         latest_llm = (
-            Message.active_objects.filter(
-                conversation=OuterRef("pk"),
-                llm__isnull=False,
-            )
+            messages.filter(llm__isnull=False)
             .order_by("-created_at")
             .values("llm_id")[:1]
         )
-        return queryset.annotate(_fallback_llm_id=Subquery(latest_llm))
+        latest_answer = messages.filter(
+            Q(llm__isnull=False) | Q(litellm_key__isnull=False)
+        ).order_by("-created_at")
+        return queryset.annotate(
+            _fallback_llm_id=Subquery(latest_llm),
+            _last_litellm_key_id=Subquery(latest_answer.values("litellm_key_id")[:1]),
+            _last_litellm_model=Subquery(
+                latest_answer.values("litellm_model_name")[:1]
+            ),
+        )
 
     @staticmethod
     def _with_list_relations(queryset):

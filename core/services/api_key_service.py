@@ -22,6 +22,8 @@ from typing import Optional
 from asgiref.sync import sync_to_async
 
 from billing.constants import UserWalletPreferenceTypeChoice
+from billing.gateway_report import gateway_user_id
+from billing.services import WalletService
 from billing.wallet_router import resolve_active_wallet
 from config import env
 from conversations.constants import Provider
@@ -144,6 +146,8 @@ def get_dispatch_credentials_for_user_sync(
     Raises:
         ValueError: If no system key is available for a non-local provider on
             the DARE fallback path.
+        PaymentRequiredError: If the user has used their spend limit on their
+            group's LiteLLM key (``LITELLM_SPEND_LIMIT_REACHED``).
     """
     if provider == Provider.LLAMA.value:
         logger.debug(f"Provider '{provider}' is local (Ollama), no API key required")
@@ -154,11 +158,15 @@ def get_dispatch_credentials_for_user_sync(
 
     wallet = resolve_active_wallet(user, requested_provider=provider)
 
+    WalletService.assert_dispatch_allowed(user, wallet)
+
     if wallet.type == UserWalletPreferenceTypeChoice.LITELLM:
         return ResolvedDispatchCredentials(
             api_key=wallet.credentials["api_key"],
             base_url=wallet.credentials.get("base_url"),
             wallet_type=UserWalletPreferenceTypeChoice.LITELLM,
+            litellm_key_id=wallet.ref_id,
+            gateway_user=gateway_user_id(user),
         )
 
     if wallet.type == UserWalletPreferenceTypeChoice.BYO:

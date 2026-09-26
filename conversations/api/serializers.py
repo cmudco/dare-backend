@@ -21,6 +21,7 @@ from conversations.models import (
     Snippet,
     WebSearchSource,
 )
+from conversations.services.llm_filter_service import litellm_picker_id
 from core.services.dtos.ensemble_dto import MAX_ANGLE_CHARS, MAX_BRIEF_CHARS
 from core.services.energy_service import compute_relatable_stats
 from dare_tools.models import DareTool
@@ -77,6 +78,13 @@ class ConversationSerializer(serializers.ModelSerializer):
         required=False,
         allow_null=True,
         write_only=True,
+    )
+    selected_model_ref = serializers.SerializerMethodField(
+        help_text=(
+            "Picker id to preselect: a stringified LLM PK, or "
+            "'litellm:<key>:<model>' when the last answer came through a "
+            "LiteLLM key."
+        )
     )
     selected_model = serializers.PrimaryKeyRelatedField(
         queryset=LLM.objects.filter(is_active=True),
@@ -218,6 +226,7 @@ class ConversationSerializer(serializers.ModelSerializer):
             "artifacts_enabled",
             "memory_enabled",
             "selected_model",
+            "selected_model_ref",
             "selected_media_ids",
             "prompt",
             "prompt_id",
@@ -268,6 +277,16 @@ class ConversationSerializer(serializers.ModelSerializer):
         if fallback_llm_id:
             data["selected_model"] = fallback_llm_id
         return data
+
+    def get_selected_model_ref(self, obj):
+        """Picker id of the model to preselect: a LiteLLM model when the last
+        answer came through a key, else the DARE model's stringified PK."""
+        litellm_key_id = getattr(obj, "_last_litellm_key_id", None)
+        litellm_model = getattr(obj, "_last_litellm_model", None)
+        if litellm_key_id and litellm_model:
+            return litellm_picker_id(litellm_key_id, litellm_model)
+        llm_id = getattr(obj, "_fallback_llm_id", None) or obj.selected_model_id
+        return str(llm_id) if llm_id is not None else None
 
 
 class ConversationSummarySerializer(serializers.ModelSerializer):
