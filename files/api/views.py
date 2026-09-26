@@ -63,7 +63,11 @@ from ..services.document_reprocessing_service import (
     ReprocessingQueueError,
     ReprocessingUnavailable,
 )
-from ..services.library_service import add_tags_to_files, search_file_contents
+from ..services.library_service import (
+    LibraryItemNotFound,
+    add_tags_to_files,
+    search_file_contents,
+)
 from .serializers import (
     BulkTagSerializer,
     ContentMatchSerializer,
@@ -411,7 +415,10 @@ class FileViewSet(viewsets.ModelViewSet):
         """Add tags to many files at once: {"fileIds": [...], "tagIds": [...]}."""
         serializer = BulkTagSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        files = add_tags_to_files(request.user, **serializer.validated_data)
+        try:
+            files = add_tags_to_files(request.user, **serializer.validated_data)
+        except LibraryItemNotFound:
+            return Response(status=status.HTTP_404_NOT_FOUND)
         return Response({"files": FileTagsSerializer(files, many=True).data})
 
     @action(detail=False, methods=["get"], url_path="content-search")

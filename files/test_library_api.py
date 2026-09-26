@@ -76,6 +76,27 @@ class LibraryApiTests(APITestCase):
             ],
         )
 
+    def test_content_search_skips_deleted_files_and_collapses_spaces(self):
+        DocumentChunk.objects.create(
+            file=self.second, chunk_index=0, text="nsf grant in a deleted file"
+        )
+        File.active_objects.filter(pk=self.second.pk).update(is_deleted=True)
+        DocumentChunk.objects.create(
+            file=self.first, chunk_index=0, text="the nsf grant", page_start=None
+        )
+        response = self.client.get("/api/files/content-search/", {"q": "nsf   grant"})
+        self.assertEqual(
+            response.json()["results"],
+            [{"fileId": self.first.pk, "snippet": "the nsf grant", "page": None}],
+        )
+
+    def test_library_endpoints_require_login(self):
+        self.client.force_authenticate(None)
+        self.assertEqual(
+            self.client.get("/api/files/content-search/", {"q": "nsf"}).status_code,
+            401,
+        )
+
     def test_content_search_needs_three_characters(self):
         response = self.client.get("/api/files/content-search/", {"q": "ab"})
         self.assertEqual(response.status_code, 400)

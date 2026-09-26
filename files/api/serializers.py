@@ -341,7 +341,14 @@ class FileTagsSerializer(serializers.ModelSerializer):
 
 
 class ContentSearchQuerySerializer(serializers.Serializer):
-    q = serializers.CharField(min_length=3, max_length=200, trim_whitespace=True)
+    q = serializers.CharField(min_length=3, max_length=200)
+
+    def validate_q(self, value: str) -> str:
+        # Snippets are cut from whitespace-collapsed text, so match the same way.
+        collapsed = " ".join(value.split())
+        if len(collapsed) < 3:
+            raise serializers.ValidationError("Enter at least 3 characters.")
+        return collapsed
 
 
 class ContentMatchSerializer(serializers.Serializer):

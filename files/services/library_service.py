@@ -3,14 +3,16 @@
 import re
 from dataclasses import dataclass
 
-from django.db import transaction
 from django.db.models import Q
-from django.http import Http404
 
 from files.models import DocumentChunk, File, Tag
 
 MAX_CONTENT_MATCHES = 50
 SNIPPET_RADIUS = 80
+
+
+class LibraryItemNotFound(Exception):
+    """A requested file or tag is missing or belongs to someone else."""
 
 
 @dataclass(frozen=True)
@@ -29,13 +31,12 @@ def add_tags_to_files(user, file_ids: list[int], tag_ids: list[int]) -> list[Fil
     files = list(File.active_objects.filter(user=user, id__in=file_ids))
     tags = list(Tag.objects.filter(Q(user=user) | Q(user=None), id__in=tag_ids))
     if len(files) != len(set(file_ids)) or len(tags) != len(set(tag_ids)):
-        raise Http404
+        raise LibraryItemNotFound
     through = File.tags.through
-    with transaction.atomic():
-        through.objects.bulk_create(
-            [through(file=file, tag=tag) for file in files for tag in tags],
-            ignore_conflicts=True,
-        )
+    through.objects.bulk_create(
+        [through(file=file, tag=tag) for file in files for tag in tags],
+        ignore_conflicts=True,
+    )
     return list(
         File.active_objects.filter(pk__in=[file.pk for file in files]).prefetch_related(
             "tags"
