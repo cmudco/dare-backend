@@ -26,6 +26,7 @@ from core.services.energy_service import compute_relatable_stats
 from dare_tools.models import DareTool
 from files.api.serializers import FileSerializer, TagSerializer
 from mcp.models import MCPServer
+from projects.models import PersonalProject
 from prompts.api.serializers import PromptSerializer
 from prompts.models import Prompt
 from users.constants import VectorDBChoice
@@ -66,6 +67,16 @@ class LLMDeletionOptionsSerializer(serializers.Serializer):
         default="",
         max_length=1000,
     )
+
+
+class OwnedProjectField(serializers.PrimaryKeyRelatedField):
+    """A project id the requesting user owns; anything else is "does not exist"."""
+
+    def get_queryset(self):
+        user = self.context["request"].user
+        if not user.is_authenticated:
+            return PersonalProject.objects.none()
+        return PersonalProject.active_objects.filter(user=user)
 
 
 class ConversationSerializer(serializers.ModelSerializer):
@@ -136,6 +147,11 @@ class ConversationSerializer(serializers.ModelSerializer):
         source="selected_agent.name",
         read_only=True,
         allow_null=True,
+    )
+    project = OwnedProjectField(
+        required=False,
+        allow_null=True,
+        help_text="Personal project the conversation is filed under.",
     )
     is_owner = serializers.SerializerMethodField()
     is_forked = serializers.SerializerMethodField()
@@ -233,6 +249,7 @@ class ConversationSerializer(serializers.ModelSerializer):
             "selected_agent",
             "selected_agent_name",
             "is_favorite",
+            "project",
             "is_published",
             "published_at",
             "is_owner",
