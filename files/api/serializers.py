@@ -322,6 +322,34 @@ class FileProcessingJourneySerializer(serializers.ModelSerializer):
         return obj.processing_journey or {"version": 1, "attempts": []}
 
 
+MAX_BULK_FILES = 500
+
+
+class BulkTagSerializer(serializers.Serializer):
+    file_ids = serializers.ListField(
+        child=serializers.IntegerField(), min_length=1, max_length=MAX_BULK_FILES
+    )
+    tag_ids = serializers.ListField(
+        child=serializers.IntegerField(), min_length=1, max_length=50
+    )
+
+
+class FileTagsSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = File
+        fields = ["id", "tags"]
+
+
+class ContentSearchQuerySerializer(serializers.Serializer):
+    q = serializers.CharField(min_length=3, max_length=200, trim_whitespace=True)
+
+
+class ContentMatchSerializer(serializers.Serializer):
+    file_id = serializers.IntegerField()
+    snippet = serializers.CharField()
+    page = serializers.IntegerField(allow_null=True)
+
+
 class TagSerializer(serializers.ModelSerializer):
     file_count = serializers.IntegerField(read_only=True)
 

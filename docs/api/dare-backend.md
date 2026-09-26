@@ -131,6 +131,20 @@ uses these capabilities rather than inferring them from the requested mode.
 Migration 0025 normalizes historical `legacy` parser identifiers to `basic` in
 file metadata and the stored document model; processing history remains an audit record.
 
+### Library bulk tagging and content search
+
+`POST /api/files/bulk-tags/` takes `{ "fileIds": [...], "tagIds": [...] }` and
+adds every tag to every file, leaving tags a file already has in place. Files
+must be the caller's own; tags must be the caller's or global. Any other id
+returns 404 and changes nothing. The response lists `files` with each file's
+`id` and full `tags`.
+
+`GET /api/files/content-search/?q=` (3 to 200 characters) returns `results`
+for up to 50 of the caller's files whose indexed text contains `q`, each with
+`fileId`, the first matching `snippet`, and its `page` (nullable). It reads
+stored chunks, so files still processing, or with no extractable text, do not
+match. No migration is required.
+
 ### Search index health
 
 `GET /api/files/{id}/index-health/` compares the chunks a file should have in

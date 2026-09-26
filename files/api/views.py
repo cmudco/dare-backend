@@ -63,13 +63,18 @@ from ..services.document_reprocessing_service import (
     ReprocessingQueueError,
     ReprocessingUnavailable,
 )
+from ..services.library_service import add_tags_to_files, search_file_contents
 from .serializers import (
+    BulkTagSerializer,
+    ContentMatchSerializer,
+    ContentSearchQuerySerializer,
     DocumentOcrApprovalSerializer,
     FileProcessingJourneySerializer,
     FileReprocessingSerializer,
     FileSerializer,
     FileShareSerializer,
     FileStructureSerializer,
+    FileTagsSerializer,
     FileUploadOptionsSerializer,
     FolderSerializer,
     TagSerializer,
@@ -396,6 +401,27 @@ class FileViewSet(viewsets.ModelViewSet):
 
         return Response(response_data, status=status.HTTP_200_OK)
 
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="bulk-tags",
+        parser_classes=[CamelCaseJSONParser],
+    )
+    def bulk_tags(self, request):
+        """Add tags to many files at once: {"fileIds": [...], "tagIds": [...]}."""
+        serializer = BulkTagSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        files = add_tags_to_files(request.user, **serializer.validated_data)
+        return Response({"files": FileTagsSerializer(files, many=True).data})
+
+    @action(detail=False, methods=["get"], url_path="content-search")
+    def content_search(self, request):
+        """Files whose text contains `q`, with the first matching passage."""
+        serializer = ContentSearchQuerySerializer(data=request.query_params)
+        serializer.is_valid(raise_exception=True)
+        matches = search_file_contents(request.user, serializer.validated_data["q"])
+        return Response({"results": ContentMatchSerializer(matches, many=True).data})
+
     # -------------------------------------------------------------------------
     # SyftBox File Sharing Actions
     # -------------------------------------------------------------------------
@@ -658,7 +684,8 @@ class FileViewSet(viewsets.ModelViewSet):
         return Response(
             {
                 "structure": structured,
-                "map": structured or DocumentChunk.objects.filter(file=file_obj).exists(),
+                "map": structured
+                or DocumentChunk.objects.filter(file=file_obj).exists(),
             }
         )
 
