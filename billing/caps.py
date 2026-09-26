@@ -28,9 +28,5 @@ class SpendLimit:
     source: str  # PolicySourceChoice value: USER or GROUP
 
     @property
-    def remaining(self) -> Decimal:
-        return max(self.limit - self.used, ZERO)
-
-    @property
     def is_reached(self) -> bool:
         return self.used >= self.limit

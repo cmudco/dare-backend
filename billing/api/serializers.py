@@ -70,7 +70,7 @@ class TransactionSerializer(serializers.ModelSerializer):
 
 
 def money_field():
-    """Optional non-negative USD amount; null alongside a clear flag means unset."""
+    """Optional non-negative USD amount; omitted or null leaves the field as is."""
     return serializers.DecimalField(
         max_digits=10,
         decimal_places=6,
@@ -117,7 +117,6 @@ class SpendLimitSerializer(serializers.Serializer):
 
     limit = serializers.DecimalField(max_digits=10, decimal_places=6)
     used = serializers.DecimalField(max_digits=12, decimal_places=6)
-    remaining = serializers.DecimalField(max_digits=12, decimal_places=6)
     source = serializers.ChoiceField(choices=PolicySourceChoice.choices)
     is_reached = serializers.BooleanField()
 

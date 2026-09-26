@@ -358,6 +358,14 @@ class GroupWalletAdmin(admin.ModelAdmin):
                 request, "Provide amount, period_days, or both.", level=messages.ERROR
             )
             return
+        # The serializer's bounds do not run here.
+        if (amount is not None and amount < 0) or (period is not None and period < 1):
+            self.message_user(
+                request,
+                "Amount cannot be negative and period must be at least 1 day.",
+                level=messages.ERROR,
+            )
+            return
 
         changed = 0
         for gw in queryset:

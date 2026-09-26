@@ -219,7 +219,7 @@ class GroupWalletService:
         """
         Owner/admin updates the group's refill policy, member spend limit and
         active flag. A ``clear_*`` flag unsets its field (inherit / no limit).
-        Values arrive validated from the API serializer.
+        Callers validate bounds: the API serializer or the admin action.
         """
         with db_transaction.atomic():
             group_wallet = GroupWallet.objects.select_for_update().select_related("group").get(

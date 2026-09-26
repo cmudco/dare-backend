@@ -347,7 +347,6 @@ class GroupWalletApiTests(TestCase):
         rows = self.client.get(f"{GROUP_WALLETS}{self.group_wallet.pk}/members/").json()
         row = next(r for r in rows if r["id"] == self.student.pk)
         self.assertEqual(row["spendLimit"]["used"], "4.500000")
-        self.assertEqual(row["spendLimit"]["remaining"], "10.500000")
         self.assertEqual(row["spendLimit"]["source"], PolicySourceChoice.GROUP)
         self.assertFalse(row["spendLimit"]["isReached"])
 
@@ -388,7 +387,6 @@ class GroupWalletApiTests(TestCase):
 
         wallets = self.client.get("/api/billing/wallets/").json()["wallets"]
         group_row = next(w for w in wallets if w.get("refId") == str(self.key.pk))
-        self.assertEqual(group_row["status"]["spendLimit"]["remaining"], "14.000000")
 
 
 class GatewayReportTests(TestCase):

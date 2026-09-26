@@ -356,15 +356,7 @@ class MessageCoordinator:
                         ErrorMessage.INSUFFICIENT_CREDITS,
                     )
                     return None
-                limit_error = await database_sync_to_async(self._spend_limit_error)(
-                    self.user
-                )
-                if limit_error:
-                    await self.send_error(
-                        ErrorCode.SPEND_LIMIT_REACHED,
-                        str(limit_error),
-                        limit_error.details,
-                    )
+                if await self._reject_if_spend_limit_reached():
                     return None
             elif self.conversation.bot_id:
                 cap_error = await database_sync_to_async(self._public_bot_cap_error)(
@@ -528,15 +520,7 @@ class MessageCoordinator:
                         ErrorMessage.INSUFFICIENT_CREDITS,
                     )
                     return None
-                limit_error = await database_sync_to_async(self._spend_limit_error)(
-                    self.user
-                )
-                if limit_error:
-                    await self.send_error(
-                        ErrorCode.SPEND_LIMIT_REACHED,
-                        str(limit_error),
-                        limit_error.details,
-                    )
+                if await self._reject_if_spend_limit_reached():
                     return None
 
             await self._clear_regeneration_run_state(ai_message)
@@ -1087,6 +1071,13 @@ class MessageCoordinator:
             send_error_callback=self.send_error,
             mark_as_regenerated_callback=self._mark_as_regenerated,
         )
+
+    async def _reject_if_spend_limit_reached(self) -> bool:
+        """Tell the client when the member has used their group gateway limit."""
+        error = await database_sync_to_async(self._spend_limit_error)(self.user)
+        if error:
+            await self.send_error(ErrorCode.SPEND_LIMIT_REACHED, str(error))
+        return error is not None
 
     @staticmethod
     def _spend_limit_error(user) -> Optional[PaymentRequiredError]:

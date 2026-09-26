@@ -82,7 +82,7 @@ Each field has a matching `clear*` flag (`clearLitellmMemberCap`,
 `clearLitellmCap`, `clearRefillCap`) that unsets it. Amounts must be
 non-negative.
 
-Member rows carry `spendLimit` (`limit`, `used`, `remaining`, `source`,
+Member rows carry `spendLimit` (`limit`, `used`, `source`,
 `isReached`), or `null` when no limit applies. The group wallet carries
 `gatewayKeys`: for each of the group's keys, the gateway-reported spend and
 budget (read from `x-litellm-key-*` response headers) beside DARE's estimate,
