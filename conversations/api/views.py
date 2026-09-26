@@ -62,6 +62,7 @@ from conversations.services.sharing_service import (
     SharingValidationError,
 )
 from core.services.sb_client import SocraticBooksClient
+from projects.services.project_service import start_chat_in_project
 from dare_tools.services.artifact_pdf_generator import (
     generate_docx_pdf_bytes,
     generate_pptx_pdf_bytes,
@@ -193,6 +194,8 @@ class ConversationViewSet(ConversationSharingMixin, viewsets.ModelViewSet):
         if user and hasattr(user, "default_prompt") and user.default_prompt:
             serializer.instance.prompt = user.default_prompt
             serializer.instance.save()
+        if serializer.instance.project_id:
+            start_chat_in_project(serializer.instance)
 
     @action(detail=False, methods=["patch"], url_path="update-sort-order")
     def update_sort_order(self, request):

@@ -233,6 +233,7 @@ def shortlist(
     now: Optional[str] = None,
     exclude_pinned: bool = False,
     query_vector: Optional[Sequence[float]] = None,
+    source_project_id: Optional[int] = None,
 ) -> List[Candidate]:
     """Stage one: the whole archive → ~50 candidates, indexes only.
 
@@ -245,6 +246,9 @@ def shortlist(
     prompt, rendered into USER.md, so retrieving it again spends one of three
     fact slots repeating something the model has read twice. The writer's own
     retrieval leaves them in — it has to see a pinned fact to supersede it.
+
+    ``source_project_id`` limits recall to memories learned in that project's
+    chats; the writer never passes it, so storage stays one shared archive.
     """
     include_retired = bool(HISTORICAL_RE.search(query or ""))
     states = (
@@ -259,6 +263,8 @@ def shortlist(
         base = base.filter(kind=kind)
     if exclude_pinned:
         base = base.filter(pinned_to="")
+    if source_project_id is not None:
+        base = base.filter(source_conversation__project_id=source_project_id)
     if not include_retired:
         # An expired fact is not current, and current questions get current
         # answers. Historical phrasing lifts this along with the state filter.
