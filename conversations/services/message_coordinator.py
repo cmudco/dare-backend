@@ -21,6 +21,9 @@ from channels.db import database_sync_to_async
 from django.utils import timezone
 from djangorestframework_camel_case.util import camelize
 
+from billing.exceptions import PaymentRequiredError
+from billing.services import WalletService
+from billing.wallet_router import resolve_active_wallet
 from conversations.api.serializers import ArtifactListSerializer
 from conversations.constants import (
     DEFAULT_AI_SENDER_NAME,
@@ -353,6 +356,8 @@ class MessageCoordinator:
                         ErrorMessage.INSUFFICIENT_CREDITS,
                     )
                     return None
+                if await self._reject_if_spend_limit_reached():
+                    return None
             elif self.conversation.bot_id:
                 cap_error = await database_sync_to_async(self._public_bot_cap_error)(
                     self.conversation.bot_id
@@ -514,6 +519,8 @@ class MessageCoordinator:
                         ErrorCode.INSUFFICIENT_CREDITS,
                         ErrorMessage.INSUFFICIENT_CREDITS,
                     )
+                    return None
+                if await self._reject_if_spend_limit_reached():
                     return None
 
             await self._clear_regeneration_run_state(ai_message)
@@ -1064,6 +1071,21 @@ class MessageCoordinator:
             send_error_callback=self.send_error,
             mark_as_regenerated_callback=self._mark_as_regenerated,
         )
+
+    async def _reject_if_spend_limit_reached(self) -> bool:
+        """Tell the client when the member has used their group gateway limit."""
+        error = await database_sync_to_async(self._spend_limit_error)(self.user)
+        if error:
+            await self.send_error(ErrorCode.SPEND_LIMIT_REACHED, str(error))
+        return error is not None
+
+    @staticmethod
+    def _spend_limit_error(user) -> Optional[PaymentRequiredError]:
+        try:
+            WalletService.assert_dispatch_allowed(user, resolve_active_wallet(user))
+        except PaymentRequiredError as error:
+            return error
+        return None
 
     @staticmethod
     def _public_bot_cap_error(bot_id: int) -> Optional[Dict[str, Any]]:

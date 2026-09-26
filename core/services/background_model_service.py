@@ -8,6 +8,7 @@ from asgiref.sync import sync_to_async
 from pydantic import BaseModel
 
 from billing.constants import UserWalletPreferenceTypeChoice
+from billing.exceptions import PaymentRequiredError
 from billing.models import LiteLLMKey
 from billing.wallet_router import resolve_active_wallet, resolve_active_wallet_for_bot
 from config import env
@@ -208,7 +209,14 @@ class BackgroundModelService:
         # LLMService imports the RAG pipeline, whose analyzer calls back here.
         from core.services.llm_service import LLMService
 
-        return await LLMService()._get_ai_service(route.model, user=route.dispatch_user)
+        try:
+            return await LLMService()._get_ai_service(
+                route.model, user=route.dispatch_user
+            )
+        except PaymentRequiredError as error:
+            raise BackgroundModelUnavailable(
+                f"Background call refused by billing ({error.code})"
+            ) from error
 
     @staticmethod
     async def _collect_text(service, messages, max_tokens, temperature):

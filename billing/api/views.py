@@ -59,7 +59,7 @@ from billing.models import (
     Wallet,
     format_usd,
 )
-from billing.services import WalletService
+from billing.services import MEMBER_SPEND_PREFETCH, WalletService
 from common.pagination import CustomPageNumberPagination
 from common.permissions import IsSuperAdmin
 from conversations.constants import Provider
@@ -635,9 +635,13 @@ class BillingViewSet(viewsets.ViewSet):
                     target_user_id=target.id,
                     refill_amount=data.get("refill_amount"),
                     refill_period_days=data.get("refill_period_days"),
+                    refill_cap=data.get("refill_cap"),
+                    litellm_cap=data.get("litellm_cap"),
                     reason=data.get("reason", ""),
-                    clear_amount=data.get("clear_amount", False),
-                    clear_period=data.get("clear_period", False),
+                    clear_amount=data["clear_amount"],
+                    clear_period=data["clear_period"],
+                    clear_refill_cap=data["clear_refill_cap"],
+                    clear_litellm_cap=data["clear_litellm_cap"],
                 )
             )
         except ValidationError as exc:
@@ -692,6 +696,7 @@ class BillingViewSet(viewsets.ViewSet):
                 "status": {
                     "kind": "BALANCE",
                     "balance": str(dare_wallet.balance) if dare_wallet else "0.00",
+                    "ceiling": str(WalletService.get_effective_refill_policy(user).cap),
                     "last_refill_at": (
                         dare_wallet.last_refill_at if dare_wallet else None
                     ),
@@ -743,6 +748,7 @@ class BillingViewSet(viewsets.ViewSet):
             str(row.litellm_key_id): row.total_reference_amount
             for row in LiteLLMSpend.objects.filter(user=user)
         }
+        spend_limit = WalletService.get_litellm_spend_limit(user)
         for key in litellm_qs:
             group_name = key.source_group.access_code if key.source_group else None
             wallets_list.append(
@@ -765,6 +771,12 @@ class BillingViewSet(viewsets.ViewSet):
                         "kind": "EXTERNAL",
                         "spend": str(
                             spend_by_key.get(str(key.pk), Decimal("0.000000"))
+                        ),
+                        "spend_limit": (
+                            spend_limit
+                            if key.source_group_id is not None
+                            and key.source_group_id == user.access_code_group_id
+                            else None
                         ),
                     },
                 }
@@ -1040,8 +1052,10 @@ class GroupWalletViewSet(viewsets.GenericViewSet, mixins.UpdateModelMixin):
     @action(detail=True, methods=["get"], url_path="members")
     def members(self, request, pk=None):
         group_wallet = self.get_object()
-        users = group_wallet.group.users.all().select_related(
-            "wallet", "refill_override"
+        users = (
+            group_wallet.group.users.all()
+            .select_related("wallet", "refill_override")
+            .prefetch_related(MEMBER_SPEND_PREFETCH)
         )
         serializer = MemberRowSerializer(users, many=True)
         return Response(serializer.data)
@@ -1061,9 +1075,13 @@ class GroupWalletViewSet(viewsets.GenericViewSet, mixins.UpdateModelMixin):
                     owner=request.user,
                     refill_amount=data.get("refill_amount"),
                     refill_period_days=data.get("refill_period_days"),
+                    refill_cap=data.get("refill_cap"),
+                    litellm_member_cap=data.get("litellm_member_cap"),
                     is_active=data.get("is_active"),
-                    clear_amount=data.get("clear_amount", False),
-                    clear_period=data.get("clear_period", False),
+                    clear_amount=data["clear_amount"],
+                    clear_period=data["clear_period"],
+                    clear_refill_cap=data["clear_refill_cap"],
+                    clear_litellm_member_cap=data["clear_litellm_member_cap"],
                 )
             )
         except PermissionDenied as exc:
@@ -1100,8 +1118,10 @@ class GroupWalletViewSet(viewsets.GenericViewSet, mixins.UpdateModelMixin):
             )
 
         group_wallet.refresh_from_db()
-        recipient = User.objects.select_related("wallet", "refill_override").get(
-            pk=data["recipient_user_id"]
+        recipient = (
+            User.objects.select_related("wallet", "refill_override")
+            .prefetch_related(MEMBER_SPEND_PREFETCH)
+            .get(pk=data["recipient_user_id"])
         )
         return Response(
             {
@@ -1178,9 +1198,13 @@ class GroupWalletViewSet(viewsets.GenericViewSet, mixins.UpdateModelMixin):
                     target_user_id=target.id,
                     refill_amount=data.get("refill_amount"),
                     refill_period_days=data.get("refill_period_days"),
+                    refill_cap=data.get("refill_cap"),
+                    litellm_cap=data.get("litellm_cap"),
                     reason=data.get("reason", ""),
-                    clear_amount=data.get("clear_amount", False),
-                    clear_period=data.get("clear_period", False),
+                    clear_amount=data["clear_amount"],
+                    clear_period=data["clear_period"],
+                    clear_refill_cap=data["clear_refill_cap"],
+                    clear_litellm_cap=data["clear_litellm_cap"],
                 )
             )
         except PermissionDenied as exc:

@@ -220,7 +220,7 @@ class TransactionAdmin(admin.ModelAdmin):
 
 @admin.register(SystemRefillPolicy)
 class SystemRefillPolicyAdmin(admin.ModelAdmin):
-    list_display = ("refill_amount", "refill_period_days", "updated_at")
+    list_display = ("refill_amount", "refill_period_days", "refill_cap", "updated_at")
     readonly_fields = ("created_at", "updated_at")
 
     def has_add_permission(self, request):
@@ -256,6 +256,8 @@ class GroupWalletAdmin(admin.ModelAdmin):
         "budget_balance",
         "refill_amount",
         "refill_period_days",
+        "refill_cap",
+        "litellm_member_cap",
         "is_active",
         "updated_at",
     )
@@ -356,6 +358,14 @@ class GroupWalletAdmin(admin.ModelAdmin):
                 request, "Provide amount, period_days, or both.", level=messages.ERROR
             )
             return
+        # The serializer's bounds do not run here.
+        if (amount is not None and amount < 0) or (period is not None and period < 1):
+            self.message_user(
+                request,
+                "Amount cannot be negative and period must be at least 1 day.",
+                level=messages.ERROR,
+            )
+            return
 
         changed = 0
         for gw in queryset:
@@ -400,11 +410,14 @@ class GroupWalletInline(admin.StackedInline):
                     "budget_balance",
                     "refill_amount",
                     "refill_period_days",
+                    "refill_cap",
+                    "litellm_member_cap",
                     "is_active",
                 ),
                 "description": (
                     "Budget fund the group; drained by scheduled refills and one-off "
-                    "allocations. Leave refill fields blank to inherit the system default."
+                    "allocations. Leave refill fields blank to inherit the system default. "
+                    "The LiteLLM limit caps each member's spend through the group's keys."
                 ),
             },
         ),
@@ -427,6 +440,8 @@ class UserRefillOverrideAdmin(admin.ModelAdmin):
         "user",
         "refill_amount",
         "refill_period_days",
+        "refill_cap",
+        "litellm_cap",
         "set_by",
         "updated_at",
     )
@@ -450,6 +465,8 @@ class UserRefillOverrideInline(admin.StackedInline):
                 "fields": (
                     "refill_amount",
                     "refill_period_days",
+                    "refill_cap",
+                    "litellm_cap",
                     "reason",
                     "set_by",
                     "created_at",
@@ -510,7 +527,13 @@ class LiteLLMKeyAdmin(admin.ModelAdmin):
         "assigned_user__email",
         "source_group__access_code",
     )
-    readonly_fields = ("created_at", "updated_at")
+    readonly_fields = (
+        "gateway_spend",
+        "gateway_max_budget",
+        "gateway_reported_at",
+        "created_at",
+        "updated_at",
+    )
     actions = ["revoke_selected"]
     raw_id_fields = ("owner_user", "assigned_user", "source_group", "created_by")
 
@@ -526,6 +549,20 @@ class LiteLLMKeyAdmin(admin.ModelAdmin):
                     "source_group",
                     "expires_at",
                 )
+            },
+        ),
+        (
+            _("Gateway report"),
+            {
+                "fields": (
+                    "gateway_spend",
+                    "gateway_max_budget",
+                    "gateway_reported_at",
+                ),
+                "description": _(
+                    "The gateway's own figures, read from its responses. Compare "
+                    "with DARE's per-member estimates on the group wallet page."
+                ),
             },
         ),
         (

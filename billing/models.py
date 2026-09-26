@@ -26,6 +26,12 @@ from users.constants import AuthSourceChoice
 from users.models import AccessCodeGroup, User
 
 
+def validate_non_negative(instance, field_name):
+    value = getattr(instance, field_name)
+    if value is not None and value < 0:
+        raise ValidationError({field_name: _("This amount cannot be negative.")})
+
+
 class SystemRefillPolicy(TimeStampMixin):
     """
     Singleton holding the platform-wide default refill amount and period.
@@ -46,6 +52,17 @@ class SystemRefillPolicy(TimeStampMixin):
         verbose_name=_("Default Refill Period (days)"),
         help_text=_("Platform-wide default number of days between automatic refills."),
     )
+    refill_cap = models.DecimalField(
+        max_digits=10,
+        decimal_places=6,
+        null=True,
+        blank=True,
+        verbose_name=_("Default Refill Cap (USD)"),
+        help_text=_(
+            "Scheduled refills top a wallet up to this balance and never past it. "
+            "Blank means the refill amount is the ceiling, so balances never stack."
+        ),
+    )
 
     class Meta:
         verbose_name = _("System Refill Policy")
@@ -60,6 +77,7 @@ class SystemRefillPolicy(TimeStampMixin):
             raise ValidationError(
                 {"refill_period_days": _("Refill period must be at least 1 day.")}
             )
+        validate_non_negative(self, "refill_cap")
 
     def save(self, *args, **kwargs):
         self.pk = 1
@@ -117,6 +135,29 @@ class GroupWallet(TimeStampMixin):
             "Days between automatic refills for members of this group. Null means inherit the system default."
         ),
     )
+    refill_cap = models.DecimalField(
+        max_digits=10,
+        decimal_places=6,
+        null=True,
+        blank=True,
+        verbose_name=_("Group Refill Cap (USD)"),
+        help_text=_(
+            "Scheduled refills top each member up to this balance and never past it; "
+            "the group budget is charged only for what is added. Null means inherit "
+            "the system default."
+        ),
+    )
+    litellm_member_cap = models.DecimalField(
+        max_digits=10,
+        decimal_places=6,
+        null=True,
+        blank=True,
+        verbose_name=_("LiteLLM Spend Limit per Member (USD)"),
+        help_text=_(
+            "Most each member may spend, in total, through this group's LiteLLM "
+            "keys. Measured at DARE's reference rates. Null means no limit."
+        ),
+    )
     is_active = models.BooleanField(
         default=True,
         verbose_name=_("Active"),
@@ -142,6 +183,8 @@ class GroupWallet(TimeStampMixin):
             raise ValidationError(
                 {"budget_balance": _("Budget balance cannot be negative.")}
             )
+        validate_non_negative(self, "refill_cap")
+        validate_non_negative(self, "litellm_member_cap")
 
     @property
     def display_budget(self):
@@ -187,6 +230,27 @@ class UserRefillOverride(TimeStampMixin):
             "Custom period between refills for this user. Null means inherit from group/system."
         ),
     )
+    refill_cap = models.DecimalField(
+        max_digits=10,
+        decimal_places=6,
+        null=True,
+        blank=True,
+        verbose_name=_("Refill Cap (USD)"),
+        help_text=_(
+            "Custom balance ceiling for scheduled refills. Null means inherit from group/system."
+        ),
+    )
+    litellm_cap = models.DecimalField(
+        max_digits=10,
+        decimal_places=6,
+        null=True,
+        blank=True,
+        verbose_name=_("LiteLLM Spend Limit (USD)"),
+        help_text=_(
+            "Custom limit on this user's total spend through their group's LiteLLM "
+            "keys. Null means inherit the group's per-member limit."
+        ),
+    )
     reason = models.CharField(
         max_length=255,
         blank=True,
@@ -216,6 +280,19 @@ class UserRefillOverride(TimeStampMixin):
             raise ValidationError(
                 {"refill_period_days": _("Refill period must be at least 1 day.")}
             )
+        validate_non_negative(self, "refill_cap")
+        validate_non_negative(self, "litellm_cap")
+
+    @property
+    def is_empty(self) -> bool:
+        """True when every field inherits, so the row no longer overrides anything."""
+        return (
+            self.refill_amount is None
+            and self.refill_period_days is None
+            and self.refill_cap is None
+            and self.litellm_cap is None
+            and not self.reason
+        )
 
     def __str__(self):
         parts = []
@@ -223,6 +300,10 @@ class UserRefillOverride(TimeStampMixin):
             parts.append(f"${self.refill_amount}")
         if self.refill_period_days is not None:
             parts.append(f"{self.refill_period_days}d")
+        if self.refill_cap is not None:
+            parts.append(f"cap ${self.refill_cap}")
+        if self.litellm_cap is not None:
+            parts.append(f"LiteLLM ${self.litellm_cap}")
         detail = "/".join(parts) if parts else "inherit"
         return f"Override<{self.user.email}: {detail}>"
 
@@ -648,6 +729,34 @@ class LiteLLMKey(TimeStampMixin):
             "Optional hard expiry. Past expiry hides the key from the user's wallet list."
         ),
     )
+    gateway_spend = models.DecimalField(
+        max_digits=12,
+        decimal_places=6,
+        null=True,
+        blank=True,
+        verbose_name=_("Gateway-Reported Spend (USD)"),
+        help_text=_(
+            "The key's total spend as the LiteLLM gateway reports it in response "
+            "headers. The gateway's own figure, used to check DARE's estimates. "
+            "Keeps the highest value seen, because replicas can report stale totals."
+        ),
+    )
+    gateway_max_budget = models.DecimalField(
+        max_digits=12,
+        decimal_places=6,
+        null=True,
+        blank=True,
+        verbose_name=_("Gateway-Reported Budget (USD)"),
+        help_text=_(
+            "The key's hard budget as the gateway reports it. Null when unset."
+        ),
+    )
+    gateway_reported_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name=_("Gateway Report Received At"),
+        help_text=_("When a gateway response last reported this key's spend."),
+    )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
@@ -720,15 +829,21 @@ class LiteLLMKey(TimeStampMixin):
         """
         Queryset of non-expired keys the given user has access to:
         their own self-served keys, admin-assigned individual keys, and
-        ADMIN_GROUP keys whose source_group matches the user's current
-        access_code_group (FK on User; not an M2M).
+        ADMIN_GROUP keys of the group they belong to (``access_code_group``)
+        or own (``group_owner``). An owner runs the course on the same key as
+        its members without having to join it.
         """
         now = timezone.now()
         not_expired = Q(expires_at__isnull=True) | Q(expires_at__gt=now)
         user_group_id = getattr(user, "access_code_group_id", None)
 
-        owned_or_assigned = Q(source=LiteLLMKeySourceChoice.USER, owner_user=user) | Q(
-            source=LiteLLMKeySourceChoice.ADMIN_USER, assigned_user=user
+        owned_or_assigned = (
+            Q(source=LiteLLMKeySourceChoice.USER, owner_user=user)
+            | Q(source=LiteLLMKeySourceChoice.ADMIN_USER, assigned_user=user)
+            | Q(
+                source=LiteLLMKeySourceChoice.ADMIN_GROUP,
+                source_group__group_owner=user,
+            )
         )
         if user_group_id:
             owned_or_assigned = owned_or_assigned | Q(

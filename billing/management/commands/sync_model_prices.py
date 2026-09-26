@@ -65,6 +65,11 @@ class Command(BaseCommand):
                 "input": f"{input_cost * PER_MILLION:.6f}",
                 "output": f"{output_cost * PER_MILLION:.6f}",
             }
+            # Cached prompt tokens bill at a discount; without the rate they
+            # would be priced as fresh input.
+            cached_cost = entry.get("cache_read_input_token_cost")
+            if cached_cost is not None:
+                prices[model_id]["cached_input"] = f"{cached_cost * PER_MILLION:.6f}"
 
         if not prices:
             self.stderr.write("Source carried no usable rates; leaving the file alone.")

@@ -2,7 +2,7 @@ import logging
 from decimal import Decimal
 
 from django.conf import settings
-from django.db.models.signals import post_save, pre_delete
+from django.db.models.signals import post_save, pre_delete, pre_save
 from django.dispatch import receiver
 
 from api_keys.constants import BillingModeChoice
@@ -11,7 +11,7 @@ from billing.constants import LiteLLMKeySourceChoice, UserWalletPreferenceTypeCh
 from billing.group_wallet import adopt_group_wallet
 from billing.litellm_models_service import invalidate as invalidate_litellm_probe
 from billing.models import LiteLLMKey, UserWalletPreference, Wallet
-from users.models import User
+from users.models import AccessCodeGroup, User
 
 logger = logging.getLogger(__name__)
 
@@ -178,6 +178,29 @@ def reset_pref_on_litellm_delete(sender, instance, **kwargs):
         pref.reset_to_dare()
 
 
+@receiver(pre_save, sender=AccessCodeGroup)
+def remember_previous_group_owner(sender, instance, **kwargs):
+    instance._previous_owner_id = (
+        AccessCodeGroup.objects.filter(pk=instance.pk)
+        .values_list("group_owner_id", flat=True)
+        .first()
+    )
+
+
+@receiver(post_save, sender=AccessCodeGroup)
+def adopt_new_group_owner(sender, instance, **kwargs):
+    """Default a newly assigned owner onto the group's key.
+
+    Only an owner change counts as provisioning, so saving the group for any
+    other reason leaves an owner who switched back to DARE alone.
+    """
+    if instance.group_owner_id is None:
+        return
+    if instance.group_owner_id == getattr(instance, "_previous_owner_id", None):
+        return
+    adopt_group_wallet(instance.group_owner, instance)
+
+
 @receiver(post_save, sender=LiteLLMKey)
 def invalidate_litellm_probe_on_save(sender, instance, **kwargs):
     """Drop the cached probe when the key's URL or secret changes."""
@@ -198,8 +221,11 @@ def adopt_group_members_on_key_created(sender, instance, created, **kwargs):
     if instance.source_group_id is None:
         return
 
-    members = User.objects.filter(access_code_group_id=instance.source_group_id)
+    group = instance.source_group
+    members = User.objects.filter(access_code_group_id=group.pk)
     adopted = sum(1 for member in members if adopt_group_wallet(member))
+    if group.group_owner is not None:
+        adopted += adopt_group_wallet(group.group_owner, group)
     if adopted:
         logger.info(
             "Defaulted %s member(s) of group %s onto LiteLLM key %s.",

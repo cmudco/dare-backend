@@ -25,11 +25,17 @@ class ResolvedDispatchCredentials:
         wallet_type: Discriminator from `UserWalletPreferenceTypeChoice`.
             Defaults to DARE so legacy callers without wallet context fall
             through to the system-key path unchanged.
+        litellm_key_id: The LiteLLM key being dispatched through, so the
+            gateway's spend report can be stored against it. LITELLM only.
+        gateway_user: End-user id sent to the gateway so it can attribute
+            spend per DARE user. LITELLM only.
     """
 
     api_key: Optional[str]
     base_url: Optional[str] = None
     wallet_type: str = UserWalletPreferenceTypeChoice.DARE
+    litellm_key_id: Optional[str] = None
+    gateway_user: Optional[str] = None
 
     @property
     def use_litellm_proxy(self) -> bool:
