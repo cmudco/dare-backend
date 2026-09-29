@@ -40,6 +40,7 @@ class BotBillingConfig:
     # Picker id of the chat model the owner saved on the bot: the only model
     # the owner's LiteLLM key may be spent on inside its conversations.
     chat_model_ref: Optional[str] = None
+    tracking_model_ref: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -318,6 +319,7 @@ class SocraticBooksClient:
                 is_publicly_deployed=bool(body.get("isPubliclyDeployed", False)),
                 is_active=bool(body.get("isActive", True)),
                 chat_model_ref=body.get("chatModelDareId"),
+                tracking_model_ref=body.get("trackingModelDareId"),
             )
         except (KeyError, TypeError, ValueError) as exc:
             logger.error("billing-config payload malformed for bot %s: %s", bot_id, exc)

@@ -260,26 +260,33 @@ def filter_for_bot(
     owner,
     base_qs,
 ) -> Tuple[List[Dict[str, Any]], WalletMeta]:
-    """Models the owner can save on a bot, each saying who will pay for it.
+    """Models an owner can save on a bot, each saying who will pay for it.
 
-    DARE catalog models are paid by each chatter from their own wallet. The
-    owner's active LiteLLM key adds its models, paid by the owner. The bot's
-    saved LiteLLM model stays listed while the owner can still sponsor it, so
-    switching wallets never empties the form.
+    The list follows the owner's active wallet, as DARE's chat picker does:
+    the DARE catalog, the catalog models their BYO keys cover, or their active
+    LiteLLM key's models. DARE catalog models are paid by each chatter; a
+    LiteLLM model is sponsored by the owner. The models the bot is saved with
+    stay listed while still usable, so switching wallets never empties a form.
     """
-    dare_entries, meta = _filter_for_dare(base_qs)
-    entries = [_bot_entry(entry, PAID_BY_CHATTER) for entry in dare_entries]
-
     active = resolve_active_wallet(owner)
     if active.type == UserWalletPreferenceTypeChoice.LITELLM:
         key = LiteLLMKey.objects.filter(pk=active.ref_id).first()
-        litellm_entries, meta = _filter_for_litellm(key)
-        entries += [_bot_entry(e, PAID_BY_OWNER, key) for e in litellm_entries]
+        found, meta = _filter_for_litellm(key)
+        entries = [_bot_entry(e, PAID_BY_OWNER, key) for e in found]
+    else:
+        found, meta = (
+            _filter_for_byo(owner, base_qs)
+            if active.type == UserWalletPreferenceTypeChoice.BYO
+            else _filter_for_dare(base_qs)
+        )
+        entries = [_bot_entry(e, PAID_BY_CHATTER) for e in found]
 
-    saved = _saved_sponsored_entry(bot_id, owner) if bot_id is not None else None
-    if saved is not None and saved["id"] not in {e["id"] for e in entries}:
-        entries.append(saved)
-    # An unreachable gateway still leaves the DARE models to pick from.
+    listed = {e["id"] for e in entries}
+    if bot_id is not None:
+        entries += [
+            e for e in _saved_entries(bot_id, owner, base_qs) if e["id"] not in listed
+        ]
+    # A saved model keeps the form usable even when the wallet lists nothing.
     return entries, replace(meta, is_empty=not entries)
 
 
@@ -291,18 +298,28 @@ def _bot_entry(entry: Dict[str, Any], paid_by: str, key=None) -> Dict[str, Any]:
     }
 
 
-def _saved_sponsored_entry(bot_id: int, owner) -> Optional[Dict[str, Any]]:
+def _saved_entries(bot_id: int, owner, base_qs) -> List[Dict[str, Any]]:
     config, _owner = load_bot_billing(bot_id)
-    ref = config.chat_model_ref if config is not None else None
-    parsed = split_litellm_picker_id(ref) if ref else None
-    if parsed is None:
-        return None
-    try:
-        key = sponsored_litellm_key(config, owner, ref)
-    except BotModelUnavailable:
-        return None
-    model_name = parsed[1]
-    return _bot_entry(_litellm_entry(key, model_name), PAID_BY_OWNER, key)
+    if config is None:
+        return []
+    entries = []
+    for ref in (config.chat_model_ref, config.tracking_model_ref):
+        entry = _saved_entry(config, owner, base_qs, ref) if ref else None
+        if entry is not None:
+            entries.append(entry)
+    return entries
+
+
+def _saved_entry(config, owner, base_qs, ref: str) -> Optional[Dict[str, Any]]:
+    parsed = split_litellm_picker_id(ref)
+    if parsed is not None:
+        try:
+            key = sponsored_litellm_key(config, owner, ref)
+        except BotModelUnavailable:
+            return None
+        return _bot_entry(_litellm_entry(key, parsed[1]), PAID_BY_OWNER, key)
+    model = base_qs.filter(pk=int(ref)).first() if ref.isdigit() else None
+    return _bot_entry(_llm_entry(model), PAID_BY_CHATTER) if model else None
 
 
 # === Bot save check ========================================================

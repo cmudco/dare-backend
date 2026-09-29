@@ -17,7 +17,14 @@ from billing.constants import (
 )
 from billing.exceptions import BotModelUnavailable, PaymentRequiredError
 from billing.litellm_key_service import LiteLLMKeyDependencyError, delete_key
-from billing.models import GroupWallet, LiteLLMKey, LiteLLMSpend, Transaction, Wallet
+from billing.models import (
+    GroupWallet,
+    LiteLLMKey,
+    LiteLLMSpend,
+    Transaction,
+    UserWalletPreference,
+    Wallet,
+)
 from billing.test_spend_caps import (
     activate,
     make_group_key,
@@ -32,6 +39,7 @@ from conversations.services.llm_filter_service import (
     MODEL_NOT_ON_KEY,
     TRACKING_NEEDS_DARE_MODEL,
     bot_model_problem,
+    filter_for_bot,
 )
 from core.services.api_key_service import get_chat_dispatch_credentials_sync
 from core.services.billing_service import BillingService
@@ -286,3 +294,77 @@ class LiteLLMKeyDeletionTests(TestCase):
             delete_key(self.key)
 
         self.assertTrue(LiteLLMKey.objects.filter(pk=key_id).exists())
+
+
+class BotPickerTests(TestCase):
+    """The bot picker follows the owner's active wallet and keeps saved models."""
+
+    def setUp(self):
+        for flag in ("enable_litellm_wallet", "enable_byok"):
+            FeatureFlag.objects.update_or_create(
+                key=flag, defaults={"default_enabled": True}
+            )
+        self.owner = make_user("owner@example.com")
+        self.key = make_personal_key(self.owner)
+        self.gemini = LLM.objects.create(
+            name="Gem", identifier="gem-test", provider="gemini"
+        )
+        self.claude = LLM.objects.create(
+            name="Cla", identifier="cla-test", provider="claude"
+        )
+        self.saved = {"chat": str(self.claude.pk), "tracking": None}
+        listed = patch(
+            "billing.litellm_models_service.list_models",
+            return_value=type(
+                "Probe",
+                (),
+                {"models": [type("M", (), {"name": "gpt-5"})()], "is_stale": False},
+            )(),
+        )
+        listed.start()
+        self.addCleanup(listed.stop)
+        config = patch(BILLING_CONFIG, side_effect=self._config)
+        config.start()
+        self.addCleanup(config.stop)
+
+    def _config(self, bot_id):
+        return BotBillingConfig(
+            bot_id=bot_id,
+            owner_dare_user_id=self.owner.pk,
+            budget=None,
+            budget_used=Decimal("0"),
+            is_publicly_deployed=False,
+            is_active=True,
+            chat_model_ref=self.saved["chat"],
+            tracking_model_ref=self.saved["tracking"],
+        )
+
+    def _ids(self, bot_id=BOT_ID):
+        entries, _meta = filter_for_bot(
+            bot_id,
+            self.owner,
+            LLM.objects.filter(pk__in=[self.gemini.pk, self.claude.pk]),
+        )
+        return {e["id"]: e["paid_by"] for e in entries}
+
+    def test_byo_owner_sees_their_providers_plus_the_saved_model(self):
+        UserProviderAPIKey._default_manager.update_or_create(
+            user=self.owner, provider="gemini", defaults={"api_key": "g"}
+        )
+        pref = UserWalletPreference.get_or_create_for(self.owner)
+        pref.active_wallet_type = UserWalletPreferenceTypeChoice.BYO
+        pref.save()
+
+        self.assertEqual(
+            self._ids(),
+            {str(self.gemini.pk): "CHATTER", str(self.claude.pk): "CHATTER"},
+        )
+        self.assertEqual(self._ids(bot_id=None), {str(self.gemini.pk): "CHATTER"})
+
+    def test_litellm_owner_sees_only_their_keys_models(self):
+        activate(self.owner, self.key)
+        self.saved["chat"] = None
+
+        self.assertEqual(
+            self._ids(), {litellm_picker_id(self.key.pk, "gpt-5"): "OWNER"}
+        )
