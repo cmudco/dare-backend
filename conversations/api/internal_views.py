@@ -179,6 +179,7 @@ class InternalBotModelCheckView(APIView):
     ``null`` when that model is fine; SocraticBooks turns codes into messages.
     """
 
+    authentication_classes = []
     permission_classes = [HasInternalKey]
 
     def post(self, request):

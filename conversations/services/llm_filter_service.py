@@ -44,6 +44,7 @@ from core.services.dtos.llm_descriptor_dto import (
 )
 from core.services.model_capabilities import family_supports_temperature
 from core.services.model_identity import resolve_family
+from feature_flags.services import is_flag_enabled_for_user
 
 # === Wallet metadata wire shape ============================================
 #
@@ -350,7 +351,7 @@ def bot_model_problem(owner, model_ref: str, *, is_tracking: bool) -> Optional[s
 
     key_id, model_name = parsed
     key = LiteLLMKey.visible_for_user(owner).filter(pk=key_id).first()
-    if key is None:
+    if key is None or not is_flag_enabled_for_user(owner, "enable_litellm_wallet"):
         return KEY_UNAVAILABLE
     listed = {m.name for m in litellm_models_service.list_models(key).models}
     return None if model_name in listed else MODEL_NOT_ON_KEY

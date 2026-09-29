@@ -1100,8 +1100,8 @@ class LLMViewSet(viewsets.ModelViewSet):
                 or config.owner_dare_user_id != getattr(request.user, "id", None)
             ):
                 return Response(
-                    {"detail": "Not authorized for this bot."},
-                    status=status.HTTP_403_FORBIDDEN,
+                    {"detail": "Bot not found."},
+                    status=status.HTTP_404_NOT_FOUND,
                 )
             models, meta = filter_for_bot(scope.bot_id, request.user, base_qs)
 

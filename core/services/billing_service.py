@@ -285,8 +285,11 @@ class BillingService:
 
     @db_transaction.atomic
     def _record_litellm_transaction(
-        self, message_obj: Message, reference_llm: Optional[LLM]
-    ) -> Transaction:
+        self,
+        message_obj: Message,
+        reference_llm: Optional[LLM],
+        bot_owner: Optional["User"] = None,
+    ) -> Optional[Transaction]:
         """Emit a $0 Transaction row for a LiteLLM-routed message.
 
         DARE doesn't debit its own wallet for LiteLLM dispatch (the user
@@ -326,13 +329,26 @@ class BillingService:
         )
         # A bot's LiteLLM model is sponsored by its owner: the call spends the
         # owner's allowance on the key, while the row stays with the chatter so
-        # the owner's per-bot usage shows who used it.
-        bot_owner = None
-        if conversation.bot_id is not None:
-            _config, bot_owner = load_bot_billing(conversation.bot_id)
+        # the owner's per-bot usage shows who used it. Anonymous chatters have
+        # no user, so their rows belong to the owner, as for DARE-model bots.
+        is_bot = conversation.bot_id is not None
+        row_user = conversation.user or bot_owner
+        if row_user is None:
+            logger.error(
+                "LiteLLM message %s in bot %s has no chatter or owner to record against",
+                message_obj.id,
+                conversation.bot_id,
+            )
+            return None
+        if is_bot and bot_owner is None:
+            logger.error(
+                "Bot %s owner unavailable; LiteLLM spend for message %s not accrued",
+                conversation.bot_id,
+                message_obj.id,
+            )
         return self._record_litellm_usage(
-            user=conversation.user,
-            spender=bot_owner or conversation.user,
+            user=row_user,
+            spender=bot_owner if is_bot else conversation.user,
             litellm_key=message_obj.litellm_key,
             model_name=message_obj.litellm_model_name,
             input_tokens=message_obj.input_tokens,
@@ -381,19 +397,17 @@ class BillingService:
         description: str,
         platform: str,
         reference_amount,
+        spender: Optional["User"],
         cached_input_tokens: int = 0,
-        spender: Optional["User"] = None,
         bot_id: Optional[int] = None,
         bot_owner: Optional["User"] = None,
     ) -> Transaction:
         """Persist one externally billed call without touching DARE credit.
 
-        ``user`` owns the row; ``spender`` (default ``user``) is whose
-        allowance on the key the call counts against.
+        ``user`` owns the row; ``spender`` is whose allowance on the key the
+        call counts against (``None`` records the row without accruing spend).
         """
-        self._accumulate_litellm_spend(
-            spender or user, litellm_key.pk, reference_amount
-        )
+        self._accumulate_litellm_spend(spender, litellm_key.pk, reference_amount)
         return Transaction.objects.create(
             user=user,
             bot_id=bot_id,
@@ -455,7 +469,15 @@ class BillingService:
                 # visibility, and capture proxy-reported energy if present.
                 if message_obj.litellm_key_id is not None:
                     reference_llm = reference_rates(message_obj.litellm_model_name)
-                    self._record_litellm_transaction(message_obj, reference_llm)
+                    # Resolved before the transaction opens: it may call SB.
+                    bot_owner = (
+                        load_bot_billing(message_obj.conversation.bot_id)[1]
+                        if message_obj.conversation.bot_id is not None
+                        else None
+                    )
+                    self._record_litellm_transaction(
+                        message_obj, reference_llm, bot_owner
+                    )
                     if reference_llm is not None:
                         message_obj.cost = self._calculate_cost(
                             reference_llm,
@@ -896,6 +918,7 @@ class BillingService:
         )
         return self._record_litellm_usage(
             user=user,
+            spender=user,
             litellm_key=litellm_key,
             model_name=model_name,
             input_tokens=input_tokens,

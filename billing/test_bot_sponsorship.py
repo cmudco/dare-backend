@@ -7,7 +7,8 @@ a LiteLLM model saved on the bot is sponsored by the owner's key.
 from decimal import Decimal
 from unittest.mock import patch
 
-from django.test import TestCase
+from django.test import TestCase, override_settings
+from rest_framework.test import APIClient
 
 from api_keys.constants import BillingModeChoice
 from api_keys.models import UserProviderAPIKey
@@ -41,6 +42,7 @@ from conversations.services.llm_filter_service import (
     bot_model_problem,
     filter_for_bot,
 )
+from conversations.services.message_helpers.db_helpers import parse_model_id
 from core.services.api_key_service import get_chat_dispatch_credentials_sync
 from core.services.billing_service import BillingService
 from core.services.dtos.llm_descriptor_dto import litellm_picker_id
@@ -52,7 +54,9 @@ BOT_ID = 7
 BILLING_CONFIG = "core.services.sb_client.SocraticBooksClient.get_bot_billing_config"
 
 
-class BotSponsorshipTests(TestCase):
+class SponsorshipCase(TestCase):
+    """Owner with a personal key, subscriber on their own key, bot saved on the owner's."""
+
     def setUp(self):
         for flag in ("enable_litellm_wallet", "enable_byok"):
             FeatureFlag.objects.update_or_create(
@@ -91,6 +95,8 @@ class BotSponsorshipTests(TestCase):
             "custom", user, bot_id=BOT_ID, litellm_model_ref=ref or self.saved_ref
         )
 
+
+class BotSponsorshipTests(SponsorshipCase):
     def test_saved_litellm_model_is_sent_through_the_owners_key(self):
         creds = self._sponsored(self.subscriber)
 
@@ -368,3 +374,102 @@ class BotPickerTests(TestCase):
         self.assertEqual(
             self._ids(), {litellm_picker_id(self.key.pk, "gpt-5"): "OWNER"}
         )
+
+
+class SponsorshipEdgeTests(SponsorshipCase):
+    """Anonymous turns, switched-off wallets, and the HTTP surfaces around them."""
+
+    def test_anonymous_reply_is_recorded_against_the_owner(self):
+        conversation = Conversation._default_manager.create(
+            user=None, bot_id=BOT_ID, source="SocraticBots"
+        )
+        reply = Message._default_manager.create(
+            conversation=conversation,
+            sender_type=SenderType.AI_ASSISTANT,
+            message="",
+            litellm_key=self.owner_key,
+            litellm_model_name="gpt-5",
+        )
+
+        BillingService().finalize_ai_message(
+            reply, "Hello", {"input_tokens": 1000, "output_tokens": 100}
+        )
+
+        row = Transaction.objects.get(llm_name="gpt-5")
+        self.assertEqual(
+            (row.user, row.bot_owner, row.bot_id), (self.owner, self.owner, BOT_ID)
+        )
+        self.assertTrue(
+            LiteLLMSpend.objects.filter(
+                user=self.owner, litellm_key=self.owner_key
+            ).exists()
+        )
+
+    def test_anonymous_turns_need_a_model_the_budget_can_meter(self):
+        self.saved_ref = litellm_picker_id(self.owner_key.pk, "no-price-model-x")
+        with self.assertRaises(PaymentRequiredError) as refused:
+            self._sponsored(None)
+        self.assertEqual(refused.exception.code, "BOT_CAP_REACHED")
+        self.assertEqual(
+            self._sponsored(self.subscriber).litellm_key_id, str(self.owner_key.pk)
+        )
+
+    def test_owner_with_litellm_switched_off_cannot_sponsor(self):
+        flag = FeatureFlag.objects.get(key="enable_litellm_wallet")
+        flag.default_enabled = False
+        flag.save()
+
+        with self.assertRaises(PaymentRequiredError) as refused:
+            self._sponsored(self.subscriber)
+        self.assertEqual(refused.exception.code, "LITELLM_UNAVAILABLE")
+
+    def test_chat_resolves_only_the_bots_saved_litellm_model(self):
+        saved = parse_model_id.func(self.saved_ref, self.subscriber, bot_id=BOT_ID)
+        other = parse_model_id.func(
+            litellm_picker_id(make_personal_key(self.owner).pk, "gpt-5"),
+            self.subscriber,
+            bot_id=BOT_ID,
+        )
+
+        self.assertEqual(saved.litellm_key.pk, self.owner_key.pk)
+        self.assertIsNone(other)
+
+    def test_only_the_owner_sees_a_bots_model_list(self):
+        client = APIClient()
+        client.force_authenticate(self.subscriber)
+        self.assertEqual(
+            client.get("/api/llms/", {"wallet_scope": f"bot:{BOT_ID}"}).status_code, 404
+        )
+        client.force_authenticate(self.owner)
+        self.assertEqual(
+            client.get("/api/llms/", {"wallet_scope": f"bot:{BOT_ID}"}).status_code, 200
+        )
+
+    @override_settings(DARE_INTERNAL_KEY="internal-secret")
+    def test_bot_model_check_needs_the_internal_key(self):
+        body = {"ownerDareUserId": self.owner.pk, "chatModelDareId": "999999"}
+        url = "/api/internal/bot-model-check/"
+        client = APIClient()
+        self.assertIn(client.post(url, body, format="json").status_code, (401, 403))
+        response = client.post(
+            url, body, format="json", HTTP_X_INTERNAL_KEY="internal-secret"
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["chatModelProblem"], "MODEL_NOT_AVAILABLE")
+
+    @patch(
+        "core.services.sb_client.SocraticBooksClient.is_configured", return_value=True
+    )
+    @patch(
+        "core.services.sb_client.SocraticBooksClient.get_litellm_key_dependencies",
+        return_value=(),
+    )
+    def test_key_dependents_are_the_owners_to_see(self, _deps, _configured):
+        url = f"/api/billing/wallets/litellm/{self.owner_key.pk}/dependents/"
+        client = APIClient()
+        client.force_authenticate(self.subscriber)
+        self.assertEqual(client.get(url).status_code, 404)
+        client.force_authenticate(self.owner)
+        response = client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["botCount"], 0)

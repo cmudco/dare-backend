@@ -29,6 +29,8 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
+from django.core.cache import cache
+
 from api_keys.models import UserProviderAPIKey
 from billing.constants import UserWalletPreferenceTypeChoice
 from billing.exceptions import BotModelUnavailable, PaymentRequiredError
@@ -242,6 +244,9 @@ def load_bot_billing(bot_id: int, *, chat_model_ref: Optional[str] = None):
         config is not None
         and chat_model_ref is not None
         and config.chat_model_ref != chat_model_ref
+        # At most one re-read per bot per window, so repeated requests naming
+        # some other model can't turn every turn into a call to SB.
+        and cache.add(f"sb:bot:billing-config-reread:{bot_id}", True, 10)
     ):
         SocraticBooksClient.invalidate_bot_billing_config(bot_id)
         config = SocraticBooksClient.get_bot_billing_config(bot_id)
