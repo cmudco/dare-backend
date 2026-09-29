@@ -53,4 +53,5 @@ SYFTBOX = {
         str(Path.home()), 'SyftBox', 'datasites'
     ),
     'APP_NAME': env.SYFTBOX_APP_NAME,
+    'BASE_URL': env.SYFTBOX_BASE_URL,
 }

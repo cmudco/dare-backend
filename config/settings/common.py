@@ -84,6 +84,7 @@ THIRD_PARTY_APPS = [
     "channels",
     "django_rq",
     "drf_spectacular",
+    "syftbox_connect",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + LOCAL_APPS + THIRD_PARTY_APPS
@@ -415,6 +416,7 @@ SYFTBOX = {
     'ENABLED': env.SYFTBOX_ENABLED,
     'DATASITES_ROOT': env.SYFTBOX_DATASITES_ROOT,
     'APP_NAME': env.SYFTBOX_APP_NAME,
+    'BASE_URL': env.SYFTBOX_BASE_URL,
 }
 
 # Hermes agent runtime (delegated research-agent runtime for Research Mode)

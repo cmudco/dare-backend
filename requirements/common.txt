@@ -127,3 +127,8 @@ ecologits>=0.10.0
 # SyftBox (distributed file storage)
 syft-core
 syft-perm
+
+# Shared SyftBox integration: account linking, storage backend, sync.
+# Private repo — pip needs SSH access to cmudco. Pinned to a tag so a change
+# there cannot reach a project that never deployed.
+syftbox-connect[api] @ git+ssh://git@github.com/cmudco/syftbox-connect.git@v0.1.2
