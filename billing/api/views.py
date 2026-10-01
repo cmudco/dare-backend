@@ -12,6 +12,7 @@ from rest_framework.response import Response
 
 from api_keys.constants import BillingModeChoice
 from api_keys.models import UserProviderAPIKey
+from billing import litellm_key_service
 from billing.api.serializers import (
     ActiveWalletRefSerializer,
     AllocateSerializer,
@@ -20,6 +21,7 @@ from billing.api.serializers import (
     GroupWalletReadSerializer,
     GroupWalletWriteSerializer,
     LiteLLMKeyCreateSerializer,
+    LiteLLMKeyDependentsSerializer,
     LiteLLMKeyReadSerializer,
     LiteLLMKeyUpdateSerializer,
     LiteLLMTestRequestSerializer,
@@ -46,6 +48,7 @@ from billing.group_wallet_service import (
     UpdateGroupPolicyRequest,
     UpsertUserOverrideRequest,
 )
+from billing.litellm_key_service import LiteLLMKeyDependencyError
 from billing.litellm_model_policy import recommend_background_models
 from billing.litellm_probe import probe_litellm_connection
 from billing.models import (
@@ -486,6 +489,9 @@ class BillingViewSet(viewsets.ViewSet):
         so the dashboard can distinguish individual sessions without exposing
         the raw id.
 
+        ``totalCost`` is what chatters paid from DARE wallets; ``sponsoredCost``
+        is the owner's LiteLLM spend on the bot, at DARE's reference rates.
+
         Query params:
             group_by: ``user`` (default) | ``date``
             period: ``7d`` | ``30d`` | ``90d`` | ``all`` (default)
@@ -512,6 +518,9 @@ class BillingViewSet(viewsets.ViewSet):
 
         totals = base_qs.aggregate(
             total_cost=Sum("amount"),
+            sponsored_cost=Sum(
+                "reference_amount", filter=Q(billing_mode=BillingModeChoice.LITELLM)
+            ),
             total_input=Sum("input_tokens"),
             total_output=Sum("output_tokens"),
             message_count=Count("id"),
@@ -528,17 +537,22 @@ class BillingViewSet(viewsets.ViewSet):
                 base_qs.values("user__id", "user__email")
                 .annotate(
                     total_cost=Sum("amount"),
+                    sponsored_cost=Sum(
+                        "reference_amount",
+                        filter=Q(billing_mode=BillingModeChoice.LITELLM),
+                    ),
                     input_tokens=Sum("input_tokens"),
                     output_tokens=Sum("output_tokens"),
                     message_count=Count("id"),
                 )
-                .order_by("-total_cost")
+                .order_by("-total_cost", "-sponsored_cost")
             )
             user_breakdown = [
                 {
                     "userId": row["user__id"],
                     "userEmail": row["user__email"] or "anonymous",
                     "totalCost": str(row["total_cost"] or 0),
+                    "sponsoredCost": str(row["sponsored_cost"] or 0),
                     "inputTokens": row["input_tokens"] or 0,
                     "outputTokens": row["output_tokens"] or 0,
                     "messageCount": row["message_count"],
@@ -551,6 +565,10 @@ class BillingViewSet(viewsets.ViewSet):
                 .values("date")
                 .annotate(
                     total_cost=Sum("amount"),
+                    sponsored_cost=Sum(
+                        "reference_amount",
+                        filter=Q(billing_mode=BillingModeChoice.LITELLM),
+                    ),
                     message_count=Count("id"),
                 )
                 .order_by("date")
@@ -559,6 +577,7 @@ class BillingViewSet(viewsets.ViewSet):
                 {
                     "date": row["date"].isoformat() if row["date"] else None,
                     "totalCost": str(row["total_cost"] or 0),
+                    "sponsoredCost": str(row["sponsored_cost"] or 0),
                     "messageCount": row["message_count"],
                 }
                 for row in rows
@@ -576,6 +595,7 @@ class BillingViewSet(viewsets.ViewSet):
                 "groupBy": group_by,
                 "totals": {
                     "totalCost": str(totals["total_cost"] or 0),
+                    "sponsoredCost": str(totals["sponsored_cost"] or 0),
                     "totalInputTokens": totals["total_input"] or 0,
                     "totalOutputTokens": totals["total_output"] or 0,
                     "messageCount": totals["message_count"] or 0,
@@ -788,6 +808,8 @@ class BillingViewSet(viewsets.ViewSet):
                 "ref_id": pref.active_wallet_ref_id,
             },
             "wallets": wallets_list,
+            "byo_enabled": byo_enabled,
+            "litellm_enabled": litellm_enabled,
         }
         # Use serializer purely for shape validation / camelCase rendering.
         return Response(WalletsListResponseSerializer(body).data)
@@ -911,6 +933,18 @@ class BillingViewSet(viewsets.ViewSet):
         )
 
 
+def _socratic_unavailable_response() -> Response:
+    return Response(
+        {
+            "detail": _(
+                "Couldn't reach Socratic Bots to check the bots using this key. "
+                "Nothing was changed; try again shortly."
+            )
+        },
+        status=status.HTTP_502_BAD_GATEWAY,
+    )
+
+
 class LiteLLMKeyViewSet(
     viewsets.GenericViewSet,
     mixins.CreateModelMixin,
@@ -971,7 +1005,22 @@ class LiteLLMKeyViewSet(
         # `reset_pref_on_litellm_delete` (billing/signals.py) handles the
         # cascade-reset of UserWalletPreference for any user whose active
         # wallet pointed at this key.
-        return super().destroy(request, *args, **kwargs)
+        try:
+            litellm_key_service.delete_key(self.get_object())
+        except LiteLLMKeyDependencyError:
+            return _socratic_unavailable_response()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @action(detail=True, methods=["get"], url_path="dependents")
+    def dependents(self, request, pk=None):
+        """Socratic bots that stop answering if this key is deleted."""
+        try:
+            bots = litellm_key_service.bot_dependents(self.get_object())
+        except LiteLLMKeyDependencyError:
+            return _socratic_unavailable_response()
+        return Response(
+            LiteLLMKeyDependentsSerializer({"bot_count": len(bots), "bots": bots}).data
+        )
 
     @action(detail=False, methods=["post"], url_path="test")
     def test_unsaved(self, request):

@@ -21,8 +21,8 @@ from conversations.models import (
     Snippet,
     WebSearchSource,
 )
-from conversations.services.llm_filter_service import litellm_picker_id
 from core.services.dtos.ensemble_dto import MAX_ANGLE_CHARS, MAX_BRIEF_CHARS
+from core.services.dtos.llm_descriptor_dto import litellm_picker_id
 from core.services.energy_service import compute_relatable_stats
 from dare_tools.models import DareTool
 from files.api.serializers import FileSerializer, TagSerializer

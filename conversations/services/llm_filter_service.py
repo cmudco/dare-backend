@@ -1,10 +1,11 @@
 """
 Wallet-aware filtering for the model picker.
 
-`filter_for_active_wallet(user, base_qs)` and `filter_for_bot(bot_id, user,
-base_qs)` resolve the wallet that will pay (via `billing.wallet_router`) and
-return the model list it can actually serve, plus a `WalletMeta` block for
-the FE empty-state UX.
+`filter_for_active_wallet(user, base_qs)` resolves the wallet that will pay
+(via `billing.wallet_router`) and returns the model list it can actually serve,
+plus a `WalletMeta` block for the FE empty-state UX. `filter_for_bot(bot_id,
+owner, base_qs)` lists what an owner can save on a bot, each entry tagged with
+who pays for it (``paid_by``).
 
 DARE wallets keep returning the existing access-code-group filtered catalog.
 BYO wallets are filtered to the providers the user has populated keys for.
@@ -21,26 +22,29 @@ forwards from `LLMViewSet.list`.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Tuple
 
 from api_keys.models import UserProviderAPIKey
 from billing import litellm_models_service
 from billing.constants import UserWalletPreferenceTypeChoice
+from billing.exceptions import BotModelUnavailable
 from billing.models import LiteLLMKey
 from billing.wallet_router import (
-    BOT_WALLET_BYO,
-    BOT_WALLET_DARE,
-    BOT_WALLET_LITELLM,
-    ResolvedBotWallet,
     ResolvedWallet,
+    load_bot_billing,
     resolve_active_wallet,
-    resolve_active_wallet_for_bot,
+    sponsored_litellm_key,
 )
 from conversations.constants import Provider
 from conversations.models import LLM
+from core.services.dtos.llm_descriptor_dto import (
+    litellm_picker_id,
+    split_litellm_picker_id,
+)
 from core.services.model_capabilities import family_supports_temperature
 from core.services.model_identity import resolve_family
+from feature_flags.services import is_flag_enabled_for_user
 
 # === Wallet metadata wire shape ============================================
 #
@@ -92,14 +96,6 @@ class WalletMeta:
 # === Active-scope filter ====================================================
 
 
-LITELLM_ID_PREFIX = "litellm:"
-
-
-def litellm_picker_id(litellm_key_id, model_name: str) -> str:
-    """Picker id of a LiteLLM-routed model; ``parse_model_id`` inverts it."""
-    return f"{LITELLM_ID_PREFIX}{litellm_key_id}:{model_name}"
-
-
 def _llm_entry(model: LLM) -> Dict[str, Any]:
     """Flat picker entry for a DB-backed LLM. ``id`` is the stringified PK."""
     return {
@@ -124,7 +120,7 @@ def _llm_entry(model: LLM) -> Dict[str, Any]:
     }
 
 
-def _litellm_entry(litellm_key, probed) -> Dict[str, Any]:
+def _litellm_entry(litellm_key, model_name: str) -> Dict[str, Any]:
     """Flat picker entry for a LiteLLM-routed model. ``id`` is opaque to the
     FE: ``litellm:<key_pk>:<model_name>``. ``parse_model_id`` on the BE
     inverts it on dispatch. Capabilities come from the resolved model family;
@@ -135,12 +131,12 @@ def _litellm_entry(litellm_key, probed) -> Dict[str, Any]:
     # commonly report "openai" for everything they front. This field drives
     # dispatch and credential lookup, which for a proxy model is always custom.
     provider = Provider.CUSTOM.value
-    family = resolve_family(probed.name)
+    family = resolve_family(model_name)
     is_reasoning = bool(family and family.is_reasoning)
     return {
-        "id": litellm_picker_id(litellm_key.pk, probed.name),
-        "name": probed.name,
-        "identifier": probed.name,
+        "id": litellm_picker_id(litellm_key.pk, model_name),
+        "name": model_name,
+        "identifier": model_name,
         "provider": provider,
         "description": None,
         "is_active": True,
@@ -192,7 +188,7 @@ def _filter_for_litellm(litellm_key) -> Tuple[List[Dict[str, Any]], WalletMeta]:
     cached = litellm_models_service.list_models(litellm_key)
     if not cached.models:
         return [], _litellm_meta(is_empty=True, empty_reason=EMPTY_PROBE_FAILED)
-    entries = [_litellm_entry(litellm_key, m) for m in cached.models]
+    entries = [_litellm_entry(litellm_key, m.name) for m in cached.models]
     providers = sorted({e["provider"] for e in entries})
     return entries, _litellm_meta(
         providers=providers,
@@ -256,33 +252,109 @@ def filter_for_active_wallet(user, base_qs) -> Tuple[List[Dict[str, Any]], Walle
 
 # === Bot-scope filter =======================================================
 
+PAID_BY_CHATTER = "CHATTER"
+PAID_BY_OWNER = "OWNER"
+
 
 def filter_for_bot(
-    bot_id: int,
-    calling_user,
+    bot_id: Optional[int],
+    owner,
     base_qs,
 ) -> Tuple[List[Dict[str, Any]], WalletMeta]:
-    """Resolve the bot's billing source and filter the catalog accordingly."""
-    resolved: Optional[ResolvedBotWallet] = resolve_active_wallet_for_bot(
-        bot_id, calling_user=calling_user
-    )
-    if resolved is None:
-        # Bot config unfetchable — fall back to legacy unfiltered behavior so
-        # the picker still works during SB outage.
-        return _filter_for_dare(base_qs)
+    """Models an owner can save on a bot, each saying who will pay for it.
 
-    if resolved.type == BOT_WALLET_LITELLM:
-        return _filter_for_litellm(resolved.litellm_key)
+    The list follows the owner's active wallet, as DARE's chat picker does:
+    the DARE catalog, the catalog models their BYO keys cover, or their active
+    LiteLLM key's models. DARE catalog models are paid by each chatter; a
+    LiteLLM model is sponsored by the owner. The models the bot is saved with
+    stay listed while still usable, so switching wallets never empties a form.
+    """
+    active = resolve_active_wallet(owner)
+    if active.type == UserWalletPreferenceTypeChoice.LITELLM:
+        key = LiteLLMKey.objects.filter(pk=active.ref_id).first()
+        found, meta = _filter_for_litellm(key)
+        entries = [_bot_entry(e, PAID_BY_OWNER, key) for e in found]
+    else:
+        found, meta = (
+            _filter_for_byo(owner, base_qs)
+            if active.type == UserWalletPreferenceTypeChoice.BYO
+            else _filter_for_dare(base_qs)
+        )
+        entries = [_bot_entry(e, PAID_BY_CHATTER) for e in found]
 
-    if resolved.type == BOT_WALLET_BYO:
-        # The payer's BYO keys decide what the bot can run.
-        payer = resolved.payer_user or resolved.bot_owner
-        if payer is None:
-            return _filter_for_dare(base_qs)
-        return _filter_for_byo(payer, base_qs)
+    listed = {e["id"] for e in entries}
+    if bot_id is not None:
+        entries += [
+            e for e in _saved_entries(bot_id, owner, base_qs) if e["id"] not in listed
+        ]
+    # A saved model keeps the form usable even when the wallet lists nothing.
+    return entries, replace(meta, is_empty=not entries)
 
-    # GROUP / DARE / fallback: cohort or owner DARE wallet pays — full catalog.
-    return _filter_for_dare(base_qs)
+
+def _bot_entry(entry: Dict[str, Any], paid_by: str, key=None) -> Dict[str, Any]:
+    return {
+        **entry,
+        "paid_by": paid_by,
+        "sponsor_key_label": key.label if key is not None else None,
+    }
+
+
+def _saved_entries(bot_id: int, owner, base_qs) -> List[Dict[str, Any]]:
+    config, _owner = load_bot_billing(bot_id)
+    if config is None:
+        return []
+    entries = []
+    for ref in (config.chat_model_ref, config.tracking_model_ref):
+        entry = _saved_entry(config, owner, base_qs, ref) if ref else None
+        if entry is not None:
+            entries.append(entry)
+    return entries
+
+
+def _saved_entry(config, owner, base_qs, ref: str) -> Optional[Dict[str, Any]]:
+    parsed = split_litellm_picker_id(ref)
+    if parsed is not None:
+        try:
+            key = sponsored_litellm_key(config, owner, ref)
+        except BotModelUnavailable:
+            return None
+        return _bot_entry(_litellm_entry(key, parsed[1]), PAID_BY_OWNER, key)
+    model = base_qs.filter(pk=int(ref)).first() if ref.isdigit() else None
+    return _bot_entry(_llm_entry(model), PAID_BY_CHATTER) if model else None
+
+
+# === Bot save check ========================================================
+
+MODEL_NOT_AVAILABLE = "MODEL_NOT_AVAILABLE"
+KEY_UNAVAILABLE = "KEY_UNAVAILABLE"
+MODEL_NOT_ON_KEY = "MODEL_NOT_ON_KEY"
+TRACKING_NEEDS_DARE_MODEL = "TRACKING_NEEDS_DARE_MODEL"
+
+
+def bot_model_problem(owner, model_ref: str, *, is_tracking: bool) -> Optional[str]:
+    """Why ``owner`` can't save ``model_ref`` on a bot, or ``None`` if they can.
+
+    A DARE catalog model must be in the owner's catalog. A LiteLLM model must
+    be on a key the owner can use and listed by that key's gateway. Progress
+    tracking only runs on DARE catalog models.
+    """
+    parsed = split_litellm_picker_id(model_ref)
+    if parsed is None:
+        try:
+            pk = int(model_ref)
+        except ValueError:
+            return MODEL_NOT_AVAILABLE
+        visible = LLM.visible_for_user(owner).filter(pk=pk, is_active=True)
+        return None if visible.exists() else MODEL_NOT_AVAILABLE
+    if is_tracking:
+        return TRACKING_NEEDS_DARE_MODEL
+
+    key_id, model_name = parsed
+    key = LiteLLMKey.visible_for_user(owner).filter(pk=key_id).first()
+    if key is None or not is_flag_enabled_for_user(owner, "enable_litellm_wallet"):
+        return KEY_UNAVAILABLE
+    listed = {m.name for m in litellm_models_service.list_models(key).models}
+    return None if model_name in listed else MODEL_NOT_ON_KEY
 
 
 # === Scope parser ===========================================================
@@ -291,7 +363,7 @@ def filter_for_bot(
 @dataclass(frozen=True)
 class WalletScope:
     kind: str  # 'active' or 'bot'
-    bot_id: Optional[int] = None
+    bot_id: Optional[int] = None  # None for a bot being created
 
 
 def parse_scope(raw: Optional[str]) -> Optional[WalletScope]:
@@ -300,6 +372,8 @@ def parse_scope(raw: Optional[str]) -> Optional[WalletScope]:
         return None
     if raw == "active":
         return WalletScope(kind="active")
+    if raw == "bot:new":
+        return WalletScope(kind="bot")
     if raw.startswith("bot:"):
         try:
             return WalletScope(kind="bot", bot_id=int(raw.split(":", 1)[1]))

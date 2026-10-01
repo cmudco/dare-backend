@@ -15,6 +15,7 @@ from conversations.api.views import (
 )
 from conversations.api.ensemble_views import EnsemblePresetViewSet
 from conversations.api.internal_views import (
+    InternalBotModelCheckView,
     InternalUserConversationsView,
     InternalConversationMessagesView,
 )
@@ -44,6 +45,7 @@ urlpatterns = [
     # Anonymous conversations endpoint (JWT authenticated)
     path('anonymous-conversations/', AnonymousConversationsView.as_view(), name='anonymous-conversations'),
     # Internal endpoints for service-to-service communication (SocraticBots -> DARE)
+    path('internal/bot-model-check/', InternalBotModelCheckView.as_view(), name='internal-bot-model-check'),
     path('internal/user-conversations/', InternalUserConversationsView.as_view(), name='internal-user-conversations'),
     path('internal/conversations/<str:conversation_id>/messages/', InternalConversationMessagesView.as_view(), name='internal-conversation-messages'),
 ]
