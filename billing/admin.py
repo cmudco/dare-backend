@@ -210,7 +210,7 @@ class TransactionAdmin(admin.ModelAdmin):
     total_tokens_display.admin_order_field = "input_tokens"
 
     def export_transactions_to_csv(self, request, queryset):
-        return TransactionExportService.export_to_csv(queryset)
+        return TransactionExportService.export_to_csv(queryset, include_owner=True)
 
     export_transactions_to_csv.short_description = "Export selected transactions to CSV"
 

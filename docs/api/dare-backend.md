@@ -55,6 +55,25 @@ Apply migration `conversations.0100_ensemble_preset` before deploying the briefs
 frontend. It adds a table without changing existing conversations. Panel/council
 execution remains controlled by the existing `enable_ensemble` feature flag.
 
+## Transaction history and exports
+
+`GET /api/billing/transactions/` pages the authenticated user's transactions,
+newest first. `GET /api/billing/transactions/export/` returns every matching
+row as CSV, with costs at full six-decimal precision. Both accept the same
+optional query parameters; an invalid value returns 400.
+
+| Parameter | Values |
+| --- | --- |
+| `platform` | `ALL`, `DARE`, `SocraticBots`; defaults to the caller's sign-in platform |
+| `billing_mode` | `wallet`, `own_api`, `litellm` |
+| `model` | an exact model name from `models` |
+| `created_after` | ISO 8601 datetime, inclusive |
+| `created_before` | ISO 8601 datetime, exclusive; must follow `created_after` |
+
+The list response adds `summary`, counts per billing mode under every filter
+except `billing_mode`, and `models`, the model names on the selected platform.
+Deploy this API before the matching frontend. No migration is required.
+
 ## LiteLLM background models
 
 LiteLLM wallets expose one optional `backgroundModel` setting through

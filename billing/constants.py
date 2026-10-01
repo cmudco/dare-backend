@@ -3,6 +3,9 @@ from django.utils.translation import gettext_lazy as _
 
 APP_NAME = "billing"
 
+# Transaction-history platform filter value that spans every auth source.
+ALL_PLATFORMS = "ALL"
+
 
 class TransactionTypeChoice(models.IntegerChoices):
     DEBIT = 1, _("Debit")
