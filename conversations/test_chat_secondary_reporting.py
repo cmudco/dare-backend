@@ -41,10 +41,12 @@ class SecondaryFailureReportingTests(SimpleTestCase):
 
     async def test_usage_save_failure_is_reported_without_interrupting_chat(self):
         coordinator = MessageCoordinator.__new__(MessageCoordinator)
-        message = SimpleNamespace(
-            id=42, save=Mock(side_effect=RuntimeError("DB failure"))
-        )
-        await coordinator._save_usage_breakdown(message, [{"round_index": 1}])
+        message = SimpleNamespace(id=42, pk=42)
+        with patch(
+            "conversations.services.message_coordinator.Message._base_manager.filter",
+            side_effect=RuntimeError("DB failure"),
+        ):
+            await coordinator._save_usage_breakdown(message, [{"round_index": 1}])
         self.assertEqual(self.assert_exception_reported()["extra"]["message_id"], 42)
 
     async def test_citation_save_failure_is_reported(self):
