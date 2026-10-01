@@ -70,6 +70,7 @@ LOCAL_APPS = [
     "feature_flags",
     "research",
     "libraries",
+    "projects",
 ]
 
 THIRD_PARTY_APPS = [

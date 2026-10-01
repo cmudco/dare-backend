@@ -40,6 +40,7 @@ def retrieve(
     embed_query: bool = True,
     relevance_floor: float = RELEVANCE_FLOOR,
     exclude_pinned: bool = False,
+    source_project_id: Optional[int] = None,
 ) -> Recall:
     """Run the funnel for one query.
 
@@ -73,6 +74,7 @@ def retrieve(
         now=moment,
         exclude_pinned=exclude_pinned,
         query_vector=vector,
+        source_project_id=source_project_id,
     )
 
     result: RankResult = rank(

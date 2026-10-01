@@ -39,6 +39,7 @@ app_paths = [
     path("", include("feature_flags.urls", namespace="feature_flags")),
     path("", include("research.urls", namespace="research")),
     path("", include("libraries.urls", namespace="libraries")),
+    path("", include("projects.urls", namespace="projects")),
     path("syftbox/", include("syftbox.urls", namespace="syftbox")),
 ]
 
