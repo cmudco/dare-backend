@@ -59,6 +59,12 @@ class ToolCallResult:
 
 @dataclass(frozen=True)
 class ToolLoopConfig:
-    """Bounds for the tool loop."""
+    """Bounds for the tool loop.
+
+    After ``max_rounds`` tool rounds, or once ``max_tool_calls`` calls have
+    run (a round can hold several parallel calls), tools are withdrawn and
+    the next call must answer in text.
+    """
 
     max_rounds: int
+    max_tool_calls: Optional[int] = None

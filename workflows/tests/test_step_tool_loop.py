@@ -34,7 +34,7 @@ def _binding(run_step, sent):
 
 
 class _TextOnlyLLMService:
-    async def prepare_chat(self, request):
+    async def prepare_chat(self, request, messages=None):
         return SimpleNamespace(
             messages=[{"role": "user", "content": "summarize"}],
             tools=None,
@@ -52,7 +52,7 @@ class _AgenticLLMService:
     def __init__(self):
         self.rounds = 0
 
-    async def prepare_chat(self, request):
+    async def prepare_chat(self, request, messages=None):
         return SimpleNamespace(
             messages=[{"role": "user", "content": "compare the documents"}],
             tools=[{"name": "search_documents"}],

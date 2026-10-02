@@ -9,7 +9,6 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core import signing
 from django.core.files.storage import default_storage
-from django.db.models import Sum
 from django.http import Http404
 from django.utils import timezone
 from django_rq import enqueue, get_queue
@@ -20,12 +19,6 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from billing.constants import TransactionTypeChoice
-from billing.models import Transaction
-from conversations.constants import SenderType
-from conversations.models import Conversation, Message
-from files.models import File
-from prompts.models import Prompt
 from users.constants import (
     VOICE_ACCESS_CODE_CAPACITY,
     AccessCodeProvisionerChoice,
@@ -39,6 +32,7 @@ from users.services.account_deletion_service import (
     AccountDeletionBlocked,
     AccountDeletionService,
 )
+from users.services.stats_service import get_user_stats
 
 User = get_user_model()
 
@@ -116,50 +110,7 @@ class CustomVerifyEmailView(VerifyEmailView):
 class UserStatsView(APIView):
 
     def get(self, request, *args, **kwargs):
-        user = request.user
-
-        prompt_count = Prompt.active_objects.filter(user=user).count()
-
-        file_count = File.active_objects.filter(user=user).count()
-
-        conversation_count = Conversation.active_objects.filter(user=user).count()
-
-        message_count = Message.active_objects.filter(conversation__user=user).count()
-
-        ai_message_count = Message.active_objects.filter(
-            conversation__user=user, sender_type=SenderType.AI_ASSISTANT
-        ).count()
-
-        tagged_files_count = File.active_objects.filter(
-            user=user, tags__isnull=False
-        ).count()
-
-        # Every debited call, including proxy-routed ones. Those carry no
-        # ``llm`` row, and filtering them out here understated the token
-        # counts for anyone on a LiteLLM key. Tokens are a count, not money —
-        # unlike cost, they are the same quantity whoever paid for the call.
-        token_stats = Transaction.objects.filter(
-            user=user,
-            type=TransactionTypeChoice.DEBIT,
-        ).aggregate(
-            total_input_tokens=Sum("input_tokens"),
-            total_output_tokens=Sum("output_tokens"),
-        )
-
-        stats = {
-            "prompt_count": prompt_count,
-            "file_count": file_count,
-            "conversation_count": conversation_count,
-            "message_count": message_count,
-            "ai_message_count": ai_message_count,
-            "tagged_files_count": tagged_files_count,
-            "total_input_tokens": token_stats["total_input_tokens"] or 0,
-            "total_output_tokens": token_stats["total_output_tokens"] or 0,
-            "total_tokens": (token_stats["total_input_tokens"] or 0)
-            + (token_stats["total_output_tokens"] or 0),
-        }
-
-        return Response(stats, status=status.HTTP_200_OK)
+        return Response(get_user_stats(request.user), status=status.HTTP_200_OK)
 
 
 class VectorDBViewSet(viewsets.ViewSet):

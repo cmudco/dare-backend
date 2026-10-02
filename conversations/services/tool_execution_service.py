@@ -27,6 +27,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from asgiref.sync import sync_to_async
 from channels.db import database_sync_to_async
 
+from assistant.constants import ACCOUNT_TOOLS, SEARCH_PLATFORM_DOCS
+from assistant.services.account_tools import execute_account_tool
 from conversations.constants import ToolCallOrigin
 from conversations.models import Conversation, Message
 from conversations.services.artifact_tool_executor import \
@@ -64,7 +66,8 @@ ARTIFACT_TOOLS = frozenset(
 )
 
 # DARE tools that retrieve document context — routed to RetrievalToolExecutor.
-RETRIEVAL_TOOLS = frozenset({"search_documents"})
+# The platform assistant's docs search is the same retrieval over its own scope.
+RETRIEVAL_TOOLS = frozenset({"search_documents", SEARCH_PLATFORM_DOCS})
 
 # Memory tools are scoped to the authenticated user by the server.
 MEMORY_TOOLS = frozenset({"search_sessions"})
@@ -230,6 +233,10 @@ class ToolExecutionService:
                 arguments=arguments,
                 target=ctx.store.retrieval_target,
                 scope=ctx.retrieval_scope,
+            )
+        elif tool_name in ACCOUNT_TOOLS:
+            raw_result = await sync_to_async(execute_account_tool)(
+                tool_name, arguments, ctx.user
             )
         elif tool_name in MEMORY_TOOLS:
             raw_result = await sync_to_async(search_sessions_for_user)(
