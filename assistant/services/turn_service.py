@@ -48,11 +48,11 @@ class AssistantTurnService:
         retrieval_scope = None
         if knowledge is not None:
             tool_slugs.add(SEARCH_PLATFORM_DOCS)
-            # The docs owner's index holds the vectors and its wallet pays
-            # the (tiny) query-analysis call; the asking user pays nothing.
+            # Vectors live under the docs owner's index. There is no payer: the
+            # model already writes a focused search query, so retrieval skips
+            # the query-analysis LLM call, and the asking user pays nothing.
             retrieval_scope = RetrievalScope(
                 embedding_ids=knowledge.file_ids,
-                user_id=knowledge.owner_id,
                 file_owner_id=knowledge.owner_id,
                 max_context_snippets=DOCS_SEARCH_TOP_K,
             )
