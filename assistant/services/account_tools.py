@@ -67,8 +67,8 @@ def _account_overview(user) -> Dict[str, Any]:
 
 def _list_files(user, arguments: Dict[str, Any]) -> Dict[str, Any]:
     files = File.active_objects.filter(user=user, is_media=False)
-    status = arguments.get("status")
-    if status:
+    status = arguments.get("status") or "all"
+    if status != "all":
         if status not in _FILE_STATUS_BY_NAME:
             return {"success": False, "error": f"Unknown status '{status}'."}
         files = files.filter(status=_FILE_STATUS_BY_NAME[status])

@@ -63,17 +63,18 @@ def list_my_files_schema() -> Dict:
         LIST_MY_FILES,
         "The user's most recent files: id, name, ingestion status (processing, "
         "processed, failed, needs OCR), stage, error, tags and folders. Use it "
-        "for questions like 'why isn't my file ready?', and with limit=100 "
-        "before proposing how to organise files.",
+        "for questions like 'why isn't my file ready?'. One call with "
+        "status='all' and limit=100 returns every file; never call it once "
+        "per status.",
         {
             "status": {
                 "type": "string",
-                "enum": ["processing", "processed", "failed", "needs_ocr"],
-                "description": "Only return files in this status.",
+                "enum": ["all", "processing", "processed", "failed", "needs_ocr"],
+                "description": "Files in this status; 'all' (default) returns every file in one call.",
             },
             "name_contains": {
                 "type": "string",
-                "description": "Only return files whose name contains this text.",
+                "description": "Only files whose name contains this text; empty for no filter.",
             },
             "limit": {
                 "type": "integer",

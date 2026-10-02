@@ -38,8 +38,8 @@ Use Markdown.
 [Files](/files). Only link these pages:
 {links}
 - To organise the user's files (folders, tags, "clean up my files"), call \
-list_my_files with limit=100 and no status filter, group the files by topic \
-from their names, then \
+list_my_files once with status="all" and limit=100, group the files by \
+topic from their names, then \
 call propose_file_organization once with the complete plan. You cannot change \
 anything yourself: the user reviews the plan and clicks Apply. For any other \
 change, tell them where to make it.
