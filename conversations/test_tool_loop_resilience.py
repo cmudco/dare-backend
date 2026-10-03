@@ -6,7 +6,12 @@ from django.utils import timezone
 
 from conversations.services.tool_loop_binding import ChatToolLoopBinding
 from conversations.services.tool_loop_service import ToolLoopService
-from core.services.dtos import LLMStreamEvent
+from core.services.dtos import (
+    LLMStreamEvent,
+    ToolCallRequest,
+    ToolCallResult,
+    ToolLoopConfig,
+)
 
 
 def _binding(message_obj, send_callback):
@@ -41,7 +46,7 @@ class ToolLoopResilienceTests(SimpleTestCase):
             def __init__(self):
                 self.calls = []
 
-            async def prepare_chat(self, request):
+            async def prepare_chat(self, request, messages=None):
                 return SimpleNamespace(
                     messages=[{"role": "user", "content": "Ambiguous topic"}],
                     tools=None,
@@ -82,7 +87,7 @@ class ToolLoopResilienceTests(SimpleTestCase):
 
     async def test_stream_preserves_whitespace_only_deltas(self):
         class WhitespaceLLMService:
-            async def prepare_chat(self, request):
+            async def prepare_chat(self, request, messages=None):
                 return SimpleNamespace(
                     messages=[{"role": "user", "content": "format this"}],
                     tools=None,
@@ -112,7 +117,7 @@ class ToolLoopResilienceTests(SimpleTestCase):
         # coordinator replaced already-streamed text with a generic failure
         # notice and dropped the accumulated usage (unbilled tokens).
         class TextThenStallLLMService:
-            async def prepare_chat(self, request):
+            async def prepare_chat(self, request, messages=None):
                 return SimpleNamespace(
                     messages=[{"role": "user", "content": "long question"}],
                     llm=SimpleNamespace(identifier="test-model", provider="gemini"),
@@ -144,3 +149,62 @@ class ToolLoopResilienceTests(SimpleTestCase):
         self.assertEqual(result.text, "Partial answer the user saw")
         self.assertEqual(result.token_usage["input_tokens"], 11)
         self.assertEqual(result.token_usage["output_tokens"], 7)
+
+
+class ToolLoopBudgetTests(SimpleTestCase):
+    async def test_call_budget_withdraws_tools_and_forces_an_answer(self):
+        class AlwaysSearchesLLMService:
+            def __init__(self):
+                self.tools_per_round = []
+
+            async def prepare_chat(self, request, messages=None):
+                return SimpleNamespace(
+                    messages=[{"role": "user", "content": "Find it"}],
+                    tools=[{"type": "function"}],
+                    memory_context=[],
+                    context_trace=None,
+                )
+
+            async def stream_round(self, prepared, messages, tools):
+                self.tools_per_round.append(tools is not None)
+                if tools is None:
+                    yield LLMStreamEvent.text_delta("Not in the docs.")
+                    return
+                # Two parallel searches every round it is allowed to.
+                for index in range(2):
+                    yield LLMStreamEvent.tool_call_ready(
+                        ToolCallRequest(id=f"c{index}", name="search", arguments="{}")
+                    )
+
+        class CountingExecutor:
+            async def execute_round(self, calls, ctx, round_index):
+                return [
+                    ToolCallResult(
+                        tool_call_id=call.id,
+                        tool_name=call.name,
+                        origin="dare",
+                        server_slug="dare",
+                        content="nothing",
+                    )
+                    for call in calls
+                ]
+
+        llm_service = AlwaysSearchesLLMService()
+        service = ToolLoopService(
+            llm_service, ToolLoopConfig(max_rounds=5, max_tool_calls=3)
+        )
+        service.execution_service = CountingExecutor()
+
+        async def send(payload):
+            pass
+
+        result = await service.run(
+            request=SimpleNamespace(),
+            binding=_binding(SimpleNamespace(id=8, created_at=timezone.now()), send),
+            retrieval_scope=None,
+        )
+
+        # Rounds 1-2 spend 4 calls (budget 3), so round 3 has no tools.
+        self.assertEqual(llm_service.tools_per_round, [True, True, False])
+        self.assertEqual(result.tool_calls_made, 4)
+        self.assertEqual(result.text, "Not in the docs.")

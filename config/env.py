@@ -171,3 +171,8 @@ SYFTBOX_DATASITES_ROOT = os.getenv("SYFTBOX_DATASITES_ROOT", None)
 SYFTBOX_APP_NAME = os.getenv("SYFTBOX_APP_NAME", "dare")
 SYFTBOX_BASE_URL = os.getenv("SYFTBOX_BASE_URL", "https://syftbox.net")
 SYFTBOX_SYNC_INTERVAL_SECONDS = int(os.getenv("SYFTBOX_SYNC_INTERVAL_SECONDS", "300"))
+
+# In-app platform assistant. The platform pays for its turns (system provider
+# key), so the model is a cheap one and each user gets a daily message budget.
+ASSISTANT_MODEL_IDENTIFIER = os.getenv("ASSISTANT_MODEL_IDENTIFIER", "gpt-6-luna")
+ASSISTANT_DAILY_MESSAGE_LIMIT = int(os.getenv("ASSISTANT_DAILY_MESSAGE_LIMIT", "50"))

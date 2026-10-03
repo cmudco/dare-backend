@@ -133,7 +133,11 @@ class LLMService:
 
     # ========== Tool-Loop Seams ==========
 
-    async def prepare_chat(self, request: LLMQueryRequest) -> PreparedChat:
+    async def prepare_chat(
+        self,
+        request: LLMQueryRequest,
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> PreparedChat:
         """Build everything a tool loop needs, exactly once per turn.
 
         Runs the full prompt build (system, context, RAG pre-injection,
@@ -144,6 +148,8 @@ class LLMService:
 
         Args:
             request: LLMQueryRequest for the turn.
+            messages: A host-built prompt (system, history, current message)
+                that replaces the chat prompt build; the host owns its context.
 
         Returns:
             PreparedChat ready for round streaming.
@@ -151,7 +157,8 @@ class LLMService:
         llm = await self._resolve_llm(request)
         self._pending_memory_context = []
         self._pending_context_trace = None
-        messages = await self._build_messages_for_request(request, llm)
+        if messages is None:
+            messages = await self._build_messages_for_request(request, llm)
         context_trace = self._pending_context_trace
 
         media_start = time.monotonic()
