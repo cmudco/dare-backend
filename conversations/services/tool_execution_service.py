@@ -47,6 +47,7 @@ from dare_tools.services.retrieval_tool_executor import (
 from mcp.services.artifact_bridge import BridgeStatus, maybe_create_pdf_artifact
 from mcp.services.mcp_tool_executor import MCPToolExecutorError, mcp_tool_executor
 from memory.services.session_search import search_sessions_for_user
+from projects.services.project_service import memory_scope_project_id
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +92,17 @@ class ToolExecutionContext:
     store: ToolLoopStore
     retrieval_scope: Optional[RetrievalScope] = None
     artifact_host: Optional[ArtifactHost] = None
+
+
+def _search_sessions(ctx: ToolExecutionContext, arguments: Dict) -> Dict:
+    project_id = ctx.conversation.project_id if ctx.conversation else None
+    return search_sessions_for_user(
+        ctx.user,
+        arguments["query"],
+        since=arguments.get("since"),
+        until=arguments.get("until"),
+        source_project_id=memory_scope_project_id(project_id),
+    )
 
 
 class ToolExecutionService:
@@ -239,12 +251,7 @@ class ToolExecutionService:
                 tool_name, arguments, ctx.user
             )
         elif tool_name in MEMORY_TOOLS:
-            raw_result = await sync_to_async(search_sessions_for_user)(
-                ctx.user,
-                arguments["query"],
-                since=arguments.get("since"),
-                until=arguments.get("until"),
-            )
+            raw_result = await sync_to_async(_search_sessions)(ctx, arguments)
         elif tool_name in ARTIFACT_TOOLS:
             if ctx.artifact_host is None or not ctx.artifact_host.can_create:
                 return self._unavailable_in_context(tool_name)
