@@ -142,13 +142,9 @@ def _search(
             )[:limit]
         )
     elif connection.vendor == "postgresql":
-        matched = _search_postgres(
-            user, terms, limit, since, until, source_project_id
-        )
+        matched = _search_postgres(user, terms, limit, since, until, source_project_id)
     else:
-        matched = _search_fallback(
-            user, terms, limit, since, until, source_project_id
-        )
+        matched = _search_fallback(user, terms, limit, since, until, source_project_id)
 
     # Include adjacent turns and suppress overlapping windows.
     shown: set = set()
