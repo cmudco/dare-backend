@@ -185,6 +185,12 @@ class ConversationViewSet(ConversationSharingMixin, viewsets.ModelViewSet):
         if bot_id is not None:
             queryset = queryset.filter(bot_id=bot_id)
 
+        project = self.request.query_params.get("project", None)
+        if project is not None:
+            if not project.isdigit():
+                return Conversation.active_objects.none()
+            queryset = queryset.filter(project_id=int(project))
+
         return self._annotate_fallback_llm(
             self._with_list_relations(queryset)
         ).order_by("sort_order", "-created_at")

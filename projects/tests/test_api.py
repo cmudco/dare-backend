@@ -177,6 +177,27 @@ class ProjectChatTests(ProjectTestCase):
         conversation.refresh_from_db()
         self.assertIsNone(conversation.project_id)
 
+    def test_conversation_list_filters_to_one_project(self):
+        project = self.make_project()
+        theirs = self.make_project(user=self.other, name="Theirs")
+        Conversation.active_objects.create(
+            user=self.user, conversation_id="in-project", project=project
+        )
+        Conversation.active_objects.create(user=self.user, conversation_id="loose")
+        Conversation.active_objects.create(
+            user=self.other, conversation_id="their-chat", project=theirs
+        )
+
+        mine = self.client.get(CONVERSATIONS_URL, {"project": project.id})
+        other = self.client.get(CONVERSATIONS_URL, {"project": theirs.id})
+        garbage = self.client.get(CONVERSATIONS_URL, {"project": "abc"})
+
+        self.assertEqual(
+            [row["conversation_id"] for row in mine.data["results"]], ["in-project"]
+        )
+        self.assertEqual(other.data["results"], [])
+        self.assertEqual(garbage.data["results"], [])
+
     def test_project_list_counts_live_chats(self):
         project = self.make_project()
         for suffix in ("a", "b"):
