@@ -1,3 +1,4 @@
+import uuid
 from decimal import Decimal
 
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -79,6 +80,14 @@ from core.services.energy_service import compute_relatable_stats
 from feature_flags.services import is_flag_enabled_for_user
 from users.models import User
 from users.utils import detect_platform_from_request
+
+
+def _is_uuid(value: str) -> bool:
+    try:
+        uuid.UUID(value)
+    except ValueError:
+        return False
+    return True
 
 
 def _validation_response(exc: ValidationError):
@@ -443,7 +452,7 @@ class BillingViewSet(viewsets.ViewSet):
                 "label": spend.litellm_key.label,
                 "source": spend.litellm_key.source,
                 "groupName": (
-                    spend.litellm_key.source_group.name
+                    spend.litellm_key.source_group.access_code
                     if spend.litellm_key.source_group_id
                     else None
                 ),
@@ -865,9 +874,12 @@ class BillingViewSet(viewsets.ViewSet):
                 pref.active_wallet_type = UserWalletPreferenceTypeChoice.BYO
                 pref.active_wallet_ref_id = None
             else:
-                if not UserProviderAPIKey.active_objects.filter(
-                    pk=ref_id, user=request.user
-                ).exists():
+                if (
+                    not ref_id.isdigit()
+                    or not UserProviderAPIKey.active_objects.filter(
+                        pk=ref_id, user=request.user
+                    ).exists()
+                ):
                     return Response(
                         {
                             "code": "WALLET_NOT_FOUND",
@@ -905,7 +917,10 @@ class BillingViewSet(viewsets.ViewSet):
                     },
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-            if not visible_keys.filter(pk=ref_id).exists():
+            if (
+                not _is_uuid(ref_id)
+                or not visible_keys.filter(pk=ref_id).exists()
+            ):
                 return Response(
                     {
                         "code": "WALLET_NOT_FOUND",
