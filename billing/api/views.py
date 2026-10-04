@@ -917,10 +917,7 @@ class BillingViewSet(viewsets.ViewSet):
                     },
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-            if (
-                not _is_uuid(ref_id)
-                or not visible_keys.filter(pk=ref_id).exists()
-            ):
+            if not _is_uuid(ref_id) or not visible_keys.filter(pk=ref_id).exists():
                 return Response(
                     {
                         "code": "WALLET_NOT_FOUND",
