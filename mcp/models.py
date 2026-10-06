@@ -13,7 +13,7 @@ from django.db import models
 
 from common.managers import ActiveObjectsManager
 from common.models import BaseModel
-from mcp.constants import ExecutionStatus, MCPAuthType, MCPTransport
+from mcp.constants import ConnectionHealth, ExecutionStatus, MCPAuthType, MCPTransport
 
 
 class MCPServer(BaseModel):
@@ -188,6 +188,14 @@ class UserMCPConnection(BaseModel):
         blank=True,
         help_text="Non-secret connection metadata such as OAuth expiry and account identity",
     )
+    health_status = models.CharField(
+        max_length=20,
+        choices=ConnectionHealth.choices(),
+        default=ConnectionHealth.UNKNOWN,
+        help_text="Last observed health, updated from real discovery/tool calls",
+    )
+    health_error = models.TextField(blank=True, default="")
+    health_changed_at = models.DateTimeField(null=True, blank=True)
 
     all_objects = models.Manager()  # Default manager for get_or_create, etc.
     active_objects = ActiveObjectsManager()

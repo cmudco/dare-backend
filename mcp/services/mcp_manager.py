@@ -31,7 +31,13 @@ from mcp.constants import (
 from mcp.models import MCPToolExecution, UserMCPConnection
 from mcp.services.client_dtos import MCPConnectionConfig
 from mcp.services.credential_service import MCPCredentialService
-from mcp.services.mcp_client import MCPClient, MCPClientError
+from mcp.services.mcp_client import (
+    MCPAuthError,
+    MCPClient,
+    MCPClientError,
+    MCPServerDownError,
+    MCPTimeoutError,
+)
 from mcp.services.streamable_http_client import StreamableHTTPMCPClient
 
 logger = logging.getLogger(__name__)
@@ -41,6 +47,14 @@ class MCPManagerError(Exception):
     """Base exception for MCP manager errors."""
 
     pass
+
+
+class MCPManagerAuthError(MCPManagerError):
+    """The server rejected the connection's credentials."""
+
+
+class MCPManagerUnreachableError(MCPManagerError):
+    """The server could not be reached or timed out."""
 
 
 class MCPManager:
@@ -141,6 +155,7 @@ class MCPManager:
         status = ExecutionStatus.PENDING
         result = None
         error_message = ""
+        error_class = MCPManagerError
 
         try:
             client = await self._build_client(server, credentials)
@@ -153,6 +168,12 @@ class MCPManager:
         except MCPClientError as e:
             status = ExecutionStatus.ERROR
             error_message = str(e)
+            # A slow or failing individual call is not evidence the server
+            # is down; only rejected auth and a down server change health.
+            if isinstance(e, MCPAuthError):
+                error_class = MCPManagerAuthError
+            elif isinstance(e, MCPServerDownError):
+                error_class = MCPManagerUnreachableError
             logger.error(f"MCP tool call failed: {e}")
         except Exception as e:
             status = ExecutionStatus.ERROR
@@ -182,7 +203,7 @@ class MCPManager:
             logger.error(f"Failed to log tool execution: {e}")
 
         if status == ExecutionStatus.ERROR:
-            raise MCPManagerError(error_message)
+            raise error_class(error_message)
 
         return result
 
@@ -199,31 +220,20 @@ class MCPManager:
         except redis.RedisError as e:
             logger.warning(f"Redis error invalidating cache: {e}")
 
-    async def test_connection(self, server, credentials: dict) -> tuple[bool, str]:
-        """
-        Test that credentials work by initializing connection.
-
-        Args:
-            server: MCPServer instance
-            credentials: Decrypted credentials dict
-
-        Returns:
-            Tuple of (success, message)
-        """
+    def forget_tools(self, server, credentials: dict):
+        """Drop the cached tool list tied to these (now rejected) credentials."""
         try:
-            client = await self._build_client(server, credentials)
+            self.redis.delete(self._tools_cache_key(server, credentials))
+        except redis.RedisError as e:
+            logger.warning(f"Redis error forgetting tools: {e}")
 
-            try:
-                await client.initialize()
-                tools = await client.list_tools()
-                return True, f"Connection successful. {len(tools)} tools available."
-            finally:
-                await client.close()
-
-        except MCPClientError as e:
-            return False, str(e)
-        except Exception as e:
-            return False, f"Unexpected error: {e}"
+    async def list_tools_live(self, server, credentials: dict) -> list[dict]:
+        """Single uncached tools/list round-trip; raises MCPClientError on failure."""
+        client = await self._build_client(server, credentials)
+        try:
+            return await client.list_tools()
+        finally:
+            await client.close()
 
     async def _discover_tools(self, server, credentials: dict) -> list[dict]:
         """
@@ -239,7 +249,11 @@ class MCPManager:
             try:
                 return await client.list_tools()
             except MCPClientError as e:
-                if attempt == attempts:
+                # Only transient server errors (cold-start 5xx) are worth a
+                # retry; auth rejection, refusal and timeouts fail fast.
+                if attempt == attempts or isinstance(
+                    e, (MCPAuthError, MCPServerDownError, MCPTimeoutError)
+                ):
                     raise
                 logger.warning(
                     f"Tool discovery for {server.slug} failed "

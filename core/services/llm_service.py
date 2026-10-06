@@ -99,7 +99,7 @@ class LLMService:
             all_images = await self._process_media_files(request)
 
             # Collect all tools (MCP + DARE + any passed externally) via ToolFetcher
-            all_tools = await self.tool_fetcher.get_all_tools(request, llm, tools)
+            all_tools, _ = await self.tool_fetcher.get_all_tools(request, llm, tools)
 
             # Capture memory context to attach to final usage
             memory_context = self._pending_memory_context
@@ -171,7 +171,12 @@ class LLMService:
         media_ms = int((time.monotonic() - media_start) * 1000)
 
         tools_start = time.monotonic()
-        all_tools = await self.tool_fetcher.get_all_tools(request, llm, None)
+        all_tools, mcp_discovery = await self.tool_fetcher.get_all_tools(
+            request, llm, None
+        )
+        mcp_issues = mcp_discovery.issues if mcp_discovery else []
+        if mcp_issues:
+            messages = _with_unavailable_tools_note(messages, mcp_issues)
         llm_tools = self._append_web_tools(request, llm, all_tools)
         tools_ms = int((time.monotonic() - tools_start) * 1000)
 
@@ -182,10 +187,12 @@ class LLMService:
                 context_trace["stages"].append(
                     {"kind": "media", "ms": media_ms, "count": len(all_images)}
                 )
-            if llm_tools:
-                context_trace["stages"].append(
-                    {"kind": "tools", "ms": tools_ms, "count": len(llm_tools)}
-                )
+            mcp_servers = mcp_discovery.servers if mcp_discovery else []
+            if llm_tools or mcp_servers:
+                stage = {"kind": "tools", "ms": tools_ms, "count": len(llm_tools or [])}
+                if mcp_servers:
+                    stage["servers"] = mcp_servers
+                context_trace["stages"].append(stage)
             context_trace["totalMs"] += media_ms + tools_ms
 
         ai_service = await self._get_ai_service(
@@ -204,6 +211,7 @@ class LLMService:
             memory_context=self._pending_memory_context,
             llm=llm,
             context_trace=context_trace,
+            mcp_issues=mcp_issues,
         )
 
     async def stream_round(
@@ -592,3 +600,27 @@ class LLMService:
 
         tool_func = provider_tools.get(llm.provider)
         return [tool_func()] if tool_func else []
+
+
+def _with_unavailable_tools_note(
+    messages: List[Dict[str, Any]], mcp_issues: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """Tell the model which selected tool servers are down so it doesn't pretend to use them."""
+    names = ", ".join(issue["server_name"] for issue in mcp_issues)
+    note = (
+        f"The user's connected tool server(s) {names} could not be reached this "
+        "turn (the connection expired or is down), so none of their tools are "
+        "available to you. Never write tool-call markup or invent tool results. "
+        "If the request needs those tools, tell the user plainly that the "
+        "connection needs to be reconnected, then help as best you can without it."
+    )
+    messages = list(messages)
+    if (
+        messages
+        and messages[0].get("role") == "system"
+        and isinstance(messages[0].get("content"), str)
+    ):
+        messages[0] = {**messages[0], "content": f"{messages[0]['content']}\n\n{note}"}
+    else:
+        messages.insert(0, {"role": "system", "content": note})
+    return messages

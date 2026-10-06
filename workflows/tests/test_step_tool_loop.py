@@ -17,6 +17,7 @@ def _run_step(step_id=11, run_id=5):
         workflow_run_id=run_id,
         retrieval_trace=None,
         context_trace=None,
+        mcp_issues=[],
     )
 
 
@@ -40,6 +41,7 @@ class _TextOnlyLLMService:
             tools=None,
             memory_context=[],
             context_trace=None,
+            mcp_issues=[],
         )
 
     async def stream_round(self, prepared, messages, tools):
@@ -58,6 +60,7 @@ class _AgenticLLMService:
             tools=[{"name": "search_documents"}],
             memory_context=[],
             context_trace=None,
+            mcp_issues=[],
         )
 
     async def stream_round(self, prepared, messages, tools):
@@ -101,7 +104,7 @@ class WorkflowStepToolLoopTests(SimpleTestCase):
         service = ToolLoopService(_TextOnlyLLMService())
 
         result = await service.run(
-            request=SimpleNamespace(),
+            request=SimpleNamespace(mcp_server_ids=()),
             binding=_binding(_run_step(), sent),
             retrieval_scope=None,
         )
@@ -120,7 +123,7 @@ class WorkflowStepToolLoopTests(SimpleTestCase):
         service.execution_service = execution_service
 
         result = await service.run(
-            request=SimpleNamespace(),
+            request=SimpleNamespace(mcp_server_ids=()),
             binding=_binding(run_step, sent),
             retrieval_scope=None,
         )

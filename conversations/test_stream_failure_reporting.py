@@ -31,6 +31,7 @@ class StreamFailureReportingTests(SimpleTestCase):
                         tools=None,
                         memory_context=[],
                         context_trace=None,
+                        mcp_issues=[],
                         llm=SimpleNamespace(
                             identifier="gemini-3.8-flash", provider="gemini"
                         ),
@@ -47,7 +48,7 @@ class StreamFailureReportingTests(SimpleTestCase):
             scope.set_client(client)
             with patch.object(service, "_stream_round", stalled_round):
                 result = await service.run(
-                    request=SimpleNamespace(),
+                    request=SimpleNamespace(mcp_server_ids=()),
                     binding=_binding(
                         SimpleNamespace(id=42, created_at=timezone.now()), AsyncMock()
                     ),

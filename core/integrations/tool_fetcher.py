@@ -15,7 +15,7 @@ Usage:
 """
 
 import logging
-from typing import List, Optional, Set
+from typing import Any, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +39,7 @@ class ToolFetcher:
         user,
         server_ids: Optional[Set[int]],
         llm_provider: str,
-    ) -> List:
+    ) -> Optional[Any]:
         """
         Fetch MCP tools from specified servers.
 
@@ -49,10 +49,11 @@ class ToolFetcher:
             llm_provider: LLM provider string for format conversion
 
         Returns:
-            List of tool definitions in LLM-compatible format
+            The MCPToolDiscovery (tools, issues, per-server report), or None
+            when no servers were requested or discovery failed outright.
         """
         if not server_ids or not user:
-            return []
+            return None
 
         try:
             # Lazy import to avoid circular dependency
@@ -60,19 +61,19 @@ class ToolFetcher:
             from mcp.services import MCPToolExecutor
 
             executor = MCPToolExecutor()
-            tools = await executor.get_tools_for_server_ids(
+            discovery = await executor.get_tools_for_server_ids(
                 user=user,
                 server_ids=list(server_ids),
                 llm_provider=llm_provider,
             )
 
-            if tools:
-                logger.info(f"[ToolFetcher] Loaded {len(tools)} MCP tools")
+            if discovery.tools:
+                logger.info(f"[ToolFetcher] Loaded {len(discovery.tools)} MCP tools")
 
-            return tools
+            return discovery
         except Exception as e:
             logger.warning(f"[ToolFetcher] Failed to get MCP tools: {e}")
-            return []
+            return None
 
     def get_dare_tools(
         self,
@@ -114,7 +115,7 @@ class ToolFetcher:
         request,
         llm,
         external_tools: Optional[List] = None,
-    ) -> List:
+    ) -> Tuple[List, Optional[Any]]:
         """
         Get all tools for a request (MCP + DARE + external).
 
@@ -126,19 +127,21 @@ class ToolFetcher:
             external_tools: Optional pre-defined tools to include
 
         Returns:
-            Combined list of all tool definitions
+            (combined tool definitions, MCPToolDiscovery or None)
         """
         all_tools = list(external_tools) if external_tools else []
+        mcp_discovery = None
 
         # Fetch MCP tools if server IDs provided
         if request.requires_mcp_tools():
             logger.info(f"[ToolFetcher] Request has MCP server IDs: {request.mcp_server_ids}")
-            mcp_tools = await self.get_mcp_tools(
+            mcp_discovery = await self.get_mcp_tools(
                 user=request.user,
                 server_ids=request.mcp_server_ids,
                 llm_provider=llm.provider,
             )
-            all_tools.extend(mcp_tools)
+            if mcp_discovery:
+                all_tools.extend(mcp_discovery.tools)
         else:
             logger.debug("[ToolFetcher] No MCP server IDs in request")
 
@@ -158,4 +161,4 @@ class ToolFetcher:
             tool_names = [t.get('function', {}).get('name', 'unknown') for t in all_tools]
             logger.info(f"[ToolFetcher] Passing {len(all_tools)} tools to LLM: {tool_names}")
 
-        return all_tools
+        return all_tools, mcp_discovery

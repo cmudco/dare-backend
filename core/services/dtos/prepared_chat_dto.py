@@ -1,6 +1,6 @@
 """Prepared-chat DTO: everything a tool loop needs to stream rounds."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from .generation_dto import GenerationConfig
@@ -27,6 +27,8 @@ class PreparedChat:
         context_trace: Timed context-assembly stages for the turn (the
             ``context_trace`` event payload), or None for flows that don't
             record one (Socratic mode).
+        mcp_issues: Selected MCP servers whose tools couldn't be loaded
+            (expired auth or unreachable), for the host to surface.
     """
 
     messages: List[Dict[str, Any]]
@@ -37,3 +39,4 @@ class PreparedChat:
     memory_context: List[Dict[str, Any]]
     llm: Any
     context_trace: Optional[Dict[str, Any]] = None
+    mcp_issues: List[Dict[str, Any]] = field(default_factory=list)

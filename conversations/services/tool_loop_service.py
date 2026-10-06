@@ -154,6 +154,11 @@ class ToolLoopService:
         if regenerate:
             await binding.store.clear_prior_tool_calls()
 
+        emitter = ToolEventEmitter(binding.send_callback, binding.correlation)
+        if request.mcp_server_ids:
+            # Discovery runs inside prepare and can wait on a slow server;
+            # tell the client which servers it is waiting on.
+            await emitter.tool_servers_connecting(sorted(request.mcp_server_ids))
         try:
             prepared = await self.llm_service.prepare_chat(request, messages)
         except asyncio.CancelledError:
@@ -167,7 +172,8 @@ class ToolLoopService:
             len(prepared.tools or []),
             regenerate,
         )
-        emitter = ToolEventEmitter(binding.send_callback, binding.correlation)
+        for issue in prepared.mcp_issues:
+            await emitter.mcp_connection_issue(issue)
         if prepared.context_trace and prepared.context_trace["stages"]:
             # Persist first, then emit: a client that misses the event (or
             # refreshes) still gets the trace from the turn's payload.

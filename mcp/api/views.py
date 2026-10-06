@@ -4,41 +4,43 @@ ViewSets for MCP API.
 
 import json
 import logging
-import time
 
-from rest_framework import viewsets, status
-from rest_framework import mixins
-from rest_framework.decorators import api_view, permission_classes
-from rest_framework.decorators import action
-from rest_framework.response import Response
-from rest_framework.views import APIView
-from rest_framework.parsers import JSONParser
-from rest_framework.renderers import JSONRenderer
-from rest_framework.permissions import AllowAny, IsAuthenticated
+from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
 from django.http import HttpResponse
 from django.shortcuts import redirect
 from django.utils import timezone
-from asgiref.sync import async_to_sync
+from rest_framework import mixins, status, viewsets
+from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.parsers import JSONParser
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.renderers import JSONRenderer
+from rest_framework.response import Response
+from rest_framework.views import APIView
 
 from common.permissions import IsResearcherOrAbove
-from mcp.services.mcp_gateway import handle_jsonrpc
-from mcp.constants import MCPAuthType
-from mcp.models import MCPServer, UserMCPConnection, MCPToolExecution
 from mcp.api.serializers import (
+    ConnectionTestResultSerializer,
     MCPServerCreateSerializer,
     MCPServerSerializer,
-    UserMCPConnectionSerializer,
-    UserMCPConnectionCreateSerializer,
     MCPToolExecutionSerializer,
+    OAuthStartSerializer,
     ToolCallSerializer,
     ToolDefinitionSerializer,
-    ConnectionTestResultSerializer,
-    OAuthStartSerializer,
+    UserMCPConnectionCreateSerializer,
+    UserMCPConnectionSerializer,
+)
+from mcp.constants import MCPAuthType
+from mcp.models import MCPServer, MCPToolExecution, UserMCPConnection
+from mcp.services.connection_health import (
+    MCPReauthRequired,
+    call_with_auth_retry,
+    reset_health,
 )
 from mcp.services.credential_service import MCPCredentialService
-from mcp.services.mcp_manager import mcp_manager, MCPManagerError
-from mcp.services.oauth_service import mcp_oauth_service, MCPOAuthError
+from mcp.services.mcp_gateway import handle_jsonrpc
+from mcp.services.mcp_manager import MCPManagerError, mcp_manager
+from mcp.services.oauth_service import MCPOAuthError, mcp_oauth_service
 
 logger = logging.getLogger(__name__)
 
@@ -97,11 +99,10 @@ class MCPServerViewSet(
             )
 
         try:
-            # Decrypt credentials
-            credentials = _get_connection_credentials(connection)
-
-            # Get tools (cached in Redis)
-            tools = async_to_sync(mcp_manager.get_available_tools)(server, credentials)
+            tools = async_to_sync(call_with_auth_retry)(
+                connection,
+                lambda credentials: mcp_manager.get_available_tools(server, credentials),
+            )
 
             # Also update DB cache as fallback
             connection.cached_tools = tools
@@ -116,15 +117,18 @@ class MCPServerViewSet(
                 'cached': True  # Could be enhanced to indicate cache hit/miss
             })
 
-        except MCPManagerError as e:
-            return Response(
-                {'error': str(e)},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+        except MCPReauthRequired as e:
+            return _reauth_response(e)
         except Exception as e:
+            logger.warning("[MCP] Tool discovery failed for %s: %s", server.slug, e)
             return Response(
-                {'error': f'Failed to get tools: {str(e)}'},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+                {
+                    'error': f"Couldn't reach {server.name}. It may be offline; "
+                    "try again in a moment.",
+                    'detail': str(e)[:300],
+                    'health_status': connection.health_status,
+                },
+                status=status.HTTP_502_BAD_GATEWAY,
             )
 
     @action(detail=True, methods=['post'], url_path='oauth/start')
@@ -212,24 +216,25 @@ class UserMCPConnectionViewSet(viewsets.ModelViewSet):
             )
 
         try:
-            credentials = _get_connection_credentials(connection)
-
-            success, message = async_to_sync(mcp_manager.test_connection)(
-                connection.server,
-                credentials
+            tools = async_to_sync(call_with_auth_retry)(
+                connection,
+                lambda credentials: mcp_manager.list_tools_live(
+                    connection.server, credentials
+                ),
+                recheck=True,
             )
-
-            serializer = ConnectionTestResultSerializer({
-                'success': success,
-                'message': message
-            })
-            return Response(serializer.data)
-
+            success = True
+            message = f"Connection successful. {len(tools)} tools available."
         except Exception as e:
-            return Response({
-                'success': False,
-                'message': f'Test failed: {str(e)}'
-            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            success, message = False, str(e)
+
+        connection.refresh_from_db(fields=['health_status'])
+        serializer = ConnectionTestResultSerializer({
+            'success': success,
+            'message': message,
+            'health_status': connection.health_status,
+        })
+        return Response(serializer.data)
 
     @action(detail=True, methods=['post'], url_path='execute')
     def execute_tool(self, request, server_slug=None):
@@ -257,20 +262,24 @@ class UserMCPConnectionViewSet(viewsets.ModelViewSet):
         arguments = serializer.validated_data['arguments']
 
         try:
-            credentials = _get_connection_credentials(connection)
-
-            result = async_to_sync(mcp_manager.call_tool)(
-                user=request.user,
-                server=connection.server,
-                tool_name=tool_name,
-                arguments=arguments,
-                credentials=credentials
+            result = async_to_sync(call_with_auth_retry)(
+                connection,
+                lambda credentials: mcp_manager.call_tool(
+                    user=request.user,
+                    server=connection.server,
+                    tool_name=tool_name,
+                    arguments=arguments,
+                    credentials=credentials,
+                ),
             )
 
             return Response({
                 'success': True,
                 'result': result
             })
+
+        except MCPReauthRequired as e:
+            return _reauth_response(e)
 
         except MCPManagerError as e:
             return Response({
@@ -346,11 +355,13 @@ def oauth_callback(request):
         connection.auth_metadata = token.to_metadata()
         connection.is_active = True
         connection.is_deleted = False
+        health_fields = reset_health(connection)
         connection.save(update_fields=[
             'encrypted_credentials',
             'auth_metadata',
             'is_active',
             'is_deleted',
+            *health_fields,
             'updated_at',
         ])
     except (MCPServer.DoesNotExist, get_user_model().DoesNotExist):
@@ -384,32 +395,11 @@ def _connection_has_auth(connection: UserMCPConnection) -> bool:
     return bool(connection.encrypted_credentials)
 
 
-def _get_connection_credentials(connection: UserMCPConnection) -> dict:
-    credentials = MCPCredentialService.decrypt_credentials(
-        connection.encrypted_credentials
+def _reauth_response(error: MCPReauthRequired):
+    return Response(
+        {'error': str(error), 'needs_reauth': True},
+        status=status.HTTP_409_CONFLICT,
     )
-    if connection.server.auth_type != MCPAuthType.OAUTH2:
-        return credentials
-
-    expires_at = connection.auth_metadata.get("expires_at")
-    refresh_token = MCPCredentialService.get_refresh_token(credentials)
-    if not expires_at or not refresh_token or expires_at > int(time.time()) + 60:
-        return credentials
-
-    token = async_to_sync(mcp_oauth_service.refresh_access_token)(
-        connection.server,
-        refresh_token,
-    )
-    connection.encrypted_credentials = MCPCredentialService.encrypt_credentials(
-        token.to_credentials()
-    )
-    connection.auth_metadata = token.to_metadata()
-    connection.save(update_fields=[
-        'encrypted_credentials',
-        'auth_metadata',
-        'updated_at',
-    ])
-    return token.to_credentials()
 
 
 class MCPGatewayView(APIView):
@@ -468,13 +458,15 @@ class QuillmarkQuillsView(APIView):
             )
 
         try:
-            credentials = _get_connection_credentials(connection)
-            result = async_to_sync(mcp_manager.call_tool)(
-                user=request.user,
-                server=server,
-                tool_name="list_quills",
-                arguments={},
-                credentials=credentials,
+            result = async_to_sync(call_with_auth_retry)(
+                connection,
+                lambda credentials: mcp_manager.call_tool(
+                    user=request.user,
+                    server=server,
+                    tool_name="list_quills",
+                    arguments={},
+                    credentials=credentials,
+                ),
             )
             quills = self._extract_quills(result)
         except Exception as e:

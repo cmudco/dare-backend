@@ -25,6 +25,16 @@ class MCPConnectionError(MCPClientError):
     pass
 
 
+class MCPAuthError(MCPConnectionError):
+    """Raised when the server rejects the connection's credentials (401/403)."""
+    pass
+
+
+class MCPServerDownError(MCPConnectionError):
+    """Raised when nothing is listening at the server address (connection refused)."""
+    pass
+
+
 class MCPTimeoutError(MCPClientError):
     """Raised when MCP operation times out."""
     pass

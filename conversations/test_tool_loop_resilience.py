@@ -52,6 +52,7 @@ class ToolLoopResilienceTests(SimpleTestCase):
                     tools=None,
                     memory_context=[],
                     context_trace=None,
+                    mcp_issues=[],
                 )
 
             async def stream_round(self, prepared, messages, tools):
@@ -71,7 +72,7 @@ class ToolLoopResilienceTests(SimpleTestCase):
             sent.append(payload)
 
         result = await service.run(
-            request=SimpleNamespace(),
+            request=SimpleNamespace(mcp_server_ids=()),
             binding=_binding(SimpleNamespace(id=7, created_at=timezone.now()), send),
             retrieval_scope=None,
         )
@@ -93,6 +94,7 @@ class ToolLoopResilienceTests(SimpleTestCase):
                     tools=None,
                     memory_context=[],
                     context_trace=None,
+                    mcp_issues=[],
                 )
 
             async def stream_round(self, prepared, messages, tools):
@@ -105,7 +107,7 @@ class ToolLoopResilienceTests(SimpleTestCase):
             return None
 
         result = await service.run(
-            request=SimpleNamespace(),
+            request=SimpleNamespace(mcp_server_ids=()),
             binding=_binding(SimpleNamespace(id=8, created_at=timezone.now()), send),
             retrieval_scope=None,
         )
@@ -124,6 +126,7 @@ class ToolLoopResilienceTests(SimpleTestCase):
                     tools=None,
                     memory_context=[],
                     context_trace=None,
+                    mcp_issues=[],
                 )
 
             async def stream_round(self, prepared, messages, tools):
@@ -140,7 +143,7 @@ class ToolLoopResilienceTests(SimpleTestCase):
             return None
 
         result = await service.run(
-            request=SimpleNamespace(),
+            request=SimpleNamespace(mcp_server_ids=()),
             binding=_binding(SimpleNamespace(id=9, created_at=timezone.now()), send),
             retrieval_scope=None,
         )
@@ -163,6 +166,7 @@ class ToolLoopBudgetTests(SimpleTestCase):
                     tools=[{"type": "function"}],
                     memory_context=[],
                     context_trace=None,
+                    mcp_issues=[],
                 )
 
             async def stream_round(self, prepared, messages, tools):
@@ -199,7 +203,7 @@ class ToolLoopBudgetTests(SimpleTestCase):
             pass
 
         result = await service.run(
-            request=SimpleNamespace(),
+            request=SimpleNamespace(mcp_server_ids=()),
             binding=_binding(SimpleNamespace(id=8, created_at=timezone.now()), send),
             retrieval_scope=None,
         )

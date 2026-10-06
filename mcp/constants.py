@@ -48,9 +48,29 @@ class MCPAuthType:
         ]
 
 
+class ConnectionHealth:
+    """Last observed health of a user's MCP connection."""
+    UNKNOWN = 'unknown'
+    HEALTHY = 'healthy'
+    NEEDS_REAUTH = 'needs_reauth'
+    UNREACHABLE = 'unreachable'
+
+    @classmethod
+    def choices(cls):
+        return [
+            (cls.UNKNOWN, 'Unknown'),
+            (cls.HEALTHY, 'Healthy'),
+            (cls.NEEDS_REAUTH, 'Needs reconnect'),
+            (cls.UNREACHABLE, 'Unreachable'),
+        ]
+
+
 # Redis cache keys and TTLs
 TOOL_CACHE_KEY_PREFIX = 'mcp:tools:'
 TOOL_CACHE_TTL = 3600  # 1 hour
+
+SERVER_DOWN_KEY_PREFIX = 'mcp:down:'
+SERVER_DOWN_COOLDOWN = 60  # seconds a failed server is skipped before re-probing
 
 CONNECTION_CACHE_KEY_PREFIX = 'mcp:connection:'
 CONNECTION_CACHE_TTL = 300  # 5 minutes

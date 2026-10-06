@@ -6,17 +6,22 @@ Handles tool discovery, format conversion, and execution routing
 for use within chat conversations.
 """
 
+import asyncio
 import logging
 import time
+from dataclasses import dataclass, field
 from typing import Optional
 
 from asgiref.sync import sync_to_async
 
-from mcp.models import MCPServer, UserMCPConnection, MCPToolExecution
-from mcp.constants import ExecutionStatus, MCPAuthType
-from mcp.services.mcp_manager import mcp_manager, MCPManagerError
-from mcp.services.credential_service import MCPCredentialService
-from mcp.services.oauth_service import mcp_oauth_service, MCPOAuthError
+from mcp.constants import ConnectionHealth, MCPAuthType
+from mcp.models import MCPServer, MCPToolExecution, UserMCPConnection
+from mcp.services.connection_health import (
+    MCPReauthRequired,
+    MCPServerUnavailable,
+    call_with_auth_retry,
+)
+from mcp.services.mcp_manager import MCPManagerError, mcp_manager
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +29,37 @@ logger = logging.getLogger(__name__)
 class MCPToolExecutorError(Exception):
     """Base exception for MCP tool executor errors."""
     pass
+
+
+class MCPToolReauthError(MCPToolExecutorError):
+    """The server rejected the user's connection; they must reconnect."""
+
+    def __init__(self, server):
+        self.server = server
+        super().__init__(str(MCPReauthRequired(server)))
+
+
+@dataclass
+class MCPToolDiscovery:
+    """Discovery outcome for one turn.
+
+    ``tools`` go to the model, ``issues`` are the failures the user must hear
+    about, and ``servers`` is the per-server report for the activity timeline.
+    """
+
+    tools: list[dict] = field(default_factory=list)
+    issues: list[dict] = field(default_factory=list)
+    servers: list[dict] = field(default_factory=list)
+
+
+def connection_issue(server, status: str, message: str) -> dict:
+    return {
+        "server_slug": server.slug,
+        "server_name": server.name,
+        "auth_type": server.auth_type,
+        "status": status,
+        "message": message,
+    }
 
 
 class MCPToolExecutor:
@@ -41,98 +77,69 @@ class MCPToolExecutor:
     
     Usage:
         executor = MCPToolExecutor()
-        tools = await executor.get_tools_for_conversation(user, conversation)
+        discovery = await executor.get_tools_for_server_ids(user, [server.id])
         result = await executor.execute_tool_call(
             user, "slack", "send_message", {"channel": "C123", "text": "Hi"},
             message=message_obj, conversation=conversation_obj
         )
     """
 
-    async def get_tools_for_conversation(
-        self,
-        user,
-        conversation,
-    ) -> list[dict]:
-        """
-        Get all available tools from selected MCP servers for a conversation.
-        
-        Args:
-            user: User instance
-            conversation: Conversation instance with selected_mcp_servers
-        
-        Returns:
-            List of tools in OpenAI function calling format
-        """
-        if not conversation or not user:
-            return []
-
-        # Get selected MCP servers for this conversation
-        selected_servers = await self._get_selected_servers(conversation)
-        if not selected_servers:
-            return []
-
-        logger.info(
-            f"[MCPToolExecutor] Getting tools for {len(selected_servers)} selected servers"
-        )
-
-        all_tools = []
-        for server in selected_servers:
-            try:
-                tools = await self._get_tools_for_server(user, server)
-                all_tools.extend(tools)
-            except Exception as e:
-                logger.warning(
-                    f"[MCPToolExecutor] Failed to get tools from {server.slug}: {e}"
-                )
-                # Continue with other servers if one fails
-
-        logger.info(f"[MCPToolExecutor] Collected {len(all_tools)} total tools")
-        return all_tools
-
     async def get_tools_for_server_ids(
         self,
         user,
         server_ids: list[int],
         llm_provider: str = "openai",
-    ) -> list[dict]:
+    ) -> MCPToolDiscovery:
         """
-        Get all available tools from specified MCP server IDs.
-        
-        This is the preferred method for LLM service integration.
-        Fetches tools directly by ID without needing a conversation.
-        
-        Args:
-            user: User instance
-            server_ids: List of MCP server IDs
-            llm_provider: LLM provider name for format conversion (openai/claude/gemini)
-        
-        Returns:
-            List of tools in the appropriate LLM format
-        """
-        if not server_ids or not user:
-            return []
+        Get tools from the given MCP server IDs, reporting servers that failed.
 
-        # Get servers by IDs
-        servers = await self._get_servers_by_ids(server_ids)
-        if not servers:
-            return []
+        A failing server never blocks the others: its tools are omitted and a
+        connection issue is returned so the host can tell the user.
+        """
+        discovery = MCPToolDiscovery()
+        if not server_ids or not user:
+            return discovery
+
+        connections = await self._get_user_connections(user, server_ids)
+        results = await asyncio.gather(
+            *(self._timed_discovery(connection) for connection in connections)
+        )
+        for connection, (result, ms) in zip(connections, results):
+            server = connection.server
+            if isinstance(result, MCPReauthRequired):
+                status = ConnectionHealth.NEEDS_REAUTH
+                discovery.issues.append(connection_issue(server, status, str(result)))
+            elif isinstance(result, Exception):
+                status = ConnectionHealth.UNREACHABLE
+                logger.warning(
+                    f"[MCPToolExecutor] Failed to get tools from {server.slug}: {result}"
+                )
+                discovery.issues.append(
+                    connection_issue(
+                        server,
+                        ConnectionHealth.UNREACHABLE,
+                        f"Couldn't reach {server.name}, so its tools are "
+                        "unavailable for this message.",
+                    )
+                )
+            else:
+                status = ConnectionHealth.HEALTHY
+                discovery.tools.extend(result)
+            discovery.servers.append(
+                {
+                    "slug": server.slug,
+                    "name": server.name,
+                    "status": status,
+                    "tools": 0 if isinstance(result, Exception) else len(result),
+                    "ms": ms,
+                }
+            )
 
         logger.info(
-            f"[MCPToolExecutor] Getting tools for {len(servers)} servers by ID"
+            f"[MCPToolExecutor] Collected {len(discovery.tools)} tools, "
+            f"{len(discovery.issues)} connection issues"
         )
-
-        all_tools = []
-        for server in servers:
-            try:
-                tools = await self._get_tools_for_server(user, server)
-                all_tools.extend(tools)
-            except Exception as e:
-                logger.warning(
-                    f"[MCPToolExecutor] Failed to get tools from {server.slug}: {e}"
-                )
-
-        logger.info(f"[MCPToolExecutor] Collected {len(all_tools)} total tools")
-        return all_tools
+        return discovery
 
     async def execute_tool_call(
         self,
@@ -171,21 +178,21 @@ class MCPToolExecutor:
                 f"No active connection to {server.name}. User must connect first."
             )
 
-        credentials = await self._get_connection_credentials(connection)
-
         logger.info(
             f"[MCPToolExecutor] Executing {tool_name} on {server_slug} "
             f"for user {user.email}"
         )
 
         try:
-            # Execute via MCPManager (handles subprocess, audit logging)
-            result = await mcp_manager.call_tool(
-                user=user,
-                server=server,
-                tool_name=tool_name,
-                arguments=arguments,
-                credentials=credentials,
+            result = await call_with_auth_retry(
+                connection,
+                lambda credentials: mcp_manager.call_tool(
+                    user=user,
+                    server=server,
+                    tool_name=tool_name,
+                    arguments=arguments,
+                    credentials=credentials,
+                ),
             )
 
             # Update execution record with message/conversation context if provided
@@ -196,7 +203,9 @@ class MCPToolExecutor:
 
             return result
 
-        except MCPManagerError as e:
+        except MCPReauthRequired:
+            raise MCPToolReauthError(server)
+        except (MCPManagerError, MCPServerUnavailable) as e:
             raise MCPToolExecutorError(str(e))
 
     def convert_to_openai_function(
@@ -255,19 +264,22 @@ class MCPToolExecutor:
     # ========== Private Helper Methods ==========
 
     @sync_to_async
-    def _get_selected_servers(self, conversation) -> list:
-        """Get selected MCP servers for a conversation."""
-        return list(conversation.selected_mcp_servers.filter(is_active=True))
-
-    @sync_to_async
     def _get_server_by_slug(self, slug: str) -> Optional[MCPServer]:
         """Get MCP server by slug."""
         return MCPServer.active_objects.filter(slug=slug).first()
 
     @sync_to_async
-    def _get_servers_by_ids(self, server_ids: list[int]) -> list[MCPServer]:
-        """Get MCP servers by their IDs."""
-        return list(MCPServer.active_objects.filter(id__in=server_ids))
+    def _get_user_connections(
+        self, user, server_ids: list[int]
+    ) -> list[UserMCPConnection]:
+        """The user's usable connections to the given active servers, in one query."""
+        connections = UserMCPConnection.active_objects.select_related("server").filter(
+            user=user,
+            server_id__in=server_ids,
+            server__is_active=True,
+            server__is_deleted=False,
+        )
+        return [c for c in connections if self._connection_has_auth(c)]
 
     @sync_to_async
     def _get_user_connection(self, user, server) -> Optional[UserMCPConnection]:
@@ -278,94 +290,30 @@ class MCPToolExecutor:
             .first()
         )
 
-    async def _get_tools_for_server(self, user, server) -> list[dict]:
-        """
-        Get tools from a single MCP server and convert to OpenAI format.
-        
-        Args:
-            user: User instance
-            server: MCPServer instance
-        
-        Returns:
-            List of OpenAI-format tool definitions
-        """
-        connection = await self._get_user_connection(user, server)
-        if not connection or not self._connection_has_auth(connection):
-            logger.debug(
-                f"[MCPToolExecutor] User {user.email} has no connection to {server.slug}"
-            )
-            return []
-
-        credentials = await self._get_connection_credentials(connection)
-
-        # Get tools from cache or subprocess
+    async def _timed_discovery(
+        self, connection: UserMCPConnection
+    ) -> tuple[list[dict] | Exception, int]:
+        """Discover one server, returning its tools (or the failure) and elapsed ms."""
+        start = time.monotonic()
         try:
-            mcp_tools = await mcp_manager.get_available_tools(server, credentials)
-        except MCPManagerError as e:
-            logger.warning(f"[MCPToolExecutor] Failed to get tools from {server.slug}: {e}")
-            return []
+            result = await self._discover_tools(connection)
+        except Exception as error:  # reported per server, never fails the turn
+            result = error
+        return result, int((time.monotonic() - start) * 1000)
 
-        # Convert to OpenAI format with server prefix
-        openai_tools = [
-            self.convert_to_openai_function(tool, server.slug)
-            for tool in mcp_tools
-        ]
-
-        logger.debug(
-            f"[MCPToolExecutor] Got {len(openai_tools)} tools from {server.slug}"
+    async def _discover_tools(self, connection: UserMCPConnection) -> list[dict]:
+        """One server's tools in OpenAI format; raises on auth or reachability failure."""
+        server = connection.server
+        mcp_tools = await call_with_auth_retry(
+            connection,
+            lambda credentials: mcp_manager.get_available_tools(server, credentials),
         )
-        return openai_tools
+        return [self.convert_to_openai_function(tool, server.slug) for tool in mcp_tools]
 
     def _connection_has_auth(self, connection: UserMCPConnection) -> bool:
         if connection.server.auth_type == MCPAuthType.NONE:
             return True
         return bool(connection.encrypted_credentials)
-
-    async def _get_connection_credentials(self, connection: UserMCPConnection) -> dict:
-        credentials = MCPCredentialService.decrypt_credentials(
-            connection.encrypted_credentials
-        )
-        if connection.server.auth_type != MCPAuthType.OAUTH2:
-            return credentials
-
-        expires_at = connection.auth_metadata.get("expires_at")
-        refresh_token = MCPCredentialService.get_refresh_token(credentials)
-        if not expires_at or not refresh_token or expires_at > int(time.time()) + 60:
-            return credentials
-
-        try:
-            token = await mcp_oauth_service.refresh_access_token(
-                connection.server,
-                refresh_token,
-            )
-        except MCPOAuthError as error:
-            logger.warning(
-                f"[MCPToolExecutor] Failed to refresh OAuth token for {connection.server.slug}: {error}"
-            )
-            return credentials
-
-        encrypted_credentials = MCPCredentialService.encrypt_credentials(
-            token.to_credentials()
-        )
-        auth_metadata = token.to_metadata()
-        await self._update_connection_auth(
-            connection.id,
-            encrypted_credentials,
-            auth_metadata,
-        )
-        return token.to_credentials()
-
-    @sync_to_async
-    def _update_connection_auth(
-        self,
-        connection_id: int,
-        encrypted_credentials: dict,
-        auth_metadata: dict,
-    ):
-        UserMCPConnection.all_objects.filter(id=connection_id).update(
-            encrypted_credentials=encrypted_credentials,
-            auth_metadata=auth_metadata,
-        )
 
     @sync_to_async
     def _update_execution_context(

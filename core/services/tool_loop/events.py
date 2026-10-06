@@ -9,6 +9,8 @@ covering the full lifecycle the FE renders:
     tool_call_executing      the tool is running (final arguments attached)
     tool_call_result         completed or failed, with the typed result
     tool_rounds_capped       the loop hit its round cap
+    tool_servers_connecting  MCP tool discovery started for these server ids
+    mcp_connection_issue     a selected MCP server's auth expired or it is down
     context_trace            the turn's context-assembly trace
 
 Every payload carries the host's ``correlation`` keys — ``{"message_id"}``
@@ -137,6 +139,21 @@ class ToolEventEmitter:
                 **self._correlation,
                 "round": round_index,
             }
+        )
+
+    async def tool_servers_connecting(self, server_ids: list) -> None:
+        await self._send_payload(
+            {
+                "type": "tool_servers_connecting",
+                **self._correlation,
+                "server_ids": server_ids,
+            }
+        )
+
+    async def mcp_connection_issue(self, issue: Dict[str, Any]) -> None:
+        """A selected MCP connection is expired or unreachable (see MCPToolDiscovery)."""
+        await self._send_payload(
+            {"type": "mcp_connection_issue", **self._correlation, **issue}
         )
 
     async def context_trace(self, trace: Dict[str, Any]) -> None:

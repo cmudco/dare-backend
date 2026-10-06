@@ -3,8 +3,10 @@ Serializers for MCP API.
 """
 
 from rest_framework import serializers
+
 from mcp.constants import MCPAuthType, MCPTransport
-from mcp.models import MCPServer, UserMCPConnection, MCPToolExecution
+from mcp.models import MCPServer, MCPToolExecution, UserMCPConnection
+from mcp.services.connection_health import reset_health
 from mcp.services.credential_service import MCPCredentialService
 
 
@@ -133,12 +135,16 @@ class UserMCPConnectionSerializer(serializers.ModelSerializer):
             'auth_metadata',
             'is_active',
             'last_used_at',
+            'health_status',
+            'health_error',
+            'health_changed_at',
             'created_at',
             'updated_at',
         ]
         read_only_fields = [
             'id', 'server', 'masked_credentials', 'has_credentials',
-            'auth_metadata', 'last_used_at', 'created_at', 'updated_at'
+            'auth_metadata', 'last_used_at', 'health_status', 'health_error',
+            'health_changed_at', 'created_at', 'updated_at'
         ]
 
     def get_masked_credentials(self, obj):
@@ -224,11 +230,13 @@ class UserMCPConnectionCreateSerializer(serializers.Serializer):
             }
             connection.is_active = True
             connection.is_deleted = False
+            health_fields = reset_health(connection)
             connection.save(update_fields=[
                 'encrypted_credentials',
                 'auth_metadata',
                 'is_active',
                 'is_deleted',
+                *health_fields,
                 'updated_at',
             ])
 
@@ -285,3 +293,4 @@ class ConnectionTestResultSerializer(serializers.Serializer):
 
     success = serializers.BooleanField()
     message = serializers.CharField()
+    health_status = serializers.CharField()

@@ -38,6 +38,7 @@ class _QuillmarkChainLLMService:
             ],
             memory_context=[],
             context_trace=None,
+            mcp_issues=[],
         )
 
     async def stream_round(self, prepared, messages, tools):
@@ -128,6 +129,7 @@ class _ClaudeInterleavedLLMService:
             tools=[{"name": "quillmark__get_spec"}],
             memory_context=[],
             context_trace=None,
+            mcp_issues=[],
         )
 
     async def stream_round(self, prepared, messages, tools):
@@ -187,6 +189,7 @@ class _ClaudeWebThenDareLLMService:
             tools=[{"name": "search_documents"}],
             memory_context=[],
             context_trace=None,
+            mcp_issues=[],
         )
 
     async def stream_round(self, prepared, messages, tools):
@@ -240,7 +243,7 @@ class QuillmarkToolLoopTests(SimpleTestCase):
             sent.append(payload)
 
         result = await service.run(
-            request=SimpleNamespace(),
+            request=SimpleNamespace(mcp_server_ids=()),
             binding=_binding(SimpleNamespace(id=296, created_at=timezone.now()), send),
             retrieval_scope=None,
         )
@@ -276,7 +279,7 @@ class QuillmarkToolLoopTests(SimpleTestCase):
             return None
 
         result = await service.run(
-            request=SimpleNamespace(),
+            request=SimpleNamespace(mcp_server_ids=()),
             binding=_binding(SimpleNamespace(id=297, created_at=timezone.now()), send),
             retrieval_scope=None,
         )
@@ -308,7 +311,7 @@ class QuillmarkToolLoopTests(SimpleTestCase):
             return None
 
         result = await service.run(
-            request=SimpleNamespace(),
+            request=SimpleNamespace(mcp_server_ids=()),
             binding=_binding(SimpleNamespace(id=298, created_at=timezone.now()), send),
             retrieval_scope=retrieval_scope,
         )

@@ -31,8 +31,7 @@ from assistant.constants import ACCOUNT_TOOLS, SEARCH_PLATFORM_DOCS
 from assistant.services.account_tools import execute_account_tool
 from conversations.constants import ToolCallOrigin
 from conversations.models import Conversation, Message
-from conversations.services.artifact_tool_executor import \
-    artifact_tool_executor
+from conversations.services.artifact_tool_executor import artifact_tool_executor
 from core.services.dtos import ToolCallRequest, ToolCallResult
 from core.services.tool_loop.binding import ArtifactHost, ToolLoopStore
 from core.services.tool_loop.events import ToolEventEmitter
@@ -44,8 +43,14 @@ from dare_tools.services.retrieval_tool_executor import (
     RetrievalScope,
     retrieval_tool_executor,
 )
+from mcp.constants import ConnectionHealth
 from mcp.services.artifact_bridge import BridgeStatus, maybe_create_pdf_artifact
-from mcp.services.mcp_tool_executor import MCPToolExecutorError, mcp_tool_executor
+from mcp.services.mcp_tool_executor import (
+    MCPToolExecutorError,
+    MCPToolReauthError,
+    connection_issue,
+    mcp_tool_executor,
+)
 from memory.services.session_search import search_sessions_for_user
 from projects.services.project_service import memory_scope_project_id
 
@@ -156,6 +161,13 @@ class ToolExecutionService:
                 raw_result = {"success": False, "error": f"Unknown tool: {call.name}"}
                 content = f"Error: unknown tool '{call.name}'"
                 is_error = True
+        except MCPToolReauthError as exc:
+            raw_result = {"success": False, "error": str(exc)}
+            content = f"Error: {exc}"
+            is_error = True
+            await ctx.emitter.mcp_connection_issue(
+                connection_issue(exc.server, ConnectionHealth.NEEDS_REAUTH, str(exc))
+            )
         except MCPToolExecutorError as exc:
             raw_result = {"success": False, "error": str(exc)}
             content = f"Error: {exc}"

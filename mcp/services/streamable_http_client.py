@@ -9,8 +9,10 @@ import httpx
 from mcp.services.base_client import BaseMCPClient
 from mcp.services.client_dtos import MCPConnectionConfig
 from mcp.services.mcp_client import (
+    MCPAuthError,
     MCPConnectionError,
     MCPProtocolError,
+    MCPServerDownError,
     MCPTimeoutError,
 )
 
@@ -84,14 +86,18 @@ class StreamableHTTPMCPClient(BaseMCPClient):
             payload["params"] = params
 
         try:
+            # An explicit timeout=None disables httpx timeouts entirely, so
+            # fall back to the client default instead.
             response = await self._client.post(
                 self.url,
                 json=payload,
                 headers=self._build_headers(),
-                timeout=timeout,
+                timeout=httpx.USE_CLIENT_DEFAULT if timeout is None else timeout,
             )
         except httpx.TimeoutException as error:
             raise MCPTimeoutError(f"Timeout waiting for response to {method}") from error
+        except httpx.ConnectError as error:
+            raise MCPServerDownError(f"Remote MCP server is not reachable: {error}") from error
         except httpx.HTTPError as error:
             raise MCPConnectionError(f"Remote MCP request failed: {error}") from error
 
@@ -138,8 +144,14 @@ class StreamableHTTPMCPClient(BaseMCPClient):
             self._session_id = session_id
 
     def _parse_response(self, response: httpx.Response) -> dict:
+        # Only 401 means the token is bad; 403 is usually a scope or plan limit
+        # on one call, which reconnecting would not fix.
         if response.status_code == 401:
-            raise MCPConnectionError("Remote MCP server rejected authentication")
+            raise MCPAuthError("Remote MCP server rejected authentication (HTTP 401)")
+        if response.status_code in (502, 503, 504):
+            raise MCPServerDownError(
+                f"Remote MCP server is unavailable (HTTP {response.status_code})"
+            )
         if response.status_code >= 400:
             raise MCPConnectionError(
                 f"Remote MCP server returned HTTP {response.status_code}: {response.text[:500]}"
