@@ -9,6 +9,7 @@ env = environ.Env()
 environ.Env.read_env(os.path.join(BASE_DIR, ".env"))
 
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY")
+SSO_JWT_KEY = os.getenv("SSO_JWT_KEY", "") # Signs the JWTs this project shares with Research Tools.
 DEBUG = os.getenv("DJANGO_DEBUG")
 DJANGO_SETTINGS_MODULE = os.getenv("DJANGO_SETTINGS_MODULE")
 ENVIRONMENT = os.getenv("ENVIRONMENT", "local")
