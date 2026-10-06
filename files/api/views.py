@@ -451,9 +451,14 @@ class FileViewSet(viewsets.ModelViewSet):
 
     def _get_import_access_token(self, request, is_publicly_shared):
         """Resolve SyftBox token for import reads."""
+        # Through the package's resolver so credentials come from
+        # SyftBoxAccount, falling back to the legacy columns on these models
+        # for any identity not yet backfilled.
+        from syftbox_connect.credentials import access_token_for
+
         if is_publicly_shared:
-            return DareConfig.active_objects.first().access_token
-        return request.user.access_token
+            return access_token_for(DareConfig.active_objects.first().project_email)
+        return access_token_for(request.user.email)
 
     @action(
         detail=True,

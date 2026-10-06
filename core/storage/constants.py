@@ -1,15 +1,11 @@
 """
-Constants for SyftBox storage integration.
+Re-export shim: this code now lives in the shared ``syftbox-connect``
+package. Kept so existing imports in this project keep resolving; the
+implementation is in ``syftbox_connect.storage.constants``.
 """
-from django.db import models
-from django.utils.translation import gettext_lazy as _
 
-
-class StorageBackendChoice(models.IntegerChoices):
-    """Choices for file storage backends."""
-    LOCAL = 1, _("Local FileSystem")
-    SYFTBOX = 2, _("SyftBox Distributed Storage")
-
-
-DEFAULT_FILE_PERMISSIONS = ['read']
-DEFAULT_OWNER_PERMISSIONS = ['admin', 'read', 'write', 'create']
+from syftbox_connect.storage.constants import (  # noqa: F401
+    DEFAULT_FILE_PERMISSIONS,
+    DEFAULT_OWNER_PERMISSIONS,
+    StorageBackendChoice,
+)

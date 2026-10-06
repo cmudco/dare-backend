@@ -12,6 +12,7 @@ from files.tasks import migrate_user_files_to_syftbox
 from syftbox.api.serializers.auth import VerifyOtpSerializer
 from syftbox.errors import SyftBoxErrorCode, SyftBoxException
 from syftbox.services.syftbox_auth_service import SyftBoxAuthService
+from syftbox_connect.models import SyftBoxAccount
 
 
 class SyftboxAuthView(ViewSet):
@@ -35,7 +36,8 @@ class SyftboxAuthView(ViewSet):
         except SyftBoxException as error:
             http_status = (
                 status.HTTP_400_BAD_REQUEST
-                if error.code in {SyftBoxErrorCode.OTP_REQUIRED, SyftBoxErrorCode.INVALID_REQUEST}
+                if error.code
+                in {SyftBoxErrorCode.OTP_REQUIRED, SyftBoxErrorCode.INVALID_REQUEST}
                 else status.HTTP_502_BAD_GATEWAY
             )
             return Response(
@@ -68,6 +70,10 @@ class SyftboxAuthView(ViewSet):
                         "storage_backend",
                     ]
                 )
+                # Written to both while the credential columns are still
+                # present. Reads already prefer the package's table; the
+                # columns go once it has been serving them for a release.
+                SyftBoxAccount.link(email=email, tokens=tokens, owner=request.user)
             migration_job = enqueue(migrate_user_files_to_syftbox, request.user.id)
             return Response(
                 {
