@@ -904,6 +904,12 @@ class Message(BaseModel):
         related_name="messages",
         help_text="The LLM used to generate this message (null for user messages or LiteLLM-routed dispatches).",
     )
+    llm_name = models.CharField(
+        max_length=255,
+        null=True,
+        blank=True,
+        help_text="Name of the LLM, recorded when the model is deleted so history keeps its label.",
+    )
     litellm_key = models.ForeignKey(
         "billing.LiteLLMKey",
         on_delete=models.SET_NULL,
