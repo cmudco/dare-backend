@@ -3,6 +3,9 @@ from django.utils.translation import gettext_lazy as _
 
 APP_NAME = "billing"
 
+# Transaction-history platform filter value that spans every auth source.
+ALL_PLATFORMS = "ALL"
+
 
 class TransactionTypeChoice(models.IntegerChoices):
     DEBIT = 1, _("Debit")
@@ -39,6 +42,8 @@ class UserWalletPreferenceTypeChoice(models.TextChoices):
     BYO = "BYO", _("BYO Key")
     LITELLM = "LITELLM", _("LiteLLM Key")
 
+
+LITELLM_SPEND_LIMIT_REACHED = "LITELLM_SPEND_LIMIT_REACHED"
 
 DEFAULT_REFILL_AMOUNT = "5.00"
 DEFAULT_REFILL_PERIOD_DAYS = 30

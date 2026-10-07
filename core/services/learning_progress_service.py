@@ -90,7 +90,11 @@ If there is no current status, follow the system prompt to make a new status rep
                 {"role": "user", "content": user_message},
             ]
 
-            ai_service = await self._get_ai_service(llm, user=user)
+            ai_service = await self._get_ai_service(
+                llm,
+                user=user,
+                bot_id=conversation.bot_id if conversation is not None else None,
+            )
             event_stream = ai_service.stream_chat_completion(
                 messages=messages,
                 max_tokens=max_tokens,
@@ -122,15 +126,17 @@ If there is no current status, follow the system prompt to make a new status rep
         )
 
     async def _get_ai_service(
-        self, llm: LLM, user: Optional[object] = None
+        self,
+        llm: LLM,
+        user: Optional[object] = None,
+        bot_id: Optional[int] = None,
     ) -> AIService:
         """Return the provider-specific AI service for the given LLM.
 
-        Forwards ``user`` so the user's active wallet (DARE / BYO / LITELLM)
-        decides which key pays for the assessment call — pre-wallet-refactor
-        this always billed the system DARE wallet.
+        Forwards ``user`` and ``bot_id`` so the same wallet that pays for the
+        bot's replies decides which key pays for the assessment call.
         """
-        return await self.llm_service._get_ai_service(llm, user=user)
+        return await self.llm_service._get_ai_service(llm, user=user, bot_id=bot_id)
 
     @database_sync_to_async
     def _get_default_progress_llm(self) -> LLM:

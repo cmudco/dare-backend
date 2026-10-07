@@ -682,6 +682,14 @@ class Conversation(BaseModel):
         default=False,
         help_text="Whether this conversation is marked as a favorite by its owner.",
     )
+    project = models.ForeignKey(
+        "projects.PersonalProject",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="conversations",
+        help_text="Personal project this conversation is filed under, if any.",
+    )
 
     # Sharing / publishing
     is_published = models.BooleanField(
@@ -768,6 +776,8 @@ class Conversation(BaseModel):
                     self.selected_media_ids.copy() if self.selected_media_ids else []
                 ),
                 prompt=self.prompt,
+                # A fork belongs to another user, who cannot see this project.
+                project=self.project if user in (None, self.user) else None,
                 sort_order=self.sort_order,
                 selected_agent=self.selected_agent,
                 # Copy file/embedding selections for forked conversations

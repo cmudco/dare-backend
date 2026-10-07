@@ -9,9 +9,12 @@ import logging
 from typing import AsyncGenerator, Dict, List, Optional, Tuple, Type, TypeVar
 
 import httpx
+from asgiref.sync import sync_to_async
+from django.db import DatabaseError
 from openai import AsyncOpenAI
 from pydantic import BaseModel
 
+from billing.gateway_report import parse_gateway_key_report, record_gateway_key_report
 from conversations.models import LLM
 from core.services.api_key_service import get_provider_api_key
 from core.services.dtos.stream_event_dto import LLMStreamEvent
@@ -46,6 +49,7 @@ OPENAI_CHAT_PARAMS = frozenset(
         "tools",
         "tool_choice",
         "response_format",
+        "user",
     }
 )
 
@@ -58,6 +62,8 @@ class CustomLLMService:
         llm: LLM,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
+        litellm_key_id: Optional[str] = None,
+        gateway_user: Optional[str] = None,
     ):
         """
         Initialize Custom LLM service with OpenAI-compatible endpoint.
@@ -68,6 +74,10 @@ class CustomLLMService:
             base_url: Endpoint override. LiteLLM dispatch passes the proxy URL
                 from the wallet, since a synthetic model carries no base_url
                 of its own.
+            litellm_key_id: LiteLLM key this call bills to; the gateway's spend
+                report in each response is recorded against it.
+            gateway_user: End-user id sent as the OpenAI ``user`` field so the
+                gateway attributes spend per DARE user.
         """
         endpoint = base_url or llm.base_url
         if not endpoint:
@@ -80,11 +90,18 @@ class CustomLLMService:
         if api_key is None:
             api_key = get_provider_api_key(llm.provider)
 
-        # Initialize OpenAI client with custom base URL
+        self.litellm_key_id = litellm_key_id
+        self.gateway_user = gateway_user
+        event_hooks = (
+            {"response": [self._record_gateway_report]} if litellm_key_id else {}
+        )
         self.client = AsyncOpenAI(
             api_key=api_key,
             base_url=endpoint,
-            http_client=httpx.AsyncClient(verify=False),  # bypass SSL verification
+            http_client=httpx.AsyncClient(
+                verify=False,  # bypass SSL verification
+                event_hooks=event_hooks,
+            ),
         )
         self.model = llm.identifier
         self.is_reasoning = llm.is_reasoning
@@ -192,6 +209,7 @@ class CustomLLMService:
             "model": self.model,
             "messages": messages,
             "response_format": response_format,
+            **self._attribution(),
         }
         if self.is_reasoning:
             params["max_completion_tokens"] = max_tokens
@@ -225,6 +243,7 @@ class CustomLLMService:
             "model": self.model,
             "messages": messages,
             "response_format": response_model,
+            **self._attribution(),
         }
         if self.is_reasoning:
             params["max_completion_tokens"] = max_tokens
@@ -255,6 +274,22 @@ class CustomLLMService:
             logger.exception("[Custom LLM] Failed to close async client")
 
     # ==================== Private Methods ====================
+
+    def _attribution(self) -> Dict[str, str]:
+        return {"user": self.gateway_user} if self.gateway_user else {}
+
+    async def _record_gateway_report(self, response: httpx.Response) -> None:
+        report = parse_gateway_key_report(response.headers)
+        if report is None:
+            return
+        try:
+            await sync_to_async(record_gateway_key_report)(self.litellm_key_id, report)
+        except DatabaseError:
+            # The call has already been paid for; losing one reconciliation
+            # sample must not fail the user's reply.
+            logger.exception(
+                "Could not record gateway spend for LiteLLM key %s", self.litellm_key_id
+            )
 
     def _prepare_messages(
         self, messages: List[Dict], images: Optional[List[Dict]]
@@ -329,6 +364,7 @@ class CustomLLMService:
             "messages": messages,
             "stream": True,
             "stream_options": {"include_usage": True},
+            **self._attribution(),
         }
 
         # Reasoning models rename the token ceiling and reject sampling

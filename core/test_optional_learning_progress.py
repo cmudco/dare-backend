@@ -26,7 +26,7 @@ class OptionalLearningProgressTests(SimpleTestCase):
 
     def run_progress(self, meta, service=None):
         async_to_sync(run_learning_progress_stream)(
-            conversation=SimpleNamespace(id=1, conversation_id="QA"),
+            conversation=SimpleNamespace(id=1, conversation_id="QA", bot_id=None),
             message_data={"bot_meta": meta},
             message_obj=SimpleNamespace(id=2),
             llm=SimpleNamespace(id=1),
@@ -119,7 +119,7 @@ class OptionalLearningProgressTests(SimpleTestCase):
 
         self.assertEqual(captured["max_tokens"], 32000)
         self.service._get_conversation_history.assert_awaited_once_with(
-            SimpleNamespace(id=1, conversation_id="QA"), limit=80
+            SimpleNamespace(id=1, conversation_id="QA", bot_id=None), limit=80
         )
         self.service._get_previous_assessment.assert_awaited_once()
         self.assertIn("User: hello", captured["messages"][1]["content"])

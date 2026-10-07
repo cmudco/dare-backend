@@ -268,6 +268,9 @@ async def build_standard_messages(
                 messages=messages,
                 query=request.message,
                 user_id=user_id,
+                project_id=(
+                    request.conversation.project_id if request.conversation else None
+                ),
             )
             if memory_context:
                 stage["count"] = len(memory_context)

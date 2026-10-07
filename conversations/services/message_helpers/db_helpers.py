@@ -13,10 +13,16 @@ from typing import Dict, List, Optional
 
 from channels.db import database_sync_to_async
 
+from billing.exceptions import BotModelUnavailable
 from billing.models import LiteLLMKey
+from billing.wallet_router import load_bot_billing, sponsored_litellm_key
 from conversations.constants import Provider, SenderType
 from conversations.models import LLM, Conversation, Message
 from core.services.dtos import LLMDescriptor
+from core.services.dtos.llm_descriptor_dto import (
+    LITELLM_ID_PREFIX,
+    split_litellm_picker_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -77,20 +83,17 @@ def get_message_image_file_ids(message: Message) -> List[int]:
 def _resolve_litellm_ref(
     key_id: str, model_name: str, user=None
 ) -> Optional[LLMDescriptor]:
-    """Look up a LiteLLM dispatch reference and build the descriptor."""
-    key_queryset = (
-        LiteLLMKey.visible_for_user(user)
-        if user is not None
-        else LiteLLMKey.objects.all()
-    )
-    key = key_queryset.filter(pk=key_id).first()
+    """Look up a LiteLLM dispatch reference the user can use and build the descriptor."""
+    if user is None:
+        return None
+    key = LiteLLMKey.visible_for_user(user).filter(pk=key_id).first()
     if key is None:
         logger.info("LiteLLM ref references missing LiteLLMKey id=%s", key_id)
         return None
-    if getattr(key, "is_expired", False):
-        logger.info("LiteLLM ref references expired LiteLLMKey id=%s", key_id)
-        return None
+    return _litellm_descriptor(key, model_name)
 
+
+def _litellm_descriptor(key, model_name: str) -> LLMDescriptor:
     # The probe's ``litellm_provider`` names the upstream vendor, and some
     # gateways report "openai" for every model they front. ``provider`` selects
     # DARE's service class and credential, so it must describe the transport:
@@ -100,16 +103,13 @@ def _resolve_litellm_ref(
     )
 
 
-LITELLM_ID_PREFIX = "litellm:"
-
-
 def _visible_llms_for_user(user):
     """Mirror the model catalog entitlement rules at dispatch time."""
     return LLM.visible_for_user(user)
 
 
 @database_sync_to_async
-def parse_model_id(model_id, user=None) -> Optional[LLMDescriptor]:
+def parse_model_id(model_id, user=None, *, bot_id=None) -> Optional[LLMDescriptor]:
     """Resolve an opaque ``model_id`` string to an ``LLMDescriptor``.
 
     The FE treats ``model_id`` as opaque — it just hands back whatever the
@@ -118,21 +118,23 @@ def parse_model_id(model_id, user=None) -> Optional[LLMDescriptor]:
       ``"<int>"``                       → DB-backed LLM (PK)
       ``"litellm:<key_pk>:<model>"``    → LiteLLM-routed dispatch
 
-    Returns ``None`` for an unknown id, deleted/expired LiteLLM key, or
-    malformed string — caller falls back to the conversation default.
+    In a bot conversation (``bot_id``) a LiteLLM model belongs to the bot's
+    owner, who sponsors it: it resolves only when it is the bot's saved model
+    and the owner can still use its key, whoever is chatting.
+
+    Returns ``None`` for an unknown id, a key the resolving user can't use, or
+    a malformed string — the caller reports the model as unavailable.
     """
     if not isinstance(model_id, str) or not model_id:
         return None
     if model_id.startswith(LITELLM_ID_PREFIX):
-        try:
-            _, key_id, model_name = model_id.split(":", 2)
-        except ValueError:
+        parsed = split_litellm_picker_id(model_id)
+        if parsed is None:
             logger.warning("Malformed LiteLLM model_id: %r", model_id)
             return None
-        if not key_id or not model_name:
-            logger.warning("Malformed LiteLLM model_id: %r", model_id)
-            return None
-        return _resolve_litellm_ref(key_id, model_name, user=user)
+        if bot_id is not None:
+            return _resolve_sponsored_ref(bot_id, model_id, parsed[1])
+        return _resolve_litellm_ref(*parsed, user=user)
     try:
         pk = int(model_id)
     except ValueError:
@@ -140,6 +142,20 @@ def parse_model_id(model_id, user=None) -> Optional[LLMDescriptor]:
         return None
     llm = _visible_llms_for_user(user).filter(id=pk).first()
     return LLMDescriptor.from_llm(llm) if llm else None
+
+
+def _resolve_sponsored_ref(
+    bot_id: int, model_id: str, model_name: str
+) -> Optional[LLMDescriptor]:
+    config, owner = load_bot_billing(bot_id, chat_model_ref=model_id)
+    if config is None:
+        return None
+    try:
+        key = sponsored_litellm_key(config, owner, model_id)
+    except BotModelUnavailable:
+        logger.info("Bot %s cannot sponsor model %r", bot_id, model_id)
+        return None
+    return _litellm_descriptor(key, model_name)
 
 
 @database_sync_to_async

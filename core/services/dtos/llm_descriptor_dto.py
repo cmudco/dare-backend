@@ -11,10 +11,31 @@ cycle; consumers receive the real instances on the optional fields.
 """
 
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Optional, Tuple
 
 from core.services.model_capabilities import family_supports_temperature
 from core.services.model_identity import resolve_family
+
+LITELLM_ID_PREFIX = "litellm:"
+
+
+def litellm_picker_id(litellm_key_id: Any, model_name: str) -> str:
+    """Picker id of a LiteLLM-routed model: ``litellm:<key_id>:<model>``."""
+    return f"{LITELLM_ID_PREFIX}{litellm_key_id}:{model_name}"
+
+
+def split_litellm_picker_id(model_id: str) -> Optional[Tuple[str, str]]:
+    """``(key_id, model_name)`` of a LiteLLM picker id, else ``None``.
+
+    Model names may themselves contain colons (``bedrock:model:v1``), so only
+    the first two separators are structural.
+    """
+    if not model_id.startswith(LITELLM_ID_PREFIX):
+        return None
+    parts = model_id.split(":", 2)
+    if len(parts) != 3 or not parts[1] or not parts[2]:
+        return None
+    return parts[1], parts[2]
 
 
 @dataclass(frozen=True)
@@ -122,6 +143,13 @@ class LLMDescriptor:
             litellm_key=litellm_key,
             litellm_model_name=model_name,
         )
+
+    @property
+    def litellm_model_ref(self) -> Optional[str]:
+        """Picker id of a LiteLLM-routed descriptor; ``None`` for DB models."""
+        if self.litellm_key is None:
+            return None
+        return litellm_picker_id(self.litellm_key.pk, self.litellm_model_name)
 
     @property
     def is_synthetic(self) -> bool:

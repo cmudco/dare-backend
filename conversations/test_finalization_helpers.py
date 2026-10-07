@@ -4,7 +4,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from asgiref.sync import async_to_sync
 from django.test import TransactionTestCase
 
-from conversations.models import Conversation
+from conversations.constants import SenderType
+from conversations.models import Conversation, Message
 from conversations.services.message_helpers.finalization_helpers import (
     _conversation_was_deleted,
     finalize_message,
@@ -19,13 +20,10 @@ FORMAT_MESSAGE = (
 class ConversationFinalizationTests(TransactionTestCase):
     def test_existing_conversation_allows_message_finalization(self):
         conversation = Conversation._base_manager.create(conversation_id="FINALIZE")
-        message = SimpleNamespace(
-            id=42,
-            conversation_id=conversation.pk,
-            message="",
-            original_message=None,
+        message = Message._base_manager.create(
+            conversation=conversation, sender_type=SenderType.AI_ASSISTANT, message=""
         )
-        finalized_message = SimpleNamespace(id=42, cost=0)
+        finalized_message = SimpleNamespace(id=message.id, cost=0)
         finalize_ai_message = MagicMock(return_value=finalized_message)
         billing_service = SimpleNamespace(
             finalize_ai_message=finalize_ai_message,

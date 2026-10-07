@@ -15,6 +15,7 @@ from conversations.constants import SenderType
 from conversations.models import Conversation, Message
 from memory.models import MemoryLedgerEntry
 from memory.services.session_search import search_sessions_for_user
+from projects.models import PersonalProject
 
 
 class SessionSearchTests(TestCase):
@@ -167,3 +168,40 @@ class DateBoundTests(TestCase):
         result = self.search("")
         self.assertFalse(result["success"])
         self.assertIn("since/until", result["error"])
+
+
+class ProjectScopeTests(TestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.user = get_user_model().objects.create_user(
+            email="session-projects@example.com", password="x"
+        )
+        cls.grant = PersonalProject.objects.create(user=cls.user, name="Grant")
+        research = PersonalProject.objects.create(user=cls.user, name="Research")
+        for conversation_id, project, text in [
+            ("grant-conv", cls.grant, "The grant nickname is Red Kite."),
+            ("research-conv", research, "The study nickname is Blue Lantern."),
+            ("loose-conv", None, "My cat's nickname is Biscuit."),
+        ]:
+            conversation = Conversation.active_objects.create(
+                user=cls.user, conversation_id=conversation_id, project=project
+            )
+            Message.active_objects.create(
+                conversation=conversation,
+                sender_type=SenderType.PLAYER,
+                sender="t",
+                message=text,
+            )
+
+    def test_a_project_search_only_sees_that_projects_chats(self):
+        result = search_sessions_for_user(
+            self.user, "nickname", source_project_id=self.grant.id
+        )
+        self.assertIn("Red Kite", result["transcript"])
+        self.assertNotIn("Blue Lantern", result["transcript"])
+        self.assertNotIn("Biscuit", result["transcript"])
+
+    def test_an_unscoped_search_sees_every_chat(self):
+        result = search_sessions_for_user(self.user, "nickname")
+        for name in ("Red Kite", "Blue Lantern", "Biscuit"):
+            self.assertIn(name, result["transcript"])

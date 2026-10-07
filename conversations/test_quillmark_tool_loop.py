@@ -24,7 +24,7 @@ class _QuillmarkChainLLMService:
     def __init__(self):
         self.round_messages = []
 
-    async def prepare_chat(self, request):
+    async def prepare_chat(self, request, messages=None):
         return SimpleNamespace(
             messages=[
                 {
@@ -122,7 +122,7 @@ class _ClaudeInterleavedLLMService:
             },
         ]
 
-    async def prepare_chat(self, request):
+    async def prepare_chat(self, request, messages=None):
         return SimpleNamespace(
             messages=[{"role": "user", "content": "Research, then create a memo."}],
             tools=[{"name": "quillmark__get_spec"}],
@@ -176,7 +176,7 @@ class _ClaudeWebThenDareLLMService:
             },
         ]
 
-    async def prepare_chat(self, request):
+    async def prepare_chat(self, request, messages=None):
         return SimpleNamespace(
             messages=[
                 {
