@@ -19,6 +19,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from users.sso import tokens_for
 from users.constants import (
     VOICE_ACCESS_CODE_CAPACITY,
     AccessCodeProvisionerChoice,
@@ -100,8 +101,8 @@ class CustomVerifyEmailView(VerifyEmailView):
         # Only generate JWT tokens for DARE users (auto-login)
         # Socratic Bots users will be redirected to their frontend where these tokens wouldn't be accessible
         if user.auth_source == AuthSourceChoice.DARE:
-            refresh = RefreshToken.for_user(user)
-            response_data["access"] = str(refresh.access_token)
+            refresh, access = tokens_for(user)
+            response_data["access"] = str(access)
             response_data["refresh"] = str(refresh)
 
         return Response(response_data, status=status.HTTP_200_OK)
