@@ -13,16 +13,24 @@ through an access-code group, so it stays behind the normal signup.
 """
 
 from datetime import timedelta
+from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
 import jwt
+import socketio
+from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.exceptions import AuthenticationFailed
+from rest_framework.test import APIRequestFactory
 from rest_framework_simplejwt.authentication import JWTAuthentication
 from rest_framework_simplejwt.exceptions import InvalidToken
-from rest_framework.test import APIRequestFactory
+
+from assistant.namespace import AssistantNamespace
+from conversations.namespaces.chat import ChatNamespace
+from conversations.namespaces.workflow import WorkflowNamespace
+from users.sso import tokens_for
 
 User = get_user_model()
 
@@ -170,3 +178,26 @@ class IssuedTokenClaimTests(TestCase):
         access, _refresh = jwt_encode(self.user)
         self.assertEqual(self._claims(access)["name"], "Ada Lovelace")
         self.assertEqual(self._claims(access)["email"], "ada@example.com")
+
+
+@override_settings(SIMPLE_JWT=SIMPLE_JWT)
+class SocketTokenTests(TestCase):
+    """Socket.IO handshakes accept exactly the tokens the REST API accepts."""
+
+    def setUp(self):
+        self.user = User.objects.create(email="ada@example.com", first_name="Ada")
+        self.access = str(tokens_for(self.user)[1])
+
+    def _connect(self, namespace, token):
+        with patch("conversations.namespaces.chat.sio.enter_room", AsyncMock()):
+            return async_to_sync(namespace.on_connect)("sid", {}, {"token": token})
+
+    def test_a_login_token_opens_every_socket_namespace(self):
+        for namespace_class in (ChatNamespace, WorkflowNamespace, AssistantNamespace):
+            namespace = namespace_class()
+            self.assertTrue(self._connect(namespace, self.access), namespace_class)
+
+    def test_a_token_signed_with_another_key_is_refused(self):
+        forged = research_tools_token(self.user.email, key=OTHER_KEY)
+        with self.assertRaises(socketio.exceptions.ConnectionRefusedError):
+            self._connect(ChatNamespace(), forged)
