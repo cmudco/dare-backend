@@ -14,15 +14,15 @@ providing clean separation between WebSocket handling and business logic.
 """
 
 import logging
-import jwt
 from typing import Dict, Any, Optional
-from django.conf import settings
 import socketio
 
 from conversations.socket_server import sio
 from conversations.namespaces.utils import detect_platform_from_socketio_environ
 from workflows.services.workflow_coordinator import WorkflowCoordinator
-from workflows.services.workflow_run_repository import WorkflowRunRepository
+from asgiref.sync import sync_to_async
+from core.utils.db import db_reconnect_on_stale
+from users.sso import user_for_access_token
 
 
 logger = logging.getLogger(__name__)
@@ -80,24 +80,13 @@ class WorkflowNamespace(socketio.AsyncNamespace):
                 )
                 raise socketio.exceptions.ConnectionRefusedError('JWT token required')
 
-            # Decode and validate JWT
-            try:
-                decoded = jwt.decode(token, settings.SECRET_KEY, algorithms=['HS256'])
-            except jwt.ExpiredSignatureError:
-                raise socketio.exceptions.ConnectionRefusedError('Token expired')
-            except jwt.InvalidTokenError as e:
-                raise socketio.exceptions.ConnectionRefusedError(f'Invalid token: {str(e)}')
-
-            user_id = decoded.get('user_id')
-            if not user_id:
-                raise socketio.exceptions.ConnectionRefusedError(
-                    'Invalid token: missing user_id'
-                )
-
-            # Fetch user from database
-            user = await WorkflowRunRepository.get_user(user_id)
+            user = await sync_to_async(db_reconnect_on_stale)(
+                user_for_access_token, token
+            )
             if not user:
-                raise socketio.exceptions.ConnectionRefusedError('User not found')
+                raise socketio.exceptions.ConnectionRefusedError(
+                    'Invalid or expired token'
+                )
 
             # Detect platform from Origin/Referer headers
             platform = detect_platform_from_socketio_environ(environ)

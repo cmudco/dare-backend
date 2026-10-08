@@ -16,11 +16,8 @@ import asyncio
 import logging
 from typing import Any, Dict, Optional
 
-import jwt
 import socketio
 from asgiref.sync import sync_to_async
-from django.conf import settings
-from django.contrib.auth import get_user_model
 from djangorestframework_camel_case.util import camelize
 
 from assistant.api.serializers import (
@@ -35,9 +32,9 @@ from assistant.services.thread_service import (
 from assistant.services.turn_service import AssistantTurnService
 from conversations.socket_server import sio
 from core.utils.db import db_reconnect_on_stale
+from users.sso import user_for_access_token
 
 logger = logging.getLogger(__name__)
-User = get_user_model()
 
 UNAVAILABLE_MESSAGE = "The assistant is unavailable right now. Please try again later."
 
@@ -53,13 +50,9 @@ class AssistantNamespace(socketio.AsyncNamespace):
         token = (auth or {}).get("token")
         if not token:
             raise socketio.exceptions.ConnectionRefusedError("JWT token required")
-        try:
-            decoded = jwt.decode(token, settings.SECRET_KEY, algorithms=["HS256"])
-        except jwt.InvalidTokenError as error:
-            raise socketio.exceptions.ConnectionRefusedError("Invalid token") from error
-        user = await self._get_user(decoded.get("user_id"))
+        user = await self._get_user(token)
         if user is None:
-            raise socketio.exceptions.ConnectionRefusedError("User not found")
+            raise socketio.exceptions.ConnectionRefusedError("Invalid token")
         self.users[sid] = user
         return True
 
@@ -131,13 +124,8 @@ class AssistantNamespace(socketio.AsyncNamespace):
         await emit({"type": "assistant_message", "message": await _serialize(reply)})
 
     @sync_to_async
-    def _get_user(self, user_id: Optional[int]):
-        if not user_id:
-            return None
-        try:
-            return db_reconnect_on_stale(User.objects.get, id=user_id)
-        except User.DoesNotExist:
-            return None
+    def _get_user(self, token: str):
+        return db_reconnect_on_stale(user_for_access_token, token)
 
 
 @sync_to_async

@@ -15,12 +15,9 @@ with a single persistent connection model.
 
 import json
 import logging
-import jwt
 import base64
 from typing import Dict, Any, Optional, Set
 from asgiref.sync import sync_to_async
-from django.conf import settings
-from django.contrib.auth import get_user_model
 from core.utils.db import db_reconnect_on_stale
 import socketio
 
@@ -37,9 +34,9 @@ from conversations.services.message_validation_service import MessageValidationS
 from conversations.services.audio_transcription_service import AudioTranscriptionService
 from conversations.services.websocket_response_service import WebSocketResponseService
 from conversations.namespaces.utils import detect_platform_from_socketio_environ
+from users.sso import user_for_access_token
 from core.services.conversation_service import ConversationService
 
-User = get_user_model()
 logger = logging.getLogger(__name__)
 
 
@@ -113,22 +110,9 @@ class ChatNamespace(socketio.AsyncNamespace):
 
     async def _connect_with_jwt(self, sid: str, environ: dict, token: str) -> bool:
         """Handle JWT-based authentication for authenticated users."""
-        # Decode and validate JWT
-        try:
-            decoded = jwt.decode(token, settings.SECRET_KEY, algorithms=['HS256'])
-        except jwt.ExpiredSignatureError:
-            raise socketio.exceptions.ConnectionRefusedError('Token expired')
-        except jwt.InvalidTokenError as e:
-            raise socketio.exceptions.ConnectionRefusedError(f'Invalid token: {str(e)}')
-
-        user_id = decoded.get('user_id')
-        if not user_id:
-            raise socketio.exceptions.ConnectionRefusedError('Invalid token: missing user_id')
-
-        # Fetch user from database
-        user = await self._get_user(user_id)
+        user = await self._get_user(token)
         if not user:
-            raise socketio.exceptions.ConnectionRefusedError('User not found')
+            raise socketio.exceptions.ConnectionRefusedError('Invalid or expired token')
 
         # Detect platform from Origin/Referer headers
         platform = detect_platform_from_socketio_environ(environ)
@@ -713,12 +697,9 @@ class ChatNamespace(socketio.AsyncNamespace):
         return send_callback
     
     @sync_to_async
-    def _get_user(self, user_id: int):
-        """Fetch user by ID; reconnects once if the thread-local connection is stale."""
-        try:
-            return db_reconnect_on_stale(User.objects.get, id=user_id)
-        except User.DoesNotExist:
-            return None
+    def _get_user(self, token: str):
+        """Reconnects once if the thread-local connection is stale."""
+        return db_reconnect_on_stale(user_for_access_token, token)
 
     async def _pause_conversation_artifacts(self, conv_id: str):
         """Pause all in-progress artifacts for a conversation."""
