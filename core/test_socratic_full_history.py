@@ -9,6 +9,7 @@ from conversations.constants import SenderType
 from conversations.models import Conversation, Message
 from conversations.services.message_validation_service import MessageValidationService
 from core.services.dtos.builder import LLMQueryRequestBuilder
+from core.services.learning_progress_service import LearningProgressService
 from core.services.llm_helpers.socratic_helpers import (
     build_advanced_socratic_messages,
     build_classic_socratic_messages,
@@ -89,3 +90,23 @@ class LongInterviewTests(TransactionTestCase):
                 self.assertEqual(history["turns"], 60)
                 self.assertEqual(history["limit"], 0)
                 self.assertIn("Continue the interview", prompt)
+
+    def test_progress_tracker_reads_the_whole_conversation(self):
+        user = User.objects.create_user(email="tracker@example.test", password="test")
+        conversation = Conversation.active_objects.create(user=user, title="Tracker")
+        for index in range(100):
+            Message.active_objects.create(
+                conversation=conversation,
+                sender_type=(
+                    SenderType.PLAYER if index % 2 == 0 else SenderType.AI_ASSISTANT
+                ),
+                message=f"Tracked message {index:03d}.",
+            )
+
+        transcript = async_to_sync(LearningProgressService()._get_conversation_history)(
+            conversation
+        )
+
+        self.assertTrue(transcript.startswith("User: Tracked message 000."))
+        self.assertTrue(transcript.endswith("Assistant: Tracked message 099."))
+        self.assertEqual(transcript.count("Tracked message"), 100)

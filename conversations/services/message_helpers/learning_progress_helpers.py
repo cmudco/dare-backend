@@ -91,7 +91,6 @@ async def run_learning_progress_stream(
             tracking_prompt=tracking_prompt,
             llm=progress_llm,
             temperature=0.7,
-            conversation_history_limit=80,
             bot_meta=bot_meta,
             user=user,
         ):
