@@ -26,7 +26,6 @@ class LearningProgressService:
         llm: LLM = None,
         max_tokens: int = 32000,
         temperature: float = 0.7,
-        conversation_history_limit: int = 80,
         # New: include bot metadata for subject/topic/title
         bot_meta: Optional[Dict] = None,
         user: Optional[object] = None,
@@ -49,9 +48,7 @@ class LearningProgressService:
                 llm = await self._get_default_progress_llm()
 
             # Get conversation history (following reference pattern)
-            conversation_history = await self._get_conversation_history(
-                conversation, limit=conversation_history_limit
-            )
+            conversation_history = await self._get_conversation_history(conversation)
 
             # Get latest previous assessment (following reference pattern)
             previous_assessment_text = await self._get_previous_assessment(conversation)
@@ -153,21 +150,14 @@ If there is no current status, follow the system prompt to make a new status rep
         raise ValueError("No LLM models configured for progress tracking")
 
     @database_sync_to_async
-    def _get_conversation_history(
-        self, conversation: Conversation, limit: int = 20
-    ) -> str:
-        """Get formatted conversation history as readable transcript."""
-        # Get messages in reverse chronological order (newest first)
+    def _get_conversation_history(self, conversation: Conversation) -> str:
+        """The whole conversation as a chronological transcript."""
         messages = Message.active_objects.filter(conversation=conversation).order_by(
-            "-created_at"
+            "created_at"
         )
-
-        if limit > 0:
-            messages = messages[:limit]  # Take most recent N messages
         conversation_history = ""
         if messages.exists():
-            # Reverse to get chronological order (oldest to newest) for the transcript
-            for msg in reversed(messages):
+            for msg in messages:
                 role_name = (
                     "User" if msg.sender_type == SenderType.PLAYER else "Assistant"
                 )
