@@ -1,6 +1,13 @@
+from decimal import Decimal
+
+from django.db.models import Sum, Value
+from django.db.models.functions import Coalesce
+from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
 
+from api_keys.constants import BillingModeChoice
 from billing.constants import (
+    ALL_PLATFORMS,
     LiteLLMKeySourceChoice,
     PolicySourceChoice,
     UserWalletPreferenceTypeChoice,
@@ -15,6 +22,7 @@ from billing.models import (
 )
 from billing.services import WalletService
 from conversations.api.serializers import LLMSerializer
+from users.constants import AuthSourceChoice
 from users.models import AccessCodeGroup, User
 
 
@@ -62,13 +70,46 @@ class TransactionSerializer(serializers.ModelSerializer):
         ]
 
 
+class TransactionHistoryQuerySerializer(serializers.Serializer):
+    platform = serializers.ChoiceField(
+        choices=[ALL_PLATFORMS, *AuthSourceChoice.values], required=False
+    )
+    billing_mode = serializers.ChoiceField(
+        choices=BillingModeChoice.values, required=False
+    )
+    model = serializers.CharField(required=False)
+    created_after = serializers.DateTimeField(required=False)
+    created_before = serializers.DateTimeField(required=False)
+
+    def validate(self, attrs):
+        after, before = attrs.get("created_after"), attrs.get("created_before")
+        if after and before and after >= before:
+            raise serializers.ValidationError(
+                _("The start of the date range must be before its end.")
+            )
+        return attrs
+
+
 # --- System refill policy -------------------------------------------------
 
 
+def money_field():
+    """Optional non-negative USD amount; omitted or null leaves the field as is."""
+    return serializers.DecimalField(
+        max_digits=10,
+        decimal_places=6,
+        min_value=Decimal("0"),
+        required=False,
+        allow_null=True,
+    )
+
+
 class SystemRefillPolicySerializer(serializers.ModelSerializer):
+    refill_cap = money_field()
+
     class Meta:
         model = SystemRefillPolicy
-        fields = ["refill_amount", "refill_period_days", "updated_at"]
+        fields = ["refill_amount", "refill_period_days", "refill_cap", "updated_at"]
 
     def validate_refill_amount(self, value):
         if value is None or value < 0:
@@ -91,37 +132,70 @@ class EffectivePolicySerializer(serializers.Serializer):
     period_days = serializers.IntegerField()
     amount_source = serializers.ChoiceField(choices=PolicySourceChoice.choices)
     period_source = serializers.ChoiceField(choices=PolicySourceChoice.choices)
+    cap = serializers.DecimalField(max_digits=10, decimal_places=6)
+    cap_source = serializers.ChoiceField(choices=PolicySourceChoice.choices)
+
+
+class SpendLimitSerializer(serializers.Serializer):
+    """A member's LiteLLM spend against the limit that applies to them."""
+
+    limit = serializers.DecimalField(max_digits=10, decimal_places=6)
+    used = serializers.DecimalField(max_digits=12, decimal_places=6)
+    source = serializers.ChoiceField(choices=PolicySourceChoice.choices)
+    is_reached = serializers.BooleanField()
 
 
 class UserRefillOverrideSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserRefillOverride
-        fields = ["refill_amount", "refill_period_days", "reason", "updated_at"]
+        fields = [
+            "refill_amount",
+            "refill_period_days",
+            "refill_cap",
+            "litellm_cap",
+            "reason",
+            "updated_at",
+        ]
 
 
 class UpsertUserOverrideSerializer(serializers.Serializer):
     """Write payload for creating or updating a user's refill override."""
 
-    refill_amount = serializers.DecimalField(
-        max_digits=10,
-        decimal_places=6,
-        required=False,
-        allow_null=True,
-    )
+    refill_amount = money_field()
     refill_period_days = serializers.IntegerField(
         required=False, allow_null=True, min_value=1
     )
+    refill_cap = money_field()
+    litellm_cap = money_field()
     reason = serializers.CharField(required=False, allow_blank=True, max_length=255)
     clear_amount = serializers.BooleanField(required=False, default=False)
     clear_period = serializers.BooleanField(required=False, default=False)
+    clear_refill_cap = serializers.BooleanField(required=False, default=False)
+    clear_litellm_cap = serializers.BooleanField(required=False, default=False)
 
 
 # --- Group wallet ---------------------------------------------------------
 
 
+class GatewayKeySerializer(serializers.Serializer):
+    """One of the group's LiteLLM keys: the gateway's figures beside DARE's."""
+
+    id = serializers.UUIDField()
+    label = serializers.CharField()
+    gateway_spend = serializers.DecimalField(
+        max_digits=12, decimal_places=6, allow_null=True
+    )
+    gateway_max_budget = serializers.DecimalField(
+        max_digits=12, decimal_places=6, allow_null=True
+    )
+    gateway_reported_at = serializers.DateTimeField(allow_null=True)
+    dare_estimate = serializers.DecimalField(max_digits=12, decimal_places=6)
+
+
 class GroupWalletReadSerializer(serializers.ModelSerializer):
     display_budget = serializers.CharField(read_only=True)
     member_count = serializers.SerializerMethodField()
+    gateway_keys = serializers.SerializerMethodField()
 
     class Meta:
         model = GroupWallet
@@ -131,8 +205,11 @@ class GroupWalletReadSerializer(serializers.ModelSerializer):
             "display_budget",
             "refill_amount",
             "refill_period_days",
+            "refill_cap",
+            "litellm_member_cap",
             "is_active",
             "member_count",
+            "gateway_keys",
             "created_at",
             "updated_at",
         ]
@@ -140,20 +217,29 @@ class GroupWalletReadSerializer(serializers.ModelSerializer):
     def get_member_count(self, obj):
         return obj.group.users.count()
 
+    def get_gateway_keys(self, obj):
+        keys = LiteLLMKey.objects.filter(
+            source=LiteLLMKeySourceChoice.ADMIN_GROUP, source_group=obj.group
+        ).annotate(
+            dare_estimate=Coalesce(
+                Sum("spend_records__total_reference_amount"), Value(Decimal("0"))
+            )
+        )
+        return GatewayKeySerializer(keys.order_by("created_at"), many=True).data
+
 
 class GroupWalletWriteSerializer(serializers.Serializer):
-    refill_amount = serializers.DecimalField(
-        max_digits=10,
-        decimal_places=6,
-        required=False,
-        allow_null=True,
-    )
+    refill_amount = money_field()
     refill_period_days = serializers.IntegerField(
         required=False, allow_null=True, min_value=1
     )
+    refill_cap = money_field()
+    litellm_member_cap = money_field()
     is_active = serializers.BooleanField(required=False)
     clear_amount = serializers.BooleanField(required=False, default=False)
     clear_period = serializers.BooleanField(required=False, default=False)
+    clear_refill_cap = serializers.BooleanField(required=False, default=False)
+    clear_litellm_member_cap = serializers.BooleanField(required=False, default=False)
 
 
 class FundBudgetSerializer(serializers.Serializer):
@@ -176,6 +262,7 @@ class MemberRowSerializer(serializers.ModelSerializer):
 
     display_balance = serializers.SerializerMethodField()
     effective_policy = serializers.SerializerMethodField()
+    spend_limit = serializers.SerializerMethodField()
     override = serializers.SerializerMethodField()
 
     class Meta:
@@ -187,6 +274,7 @@ class MemberRowSerializer(serializers.ModelSerializer):
             "last_name",
             "display_balance",
             "effective_policy",
+            "spend_limit",
             "override",
         ]
 
@@ -199,6 +287,10 @@ class MemberRowSerializer(serializers.ModelSerializer):
         # match EffectivePolicySerializer fields — pass it through directly.
         policy = WalletService.get_effective_refill_policy(obj)
         return EffectivePolicySerializer(policy).data
+
+    def get_spend_limit(self, obj):
+        spend_limit = WalletService.get_litellm_spend_limit(obj)
+        return SpendLimitSerializer(spend_limit).data if spend_limit else None
 
     def get_override(self, obj):
         override = getattr(obj, "refill_override", None)
@@ -246,10 +338,16 @@ class WalletStatusSerializer(serializers.Serializer):
 
     kind = serializers.CharField()  # "BALANCE" or "EXTERNAL"
     balance = serializers.CharField(required=False, allow_null=True)  # BALANCE only
+    ceiling = serializers.CharField(
+        required=False, allow_null=True
+    )  # BALANCE only: the balance scheduled refills top up to
     last_refill_at = serializers.DateTimeField(
         required=False, allow_null=True
     )  # BALANCE only
     spend = serializers.CharField(required=False, allow_null=True)  # EXTERNAL only
+    spend_limit = SpendLimitSerializer(
+        required=False, allow_null=True
+    )  # LITELLM ADMIN_GROUP only, when the group sets a limit
 
 
 class UnifiedWalletSerializer(serializers.Serializer):
@@ -289,6 +387,9 @@ class WalletsListResponseSerializer(serializers.Serializer):
 
     active_wallet = ActiveWalletRefSerializer()
     wallets = UnifiedWalletSerializer(many=True)
+    # Clients without feature-flag access (SocraticBooks) hide what's off.
+    byo_enabled = serializers.BooleanField()
+    litellm_enabled = serializers.BooleanField()
 
 
 class SetActiveWalletRequestSerializer(serializers.Serializer):
@@ -340,6 +441,19 @@ class LiteLLMTestResponseSerializer(serializers.Serializer):
     models = serializers.ListField(child=serializers.CharField())
     recommended_models = serializers.ListField(child=serializers.CharField())
     error = serializers.CharField(allow_blank=True)
+
+
+class LiteLLMKeyDependentBotSerializer(serializers.Serializer):
+    """A SocraticBooks bot whose chat model routes through a LiteLLM key."""
+
+    bot_id = serializers.IntegerField()
+    bot_title = serializers.CharField()
+    bot_group_title = serializers.CharField()
+
+
+class LiteLLMKeyDependentsSerializer(serializers.Serializer):
+    bot_count = serializers.IntegerField()
+    bots = LiteLLMKeyDependentBotSerializer(many=True)
 
 
 class LiteLLMKeyReadSerializer(serializers.ModelSerializer):

@@ -6,6 +6,7 @@ from os.path import basename
 from syftbox.constants import DATASITE_SYNC_FOLDER, DATASITE_VIEW
 from syftbox.dtos import RemoteSyftBoxFile, SyftBoxSyncResult
 from syftbox.errors import SyftBoxErrorCode, SyftBoxException
+from syftbox_connect.credentials import access_token_for
 from syftbox.services.http_client import HttpClient
 from syftbox.services.syftbox_sync_service import SyftBoxSyncService
 from users.models import User
@@ -33,7 +34,7 @@ class SyftBoxDatasitePollService:
         payload = self.http_client.request(
             method="GET",
             url=DATASITE_VIEW,
-            access_token=user.access_token,
+            access_token=access_token_for(email),
         )
         files = payload.get("files")
         if not isinstance(files, list):

@@ -53,6 +53,22 @@ def format_dare_result_for_llm(tool_name: str, result: Dict[str, Any]) -> str:
             "When you use a passage in your answer, cite it inline with "
             "its [S#] tag:\n\n" + "\n\n".join(blocks)
         )
+    elif tool_name == "search_platform_docs":
+        blocks = result.get("blocks") or []
+        if not blocks:
+            return (
+                f'The documentation has no passages for "{result.get("query", "")}". '
+                "Try a different query, or tell the user the docs do not cover it."
+            )
+        return "Documentation passages:\n\n" + "\n\n".join(blocks)
+    elif tool_name == "propose_file_organization":
+        return (
+            f"Proposal {result.get('proposal_id')} ({result.get('files')} files, "
+            f"{result.get('folders')} folders, {result.get('tags')} tags) is now "
+            "shown to the user as a card with Apply and Discard. Nothing has "
+            "changed yet. Briefly describe the plan and ask them to review it "
+            "and click Apply."
+        )
     elif tool_name == "search_sessions":
         found = result.get("found", 0)
         if not found:

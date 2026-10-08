@@ -26,8 +26,12 @@ def search_sessions_for_user(
     limit: int = DEFAULT_LIMIT,
     since: Optional[str] = None,
     until: Optional[str] = None,
+    source_project_id: Optional[int] = None,
 ) -> Dict[str, Any]:
-    """Search one user's transcript and return the tool result shape."""
+    """Search one user's transcript and return the tool result shape.
+
+    ``source_project_id`` limits the search to that project's chats.
+    """
     if user is None:
         return {
             "success": False,
@@ -49,7 +53,7 @@ def search_sessions_for_user(
         }
 
     try:
-        hits = _search(user, terms, limit, start, end)
+        hits = _search(user, terms, limit, start, end, source_project_id)
         blocks = [_render_hit(hit) for hit in hits]
     except Exception:
         logger.exception("[memory] search_sessions failed for user %s", user.id)
@@ -67,7 +71,12 @@ def search_sessions_for_user(
     }
 
 
-def _base_queryset(user, since: Optional[date] = None, until: Optional[date] = None):
+def _base_queryset(
+    user,
+    since: Optional[date] = None,
+    until: Optional[date] = None,
+    source_project_id: Optional[int] = None,
+):
     queryset = (
         Message.active_objects.filter(
             conversation__user=user,
@@ -79,6 +88,8 @@ def _base_queryset(user, since: Optional[date] = None, until: Optional[date] = N
         .select_related("conversation")
         .exclude(message="")
     )
+    if source_project_id is not None:
+        queryset = queryset.filter(conversation__project_id=source_project_id)
     if since is not None:
         queryset = queryset.filter(created_at__date__gte=since)
     if until is not None:
@@ -120,17 +131,20 @@ def _search(
     limit: int,
     since: Optional[date] = None,
     until: Optional[date] = None,
+    source_project_id: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     if not terms:
         # A date range with no words is a real search: "what did we talk about
         # last Tuesday" has nothing to match on but is perfectly answerable.
         matched = list(
-            _base_queryset(user, since, until).order_by("-created_at")[:limit]
+            _base_queryset(user, since, until, source_project_id).order_by(
+                "-created_at"
+            )[:limit]
         )
     elif connection.vendor == "postgresql":
-        matched = _search_postgres(user, terms, limit, since, until)
+        matched = _search_postgres(user, terms, limit, since, until, source_project_id)
     else:
-        matched = _search_fallback(user, terms, limit, since, until)
+        matched = _search_fallback(user, terms, limit, since, until, source_project_id)
 
     # Include adjacent turns and suppress overlapping windows.
     shown: set = set()
@@ -151,11 +165,12 @@ def _search_postgres(
     limit: int,
     since: Optional[date] = None,
     until: Optional[date] = None,
+    source_project_id: Optional[int] = None,
 ) -> List[Message]:
     """Run ranked Postgres FTS with prefix terms."""
     tsquery = " | ".join(f"{term}:*" for term in terms)
     queryset = (
-        _base_queryset(user, since, until)
+        _base_queryset(user, since, until, source_project_id)
         .extra(
             select={
                 "fts_rank": (
@@ -178,13 +193,14 @@ def _search_fallback(
     limit: int,
     since: Optional[date] = None,
     until: Optional[date] = None,
+    source_project_id: Optional[int] = None,
 ) -> List[Message]:
     """SQLite local dev: LIKE over the body, newest first."""
     condition = Q()
     for term in terms:
         condition |= Q(message__icontains=term)
     return list(
-        _base_queryset(user, since, until)
+        _base_queryset(user, since, until, source_project_id)
         .filter(condition)
         .order_by("-created_at")[:limit]
     )

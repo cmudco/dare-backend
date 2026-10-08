@@ -70,6 +70,8 @@ LOCAL_APPS = [
     "feature_flags",
     "research",
     "libraries",
+    "projects",
+    "assistant",
 ]
 
 THIRD_PARTY_APPS = [
@@ -84,6 +86,8 @@ THIRD_PARTY_APPS = [
     "channels",
     "django_rq",
     "drf_spectacular",
+    "syftbox_connect",
+    "rest_framework_simplejwt.token_blacklist",
 ]
 
 INSTALLED_APPS = DJANGO_APPS + LOCAL_APPS + THIRD_PARTY_APPS
@@ -203,6 +207,8 @@ ACCOUNT_EMAIL_REQUIRED = True
 ACCOUNT_LOGIN_METHODS = {"email"}
 ACCOUNT_ADAPTER = "users.adapter.AccountAdapter"
 
+# Signed with the key Research Tools also uses, and identified by email rather
+# than primary key, so a token from either product authenticates against both.
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(
         hours=12
@@ -211,11 +217,16 @@ SIMPLE_JWT = {
     "ROTATE_REFRESH_TOKENS": False,
     "BLACKLIST_AFTER_ROTATION": True,
     "UPDATE_LAST_LOGIN": False,
+    "SIGNING_KEY": env.SSO_JWT_KEY,
+    "USER_ID_FIELD": "email",
+    "USER_ID_CLAIM": "email",
+    "LEEWAY": timedelta(seconds=10),  # the two servers' clocks will differ
 }
 
 REST_AUTH = {
     "USE_JWT": True,
     "JWT_AUTH_HTTPONLY": False,
+    "JWT_TOKEN_CLAIMS_SERIALIZER": "users.sso.SharedClaimsTokenSerializer",
     "USER_DETAILS_SERIALIZER": "users.api.serializers.CustomUserDetailsSerializer",
     "REGISTER_SERIALIZER": "users.api.serializers.CustomRegisterSerializer",
     "LOGIN_SERIALIZER": "users.api.serializers.CustomLoginSerializer",
@@ -415,6 +426,7 @@ SYFTBOX = {
     'ENABLED': env.SYFTBOX_ENABLED,
     'DATASITES_ROOT': env.SYFTBOX_DATASITES_ROOT,
     'APP_NAME': env.SYFTBOX_APP_NAME,
+    'BASE_URL': env.SYFTBOX_BASE_URL,
 }
 
 # Hermes agent runtime (delegated research-agent runtime for Research Mode)
@@ -430,3 +442,6 @@ HERMES_STREAM_IDLE_SECONDS = env.HERMES_STREAM_IDLE_SECONDS
 HERMES_PROFILE_MODEL = env.HERMES_PROFILE_MODEL
 HERMES_PROFILE_MODEL_PROVIDER = env.HERMES_PROFILE_MODEL_PROVIDER
 DARE_MCP_GATEWAY_URL = env.DARE_MCP_GATEWAY_URL
+
+ASSISTANT_MODEL_IDENTIFIER = env.ASSISTANT_MODEL_IDENTIFIER
+ASSISTANT_DAILY_MESSAGE_LIMIT = env.ASSISTANT_DAILY_MESSAGE_LIMIT

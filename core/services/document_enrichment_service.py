@@ -14,6 +14,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
+import sentry_sdk
 from asgiref.sync import async_to_sync
 from django.db import connections
 from django.utils import timezone
@@ -428,18 +429,27 @@ class DocumentEnrichmentService:
     def _thread_operation(
         self, operation, file_id, token, elements, route, credentials
     ):
-        try:
-            file = (
-                File.active_objects.select_related("user")
-                .filter(pk=file_id, ingestion_token=token)
-                .first()
-            )
-            if file is None:
-                raise IngestionCancelled("File removed or ingestion attempt replaced")
-            service = self._build_ai_service(route.model, credentials)
-            return self._execute_operation(operation, file, elements, route, service)
-        finally:
-            connections.close_all()
+        # Provider errors auto-report under the embeddings job; label them as vision.
+        with sentry_sdk.isolation_scope() as scope:
+            scope.set_tag("llm.purpose", "vision_enrichment")
+            scope.set_tag("vision.kind", operation.kind)
+            scope.set_tag("vision.model", route.model.identifier)
+            try:
+                file = (
+                    File.active_objects.select_related("user")
+                    .filter(pk=file_id, ingestion_token=token)
+                    .first()
+                )
+                if file is None:
+                    raise IngestionCancelled(
+                        "File removed or ingestion attempt replaced"
+                    )
+                service = self._build_ai_service(route.model, credentials)
+                return self._execute_operation(
+                    operation, file, elements, route, service
+                )
+            finally:
+                connections.close_all()
 
     def _execute_operation(self, operation, file, elements, route, ai_service):
         ensure_ingestion_owner(file)

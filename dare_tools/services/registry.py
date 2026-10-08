@@ -8,6 +8,12 @@ definitions and executors.
 import logging
 from typing import Any, Callable, Dict, List, Optional
 
+from assistant.domain.tool_schemas import (get_account_overview_schema,
+                                           get_conversation_schema,
+                                           get_project_schema,
+                                           list_my_files_schema,
+                                           propose_file_organization_schema,
+                                           search_platform_docs_schema)
 from core.services.llm_utils.diagram_tool import (get_diagram_tool_claude,
                                                   get_diagram_tool_openai,
                                                   json_to_mermaid)
@@ -785,6 +791,35 @@ def get_search_sessions_tool_claude() -> Dict:
     }
 
 
+def _claude_schema(openai_schema: Callable[[], Dict]) -> Callable[[], Dict]:
+    """Derive a Claude-format schema getter from an OpenAI-format one."""
+
+    def get_schema() -> Dict:
+        func = openai_schema()["function"]
+        return {
+            "name": func["name"],
+            "description": func["description"],
+            "input_schema": func["parameters"],
+        }
+
+    return get_schema
+
+
+def _assistant_tool(slug: str, name: str, openai_schema: Callable[[], Dict]) -> Dict:
+    # Assistant-only: no DareTool row, so it never appears in the chat tool
+    # drawer; routed by ToolExecutionService (needs the requesting user).
+    return {
+        "name": name,
+        "slug": slug,
+        "description": openai_schema()["function"]["description"],
+        "icon": "help",
+        "category": "assistant",
+        "get_openai_schema": openai_schema,
+        "get_claude_schema": _claude_schema(openai_schema),
+        "executor": None,
+    }
+
+
 class DareToolRegistry:
     """
     Registry of all available DARE tools.
@@ -884,6 +919,24 @@ class DareToolRegistry:
             "get_claude_schema": get_search_sessions_tool_claude,
             "executor": None,  # Routed via ToolExecutionService (needs user scope + async ORM)
         },
+        "search_platform_docs": _assistant_tool(
+            "search_platform_docs", "Search Platform Docs", search_platform_docs_schema
+        ),
+        "get_account_overview": _assistant_tool(
+            "get_account_overview", "Account Overview", get_account_overview_schema
+        ),
+        "list_my_files": _assistant_tool(
+            "list_my_files", "List My Files", list_my_files_schema
+        ),
+        "get_conversation": _assistant_tool(
+            "get_conversation", "Get Conversation", get_conversation_schema
+        ),
+        "get_project": _assistant_tool("get_project", "Get Project", get_project_schema),
+        "propose_file_organization": _assistant_tool(
+            "propose_file_organization",
+            "Propose File Organization",
+            propose_file_organization_schema,
+        ),
     }
     
     @classmethod

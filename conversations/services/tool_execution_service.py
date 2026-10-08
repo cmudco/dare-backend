@@ -27,6 +27,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from asgiref.sync import sync_to_async
 from channels.db import database_sync_to_async
 
+from assistant.constants import ACCOUNT_TOOLS, SEARCH_PLATFORM_DOCS
+from assistant.services.account_tools import execute_account_tool
 from conversations.constants import ToolCallOrigin
 from conversations.models import Conversation, Message
 from conversations.services.artifact_tool_executor import \
@@ -45,6 +47,7 @@ from dare_tools.services.retrieval_tool_executor import (
 from mcp.services.artifact_bridge import BridgeStatus, maybe_create_pdf_artifact
 from mcp.services.mcp_tool_executor import MCPToolExecutorError, mcp_tool_executor
 from memory.services.session_search import search_sessions_for_user
+from projects.services.project_service import memory_scope_project_id
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +67,8 @@ ARTIFACT_TOOLS = frozenset(
 )
 
 # DARE tools that retrieve document context — routed to RetrievalToolExecutor.
-RETRIEVAL_TOOLS = frozenset({"search_documents"})
+# The platform assistant's docs search is the same retrieval over its own scope.
+RETRIEVAL_TOOLS = frozenset({"search_documents", SEARCH_PLATFORM_DOCS})
 
 # Memory tools are scoped to the authenticated user by the server.
 MEMORY_TOOLS = frozenset({"search_sessions"})
@@ -88,6 +92,17 @@ class ToolExecutionContext:
     store: ToolLoopStore
     retrieval_scope: Optional[RetrievalScope] = None
     artifact_host: Optional[ArtifactHost] = None
+
+
+def _search_sessions(ctx: ToolExecutionContext, arguments: Dict) -> Dict:
+    project_id = ctx.conversation.project_id if ctx.conversation else None
+    return search_sessions_for_user(
+        ctx.user,
+        arguments["query"],
+        since=arguments.get("since"),
+        until=arguments.get("until"),
+        source_project_id=memory_scope_project_id(project_id),
+    )
 
 
 class ToolExecutionService:
@@ -231,13 +246,12 @@ class ToolExecutionService:
                 target=ctx.store.retrieval_target,
                 scope=ctx.retrieval_scope,
             )
-        elif tool_name in MEMORY_TOOLS:
-            raw_result = await sync_to_async(search_sessions_for_user)(
-                ctx.user,
-                arguments["query"],
-                since=arguments.get("since"),
-                until=arguments.get("until"),
+        elif tool_name in ACCOUNT_TOOLS:
+            raw_result = await sync_to_async(execute_account_tool)(
+                tool_name, arguments, ctx.user
             )
+        elif tool_name in MEMORY_TOOLS:
+            raw_result = await sync_to_async(_search_sessions)(ctx, arguments)
         elif tool_name in ARTIFACT_TOOLS:
             if ctx.artifact_host is None or not ctx.artifact_host.can_create:
                 return self._unavailable_in_context(tool_name)

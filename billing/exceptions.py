@@ -27,3 +27,24 @@ class PaymentRequiredError(Exception):
         self.code = code or self.DEFAULT_CODE
         self.details = details or {}
         super().__init__(message or _('Insufficient balance to complete the request.'))
+
+
+class BotModelUnavailable(Exception):
+    """A bot's configured model cannot be served for this turn.
+
+    Raised when the model is not the one the bot was saved with, or when the
+    bot owner can no longer use the LiteLLM key it routes through (deleted,
+    expired, or the owner left the key's group). Distinct from a payment
+    failure: no wallet top-up fixes it, only the owner re-picking a model.
+    """
+
+    code = "BOT_MODEL_UNAVAILABLE"
+
+    def __init__(self, message=None):
+        super().__init__(
+            message
+            or _(
+                "This bot's AI model is no longer available. Ask the bot's owner "
+                "to choose a new model."
+            )
+        )

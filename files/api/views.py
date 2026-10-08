@@ -63,13 +63,22 @@ from ..services.document_reprocessing_service import (
     ReprocessingQueueError,
     ReprocessingUnavailable,
 )
+from ..services.library_service import (
+    LibraryItemNotFound,
+    add_tags_to_files,
+    search_file_contents,
+)
 from .serializers import (
+    BulkTagSerializer,
+    ContentMatchSerializer,
+    ContentSearchQuerySerializer,
     DocumentOcrApprovalSerializer,
     FileProcessingJourneySerializer,
     FileReprocessingSerializer,
     FileSerializer,
     FileShareSerializer,
     FileStructureSerializer,
+    FileTagsSerializer,
     FileUploadOptionsSerializer,
     FolderSerializer,
     TagSerializer,
@@ -396,6 +405,30 @@ class FileViewSet(viewsets.ModelViewSet):
 
         return Response(response_data, status=status.HTTP_200_OK)
 
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="bulk-tags",
+        parser_classes=[CamelCaseJSONParser],
+    )
+    def bulk_tags(self, request):
+        """Add tags to many files at once: {"fileIds": [...], "tagIds": [...]}."""
+        serializer = BulkTagSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            files = add_tags_to_files(request.user, **serializer.validated_data)
+        except LibraryItemNotFound:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        return Response({"files": FileTagsSerializer(files, many=True).data})
+
+    @action(detail=False, methods=["get"], url_path="content-search")
+    def content_search(self, request):
+        """Files whose text contains `q`, with the first matching passage."""
+        serializer = ContentSearchQuerySerializer(data=request.query_params)
+        serializer.is_valid(raise_exception=True)
+        matches = search_file_contents(request.user, serializer.validated_data["q"])
+        return Response({"results": ContentMatchSerializer(matches, many=True).data})
+
     # -------------------------------------------------------------------------
     # SyftBox File Sharing Actions
     # -------------------------------------------------------------------------
@@ -418,9 +451,14 @@ class FileViewSet(viewsets.ModelViewSet):
 
     def _get_import_access_token(self, request, is_publicly_shared):
         """Resolve SyftBox token for import reads."""
+        # Through the package's resolver so credentials come from
+        # SyftBoxAccount, falling back to the legacy columns on these models
+        # for any identity not yet backfilled.
+        from syftbox_connect.credentials import access_token_for
+
         if is_publicly_shared:
-            return DareConfig.active_objects.first().access_token
-        return request.user.access_token
+            return access_token_for(DareConfig.active_objects.first().project_email)
+        return access_token_for(request.user.email)
 
     @action(
         detail=True,
@@ -658,7 +696,8 @@ class FileViewSet(viewsets.ModelViewSet):
         return Response(
             {
                 "structure": structured,
-                "map": structured or DocumentChunk.objects.filter(file=file_obj).exists(),
+                "map": structured
+                or DocumentChunk.objects.filter(file=file_obj).exists(),
             }
         )
 

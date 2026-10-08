@@ -46,8 +46,10 @@ def register_namespaces():
     This function is called after all namespace modules are imported
     to avoid circular import issues.
     """
+    from assistant.namespace import assistant_namespace
     from conversations.namespaces.chat import chat_namespace
     from conversations.namespaces.workflow import workflow_namespace
 
     sio.register_namespace(chat_namespace)
     sio.register_namespace(workflow_namespace)
+    sio.register_namespace(assistant_namespace)

@@ -18,7 +18,6 @@ from core.services.rag import (
     RetrievedChunk,
     build_pipeline,
 )
-from core.services.vector_service import get_vector_service_async
 from libraries.services.library_search import search_libraries
 
 from .db_helpers import get_files_from_folders, get_files_from_tags
@@ -145,12 +144,9 @@ async def add_semantic_context_to_messages(
         # Use file_owner_id for shared boards/conversations, fallback to current user
         vector_user_id = file_owner_id or user_id
 
-        # Initialize vector service if user context changed
-        if vector_user_id and vector_user_id != document_processor.user_id:
-            document_processor.user_id = vector_user_id
-            document_processor.vector_service = await get_vector_service_async(
-                vector_user_id
-            )
+        # Each retrieval path owns client initialization and failure reporting.
+        # Eager initialization here can fail before those guards and leave the
+        # processor's owner changed even though its client was never created.
 
         # Advanced mode routes retrieval through the full RAG pipeline
         # (query analysis -> hybrid -> rerank -> grounding -> trace) — the same
@@ -338,7 +334,7 @@ async def _search_documents_for_query(
             target,
         )
     except Exception as exc:
-        logger.warning("Document context retrieval failed: %s", exc)
+        logger.exception("Document context retrieval failed: %s", exc)
         if failures is not None:
             failures.append(f"documents: {exc}")
         return []

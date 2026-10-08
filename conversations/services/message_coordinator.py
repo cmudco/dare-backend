@@ -19,8 +19,11 @@ from typing import Any, Callable, Dict, List, Optional
 
 from channels.db import database_sync_to_async
 from django.utils import timezone
+from django.utils.translation import gettext_lazy as _
 from djangorestframework_camel_case.util import camelize
 
+from billing.constants import LITELLM_SPEND_LIMIT_REACHED
+from billing.exceptions import BotModelUnavailable, PaymentRequiredError
 from conversations.api.serializers import ArtifactListSerializer
 from conversations.constants import (
     DEFAULT_AI_SENDER_NAME,
@@ -64,6 +67,7 @@ from conversations.services.tool_loop_binding import ChatToolLoopBinding
 from conversations.services.tool_loop_service import ToolLoopResult, ToolLoopService
 from conversations.services.web_search_source_service import WebSearchSourceService
 from conversations.services.websocket_response_service import WebSocketResponseService
+from core.services.api_key_service import get_chat_dispatch_credentials
 from core.services.billing_service import BillingService
 from core.services.conversation_service import ConversationService
 from core.services.dtos import LLMDescriptor, LLMQueryRequestBuilder
@@ -76,6 +80,18 @@ from memory.tasks import run_memory_writer
 from users.utils import should_run_learning_progress
 
 logger = logging.getLogger(__name__)
+
+BOT_OWNER_ALLOWANCE_USED = _(
+    "This bot's owner has used their AI gateway allowance. Ask them to raise it."
+)
+
+# Socket error code for each billing refusal a turn can hit before dispatch.
+_DISPATCH_ERROR_CODES = {
+    LITELLM_SPEND_LIMIT_REACHED: ErrorCode.SPEND_LIMIT_REACHED,
+    "BOT_CAP_REACHED": "bot_cap_reached",
+    "BOT_CONFIG_UNAVAILABLE": "bot_config_unavailable",
+    "LITELLM_UNAVAILABLE": ErrorCode.VALIDATION_ERROR,
+}
 
 
 class MessageCoordinator:
@@ -333,9 +349,7 @@ class MessageCoordinator:
                 else (model_id or message_data.get("model_id"))
             )
             if descriptor is None:
-                await self.send_error(
-                    ErrorCode.VALIDATION_ERROR, "Selected AI model not found"
-                )
+                await self._send_model_unavailable()
                 return None
             dispatch_handle = descriptor.to_dispatch_handle()
 
@@ -364,6 +378,8 @@ class MessageCoordinator:
                         cap_error.get("details"),
                     )
                     return None
+            if await self._reject_if_undispatchable(descriptor):
+                return None
 
             # Save attached images and combine with existing file_ids
             attached_image_ids = await self._save_attached_images(
@@ -486,9 +502,7 @@ class MessageCoordinator:
                 default=LLMDescriptor.from_message(ai_message),
             )
             if descriptor is None:
-                await self.send_error(
-                    ErrorCode.VALIDATION_ERROR, "Selected AI model not found"
-                )
+                await self._send_model_unavailable()
                 return None
             dispatch_handle = descriptor.to_dispatch_handle()
 
@@ -515,6 +529,8 @@ class MessageCoordinator:
                         ErrorMessage.INSUFFICIENT_CREDITS,
                     )
                     return None
+            if await self._reject_if_undispatchable(descriptor):
+                return None
 
             await self._clear_regeneration_run_state(ai_message)
 
@@ -1033,7 +1049,15 @@ class MessageCoordinator:
             return
         try:
             message_obj.usage_details = usage_breakdown
-            message_obj.save(update_fields=["usage_details"])
+            updated = Message._base_manager.filter(pk=message_obj.pk).update(
+                usage_details=usage_breakdown
+            )
+            # Clients soft-delete, so a vanished row is an anomaly worth a Sentry event.
+            if not updated:
+                logger.error(
+                    "Message %s row vanished mid-stream; usage breakdown dropped.",
+                    message_obj.id,
+                )
         except Exception:
             logger.exception(
                 "Failed to save usage breakdown",
@@ -1064,6 +1088,46 @@ class MessageCoordinator:
             send_error_callback=self.send_error,
             mark_as_regenerated_callback=self._mark_as_regenerated,
         )
+
+    async def _reject_if_undispatchable(self, descriptor: LLMDescriptor) -> bool:
+        """Resolve this turn's credentials up front and report why they can't be.
+
+        The same resolution runs again at dispatch; doing it here keeps a spend
+        limit or an unsponsorable bot model from creating an empty reply.
+        """
+        try:
+            await get_chat_dispatch_credentials(
+                descriptor.provider,
+                self.user,
+                bot_id=self.conversation.bot_id,
+                litellm_model_ref=descriptor.litellm_model_ref,
+            )
+        except BotModelUnavailable as error:
+            await self.send_error(ErrorCode.BOT_MODEL_UNAVAILABLE, str(error))
+            return True
+        except PaymentRequiredError as error:
+            message = str(error)
+            if (
+                self.conversation.bot_id is not None
+                and error.code == LITELLM_SPEND_LIMIT_REACHED
+            ):
+                # In a bot the gateway allowance spent is the owner's, not the chatter's.
+                message = str(BOT_OWNER_ALLOWANCE_USED)
+            await self.send_error(
+                _DISPATCH_ERROR_CODES.get(error.code, ErrorCode.INSUFFICIENT_BALANCE),
+                message,
+                error.details,
+            )
+            return True
+        return False
+
+    async def _send_model_unavailable(self) -> None:
+        if self.conversation.bot_id is not None:
+            await self.send_error(
+                ErrorCode.BOT_MODEL_UNAVAILABLE, str(BotModelUnavailable())
+            )
+            return
+        await self.send_error(ErrorCode.VALIDATION_ERROR, "Selected AI model not found")
 
     @staticmethod
     def _public_bot_cap_error(bot_id: int) -> Optional[Dict[str, Any]]:
@@ -1197,7 +1261,9 @@ class MessageCoordinator:
             the id nor the conversation default resolves.
         """
         if model_id:
-            return await parse_model_id(model_id, user=self.user)
+            return await parse_model_id(
+                model_id, user=self.user, bot_id=self.conversation.bot_id
+            )
         if default is not None:
             return default
         return await get_conversation_default_descriptor(

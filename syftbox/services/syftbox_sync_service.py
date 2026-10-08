@@ -10,13 +10,8 @@ from core.storage.constants import StorageBackendChoice
 from files.models import File
 from files.tasks import process_file_embeddings, refresh_file_embeddings
 from syftbox.dtos import RemoteSyftBoxFile, SyftBoxSyncResult
-from syftbox.enums import SyftBoxSyncAction
-from syftbox.utils import (
-    has_remote_etag_change,
-    is_syftbox_acl_file,
-    normalize_syftbox_path,
-    resolve_sync_action,
-)
+from syftbox_connect.sync import LocalSyftBoxFile, diff
+from syftbox_connect.utils import normalize_syftbox_path
 from users.models import User
 
 logger = logging.getLogger(__name__)
@@ -25,6 +20,10 @@ logger = logging.getLogger(__name__)
 class SyftBoxSyncService:
     """
     Sync SyftBox files into the File DB.
+
+    Deciding *what* changed now lives in ``syftbox_connect.sync.diff`` -- a pure
+    function shared with other projects. This class keeps the half that is
+    specific to DARE: turning that verdict into File rows and embedding jobs.
 
     - Creates missing File records
     - Skips existing ones
@@ -45,151 +44,78 @@ class SyftBoxSyncService:
             storage_backend=StorageBackendChoice.SYFTBOX,
         )
 
-        existing_files_by_path = {
-            normalize_syftbox_path(file_obj.file.name): file_obj
-            for file_obj in existing_db_files
-        }
-
-        remote_paths = self._collect_remote_paths(remote_files)
-
-        result = SyftBoxSyncResult(
-            total_remote=len(remote_files),
-            kept=0,
+        verdict = diff(
+            remote_files,
+            [
+                LocalSyftBoxFile(
+                    path=normalize_syftbox_path(file_obj.file.name),
+                    etag=file_obj.syftbox_etag,
+                    ref=file_obj,
+                )
+                for file_obj in existing_db_files
+            ],
         )
 
-        self._sync_uploads(
-            user=user,
-            remote_files=remote_files,
-            existing_files_by_path=existing_files_by_path,
-            result=result,
-        )
-
-        self._sync_deletions(
-            existing_files_by_path=existing_files_by_path,
-            remote_paths=remote_paths,
-            result=result,
-        )
-
+        result = SyftBoxSyncResult(total_remote=verdict.total_remote, kept=0)
+        self._apply(user=user, verdict=verdict, result=result)
         return result
 
-    def _sync_uploads(
-        self,
-        *,
-        user: User,
-        remote_files: list[RemoteSyftBoxFile],
-        existing_files_by_path: dict[str, File],
-        result: SyftBoxSyncResult,
-    ) -> None:
-        """Create missing files and refresh embeddings for changed files."""
+    def _apply(self, *, user, verdict, result: SyftBoxSyncResult) -> None:
+        """Turn the diff into File rows, embedding jobs, and counters."""
 
-        for remote_file in remote_files:
-            if is_syftbox_acl_file(remote_file.path):
-                result.kept += 1
-                continue
+        # ACL metadata is not a user file; counted as kept, as before.
+        result.kept += len(verdict.skipped)
 
-            normalized_path = normalize_syftbox_path(remote_file.path)
-            db_file = existing_files_by_path.get(normalized_path)
-
-            if db_file:
-                action = resolve_sync_action(
-                    remote_exists=True,
-                    db_exists=True,
-                    etag_changed=has_remote_etag_change(
-                        remote_etag=remote_file.etag,
-                        db_etag=db_file.syftbox_etag,
-                    ),
-                )
-
-                if action == SyftBoxSyncAction.UPDATE_DB:
-                    try:
-                        self._refresh_changed_file(
-                            db_file=db_file,
-                            remote_file=remote_file,
-                        )
-                        result.updated += 1
-                    except Exception as error:
-                        message = (
-                            f"Update failed for remote_path='{remote_file.path}': {error}"
-                        )
-                        result.failed += 1
-                        result.errors.append(message)
-                        logger.exception(message)
-                    continue
-
-                self._update_existing_metadata(
-                    db_file=db_file,
-                    remote_file=remote_file,
-                )
-                result.kept += 1
-                continue
-
-            action = resolve_sync_action(remote_exists=True, db_exists=False)
-
-            if action != SyftBoxSyncAction.UPLOAD_DB:
-                result.kept += 1
-                continue
-
+        for remote_file in verdict.created:
             try:
                 self._create_ref_and_enqueue(
                     user=user,
                     remote_file=remote_file,
-                    normalized_path=normalized_path,
+                    normalized_path=normalize_syftbox_path(remote_file.path),
                 )
                 result.created += 1
-
             except Exception as error:
-                message = (
-                    f"Create failed for remote_path='{remote_file.path}': {error}"
+                self._record_failure(
+                    result,
+                    f"Create failed for remote_path='{remote_file.path}': {error}",
                 )
-                result.failed += 1
-                result.errors.append(message)
-                logger.exception(message)
 
-    def _sync_deletions(
-        self,
-        *,
-        existing_files_by_path: dict[str, File],
-        remote_paths: set[str],
-        result: SyftBoxSyncResult,
-    ) -> None:
-        """Delete DB records that no longer exist in the remote snapshot."""
-
-        for normalized_path, db_file in existing_files_by_path.items():
-            action = resolve_sync_action(
-                remote_exists=normalized_path in remote_paths,
-                db_exists=True,
-            )
-
-            if action != SyftBoxSyncAction.DELETE_DB:
-                continue
-
+        for pair in verdict.changed:
             try:
-                db_file.delete()
-                result.deleted += 1
-
-            except Exception as error:
-                message = (
-                    f"Delete failed for db_path='{normalized_path}': {error}"
+                self._refresh_changed_file(
+                    db_file=pair.local.ref,
+                    remote_file=pair.remote,
                 )
-                result.failed += 1
-                result.errors.append(message)
-                logger.exception(message)
+                result.updated += 1
+            except Exception as error:
+                self._record_failure(
+                    result,
+                    f"Update failed for remote_path='{pair.remote.path}': {error}",
+                )
 
-    def _collect_remote_paths(
-        self,
-        remote_files: list[RemoteSyftBoxFile],
-    ) -> set[str]:
-        """Return normalized non-ACL remote file paths for fast lookup."""
+        for pair in verdict.unchanged:
+            # Deliberately not guarded: the original let metadata backfill
+            # errors propagate, and this phase does not change behaviour.
+            self._update_existing_metadata(
+                db_file=pair.local.ref,
+                remote_file=pair.remote,
+            )
+            result.kept += 1
 
-        paths: set[str] = set()
+        for local_file in verdict.deleted:
+            try:
+                local_file.ref.delete()
+                result.deleted += 1
+            except Exception as error:
+                self._record_failure(
+                    result, f"Delete failed for db_path='{local_file.path}': {error}"
+                )
 
-        for remote_file in remote_files:
-            if is_syftbox_acl_file(remote_file.path):
-                continue
-
-            paths.add(normalize_syftbox_path(remote_file.path))
-
-        return paths
+    @staticmethod
+    def _record_failure(result: SyftBoxSyncResult, message: str) -> None:
+        result.failed += 1
+        result.errors.append(message)
+        logger.exception(message)
 
     def _create_ref_and_enqueue(
         self,
@@ -293,10 +219,7 @@ class SyftBoxSyncService:
             db_file.syftbox_etag = remote_file.etag
             update_fields.append("syftbox_etag")
 
-        if (
-            remote_file.size is not None
-            and remote_file.size != db_file.size
-        ):
+        if remote_file.size is not None and remote_file.size != db_file.size:
             db_file.size = remote_file.size
             update_fields.append("size")
 

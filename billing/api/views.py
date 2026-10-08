@@ -1,3 +1,4 @@
+import uuid
 from decimal import Decimal
 
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -12,6 +13,7 @@ from rest_framework.response import Response
 
 from api_keys.constants import BillingModeChoice
 from api_keys.models import UserProviderAPIKey
+from billing import litellm_key_service
 from billing.api.serializers import (
     ActiveWalletRefSerializer,
     AllocateSerializer,
@@ -20,6 +22,7 @@ from billing.api.serializers import (
     GroupWalletReadSerializer,
     GroupWalletWriteSerializer,
     LiteLLMKeyCreateSerializer,
+    LiteLLMKeyDependentsSerializer,
     LiteLLMKeyReadSerializer,
     LiteLLMKeyUpdateSerializer,
     LiteLLMTestRequestSerializer,
@@ -28,6 +31,7 @@ from billing.api.serializers import (
     OwnedGroupSerializer,
     SetActiveWalletRequestSerializer,
     SystemRefillPolicySerializer,
+    TransactionHistoryQuerySerializer,
     TransactionSerializer,
     UpsertUserOverrideSerializer,
     UserRefillOverrideSerializer,
@@ -35,6 +39,7 @@ from billing.api.serializers import (
     WalletsListResponseSerializer,
 )
 from billing.constants import (
+    ALL_PLATFORMS,
     LiteLLMKeySourceChoice,
     TransactionTypeChoice,
     UserWalletPreferenceTypeChoice,
@@ -46,6 +51,7 @@ from billing.group_wallet_service import (
     UpdateGroupPolicyRequest,
     UpsertUserOverrideRequest,
 )
+from billing.litellm_key_service import LiteLLMKeyDependencyError
 from billing.litellm_model_policy import recommend_background_models
 from billing.litellm_probe import probe_litellm_connection
 from billing.models import (
@@ -59,16 +65,29 @@ from billing.models import (
     Wallet,
     format_usd,
 )
-from billing.services import WalletService
+from billing.services import (
+    MEMBER_SPEND_PREFETCH,
+    TransactionExportService,
+    TransactionHistoryQuery,
+    TransactionHistoryService,
+    WalletService,
+)
 from common.pagination import CustomPageNumberPagination
 from common.permissions import IsSuperAdmin
 from conversations.constants import Provider
 from conversations.models import Message
 from core.services.energy_service import compute_relatable_stats
 from feature_flags.services import is_flag_enabled_for_user
-from users.constants import AuthSourceChoice
 from users.models import User
 from users.utils import detect_platform_from_request
+
+
+def _is_uuid(value: str) -> bool:
+    try:
+        uuid.UUID(value)
+    except ValueError:
+        return False
+    return True
 
 
 def _validation_response(exc: ValidationError):
@@ -76,13 +95,11 @@ def _validation_response(exc: ValidationError):
     return Response(detail, status=status.HTTP_400_BAD_REQUEST)
 
 
-# Energy is recorded against the model that produced it, but `Message.llm`
-# is SET_NULL, so retiring a model leaves its messages pointing at nothing.
-# The consumption still happened and still belongs in the total, so the rows
-# are kept under one heading rather than dropped — which would make the chart
-# disagree with the headline figure.
-DELETED_MODEL_LABEL = "Deleted model"
-DELETED_MODEL_PROVIDER = "unknown"
+# Rows with no ``llm`` (a deleted model, or a proxy dispatch) are labelled by
+# the name kept on the row. Ones with no name at all still count toward the
+# total, under one heading, so the chart never disagrees with it.
+UNKNOWN_MODEL_LABEL = "Unknown model"
+UNKNOWN_MODEL_PROVIDER = "unknown"
 
 
 def _model_stat_row(
@@ -125,6 +142,22 @@ def _model_stat_row(
     }
 
 
+def _transaction_history_query(request) -> TransactionHistoryQuery:
+    params = TransactionHistoryQuerySerializer(data=request.query_params)
+    params.is_valid(raise_exception=True)
+    data = params.validated_data
+    # Without an explicit platform, callers see the platform they signed in on;
+    # the SocraticBots backend relies on this.
+    platform = data.get("platform") or detect_platform_from_request(request)
+    return TransactionHistoryQuery(
+        platform=None if platform == ALL_PLATFORMS else platform,
+        billing_mode=data.get("billing_mode"),
+        model=data.get("model"),
+        created_after=data.get("created_after"),
+        created_before=data.get("created_before"),
+    )
+
+
 class BillingViewSet(viewsets.ViewSet):
     """
     ViewSet for billing-related operations.
@@ -151,53 +184,30 @@ class BillingViewSet(viewsets.ViewSet):
     @action(detail=False, methods=["get"])
     def transactions(self, request):
         """
-        List the authenticated user's transactions, paginated and filtered.
-
-        Query params (all optional):
-            platform:     "ALL" | "DARE" | "SocraticBots"
-                          When omitted, defaults to the platform detected from
-                          the auth scope (preserves the SocraticBots backend's
-                          behavior when it calls without the param).
-            billing_mode: "wallet" | "own_api"
-                          Filter results to a single billing mode.
-
-        The response wraps DRF's standard paginated payload and adds a
-        `summary` object with counts per billing mode under the current
-        platform filter, so tab badges in the UI can display accurate totals
-        across all pages rather than just the current page.
+        List the caller's transactions, newest first, filtered by
+        TransactionHistoryQuerySerializer. Adds `summary` (counts per billing
+        mode) and `models` (model names on the platform) for the filter UI.
         """
-        platform_param = request.query_params.get("platform")
-        billing_mode_param = request.query_params.get("billing_mode")
+        query = _transaction_history_query(request)
+        page = self.paginate_queryset(
+            TransactionHistoryService.transactions(request.user, query)
+        )
+        response = self.get_paginated_response(
+            TransactionSerializer(page, many=True).data
+        )
+        response.data["summary"] = TransactionHistoryService.summary(
+            request.user, query
+        )
+        response.data["models"] = TransactionHistoryService.models(request.user, query)
+        return response
 
-        base_qs = Transaction.objects.filter(user=request.user)
-
-        if platform_param == "ALL":
-            pass
-        elif platform_param in AuthSourceChoice.values:
-            base_qs = base_qs.filter(platform=platform_param)
-        else:
-            base_qs = base_qs.filter(platform=detect_platform_from_request(request))
-
-        summary = {
-            "all": base_qs.count(),
-            "wallet": base_qs.filter(billing_mode=BillingModeChoice.WALLET).count(),
-            "ownApi": base_qs.filter(billing_mode=BillingModeChoice.OWN_API).count(),
-            "litellm": base_qs.filter(billing_mode=BillingModeChoice.LITELLM).count(),
-        }
-
-        queryset = base_qs.order_by("-created_at")
-        if billing_mode_param in BillingModeChoice.values:
-            queryset = queryset.filter(billing_mode=billing_mode_param)
-
-        page = self.paginate_queryset(queryset)
-        if page is not None:
-            serializer = TransactionSerializer(page, many=True)
-            response = self.get_paginated_response(serializer.data)
-            response.data["summary"] = summary
-            return response
-
-        serializer = TransactionSerializer(queryset, many=True)
-        return Response({"results": serializer.data, "summary": summary})
+    @action(detail=False, methods=["get"], url_path="transactions/export")
+    def export_transactions(self, request):
+        """Every transaction matching the list filters, as CSV."""
+        query = _transaction_history_query(request)
+        return TransactionExportService.export_to_csv(
+            TransactionHistoryService.transactions(request.user, query)
+        )
 
     @action(detail=False, methods=["get"])
     def model_stats(self, request):
@@ -205,7 +215,8 @@ class BillingViewSet(viewsets.ViewSet):
 
         Two groupings, deliberately kept apart. DARE-billed rows group by the
         ``llm`` foreign key, so a model renamed after the fact still reports as
-        a single row. Proxy-routed rows have no such row to point at, so they
+        a single row; once a model is deleted they fall back to the name the
+        transaction kept. Proxy-routed rows have no such row to point at, so they
         group by the identifier the gateway served; their cost comes from the
         reference registry and was never charged, which ``is_estimated`` says
         out loud rather than letting it read as spend.
@@ -255,6 +266,24 @@ class BillingViewSet(viewsets.ViewSet):
             for stat in base_qs.filter(billing_mode=BillingModeChoice.LITELLM)
             .values("llm_name")
             .annotate(total_reference=Sum("reference_amount"), **token_sums)
+        ]
+
+        models_billing_stats += [
+            _model_stat_row(
+                llm_id=None,
+                name=stat["llm_name"] or UNKNOWN_MODEL_LABEL,
+                identifier=stat["llm_name"] or UNKNOWN_MODEL_LABEL,
+                provider=UNKNOWN_MODEL_PROVIDER,
+                cost=stat["total_cost"],
+                is_estimated=False,
+                input_tokens=stat["input_tokens"],
+                output_tokens=stat["output_tokens"],
+                transaction_count=stat["transaction_count"],
+            )
+            for stat in base_qs.filter(llm__isnull=True)
+            .exclude(billing_mode=BillingModeChoice.LITELLM)
+            .values("llm_name")
+            .annotate(total_cost=Sum("amount"), **token_sums)
         ]
 
         models_billing_stats.sort(
@@ -328,7 +357,14 @@ class BillingViewSet(viewsets.ViewSet):
         relatable = compute_relatable_stats(total_energy)
 
         per_model = (
-            base_qs.values("llm__id", "llm__name", "llm__identifier", "llm__provider")
+            base_qs.values(
+                "llm__id",
+                "llm__name",
+                "llm__identifier",
+                "llm__provider",
+                "llm_name",
+                "litellm_model_name",
+            )
             .annotate(
                 energy_wh_sum=Sum("energy_wh"),
                 carbon_g_sum=Sum("carbon_g"),
@@ -338,19 +374,30 @@ class BillingViewSet(viewsets.ViewSet):
             .order_by("-energy_wh_sum")
         )
 
-        models_breakdown = [
-            {
-                "llmId": row["llm__id"],
-                "llmName": row["llm__name"] or DELETED_MODEL_LABEL,
-                "llmIdentifier": row["llm__identifier"] or DELETED_MODEL_LABEL,
-                "llmProvider": row["llm__provider"] or DELETED_MODEL_PROVIDER,
-                "energyWh": float(row["energy_wh_sum"] or 0),
-                "carbonG": float(row["carbon_g_sum"] or 0),
-                "waterMl": float(row["water_ml_sum"] or 0),
-                "messageCount": row["message_count"],
-            }
-            for row in per_model
-        ]
+        models_breakdown = []
+        for row in per_model:
+            if row["llm__id"] is not None:
+                name = row["llm__name"]
+                identifier = row["llm__identifier"]
+                provider = row["llm__provider"]
+            elif row["litellm_model_name"]:
+                name = identifier = row["litellm_model_name"]
+                provider = Provider.CUSTOM.value
+            else:
+                name = identifier = row["llm_name"] or UNKNOWN_MODEL_LABEL
+                provider = UNKNOWN_MODEL_PROVIDER
+            models_breakdown.append(
+                {
+                    "llmId": row["llm__id"],
+                    "llmName": name,
+                    "llmIdentifier": identifier,
+                    "llmProvider": provider,
+                    "energyWh": float(row["energy_wh_sum"] or 0),
+                    "carbonG": float(row["carbon_g_sum"] or 0),
+                    "waterMl": float(row["water_ml_sum"] or 0),
+                    "messageCount": row["message_count"],
+                }
+            )
 
         return Response(
             {
@@ -440,7 +487,7 @@ class BillingViewSet(viewsets.ViewSet):
                 "label": spend.litellm_key.label,
                 "source": spend.litellm_key.source,
                 "groupName": (
-                    spend.litellm_key.source_group.name
+                    spend.litellm_key.source_group.access_code
                     if spend.litellm_key.source_group_id
                     else None
                 ),
@@ -486,6 +533,9 @@ class BillingViewSet(viewsets.ViewSet):
         so the dashboard can distinguish individual sessions without exposing
         the raw id.
 
+        ``totalCost`` is what chatters paid from DARE wallets; ``sponsoredCost``
+        is the owner's LiteLLM spend on the bot, at DARE's reference rates.
+
         Query params:
             group_by: ``user`` (default) | ``date``
             period: ``7d`` | ``30d`` | ``90d`` | ``all`` (default)
@@ -512,6 +562,9 @@ class BillingViewSet(viewsets.ViewSet):
 
         totals = base_qs.aggregate(
             total_cost=Sum("amount"),
+            sponsored_cost=Sum(
+                "reference_amount", filter=Q(billing_mode=BillingModeChoice.LITELLM)
+            ),
             total_input=Sum("input_tokens"),
             total_output=Sum("output_tokens"),
             message_count=Count("id"),
@@ -528,17 +581,22 @@ class BillingViewSet(viewsets.ViewSet):
                 base_qs.values("user__id", "user__email")
                 .annotate(
                     total_cost=Sum("amount"),
+                    sponsored_cost=Sum(
+                        "reference_amount",
+                        filter=Q(billing_mode=BillingModeChoice.LITELLM),
+                    ),
                     input_tokens=Sum("input_tokens"),
                     output_tokens=Sum("output_tokens"),
                     message_count=Count("id"),
                 )
-                .order_by("-total_cost")
+                .order_by("-total_cost", "-sponsored_cost")
             )
             user_breakdown = [
                 {
                     "userId": row["user__id"],
                     "userEmail": row["user__email"] or "anonymous",
                     "totalCost": str(row["total_cost"] or 0),
+                    "sponsoredCost": str(row["sponsored_cost"] or 0),
                     "inputTokens": row["input_tokens"] or 0,
                     "outputTokens": row["output_tokens"] or 0,
                     "messageCount": row["message_count"],
@@ -551,6 +609,10 @@ class BillingViewSet(viewsets.ViewSet):
                 .values("date")
                 .annotate(
                     total_cost=Sum("amount"),
+                    sponsored_cost=Sum(
+                        "reference_amount",
+                        filter=Q(billing_mode=BillingModeChoice.LITELLM),
+                    ),
                     message_count=Count("id"),
                 )
                 .order_by("date")
@@ -559,6 +621,7 @@ class BillingViewSet(viewsets.ViewSet):
                 {
                     "date": row["date"].isoformat() if row["date"] else None,
                     "totalCost": str(row["total_cost"] or 0),
+                    "sponsoredCost": str(row["sponsored_cost"] or 0),
                     "messageCount": row["message_count"],
                 }
                 for row in rows
@@ -576,6 +639,7 @@ class BillingViewSet(viewsets.ViewSet):
                 "groupBy": group_by,
                 "totals": {
                     "totalCost": str(totals["total_cost"] or 0),
+                    "sponsoredCost": str(totals["sponsored_cost"] or 0),
                     "totalInputTokens": totals["total_input"] or 0,
                     "totalOutputTokens": totals["total_output"] or 0,
                     "messageCount": totals["message_count"] or 0,
@@ -635,9 +699,13 @@ class BillingViewSet(viewsets.ViewSet):
                     target_user_id=target.id,
                     refill_amount=data.get("refill_amount"),
                     refill_period_days=data.get("refill_period_days"),
+                    refill_cap=data.get("refill_cap"),
+                    litellm_cap=data.get("litellm_cap"),
                     reason=data.get("reason", ""),
-                    clear_amount=data.get("clear_amount", False),
-                    clear_period=data.get("clear_period", False),
+                    clear_amount=data["clear_amount"],
+                    clear_period=data["clear_period"],
+                    clear_refill_cap=data["clear_refill_cap"],
+                    clear_litellm_cap=data["clear_litellm_cap"],
                 )
             )
         except ValidationError as exc:
@@ -692,6 +760,7 @@ class BillingViewSet(viewsets.ViewSet):
                 "status": {
                     "kind": "BALANCE",
                     "balance": str(dare_wallet.balance) if dare_wallet else "0.00",
+                    "ceiling": str(WalletService.get_effective_refill_policy(user).cap),
                     "last_refill_at": (
                         dare_wallet.last_refill_at if dare_wallet else None
                     ),
@@ -743,6 +812,7 @@ class BillingViewSet(viewsets.ViewSet):
             str(row.litellm_key_id): row.total_reference_amount
             for row in LiteLLMSpend.objects.filter(user=user)
         }
+        spend_limit = WalletService.get_litellm_spend_limit(user)
         for key in litellm_qs:
             group_name = key.source_group.access_code if key.source_group else None
             wallets_list.append(
@@ -766,6 +836,12 @@ class BillingViewSet(viewsets.ViewSet):
                         "spend": str(
                             spend_by_key.get(str(key.pk), Decimal("0.000000"))
                         ),
+                        "spend_limit": (
+                            spend_limit
+                            if key.source_group_id is not None
+                            and key.source_group_id == user.access_code_group_id
+                            else None
+                        ),
                     },
                 }
             )
@@ -776,6 +852,8 @@ class BillingViewSet(viewsets.ViewSet):
                 "ref_id": pref.active_wallet_ref_id,
             },
             "wallets": wallets_list,
+            "byo_enabled": byo_enabled,
+            "litellm_enabled": litellm_enabled,
         }
         # Use serializer purely for shape validation / camelCase rendering.
         return Response(WalletsListResponseSerializer(body).data)
@@ -831,9 +909,12 @@ class BillingViewSet(viewsets.ViewSet):
                 pref.active_wallet_type = UserWalletPreferenceTypeChoice.BYO
                 pref.active_wallet_ref_id = None
             else:
-                if not UserProviderAPIKey.active_objects.filter(
-                    pk=ref_id, user=request.user
-                ).exists():
+                if (
+                    not ref_id.isdigit()
+                    or not UserProviderAPIKey.active_objects.filter(
+                        pk=ref_id, user=request.user
+                    ).exists()
+                ):
                     return Response(
                         {
                             "code": "WALLET_NOT_FOUND",
@@ -871,7 +952,7 @@ class BillingViewSet(viewsets.ViewSet):
                     },
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-            if not visible_keys.filter(pk=ref_id).exists():
+            if not _is_uuid(ref_id) or not visible_keys.filter(pk=ref_id).exists():
                 return Response(
                     {
                         "code": "WALLET_NOT_FOUND",
@@ -897,6 +978,18 @@ class BillingViewSet(viewsets.ViewSet):
                 ).data,
             }
         )
+
+
+def _socratic_unavailable_response() -> Response:
+    return Response(
+        {
+            "detail": _(
+                "Couldn't reach Socratic Bots to check the bots using this key. "
+                "Nothing was changed; try again shortly."
+            )
+        },
+        status=status.HTTP_502_BAD_GATEWAY,
+    )
 
 
 class LiteLLMKeyViewSet(
@@ -959,7 +1052,22 @@ class LiteLLMKeyViewSet(
         # `reset_pref_on_litellm_delete` (billing/signals.py) handles the
         # cascade-reset of UserWalletPreference for any user whose active
         # wallet pointed at this key.
-        return super().destroy(request, *args, **kwargs)
+        try:
+            litellm_key_service.delete_key(self.get_object())
+        except LiteLLMKeyDependencyError:
+            return _socratic_unavailable_response()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @action(detail=True, methods=["get"], url_path="dependents")
+    def dependents(self, request, pk=None):
+        """Socratic bots that stop answering if this key is deleted."""
+        try:
+            bots = litellm_key_service.bot_dependents(self.get_object())
+        except LiteLLMKeyDependencyError:
+            return _socratic_unavailable_response()
+        return Response(
+            LiteLLMKeyDependentsSerializer({"bot_count": len(bots), "bots": bots}).data
+        )
 
     @action(detail=False, methods=["post"], url_path="test")
     def test_unsaved(self, request):
@@ -1040,8 +1148,10 @@ class GroupWalletViewSet(viewsets.GenericViewSet, mixins.UpdateModelMixin):
     @action(detail=True, methods=["get"], url_path="members")
     def members(self, request, pk=None):
         group_wallet = self.get_object()
-        users = group_wallet.group.users.all().select_related(
-            "wallet", "refill_override"
+        users = (
+            group_wallet.group.users.all()
+            .select_related("wallet", "refill_override")
+            .prefetch_related(MEMBER_SPEND_PREFETCH)
         )
         serializer = MemberRowSerializer(users, many=True)
         return Response(serializer.data)
@@ -1061,9 +1171,13 @@ class GroupWalletViewSet(viewsets.GenericViewSet, mixins.UpdateModelMixin):
                     owner=request.user,
                     refill_amount=data.get("refill_amount"),
                     refill_period_days=data.get("refill_period_days"),
+                    refill_cap=data.get("refill_cap"),
+                    litellm_member_cap=data.get("litellm_member_cap"),
                     is_active=data.get("is_active"),
-                    clear_amount=data.get("clear_amount", False),
-                    clear_period=data.get("clear_period", False),
+                    clear_amount=data["clear_amount"],
+                    clear_period=data["clear_period"],
+                    clear_refill_cap=data["clear_refill_cap"],
+                    clear_litellm_member_cap=data["clear_litellm_member_cap"],
                 )
             )
         except PermissionDenied as exc:
@@ -1100,8 +1214,10 @@ class GroupWalletViewSet(viewsets.GenericViewSet, mixins.UpdateModelMixin):
             )
 
         group_wallet.refresh_from_db()
-        recipient = User.objects.select_related("wallet", "refill_override").get(
-            pk=data["recipient_user_id"]
+        recipient = (
+            User.objects.select_related("wallet", "refill_override")
+            .prefetch_related(MEMBER_SPEND_PREFETCH)
+            .get(pk=data["recipient_user_id"])
         )
         return Response(
             {
@@ -1178,9 +1294,13 @@ class GroupWalletViewSet(viewsets.GenericViewSet, mixins.UpdateModelMixin):
                     target_user_id=target.id,
                     refill_amount=data.get("refill_amount"),
                     refill_period_days=data.get("refill_period_days"),
+                    refill_cap=data.get("refill_cap"),
+                    litellm_cap=data.get("litellm_cap"),
                     reason=data.get("reason", ""),
-                    clear_amount=data.get("clear_amount", False),
-                    clear_period=data.get("clear_period", False),
+                    clear_amount=data["clear_amount"],
+                    clear_period=data["clear_period"],
+                    clear_refill_cap=data["clear_refill_cap"],
+                    clear_litellm_cap=data["clear_litellm_cap"],
                 )
             )
         except PermissionDenied as exc:

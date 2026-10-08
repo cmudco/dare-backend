@@ -82,8 +82,14 @@ def _guard_note(question: str) -> Optional[str]:
     return "<memory_status>\n" + "\n".join(verdicts) + "\n</memory_status>"
 
 
-def read_context(user, question: str) -> ReadContext:
-    """Read USER.md, facts, and procedures for the current turn."""
+def read_context(
+    user, question: str, source_project_id: Optional[int] = None
+) -> ReadContext:
+    """Read USER.md, facts, and procedures for the current turn.
+
+    ``source_project_id`` bounds fact and procedure recall to one project's
+    chats; USER.md is the user's profile and always applies.
+    """
     user_doc = read_user_doc(user)
     vector = embed_one(question)
 
@@ -95,6 +101,7 @@ def read_context(user, question: str) -> ReadContext:
         embed_query=False,
         # Pinned facts are already present in USER.md.
         exclude_pinned=True,
+        source_project_id=source_project_id,
     )
 
     task_text = task_query(question)
@@ -109,6 +116,7 @@ def read_context(user, question: str) -> ReadContext:
         query_vector=task_vector,
         embed_query=False,
         relevance_floor=PROCEDURE_RELEVANCE_FLOOR,
+        source_project_id=source_project_id,
     )
 
     procedure_block = format_procedures([item.record for item in procedures.chosen])

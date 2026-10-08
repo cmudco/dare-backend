@@ -70,6 +70,12 @@ FAMILIES: Tuple[ModelFamily, ...] = (
         supports_temperature=False,
     ),
     ModelFamily(
+        key="openai-o-series",
+        patterns=(re.compile(r"(?:^|-)o[1-9](?:-|$)"),),
+        is_reasoning=True,
+        supports_temperature=False,
+    ),
+    ModelFamily(
         key="claude-reasoning-effort",
         patterns=(re.compile(r"(?:^|-)claude-(?:opus-4-[78]|sonnet-5)(?:-|$)"),),
         supports_temperature=False,

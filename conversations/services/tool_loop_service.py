@@ -10,8 +10,9 @@ Replaces the old hardcoded two-step flow (one tool round, then one
 synthesis call with tools stripped and results flattened into a prose user
 message). Here the model keeps its tools across rounds, sees results as
 provider-native ``role:"tool"`` turns, and can chain calls — search, read,
-search again, then chart. The call after ``MAX_TOOL_ROUNDS`` runs with
-tools stripped, forcing a final text answer, so termination is guaranteed.
+search again, then chart. Once the ``ToolLoopConfig`` bounds are reached
+(``MAX_TOOL_ROUNDS`` by default) the next call runs with tools stripped,
+forcing a final text answer, so termination is guaranteed.
 
 Text accumulates ACROSS rounds (post-tool text appends after a paragraph
 break instead of replacing what the user already read), usage accumulates
@@ -40,7 +41,12 @@ from conversations.services.tool_execution_service import (
     ToolExecutionService,
     tool_execution_service,
 )
-from core.services.dtos import LLMQueryRequest, StreamEventKind, ToolCallRequest
+from core.services.dtos import (
+    LLMQueryRequest,
+    StreamEventKind,
+    ToolCallRequest,
+    ToolLoopConfig,
+)
 from core.services.llm_helpers.tool_turn_helpers import (
     build_assistant_tool_call_turn,
     build_tool_result_turn,
@@ -82,8 +88,13 @@ class ToolLoopResult:
 class ToolLoopService:
     """Runs the bounded tool loop for one host turn."""
 
-    def __init__(self, llm_service) -> None:
+    def __init__(
+        self,
+        llm_service,
+        config: ToolLoopConfig = ToolLoopConfig(max_rounds=MAX_TOOL_ROUNDS),
+    ) -> None:
         self.llm_service = llm_service
+        self.config = config
         self.execution_service: ToolExecutionService = tool_execution_service
         self.stream_idle_timeout_seconds = float(
             os.environ.get("LLM_STREAM_IDLE_TIMEOUT_SECONDS", "45")
@@ -126,6 +137,7 @@ class ToolLoopService:
         binding: ToolLoopBinding,
         retrieval_scope: Optional[RetrievalScope],
         regenerate: bool = False,
+        messages: Optional[List[Dict[str, Any]]] = None,
     ) -> ToolLoopResult:
         """Run the loop and return the finished turn.
 
@@ -136,17 +148,18 @@ class ToolLoopService:
             retrieval_scope: Attached-source scope for search_documents.
             regenerate: True when regenerating — clears the turn's prior
                 tool-call rows so history and the FE never show ghosts.
+            messages: Host-built prompt replacing the chat prompt build.
         """
         turn_key = binding.store.turn_key
         if regenerate:
             await binding.store.clear_prior_tool_calls()
 
         try:
-            prepared = await self.llm_service.prepare_chat(request)
+            prepared = await self.llm_service.prepare_chat(request, messages)
         except asyncio.CancelledError:
             logger.info("[journey] mid=%s cancelled during prepare", turn_key)
             return ToolLoopResult(cancelled=True)
-        messages: List[Dict[str, Any]] = list(prepared.messages)
+        messages = list(prepared.messages)
         logger.info(
             "[journey] mid=%s prepared: %d prompt turns, %d tools, regenerate=%s",
             turn_key,
@@ -183,12 +196,13 @@ class ToolLoopService:
         # One extra stream attempt is reserved for the initial empty-response
         # recovery. ``round_index`` remains the logical tool round, so a
         # provider anomaly cannot consume the user's bounded tool budget.
-        for stream_index in range(1, MAX_TOOL_ROUNDS + 3):
+        tools_open = True
+        for stream_index in range(1, self.config.max_rounds + 3):
             round_index = stream_index - int(empty_stream_retried)
-            if round_index > MAX_TOOL_ROUNDS + 1:
+            if round_index > self.config.max_rounds + 1:
                 break
             result.rounds_used = round_index
-            tools = prepared.tools if round_index <= MAX_TOOL_ROUNDS else None
+            tools = prepared.tools if tools_open else None
             pending_calls: List[ToolCallRequest] = []
             synthesized_ids: deque = deque()
             round_has_text = False
@@ -419,11 +433,18 @@ class ToolLoopService:
             )
             result.tool_calls_made += len(pending_calls)
 
-            if round_index == MAX_TOOL_ROUNDS:
+            budget_spent = (
+                self.config.max_tool_calls is not None
+                and result.tool_calls_made >= self.config.max_tool_calls
+            )
+            if round_index == self.config.max_rounds or budget_spent:
+                tools_open = False
                 logger.info(
-                    "[journey] mid=%s round cap hit — next round forces a "
-                    "text answer",
+                    "[journey] mid=%s tool cap hit (round %d, %d calls) — next "
+                    "round forces a text answer",
                     turn_key,
+                    round_index,
+                    result.tool_calls_made,
                 )
                 await emitter.rounds_capped(round_index)
 

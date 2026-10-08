@@ -1,13 +1,14 @@
 """Attach the current memory layers to a model request."""
 
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from channels.db import database_sync_to_async
 from django.contrib.auth import get_user_model
 
 from config.env import USE_POSTGRES
 from memory.services.context import ReadContext, read_context
+from projects.services.project_service import memory_scope_project_id
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +17,7 @@ async def add_memory_context_to_messages(
     messages: List[Dict[str, str]],
     query: str,
     user_id: int,
+    project_id: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """
     Read the user's memory layers and append the framed context block.
@@ -24,6 +26,7 @@ async def add_memory_context_to_messages(
         messages: LLM message list to append to (modified in place)
         query: The user's message text used as the retrieval query
         user_id: Authenticated user's integer ID
+        project_id: The chat's project; bounds recall when it is memory-scoped
 
     Returns:
         List of memory item dicts the prompt actually carried (for display on
@@ -38,7 +41,7 @@ async def add_memory_context_to_messages(
 
     try:
         context = await database_sync_to_async(_read_context_for_user)(
-            user_id, query.strip()
+            user_id, query.strip(), project_id
         )
     except Exception:
         logger.exception(
@@ -53,8 +56,12 @@ async def add_memory_context_to_messages(
     return context.items
 
 
-def _read_context_for_user(user_id: int, query: str) -> ReadContext | None:
+def _read_context_for_user(
+    user_id: int, query: str, project_id: Optional[int]
+) -> ReadContext | None:
     user = get_user_model().objects.filter(pk=user_id).first()
     if user is None:
         return None
-    return read_context(user, query)
+    return read_context(
+        user, query, source_project_id=memory_scope_project_id(project_id)
+    )
