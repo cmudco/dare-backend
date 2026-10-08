@@ -13,6 +13,8 @@ granted wallet credit through an access-code group and a token alone must not
 be able to do that.
 """
 
+from rest_framework_simplejwt.authentication import JWTAuthentication
+from rest_framework_simplejwt.exceptions import AuthenticationFailed, InvalidToken
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 
@@ -43,3 +45,12 @@ class SharedClaimsTokenSerializer(TokenObtainPairSerializer):
     @classmethod
     def get_token(cls, user):
         return add_shared_claims(super().get_token(user), user)
+
+
+def user_for_access_token(raw_token):
+    """The active user an access token names, validated as the REST API does, else None."""
+    auth = JWTAuthentication()
+    try:
+        return auth.get_user(auth.get_validated_token(raw_token))
+    except (InvalidToken, AuthenticationFailed):
+        return None
