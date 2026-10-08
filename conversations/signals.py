@@ -1,11 +1,12 @@
 import logging
 
 from django.conf import settings
-from django.db.models.signals import post_save
+from django.db.models.signals import post_save, pre_delete
 from django.dispatch import receiver
 
+from billing.models import Transaction
 from conversations.constants import SenderType
-from conversations.models import Message
+from conversations.models import LLM, Message
 from conversations.tasks import refresh_conversation_summary_for_conversation
 
 logger = logging.getLogger(__name__)
@@ -34,3 +35,14 @@ def enqueue_conversation_summary_refresh(
             "Failed to enqueue conversation summary for conversation %s",
             instance.conversation.conversation_id,
         )
+
+
+@receiver(pre_delete, sender=LLM)
+def keep_model_name_on_history(sender, instance: LLM, **kwargs) -> None:
+    """Deleting a model nulls ``llm`` on its history; record the name first."""
+    Message._base_manager.filter(llm=instance, llm_name__isnull=True).update(
+        llm_name=instance.name
+    )
+    Transaction._base_manager.filter(llm=instance, llm_name__isnull=True).update(
+        llm_name=instance.name
+    )

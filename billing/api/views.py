@@ -95,13 +95,11 @@ def _validation_response(exc: ValidationError):
     return Response(detail, status=status.HTTP_400_BAD_REQUEST)
 
 
-# Energy is recorded against the model that produced it, but `Message.llm`
-# is SET_NULL, so retiring a model leaves its messages pointing at nothing.
-# The consumption still happened and still belongs in the total, so the rows
-# are kept under one heading rather than dropped — which would make the chart
-# disagree with the headline figure.
-DELETED_MODEL_LABEL = "Deleted model"
-DELETED_MODEL_PROVIDER = "unknown"
+# Rows with no ``llm`` (a deleted model, or a proxy dispatch) are labelled by
+# the name kept on the row. Ones with no name at all still count toward the
+# total, under one heading, so the chart never disagrees with it.
+UNKNOWN_MODEL_LABEL = "Unknown model"
+UNKNOWN_MODEL_PROVIDER = "unknown"
 
 
 def _model_stat_row(
@@ -217,7 +215,8 @@ class BillingViewSet(viewsets.ViewSet):
 
         Two groupings, deliberately kept apart. DARE-billed rows group by the
         ``llm`` foreign key, so a model renamed after the fact still reports as
-        a single row. Proxy-routed rows have no such row to point at, so they
+        a single row; once a model is deleted they fall back to the name the
+        transaction kept. Proxy-routed rows have no such row to point at, so they
         group by the identifier the gateway served; their cost comes from the
         reference registry and was never charged, which ``is_estimated`` says
         out loud rather than letting it read as spend.
@@ -267,6 +266,24 @@ class BillingViewSet(viewsets.ViewSet):
             for stat in base_qs.filter(billing_mode=BillingModeChoice.LITELLM)
             .values("llm_name")
             .annotate(total_reference=Sum("reference_amount"), **token_sums)
+        ]
+
+        models_billing_stats += [
+            _model_stat_row(
+                llm_id=None,
+                name=stat["llm_name"] or UNKNOWN_MODEL_LABEL,
+                identifier=stat["llm_name"] or UNKNOWN_MODEL_LABEL,
+                provider=UNKNOWN_MODEL_PROVIDER,
+                cost=stat["total_cost"],
+                is_estimated=False,
+                input_tokens=stat["input_tokens"],
+                output_tokens=stat["output_tokens"],
+                transaction_count=stat["transaction_count"],
+            )
+            for stat in base_qs.filter(llm__isnull=True)
+            .exclude(billing_mode=BillingModeChoice.LITELLM)
+            .values("llm_name")
+            .annotate(total_cost=Sum("amount"), **token_sums)
         ]
 
         models_billing_stats.sort(
@@ -340,7 +357,14 @@ class BillingViewSet(viewsets.ViewSet):
         relatable = compute_relatable_stats(total_energy)
 
         per_model = (
-            base_qs.values("llm__id", "llm__name", "llm__identifier", "llm__provider")
+            base_qs.values(
+                "llm__id",
+                "llm__name",
+                "llm__identifier",
+                "llm__provider",
+                "llm_name",
+                "litellm_model_name",
+            )
             .annotate(
                 energy_wh_sum=Sum("energy_wh"),
                 carbon_g_sum=Sum("carbon_g"),
@@ -350,19 +374,30 @@ class BillingViewSet(viewsets.ViewSet):
             .order_by("-energy_wh_sum")
         )
 
-        models_breakdown = [
-            {
-                "llmId": row["llm__id"],
-                "llmName": row["llm__name"] or DELETED_MODEL_LABEL,
-                "llmIdentifier": row["llm__identifier"] or DELETED_MODEL_LABEL,
-                "llmProvider": row["llm__provider"] or DELETED_MODEL_PROVIDER,
-                "energyWh": float(row["energy_wh_sum"] or 0),
-                "carbonG": float(row["carbon_g_sum"] or 0),
-                "waterMl": float(row["water_ml_sum"] or 0),
-                "messageCount": row["message_count"],
-            }
-            for row in per_model
-        ]
+        models_breakdown = []
+        for row in per_model:
+            if row["llm__id"] is not None:
+                name = row["llm__name"]
+                identifier = row["llm__identifier"]
+                provider = row["llm__provider"]
+            elif row["litellm_model_name"]:
+                name = identifier = row["litellm_model_name"]
+                provider = Provider.CUSTOM.value
+            else:
+                name = identifier = row["llm_name"] or UNKNOWN_MODEL_LABEL
+                provider = UNKNOWN_MODEL_PROVIDER
+            models_breakdown.append(
+                {
+                    "llmId": row["llm__id"],
+                    "llmName": name,
+                    "llmIdentifier": identifier,
+                    "llmProvider": provider,
+                    "energyWh": float(row["energy_wh_sum"] or 0),
+                    "carbonG": float(row["carbon_g_sum"] or 0),
+                    "waterMl": float(row["water_ml_sum"] or 0),
+                    "messageCount": row["message_count"],
+                }
+            )
 
         return Response(
             {

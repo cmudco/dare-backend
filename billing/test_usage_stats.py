@@ -139,6 +139,19 @@ class UsageStatsTests(TestCase):
         )
         self.assertEqual([key["label"] for key in body["keysBreakdown"]], ["gateway"])
 
+    def test_a_deleted_model_keeps_its_spend_in_the_breakdown(self):
+        self._wallet_call()
+        self.llm.delete()
+
+        rows = self.client.get("/api/billing/model_stats/").json()[
+            "modelsBillingStats"
+        ]
+
+        self.assertEqual(
+            [(r["llmName"], r["totalCostDecimal"], r["isEstimated"]) for r in rows],
+            [("Wallet Model", 0.25, False)],
+        )
+
     def test_wallet_only_usage_reports_no_proxy_activity(self):
         self._wallet_call()
 
@@ -199,7 +212,7 @@ class EnergyStatsTests(TestCase):
         row = self._breakdown()[0]
 
         self.assertIsNone(row["llmId"])
-        self.assertIsNotNone(row["llmName"])
+        self.assertEqual(row["llmName"], "Retired Model")
         self.assertIsNotNone(row["llmProvider"])
         self.assertEqual(row["energyWh"], 1.5)
 
