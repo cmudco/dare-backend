@@ -26,6 +26,7 @@ from rest_framework.views import APIView
 from conversations.api.content_negotiation import ArtifactDownloadContentNegotiation
 from conversations.api.mixins import ConversationSharingMixin
 from conversations.constants import (
+    SOCRATIC_HISTORY_LIMIT,
     ArtifactStatus,
     ArtifactType,
     SharingErrorCode,
@@ -62,13 +63,14 @@ from conversations.services.sharing_service import (
     SharingValidationError,
 )
 from core.services.sb_client import SocraticBooksClient
-from projects.services.project_service import start_chat_in_project
 from dare_tools.services.artifact_pdf_generator import (
     generate_docx_pdf_bytes,
     generate_pptx_pdf_bytes,
 )
 from dare_tools.services.pptx_generator import generate_pptx_bytes
+from projects.services.project_service import start_chat_in_project
 from sharing.services.sharing_service import SharingService
+from users.constants import AuthSourceChoice
 from users.utils import detect_platform_from_request
 
 from .serializers import (
@@ -205,7 +207,10 @@ class ConversationViewSet(ConversationSharingMixin, viewsets.ModelViewSet):
             and self.request.user.is_authenticated
         ):
             user = self.request.user
-        serializer.save(user=user, source=platform_source)
+        extra = {}
+        if platform_source == AuthSourceChoice.SOCRATIC_BOTS:
+            extra["history_limit"] = SOCRATIC_HISTORY_LIMIT
+        serializer.save(user=user, source=platform_source, **extra)
         if user and hasattr(user, "default_prompt") and user.default_prompt:
             serializer.instance.prompt = user.default_prompt
             serializer.instance.save()
