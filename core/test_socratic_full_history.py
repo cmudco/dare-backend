@@ -1,9 +1,12 @@
 """Long Socratic interviews retain early answers in both prompt modes."""
 
 from types import SimpleNamespace
+from unittest import mock
 
 from asgiref.sync import async_to_sync
-from django.test import SimpleTestCase, TransactionTestCase
+from django.template.loader import render_to_string
+from django.test import SimpleTestCase, TestCase, TransactionTestCase
+from rest_framework.test import APIClient
 
 from conversations.constants import SenderType
 from conversations.models import Conversation, Message
@@ -89,3 +92,47 @@ class LongInterviewTests(TransactionTestCase):
                 self.assertEqual(history["turns"], 60)
                 self.assertEqual(history["limit"], 0)
                 self.assertIn("Continue the interview", prompt)
+
+
+DARE_URL = "https://dare.example.test"
+SOCRATIC_URL = "https://socratic.example.test"
+
+
+@mock.patch.multiple(
+    "users.utils",
+    DARE_FRONTEND_URL=DARE_URL,
+    SOCRATIC_BOTS_FRONTEND_URL=SOCRATIC_URL,
+)
+class StoredHistoryPolicyTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(email="stored@example.test", password="t")
+        self.client = APIClient()
+        self.client.force_authenticate(self.user)
+
+    def create_conversation(self, origin):
+        response = self.client.post(
+            "/api/conversations/", {"title": "Chat"}, format="json", HTTP_ORIGIN=origin
+        )
+        self.assertEqual(response.status_code, 201, response.data)
+        return Conversation.active_objects.get(
+            conversation_id=response.data["conversation_id"]
+        )
+
+    def test_socratic_conversations_record_full_history(self):
+        conversation = self.create_conversation(SOCRATIC_URL)
+        self.assertEqual(conversation.source, AuthSourceChoice.SOCRATIC_BOTS)
+        self.assertEqual(conversation.history_limit, 0)
+
+    def test_dare_conversations_keep_the_default_limit(self):
+        conversation = self.create_conversation(DARE_URL)
+        self.assertEqual(conversation.history_limit, 20)
+
+    def test_export_labels_full_history(self):
+        conversation = Conversation.active_objects.create(
+            user=self.user, title="Export", history_limit=0
+        )
+        html = render_to_string(
+            "conversations/conversation_export.html",
+            {"conversation": conversation, "messages": [], "user": self.user},
+        )
+        self.assertRegex(html, r"History Limit</div><div[^>]*>All messages<")
