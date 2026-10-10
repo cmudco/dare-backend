@@ -70,7 +70,9 @@ class StreamFailureReportingTests(SimpleTestCase):
             with self.subTest(tool_calls=tool_calls):
                 coordinator = MessageCoordinator.__new__(MessageCoordinator)
                 coordinator.user = None
-                coordinator.conversation = SimpleNamespace(id=1, bot_id=2)
+                coordinator.conversation = SimpleNamespace(
+                    id=1, bot_id=2, history_limit=0
+                )
                 coordinator.platform = "SocraticBots"
                 coordinator.send = AsyncMock()
                 coordinator.billing_service = None
@@ -85,6 +87,7 @@ class StreamFailureReportingTests(SimpleTestCase):
                 request = MagicMock()
                 request.requires_audio_transcription.return_value = False
                 request.requires_image_generation.return_value = False
+                request.context.history_limit = 0
                 message = SimpleNamespace(id=42, created_at=timezone.now())
                 with patch(
                     "conversations.services.message_coordinator.LLMQueryRequestBuilder.from_message_data",

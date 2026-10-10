@@ -119,7 +119,7 @@ class OptionalLearningProgressTests(SimpleTestCase):
 
         self.assertEqual(captured["max_tokens"], 32000)
         self.service._get_conversation_history.assert_awaited_once_with(
-            SimpleNamespace(id=1, conversation_id="QA", bot_id=None)
+            SimpleNamespace(id=1, conversation_id="QA", bot_id=None), limit=0
         )
         self.service._get_previous_assessment.assert_awaited_once()
         self.assertIn("User: hello", captured["messages"][1]["content"])

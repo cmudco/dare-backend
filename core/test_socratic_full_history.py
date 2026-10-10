@@ -42,6 +42,17 @@ class HistoryPolicyTests(SimpleTestCase):
             with self.subTest(payload=payload):
                 self.assertEqual(request_for(**payload).context.history_limit, 0)
 
+    def test_socratic_uses_the_bots_history_window(self):
+        self.assertEqual(
+            request_for(socratic_history_limit=30).context.history_limit, 30
+        )
+
+    def test_invalid_bot_windows_fall_back_to_full_history(self):
+        for value in (-5, "30", 2.5, True, None):
+            with self.subTest(value=value):
+                request = request_for(socratic_history_limit=value)
+                self.assertEqual(request.context.history_limit, 0)
+
     def test_standard_chat_retains_requested_and_default_limits(self):
         self.assertEqual(request_for(platform=None).context.history_limit, 10)
         self.assertEqual(
@@ -113,6 +124,13 @@ class LongInterviewTests(TransactionTestCase):
         self.assertTrue(transcript.startswith("User: Tracked message 000."))
         self.assertTrue(transcript.endswith("Assistant: Tracked message 099."))
         self.assertEqual(transcript.count("Tracked message"), 100)
+
+        windowed = async_to_sync(LearningProgressService()._get_conversation_history)(
+            conversation, limit=10
+        )
+        self.assertTrue(windowed.startswith("User: Tracked message 090."))
+        self.assertTrue(windowed.endswith("Assistant: Tracked message 099."))
+        self.assertEqual(windowed.count("Tracked message"), 10)
 
 
 DARE_URL = "https://dare.example.test"

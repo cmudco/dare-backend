@@ -14,6 +14,7 @@ These functions handle the complete learning progress streaming flow:
 import logging
 from typing import Any, Awaitable, Callable, Dict, Optional
 
+from conversations.constants import SOCRATIC_HISTORY_LIMIT
 from conversations.models import LLM, Conversation, Message
 from conversations.services.message_helpers.db_helpers import (
     update_message_learning_progress,
@@ -91,6 +92,9 @@ async def run_learning_progress_stream(
             tracking_prompt=tracking_prompt,
             llm=progress_llm,
             temperature=0.7,
+            history_limit=message_data.get(
+                "tracking_history_limit", SOCRATIC_HISTORY_LIMIT
+            ),
             bot_meta=bot_meta,
             user=user,
         ):

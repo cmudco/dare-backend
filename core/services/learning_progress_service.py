@@ -4,7 +4,7 @@ from typing import AsyncGenerator, Dict, Optional, Tuple
 from channels.db import database_sync_to_async
 
 # Correctly map sender roles using the shared enum
-from conversations.constants import SenderType
+from conversations.constants import SOCRATIC_HISTORY_LIMIT, SenderType
 from conversations.models import LLM, Conversation, LearningProgressAssessment, Message
 from core.services.llm_service import AIService, LLMService
 
@@ -26,6 +26,7 @@ class LearningProgressService:
         llm: LLM = None,
         max_tokens: int = 32000,
         temperature: float = 0.7,
+        history_limit: int = SOCRATIC_HISTORY_LIMIT,
         # New: include bot metadata for subject/topic/title
         bot_meta: Optional[Dict] = None,
         user: Optional[object] = None,
@@ -48,7 +49,9 @@ class LearningProgressService:
                 llm = await self._get_default_progress_llm()
 
             # Get conversation history (following reference pattern)
-            conversation_history = await self._get_conversation_history(conversation)
+            conversation_history = await self._get_conversation_history(
+                conversation, limit=history_limit
+            )
 
             # Get latest previous assessment (following reference pattern)
             previous_assessment_text = await self._get_previous_assessment(conversation)
@@ -150,13 +153,18 @@ If there is no current status, follow the system prompt to make a new status rep
         raise ValueError("No LLM models configured for progress tracking")
 
     @database_sync_to_async
-    def _get_conversation_history(self, conversation: Conversation) -> str:
-        """The whole conversation as a chronological transcript."""
+    def _get_conversation_history(
+        self, conversation: Conversation, limit: int = SOCRATIC_HISTORY_LIMIT
+    ) -> str:
+        """The latest ``limit`` messages (all when 0) as a chronological transcript."""
         messages = Message.active_objects.filter(conversation=conversation).order_by(
-            "created_at"
+            "-created_at"
         )
+        if limit:
+            messages = messages[:limit]
+        messages = list(reversed(messages))
         conversation_history = ""
-        if messages.exists():
+        if messages:
             for msg in messages:
                 role_name = (
                     "User" if msg.sender_type == SenderType.PLAYER else "Assistant"
