@@ -5,8 +5,9 @@ Handles validation and parsing of incoming WebSocket messages.
 Provides type-safe extraction of message data with defaults.
 """
 
-from typing import Dict, Any, List, Optional
-from conversations.constants import RagMode, SenderType
+from typing import Any, Dict, List, Optional
+
+from conversations.constants import SOCRATIC_HISTORY_LIMIT, RagMode, SenderType
 from core.services.dtos.ensemble_dto import EnsembleRequest
 
 
@@ -103,6 +104,13 @@ class MessageValidationService:
             "learning_goals": data.get("learning_goals", ""),
             "progress_llm_id": data.get("progress_llm_id"),
             "bot_meta": data.get("bot_meta", {}),
+            # Messages a Socratic bot replays to the chat model and the tracker.
+            "socratic_history_limit": cls._get_history_window(
+                data, "socratic_history_limit"
+            ),
+            "tracking_history_limit": cls._get_history_window(
+                data, "tracking_history_limit"
+            ),
             # Advanced mode (support both snake_case and camelCase)
             "is_advanced": data.get("is_advanced", data.get("isAdvanced")),
             # MCP servers for tool calls
@@ -112,6 +120,14 @@ class MessageValidationService:
             # Whether to search user's memory store for context
             "use_memory": bool(data.get("use_memory", False)),
         }
+
+    @staticmethod
+    def _get_history_window(data: Dict[str, Any], key: str) -> int:
+        """A message count to replay, where 0 (also the default) means all of them."""
+        value = data.get(key)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            return SOCRATIC_HISTORY_LIMIT
+        return value
 
     @staticmethod
     def _get_list(data: Dict[str, Any], key: str) -> List:
