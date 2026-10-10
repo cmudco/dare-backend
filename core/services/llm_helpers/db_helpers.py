@@ -113,6 +113,16 @@ def save_retrieval_trace(message_obj, payload) -> None:
 
 
 @database_sync_to_async
+def get_live_file_ids(file_ids) -> list:
+    """The ids among ``file_ids`` whose files are not deleted or disabled."""
+    if not file_ids:
+        return []
+    return list(
+        File.active_objects.filter(id__in=file_ids).values_list("id", flat=True)
+    )
+
+
+@database_sync_to_async
 def get_files_from_tags(tag_ids: list, user_id: int) -> list:
     """Fetch file IDs from tags.
 
