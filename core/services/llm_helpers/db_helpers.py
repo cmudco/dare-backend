@@ -16,6 +16,7 @@ from channels.db import database_sync_to_async
 
 from conversations.constants import SenderType
 from conversations.models import Conversation, ConversationSummary, Message, Snippet
+from core.services.image_formats import to_provider_image
 from files.models import File
 from prompts.models import Prompt
 
@@ -230,15 +231,15 @@ def convert_file_to_base64_dict(media_file: "File") -> Optional[dict]:
     """
     try:
         with media_file.file.open("rb") as f:
-            file_data = f.read()
+            file_data, mime_type = to_provider_image(f.read(), media_file.file_type)
 
         base64_data = base64.b64encode(file_data).decode("utf-8")
-        data_url = f"data:{media_file.file_type};base64,{base64_data}"
+        data_url = f"data:{mime_type};base64,{base64_data}"
 
         return {
             "preview": data_url,
             "name": media_file.name or media_file.file.name,
-            "type": media_file.file_type,
+            "type": mime_type,
         }
     except Exception as e:
         logger.error(f"Error reading media file {media_file.id}: {str(e)}")
