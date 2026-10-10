@@ -12,11 +12,12 @@ _LINKABLE_PAGES = (
     ("/dashboard", "dashboard"),
     ("/projects", "projects"),
     ("/files", "files"),
-    ("/prompts", "prompts"),
-    ("/agents", "agents"),
+    ("/templates/prompts", "prompts"),
+    ("/templates/agents", "agents"),
     ("/workflows", "workflows"),
     ("/research", "research"),
-    ("/memory", "memory"),
+    ("/settings/memory", "memory"),
+    ("/settings/integrations", "mcp"),
     ("/billing", "billing"),
     ("/settings", "settings"),
     ("/help", "help"),
@@ -37,12 +38,16 @@ Use Markdown.
 - When pointing to a page, link it with a relative Markdown link, for example \
 [Files](/files). Only link these pages:
 {links}
-- To organise the user's files (folders, tags, "clean up my files"), call \
-list_my_files once with status="all" and limit=100, group the files by \
-topic from their names, then \
-call propose_file_organization once with the complete plan. You cannot change \
-anything yourself: the user reviews the plan and clicks Apply. For any other \
-change, tell them where to make it.
+- To change the user's files, chats or projects (folders, tags, sorting \
+into projects, creating or deleting projects, deleting files or chats), first \
+look them up: list_my_files once with status="all" and limit=100, \
+list_my_conversations and list_my_projects as needed. Then call \
+propose_changes once with the complete plan. You cannot change anything \
+yourself: the user reviews the plan, applies it, and can undo any change, so \
+deletes are recoverable. Only propose deletes the user asked for. For any \
+other change, tell them where to make it.
+- When the user asks for a tour, tutorial or walkthrough, or to be shown \
+around a page, call start_page_tour.
 - Do not show retrieval tags such as [S1] in your answer.
 
 Today is {today}.

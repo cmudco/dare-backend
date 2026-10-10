@@ -9,10 +9,16 @@ from assistant.constants import (
     GET_ACCOUNT_OVERVIEW,
     GET_CONVERSATION,
     GET_PROJECT,
+    LIST_CONVERSATIONS_MAX_LIMIT,
+    LIST_MY_CONVERSATIONS,
     LIST_MY_FILES,
-    PLAN_MAX_GROUPS,
-    PROPOSE_FILE_ORGANIZATION,
+    LIST_MY_PROJECTS,
+    PLAN_MAX_ACTIONS,
+    PROPOSE_CHANGES,
     SEARCH_PLATFORM_DOCS,
+    START_PAGE_TOUR,
+    TOUR_PAGES,
+    ProposalActionType,
 )
 
 
@@ -118,38 +124,113 @@ def get_project_schema() -> Dict:
     )
 
 
-def _plan_groups(name_key: str, what: str) -> Dict:
-    return {
-        "type": "array",
-        "maxItems": PLAN_MAX_GROUPS,
-        "description": what,
-        "items": {
-            "type": "object",
-            "properties": {
-                name_key: {"type": "string"},
-                "file_ids": {"type": "array", "items": {"type": "integer"}},
-            },
-            "required": [name_key, "file_ids"],
-        },
-    }
-
-
-def propose_file_organization_schema() -> Dict:
+def list_my_projects_schema() -> Dict:
     return _function(
-        PROPOSE_FILE_ORGANIZATION,
-        "Propose putting the user's files into folders and/or tagging them. "
-        "This changes nothing: the plan is shown to the user as a card with "
-        "Apply and Discard. Call list_my_files (limit=100) first and use only "
-        "its ids. Group files by topic using their names; reuse existing "
-        "folder and tag names where they fit. Files are added to folders and "
-        "tags, never removed from existing ones. Send one complete plan.",
+        LIST_MY_PROJECTS,
+        "Every one of the user's personal projects: id, name, description and "
+        "counts of its chats, files and folders.",
+        {},
+    )
+
+
+def list_my_conversations_schema() -> Dict:
+    return _function(
+        LIST_MY_CONVERSATIONS,
+        "The user's chats, newest first: conversation id, title, the project "
+        "it is in (or none) and when it was last updated.",
+        {
+            "project": {
+                "type": "string",
+                "description": (
+                    "'none' for chats outside any project, a project id for "
+                    "that project's chats; omit for all chats."
+                ),
+            },
+            "title_contains": {
+                "type": "string",
+                "description": "Only chats whose title contains this text.",
+            },
+            "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": LIST_CONVERSATIONS_MAX_LIMIT,
+                "description": "How many chats to return (default 30).",
+            },
+        },
+    )
+
+
+def propose_changes_schema() -> Dict:
+    return _function(
+        PROPOSE_CHANGES,
+        "Propose changes to the user's files, chats and projects. This "
+        "changes nothing: the plan is shown to the user as a card where they "
+        "apply, undo and re-apply each change. Use only ids from "
+        "list_my_files and list_my_conversations, and project, folder and tag "
+        "names that exist (add_* and create_project may use new names). "
+        "Deletes are recoverable with Undo. Send one complete plan.\n"
+        "Action types:\n"
+        "- add_to_folder / remove_from_folder: name=folder, file_ids.\n"
+        "- add_tag / remove_tag: name=tag label, file_ids.\n"
+        "- delete_files: file_ids.\n"
+        "- create_project: name, optional description.\n"
+        "- add_to_project / remove_from_project: name=project, file_ids "
+        "(project sources) and/or conversation_ids (chats). add_to_project "
+        "creates the project if it does not exist.\n"
+        "- delete_project: name=project; its chats return to the chat list.\n"
+        "- delete_conversations: conversation_ids.",
         {
             "summary": {
                 "type": "string",
                 "description": "One short sentence describing the plan.",
             },
-            "folders": _plan_groups("name", "Folders and the files to put in each."),
-            "tags": _plan_groups("label", "Tags and the files to apply each to."),
+            "actions": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": PLAN_MAX_ACTIONS,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "type": {
+                            "type": "string",
+                            "enum": list(ProposalActionType.values),
+                        },
+                        "name": {
+                            "type": "string",
+                            "description": "Folder, tag or project name.",
+                        },
+                        "description": {
+                            "type": "string",
+                            "description": "New project description (create_project).",
+                        },
+                        "file_ids": {"type": "array", "items": {"type": "integer"}},
+                        "conversation_ids": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                    },
+                    "required": ["type"],
+                },
+            },
         },
-        required=("summary",),
+        required=("summary", "actions"),
+    )
+
+
+def start_page_tour_schema() -> Dict:
+    return _function(
+        START_PAGE_TOUR,
+        "Start the guided on-screen tour of a DARE page for the user. Pass "
+        "the current page's tour key from the page context unless they ask "
+        "about another page, which the app then opens first. The tour starts "
+        "when your answer finishes, so reply with one short sentence and do "
+        "not describe the tour's steps.",
+        {
+            "page": {
+                "type": "string",
+                "enum": list(TOUR_PAGES),
+                "description": "Tour key of the page to tour.",
+            }
+        },
+        required=("page",),
     )

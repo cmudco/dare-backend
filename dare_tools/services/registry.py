@@ -11,9 +11,12 @@ from typing import Any, Callable, Dict, List, Optional
 from assistant.domain.tool_schemas import (get_account_overview_schema,
                                            get_conversation_schema,
                                            get_project_schema,
+                                           list_my_conversations_schema,
                                            list_my_files_schema,
-                                           propose_file_organization_schema,
-                                           search_platform_docs_schema)
+                                           list_my_projects_schema,
+                                           propose_changes_schema,
+                                           search_platform_docs_schema,
+                                           start_page_tour_schema)
 from core.services.llm_utils.diagram_tool import (get_diagram_tool_claude,
                                                   get_diagram_tool_openai,
                                                   json_to_mermaid)
@@ -932,10 +935,19 @@ class DareToolRegistry:
             "get_conversation", "Get Conversation", get_conversation_schema
         ),
         "get_project": _assistant_tool("get_project", "Get Project", get_project_schema),
-        "propose_file_organization": _assistant_tool(
-            "propose_file_organization",
-            "Propose File Organization",
-            propose_file_organization_schema,
+        "list_my_projects": _assistant_tool(
+            "list_my_projects", "List My Projects", list_my_projects_schema
+        ),
+        "list_my_conversations": _assistant_tool(
+            "list_my_conversations",
+            "List My Conversations",
+            list_my_conversations_schema,
+        ),
+        "propose_changes": _assistant_tool(
+            "propose_changes", "Propose Changes", propose_changes_schema
+        ),
+        "start_page_tour": _assistant_tool(
+            "start_page_tour", "Start Page Tour", start_page_tour_schema
         ),
     }
     

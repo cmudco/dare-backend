@@ -23,6 +23,7 @@ ALLOWED_FILES = [
     "png",
     "gif",
     "bmp",
+    "tif",
     "tiff",
     "webp",
     # Video extensions (no vectorization - media files only)

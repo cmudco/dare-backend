@@ -9,6 +9,8 @@ import re
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
+from assistant.constants import TOUR_PAGES
+
 
 @dataclass(frozen=True)
 class Page:
@@ -44,8 +46,17 @@ PAGES = {
             "The user's document library: upload, tag, organise into folders, "
             "and watch ingestion (parsing and indexing) status.",
         ),
-        Page("prompts", "Prompts", "Saved, reusable system prompts."),
-        Page("agents", "Agents", "AI agents with personas and instructions."),
+        Page(
+            "prompts",
+            "Templates: Prompts",
+            "Saved, reusable system prompts, on the Templates page.",
+        ),
+        Page(
+            "agents",
+            "Templates: Agents",
+            "Agents pair a prompt with a model, files and settings, on the "
+            "Templates page.",
+        ),
         Page(
             "workflows",
             "Workflows",
@@ -64,16 +75,25 @@ PAGES = {
         Page(
             "settings",
             "Settings",
-            "Account preferences, API keys, conversation defaults and security.",
+            "Tabs for Account (details, avatar, password), Appearance, Chat "
+            "(conversation defaults, API keys), Memory, Integrations and Data "
+            "(export or delete the account).",
         ),
         Page(
             "help",
             "Help",
             "The model catalogue by tier and capability, plus learning modules.",
         ),
-        Page("mcp", "MCP servers", "Connect external MCP tool servers to chat."),
-        Page("profile", "Profile", "The user's profile and avatar."),
-        Page("memory", "Memory", "What DARE remembers about the user across chats."),
+        Page(
+            "mcp",
+            "Settings: Integrations",
+            "Connect external MCP tool servers to chat.",
+        ),
+        Page(
+            "memory",
+            "Settings: Memory",
+            "What DARE remembers about the user across chats.",
+        ),
         Page(
             "billing",
             "Billing",
@@ -93,12 +113,15 @@ _ROUTES: Tuple[Tuple[re.Pattern, str], ...] = tuple(
         (r"^/workflows/(?:create|\d+/edit)/?$", "workflow_builder"),
         (r"^/workflows/?$", "workflows"),
         (r"^/research(?:/.*)?$", "research"),
-        (r"^/mcp(?:/.*)?$", "mcp"),
+        (r"^/settings/integrations(?:/.*)?$", "mcp"),
+        (r"^/settings/memory/?$", "memory"),
+        (r"^/settings(?:/(?:appearance|chat|data))?/?$", "settings"),
+        (r"^/templates(?:/prompts)?/?$", "prompts"),
+        (r"^/templates/agents/?$", "agents"),
         (r"^/billing/?$", "billing"),
         (r"^/group-wallet/?$", "group_wallet"),
         (
-            r"^/(?P<page>dashboard|files|prompts|agents|settings|help|profile"
-            r"|memory|onboarding)/?$",
+            r"^/(?P<page>dashboard|files|help|onboarding)/?$",
             "",
         ),
     )
@@ -136,6 +159,10 @@ def describe_page_context(context: PageContext) -> str:
         f"The user is on the {context.page.title} page ({context.path}). "
         f"{context.page.summary}"
     ]
+    if context.page.key in TOUR_PAGES:
+        lines.append(f"Its tour key for start_page_tour is '{context.page.key}'.")
+    else:
+        lines.append("This page has no guided tour.")
     if context.conversation_id:
         lines.append(
             f"The open conversation's id is {context.conversation_id}; call "

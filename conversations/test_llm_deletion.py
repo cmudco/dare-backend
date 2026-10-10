@@ -181,7 +181,7 @@ class LLMDeletionServiceTests(TestCase):
         self.assertEqual(notifications.count(), 2)
         self.assertEqual(
             {notification.action_url for notification in notifications},
-            {f"/workflows/{workflow.pk}/edit", "/agents"},
+            {f"/workflows/{workflow.pk}/edit", "/templates/agents"},
         )
         self.assertTrue(
             all(
@@ -315,7 +315,7 @@ class LLMDeletionServiceTests(TestCase):
         self.assertEqual(notifications.count(), 2)
         self.assertEqual(
             {notification.action_url for notification in notifications},
-            {f"/workflows/{workflow.pk}/edit", "/agents"},
+            {f"/workflows/{workflow.pk}/edit", "/templates/agents"},
         )
         self.assertTrue(
             all("planned for removal" in item.message for item in notifications)

@@ -10,6 +10,13 @@ from django.core.files.base import ContentFile
 from django.db import transaction
 from django_rq import enqueue
 
+from core.services.image_formats import (
+    PDF_MIME_TYPE,
+    UnreadableImage,
+    is_tiff,
+    tiff_to_pdf,
+    to_provider_image,
+)
 from core.storage.constants import StorageBackendChoice
 from files.constants import ALLOWED_FILES, DocumentProcessingMode, FileStatus
 from files.models import File, Folder, Tag
@@ -186,11 +193,16 @@ class FileUploadService:
         is_valid, error_message = FileUploadService.validate_file(
             uploaded_file, file_name
         )
+        content_type = uploaded_file.content_type
+        if is_valid and is_tiff(file_name, content_type):
+            uploaded_file, file_name, error_message = FileUploadService._tiff_as_pdf(
+                uploaded_file, file_name
+            )
+            is_valid = error_message is None
+            content_type = PDF_MIME_TYPE
 
         # Detect if this is a media file (image/video)
-        is_media, media_type = FileUploadService.detect_media_type(
-            uploaded_file.content_type
-        )
+        is_media, media_type = FileUploadService.detect_media_type(content_type)
 
         # Get storage backend based on user preference
         storage_backend = getattr(user, "storage_backend", StorageBackendChoice.LOCAL)
@@ -200,7 +212,7 @@ class FileUploadService:
             user=user,
             name=file_name,
             size=uploaded_file.size,
-            file_type=uploaded_file.content_type,
+            file_type=content_type,
             storage_backend=storage_backend,
             is_valid=is_valid,
             is_media=is_media,
@@ -231,6 +243,17 @@ class FileUploadService:
             )
 
         return file_instance
+
+    @staticmethod
+    def _tiff_as_pdf(uploaded_file, file_name: str):
+        """A TIFF upload as a PDF document: (file, name, error or None)."""
+        pdf_name = f"{Path(file_name).stem}.pdf"
+        try:
+            pdf = tiff_to_pdf(uploaded_file.read())
+        except UnreadableImage:
+            logger.warning(f"Unreadable TIFF upload '{file_name}'")
+            return uploaded_file, file_name, "This TIFF image could not be read."
+        return ContentFile(pdf, name=pdf_name), pdf_name, None
 
     @staticmethod
     def enqueue_processing(
@@ -395,8 +418,13 @@ class FileUploadService:
                     if extracted_mime:
                         mime_type = extracted_mime
 
-            # Decode base64 to bytes
-            image_bytes = base64.b64decode(base64_data)
+            # Decode base64 to bytes; keep only formats browsers and models read.
+            image_bytes, converted_type = to_provider_image(
+                base64.b64decode(base64_data), mime_type
+            )
+            if filename and converted_type != mime_type:
+                filename = f"{Path(filename).stem}.png"
+            mime_type = converted_type
 
             # Generate a unique filename if needed
             if not filename:

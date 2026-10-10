@@ -325,6 +325,23 @@ class FileProcessingJourneySerializer(serializers.ModelSerializer):
 MAX_BULK_FILES = 500
 
 
+class FileIdsSerializer(serializers.Serializer):
+    file_ids = serializers.ListField(
+        child=serializers.IntegerField(), min_length=1, max_length=MAX_BULK_FILES
+    )
+
+
+class DeletedFileSerializer(serializers.ModelSerializer):
+    """A soft-deleted file in Recently deleted."""
+
+    deleted_at = serializers.DateTimeField(source="updated_at", read_only=True)
+
+    class Meta:
+        model = File
+        fields = ("id", "name", "file_type", "size", "deleted_at")
+        read_only_fields = fields
+
+
 class BulkTagSerializer(serializers.Serializer):
     file_ids = serializers.ListField(
         child=serializers.IntegerField(), min_length=1, max_length=MAX_BULK_FILES
