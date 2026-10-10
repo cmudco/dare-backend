@@ -637,10 +637,14 @@ class MessageCoordinator:
         """Keep the conversation's stored window equal to what the bot replays."""
         if self.conversation.history_limit == history_limit:
             return
+        # A queryset update, not save(): the first turn's title task refreshes
+        # this same instance concurrently and would reset the field before save.
+        await database_sync_to_async(
+            Conversation.active_objects.filter(pk=self.conversation.pk)
+            .exclude(history_limit=history_limit)
+            .update
+        )(history_limit=history_limit)
         self.conversation.history_limit = history_limit
-        await database_sync_to_async(self.conversation.save)(
-            update_fields=["history_limit"]
-        )
 
     async def _ensemble_for_turn(self, message_data: Dict[str, Any]):
         """The turn's ensemble request, or None when the feature is off for this user.
