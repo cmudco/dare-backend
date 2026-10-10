@@ -20,7 +20,7 @@ from core.services.rag import (
 )
 from libraries.services.library_search import search_libraries
 
-from .db_helpers import get_files_from_folders, get_files_from_tags
+from .db_helpers import get_files_from_folders, get_files_from_tags, get_live_file_ids
 from .retrieval_targets import (
     ChatRetrievalTarget,
     TransientRetrievalTarget,
@@ -53,7 +53,8 @@ async def collect_embedding_file_ids(
     Returns:
         Set of file IDs to search for embeddings
     """
-    all_file_ids = set(embedding_ids or [])
+    # Chats keep the ids they were given; a file deleted since must not answer.
+    all_file_ids = set(await get_live_file_ids(embedding_ids))
 
     if tag_ids:
         tagged_file_ids = await get_files_from_tags(tag_ids, user_id)

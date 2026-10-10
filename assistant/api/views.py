@@ -4,14 +4,17 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from assistant.api.serializers import (
+    AssistantProposalSerializer,
     AssistantThreadSerializer,
-    FileOrganizationProposalSerializer,
+    ProposalActionIdsSerializer,
 )
 from assistant.services.proposal_service import (
-    ProposalAlreadyDecided,
+    ProposalConflict,
     ProposalNotFound,
-    apply_proposal,
+    apply_actions,
     discard_proposal,
+    restore_proposal,
+    undo_actions,
 )
 from assistant.services.thread_service import (
     open_thread,
@@ -52,28 +55,49 @@ class AssistantNewThreadView(APIView):
         )
 
 
-class ProposalDecisionView(APIView):
-    """Apply or discard one of the user's file-organisation proposals."""
+class ProposalView(APIView):
+    """Move one of the user's proposals between applied, pending and discarded."""
 
     permission_classes = [IsAuthenticated]
-    decide = None
+    takes_action_ids = False
+
+    def change(self, user, proposal_id: int, action_ids):
+        raise NotImplementedError
 
     def post(self, request, proposal_id: int):
+        action_ids = None
+        if self.takes_action_ids:
+            body = ProposalActionIdsSerializer(data=request.data)
+            body.is_valid(raise_exception=True)
+            action_ids = body.validated_data.get("action_ids")
         try:
-            proposal = type(self).decide(request.user, proposal_id)
+            proposal = self.change(request.user, proposal_id, action_ids)
         except ProposalNotFound:
             return Response(status=status.HTTP_404_NOT_FOUND)
-        except ProposalAlreadyDecided:
-            return Response(
-                {"error": "This proposal was already applied or discarded."},
-                status=status.HTTP_409_CONFLICT,
-            )
-        return Response(FileOrganizationProposalSerializer(proposal).data)
+        except ProposalConflict as conflict:
+            return Response({"error": str(conflict)}, status=status.HTTP_409_CONFLICT)
+        return Response(AssistantProposalSerializer(proposal).data)
 
 
-class ApplyProposalView(ProposalDecisionView):
-    decide = staticmethod(apply_proposal)
+class ApplyProposalView(ProposalView):
+    takes_action_ids = True
+
+    def change(self, user, proposal_id, action_ids):
+        return apply_actions(user, proposal_id, action_ids)
 
 
-class DiscardProposalView(ProposalDecisionView):
-    decide = staticmethod(discard_proposal)
+class UndoProposalView(ProposalView):
+    takes_action_ids = True
+
+    def change(self, user, proposal_id, action_ids):
+        return undo_actions(user, proposal_id, action_ids)
+
+
+class DiscardProposalView(ProposalView):
+    def change(self, user, proposal_id, action_ids):
+        return discard_proposal(user, proposal_id)
+
+
+class RestoreProposalView(ProposalView):
+    def change(self, user, proposal_id, action_ids):
+        return restore_proposal(user, proposal_id)

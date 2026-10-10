@@ -6,19 +6,27 @@ ids in the model's arguments only select among that user's own records.
 
 from typing import Any, Dict
 
+from django.db.models import Count
+
 from assistant.constants import (
     GET_ACCOUNT_OVERVIEW,
     GET_CONVERSATION,
     GET_PROJECT,
+    LIST_CONVERSATIONS_DEFAULT_LIMIT,
+    LIST_CONVERSATIONS_MAX_LIMIT,
     LIST_FILES_DEFAULT_LIMIT,
     LIST_FILES_MAX_LIMIT,
+    LIST_MY_CONVERSATIONS,
     LIST_MY_FILES,
-    PROPOSE_FILE_ORGANIZATION,
+    LIST_MY_PROJECTS,
+    PROPOSE_CHANGES,
+    START_PAGE_TOUR,
+    TOUR_PAGES,
 )
-from assistant.services.proposal_service import propose_file_organization
+from assistant.services.proposal_service import propose_changes
 from billing.constants import UserWalletPreferenceTypeChoice
 from billing.models import UserWalletPreference, Wallet
-from conversations.constants import SenderType
+from conversations.constants import ConversationSource, SenderType
 from conversations.models import Conversation, Message
 from files.constants import FileStatus
 from files.models import File
@@ -44,9 +52,22 @@ def execute_account_tool(
         return _conversation(user, arguments)
     if tool_name == GET_PROJECT:
         return _project(user, arguments)
-    if tool_name == PROPOSE_FILE_ORGANIZATION:
-        return propose_file_organization(user, arguments)
+    if tool_name == LIST_MY_PROJECTS:
+        return _list_projects(user)
+    if tool_name == LIST_MY_CONVERSATIONS:
+        return _list_conversations(user, arguments)
+    if tool_name == PROPOSE_CHANGES:
+        return propose_changes(user, arguments)
+    if tool_name == START_PAGE_TOUR:
+        return _start_page_tour(arguments)
     return {"success": False, "error": f"Unknown assistant tool: {tool_name}"}
+
+
+def _start_page_tour(arguments: Dict[str, Any]) -> Dict[str, Any]:
+    page = arguments.get("page")
+    if page not in TOUR_PAGES:
+        return {"success": False, "error": f"No tour exists for page '{page}'."}
+    return {"success": True, "page": page}
 
 
 def _account_overview(user) -> Dict[str, Any]:
@@ -97,6 +118,63 @@ def _list_files(user, arguments: Dict[str, Any]) -> Dict[str, Any]:
                 "uploaded_at": file.created_at.date().isoformat(),
             }
             for file in rows
+        ],
+    }
+
+
+def _list_projects(user) -> Dict[str, Any]:
+    projects = owned_projects(user).annotate(
+        file_count=Count("files", distinct=True),
+        folder_count=Count("folders", distinct=True),
+    )
+    return {
+        "success": True,
+        "projects": [
+            {
+                "id": project.id,
+                "name": project.name,
+                "description": project.description,
+                "chats": project.conversation_count,
+                "files": project.file_count,
+                "folders": project.folder_count,
+            }
+            for project in projects
+        ],
+    }
+
+
+def _list_conversations(user, arguments: Dict[str, Any]) -> Dict[str, Any]:
+    chats = Conversation.active_objects.filter(
+        user=user, source=ConversationSource.DARE
+    )
+    project = str(arguments.get("project") or "").strip().lower()
+    if project == "none":
+        chats = chats.filter(project=None)
+    elif project:
+        if not project.isdigit():
+            return {"success": False, "error": "project must be 'none' or an id."}
+        chats = chats.filter(project_id=int(project))
+    title_contains = (arguments.get("title_contains") or "").strip()
+    if title_contains:
+        chats = chats.filter(title__icontains=title_contains)
+    total = chats.count()
+    try:
+        limit = int(arguments.get("limit") or LIST_CONVERSATIONS_DEFAULT_LIMIT)
+    except (TypeError, ValueError):
+        limit = LIST_CONVERSATIONS_DEFAULT_LIMIT
+    limit = max(1, min(limit, LIST_CONVERSATIONS_MAX_LIMIT))
+    rows = chats.select_related("project").order_by("-updated_at")[:limit]
+    return {
+        "success": True,
+        "total_matching": total,
+        "conversations": [
+            {
+                "id": chat.conversation_id,
+                "title": chat.title,
+                "project": chat.project.name if chat.project else None,
+                "updated_at": chat.updated_at.date().isoformat(),
+            }
+            for chat in rows
         ],
     }
 
