@@ -63,12 +63,15 @@ from ..services.document_reprocessing_service import (
     ReprocessingQueueError,
     ReprocessingUnavailable,
 )
+from ..services.trash_service import deleted_files, purge_files, restore_files
 from ..services.library_service import (
     LibraryItemNotFound,
     add_tags_to_files,
     search_file_contents,
 )
 from .serializers import (
+    DeletedFileSerializer,
+    FileIdsSerializer,
     BulkTagSerializer,
     ContentMatchSerializer,
     ContentSearchQuerySerializer,
@@ -404,6 +407,38 @@ class FileViewSet(viewsets.ModelViewSet):
             response_data["failed_files"] = failed_files
 
         return Response(response_data, status=status.HTTP_200_OK)
+
+    @action(detail=False, methods=["get"], url_path="deleted")
+    def deleted(self, request):
+        """The user's soft-deleted files, most recently deleted first."""
+        page = self.paginate_queryset(deleted_files(request.user))
+        return self.get_paginated_response(DeletedFileSerializer(page, many=True).data)
+
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="restore",
+        parser_classes=[CamelCaseJSONParser],
+    )
+    def restore(self, request):
+        """Bring soft-deleted files back: {"fileIds": [...]}."""
+        body = FileIdsSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        restored = restore_files(request.user, body.validated_data["file_ids"])
+        return Response({"restored": restored})
+
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="purge",
+        parser_classes=[CamelCaseJSONParser],
+    )
+    def purge(self, request):
+        """Permanently delete soft-deleted files: {"fileIds": [...]}."""
+        body = FileIdsSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        deleted = purge_files(request.user, body.validated_data["file_ids"])
+        return Response({"deleted": deleted})
 
     @action(
         detail=False,
