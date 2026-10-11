@@ -61,13 +61,18 @@ def format_dare_result_for_llm(tool_name: str, result: Dict[str, Any]) -> str:
                 "Try a different query, or tell the user the docs do not cover it."
             )
         return "Documentation passages:\n\n" + "\n\n".join(blocks)
-    elif tool_name == "propose_file_organization":
+    elif tool_name == "propose_changes":
         return (
-            f"Proposal {result.get('proposal_id')} ({result.get('files')} files, "
-            f"{result.get('folders')} folders, {result.get('tags')} tags) is now "
-            "shown to the user as a card with Apply and Discard. Nothing has "
-            "changed yet. Briefly describe the plan and ask them to review it "
-            "and click Apply."
+            f"Proposal {result.get('proposal_id')} with {result.get('actions')} "
+            "change(s) is now shown to the user as a card. Nothing has changed "
+            "yet: they apply each change or all of them, and can undo any change "
+            "afterwards, deletes included. Briefly describe the plan and ask "
+            "them to review it."
+        )
+    elif tool_name == "start_page_tour":
+        return (
+            "The tour opens for the user when your answer finishes. Reply with "
+            "one short sentence saying it is starting."
         )
     elif tool_name == "search_sessions":
         found = result.get("found", 0)

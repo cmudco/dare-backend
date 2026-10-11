@@ -44,6 +44,24 @@ def add_tags_to_files(user, file_ids: list[int], tag_ids: list[int]) -> list[Fil
     )
 
 
+def remove_tags_from_files(user, file_ids: list[int], tag_ids: list[int]) -> list[File]:
+    """Take every tag off every file; files without a tag are left alone.
+
+    All ids must belong to the user (tags may also be global), otherwise
+    nothing changes.
+    """
+    files = list(File.active_objects.filter(user=user, id__in=file_ids))
+    tags = list(Tag.objects.filter(Q(user=user) | Q(user=None), id__in=tag_ids))
+    if len(files) != len(set(file_ids)) or len(tags) != len(set(tag_ids)):
+        raise LibraryItemNotFound
+    File.tags.through.objects.filter(file__in=files, tag__in=tags).delete()
+    return list(
+        File.active_objects.filter(pk__in=[file.pk for file in files]).prefetch_related(
+            "tags"
+        )
+    )
+
+
 def search_file_contents(user, query: str) -> list[ContentMatch]:
     """The first passage in each of the user's files that contains the query."""
     rows = (

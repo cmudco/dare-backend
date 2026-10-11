@@ -18,8 +18,8 @@ from assistant.domain.prompt import HistoryTurn
 from assistant.models import (
     AssistantKnowledgeSource,
     AssistantMessage,
+    AssistantProposal,
     AssistantThread,
-    FileOrganizationProposal,
 )
 from conversations.models import LLM
 from files.constants import FileStatus
@@ -185,7 +185,7 @@ def finish_turn(
     usage_totals = token_usage or {}
     proposal_ids = [call["proposal_id"] for call in tool_calls if "proposal_id" in call]
     if proposal_ids:
-        FileOrganizationProposal.active_objects.filter(
+        AssistantProposal.active_objects.filter(
             pk__in=proposal_ids, user_id=reply.thread.user_id
         ).update(message=reply)
     reply.content = text

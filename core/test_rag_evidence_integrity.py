@@ -1,6 +1,6 @@
 from dataclasses import replace
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
 from asgiref.sync import async_to_sync
@@ -45,6 +45,16 @@ from users.models import User
 
 
 class AgenticRetrievalContractTests(SimpleTestCase):
+    def setUp(self):
+        # Retrieval drops deleted files with a database lookup; these tests
+        # run without a database, so every id counts as live.
+        live = patch(
+            "core.services.llm_helpers.semantic_context_helpers.get_live_file_ids",
+            new=AsyncMock(side_effect=lambda ids: list(ids or [])),
+        )
+        live.start()
+        self.addCleanup(live.stop)
+
     def run_search(self, scope, target=None, *, failing_source=None):
         requests = []
 

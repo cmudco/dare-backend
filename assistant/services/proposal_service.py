@@ -1,174 +1,212 @@
-"""File-organisation proposals: recorded by the assistant, applied by the user.
+"""Change proposals: recorded by the assistant, applied and undone by the user.
 
-The assistant can only *propose*. Applying is a separate, user-initiated
-request that re-checks ownership and only ever adds files to folders and
-tags — it never removes, renames or deletes anything.
+The assistant can only *propose*. Applying, undoing, discarding and restoring
+are separate user requests; each action can go back and forth any number of
+times because undo reverts exactly what the last apply journaled.
 """
 
-from typing import Any, Dict, List
+from typing import Any, Dict, Iterable, List, Optional
 
 from django.db import transaction
-from django.db.models import Q
 from django.utils import timezone
 
+from assistant.constants import ProposalActionStatus
+from assistant.constants import ProposalActionType as Type
 from assistant.constants import ProposalStatus
-from assistant.domain.file_plan import PlanGroup, parse_file_plan
-from assistant.models import FileOrganizationProposal
-from files.models import File, Folder, Tag
+from assistant.domain.change_plan import PlannedAction, parse_change_plan
+from assistant.models import AssistantProposal
+from assistant.services.proposal_actions import (
+    HANDLERS,
+    find_folder,
+    find_project,
+    find_tag,
+    live_chats,
+    live_files,
+)
+from files.models import Tag
 
 
 class ProposalNotFound(Exception):
     pass
 
 
-class ProposalAlreadyDecided(Exception):
-    pass
+class ProposalConflict(Exception):
+    """The request does not fit the proposal's current state."""
 
 
-def propose_file_organization(user, arguments: Dict[str, Any]) -> Dict[str, Any]:
-    """Validate the model's plan against the user's files and record it."""
-    plan, errors = parse_file_plan(arguments)
+_EXISTING_TARGET = {
+    Type.REMOVE_FROM_FOLDER: ("folder", find_folder),
+    Type.REMOVE_TAG: ("tag", find_tag),
+    Type.REMOVE_FROM_PROJECT: ("project", find_project),
+    Type.DELETE_PROJECT: ("project", find_project),
+}
+_NEW_TARGET = {
+    Type.ADD_TO_FOLDER: find_folder,
+    Type.ADD_TAG: find_tag,
+    Type.ADD_TO_PROJECT: find_project,
+    Type.CREATE_PROJECT: find_project,
+}
+
+
+def propose_changes(user, arguments: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate the model's plan against the user's data and record it."""
+    plan, errors = parse_change_plan(arguments)
     if errors:
         return {"success": False, "error": " ".join(errors)}
-    names = dict(
-        File.active_objects.filter(
-            user=user, is_media=False, id__in=plan.file_ids
-        ).values_list("id", "name")
+    file_names = dict(live_files(user, plan.file_ids).values_list("id", "name"))
+    chat_titles = dict(
+        live_chats(user, plan.conversation_ids).values_list("conversation_id", "title")
     )
-    unknown = sorted(plan.file_ids - names.keys())
-    if unknown:
-        return {
-            "success": False,
-            "error": (
-                f"Unknown file ids {unknown}. Use only ids returned by list_my_files."
-            ),
-        }
-    folder_names = {
-        name.casefold()
-        for name in Folder.objects.filter(user=user).values_list("name", flat=True)
-    }
-    tag_labels = {
-        label.casefold()
-        for label in Tag.objects.filter(Q(user=user) | Q(user=None)).values_list(
-            "label", flat=True
-        )
-    }
-
-    def stored(groups, key, existing) -> List[Dict[str, Any]]:
-        return [
-            {
-                key: group.name,
-                "is_new": group.name.casefold() not in existing,
-                "files": [
-                    {"id": file_id, "name": names[file_id]}
-                    for file_id in group.file_ids
-                ],
-            }
-            for group in groups
-        ]
-
-    proposal = FileOrganizationProposal.active_objects.create(
+    errors = _reference_errors(user, plan.actions, file_names, chat_titles)
+    if errors:
+        return {"success": False, "error": " ".join(errors)}
+    actions = [
+        _stored(index, action, user, file_names, chat_titles)
+        for index, action in enumerate(plan.actions, start=1)
+    ]
+    proposal = AssistantProposal.active_objects.create(
         user=user,
-        summary=plan.summary or "Organise files",
-        plan={
-            "folders": stored(plan.folders, "name", folder_names),
-            "tags": stored(plan.tags, "label", tag_labels),
-        },
+        summary=plan.summary or "Proposed changes",
+        plan={"actions": actions},
     )
     return {
         "success": True,
         "proposal_id": proposal.id,
-        "folders": len(plan.folders),
-        "tags": len(plan.tags),
-        "files": len(plan.file_ids),
+        "actions": len(actions),
+        "deletes": sum(action["type"].startswith("delete") for action in actions),
     }
 
 
-def _decidable(user, proposal_id: int) -> FileOrganizationProposal:
+def _reference_errors(user, actions, file_names, chat_titles) -> List[str]:
+    errors = []
+    unknown_files = sorted({i for a in actions for i in a.file_ids} - file_names.keys())
+    if unknown_files:
+        errors.append(
+            f"Unknown file ids {unknown_files}. Use only ids from list_my_files."
+        )
+    unknown_chats = sorted(
+        {i for a in actions for i in a.conversation_ids} - chat_titles.keys()
+    )
+    if unknown_chats:
+        errors.append(
+            f"Unknown conversation ids {unknown_chats}. "
+            "Use only ids from list_my_conversations."
+        )
+    for action in actions:
+        if action.type in _EXISTING_TARGET:
+            noun, find = _EXISTING_TARGET[action.type]
+            if find(user, action.name) is None:
+                errors.append(f'There is no {noun} named "{action.name}".')
+        if action.type == Type.CREATE_PROJECT and find_project(user, action.name):
+            errors.append(
+                f'A project named "{action.name}" already exists; '
+                "use add_to_project instead."
+            )
+        if (
+            action.type == Type.ADD_TAG
+            and find_tag(user, action.name) is None
+            and Tag.objects.filter(label__iexact=action.name).exists()
+        ):
+            errors.append(f'The tag name "{action.name}" is taken; pick another.')
+    return errors
+
+
+def _stored(index, action: PlannedAction, user, file_names, chat_titles) -> Dict:
+    find_new = _NEW_TARGET.get(action.type)
+    return {
+        "id": str(index),
+        "type": action.type,
+        "name": action.name,
+        "is_new": bool(find_new) and find_new(user, action.name) is None,
+        "description": action.description,
+        "files": [{"id": i, "name": file_names[i]} for i in action.file_ids],
+        "conversations": [
+            {"id": i, "title": chat_titles[i]} for i in action.conversation_ids
+        ],
+        "status": ProposalActionStatus.PENDING,
+        "notes": [],
+        "journal": None,
+    }
+
+
+def _locked(user, proposal_id: int) -> AssistantProposal:
     proposal = (
-        FileOrganizationProposal.active_objects.select_for_update()
+        AssistantProposal.active_objects.select_for_update()
         .filter(user=user, pk=proposal_id)
         .first()
     )
     if proposal is None:
         raise ProposalNotFound()
-    if proposal.status != ProposalStatus.PENDING:
-        raise ProposalAlreadyDecided()
     return proposal
 
 
-@transaction.atomic
-def apply_proposal(user, proposal_id: int) -> FileOrganizationProposal:
-    proposal = _decidable(user, proposal_id)
-    groups = proposal.plan["folders"] + proposal.plan["tags"]
-    planned_ids = {file["id"] for group in groups for file in group["files"]}
-    live_ids = set(
-        File.active_objects.filter(
-            user=user, is_media=False, id__in=planned_ids
-        ).values_list("id", flat=True)
-    )
-    outcome = {
-        "folders_created": 0,
-        "files_filed": 0,
-        "tags_created": 0,
-        "files_tagged": 0,
-        "skipped": [],
-    }
-    for group in proposal.plan["folders"]:
-        _file_into_folder(user, _live(group, "name", live_ids), outcome)
-    for group in proposal.plan["tags"]:
-        _tag_files(user, _live(group, "label", live_ids), outcome)
-    gone = len(planned_ids - live_ids)
-    if gone:
-        outcome["skipped"].append(f"{gone} file(s) no longer exist.")
-    proposal.status = ProposalStatus.APPLIED
-    proposal.outcome = outcome
+def _selected(proposal, action_ids: Optional[Iterable[str]], status: str):
+    wanted = None if action_ids is None else set(action_ids)
+    return [
+        action
+        for action in proposal.plan["actions"]
+        if action["status"] == status and (wanted is None or action["id"] in wanted)
+    ]
+
+
+def _save(proposal: AssistantProposal) -> AssistantProposal:
+    statuses = {action["status"] for action in proposal.plan["actions"]}
+    if statuses == {ProposalActionStatus.APPLIED}:
+        proposal.status = ProposalStatus.APPLIED
+    elif ProposalActionStatus.APPLIED in statuses:
+        proposal.status = ProposalStatus.PARTIALLY_APPLIED
+    else:
+        proposal.status = ProposalStatus.PENDING
     proposal.decided_at = timezone.now()
-    proposal.save(update_fields=["status", "outcome", "decided_at", "updated_at"])
+    proposal.save(update_fields=["plan", "status", "decided_at", "updated_at"])
     return proposal
 
 
 @transaction.atomic
-def discard_proposal(user, proposal_id: int) -> FileOrganizationProposal:
-    proposal = _decidable(user, proposal_id)
+def apply_actions(
+    user, proposal_id: int, action_ids: Optional[List[str]] = None
+) -> AssistantProposal:
+    """Apply the chosen pending actions (all of them by default), in plan order."""
+    proposal = _locked(user, proposal_id)
+    if proposal.status == ProposalStatus.DISCARDED:
+        raise ProposalConflict("Restore this proposal before applying it.")
+    for action in _selected(proposal, action_ids, ProposalActionStatus.PENDING):
+        apply, _ = HANDLERS[action["type"]]
+        journal, notes = apply(user, action)
+        action.update(status=ProposalActionStatus.APPLIED, journal=journal, notes=notes)
+    return _save(proposal)
+
+
+@transaction.atomic
+def undo_actions(
+    user, proposal_id: int, action_ids: Optional[List[str]] = None
+) -> AssistantProposal:
+    """Revert the chosen applied actions (all by default), newest effect first."""
+    proposal = _locked(user, proposal_id)
+    for action in reversed(
+        _selected(proposal, action_ids, ProposalActionStatus.APPLIED)
+    ):
+        _, undo = HANDLERS[action["type"]]
+        journal = action["journal"]
+        notes = undo(user, journal) if journal else ["Nothing to undo."]
+        action.update(status=ProposalActionStatus.PENDING, journal=None, notes=notes)
+    return _save(proposal)
+
+
+@transaction.atomic
+def discard_proposal(user, proposal_id: int) -> AssistantProposal:
+    proposal = _locked(user, proposal_id)
+    if proposal.status != ProposalStatus.PENDING:
+        raise ProposalConflict("Undo the applied changes before discarding.")
     proposal.status = ProposalStatus.DISCARDED
     proposal.decided_at = timezone.now()
     proposal.save(update_fields=["status", "decided_at", "updated_at"])
     return proposal
 
 
-def _live(group: Dict[str, Any], key: str, live_ids: set) -> PlanGroup:
-    return PlanGroup(
-        name=group[key],
-        file_ids=tuple(file["id"] for file in group["files"] if file["id"] in live_ids),
-    )
-
-
-def _file_into_folder(user, group: PlanGroup, outcome: Dict[str, Any]) -> None:
-    folder = Folder.objects.filter(user=user, name__iexact=group.name).first()
-    if folder is None:
-        folder = Folder.objects.create(user=user, name=group.name)
-        outcome["folders_created"] += 1
-    already = set(
-        folder.files.filter(id__in=group.file_ids).values_list("id", flat=True)
-    )
-    folder.files.add(*group.file_ids)
-    outcome["files_filed"] += len(set(group.file_ids) - already)
-
-
-def _tag_files(user, group: PlanGroup, outcome: Dict[str, Any]) -> None:
-    tag = Tag.objects.filter(
-        Q(user=user) | Q(user=None), label__iexact=group.name
-    ).first()
-    if tag is None:
-        # Tag labels are unique across all accounts.
-        if Tag.objects.filter(label=group.name).exists():
-            outcome["skipped"].append(
-                f'The tag name "{group.name}" is unavailable; choose another.'
-            )
-            return
-        tag = Tag.objects.create(user=user, label=group.name)
-        outcome["tags_created"] += 1
-    already = set(tag.files.filter(id__in=group.file_ids).values_list("id", flat=True))
-    tag.files.add(*group.file_ids)
-    outcome["files_tagged"] += len(set(group.file_ids) - already)
+@transaction.atomic
+def restore_proposal(user, proposal_id: int) -> AssistantProposal:
+    proposal = _locked(user, proposal_id)
+    if proposal.status != ProposalStatus.DISCARDED:
+        raise ProposalConflict("Only a discarded proposal can be restored.")
+    return _save(proposal)

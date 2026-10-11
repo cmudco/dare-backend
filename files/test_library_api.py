@@ -47,6 +47,28 @@ class LibraryApiTests(APITestCase):
         self.assertFalse(self.first.tags.exists())
         self.assertFalse(self.foreign.tags.exists())
 
+    def test_bulk_untag_removes_only_the_named_tags(self):
+        self.first.tags.add(self.mine, self.shared)
+        self.second.tags.add(self.mine)
+        response = self.client.post(
+            "/api/files/bulk-untag/",
+            {"fileIds": [self.first.pk, self.second.pk], "tagIds": [self.mine.pk]},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        tags = {row["id"]: row["tags"] for row in response.json()["files"]}
+        self.assertEqual(tags, {self.first.pk: [self.shared.pk], self.second.pk: []})
+
+    def test_bulk_untag_refuses_other_users_files(self):
+        self.foreign.tags.add(self.shared)
+        response = self.client.post(
+            "/api/files/bulk-untag/",
+            {"fileIds": [self.foreign.pk], "tagIds": [self.shared.pk]},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 404)
+        self.assertTrue(self.foreign.tags.exists())
+
     def test_content_search_returns_first_match_per_own_file(self):
         DocumentChunk.objects.create(
             file=self.first, chunk_index=0, text="Intro", page_start=1

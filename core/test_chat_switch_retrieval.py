@@ -28,6 +28,16 @@ def fresh_processor():
 
 
 class ChatSwitchRetrievalTests(SimpleTestCase):
+    def setUp(self):
+        # Retrieval drops deleted files with a database lookup; these tests
+        # run without a database, so every id counts as live.
+        live = patch(
+            "core.services.llm_helpers.semantic_context_helpers.get_live_file_ids",
+            new=AsyncMock(side_effect=lambda ids: list(ids or [])),
+        )
+        live.start()
+        self.addCleanup(live.stop)
+
     def _check_fresh_conversations(self, search, expected_text, rag_mode="advanced"):
         # Each subscription creates a coordinator with a fresh processor.
         # Both turns must work even when an unused legacy client cannot open.
