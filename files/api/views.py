@@ -63,10 +63,16 @@ from ..services.document_reprocessing_service import (
     ReprocessingQueueError,
     ReprocessingUnavailable,
 )
-from ..services.trash_service import deleted_files, purge_files, restore_files
+from ..services.trash_service import (
+    deleted_files,
+    move_to_trash,
+    purge_files,
+    restore_files,
+)
 from ..services.library_service import (
     LibraryItemNotFound,
     add_tags_to_files,
+    remove_tags_from_files,
     search_file_contents,
 )
 from .serializers import (
@@ -115,6 +121,10 @@ class FileViewSet(viewsets.ModelViewSet):
             )
             .order_by(Lower("name"))
         )
+
+    def perform_destroy(self, instance):
+        """Deleting moves the file to Recently deleted; purging removes it."""
+        move_to_trash(self.request.user, [instance.id])
 
     def create(self, request):
         uploaded_files = request.FILES.getlist("files")
@@ -361,7 +371,7 @@ class FileViewSet(viewsets.ModelViewSet):
     )
     def bulk_delete(self, request):
         """
-        Bulk delete multiple files using DRF's built-in delete method for each file.
+        Move many files to Recently deleted.
         Expected payload: {"fileIds": [1, 2, 3, ...]}
         """
         file_ids = request.data.get("fileIds", [])
@@ -452,6 +462,22 @@ class FileViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         try:
             files = add_tags_to_files(request.user, **serializer.validated_data)
+        except LibraryItemNotFound:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        return Response({"files": FileTagsSerializer(files, many=True).data})
+
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="bulk-untag",
+        parser_classes=[CamelCaseJSONParser],
+    )
+    def bulk_untag(self, request):
+        """Remove tags from many files at once: {"fileIds": [...], "tagIds": [...]}."""
+        serializer = BulkTagSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            files = remove_tags_from_files(request.user, **serializer.validated_data)
         except LibraryItemNotFound:
             return Response(status=status.HTTP_404_NOT_FOUND)
         return Response({"files": FileTagsSerializer(files, many=True).data})

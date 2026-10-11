@@ -32,6 +32,26 @@ class RecentlyDeletedTests(TestCase):
         response = self.client.get("/api/files/deleted/")
         self.assertEqual([row["id"] for row in response.json()["results"]], [gone.id])
 
+    def test_deleting_a_file_moves_it_to_recently_deleted(self):
+        single = self.make_file(self.user, "single.pdf", deleted=False)
+        first = self.make_file(self.user, "first.pdf", deleted=False)
+        second = self.make_file(self.user, "second.png", deleted=False)
+        second.is_media = True
+        second.save(update_fields=["is_media"])
+
+        self.assertEqual(
+            self.client.delete(f"/api/files/{single.id}/").status_code, 204
+        )
+        self.client.post(
+            "/api/files/bulk-delete/", {"fileIds": [first.id, second.id]}, format="json"
+        )
+
+        listed = self.client.get("/api/files/deleted/").json()["results"]
+        self.assertEqual(
+            {row["id"] for row in listed}, {single.id, first.id, second.id}
+        )
+        self.assertEqual(File._base_manager.filter(user=self.user).count(), 3)
+
     def test_restore_brings_a_file_back(self):
         gone = self.make_file(self.user, "gone.pdf")
         response = self.client.post(
