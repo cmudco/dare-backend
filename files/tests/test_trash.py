@@ -32,25 +32,31 @@ class RecentlyDeletedTests(TestCase):
         response = self.client.get("/api/files/deleted/")
         self.assertEqual([row["id"] for row in response.json()["results"]], [gone.id])
 
-    def test_deleting_a_file_moves_it_to_recently_deleted(self):
-        single = self.make_file(self.user, "single.pdf", deleted=False)
+    def test_trash_moves_files_to_recently_deleted(self):
         first = self.make_file(self.user, "first.pdf", deleted=False)
-        second = self.make_file(self.user, "second.png", deleted=False)
-        second.is_media = True
-        second.save(update_fields=["is_media"])
+        image = self.make_file(self.user, "photo.png", deleted=False)
+        image.is_media = True
+        image.save(update_fields=["is_media"])
+        theirs = self.make_file(self.other, "theirs.pdf", deleted=False)
 
-        self.assertEqual(
-            self.client.delete(f"/api/files/{single.id}/").status_code, 204
-        )
-        self.client.post(
-            "/api/files/bulk-delete/", {"fileIds": [first.id, second.id]}, format="json"
+        response = self.client.post(
+            "/api/files/trash/",
+            {"fileIds": [first.id, image.id, theirs.id]},
+            format="json",
         )
 
+        self.assertEqual(response.json(), {"deleted": 2})
         listed = self.client.get("/api/files/deleted/").json()["results"]
-        self.assertEqual(
-            {row["id"] for row in listed}, {single.id, first.id, second.id}
-        )
-        self.assertEqual(File._base_manager.filter(user=self.user).count(), 3)
+        self.assertEqual({row["id"] for row in listed}, {first.id, image.id})
+        self.assertTrue(File.active_objects.filter(pk=theirs.pk).exists())
+
+    def test_bulk_delete_stays_permanent_for_socratic_books(self):
+        gone = self.make_file(self.user, "gone.pdf", deleted=False)
+        with patch("files.signals.delete_file_vectors"):
+            self.client.post(
+                "/api/files/bulk-delete/", {"fileIds": [gone.id]}, format="json"
+            )
+        self.assertFalse(File._base_manager.filter(pk=gone.pk).exists())
 
     def test_restore_brings_a_file_back(self):
         gone = self.make_file(self.user, "gone.pdf")

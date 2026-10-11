@@ -122,10 +122,6 @@ class FileViewSet(viewsets.ModelViewSet):
             .order_by(Lower("name"))
         )
 
-    def perform_destroy(self, instance):
-        """Deleting moves the file to Recently deleted; purging removes it."""
-        move_to_trash(self.request.user, [instance.id])
-
     def create(self, request):
         uploaded_files = request.FILES.getlist("files")
         file_names = request.data.getlist("names")
@@ -371,7 +367,8 @@ class FileViewSet(viewsets.ModelViewSet):
     )
     def bulk_delete(self, request):
         """
-        Move many files to Recently deleted.
+        Permanently delete many files (Socratic Books relies on this).
+        DARE moves files to Recently deleted with ``trash`` instead.
         Expected payload: {"fileIds": [1, 2, 3, ...]}
         """
         file_ids = request.data.get("fileIds", [])
@@ -417,6 +414,19 @@ class FileViewSet(viewsets.ModelViewSet):
             response_data["failed_files"] = failed_files
 
         return Response(response_data, status=status.HTTP_200_OK)
+
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="trash",
+        parser_classes=[CamelCaseJSONParser],
+    )
+    def trash(self, request):
+        """Move files to Recently deleted: {"fileIds": [...]}."""
+        body = FileIdsSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        moved = move_to_trash(request.user, body.validated_data["file_ids"])
+        return Response({"deleted": moved})
 
     @action(detail=False, methods=["get"], url_path="deleted")
     def deleted(self, request):

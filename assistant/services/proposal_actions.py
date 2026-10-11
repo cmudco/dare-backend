@@ -9,12 +9,12 @@ Deletes are soft: the rows stay and undo restores them.
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from django.db.models import Q
-from django.utils import timezone
 
 from assistant.constants import ProposalActionType as Type
 from conversations.constants import ConversationSource
 from conversations.models import Conversation
 from files.models import File, Folder, Tag
+from files.services.trash_service import move_to_trash, restore_files
 from projects.models import PersonalProject
 from projects.services.project_service import touch_project
 
@@ -199,20 +199,16 @@ def _undo_remove_tag(user, journal: Journal) -> Notes:
 
 
 def _apply_delete_files(user, action: Action) -> Tuple[Journal, Notes]:
-    files = live_files(user, _file_ids(action))
-    deleted = sorted(files.values_list("id", flat=True))
-    # updated_at doubles as the deletion time in Recently deleted.
-    File._base_manager.filter(user=user, id__in=deleted).update(
-        is_deleted=True, updated_at=timezone.now()
-    )
+    deleted = sorted(live_files(user, _file_ids(action)).values_list("id", flat=True))
+    move_to_trash(user, deleted)
     return {"deleted": deleted}, _gone_notes(action, len(deleted))
 
 
 def _undo_delete_files(user, journal: Journal) -> Notes:
-    restored = File._base_manager.filter(user=user, id__in=journal["deleted"]).update(
-        is_deleted=False, updated_at=timezone.now()
-    )
-    purged = len(journal["deleted"]) - restored
+    # Files purged from Recently deleted since are gone for good.
+    remaining = File._base_manager.filter(user=user, id__in=journal["deleted"])
+    purged = len(journal["deleted"]) - remaining.count()
+    restore_files(user, journal["deleted"])
     if purged:
         return [f"{_plural(purged, 'file')} already deleted permanently."]
     return []
