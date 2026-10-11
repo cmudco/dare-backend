@@ -873,9 +873,7 @@ class DocumentEnrichmentService:
                         parts.append(f"[Figure uncertainty: {uncertainty}]")
                     description = result.get("description", "")
                     visible_text = result.get("visible_text", "")
-                    parts.append(
-                        f"[Machine-generated figure description: {description}]"
-                    )
+                    parts.append(f"[Figure description: {description}]")
                     if visible_text:
                         parts.append(f"Visible text in figure: {visible_text}")
                 continue
@@ -904,7 +902,7 @@ class DocumentEnrichmentService:
         summary = str(result.get("summary") or "").strip()
         transcription = str(result.get("transcription_markdown") or "").strip()
         if summary:
-            parts.append(f"[Machine-generated page description: {summary}]")
+            parts.append(f"[Image description: {summary}]")
         if transcription:
             parts.append(transcription)
         uncertainty = str(result.get("uncertainty") or "").strip()
