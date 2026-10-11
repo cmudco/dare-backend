@@ -370,7 +370,7 @@
         <h2>Conversation Settings</h2>
         <div class="card grid-2">
             <div class="meta-item"><div class="meta-label">Source</div><div class="meta-value">{{ conversation.source }}</div></div>
-            <div class="meta-item"><div class="meta-label">History Limit</div><div class="meta-value">{{ conversation.history_limit }}</div></div>
+            <div class="meta-item"><div class="meta-label">History Limit</div><div class="meta-value">{% if conversation.history_limit %}{{ conversation.history_limit }}{% else %}All messages{% endif %}</div></div>
             <div class="meta-item"><div class="meta-label">Temperature</div><div class="meta-value">{{ conversation.temperature }}</div></div>
             <div class="meta-item"><div class="meta-label">Max Tokens</div><div class="meta-value">{{ conversation.max_tokens }}</div></div>
             <div class="meta-item"><div class="meta-label">Max Context Snippets</div><div class="meta-value">{{ conversation.max_context_snippets }}</div></div>
