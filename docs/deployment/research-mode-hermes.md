@@ -453,18 +453,29 @@ detail:
 | File | Written by | Reaches |
 |---|---|---|
 | `SOUL.md` | DARE, versioned | this project |
-| `memories/MEMORY.md` | the agent, as it works | this project only |
-| `memories/USER.md` | the agent; DARE absorbs and re-renders | every project this scholar owns |
+| `memories/MEMORY.md` | DARE, from approved project memory | this project only |
+| `memories/USER.md` | DARE, from the approved `ResearcherProfile` | every project this scholar owns |
+| `skills/dare/<name>/SKILL.md` | DARE, from approved `ResearchProcedure`s | every project, or one |
 
-`USER.md` is about the person rather than the project, so DARE folds it into a
-`ResearcherProfile` record and renders it into every profile that scholar owns.
-Teach one project your name and every project knows it, while the projects' own
-facts stay apart.
+Hermes still runs its whole learning loop — the `memory` and `skill_manage`
+tools mid-turn, and the background reflection fork after turns — but every
+profile sets `memory.write_approval` and `skills.write_approval` to `true`, so
+each write is **staged** under `<profile>/pending/{memory,skills}/` instead of
+committed. DARE ingests those records (`learning_service.sync_pending_learning`)
+as `ResearchMemoryProposal`s, attributes each to the chat thread whose run was
+live and to the review notes that preceded it, and removes the pending file.
+The scholar approves (optionally moving it between researcher-wide and
+project-only) or rejects; DARE renders the approved state back into the files
+above on every provision. DARE is the system of record; the files are a
+rendering. `memory.nudge_interval` and `skills.creation_nudge_interval` are
+tightened (2 turns, 8 iterations) so reflection happens at research cadence.
 
-Anything the agent writes to `MEMORY.md` is raised as a proposal the scholar
-accepts or rejects. Accepting copies it into `ResearchProjectMemory`, which DARE
-owns and injects into later runs; rejecting removes it from `MEMORY.md`, so the
-agent stops acting on a fact that was turned down.
+Entries found in the files that DARE has never seen (written before the gate
+was on) are raised as proposals before the file is re-rendered, never dropped.
+
+`/v1/runs` does not reload earlier turns from `session_id`; a chat thread sends
+its transcript (events included) as `conversation_history` each turn, and
+Hermes compresses it as it grows.
 
 Hermes caps these files (`memory.memory_char_limit`, default 2200;
 `memory.user_char_limit`, default 1375) and **rejects** an entry that would
@@ -482,14 +493,15 @@ recall, and tool scoping.
 
 ## Known limitations (tracked for v1.1)
 
-- Gateway exposes all of the service user's connected MCP servers; per-run
-  scoping is prompt-level today, credential-level later.
+- Multiplex may share one MCP connection across profiles, so the research
+  thread tools (`launch_scouts`, `thread_status`, `search_knowledge`) are
+  authorized by a signed thread token in their arguments, not by the
+  connection's identity.
 - Structured output is prompt-contract + tolerant parsing. Automatic repair
   re-asks are disabled until child execution attempts have durable identity,
   usage aggregation, and fencing (Hermes has no native schema forcing yet).
 - `SOUL.md` sync is no longer a shared-file race — each project writes its own
   profile's copy (§3.1) — but per-run `instructions` still carry the soul as a
   fallback for the unprofiled path.
-- `USER.md` propagation is a write, not a lookup: if rendering into one sibling
-  profile fails, that profile keeps a stale copy and only a log line says so.
-  A reconciliation pass is not built yet.
+- Approved learning reaches a sibling profile by rendering, not lookup: if a
+  write fails, that profile keeps a stale copy until its next provision.

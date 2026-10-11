@@ -28,14 +28,6 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from rest_framework_simplejwt.tokens import AccessToken
 
-from research.constants import MemoryProposalStatus, MemoryType
-from research.models import (
-    ResearcherProfile,
-    ResearchMemoryProposal,
-    ResearchProject,
-    ResearchProjectMemory,
-)
-
 logger = logging.getLogger(__name__)
 
 # Toolsets the api_server platform exposes inside a project profile. Deliberately
@@ -43,6 +35,12 @@ logger = logging.getLogger(__name__)
 # the web only through DARE's audited MCP tools. `terminal`, `file` and
 # `code_execution` are inherited by a bare profile and are NOT wanted here.
 PROJECT_TOOLSETS = ["memory", "skills", "todo", "vision"]
+
+# How often the runtime reflects in the background: every N scholar turns for
+# memory, every N tool iterations for procedures. Research turns are dense, so
+# both are tighter than the runtime's general-purpose default of 10.
+MEMORY_REFLECTION_TURNS = 2
+SKILL_REFLECTION_ITERATIONS = 8
 
 _ENV_FILENAME = ".env"
 _CONFIG_FILENAME = "config.yaml"
@@ -111,6 +109,16 @@ def _render_config(project):
         if model
         else ""
     )
+    fallback_block = "".join(
+        f"  - provider: {provider}\n    model: {fallback}\n"
+        for provider, fallback in settings.HERMES_PROFILE_FALLBACK_MODELS
+    )
+    if fallback_block:
+        fallback_block = (
+            "# Switched to, in order, when the pinned model is rate-limited or\n"
+            "# down — free tiers hit upstream capacity limits often.\n"
+            "fallback_model:\n" + fallback_block + "\n"
+        )
     return (
         f"# Hermes profile for DARE research project {project.id}\n"
         f"# {project.title}\n"
@@ -120,6 +128,7 @@ def _render_config(project):
         "\n"
         f"{model_block}"
         "\n"
+        f"{fallback_block}"
         "# Tiered disclosure hides the MCP tools behind `tool_search` and makes\n"
         "# the agent go find them. That trade is wrong here: a project profile\n"
         "# exposes two gateway tools, so the extra hop buys nothing and costs a\n"
@@ -128,6 +137,24 @@ def _render_config(project):
         "tools:\n"
         "  tool_search:\n"
         "    enabled: false\n"
+        "\n"        "# A Scout searches, reads and stages one tool call at a time; a low\n"
+        "# global ceiling ends it mid-search with nothing staged.\n"
+        "agent:\n"
+        f"  max_turns: {settings.HERMES_PROFILE_MAX_TURNS}\n"
+        "\n"
+        "# The learning loop runs, but nothing it learns is committed on its own:\n"
+        "# every memory and skill write — foreground or the background reflection\n"
+        "# fork — is staged under pending/ for DARE to put in front of the scholar.\n"
+        "# DARE renders what they approve back into memories/ and skills/dare/.\n"
+        "memory:\n"
+        "  memory_enabled: true\n"
+        "  user_profile_enabled: true\n"
+        "  write_approval: true\n"
+        f"  nudge_interval: {MEMORY_REFLECTION_TURNS}\n"
+        "\n"
+        "skills:\n"
+        "  write_approval: true\n"
+        f"  creation_nudge_interval: {SKILL_REFLECTION_ITERATIONS}\n"
         "\n"
         "platform_toolsets:\n"
         "  api_server:\n"
@@ -179,7 +206,6 @@ def ensure_project_profile(project, *, refresh_token=False):
         (home / "memories").mkdir(exist_ok=True)
 
         _write_if_changed(home / _CONFIG_FILENAME, _render_config(project))
-        render_user_memory(project)
 
         env_path = home / _ENV_FILENAME
         if refresh_token or not env_path.exists():
@@ -203,148 +229,3 @@ def ensure_project_profile(project, *, refresh_token=False):
         logger.info("Project %s bound to Hermes profile %s", project.id, name)
 
     return name
-
-
-def _user_memory_path(project):
-    return profile_home_for(project) / "memories" / "USER.md"
-
-
-def render_user_memory(project):
-    """Write the scholar's DARE-owned record into THIS project's USER.md.
-
-    Called on every provision, so a new project starts already knowing who its
-    scholar is instead of re-learning it. MEMORY.md is deliberately untouched:
-    the person travels between projects, the project's facts do not.
-    """
-    record = ResearcherProfile.active_objects.filter(user=project.user).first()
-    if record is None or not record.content.strip():
-        return False
-    path = _user_memory_path(project)
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if path.exists() and path.read_text(encoding="utf-8") == record.content:
-            return False
-        path.write_text(record.content, encoding="utf-8")
-        return True
-    except OSError as exc:
-        logger.warning("Could not render USER.md for project %s: %s", project.id, exc)
-        return False
-
-
-def absorb_user_memory(project, user_file_text):
-    """Fold anything the agent learned about the scholar back into DARE's record.
-
-    The agent writes USER.md inside whichever project it is working in. Without
-    this that knowledge would stay stranded there, which is the whole complaint:
-    "it knows me in this project and nowhere else." Absorbing on read means one
-    project teaching it your name makes every project know it, while the
-    projects' own memories stay separate.
-
-    Returns the names of profiles that were refreshed as a result.
-    """
-    incoming = [e.strip() for e in (user_file_text or "").split("§") if e.strip()]
-    if not incoming:
-        return []
-
-    record, _ = ResearcherProfile.objects.get_or_create(user=project.user)
-    changed = record.merge(incoming)
-
-    siblings = [
-        p
-        for p in ResearchProject.active_objects.filter(user=project.user)
-        if profile_home_for(p).is_dir()
-    ]
-
-    # Take in what every OTHER profile already knows before writing over any of
-    # them. Rendering first would destroy a fact the scholar taught a different
-    # project — the same silent clobber that combined memory entries caused, and
-    # just as invisible. Absorb everywhere, then render everywhere.
-    for sibling in siblings:
-        if sibling.id == project.id:
-            continue
-        try:
-            existing = _user_memory_path(sibling).read_text(encoding="utf-8")
-        except OSError:
-            continue
-        others = [e.strip() for e in existing.split("§") if e.strip()]
-        changed = record.merge(others) or changed
-
-    if not changed:
-        return []
-    record.save(update_fields=["content", "updated_at"])
-
-    # Propagate, so the next project the scholar opens already knows them.
-    refreshed = []
-    for sibling in siblings:
-        if render_user_memory(sibling):
-            refreshed.append(profile_name_for(sibling))
-    return refreshed
-
-
-def propose_project_memory(project):
-    """Raise a proposal for anything in MEMORY.md the scholar has not seen.
-
-    The runtime writes project memory directly, which is fine for working
-    context but leaves DARE with no say over what becomes durable — the gap the
-    Agent Memory panel used to paper over. Turning each new entry into a
-    ResearchMemoryProposal gives the scholar the same accept/reject control they
-    already have over staged findings, without blocking the agent mid-run: the
-    entry stays in MEMORY.md and keeps working, and the proposal decides whether
-    it graduates into DARE's own record.
-
-    Returns the proposals created by this call.
-    """
-    path = profile_home_for(project) / "memories" / "MEMORY.md"
-    try:
-        entries = [e.strip() for e in path.read_text(encoding="utf-8").split("§")]
-    except OSError:
-        return []
-
-    # Anything already proposed, decided, or promoted is not news.
-    seen = set(
-        ResearchMemoryProposal.objects.filter(project=project).values_list(
-            "content", flat=True
-        )
-    )
-    seen.update(
-        ResearchProjectMemory.active_objects.filter(project=project).values_list(
-            "detail", flat=True
-        )
-    )
-
-    created = []
-    for entry in entries:
-        if not entry or entry in seen:
-            continue
-        created.append(
-            ResearchMemoryProposal.objects.create(
-                project=project,
-                content=entry,
-                memory_type=MemoryType.PROJECT_MEMORY,
-                proposed_by_role="agent",
-                status=MemoryProposalStatus.PROPOSED,
-            )
-        )
-        seen.add(entry)
-    return created
-
-
-def forget_project_memory(project, entry):
-    """Remove one entry from a project's MEMORY.md.
-
-    Rejecting a proposal has to reach the file. Left in place the agent still
-    believes it, still acts on it, and proposes it again the next time DARE
-    reads — so "reject" would mean nothing.
-    """
-    path = profile_home_for(project) / "memories" / "MEMORY.md"
-    try:
-        kept = [
-            e.strip()
-            for e in path.read_text(encoding="utf-8").split("§")
-            if e.strip() and e.strip() != entry.strip()
-        ]
-        path.write_text("\n§\n".join(kept), encoding="utf-8")
-        return True
-    except OSError as exc:
-        logger.warning("Could not forget memory for project %s: %s", project.id, exc)
-        return False

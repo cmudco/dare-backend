@@ -17,6 +17,9 @@ from asgiref.sync import async_to_sync
 from mcp.models import GatewayFetch, UserMCPConnection
 from mcp.services.mcp_tool_executor import mcp_tool_executor
 from mcp.services.web_fetch import PageUnreadable, fetch_page, web_search
+from research.services.thread_tools import TOOL_DEFS as THREAD_TOOL_DEFS
+from research.services.thread_tools import TOOL_NAMES as THREAD_TOOL_NAMES
+from research.services.thread_tools import call_thread_tool
 
 logger = logging.getLogger(__name__)
 
@@ -81,10 +84,13 @@ def list_user_tools(user):
     are never exposed here; DARE runs them server-side under the project owner
     (`gather_tool_results(run.user, …)`) and injects their results into the run.
 
+    Research-thread tools ride along: they carry their own authority (a signed
+    thread token in the arguments), so they are safe on a shared connection.
+
     `user` is accepted for signature stability but intentionally unused — the
     live surface is identity-independent by design.
     """
-    return list(_BUILTIN_TOOL_DEFS)
+    return list(_BUILTIN_TOOL_DEFS) + list(THREAD_TOOL_DEFS)
 
 
 def _doi_from_url(url):
@@ -370,6 +376,13 @@ def _handle_tool_call(user, rpc_id, params, run_key=""):
             )
         _capture_fetch(user, name, text, arguments, run_key, call_id)
         return _result(rpc_id, {"content": [{"type": "text", "text": text}]})
+
+    if name in THREAD_TOOL_NAMES:
+        text, is_error = call_thread_tool(name, arguments)
+        result = {"content": [{"type": "text", "text": text}]}
+        if is_error:
+            result["isError"] = True
+        return _result(rpc_id, result)
 
     if _SEP not in name:
         return _error(rpc_id, -32602, f"Unknown tool: {name!r}")

@@ -3,8 +3,9 @@ Scout delegation helpers — how DARE asks Hermes to find sources and how it rea
 the result back.
 
 The contract: DARE sends the task as the run `input` and the soul file + a Scout
-brief as `instructions`. Scout uses Hermes's `web_search` tool and returns a single
-JSON object of source candidates, which DARE parses into staging items.
+brief as `instructions`. Scout searches and reads with DARE's gateway tools and
+stages each source with the `stage_finding` tool as it goes. An older Scout reply
+that still carries a JSON envelope of candidates is parsed as a fallback.
 """
 
 import json
@@ -16,78 +17,50 @@ logger = logging.getLogger(__name__)
 SCOUT_BRIEF = """You are Scout, a research source-finder working under the scholar's standards above.
 
 The scholar's request may be informal, terse, or underspecified — that is fine
-and expected. First restate it to yourself as a precise research question that
-preserves their intent (use the project's research question and approved
-knowledge for context), then execute the workflow for that question. Never
-refuse or stall because a request is vague; interpret it generously. The one
-exception: if the request carries no research intent at all (a greeting, small
-talk, a test message), do not search — return {"stagingItems": []} immediately.
+and expected. Restate it to yourself as a precise research question that
+preserves their intent (use the project memory and the conversation you were
+launched from), then work it. If the request carries no research intent at all
+(a greeting, a test message), stage nothing and say so in one line.
 
-Workflow — search first, then READ before you stage:
-1. SEARCH. The scholar's connected research tools (Scite, Consensus, Scholar)
-   are run for you inside DARE — when present, their results are already in your
-   input. Use those first and PRIORITIZE peer-reviewed scholarly results over
-   generic web snippets, drawing candidates from EVERY tool that returned
-   results. For coverage they lack, run `mcp__dare__web_search` (older runtimes
-   name it `mcp_dare_web_search`; DARE's own web search — it returns result
-   links) AT MOST %(max_searches)d times. Do NOT use
-   any runtime-native web_search / web_extract / browser tool, and do NOT try to
-   call consensus__search or scite__search_literature directly — the scholarly
-   tools run only server-side under the scholar's account, never from here.
-2. READ before you stage. Fetch a promising source's page with the `fetch_page`
-   MCP tool (for papers, the DOI link: https://doi.org/<doi>) and quote the
-   fetched text in `citationContext`. If the full text cannot be fetched
-   (paywall, fetch error) but the credentialed results gave you the paper's
-   abstract, you MAY ground `citationContext` in that published abstract — it
-   is the authors' own summary, not a search snippet — and judge the evidence
-   from it. Only fall to `evidenceLabel: "unverifiable"` with low confidence
-   when you have neither fetched text nor an abstract. Fetch AT MOST
-   %(max_candidates)d pages, and read a page ONLY with `fetch_page`
-   (`mcp__dare__fetch_page`, or `mcp_dare_fetch_page` on older runtimes)
-   — never `web_extract` or a browser tool, which bypass DARE's audited gateway.
-3. Never fabricate — only include sources you actually found, with bibliographic
-   details exactly as published, including `doi` whenever known.
+HOW TO WORK — search, read, stage as you go:
+1. SEARCH with mcp__dare__web_search, at most %(max_searches)d times. Any kind
+   of source can earn a place: peer-reviewed papers, preprints (arXiv etc.),
+   technical reports, documentation, and serious articles or blog posts. Your
+   memory says what the scholar trusts — let it decide, and label each source
+   honestly with its `kind`. Results the scholar's connected research tools
+   returned are already in your input; use those first.
+2. READ before you stage: open the page with mcp__dare__fetch_page (for papers,
+   the DOI link https://doi.org/<doi> or the arXiv abs page) and take the facts
+   from what you read. If the full text is unreachable but you have the
+   abstract, say so and judge from it. Read at most %(max_candidates)d pages.
+3. STAGE each source the moment you have checked it, with
+   mcp__dare__stage_finding (run="%(run_token)s"). One call per source, at most
+   %(max_candidates)d. It lands in the scholar's Review Inbox immediately.
+   DARE tells you if they already have it or rejected it before — then move on.
+4. Before you finish, call mcp__dare__report_learning (run="%(run_token)s")
+   once: `applied` = each remembered preference or skill that changed what you
+   did, with its concrete effect; `setAside` = each source you held back
+   because of one, with the reason. Empty lists are fine; never invent one.
+5. Then reply with two or three plain sentences: what you staged and what is
+   still missing. No JSON, no long report — the findings are already staged.
 
-Return ONLY a single JSON object — no prose, no markdown code fences — shaped exactly:
-{"stagingItems": [
-  {
-    "title": "string",
-    "authors": "string, semicolon-separated",
-    "year": 2024,
-    "venue": "string",
-    "doi": "string or empty",
-    "url": "string",
-    "rationale": "why this source matters for the task",
-    "confidence": 0.0,
-    "confidenceRationale": "why this confidence level",
-    "evidenceLabel": "supporting | disputing | partial | tangential | unverifiable",
-    "citationContext": "a short relevant quote/context when available",
-    "sourceTool": "which search surfaced this candidate: scite | consensus | web"
-  }
-]}
-Stage as many genuinely relevant sources as the evidence justifies, up to
-%(max_candidates)d — do not pad to reach the cap, and do not drop a strong
-source just to stay short. `confidence` is a number from 0.0 to 1.0."""
+Never fabricate — stage only sources you actually found, with bibliographic
+details exactly as published. Do NOT use your memory or skill tools in a Scout
+run, and never use a runtime-native web, extract or browser tool."""
 
 
-def build_scout_instructions(soul_content, max_candidates=4, max_searches=4):
+def build_scout_instructions(soul_content, run_token, max_candidates, max_searches):
     """Compose the run instructions: the soul file (standards) + the Scout brief."""
     parts = []
     if soul_content and soul_content.strip():
-        parts.append("# Research standards (soul file)\n" + soul_content.strip())
+        parts.append(soul_content.strip())
     parts.append(
-        SCOUT_BRIEF % {"max_candidates": max_candidates, "max_searches": max_searches}
-    )
-    # Live tool surface (Path B): the gateway exposes only DARE-owned,
-    # credential-free builtins. The scholar's research tools run server-side
-    # (their results are injected into the input), so they aren't callable here.
-    parts.append(
-        "TOOLS FOR THIS RUN: mcp__dare__web_search and mcp__dare__fetch_page "
-        "only (older runtimes name these mcp_dare_web_search / "
-        "mcp_dare_fetch_page) — "
-        "DARE's own web search and reader. Do NOT use any runtime-native "
-        "web_search, web_extract, or browser tool. The scholar's research tools "
-        "are not callable from here — their results are already in your input."
+        SCOUT_BRIEF
+        % {
+            "max_candidates": max_candidates,
+            "max_searches": max_searches,
+            "run_token": run_token,
+        }
     )
     return "\n\n".join(parts)
 
@@ -167,3 +140,33 @@ def parse_staging_items(output):
 
     logger.warning("Scout output was not JSON-parseable")
     return []
+
+
+def _clean_rows(rows, keys, limit=20):
+    out = []
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        cleaned = {k: str(row.get(k) or "").strip()[:500] for k in keys}
+        if any(cleaned.values()):
+            out.append(cleaned)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def parse_scout_learning(output):
+    """The run's "because of you" report: what approved memory changed.
+
+    Returns ``{"applied": [...], "setAside": [...]}`` or ``{}`` when the
+    Scout reported nothing (or its envelope had no learning block).
+    """
+    data = find_json_object(output or "", required_key="stagingItems")
+    learning = data.get("learning") if isinstance(data, dict) else None
+    if not isinstance(learning, dict):
+        return {}
+    applied = _clean_rows(learning.get("applied"), ("memory", "effect"))
+    set_aside = _clean_rows(learning.get("setAside"), ("title", "url", "reason"))
+    if not applied and not set_aside:
+        return {}
+    return {"applied": applied, "setAside": set_aside}

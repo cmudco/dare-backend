@@ -14,15 +14,18 @@ import time
 from django.utils import timezone
 from django_rq import job
 
-from mcp.models import GatewayFetch
 from mcp.services.mcp_gateway import gather_tool_results
-from research.constants import AgentRunStatus, AgentToolCallStatus, StagingItemStatus
+from research.constants import (
+    LIVE_RUN_STATUSES,
+    AgentRunStatus,
+    AgentToolCallStatus,
+)
 from research.models import (
     ResearchAgentRun,
     ResearchAgentToolCall,
     ResearchArtifact,
     ResearchKnowledgeItem,
-    ResearchProjectMemory,
+    ResearchSession,
     ResearchStagingItem,
     SoulFile,
 )
@@ -34,10 +37,21 @@ from research.services import (
     get_hermes_service,
     parse_artifacts,
     parse_critic_verdict,
+    parse_scout_learning,
     parse_staging_items,
     safe_hermes_usage,
 )
-from research.services.profile_service import propose_project_memory
+from research.services.audit_service import record_tool_call, token_count
+from research.services.chat_service import TurnStartFailed, start_turn, stream_turn
+from research.services.learning_service import sync_pending_learning
+from research.services.staging_service import merge_learning, stage_candidate
+from research.services.thread_service import (
+    on_run_finished,
+    run_token,
+    thread_digest,
+    thread_has_active_turn,
+    unseen_events,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -75,22 +89,17 @@ def _finish(run, detail, hermes, failed=False, raw_output=None):
         run.raw_output = raw_output
         fields.append("raw_output")
     run.save(update_fields=fields)
-    _raise_memory_proposals(run.project)
+    sync_pending_learning(run.project)
 
 
-def _raise_memory_proposals(project):
-    """Surface anything the run wrote to MEMORY.md as a pending decision.
-
-    Raised here rather than only when the Context tab is opened, because a
-    badge that appears the first time you look is a badge that can never tell
-    you to look. Best-effort: a proposal is never worth failing a finished run.
-    """
-    try:
-        propose_project_memory(project)
-    except Exception:  # noqa: BLE001 - never let bookkeeping break a run
-        logger.warning(
-            "Could not raise memory proposals for project %s", project.id, exc_info=True
-        )
+def _notify_thread(run_id):
+    """Tell the run's chat thread it ended, whatever path ended it."""
+    run = ResearchAgentRun.objects.select_related("thread").filter(id=run_id).first()
+    if run is None or run.thread_id is None:
+        return
+    if run.status in LIVE_RUN_STATUSES:
+        return
+    on_run_finished(run)
 
 
 def _save_verified_status(run, status, detail, *, terminal=False, usage=None):
@@ -209,15 +218,6 @@ def _knowledge_block(project, per_item_chars=300, max_items=12):
     return "\n".join(lines)
 
 
-def _project_memory_block(project, max_items=20, per_item_chars=400):
-    """The project's durable memory (working theses, decisions, open questions) —
-    DARE-owned and per-project, injected per run so the agent carries it across
-    sessions. Scoped to this project, so it never leaks into another one."""
-    items = ResearchProjectMemory.active_objects.filter(project=project)[:max_items]
-    lines = [f"- {m.label}: {(m.detail or '').strip()[:per_item_chars]}" for m in items]
-    return "\n".join(lines)
-
-
 def _start_run(hermes, run, input_text, instructions):
     """
     Start the Hermes run and record its id. Each delegated run gets a fresh
@@ -261,153 +261,6 @@ def _start_run(hermes, run, input_text, instructions):
                 time.sleep(2 * (attempt + 1))
     _fail(run, "Could not reach the agent runtime.", last_exc)
     return None
-
-
-# Hermes namespaces MCP tools as `<prefix><server>_<tool>`. It used a single
-# underscore until v0.19, which switched to the `mcp__<server>__<tool>` form
-# shared with Claude Code/Codex (tools/mcp_tool.py MCP_TOOL_NAME_PREFIX). Both
-# are accepted so the audit keeps working across runtime versions — matching the
-# wrong one silently drops every GatewayFetch row (no URL, no content, no
-# failure reason) rather than raising.
-_GATEWAY_PREFIXES = ("mcp__dare__", "mcp_dare_")
-_encoder = None
-
-
-def _gateway_tool_base(tool):
-    """The bare gateway tool name (`web_search`), or None if not a gateway call."""
-    for prefix in _GATEWAY_PREFIXES:
-        if tool.startswith(prefix):
-            return tool[len(prefix) :]
-    return None
-
-
-def _token_count(text):
-    """Token size of `text` (cl100k_base) — the per-call context contribution.
-    Best-effort: falls back to a chars/4 estimate if the tokenizer is absent."""
-    global _encoder
-    if not text:
-        return 0
-    if _encoder is None:
-        try:
-            import tiktoken
-
-            _encoder = tiktoken.get_encoding("cl100k_base")
-        except Exception:  # noqa: BLE001 - estimate rather than fail the run
-            _encoder = False
-    if _encoder:
-        return len(_encoder.encode(text))
-    return len(text) // 4
-
-
-def _run_session_key(run):
-    """The Hermes session id DARE assigned this run (see `_start_run`) — the
-    value the runtime forwards as X-DARE-Run-Session so gateway rows can be
-    attributed to this exact run."""
-    return f"{run.session.hermes_session_id}-r{run.id}"
-
-
-def _next_gateway_fetch(run, tool, seen_ids, call_id=""):
-    """The GatewayFetch row this streamed gateway call produced, consumed once.
-
-    One row is written per gateway call (its content on success, the reason on a
-    page miss). We link a streamed tool event to its row by, in order:
-      1. exact tool_use-id match — the stream event and the gateway's `_meta`
-         carry the SAME id, so this is an exact, order- and concurrency-proof
-         join (no guessing);
-      2. else exact run-key match — when only the run/session id is forwarded;
-      3. else the earliest unconsumed *unattributed* row for this tool in the
-         run window, tracked via `seen_ids` so N calls map to N rows in order.
-
-    The old code always took the most-recent matching row, which mislabelled
-    calls that shared a time window (and, when a call wrote no row at all,
-    borrowed a different call's reason — the "same URL ×N" audit artifact).
-    Returns None for tools that never touch the gateway."""
-    base = _gateway_tool_base(tool)
-    if base is None:
-        return None
-    row = None
-    if call_id:
-        # tool_use ids are globally unique, so match them WITHOUT the time
-        # window — a re-fetched URL de-dups onto an existing (older) row, which
-        # a windowed search would miss.
-        row = (
-            GatewayFetch.all_objects.filter(tool=base, call_id=call_id)
-            .exclude(id__in=seen_ids)
-            .order_by("created_at")
-            .first()
-        )
-        if row is None:
-            # The runtime named an id and we still could not match it. Ordering
-            # takes over from here, which is a guess — and a silent guess is how
-            # a whole run's audit ended up blank once already. Say it out loud.
-            logger.warning(
-                "research.audit run %s: %s carried toolCallId=%r with no "
-                "matching GatewayFetch row — falling back to positional order",
-                run.id,
-                tool,
-                call_id,
-            )
-    if row is None:
-        window = GatewayFetch.all_objects.filter(
-            tool=base, created_at__gte=run.started_at
-        ).exclude(id__in=seen_ids)
-        row = (
-            window.filter(run_key=_run_session_key(run)).order_by("created_at").first()
-            or window.filter(run_key="").order_by("created_at").first()
-        )
-    if row is not None:
-        seen_ids.add(row.id)
-    return row
-
-
-def _record_tool_call(run, event, arguments, seen_ids):
-    """Persist one streamed tool call for the Runs audit view and return it.
-
-    For gateway calls the result body and the real failure reason live in the
-    GatewayFetch corpus (the event stream names the tool but omits its result),
-    so the captured row is the source of truth — not the stream's error flag. A
-    page miss (paywall/404) is now returned to the agent WITHOUT isError so it
-    doesn't trip the circuit breaker, so the stream would call it a success;
-    reading the row keeps the audit honest (the row carries the reason)."""
-    duration = event.get("duration")
-    tool = event.get("tool", "")
-    raw_error = event.get("error")
-    error_text = raw_error if isinstance(raw_error, str) else ""
-    result_summary = ""
-
-    row = _next_gateway_fetch(run, tool, seen_ids, event.get("toolCallId") or "")
-    if row is None and _gateway_tool_base(tool) is not None:
-        # A gateway tool that produced no row means the audit lost this call's
-        # URL and body entirely. It has failed silently twice now (once on a
-        # tool-name rename), so say so rather than persist a blank row.
-        logger.warning(
-            "research.audit run %s: no GatewayFetch row for %s "
-            "(toolCallId=%r, run_key=%r) — url and result will be blank",
-            run.id,
-            tool,
-            event.get("toolCallId") or "",
-            _run_session_key(run),
-        )
-    if row is not None:
-        if row.url:
-            arguments = {**arguments, "url": row.url}
-        if row.error:
-            error_text = row.error
-        else:
-            result_summary = row.content
-
-    # Error if the captured row (or, for non-gateway tools, the stream) says so.
-    is_error = bool(error_text) or (bool(raw_error) and row is None)
-    return ResearchAgentToolCall.objects.create(
-        run=run,
-        tool=tool,
-        arguments=arguments,
-        status=AgentToolCallStatus.ERROR if is_error else AgentToolCallStatus.SUCCESS,
-        result_summary=result_summary,
-        duration_ms=int(duration * 1000) if duration else None,
-        result_tokens=_token_count(result_summary),
-        error=error_text,
-    )
 
 
 def _stream_run(hermes, run, interrupted_detail, on_tool=None):
@@ -514,7 +367,7 @@ def _scout_input(run, task, soul_content):
             # scholar audit exactly what came back; only the prompt injection
             # below is compacted/capped.
             result_summary=r["error"] or r["raw"],
-            result_tokens=_token_count(r["error"] or r["raw"]),
+            result_tokens=token_count(r["error"] or r["raw"]),
             error=r["error"],
         )
     context = "\n\n".join(
@@ -537,64 +390,35 @@ def _scout_input(run, task, soul_content):
             "re-stage these sources; find new or complementary evidence that "
             f"builds on them:\n{knowledge}"
         )
+    if run.thread_id:
+        digest = thread_digest(run.thread)
+        if digest:
+            text += (
+                "\n\nThe conversation this Scout was launched from (context "
+                "for what the scholar wants; your task above is what to do):\n" + digest
+            )
     return text
 
 
-def _stage_items(run, items, soul, version):
-    """Persist Scout's candidates, coercing types at the DB boundary."""
-    now = timezone.now()
-    staged = 0
-    for item in items:
-        if not isinstance(item, dict):
-            continue
-        # DB-boundary guard: a candidate with no title is malformed model
-        # output — a template echo or salvage noise from a repaired envelope.
-        # Persisting it floods the review inbox with empty cards, so drop it.
-        title = str(item.get("title") or "").strip()
-        if not title:
-            logger.warning("Scout staging skipped a titleless item (run %s)", run.id)
-            continue
-        year = item.get("year")
-        confidence = item.get("confidence")
-        try:
-            ResearchStagingItem.objects.create(
-                project=run.project,
-                run=run,
-                title=title[:512],
-                authors=str(item.get("authors") or "")[:512],
-                year=year if isinstance(year, int) else None,
-                venue=str(item.get("venue") or "")[:255],
-                doi=str(item.get("doi") or "")[:255],
-                url=str(item.get("url") or "")[:1024],
-                rationale=str(item.get("rationale") or ""),
-                confidence=(
-                    float(confidence) if isinstance(confidence, (int, float)) else None
-                ),
-                confidence_rationale=str(item.get("confidenceRationale") or ""),
-                evidence_label=str(item.get("evidenceLabel") or "")[:32],
-                citation_context=str(item.get("citationContext") or ""),
-                status=StagingItemStatus.STAGED,
-                provenance={
-                    # The agent declares which search surfaced each candidate —
-                    # only it can see its in-loop tool results.
-                    "tool": str(item.get("sourceTool") or "web")[:32],
-                    "query": run.task,
-                    "retrievedAt": now.isoformat(),
-                    "soulFileId": soul.id if soul else None,
-                    "soulFileVersion": version.version if version else None,
-                    "role": "scout",
-                    "runId": run.id,
-                },
-            )
-            staged += 1
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Scout staging item create failed: %s", exc)
-    return staged
+def _stage_envelope_items(run, items):
+    """Fallback: stage candidates a Scout returned in a JSON envelope."""
+    return sum(
+        1
+        for item in items
+        if isinstance(item, dict) and stage_candidate(run, item).item is not None
+    )
 
 
 @job("default")
 def run_scout_job(run_id):
     """Run a delegated Scout discovery end to end (search → read → staging)."""
+    try:
+        _run_scout(run_id)
+    finally:
+        _notify_thread(run_id)
+
+
+def _run_scout(run_id):
     run = ResearchAgentRun.objects.filter(id=run_id).first()
     if not run:
         logger.warning("run_scout_job: run %s not found", run_id)
@@ -613,6 +437,7 @@ def run_scout_job(run_id):
     quick = (run.selected_context or {}).get("depth") == "quick"
     instructions = build_scout_instructions(
         soul_content,
+        run_token(run),
         # Upper bounds, not targets — the brief says stage what the evidence
         # justifies; 1 great source or 10 are both fine.
         max_candidates=3 if quick else 10,
@@ -621,40 +446,46 @@ def run_scout_job(run_id):
     if not _start_run(hermes, run, scout_input, instructions):
         return
 
-    searches = 0
     seen_ids = set()  # GatewayFetch rows already claimed by this run's audit
+    counts = {"searched": 0, "read": 0}
 
     def on_tool(event, preview):
-        nonlocal searches
-        searches += 1
         # Only the real call preview — substituting the task text here would
         # mislead the Runs audit when Hermes sends none.
-        _record_tool_call(run, event, {"query": preview}, seen_ids)
-        _set_status(run, f"Searched {searches} source{'s' if searches != 1 else ''}…")
+        record_tool_call(run, event, {"query": preview}, seen_ids)
+        tool = event.get("tool", "")
+        if tool.endswith("web_search"):
+            counts["searched"] += 1
+        elif tool.endswith("fetch_page"):
+            counts["read"] += 1
+        staged = ResearchStagingItem.active_objects.filter(run=run).count()
+        _set_status(
+            run,
+            f"{counts['searched']} searches · {counts['read']} pages read · "
+            f"{staged} staged",
+        )
 
     output = _stream_run(hermes, run, "The Scout run was interrupted.", on_tool)
     if output is None:
         return
 
     _set_status(run, "Evaluating findings…")
-    items = parse_staging_items(output)
-    staged = _stage_items(run, items, soul, version)
+    _stage_envelope_items(run, parse_staging_items(output))
+    learning = parse_scout_learning(output)
+    if learning:
+        merge_learning(run, learning.get("applied"), learning.get("setAside"))
+    staged = ResearchStagingItem.active_objects.filter(run=run).count()
 
-    plural = "s" if staged != 1 else ""
     if staged == 0:
-        # Surface what happened — a deliberate empty envelope (no research
-        # intent in the request) reads differently from an opaque zero.
-        if '"stagingItems"' in output:
-            detail = "Staged 0 findings — the request had nothing to research."
-        else:
-            snippet = " ".join(output.split())[:150]
-            detail = (
-                f"Staged 0 findings — agent replied: “{snippet}…”"
-                if snippet
-                else "Staged 0 findings."
-            )
+        snippet = " ".join(output.split())[:150]
+        detail = (
+            f"Staged 0 findings — agent replied: “{snippet}…”"
+            if snippet
+            else "Staged 0 findings."
+        )
         _finish(run, detail, hermes, raw_output=output)
     else:
+        plural = "s" if staged != 1 else ""
         _finish(run, f"Staged {staged} finding{plural}.", hermes, raw_output=output)
 
     run.session.last_run_at = timezone.now()
@@ -688,7 +519,7 @@ def run_critic_job(run_id, item_id):
     seen_ids = set()  # GatewayFetch rows already claimed by this run's audit
 
     def on_tool(event, preview):
-        _record_tool_call(run, event, {"itemId": item.id, "query": preview}, seen_ids)
+        record_tool_call(run, event, {"itemId": item.id, "query": preview}, seen_ids)
         _set_status(run, "Assessing the source…")
 
     output = _stream_run(hermes, run, "The Critic run was interrupted.", on_tool)
@@ -746,7 +577,7 @@ def run_artifact_job(run_id):
     seen_ids = set()
 
     def on_tool(event, preview):
-        _record_tool_call(run, event, {"query": preview}, seen_ids)
+        record_tool_call(run, event, {"query": preview}, seen_ids)
 
     output = _stream_run(hermes, run, "The artifact run was interrupted.", on_tool)
     if output is None:
@@ -781,3 +612,28 @@ def run_artifact_job(run_id):
         hermes,
         raw_output=output,
     )
+
+
+# ── Chat follow-ups ──────────────────────────────────────────────────────────
+
+
+@job("default")
+def run_thread_followup_job(thread_id):
+    """Let the agent react to thread events nobody has answered yet.
+
+    Safe to enqueue more than once: it does nothing when a turn is already
+    live (that turn's end re-enqueues) or when every event has been answered.
+    """
+    thread = (
+        ResearchSession.active_objects.filter(id=thread_id)
+        .select_related("project", "user")
+        .first()
+    )
+    if thread is None or thread_has_active_turn(thread) or not unseen_events(thread):
+        return
+    try:
+        run, hermes = start_turn(thread, thread.user, "", followup=True)
+    except TurnStartFailed:
+        return
+    for _ in stream_turn(run, hermes):
+        pass

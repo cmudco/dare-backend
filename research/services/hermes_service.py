@@ -71,26 +71,38 @@ class HermesService:
         return headers
 
     def start_run(
-        self, *, input_text, instructions, session_id, session_key=None, timeout=30
+        self,
+        *,
+        input_text,
+        instructions,
+        session_id,
+        session_key=None,
+        conversation_history=None,
+        timeout=30,
     ):
         """
         Start an async run. The soul-file content rides in `instructions`;
-        `session_id` gives persistent cross-run memory within one mode's thread.
-        `session_key` (Hermes's official X-Hermes-Session-Key) is the stable
-        long-term memory scope — one per research workspace, shared by all of
-        its modes. Returns the gateway JSON (``{"run_id": ..., "status": ...}``).
+        `session_id` names the runtime session (its transcript and summaries).
+        `/v1/runs` does not reload earlier turns from `session_id`, so a
+        multi-turn conversation must send them as `conversation_history`
+        (``[{"role", "content"}]``, oldest first). `session_key` (Hermes's
+        X-Hermes-Session-Key) is the long-term memory scope for the workspace.
+        Returns the gateway JSON (``{"run_id": ..., "status": ...}``).
         """
         headers = self._headers(json_body=True)
         if session_key:
             headers["X-Hermes-Session-Key"] = session_key
+        body = {
+            "input": input_text,
+            "instructions": instructions,
+            "session_id": session_id,
+        }
+        if conversation_history:
+            body["conversation_history"] = conversation_history
         resp = requests.post(
             f"{self.base_url}/v1/runs",
             headers=headers,
-            json={
-                "input": input_text,
-                "instructions": instructions,
-                "session_id": session_id,
-            },
+            json=body,
             timeout=timeout,
         )
         resp.raise_for_status()
@@ -313,10 +325,22 @@ def get_hermes_service(project=None):
     """
     if project is not None:
         # Imported here, not at module scope: research.services.__init__ pulls
-        # this module in, and profile_service reaches back for the same package.
+        # this module in, and both services reach back for the same package.
+        from research.services.learning_service import render_learning
         from research.services.profile_service import ensure_project_profile
 
         profile = ensure_project_profile(project)
+        if profile:
+            try:
+                render_learning(project)
+            except OSError:
+                # A run with last session's memory beats no run; the next
+                # provision renders again.
+                logger.warning(
+                    "Could not render learning for project %s",
+                    project.id,
+                    exc_info=True,
+                )
         base = getattr(project, "hermes_base_url", "") or ""
         if profile or base:
             key = getattr(project, "hermes_api_key", "") or settings.HERMES_API_KEY

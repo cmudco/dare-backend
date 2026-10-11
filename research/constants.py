@@ -109,6 +109,18 @@ class AgentRunStatus:
         ]
 
 
+# Statuses in which a run still holds the runtime (not yet terminal).
+LIVE_RUN_STATUSES = frozenset(
+    {
+        AgentRunStatus.STARTED,
+        AgentRunStatus.QUEUED,
+        AgentRunStatus.RUNNING,
+        AgentRunStatus.STOPPING,
+        AgentRunStatus.WAITING_FOR_APPROVAL,
+    }
+)
+
+
 class AgentToolCallStatus:
     """Outcome of a single tool call (recorded; stored free-form)."""
 
@@ -232,17 +244,113 @@ class MemoryProposalStatus:
 
 
 class ChatMessageRole:
-    """Author of a chat message (DARE-owned, enforced)."""
+    """Author of a chat message (DARE-owned, enforced).
+
+    ``event`` rows are DARE-written facts pushed into a thread (a Scout started
+    or finished, a review decision, a memory proposal) so both the scholar and
+    the agent see what happened outside the conversation itself.
+    """
 
     USER = "user"
     ASSISTANT = "assistant"
+    EVENT = "event"
 
     @classmethod
     def choices(cls):
         return [
             (cls.USER, "User"),
             (cls.ASSISTANT, "Assistant"),
+            (cls.EVENT, "Event"),
         ]
+
+
+class ThreadEventType:
+    """What a thread event row records (DARE-owned, enforced)."""
+
+    SCOUTS_LAUNCHED = "scouts_launched"
+    SCOUT_FINISHED = "scout_finished"
+    REVIEW_DECISION = "review_decision"
+    MEMORY_PROPOSED = "memory_proposed"
+    MEMORY_DECIDED = "memory_decided"
+
+    @classmethod
+    def choices(cls):
+        return [
+            (cls.SCOUTS_LAUNCHED, "Scouts launched"),
+            (cls.SCOUT_FINISHED, "Scout finished"),
+            (cls.REVIEW_DECISION, "Review decision"),
+            (cls.MEMORY_PROPOSED, "Memory proposed"),
+            (cls.MEMORY_DECIDED, "Memory decided"),
+        ]
+
+
+class MemoryLayer:
+    """Where an approved memory lives (D5).
+
+    ``researcher`` travels with the scholar into every project (rendered to
+    each profile's USER.md); ``project`` stays in one project (MEMORY.md);
+    ``procedure`` is a learned method, rendered as a Hermes skill.
+    """
+
+    RESEARCHER = "researcher"
+    PROJECT = "project"
+    PROCEDURE = "procedure"
+
+    @classmethod
+    def choices(cls):
+        return [
+            (cls.RESEARCHER, "Researcher-wide"),
+            (cls.PROJECT, "Project only"),
+            (cls.PROCEDURE, "Procedure"),
+        ]
+
+
+class MemoryProposalOrigin:
+    """Who raised a memory proposal."""
+
+    FOREGROUND = "foreground"
+    BACKGROUND_REVIEW = "background_review"
+    LEGACY = "legacy"
+
+    @classmethod
+    def choices(cls):
+        return [
+            (cls.FOREGROUND, "During the conversation"),
+            (cls.BACKGROUND_REVIEW, "Agent's own reflection"),
+            (cls.LEGACY, "Earlier memory file"),
+        ]
+
+
+class ReviewReasonTag:
+    """Quick-pick reasons a scholar can attach to a review decision."""
+
+    PREPRINT = "preprint"
+    OFF_SCOPE = "off_scope"
+    CONFLICT_OF_INTEREST = "conflict_of_interest"
+    WEAK_METHOD = "weak_method"
+    DUPLICATE = "duplicate"
+    OUTDATED = "outdated"
+    STRONG_EVIDENCE = "strong_evidence"
+
+    @classmethod
+    def choices(cls):
+        return [
+            (cls.PREPRINT, "Preprint"),
+            (cls.OFF_SCOPE, "Off scope"),
+            (cls.CONFLICT_OF_INTEREST, "Conflict of interest"),
+            (cls.WEAK_METHOD, "Weak method"),
+            (cls.DUPLICATE, "Duplicate"),
+            (cls.OUTDATED, "Outdated"),
+            (cls.STRONG_EVIDENCE, "Strong evidence"),
+        ]
+
+    @classmethod
+    def values(cls):
+        return {value for value, _ in cls.choices()}
+
+
+# Most Scouts one chat turn may launch at once; each is a parallel Hermes run.
+MAX_SCOUTS_PER_LAUNCH = 4
 
 
 class StagingItemStatus:

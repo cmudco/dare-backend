@@ -139,6 +139,17 @@ HERMES_PROFILE_PREFIX = os.getenv("HERMES_PROFILE_PREFIX", "dare-proj")
 # agent is a DARE decision, not a side effect of gateway config.
 HERMES_PROFILE_MODEL = os.getenv("HERMES_PROFILE_MODEL", "claude-sonnet-5")
 HERMES_PROFILE_MODEL_PROVIDER = os.getenv("HERMES_PROFILE_MODEL_PROVIDER", "anthropic")
+# Agent-loop ceiling written into every research profile, so a project does not
+# inherit whatever the host's global Hermes config caps runs at.
+HERMES_PROFILE_MAX_TURNS = int(os.getenv("HERMES_PROFILE_MAX_TURNS", "30"))
+# Ordered fallback chain the runtime switches to on rate limits or outages,
+# as comma-separated "provider=model" pairs, e.g.
+# "nous=poolside/laguna-s-2.1:free,nous=upstage/solar-mini4:free".
+HERMES_PROFILE_FALLBACK_MODELS = [
+    tuple(part.strip().split("=", 1))
+    for part in os.getenv("HERMES_PROFILE_FALLBACK_MODELS", "").split(",")
+    if "=" in part
+]
 # Lifetime of the DARE-minted JWT written into a profile's .env so its MCP tools
 # (web search / page fetch) run as the project's owner, not a shared identity.
 HERMES_PROFILE_TOKEN_DAYS = int(os.getenv("HERMES_PROFILE_TOKEN_DAYS", "365"))

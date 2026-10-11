@@ -19,6 +19,7 @@ from research.services.hermes_service import (
 )
 from research.services.scout_service import (
     build_scout_instructions,
+    parse_scout_learning,
     parse_staging_items,
 )
 
@@ -31,6 +32,7 @@ __all__ = [
     "execute_pending_cancellation",
     "build_scout_instructions",
     "parse_staging_items",
+    "parse_scout_learning",
     "build_critic_instructions",
     "critic_input",
     "parse_critic_verdict",

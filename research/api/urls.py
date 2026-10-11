@@ -7,21 +7,26 @@ from rest_framework.routers import DefaultRouter
 
 from research.api.views import (
     ResearchAgentMemoryView,
-    ResearchMemoryProposalReviewView,
     ResearchAgentRunCancelView,
+    ResearchAgentRunRedirectView,
     ResearchAgentRunView,
     ResearchArtifactGenerateView,
-    ResearchChatView,
+    ResearcherStandardsView,
+    ResearchLearningView,
+    ResearchMemoryProposalReviewView,
     ResearchProjectGraphView,
+    ResearchProjectMemoryDocumentView,
     ResearchProjectOKFBundleView,
     ResearchProjectOKFExportView,
     ResearchProjectViewSet,
-    ResearchScoutView,
     ResearchSoulFileView,
     ResearchStagingItemCriticView,
     ResearchStagingItemReviewView,
     ResearchThesisSourceLinkDetailView,
     ResearchThesisSourceLinkView,
+    ResearchThreadListView,
+    ResearchThreadMessageView,
+    ResearchThreadView,
 )
 
 router = DefaultRouter()
@@ -29,14 +34,39 @@ router.register("projects", ResearchProjectViewSet, basename="research-project")
 
 urlpatterns = [
     path(
-        "projects/<int:project_id>/chat/",
-        ResearchChatView.as_view(),
-        name="research-chat",
+        "projects/<int:project_id>/threads/",
+        ResearchThreadListView.as_view(),
+        name="research-threads",
     ),
     path(
-        "projects/<int:project_id>/scout/",
-        ResearchScoutView.as_view(),
-        name="research-scout",
+        "threads/<int:thread_id>/",
+        ResearchThreadView.as_view(),
+        name="research-thread",
+    ),
+    path(
+        "threads/<int:thread_id>/messages/",
+        ResearchThreadMessageView.as_view(),
+        name="research-thread-messages",
+    ),
+    path(
+        "projects/<int:project_id>/memory/",
+        ResearchProjectMemoryDocumentView.as_view(),
+        name="research-project-memory-document",
+    ),
+    path(
+        "researcher/standards/",
+        ResearcherStandardsView.as_view(),
+        name="research-researcher-standards",
+    ),
+    path(
+        "projects/<int:project_id>/learning/",
+        ResearchLearningView.as_view(),
+        name="research-learning",
+    ),
+    path(
+        "agent-runs/<int:run_id>/redirect/",
+        ResearchAgentRunRedirectView.as_view(),
+        name="research-agent-run-redirect",
     ),
     path(
         "projects/<int:project_id>/soul/",

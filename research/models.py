@@ -18,6 +18,8 @@ from research.constants import (
     AgentRunStatus,
     AgentToolCallStatus,
     ChatMessageRole,
+    MemoryLayer,
+    MemoryProposalOrigin,
     MemoryProposalStatus,
     MemoryType,
     ProjectMemorySource,
@@ -27,6 +29,7 @@ from research.constants import (
     SourceType,
     StagingItemStatus,
     StagingSourceType,
+    ThreadEventType,
 )
 
 
@@ -156,6 +159,14 @@ class ResearchSession(BaseModel):
         blank=True,
         help_text="Timestamp of the most recent run in this session.",
     )
+    followup_pending = models.BooleanField(
+        default=False,
+        help_text=(
+            "A chat thread has events (finished Scouts, review notes) the agent "
+            "has not reacted to yet, and a turn was already running when they "
+            "arrived. The next turn to finish enqueues the follow-up."
+        ),
+    )
 
     objects = models.Manager()
     active_objects = ActiveObjectsManager()
@@ -181,9 +192,14 @@ class ResearchSession(BaseModel):
         )
 
     @classmethod
-    def get_or_create_chat_session(cls, project, user):
-        """The project's one persistent chat session (stable hermes_session_id)."""
-        return cls._get_or_create(project, user, ResearchSessionMode.CHAT)
+    def create_thread(cls, project, user, title=""):
+        """A new chat thread: its own persistent Hermes session."""
+        thread = cls.objects.create(
+            project=project, user=user, mode=ResearchSessionMode.CHAT, title=title
+        )
+        thread.hermes_session_id = f"dare-proj{project.id}-thread{thread.id}"
+        thread.save(update_fields=["hermes_session_id", "updated_at"])
+        return thread
 
     @classmethod
     def get_or_create_scout_session(cls, project, user):
@@ -313,6 +329,26 @@ class ResearchAgentRun(BaseModel):
         blank=True,
         default="",
         help_text="Correlating Hermes run id (set when Hermes is wired).",
+    )
+    thread = models.ForeignKey(
+        ResearchSession,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="thread_runs",
+        help_text=(
+            "The chat thread this run belongs to or was launched from — chat "
+            "turns, and Scouts the thread started. Review decisions on their "
+            "findings flow back into this thread."
+        ),
+    )
+    learning = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text=(
+            "What the run did because of the scholar's approved memory: "
+            "{applied: [{memory, effect}], setAside: [{title, url, reason}]}."
+        ),
     )
     cancellation_requested_at = models.DateTimeField(
         null=True,
@@ -694,6 +730,52 @@ class ResearchMemoryProposal(BaseModel):
         help_text="Scholar who accepted it, if accepted.",
     )
     accepted_at = models.DateTimeField(null=True, blank=True)
+    layer = models.CharField(
+        max_length=16,
+        choices=MemoryLayer.choices(),
+        default=MemoryLayer.PROJECT,
+        help_text="Where it lands if approved; the scholar may change it.",
+    )
+    origin = models.CharField(
+        max_length=24,
+        choices=MemoryProposalOrigin.choices(),
+        default=MemoryProposalOrigin.LEGACY,
+        help_text="Whether the agent proposed it mid-conversation or on reflection.",
+    )
+    payload = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text=(
+            "The runtime's staged write, verbatim: a memory op "
+            "({action, target, content, old_text}) or a skill op "
+            "({action, name, content, old_string, new_string, …})."
+        ),
+    )
+    pending_ref = models.CharField(
+        max_length=64,
+        blank=True,
+        default="",
+        help_text="Id of the runtime's staged write (<HERMES_HOME>/pending/…).",
+    )
+    thread = models.ForeignKey(
+        ResearchSession,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="memory_proposals",
+        help_text="Thread whose conversation produced it, when known.",
+    )
+    why = models.TextField(
+        blank=True,
+        default="",
+        help_text="Why the agent proposed it, in the scholar's terms.",
+    )
+    evidence = models.JSONField(
+        default=list,
+        blank=True,
+        help_text="Review notes it drew on: [{itemId, title, decision, note}].",
+    )
+    decided_at = models.DateTimeField(null=True, blank=True)
 
     objects = models.Manager()
     active_objects = ActiveObjectsManager()
@@ -702,6 +784,13 @@ class ResearchMemoryProposal(BaseModel):
         verbose_name = "Research Memory Proposal"
         verbose_name_plural = "Research Memory Proposals"
         ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["project", "pending_ref"],
+                condition=~models.Q(pending_ref=""),
+                name="research_proposal_unique_pending_ref",
+            )
+        ]
 
     def __str__(self):
         return f"{self.proposed_by_role or 'agent'} proposal ({self.project_id})"
@@ -748,6 +837,18 @@ class ResearchChatMessage(BaseModel):
         blank=True,
         default="",
         help_text="The message text.",
+    )
+    event_type = models.CharField(
+        max_length=32,
+        blank=True,
+        default="",
+        choices=ThreadEventType.choices(),
+        help_text="For role=event rows: what happened.",
+    )
+    payload = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="For role=event rows: the structured facts behind the event.",
     )
 
     objects = models.Manager()
@@ -1127,3 +1228,65 @@ class ResearcherProfile(BaseModel):
         if changed:
             self.content = "\n§\n".join(merged)
         return changed
+
+
+class ResearchProcedure(BaseModel):
+    """
+    A learned method ("verify a claim your way"), one row per version.
+
+    The agent proposes a procedure as a runtime skill write; once the scholar
+    approves it, DARE stores the full SKILL.md here and renders it into the
+    profiles it applies to. ``project`` null means researcher-wide — every
+    project the scholar owns gets it.
+    """
+
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="research_procedures",
+        help_text="The scholar this method belongs to.",
+    )
+    project = models.ForeignKey(
+        ResearchProject,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="procedures",
+        help_text="Set for a project-only procedure; null means researcher-wide.",
+    )
+    name = models.CharField(
+        max_length=64,
+        help_text="Skill name (directory name in the runtime's skills tree).",
+    )
+    description = models.CharField(max_length=512, blank=True, default="")
+    content = models.TextField(help_text="The full SKILL.md at this version.")
+    version = models.PositiveIntegerField(default=1)
+    is_current = models.BooleanField(
+        default=True, help_text="The version rendered into profiles."
+    )
+    proposal = models.ForeignKey(
+        ResearchMemoryProposal,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="procedures",
+        help_text="The approved proposal that produced this version.",
+    )
+
+    objects = models.Manager()
+    active_objects = ActiveObjectsManager()
+
+    class Meta:
+        verbose_name = "Research Procedure"
+        verbose_name_plural = "Research Procedures"
+        ordering = ["name", "-version"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["user", "project", "name", "version"],
+                name="research_procedure_unique_version",
+                nulls_distinct=False,
+            )
+        ]
+
+    def __str__(self):
+        return f"{self.name} v{self.version} ({self.user_id})"

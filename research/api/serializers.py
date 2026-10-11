@@ -10,7 +10,12 @@ renderer emits exactly the camelCase shape the frontend expects
 from rest_framework import serializers
 
 from research.constants import (
+    LIVE_RUN_STATUSES,
+    AgentRunStatus,
+    ChatMessageRole,
     MemoryProposalStatus,
+    ProjectMemorySource,
+    SoulFileOrigin,
     SourceType,
     StagingItemStatus,
     soul_template_content,
@@ -24,11 +29,14 @@ from research.models import (
     ResearchMemoryProposal,
     ResearchProject,
     ResearchProjectMemory,
+    ResearchSession,
     ResearchSource,
     ResearchStagingItem,
     SoulFile,
     SoulFileVersion,
 )
+from research.services.learning_service import proposal_payload
+from research.services.thread_service import CHAT_ROLE, scout_summary
 
 
 class ResearchProjectSerializer(serializers.ModelSerializer):
@@ -43,6 +51,20 @@ class ResearchProjectSerializer(serializers.ModelSerializer):
         required=False,
         write_only=True,
         help_text="Optional source files to attach on create.",
+    )
+    project_memory = serializers.ListField(
+        child=serializers.CharField(max_length=600, trim_whitespace=True),
+        required=False,
+        write_only=True,
+        max_length=40,
+        help_text="The project's MEMORY.md entries written in the wizard.",
+    )
+    soul_content = serializers.CharField(
+        required=False,
+        write_only=True,
+        allow_blank=True,
+        max_length=20000,
+        help_text="SOUL.md as built in the Standards step; replaces the template.",
     )
 
     class Meta:
@@ -59,6 +81,8 @@ class ResearchProjectSerializer(serializers.ModelSerializer):
             "approved_count",
             "source_count",
             "sources",
+            "project_memory",
+            "soul_content",
             "created_at",
             "updated_at",
         ]
@@ -85,7 +109,19 @@ class ResearchProjectSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         source_files = validated_data.pop("sources", [])
+        soul_override = validated_data.pop("soul_content", None)
+        scope = [line for line in validated_data.pop("project_memory", []) if line]
         project = super().create(validated_data)
+        # Facts about the inquiry live in project memory, not in SOUL.md: the
+        # soul file is who the agent is, and Hermes keeps the two apart.
+        for line in scope:
+            ResearchProjectMemory.objects.create(
+                project=project,
+                added_by=project.user,
+                label=line.split(":", 1)[0][:255] if ":" in line[:60] else "Scope",
+                detail=line,
+                source=ProjectMemorySource.MANUAL,
+            )
         for item in source_files:
             ResearchSource.objects.create(
                 project=project,
@@ -98,6 +134,8 @@ class ResearchProjectSerializer(serializers.ModelSerializer):
         # Every project starts with a versioned soul file (v1) seeded from the
         # chosen standards template (or empty for a custom/blank start).
         content, origin = soul_template_content(project.standards_template)
+        if soul_override is not None and soul_override.strip() != content.strip():
+            content, origin = soul_override.strip(), SoulFileOrigin.EDIT
         soul = SoulFile.objects.create(project=project)
         SoulFileVersion.objects.create(
             soul_file=soul,
@@ -107,6 +145,28 @@ class ResearchProjectSerializer(serializers.ModelSerializer):
             created_by=project.user,
         )
         return project
+
+
+class ProjectMemoryDocumentSerializer(serializers.Serializer):
+    """A project's MEMORY.md as the scholar edits it — one entry per item."""
+
+    entries = serializers.ListField(
+        child=serializers.CharField(
+            max_length=600, trim_whitespace=True, allow_blank=True
+        ),
+        max_length=40,
+    )
+
+
+class ResearcherStandardsSerializer(serializers.Serializer):
+    """The scholar's researcher-wide standards — one rule per entry."""
+
+    standards = serializers.ListField(
+        child=serializers.CharField(
+            max_length=400, trim_whitespace=True, allow_blank=True
+        ),
+        max_length=40,
+    )
 
 
 class ResearchSourceSerializer(serializers.ModelSerializer):
@@ -169,6 +229,7 @@ class ResearchAgentRunSerializer(serializers.ModelSerializer):
     staged_count = serializers.SerializerMethodField()
     tool_calls = serializers.SerializerMethodField()
     cancellation = serializers.SerializerMethodField()
+    focus = serializers.SerializerMethodField()
 
     class Meta:
         model = ResearchAgentRun
@@ -188,10 +249,16 @@ class ResearchAgentRunSerializer(serializers.ModelSerializer):
             "completed_at",
             "ran_at",
             "hermes_run_id",
+            "thread",
+            "learning",
+            "focus",
             "tool_calls",
             "cancellation",
         ]
         read_only_fields = fields
+
+    def get_focus(self, obj):
+        return (obj.selected_context or {}).get("focus") or ""
 
     def get_ran_at(self, obj):
         return obj.started_at or obj.created_at
@@ -261,17 +328,100 @@ class ResearchMemoryProposalSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ResearchMemoryProposal
-        fields = ["id", "role", "content", "memory_type", "status", "proposed_at"]
+        fields = [
+            "id",
+            "role",
+            "content",
+            "memory_type",
+            "layer",
+            "origin",
+            "why",
+            "evidence",
+            "thread",
+            "status",
+            "proposed_at",
+        ]
         read_only_fields = fields
 
 
 class ResearchChatMessageSerializer(serializers.ModelSerializer):
-    """One message in a project's chat transcript."""
+    """One thread row: a scholar or agent message, or a DARE event."""
 
     class Meta:
         model = ResearchChatMessage
-        fields = ["id", "role", "content", "created_at"]
+        fields = ["id", "role", "content", "event_type", "payload", "run", "created_at"]
         read_only_fields = fields
+
+
+class ResearchThreadSerializer(serializers.ModelSerializer):
+    """A chat thread in the thread list."""
+
+    preview = serializers.SerializerMethodField()
+    message_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ResearchSession
+        fields = [
+            "id",
+            "title",
+            "preview",
+            "message_count",
+            "last_run_at",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+    def get_preview(self, obj):
+        last = (
+            ResearchChatMessage.active_objects.filter(
+                session=obj, role__in=[ChatMessageRole.USER, ChatMessageRole.ASSISTANT]
+            )
+            .order_by("-created_at")
+            .values_list("content", flat=True)
+            .first()
+        )
+        return (last or "")[:140]
+
+    def get_message_count(self, obj):
+        return ResearchChatMessage.active_objects.filter(
+            session=obj, role__in=[ChatMessageRole.USER, ChatMessageRole.ASSISTANT]
+        ).count()
+
+
+def thread_detail(thread):
+    """The thread view payload: transcript, Scouts, proposals, live state."""
+    messages = ResearchChatMessage.active_objects.filter(session=thread).order_by(
+        "created_at"
+    )
+    scouts = ResearchAgentRun.active_objects.filter(
+        thread=thread, role="scout"
+    ).order_by("created_at")
+    last_turn = (
+        ResearchAgentRun.active_objects.filter(thread=thread, role=CHAT_ROLE)
+        .order_by("-created_at")
+        .first()
+    )
+
+    def turn(states):
+        if last_turn is None or last_turn.status not in states:
+            return None
+        return {
+            "runId": last_turn.id,
+            "followup": bool((last_turn.selected_context or {}).get("followup")),
+            "status": last_turn.status,
+        }
+
+    proposals = ResearchMemoryProposal.active_objects.filter(thread=thread).order_by(
+        "created_at"
+    )
+    return {
+        "thread": ResearchThreadSerializer(thread).data,
+        "messages": ResearchChatMessageSerializer(messages, many=True).data,
+        "scouts": [scout_summary(run) for run in scouts],
+        "proposals": {p.id: proposal_payload(p) for p in proposals},
+        "activeTurn": turn(LIVE_RUN_STATUSES),
+        "lastTurnFailed": turn({AgentRunStatus.FAILED, AgentRunStatus.OUTCOME_UNKNOWN}),
+    }
 
 
 class ResearchStagingItemSerializer(serializers.ModelSerializer):
@@ -299,9 +449,15 @@ class ResearchStagingItemSerializer(serializers.ModelSerializer):
             "later_reason",
             "critic_metadata",
             "review_metadata",
+            "thread_id",
             "created_at",
         ]
         read_only_fields = fields
+
+    thread_id = serializers.SerializerMethodField()
+
+    def get_thread_id(self, obj):
+        return obj.run.thread_id if obj.run_id and obj.run else None
 
 
 class ResearchKnowledgeItemSerializer(serializers.ModelSerializer):

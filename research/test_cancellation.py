@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock, patch
 
 import requests
+from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.test import TestCase
@@ -22,6 +23,15 @@ from research.tasks import run_artifact_job, run_critic_job, run_scout_job
 from users.constants import RoleChoice
 
 User = get_user_model()
+
+
+async def _collect(response):
+    return b"".join([chunk async for chunk in response.streaming_content])
+
+
+def read_stream(response):
+    """The SSE body of a chat turn (served as an async stream under ASGI)."""
+    return async_to_sync(_collect)(response).decode()
 
 
 class ResearchCancellationTests(TestCase):
@@ -400,6 +410,7 @@ class ResearchChatTerminalTests(TestCase):
             key="enable_research", defaults={"default_enabled": True}
         )
         self.project = ResearchProject.objects.create(user=self.user, title="Chat R2")
+        self.thread = ResearchSession.create_thread(self.project, self.user)
         self.client = APIClient()
         self.client.force_authenticate(self.user)
 
@@ -417,14 +428,16 @@ class ResearchChatTerminalTests(TestCase):
         )
         hermes.get_run.return_value = {"status": "cancelled"}
 
-        with patch("research.api.views.get_hermes_service", return_value=hermes):
+        with patch(
+            "research.services.chat_service.get_hermes_service", return_value=hermes
+        ):
             response = self.client.post(
-                f"/api/research/projects/{self.project.id}/chat/",
+                f"/api/research/threads/{self.thread.id}/messages/",
                 {"message": "hello"},
                 format="json",
                 HTTP_ACCEPT="text/event-stream",
             )
-            body = b"".join(response.streaming_content).decode()
+            body = read_stream(response)
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("cancelled", body)
@@ -440,14 +453,16 @@ class ResearchChatTerminalTests(TestCase):
         hermes.stream_events.return_value = iter([{"event": "run.failed"}])
         hermes.get_run.return_value = {"status": "failed", "error": "unsafe detail"}
 
-        with patch("research.api.views.get_hermes_service", return_value=hermes):
+        with patch(
+            "research.services.chat_service.get_hermes_service", return_value=hermes
+        ):
             response = self.client.post(
-                f"/api/research/projects/{self.project.id}/chat/",
+                f"/api/research/threads/{self.thread.id}/messages/",
                 {"message": "hello"},
                 format="json",
                 HTTP_ACCEPT="text/event-stream",
             )
-            body = b"".join(response.streaming_content).decode()
+            body = read_stream(response)
 
         self.assertIn("failed", body)
         run = ResearchAgentRun.objects.get(hermes_run_id="chat_failed")
