@@ -262,7 +262,7 @@ class DocumentEnrichmentReadingOrderTests(SimpleTestCase):
 
         self.assertLess(text.index("Results"), text.index("line chart"))
         self.assertLess(text.index("line chart"), text.index("discussion"))
-        self.assertIn("Machine-generated figure description", text)
+        self.assertIn("Figure description", text)
 
     def test_rebuild_keeps_native_paragraph_that_docling_clipped(self):
         complete = (
@@ -306,7 +306,7 @@ class DocumentEnrichmentReadingOrderTests(SimpleTestCase):
         )
 
         self.assertIn("first running back to win Super Bowl MVP", text)
-        self.assertIn("Machine-generated figure description", text)
+        self.assertIn("Figure description", text)
 
     def test_full_page_transcription_replaces_scan_regions_once(self):
         parsed = ParsedDocument(
@@ -359,7 +359,7 @@ class DocumentEnrichmentReadingOrderTests(SimpleTestCase):
         )
 
         self.assertIn("hockey", text)
-        self.assertIn("Machine-generated page description", text)
+        self.assertIn("Image description", text)
 
 
 class DocumentModelContextTests(SimpleTestCase):
