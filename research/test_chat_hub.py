@@ -37,7 +37,12 @@ from research.services.learning_service import (
     render_learning,
     sync_pending_learning,
 )
-from research.services.profile_service import profile_home_for
+from research.services.profile_service import (
+    ensure_project_profile,
+    profile_home_for,
+    read_env_token,
+    token_names_user,
+)
 from research.services.thread_service import (
     on_run_finished,
     run_token,
@@ -767,3 +772,23 @@ class MemoryNearDuplicateTests(ProfileRootMixin, TestCase):
         self.assertEqual(
             ResearchProjectMemory.active_objects.filter(project=self.project).count(), 1
         )
+
+
+class ProfileTokenTests(ProfileRootMixin, TestCase):
+    def test_a_token_from_an_old_jwt_scheme_is_reminted(self):
+        env_path = profile_home_for(self.project) / ".env"
+        env_path.write_text("MCP_DARE_API_KEY=signed-under-the-old-key\n")
+
+        ensure_project_profile(self.project)
+
+        token = read_env_token(env_path)
+        self.assertTrue(token_names_user(token, self.user))
+
+    def test_a_valid_token_is_left_alone(self):
+        ensure_project_profile(self.project)
+        env_path = profile_home_for(self.project) / ".env"
+        first = read_env_token(env_path)
+
+        ensure_project_profile(self.project)
+
+        self.assertEqual(read_env_token(env_path), first)

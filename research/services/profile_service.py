@@ -26,6 +26,8 @@ from pathlib import Path
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
+from rest_framework_simplejwt.exceptions import TokenError
+from rest_framework_simplejwt.settings import api_settings as jwt_settings
 from rest_framework_simplejwt.tokens import AccessToken
 
 logger = logging.getLogger(__name__)
@@ -63,6 +65,13 @@ def profile_base_url_for(project):
     return f"{gateway}/p/{profile_name_for(project)}/"
 
 
+def mint_service_token(user):
+    """A long-lived access token Hermes presents to DARE's MCP gateway as ``user``."""
+    token = AccessToken.for_user(user)
+    token.set_exp(lifetime=timedelta(days=settings.HERMES_PROFILE_TOKEN_DAYS))
+    return token
+
+
 def mint_project_token(project):
     """A long-lived access token for the project's owner.
 
@@ -70,9 +79,52 @@ def mint_project_token(project):
     `fetch_page` run under the owner's account and every captured GatewayFetch
     row is attributed to the right scholar instead of one shared identity.
     """
-    token = AccessToken.for_user(project.user)
-    token.set_exp(lifetime=timedelta(days=settings.HERMES_PROFILE_TOKEN_DAYS))
-    return str(token)
+    return str(mint_service_token(project.user))
+
+
+def token_names_user(raw_token, user):
+    """Whether ``raw_token`` still authenticates as ``user`` under DARE's current JWT scheme.
+
+    False once the signing key or identity claim changes, or the token expires, so
+    a stored token is re-minted instead of silently failing every tool call.
+    """
+    try:
+        token = AccessToken(raw_token)
+    except TokenError:
+        return False
+    return token.get(jwt_settings.USER_ID_CLAIM) == getattr(
+        user, jwt_settings.USER_ID_FIELD
+    )
+
+
+def read_env_token(env_path):
+    """The ``MCP_DARE_API_KEY`` value in an env file, or "" if absent."""
+    try:
+        lines = Path(env_path).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ""
+    prefix = f"{_TOKEN_VAR}="
+    for line in lines:
+        if line.startswith(prefix):
+            return line[len(prefix) :].strip().strip("\"'")
+    return ""
+
+
+def write_env_token(env_path, raw_token):
+    """Set ``MCP_DARE_API_KEY`` in an env file, keeping every other line as it was."""
+    env_path = Path(env_path)
+    try:
+        lines = env_path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        lines = []
+    prefix = f"{_TOKEN_VAR}="
+    entry = f"{prefix}{raw_token}"
+    if any(line.startswith(prefix) for line in lines):
+        lines = [entry if line.startswith(prefix) else line for line in lines]
+    else:
+        lines.append(entry)
+    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    env_path.chmod(0o600)
 
 
 def _render_config(project):
@@ -137,7 +189,8 @@ def _render_config(project):
         "tools:\n"
         "  tool_search:\n"
         "    enabled: false\n"
-        "\n"        "# A Scout searches, reads and stages one tool call at a time; a low\n"
+        "\n"
+        "# A Scout searches, reads and stages one tool call at a time; a low\n"
         "# global ceiling ends it mid-search with nothing staged.\n"
         "agent:\n"
         f"  max_turns: {settings.HERMES_PROFILE_MAX_TURNS}\n"
@@ -208,12 +261,11 @@ def ensure_project_profile(project, *, refresh_token=False):
         _write_if_changed(home / _CONFIG_FILENAME, _render_config(project))
 
         env_path = home / _ENV_FILENAME
-        if refresh_token or not env_path.exists():
-            # 0600: this file holds a year-long token for the project's owner.
-            env_path.write_text(
-                f"{_TOKEN_VAR}={mint_project_token(project)}\n", encoding="utf-8"
-            )
-            env_path.chmod(0o600)
+        if refresh_token or not token_names_user(
+            read_env_token(env_path), project.user
+        ):
+            write_env_token(env_path, mint_project_token(project))
+            logger.info("Minted a fresh MCP token for Hermes profile %s", name)
     except OSError as exc:
         # Provisioning is best-effort: a project that cannot get its own profile
         # must still work, so fall back to the shared default rather than 500.

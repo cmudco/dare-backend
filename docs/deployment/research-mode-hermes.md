@@ -222,6 +222,18 @@ hermes mcp add dare --url https://<dare-host>/mcp/api/gateway/ \
   --header "Authorization: Bearer ${MCP_DARE_API_KEY}"
 ```
 
+Mint `MCP_DARE_API_KEY` from DARE, which writes it into `~/.hermes/.env` without
+printing it:
+
+```bash
+python manage.py mint_hermes_token --email <researcher-email>
+hermes gateway restart
+```
+
+Re-run both whenever DARE's JWT scheme changes (signing key or identity claim)
+or the token expires; until then every tool call fails with 401. Per-project
+profile tokens re-mint themselves on the next run.
+
 Then pin the tool allowlist in `~/.hermes/config.yaml` so the agent is offered
 exactly the two working builtins:
 
