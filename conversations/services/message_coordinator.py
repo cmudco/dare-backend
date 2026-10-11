@@ -77,6 +77,7 @@ from core.services.llm_service import LLMService
 from core.services.sb_client import SocraticBooksClient
 from dare_tools.services.retrieval_tool_executor import RetrievalScope
 from memory.tasks import run_memory_writer
+from users.constants import AuthSourceChoice
 from users.utils import should_run_learning_progress
 
 logger = logging.getLogger(__name__)
@@ -632,6 +633,19 @@ class MessageCoordinator:
         finally:
             self._generation_tasks.pop(message_obj.id, None)
 
+    async def _record_history_limit(self, history_limit: int) -> None:
+        """Keep the conversation's stored window equal to what the bot replays."""
+        if self.conversation.history_limit == history_limit:
+            return
+        # A queryset update, not save(): the first turn's title task refreshes
+        # this same instance concurrently and would reset the field before save.
+        await database_sync_to_async(
+            Conversation.active_objects.filter(pk=self.conversation.pk)
+            .exclude(history_limit=history_limit)
+            .update
+        )(history_limit=history_limit)
+        self.conversation.history_limit = history_limit
+
     async def _ensemble_for_turn(self, message_data: Dict[str, Any]):
         """The turn's ensemble request, or None when the feature is off for this user.
 
@@ -707,6 +721,8 @@ class MessageCoordinator:
                 message_obj=message_obj,
                 platform=self.platform,
             )
+            if self.platform == AuthSourceChoice.SOCRATIC_BOTS:
+                await self._record_history_limit(request.context.history_limit)
 
             # Image generation / audio transcription bypass the tool loop —
             # single-pass flows with their own usage payloads.

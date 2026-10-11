@@ -139,7 +139,12 @@ class LLMQueryRequestBuilder:
         bot_meta = message_data.get("bot_meta", {})
         socratic_enabled = is_socratic_bots and not message_data.get("prompt_id")
         if is_socratic_bots:
-            context = replace(context, history_limit=SOCRATIC_HISTORY_LIMIT)
+            context = replace(
+                context,
+                history_limit=message_data.get(
+                    "socratic_history_limit", SOCRATIC_HISTORY_LIMIT
+                ),
+            )
 
         # Get max_tokens from message_data with default
         max_tokens = message_data.get("max_tokens", 8000)
