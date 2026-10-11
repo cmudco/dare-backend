@@ -64,6 +64,22 @@ class CapabilityResolutionTests(SimpleTestCase):
         )
         self.assertFalse(capabilities.supports_temperature)
 
+    def test_current_generation_proxy_models_drop_temperature(self):
+        # These reject any temperature but the default with a 400.
+        for identifier in (
+            "us.anthropic.claude-haiku-5-5",
+            "claude-sonnet-5-5",
+            "claude-opus-5-5",
+            "claude-fable-5-1",
+            "gpt-6.1-sol",
+            "gpt-6-luna",
+        ):
+            with self.subTest(identifier=identifier):
+                capabilities = ModelCapabilities.from_llm(
+                    SimpleNamespace(identifier=identifier, provider="custom")
+                )
+                self.assertFalse(capabilities.supports_temperature)
+
     def test_explicit_flag_outranks_the_family(self):
         capabilities = ModelCapabilities.from_llm(
             SimpleNamespace(

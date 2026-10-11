@@ -65,7 +65,7 @@ class ModelFamily:
 FAMILIES: Tuple[ModelFamily, ...] = (
     ModelFamily(
         key="gpt-5-reasoning",
-        patterns=(re.compile(r"(?:^|-)gpt-5(?:[.-]|$)"),),
+        patterns=(re.compile(r"(?:^|-)gpt-[56](?:[.-]|$)"),),
         is_reasoning=True,
         supports_temperature=False,
     ),
@@ -77,7 +77,12 @@ FAMILIES: Tuple[ModelFamily, ...] = (
     ),
     ModelFamily(
         key="claude-reasoning-effort",
-        patterns=(re.compile(r"(?:^|-)claude-(?:opus-4-[78]|sonnet-5)(?:-|$)"),),
+        patterns=(
+            re.compile(
+                r"(?:^|-)claude-(?:opus-4-[78]|opus-5|sonnet-5|haiku-5|fable|mythos)"
+                r"(?:-|$)"
+            ),
+        ),
         supports_temperature=False,
         supports_effort=True,
         supports_adaptive_thinking=True,
