@@ -368,7 +368,11 @@ class ResearchAgentRunRedirectView(ResearchAPIView):
             )
         replacement = redirect_scout(run, instruction)
         return Response(
-            {"runId": replacement.id, "replacedRunId": run.id},
+            {
+                "runId": replacement.id,
+                "replacedRunId": run.id if replacement.id != run.id else None,
+                "steered": replacement.id == run.id,
+            },
             status=status.HTTP_202_ACCEPTED,
         )
 

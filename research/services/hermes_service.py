@@ -291,6 +291,30 @@ class HermesService:
             detail="Hermes returned an unexpected stop status.",
         )
 
+    def steer_run(self, hermes_run_id, text, timeout=15):
+        """Inject guidance into a running agent; True when Hermes accepted it.
+
+        The run keeps its context and work in flight, unlike stop-and-restart.
+        Hermes answers 409 when the run is not mid-turn, so False means the
+        caller should fall back to a fresh run.
+        """
+        try:
+            resp = requests.post(
+                f"{self.base_url}/v1/runs/{hermes_run_id}/steer",
+                headers=self._headers(json_body=True),
+                json={"text": text},
+                timeout=timeout,
+            )
+        except requests.RequestException as exc:
+            logger.warning("Could not steer Hermes run %s: %s", hermes_run_id, exc)
+            return False
+        if resp.status_code != 200:
+            return False
+        try:
+            return bool(resp.json().get("accepted"))
+        except ValueError:
+            return False
+
     def fetch_usage(self, hermes_run_id, timeout=30):
         """
         Fetch a finished run's token usage from the run summary. Best-effort

@@ -197,11 +197,27 @@ def launch_scouts(thread, scouts):
 
 
 def redirect_scout(run, instruction):
-    """Stop ``run`` and start a replacement that follows ``instruction``."""
-    if run.status in LIVE_RUN_STATUSES:
+    """Point ``run`` at ``instruction``; returns the run that now carries it.
+
+    A Scout that is mid-turn is steered in place, so it keeps what it has
+    already read. One that is not running is replaced by a fresh Scout.
+    """
+    if run.status in LIVE_RUN_STATUSES and run.hermes_run_id:
+        from research.services.hermes_service import get_hermes_service
+
+        hermes = get_hermes_service(run.project)
+        if hermes.steer_run(
+            run.hermes_run_id, f"New direction from the user: {instruction}"
+        ):
+            context = dict(run.selected_context or {})
+            context["redirects"] = [*context.get("redirects", []), instruction]
+            run.selected_context = context
+            run.status_detail = f"Redirected: {instruction[:120]}"
+            run.save(update_fields=["selected_context", "status_detail", "updated_at"])
+            return run
         request_run_cancellation(run.id, run.user)
     focus = (run.selected_context or {}).get("focus") or "Scout"
-    task = f"{run.task}\n\nThe scholar redirected this search: {instruction}"
+    task = f"{run.task}\n\nThe user redirected this search: {instruction}"
     depth = (run.selected_context or {}).get("depth") or "deep"
     return launch_scouts(
         run.thread, [{"focus": f"{focus} (redirected)", "task": task, "depth": depth}]
