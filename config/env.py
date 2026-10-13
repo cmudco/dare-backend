@@ -169,6 +169,8 @@ HERMES_PROFILE_TOKEN_DAYS = int(os.getenv("HERMES_PROFILE_TOKEN_DAYS", "365"))
 # reading and resolves the outcome from Hermes's pollable run record instead.
 # Generous: a deep run can think for a while between tool calls. See
 # HermesService.stream_events for why a plain socket timeout is not enough.
+# How long DARE keeps polling a run whose event stream went quiet.
+HERMES_RUN_WAIT_SECONDS = int(os.getenv("HERMES_RUN_WAIT_SECONDS", "1800"))
 HERMES_STREAM_IDLE_SECONDS = int(os.getenv("HERMES_STREAM_IDLE_SECONDS", "180"))
 # Where a profile's MCP client reaches back to DARE. This is written into each
 # profile's config.yaml, so it must be resolvable from the machine running the

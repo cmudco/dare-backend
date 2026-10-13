@@ -11,6 +11,7 @@ polls the run for live status and only DARE writes to the database.
 import logging
 import time
 
+from django.conf import settings
 from django.utils import timezone
 from django_rq import job
 
@@ -133,6 +134,15 @@ def _cancel_before_hermes_start(run):
     return True
 
 
+_STILL_WORKING = {
+    AgentRunStatus.STARTED,
+    AgentRunStatus.QUEUED,
+    AgentRunStatus.RUNNING,
+    AgentRunStatus.WAITING_FOR_APPROVAL,
+    AgentRunStatus.STOPPING,
+}
+
+
 def _verify_terminal_run(hermes, run, interrupted_detail):
     """Resolve ambiguous SSE termination through Hermes's pollable run state.
 
@@ -155,6 +165,18 @@ def _verify_terminal_run(hermes, run, interrupted_detail):
         return None
 
     status = str(terminal.get("status") or "").lower()
+    # The stream can go quiet while a run is still working (a slow page read
+    # outlasts the idle timeout). Wait for Hermes to finish rather than leave
+    # the run "pending" with nothing left to resolve it.
+    deadline = time.monotonic() + settings.HERMES_RUN_WAIT_SECONDS
+    while status in _STILL_WORKING and time.monotonic() < deadline:
+        _set_status(run, "Still working…")
+        time.sleep(5)
+        try:
+            terminal = hermes.get_run(run.hermes_run_id)
+        except Exception:  # noqa: BLE001 - keep waiting; the next poll may answer
+            continue
+        status = str(terminal.get("status") or "").lower()
     if status == AgentRunStatus.COMPLETED:
         output = terminal.get("output")
         return output if isinstance(output, str) else ""

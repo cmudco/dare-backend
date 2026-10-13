@@ -922,3 +922,33 @@ class SpendCapTests(ProfileRootMixin, TestCase):
         self.assertEqual(
             ResearchAgentRun.objects.filter(thread=self.thread, role="scout").count(), 1
         )
+
+
+class QuietStreamTests(ProfileRootMixin, TestCase):
+    def test_a_run_that_outlasts_a_quiet_stream_still_resolves(self):
+        from research.tasks import _verify_terminal_run
+
+        run = ResearchAgentRun.objects.create(
+            session=self.thread,
+            thread=self.thread,
+            project=self.project,
+            user=self.user,
+            role="scout",
+            mode=ResearchSessionMode.SCOUT,
+            status=AgentRunStatus.RUNNING,
+            hermes_run_id="run_slow",
+        )
+        hermes = type("Hermes", (), {})()
+        replies = iter(
+            [
+                {"status": "running"},
+                {"status": "running"},
+                {"status": "completed", "output": "done"},
+            ]
+        )
+        hermes.get_run = lambda run_id: next(replies)
+
+        with patch("research.tasks.time.sleep"):
+            output = _verify_terminal_run(hermes, run, "interrupted")
+
+        self.assertEqual(output, "done")
