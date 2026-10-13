@@ -44,6 +44,7 @@ from research.services import (
 )
 from research.services.audit_service import record_tool_call, token_count
 from research.services.chat_service import TurnStartFailed, start_turn, stream_turn
+from research.services.cost_service import set_run_cost
 from research.services.learning_service import sync_pending_learning
 from research.services.staging_service import merge_learning, stage_candidate
 from research.services.thread_service import (
@@ -86,6 +87,7 @@ def _finish(run, detail, hermes, failed=False, raw_output=None):
     run.completed_at = timezone.now()
     run.usage = hermes.fetch_usage(run.hermes_run_id)
     fields = ["status", "status_detail", "completed_at", "usage", "updated_at"]
+    fields += set_run_cost(run)
     if raw_output is not None:
         run.raw_output = raw_output
         fields.append("raw_output")
@@ -114,6 +116,7 @@ def _save_verified_status(run, status, detail, *, terminal=False, usage=None):
     if isinstance(usage, dict):
         run.usage = usage
         fields.append("usage")
+        fields += set_run_cost(run)
     run.save(update_fields=fields)
 
 

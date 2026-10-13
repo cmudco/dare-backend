@@ -56,6 +56,7 @@ from research.models import (
 )
 from research.services import get_hermes_service, request_run_cancellation
 from research.services.chat_service import TurnStartFailed, start_turn, stream_turn
+from research.services.cost_service import SpendCapReached, check_spend_cap
 from research.services.graph_service import build_evidence_graph
 from research.services.learning_service import (
     ProposalConflict,
@@ -260,6 +261,12 @@ class ResearchThreadMessageView(ResearchAPIView):
             thread.title = message[:80]
             thread.save(update_fields=["title", "updated_at"])
         scout_now = request.data.get("mode") == "scout"
+        try:
+            check_spend_cap(thread.project)
+        except SpendCapReached as exc:
+            return Response(
+                {"error": str(exc)}, status=status.HTTP_402_PAYMENT_REQUIRED
+            )
         try:
             run, hermes = start_turn(thread, request.user, message, scout_now=scout_now)
         except TurnStartFailed as exc:

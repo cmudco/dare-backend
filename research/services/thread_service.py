@@ -234,6 +234,7 @@ def scout_summary(run):
         "status": run.status,
         "statusDetail": run.status_detail,
         "staged": items.count(),
+        "cost": float(run.cost or 0),
         "titles": list(items.values_list("title", flat=True)[:12]),
         "applied": learning.get("applied") or [],
         "setAside": learning.get("setAside") or [],

@@ -14,6 +14,7 @@ from django.db.models import Q
 
 from research.constants import MAX_SCOUTS_PER_LAUNCH
 from research.models import ResearchAgentRun, ResearchKnowledgeItem
+from research.services.cost_service import SpendCapReached, check_spend_cap
 from research.services.staging_service import (
     EVIDENCE_LABELS,
     SOURCE_KINDS,
@@ -214,6 +215,10 @@ def _scouts(arguments):
 
 def _launch(thread, arguments):
     scouts = _scouts(arguments)
+    try:
+        check_spend_cap(thread.project)
+    except SpendCapReached as exc:
+        raise ToolInputError(str(exc)) from exc
     runs = launch_scouts(
         thread, [{"focus": s.focus, "task": s.task, "depth": s.depth} for s in scouts]
     )

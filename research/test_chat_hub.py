@@ -878,3 +878,32 @@ class ProfileTokenTests(ProfileRootMixin, TestCase):
         self.assertEqual(keys[0], profile_api_key(self.project))
         self.assertNotEqual(keys[0], keys[1])
         self.assertGreaterEqual(len(keys[0]), 16)
+
+
+class SpendCapTests(ProfileRootMixin, TestCase):
+    @override_settings(RESEARCH_PROJECT_SPEND_CAP_USD=1.0)
+    def test_scouts_do_not_launch_past_the_project_cap(self):
+        ResearchAgentRun.objects.create(
+            session=self.thread,
+            thread=self.thread,
+            project=self.project,
+            user=self.user,
+            role="scout",
+            mode=ResearchSessionMode.SCOUT,
+            status=AgentRunStatus.COMPLETED,
+            cost=1.5,
+        )
+
+        text, is_error = call_thread_tool(
+            "launch_scouts",
+            {
+                "thread": thread_token(self.thread),
+                "scouts": [{"focus": "fees", "task": "Compare fund fees"}],
+            },
+        )
+
+        self.assertFalse(is_error)
+        self.assertIn("research budget", text)
+        self.assertEqual(
+            ResearchAgentRun.objects.filter(thread=self.thread, role="scout").count(), 1
+        )

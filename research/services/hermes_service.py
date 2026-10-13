@@ -17,7 +17,13 @@ import requests
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
-_SAFE_USAGE_FIELDS = ("input_tokens", "output_tokens", "total_tokens")
+_SAFE_USAGE_FIELDS = (
+    "input_tokens",
+    "output_tokens",
+    "total_tokens",
+    "cache_read_tokens",
+    "cache_write_tokens",
+)
 
 
 def safe_hermes_usage(value):

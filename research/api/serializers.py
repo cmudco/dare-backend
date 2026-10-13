@@ -7,6 +7,7 @@ renderer emits exactly the camelCase shape the frontend expects
 ``standardsTemplate``).
 """
 
+from django.db.models import Sum
 from rest_framework import serializers
 
 from research.constants import (
@@ -420,6 +421,12 @@ def thread_detail(thread):
         "messages": ResearchChatMessageSerializer(messages, many=True).data,
         "scouts": [scout_summary(run) for run in scouts],
         "proposals": {p.id: proposal_payload(p) for p in proposals},
+        "cost": float(
+            ResearchAgentRun.active_objects.filter(thread=thread).aggregate(
+                total=Sum("cost")
+            )["total"]
+            or 0
+        ),
         "activeTurn": turn(LIVE_RUN_STATUSES),
         "lastTurnFailed": turn({AgentRunStatus.FAILED, AgentRunStatus.OUTCOME_UNKNOWN}),
     }

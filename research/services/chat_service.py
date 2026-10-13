@@ -19,6 +19,7 @@ from research.constants import (
 )
 from research.models import ResearchAgentRun, ResearchChatMessage, SoulFile
 from research.services.audit_service import record_tool_call
+from research.services.cost_service import set_run_cost
 from research.services.hermes_service import get_hermes_service, safe_hermes_usage
 from research.services.learning_service import sync_pending_learning
 from research.services.thread_service import (
@@ -202,6 +203,7 @@ def _settle(run, status, detail, *, terminal, usage=None, error=""):
     if usage:
         run.usage = usage
         fields.append("usage")
+        fields += set_run_cost(run)
     if error:
         run.error = error
         fields.append("error")
