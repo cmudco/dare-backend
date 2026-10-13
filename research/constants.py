@@ -1,15 +1,9 @@
 """
-Constants for the Research app (Research Mode / the "epistemic ecosystem").
+Constants for the Research app.
 
-Naming follows the house style: choice groups are plain classes exposing a
-``choices()`` classmethod (see ``mcp/constants.py``).
-
-Only ``ResearchProjectStatus`` is enforced at the DB level — it is a workflow
-state DARE itself sets. ``StandardsTemplate`` is kept here as a canonical
-reference set for the UI/docs. Enabled tools are NOT modelled here: they are
-stored as free-form slugs in ``ResearchProject.enabled_tools`` (the user's
-connected MCP integrations, plus built-ins like web search), so there is no
-hardcoded tool enum to keep in sync.
+Choice groups are plain classes exposing a ``choices()`` classmethod (see
+``mcp/constants.py``). Enabled tools are not modelled here: they are free-form
+slugs in ``ResearchProject.enabled_tools`` (connected MCP servers plus web).
 """
 
 
@@ -27,29 +21,8 @@ class ResearchProjectStatus:
         ]
 
 
-class StandardsTemplate:
-    """Known soul-file starter templates (free-form; NOT enforced at the DB level)."""
-
-    RESEARCH_ETHICS = "research-ethics"
-    EMPIRICAL_RIGOR = "empirical-rigor"
-    CUSTOM = "custom"
-
-    @classmethod
-    def choices(cls):
-        return [
-            (cls.RESEARCH_ETHICS, "Research Ethics"),
-            (cls.EMPIRICAL_RIGOR, "Empirical Rigor"),
-            (cls.CUSTOM, "Custom"),
-        ]
-
-
 class ResearchSessionMode:
-    """
-    The delegation modes (DARE-owned, enforced). Each maps 1:1 to a Hermes
-    session per project: a persistent 'scout' session, a persistent 'chat'
-    session, and a persistent 'artifact' session (the Presentation Assistant —
-    kept separate so artifact work never mixes into Scout's session memory).
-    """
+    """What a session holds: a chat thread, or the project's Scout or artifact runs."""
 
     SCOUT = "scout"
     CHAT = "chat"
@@ -119,6 +92,29 @@ LIVE_RUN_STATUSES = frozenset(
         AgentRunStatus.WAITING_FOR_APPROVAL,
     }
 )
+
+
+TERMINAL_RUN_STATUSES = frozenset(
+    {AgentRunStatus.COMPLETED, AgentRunStatus.FAILED, AgentRunStatus.CANCELLED}
+)
+
+
+class AgentRole:
+    """Which agent a run is. Each role has its own brief in ``prompt_builder``."""
+
+    CHAT = "main-assistant"
+    SCOUT = "scout"
+    CRITIC = "critic"
+    PRESENTER = "presenter"
+
+
+# A Scout's (searches, page reads) per depth. The brief states them and the
+# gateway enforces them with a little slack.
+SCOUT_LIMITS = {"quick": (2, 3), "deep": (5, 10)}
+
+
+def scout_limits(depth):
+    return SCOUT_LIMITS["quick"] if depth == "quick" else SCOUT_LIMITS["deep"]
 
 
 class AgentToolCallStatus:
@@ -371,27 +367,24 @@ class StagingItemStatus:
         ]
 
 
-class EvidenceLabel:
-    """
-    How a candidate relates to the thesis (produced by the agent; stored
-    free-form). Canonical set per the §11 contract.
-    """
-
-    SUPPORTING = "supporting"
-    DISPUTING = "disputing"
-    PARTIAL = "partial"
-    TANGENTIAL = "tangential"
-    UNVERIFIABLE = "unverifiable"
-
-    @classmethod
-    def choices(cls):
-        return [
-            (cls.SUPPORTING, "Supporting"),
-            (cls.DISPUTING, "Disputing"),
-            (cls.PARTIAL, "Partial"),
-            (cls.TANGENTIAL, "Tangential"),
-            (cls.UNVERIFIABLE, "Unverifiable"),
-        ]
+# How a staged source bears on the question, as the Scout labels it.
+EVIDENCE_LABELS = frozenset(
+    {"supporting", "disputing", "partial", "tangential", "unverifiable"}
+)
+# What sort of source a staged item is.
+SOURCE_KINDS = frozenset(
+    {
+        "peer-reviewed",
+        "preprint",
+        "report",
+        "article",
+        "documentation",
+        "official-data",
+        "news",
+        "community",
+        "video",
+    }
+)
 
 
 class StagingSourceType:

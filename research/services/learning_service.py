@@ -13,13 +13,13 @@ renders the approved state back into the profile's files:
     project layer     -> ResearchProjectMemory -> MEMORY.md in this project
     procedure layer   -> ResearchProcedure     -> skills/dare/<name>/SKILL.md
 
-DARE is the system of record for all three; the files are a rendering.
+DARE is the system of record for all three; the files are a rendering made
+by ``prompt_builder.profile_files``.
 """
 
 import json
 import logging
 import re
-import shutil
 from datetime import datetime, timedelta
 from datetime import timezone as dt_timezone
 
@@ -33,6 +33,7 @@ from research.constants import (
     MemoryProposalOrigin,
     MemoryProposalStatus,
     ProjectMemorySource,
+    SoulFileOrigin,
     StagingItemStatus,
     ThreadEventType,
 )
@@ -45,14 +46,19 @@ from research.models import (
     ResearchProject,
     ResearchProjectMemory,
     ResearchStagingItem,
+    SoulFile,
+    SoulFileVersion,
 )
-from research.services.profile_service import profile_home_for
+from research.services.profile_service import (
+    ensure_project_profile,
+    profile_home_for,
+    write_profile_files,
+)
+from research.services.prompt_builder import MEMORY_SEPARATOR, profile_files
 from research.services.thread_service import post_event
 
 logger = logging.getLogger(__name__)
 
-_SEP = "\n§\n"
-SKILL_CATEGORY = "dare"
 _SKILL_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 # A staged write is attributed to the thread whose run was live when it was
 # staged; background reflection lands shortly after the turn it reflects on.
@@ -105,112 +111,40 @@ def _already_known(text, known):
     return False
 
 
-def _entries(text):
-    return [e.strip() for e in (text or "").split("§") if e.strip()]
-
-
-def _write_if_changed(path, content):
-    try:
-        if path.exists() and path.read_text(encoding="utf-8") == content:
-            return False
-    except OSError:
-        pass
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
-    return True
-
-
-def _project_memory_entries(project):
-    rows = ResearchProjectMemory.active_objects.filter(project=project).order_by(
-        "created_at"
-    )
-    return [(m.detail or m.label).strip() for m in rows if (m.detail or m.label)]
-
-
-def _current_procedures(project):
-    return ResearchProcedure.active_objects.filter(
-        Q(project=project) | Q(project__isnull=True),
-        user=project.user,
-        is_current=True,
-    )
-
-
 def render_learning(project):
-    """Write the approved learning state into ``project``'s profile files.
+    """Rewrite ``project``'s profile files from DARE's approved state.
 
-    Before overwriting, anything already in the files that DARE has never seen
-    is raised as a proposal, so memory written before the approval gate was on
-    reaches the user instead of vanishing.
+    Profiles that have not run yet are skipped; their first run writes them.
     """
-    home = profile_home_for(project)
-    if not home.is_dir():
-        return
-    _capture_unreviewed_file_entries(project, home)
+    if profile_home_for(project).is_dir():
+        write_profile_files(project, profile_files(project))
 
-    memories = home / "memories"
-    _write_if_changed(
-        memories / "MEMORY.md", _SEP.join(_project_memory_entries(project))
-    )
-    profile = ResearcherProfile.active_objects.filter(user=project.user).first()
-    _write_if_changed(
-        memories / "USER.md", _SEP.join(profile.entries()) if profile else ""
-    )
 
-    skills_root = home / "skills" / SKILL_CATEGORY
-    wanted = {}
-    for procedure in _current_procedures(project):
-        wanted[procedure.name] = procedure.content
-    for name, content in wanted.items():
-        _write_if_changed(skills_root / name / "SKILL.md", content)
-    if skills_root.is_dir():
-        for child in skills_root.iterdir():
-            if child.is_dir() and child.name not in wanted:
-                shutil.rmtree(child, ignore_errors=True)
+def prepare_profile(project):
+    """Create a new project's profile and write its files before its first run."""
+    ensure_project_profile(project)
+    render_learning(project)
 
 
 def render_learning_everywhere(user):
     """Re-render every profile the user owns (researcher-wide changes)."""
     for project in ResearchProject.active_objects.filter(user=user):
-        try:
-            render_learning(project)
-        except OSError:
-            logger.warning(
-                "Could not render learning into project %s", project.id, exc_info=True
-            )
+        render_learning(project)
 
 
-def _capture_unreviewed_file_entries(project, home):
-    seen = _known(
-        ResearchMemoryProposal.objects.filter(project=project).values_list(
-            "content", flat=True
-        )
+def save_soul(project, content, user, change_note=""):
+    """Save a new SOUL.md version for ``project`` and render it."""
+    soul, _ = SoulFile.objects.get_or_create(project=project)
+    latest = soul.current_version()
+    SoulFileVersion.objects.create(
+        soul_file=soul,
+        version=(latest.version + 1) if latest else 1,
+        content=content,
+        origin=SoulFileOrigin.EDIT,
+        change_note=change_note[:512],
+        created_by=user,
     )
-    seen.update(_known(_project_memory_entries(project)))
-    profile = ResearcherProfile.active_objects.filter(user=project.user).first()
-    if profile:
-        seen.update(_known(profile.entries()))
-
-    for filename, layer in (
-        ("MEMORY.md", MemoryLayer.PROJECT),
-        ("USER.md", MemoryLayer.RESEARCHER),
-    ):
-        try:
-            text = (home / "memories" / filename).read_text(encoding="utf-8")
-        except OSError:
-            continue
-        for entry in _entries(text):
-            if _same(entry) in seen:
-                continue
-            ResearchMemoryProposal.objects.create(
-                project=project,
-                content=entry,
-                layer=layer,
-                origin=MemoryProposalOrigin.LEGACY,
-                proposed_by_role="agent",
-                payload={"action": "add", "content": entry},
-                why="The agent saved this before every memory needed your approval.",
-            )
-            seen.add(_same(entry))
+    render_learning(project)
 
 
 def save_researcher_standards(user, standards):
@@ -221,15 +155,10 @@ def save_researcher_standards(user, standards):
     """
     cleaned = list(dict.fromkeys(s.strip() for s in standards if s.strip()))
     profile, _ = ResearcherProfile.objects.get_or_create(user=user)
-    profile.content = _SEP.join(cleaned)
+    profile.content = MEMORY_SEPARATOR.join(cleaned)
     profile.save(update_fields=["content", "updated_at"])
     render_learning_everywhere(user)
     return cleaned
-
-
-def project_memory_entries(project):
-    """The project's memory as the user edits it: one entry per line."""
-    return _project_memory_entries(project)
 
 
 def save_project_memory(project, entries, user):
@@ -370,11 +299,6 @@ def _memory_text(op):
     return (op.get("content") or "").strip()
 
 
-def _skill_description(content):
-    match = re.search(r"^description:\s*(.+)$", content or "", re.MULTILINE)
-    return match.group(1).strip().strip("\"'") if match else ""
-
-
 def _skill_op_text(op, fallback_name):
     name = op.get("name") or fallback_name
     action = op.get("action", "")
@@ -440,10 +364,8 @@ def sync_pending_learning(project):
                     )
                 ]
 
-            known = _known(_project_memory_entries(project))
-            profile = ResearcherProfile.active_objects.filter(user=project.user).first()
-            if profile:
-                known.update(_known(profile.entries()))
+            known = _known(ResearchProjectMemory.entries_for(project))
+            known.update(_known(ResearcherProfile.entries_for(project.user)))
             # The foreground turn and the background review often stage the
             # same memory entry; one proposal is enough. Skill proposals are
             # left alone: two "Improve skill X" can carry different patches.
@@ -531,7 +453,7 @@ def _apply_researcher(proposal, text):
             entries.append(text)
     elif text and _same(text) not in _known(entries):
         entries.append(text)
-    profile.content = _SEP.join(entries)
+    profile.content = MEMORY_SEPARATOR.join(entries)
     profile.save(update_fields=["content", "updated_at"])
 
 
@@ -566,7 +488,7 @@ def _apply_project(proposal, text, user):
         memory.label = _memory_label(text)
         memory.save(update_fields=["detail", "label", "updated_at"])
         return
-    if _same(text) in _known(_project_memory_entries(project)):
+    if _same(text) in _known(ResearchProjectMemory.entries_for(project)):
         return
     ResearchProjectMemory.objects.create(
         project=project,
@@ -740,7 +662,7 @@ def _corrections(project):
 def learning_overview(project):
     """Everything the Learning view needs, in one payload."""
     sync_pending_learning(project)
-    procedures = _current_procedures(project).order_by("name")
+    procedures = ResearchProcedure.current_for(project).order_by("name")
 
     decided = ResearchMemoryProposal.active_objects.filter(
         Q(project=project)

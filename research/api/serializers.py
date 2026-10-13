@@ -12,6 +12,7 @@ from rest_framework import serializers
 
 from research.constants import (
     LIVE_RUN_STATUSES,
+    AgentRole,
     AgentRunStatus,
     ChatMessageRole,
     MemoryProposalStatus,
@@ -37,7 +38,21 @@ from research.models import (
     SoulFileVersion,
 )
 from research.services.learning_service import proposal_payload
-from research.services.thread_service import CHAT_ROLE, scout_summary
+from research.services.thread_service import scout_summary
+
+
+def soul_payload(project):
+    """The project's current SOUL.md version, or None."""
+    version = SoulFile.current_for(project)
+    if version is None:
+        return None
+    return {
+        "id": version.soul_file_id,
+        "version": version.version,
+        "content": version.content,
+        "origin": version.origin,
+        "updatedAt": version.created_at,
+    }
 
 
 class ResearchProjectSerializer(serializers.ModelSerializer):
@@ -223,13 +238,13 @@ class ResearchAgentToolCallSerializer(serializers.ModelSerializer):
 
 
 class ResearchAgentRunSerializer(serializers.ModelSerializer):
-    """A delegated run with its tool calls (the Runs/activity record)."""
+    """A run in the project's run list."""
 
     tools = serializers.JSONField(source="allowed_tools", read_only=True)
     cost = serializers.FloatField(read_only=True)
     ran_at = serializers.SerializerMethodField()
     staged_count = serializers.SerializerMethodField()
-    tool_calls = serializers.SerializerMethodField()
+    tool_call_count = serializers.SerializerMethodField()
     cancellation = serializers.SerializerMethodField()
     focus = serializers.SerializerMethodField()
 
@@ -254,7 +269,7 @@ class ResearchAgentRunSerializer(serializers.ModelSerializer):
             "thread",
             "learning",
             "focus",
-            "tool_calls",
+            "tool_call_count",
             "cancellation",
         ]
         read_only_fields = fields
@@ -268,11 +283,8 @@ class ResearchAgentRunSerializer(serializers.ModelSerializer):
     def get_staged_count(self, obj):
         return ResearchStagingItem.active_objects.filter(run=obj).count()
 
-    def get_tool_calls(self, obj):
-        calls = ResearchAgentToolCall.active_objects.filter(run=obj).order_by(
-            "created_at"
-        )
-        return ResearchAgentToolCallSerializer(calls, many=True).data
+    def get_tool_call_count(self, obj):
+        return ResearchAgentToolCall.active_objects.filter(run=obj).count()
 
     def get_cancellation(self, obj):
         if obj.cancellation_requested_at is None:
@@ -297,18 +309,24 @@ class ResearchAgentRunSerializer(serializers.ModelSerializer):
 
 
 class ResearchAgentRunDetailSerializer(ResearchAgentRunSerializer):
-    """Single-run audit view: everything the list carries plus the agent's exact
-    final response. `raw_output` is excluded from the list serializer so run
-    lists stay lean; it is only sent for one explicitly opened run.
+    """One run's full audit: the list fields plus what it was sent, every tool
+    call and its exact final reply."""
 
-    Note: `reasoning_trace` is still captured to the DB (dormant) but not
-    surfaced — for the current model `reasoning.available` merely duplicates the
-    start of `raw_output`. If a model that emits genuinely distinct per-turn
-    reasoning is configured later, add it back here."""
+    tool_calls = serializers.SerializerMethodField()
 
     class Meta(ResearchAgentRunSerializer.Meta):
-        fields = ResearchAgentRunSerializer.Meta.fields + ["raw_output"]
+        fields = ResearchAgentRunSerializer.Meta.fields + [
+            "tool_calls",
+            "prompt",
+            "raw_output",
+        ]
         read_only_fields = fields
+
+    def get_tool_calls(self, obj):
+        calls = ResearchAgentToolCall.active_objects.filter(run=obj).order_by(
+            "created_at"
+        )
+        return ResearchAgentToolCallSerializer(calls, many=True).data
 
 
 class ResearchProjectMemorySerializer(serializers.ModelSerializer):
@@ -396,10 +414,10 @@ def thread_detail(thread):
         "created_at"
     )
     scouts = ResearchAgentRun.active_objects.filter(
-        thread=thread, role="scout"
+        thread=thread, role=AgentRole.SCOUT
     ).order_by("created_at")
     last_turn = (
-        ResearchAgentRun.active_objects.filter(thread=thread, role=CHAT_ROLE)
+        ResearchAgentRun.active_objects.filter(thread=thread, role=AgentRole.CHAT)
         .order_by("-created_at")
         .first()
     )
@@ -600,19 +618,7 @@ class ResearchProjectDetailSerializer(ResearchProjectSerializer):
         return ResearchSourceSerializer(sources, many=True).data
 
     def get_soul_file(self, obj):
-        soul = SoulFile.active_objects.filter(project=obj).first()
-        if not soul:
-            return None
-        version = soul.current_version()
-        if not version:
-            return None
-        return {
-            "id": soul.id,
-            "version": version.version,
-            "content": version.content,
-            "origin": version.origin,
-            "updatedAt": version.created_at,
-        }
+        return soul_payload(obj)
 
     def get_project_memory(self, obj):
         memory = ResearchProjectMemory.active_objects.filter(project=obj).order_by(

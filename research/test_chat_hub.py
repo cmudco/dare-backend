@@ -1,9 +1,6 @@
 import json
-import shutil
-import tempfile
 import time
-from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
@@ -13,6 +10,7 @@ from rest_framework.test import APIClient
 from feature_flags.models import FeatureFlag
 from mcp.services.web_fetch import PageUnreadable
 from research.constants import (
+    AgentRole,
     AgentRunStatus,
     ChatMessageRole,
     MemoryLayer,
@@ -45,6 +43,8 @@ from research.services.profile_service import (
     read_env_value,
     token_names_user,
 )
+from research.services.prompt_builder import project_section
+from research.services.run_service import RunStream
 from research.services.thread_service import (
     on_run_finished,
     record_review_event,
@@ -53,6 +53,7 @@ from research.services.thread_service import (
     thread_token,
 )
 from research.services.thread_tools import call_thread_tool
+from research.testing import TempProfilesMixin
 from users.constants import RoleChoice
 
 User = get_user_model()
@@ -66,15 +67,9 @@ description: Check a claim the scholar's way
 """
 
 
-class ProfileRootMixin:
+class ProfileRootMixin(TempProfilesMixin):
     def setUp(self):
-        self.root = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
-        self.settings_override = override_settings(
-            HERMES_PROFILES_ROOT=str(self.root), HERMES_PROFILE_PER_PROJECT=True
-        )
-        self.settings_override.enable()
-        self.addCleanup(self.settings_override.disable)
+        super().setUp()
         self.user = User.objects.create_user(
             email="scholar@example.com",
             password="pw",
@@ -298,20 +293,6 @@ class LearningLoopTests(ProfileRootMixin, TestCase):
         self.assertFalse(ResearcherProfile.objects.filter(user=self.user).exists())
         with self.assertRaises(ProposalConflict):
             decide_proposal(proposal, self.user, "accept")
-
-    def test_entries_written_before_the_gate_are_raised_not_lost(self):
-        (profile_home_for(self.project) / "memories" / "MEMORY.md").write_text(
-            "Corpus: 40 pension files"
-        )
-
-        render_learning(self.project)
-
-        self.assertTrue(
-            ResearchMemoryProposal.objects.filter(
-                project=self.project, content="Corpus: 40 pension files"
-            ).exists()
-        )
-        self.assertEqual(self.read(self.project, "memories", "MEMORY.md"), "")
 
 
 class ThreadToolTests(ProfileRootMixin, TestCase):
@@ -597,7 +578,7 @@ class ProjectMemoryDocumentTests(ProfileRootMixin, TestCase):
         )
         self.assertEqual(
             self.read(self.project, "memories", "MEMORY.md"),
-            "Scope: ED only\n§\nExclude: radiology",
+            f"{project_section(self.project)}\n§\nScope: ED only\n§\nExclude: radiology",
         )
 
     def test_another_scholars_project_memory_is_not_found(self):
@@ -610,7 +591,6 @@ class ProjectMemoryDocumentTests(ProfileRootMixin, TestCase):
         self.assertEqual(client.get(self.url).status_code, 404)
 
 
-@override_settings(HERMES_SYNC_SOUL=True)
 class AgentFilesOnDiskTests(ProfileRootMixin, TestCase):
     """Every save path must reach the Hermes profile files the agent reads."""
 
@@ -650,9 +630,13 @@ class AgentFilesOnDiskTests(ProfileRootMixin, TestCase):
             format="json",
         )
 
-        files = self.files(ResearchProject.objects.get(id=response.json()["id"]))
+        project = ResearchProject.objects.get(id=response.json()["id"])
+        files = self.files(project)
         self.assertEqual(files["soul"], soul.strip())
-        self.assertEqual(files["memory"], "Population or setting: secondary schools")
+        self.assertEqual(
+            files["memory"],
+            f"{project_section(project)}\n§\nPopulation or setting: secondary schools",
+        )
         self.assertEqual(files["user"], "Format citations in APA 7.")
 
     def test_editing_each_document_rewrites_its_file(self):
@@ -680,7 +664,9 @@ class AgentFilesOnDiskTests(ProfileRootMixin, TestCase):
         files = self.files(project)
         self.assertEqual(files["soul"], "# Identity\n\nNew voice.")
         self.assertEqual(
-            files["memory"], "Exclude: universities\n§\nWorking thesis: bans help"
+            files["memory"],
+            f"{project_section(project)}\n§\n"
+            "Exclude: universities\n§\nWorking thesis: bans help",
         )
         self.assertEqual(files["user"], "Peer-reviewed only.")
         self.assertEqual(
@@ -954,39 +940,34 @@ class SpendCapTests(ProfileRootMixin, TestCase):
 
 class QuietStreamTests(ProfileRootMixin, TestCase):
     def test_a_run_that_outlasts_a_quiet_stream_still_resolves(self):
-        from research.tasks import _verify_terminal_run
-
         run = ResearchAgentRun.objects.create(
             session=self.thread,
             thread=self.thread,
             project=self.project,
             user=self.user,
-            role="scout",
+            role=AgentRole.SCOUT,
             mode=ResearchSessionMode.SCOUT,
             status=AgentRunStatus.RUNNING,
             hermes_run_id="run_slow",
         )
-        hermes = type("Hermes", (), {})()
-        replies = iter(
-            [
-                {"status": "running"},
-                {"status": "running"},
-                {"status": "completed", "output": "done"},
-            ]
-        )
-        hermes.get_run = lambda run_id: next(replies)
+        hermes = MagicMock()
+        hermes.stream_events.return_value = iter([])
+        hermes.get_run.side_effect = [
+            {"status": "running"},
+            {"status": "running"},
+            {"status": "completed", "output": "done"},
+        ]
+        stream = RunStream(run, hermes)
+        list(stream)
 
-        with patch("research.tasks.time.sleep"):
-            output = _verify_terminal_run(hermes, run, "interrupted")
-
-        self.assertEqual(output, "done")
+        with patch("research.services.run_service.time.sleep"):
+            self.assertEqual(stream.result(wait_seconds=60), "done")
 
 
 class ScoutBudgetTests(ProfileRootMixin, TestCase):
     def test_a_scout_past_its_search_budget_is_told_to_stop(self):
         from mcp.models import GatewayFetch
         from mcp.services.mcp_gateway import handle_jsonrpc
-        from research.services.audit_service import run_session_key
 
         run = ResearchAgentRun.objects.create(
             session=self.thread,
@@ -1003,7 +984,7 @@ class ScoutBudgetTests(ProfileRootMixin, TestCase):
                 user=self.user,
                 tool="web_search",
                 content=f"results {n}",
-                run_key=run_session_key(run),
+                run_key=run.runtime_session_id,
             )
 
         with patch("mcp.services.mcp_gateway.web_search") as search:

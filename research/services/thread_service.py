@@ -3,9 +3,9 @@ Chat threads as the hub of research mode.
 
 A thread is one persistent conversation. From it the agent launches Scouts
 (parallel Hermes runs, each with an isolated context), and back into it DARE
-pushes what happens elsewhere — a Scout finishing, a review decision with the
-user's note, a memory proposal — as event rows both sides can see. When
-events arrive the agent has not reacted to, DARE runs a follow-up turn.
+posts what happens elsewhere (a Scout finishing, a review decision with the
+user's note, a memory proposal) as event rows both sides can see. When events
+arrive that the agent has not reacted to, DARE runs a follow-up turn.
 """
 
 import hashlib
@@ -21,6 +21,7 @@ from django.utils import timezone
 from research.constants import (
     LIVE_RUN_STATUSES,
     MAX_SCOUTS_PER_LAUNCH,
+    AgentRole,
     AgentRunStatus,
     AgentToolCallStatus,
     ChatMessageRole,
@@ -37,6 +38,7 @@ from research.models import (
     SoulFile,
 )
 from research.services.cancellation_service import request_run_cancellation
+from research.services.profile_service import hermes_for
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +46,6 @@ _TOKEN_SALT = "research.thread"
 _TOKEN_SIG_CHARS = 10
 _TOKEN_RE = re.compile(r"t(?P<id>\d+)-(?P<sig>[0-9a-f]{10})")
 _RUN_TOKEN_RE = re.compile(r"r(?P<id>\d+)-(?P<sig>[0-9a-f]{10})")
-CHAT_ROLE = "main-assistant"
 
 
 class ThreadTokenInvalid(Exception):
@@ -101,7 +102,9 @@ def resolve_run_token(token):
     if match is None:
         raise ThreadTokenInvalid("Unknown run.")
     run = (
-        ResearchAgentRun.active_objects.filter(id=int(match["id"]), role="scout")
+        ResearchAgentRun.active_objects.filter(
+            id=int(match["id"]), role=AgentRole.SCOUT
+        )
         .select_related("project")
         .first()
     )
@@ -129,12 +132,6 @@ def post_event(thread, event_type, content, payload):
     )
 
 
-def _soul_label(project):
-    soul = SoulFile.active_objects.filter(project=project).first()
-    version = soul.current_version() if soul else None
-    return f"v{version.version}" if version else ""
-
-
 # ── Scouts ───────────────────────────────────────────────────────────────────
 
 
@@ -151,10 +148,8 @@ def launch_scouts(thread, scouts):
     project = thread.project
     if len(scouts) > MAX_SCOUTS_PER_LAUNCH:
         raise ValueError(f"At most {MAX_SCOUTS_PER_LAUNCH} Scouts per launch.")
-    scout_session = ResearchSession._get_or_create(
-        project, thread.user, ResearchSessionMode.SCOUT
-    )
-    soul_label = _soul_label(project)
+    scout_session = ResearchSession.get_or_create_scout_session(project, thread.user)
+    soul_label = SoulFile.current_label(project)
     tools = list(project.enabled_tools)
     now = timezone.now()
     with transaction.atomic():
@@ -164,7 +159,7 @@ def launch_scouts(thread, scouts):
                 thread=thread,
                 project=project,
                 user=thread.user,
-                role="scout",
+                role=AgentRole.SCOUT,
                 mode=ResearchSessionMode.SCOUT,
                 task=scout["task"],
                 status=AgentRunStatus.RUNNING,
@@ -204,10 +199,7 @@ def redirect_scout(run, instruction):
     already read. One that is not running is replaced by a fresh Scout.
     """
     if run.status in LIVE_RUN_STATUSES and run.hermes_run_id:
-        from research.services.hermes_service import get_hermes_service
-
-        hermes = get_hermes_service(run.project)
-        if hermes.steer_run(
+        if hermes_for(run.project).steer_run(
             run.hermes_run_id, f"New direction from the user: {instruction}"
         ):
             context = dict(run.selected_context or {})
@@ -261,12 +253,12 @@ def scout_activity(run, limit=8):
             "-created_at"
         )
         # Searches and reads only: staging is shown as findings, not activity.
-        if call.tool.rsplit("__", 1)[-1].replace("mcp_dare_", "") in _TOOL_LABELS
+        if call.tool.rsplit("__", 1)[-1] in _TOOL_LABELS
     ][:limit]
     calls.reverse()
     rows = []
     for call in calls:
-        base = call.tool.rsplit("__", 1)[-1].replace("mcp_dare_", "")
+        base = call.tool.rsplit("__", 1)[-1]
         arguments = call.arguments or {}
         rows.append(
             {
@@ -290,7 +282,7 @@ def scout_activity(run, limit=8):
 
 def thread_has_active_turn(thread):
     return ResearchAgentRun.active_objects.filter(
-        thread=thread, role=CHAT_ROLE, status__in=LIVE_RUN_STATUSES
+        thread=thread, role=AgentRole.CHAT, status__in=LIVE_RUN_STATUSES
     ).exists()
 
 
@@ -310,7 +302,7 @@ def on_run_finished(run):
     thread = run.thread
     if thread is None:
         return
-    if run.role == "scout":
+    if run.role == AgentRole.SCOUT:
         summary = scout_summary(run)
         post_event(
             thread,
@@ -320,14 +312,14 @@ def on_run_finished(run):
         )
         siblings_live = (
             ResearchAgentRun.active_objects.filter(
-                thread=thread, role="scout", status__in=LIVE_RUN_STATUSES
+                thread=thread, role=AgentRole.SCOUT, status__in=LIVE_RUN_STATUSES
             )
             .exclude(id=run.id)
             .exists()
         )
         if not siblings_live:
             request_followup(thread)
-    elif run.role == CHAT_ROLE and thread.followup_pending:
+    elif run.role == AgentRole.CHAT and thread.followup_pending:
         thread.followup_pending = False
         thread.save(update_fields=["followup_pending", "updated_at"])
         _enqueue("research.tasks.run_thread_followup_job", thread.id)
@@ -370,103 +362,7 @@ def _has_review_notes(events):
     )
 
 
-# ── What the agent sees ──────────────────────────────────────────────────────
-
-
-def _event_line(message):
-    payload = message.payload or {}
-    kind = message.event_type
-    if kind == ThreadEventType.SCOUTS_LAUNCHED:
-        return f"[Scouts launched] {message.content}"
-    if kind == ThreadEventType.SCOUT_FINISHED:
-        line = f"[Scout finished] {message.content}"
-        if payload.get("titles"):
-            line += "\n  Staged: " + "; ".join(payload["titles"][:8])
-        for row in (payload.get("applied") or [])[:5]:
-            line += (
-                f"\n  Applied {row.get('memory', '')}: {row.get('effect', '')[:240]}"
-            )
-        for row in (payload.get("setAside") or [])[:8]:
-            line += f"\n  Set aside “{row.get('title', '')}”: {row.get('reason', '')}"
-        return line
-    if kind == ThreadEventType.REVIEW_DECISION:
-        verdict = {"approve": "approved", "reject": "rejected", "later": "deferred"}
-        line = (
-            f"[Review] The user {verdict.get(payload.get('decision'), 'reviewed')} "
-            f"finding #{payload.get('itemId')} “{payload.get('title', '')}”"
-        )
-        if payload.get("tags"):
-            line += f" (reasons: {', '.join(payload['tags'])})"
-        if payload.get("note"):
-            line += f". Their note: “{payload['note']}”"
-        return line
-    if kind == ThreadEventType.MEMORY_PROPOSED:
-        return f"[Memory proposed, awaiting the user] {message.content}"
-    if kind == ThreadEventType.MEMORY_DECIDED:
-        return (
-            f"[Memory {payload.get('status', 'decided')} by the user"
-            f" as {payload.get('layer', '')}] {message.content}"
-        )
-    return f"[{kind}] {message.content}"
-
-
-def conversation_history(thread, before=None, max_messages=60, max_chars=60000):
-    """The thread as structured turns for the runtime, oldest first.
-
-    Events ride as user-role notes from DARE so the model reads them as facts
-    about the workspace, not as things it said. The runtime compresses long
-    histories itself, so this only caps the extreme case.
-    """
-    messages = ResearchChatMessage.active_objects.filter(session=thread)
-    if before is not None:
-        messages = messages.filter(created_at__lt=before)
-    rows = list(messages.order_by("-created_at")[:max_messages])
-    rows.reverse()
-    history = []
-    for message in rows:
-        if message.role == ChatMessageRole.EVENT:
-            content = f"(DARE workspace event) {_event_line(message)}"
-            role = "user"
-        else:
-            content, role = message.content, message.role
-        if not content:
-            continue
-        if history and history[-1]["role"] == role == "user":
-            history[-1]["content"] += "\n" + content
-        else:
-            history.append({"role": role, "content": content})
-    while sum(len(h["content"]) for h in history) > max_chars and len(history) > 2:
-        history.pop(0)
-    return history
-
-
-def _findings_block(run_id, per_item_chars=600):
-    """What a finished Scout found, with the facts, so chat can answer from it."""
-    items = ResearchStagingItem.active_objects.filter(run_id=run_id).order_by("id")
-    lines = []
-    for item in items:
-        kind = (item.provenance or {}).get("kind") or "source"
-        meta = ", ".join(str(v) for v in (item.year, kind) if v)
-        facts = " ".join((item.rationale or "").split())[:per_item_chars]
-        lines.append(f"  #{item.id} {item.title} ({meta}) {item.url}\n    {facts}")
-    return "\n".join(lines)
-
-
-def followup_input(thread, preamble):
-    """The follow-up prompt: unanswered events, plus what finished Scouts found."""
-    events = unseen_events(thread)
-    lines = "\n".join(f"- {_event_line(e)}" for e in events)
-    findings = [
-        _findings_block((e.payload or {}).get("runId"))
-        for e in events
-        if e.event_type == ThreadEventType.SCOUT_FINISHED
-        and (e.payload or {}).get("runId")
-    ]
-    text = f"{preamble}\n\nNEW SINCE YOUR LAST REPLY:\n{lines}"
-    findings = [block for block in findings if block]
-    if findings:
-        text += "\n\nWHAT THE SCOUTS FOUND (your evidence):\n" + "\n".join(findings)
-    return text
+# ── What the agent has not answered yet ──────────────────────────────────────
 
 
 def unseen_events(thread):
@@ -485,12 +381,3 @@ def unseen_events(thread):
     if last_reply:
         events = events.filter(created_at__gt=last_reply)
     return list(events.order_by("created_at"))
-
-
-def thread_digest(thread, max_chars=4000):
-    """A compact brief of the thread for a Scout's isolated context."""
-    lines = []
-    for turn in conversation_history(thread, max_messages=20):
-        who = "User" if turn["role"] == "user" else "Research chat"
-        lines.append(f"{who}: {turn['content']}")
-    return "\n".join(lines)[-max_chars:]

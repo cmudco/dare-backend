@@ -11,20 +11,16 @@ import json
 import re
 from dataclasses import dataclass
 
-
-from research.constants import MAX_SCOUTS_PER_LAUNCH, ChatMessageRole
-from research.models import (
-    ResearchAgentRun,
-    ResearchChatMessage,
-    ResearchKnowledgeItem,
-)
-from research.services.cost_service import SpendCapReached, check_spend_cap
-from research.services.staging_service import (
+from research.constants import (
     EVIDENCE_LABELS,
+    MAX_SCOUTS_PER_LAUNCH,
     SOURCE_KINDS,
-    merge_learning,
-    stage_candidate,
+    AgentRole,
+    ChatMessageRole,
 )
+from research.models import ResearchAgentRun, ResearchChatMessage, ResearchKnowledgeItem
+from research.services.cost_service import SpendCapReached, check_spend_cap
+from research.services.staging_service import merge_learning, stage_candidate
 from research.services.thread_service import (
     ThreadTokenInvalid,
     launch_scouts,
@@ -251,9 +247,9 @@ def _launch(thread, arguments):
 
 
 def _status(thread, arguments):
-    runs = ResearchAgentRun.active_objects.filter(thread=thread, role="scout").order_by(
-        "-created_at"
-    )[:12]
+    runs = ResearchAgentRun.active_objects.filter(
+        thread=thread, role=AgentRole.SCOUT
+    ).order_by("-created_at")[:12]
     return {"scouts": [scout_summary(run) for run in runs]}
 
 

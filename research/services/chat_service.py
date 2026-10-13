@@ -1,330 +1,97 @@
 """
-One agent turn in a chat thread, run on Hermes.
+One agent turn in a chat thread.
 
-Used two ways: streamed live to the browser when the user sends a message,
-and drained in a worker for a follow-up turn DARE starts when thread events
-(finished Scouts, review notes) arrive. Both persist the same records.
+Streamed live to the browser when the user sends a message, and drained in a
+worker for a follow-up turn DARE starts when thread events (finished Scouts,
+review notes) arrive. Both persist the same records.
 """
-
-import logging
 
 from django.utils import timezone
 
 from research.constants import (
-    MAX_SCOUTS_PER_LAUNCH,
+    AgentRole,
     AgentRunStatus,
-    AgentToolCallStatus,
     ChatMessageRole,
     ResearchSessionMode,
 )
-from research.models import ResearchAgentRun, ResearchChatMessage, SoulFile
-from research.services.audit_service import record_tool_call
-from research.services.cost_service import set_run_cost
-from research.services.hermes_service import get_hermes_service, safe_hermes_usage
-from research.services.learning_service import sync_pending_learning
+from research.models import (
+    ResearchAgentRun,
+    ResearchChatMessage,
+    ResearchSession,
+    SoulFile,
+)
+from research.services.profile_service import hermes_for
+from research.services.prompt_builder import chat_prompt
+from research.services.run_service import RunStream, complete, start
 from research.services.thread_service import (
-    CHAT_ROLE,
-    conversation_history,
-    followup_input,
     on_run_finished,
-    thread_token,
+    thread_has_active_turn,
     unseen_events,
 )
 
-logger = logging.getLogger(__name__)
+_ERRORS = {
+    AgentRunStatus.FAILED: "The agent run failed.",
+    AgentRunStatus.CANCELLED: "The agent run was cancelled.",
+}
 
 
 class TurnStartFailed(Exception):
     """The runtime could not start the turn; the run is already marked failed."""
 
 
-HUB_BRIEF = """You are the research chat for this project: the user's thinking partner and the place research work is planned, launched and discussed. Work under the standards above.
+def start_turn(thread, user, text="", *, scout_now=False):
+    """Record the user's message (none for a follow-up) and start the turn.
 
-HOW A SESSION GOES
-1. When the user brings a question, ask at most ONE clarifying question if the scope is genuinely ambiguous. Otherwise propose a short plan: which Scouts to run, each with a one-line focus (e.g. "3 Scouts: outcomes, bias, implementation").
-2. Let the user edit the plan. Launch when they agree — or straight away if they asked you to just go.
-3. Launch with mcp__dare__launch_scouts. Scouts run in parallel in the background, each with its own isolated context; write each task so it stands alone (scope, population, what counts as evidence, what to exclude). Do not wait for them and do not poll thread_status — tell the user they are running and end your reply; DARE tells you when they finish.
-4. Findings go to the user's Review Inbox, never into your memory. When Scouts finish, DARE tells you in the thread; summarise what they staged and what is still open.
-5. Follow-ups like "go deeper on #3" or "drop vendor sources" become new, sharper Scouts.
-
-HOW TO ANSWER
-- As simple as the question. Key point first, then short bullets; a heading only when it helps scanning. Aim for under 200 words unless asked for more.
-- When a chart, timeline or table makes the point faster, draw it: a ```mermaid block renders in the chat (xychart-beta for numbers over time, timeline for dates, pie for shares, flowchart for steps). Not every reply needs one.
-- Plain words. No academic tone, no padding, no recap of what the user said. Put links where they help, not in a wall at the end.
-- Memory may say how this user wants answers; that wins over these defaults.
-
-THREAD TOOLS (pass thread="%(token)s" to every one)
-- mcp__dare__launch_scouts: start up to %(max_scouts)d Scouts: scouts=[{focus, task, depth: "quick"|"deep"}].
-- mcp__dare__thread_status: the live state of this thread's Scouts and their findings.
-- mcp__dare__search_threads: search this project's earlier threads (what was asked and what you answered). When the user refers to earlier work ("wrap it up", "what worked", "that projection"), search it and the approved knowledge first; never ask the user to paste earlier results.
-- mcp__dare__search_knowledge: search the findings the user APPROVED from the Review Inbox. That is separate from your project memory and standards, which are already loaded above — an empty result means "no approved findings yet", never "the project is empty".
-- mcp__dare__web_search, mcp__dare__search_papers and mcp__dare__fetch_page for your own quick look-ups. mcp__dare__stage_finding and mcp__dare__report_learning are for Scouts only; never call them. Never use a runtime-native web, extract or browser tool.
-
-WORKSPACE EVENTS
-Lines marked "(DARE workspace event)" are facts DARE recorded: Scouts launching and finishing, the user approving or rejecting a finding with a note, memory proposals and decisions. They are not the user speaking, but a review note IS the user's voice — take it seriously.
-
-LEARNING — EVERY CHANGE NEEDS THE USER'S APPROVAL
-You propose memory with your `memory` tool and skills with `skill_manage` (never a DARE tool). Every write you make is staged for the user to approve; nothing is saved until they do. Say "I've proposed remembering …", never "I'll remember …".
-- target "user" = about the user, in ANY project: how they judge sources, which they trust or distrust, how they want answers, their context (country, market, role). Example: "Wants Pakistan-specific data; set aside US-only sources and say so."
-- target "memory" = this project only: its scope, population, framing, decisions. Example: "Scope: emergency departments only, not radiology."
-- When a review note or a correction reveals a durable preference, propose ONE entry for it, phrased as a rule you will follow. Do not propose transient chatter or research findings.
-- When the user has corrected the same kind of thing about three times, or walks you through a method they want reused, propose a skill with skill_manage (action "create", a short lowercase-hyphenated name, a SKILL.md with frontmatter `name` and `description` and numbered steps).
-- Your approved memory and skills are already loaded. Apply them, and when one changes what you do, say so in a few words ("set aside 2 preprints, per your note").
-
-Be honest about tool failures: say plainly what failed and why; do not retry a tool that returned a quota or auth error."""
-
-
-def _soul(project):
-    soul = SoulFile.active_objects.filter(project=project).first()
-    version = soul.current_version() if soul else None
-    return (version.content if version else ""), (
-        f"v{version.version}" if version else ""
-    )
-
-
-def build_hub_instructions(thread, soul_content):
-    project = thread.project
-    parts = [soul_content] if soul_content else []
-    parts.append(
-        HUB_BRIEF % {"token": thread_token(thread), "max_scouts": MAX_SCOUTS_PER_LAUNCH}
-    )
-    if project.question and project.question.strip():
-        parts.append(
-            "# Project\nResearch question: "
-            + project.question.strip()
-            + (f"\nField: {project.field}" if project.field else "")
-        )
-    else:
-        parts.append(
-            "# Project\nNo research question is set yet. If the user's message "
-            "implies one, help them sharpen it."
-        )
-    return "\n\n".join(parts)
-
-
-FOLLOWUP_INPUT = (
-    "New workspace events arrived since your last reply. Do not repeat earlier "
-    "replies.\n"
-    "- If Scouts finished: answer the user's original question now, from what "
-    "they found (listed below) together with findings the user already "
-    "approved in earlier sessions (look them up with mcp__dare__search_knowledge "
-    "first). Lead with the answer in the shape the user asked "
-    "for (a table, a ```mermaid chart, or short bullets) and cite findings by "
-    "#number. Use only facts and numbers that appear in the findings; where "
-    "something is missing, say so in one line instead of guessing. Mention that "
-    "the findings are waiting in the Review Inbox, and end with one line on what "
-    "is still open.\n"
-    "- If the events include review notes: acknowledge them in a sentence and "
-    "say what you will do differently; if a note reveals a durable preference, "
-    "propose ONE memory entry for it now.\n"
-    "Do not launch new Scouts unless the user asked for them."
-)
-
-
-SCOUT_NOW = (
-    "The user sent this in Scout-now mode: if it is a research request, "
-    "launch exactly ONE Scout for it immediately with mcp__dare__launch_scouts "
-    "— no plan, no questions — writing a self-contained task from their words "
-    "and the project context (depth deep unless they ask for quick), then say "
-    "in one line what it will look for. If it is not a research request (a "
-    "greeting, a question about the project, small talk), just reply and "
-    "launch nothing."
-)
-
-
-def start_turn(thread, user, text, *, followup=False, scout_now=False):
-    """Create the run, record the user's message, and start the Hermes run.
-
-    Returns ``(run, hermes)``. Raises TurnStartFailed after marking the run
-    failed when the runtime cannot be reached.
+    Returns ``(run, hermes)``; raises TurnStartFailed when the runtime could
+    not be reached.
     """
     project = thread.project
-    soul_content, soul_label = _soul(project)
-    user_message = None
-    if not followup:
-        user_message = ResearchChatMessage.objects.create(
+    message = None
+    if text and not thread.title:
+        thread.title = text[:80]
+        thread.save(update_fields=["title", "updated_at"])
+    if text:
+        message = ResearchChatMessage.objects.create(
             session=thread,
             project=project,
             user=user,
             role=ChatMessageRole.USER,
             content=text,
         )
-    history = conversation_history(
-        thread, before=user_message.created_at if user_message else None
-    )
+    prompt = chat_prompt(thread, message, scout_now=scout_now)
     run = ResearchAgentRun.objects.create(
         session=thread,
         thread=thread,
         project=project,
         user=user,
-        role=CHAT_ROLE,
+        role=AgentRole.CHAT,
         mode=ResearchSessionMode.CHAT,
-        task="Follow-up on thread events" if followup else text,
+        task=text or "Follow-up on thread events",
         status=AgentRunStatus.RUNNING,
-        soul_file_version=soul_label,
-        selected_context={
-            "followup": followup,
-            "scoutNow": scout_now,
-            "historyTurns": len(history),
-        },
+        soul_file_version=SoulFile.current_label(project),
+        selected_context={"followup": message is None, "scoutNow": scout_now},
         started_at=timezone.now(),
     )
-    hermes = get_hermes_service(project)
-    hermes.provision_soul(soul_content)
-    try:
-        started = hermes.start_run(
-            input_text=followup_input(thread, FOLLOWUP_INPUT) if followup else text,
-            instructions=build_hub_instructions(thread, soul_content)
-            + (f"\n\n{SCOUT_NOW}" if scout_now else ""),
-            session_id=thread.hermes_session_id,
-            session_key=f"dare-proj{project.id}",
-            conversation_history=history,
-        )
-    except Exception as exc:  # noqa: BLE001 - surfaced as a failed run
-        logger.error("research.chat run %s start failed: %s", run.id, exc)
-        run.status = AgentRunStatus.FAILED
-        run.error = str(exc)
-        run.completed_at = timezone.now()
-        run.save(update_fields=["status", "error", "completed_at", "updated_at"])
-        raise TurnStartFailed(str(exc)) from exc
-    run.hermes_run_id = started["run_id"]
-    run.save(update_fields=["hermes_run_id", "updated_at"])
-    logger.info(
-        "research.chat run %s started: thread=%s followup=%s history=%s hermes_run=%s",
-        run.id,
-        thread.id,
-        followup,
-        len(history),
-        run.hermes_run_id,
-    )
+    hermes = hermes_for(project)
+    if not start(run, hermes, prompt):
+        raise TurnStartFailed(run.error or run.status_detail)
     return run, hermes
 
 
-def _settle(run, status, detail, *, terminal, usage=None, error=""):
-    run.status = status
-    run.status_detail = detail
-    run.completed_at = timezone.now() if terminal else None
-    fields = ["status", "status_detail", "completed_at", "updated_at"]
-    if usage:
-        run.usage = usage
-        fields.append("usage")
-        fields += set_run_cost(run)
-    if error:
-        run.error = error
-        fields.append("error")
-    if (
-        status == AgentRunStatus.CANCELLED
-        and run.cancellation_requested_at
-        and not run.cancellation_confirmed_at
-    ):
-        run.cancellation_confirmed_at = timezone.now()
-        fields.append("cancellation_confirmed_at")
-    run.save(update_fields=fields)
-
-
-def _verify(run, hermes):
-    """Resolve an ambiguous stream end from Hermes's pollable record.
-
-    Returns the final text on confirmed completion, else ``None`` with the
-    run's honest state persisted and a user-facing error message.
-    """
-    try:
-        terminal = hermes.get_run(run.hermes_run_id)
-    except Exception:  # noqa: BLE001 - unconfirmed is an honest state
-        _settle(
-            run,
-            AgentRunStatus.OUTCOME_UNKNOWN,
-            "Hermes outcome unconfirmed; terminal status is unavailable.",
-            terminal=False,
-        )
-        return None, "The agent outcome could not be confirmed."
-    status = str(terminal.get("status") or "").lower()
-    if status == AgentRunStatus.COMPLETED:
-        output = terminal.get("output")
-        return (output if isinstance(output, str) else ""), ""
-    if status == AgentRunStatus.FAILED:
-        _settle(
-            run,
-            AgentRunStatus.FAILED,
-            "Hermes confirmed that the chat run failed.",
-            terminal=True,
-            error="Hermes reported a failed run.",
-        )
-        return None, "The agent run failed."
-    if status == AgentRunStatus.CANCELLED:
-        _settle(
-            run,
-            AgentRunStatus.CANCELLED,
-            "Hermes confirmed that the chat run was cancelled.",
-            terminal=True,
-            usage=safe_hermes_usage(terminal.get("usage")),
-        )
-        return None, "The agent run was cancelled."
-    if status in {
-        AgentRunStatus.STARTED,
-        AgentRunStatus.QUEUED,
-        AgentRunStatus.RUNNING,
-        AgentRunStatus.WAITING_FOR_APPROVAL,
-        AgentRunStatus.STOPPING,
-    }:
-        _settle(
-            run,
-            status,
-            f"Hermes still reports {status}; terminal outcome is pending.",
-            terminal=False,
-        )
-        return None, "The agent run is still active."
-    _settle(
-        run,
-        AgentRunStatus.OUTCOME_UNKNOWN,
-        "Hermes returned an unrecognized terminal status.",
-        terminal=False,
-    )
-    return None, "The agent outcome could not be confirmed."
-
-
 def stream_turn(run, hermes):
-    """Consume the run's events, yielding browser-facing dicts; persist the end."""
-    chunks = []
-    seen_ids = set()
-    terminal_event = ""
-    stream_error = None
-    try:
-        for event in hermes.stream_events(run.hermes_run_id):
-            kind = event.get("event")
-            if kind == "message.delta":
-                delta = event.get("delta", "")
-                if delta:
-                    chunks.append(delta)
-                    yield {"type": "delta", "delta": delta}
-            elif kind == "tool.started":
-                yield {
-                    "type": "tool",
-                    "phase": "started",
-                    "tool": event.get("tool", ""),
-                }
-            elif kind == "tool.completed":
-                call = record_tool_call(run, event, {}, seen_ids)
-                yield {
-                    "type": "tool",
-                    "phase": "completed",
-                    "tool": event.get("tool", ""),
-                    "ok": call.status != AgentToolCallStatus.ERROR,
-                }
-            elif kind in {"run.completed", "run.failed", "run.cancelled"}:
-                terminal_event = kind
-                break
-    except Exception as exc:  # noqa: BLE001 - verified below instead of guessed
-        stream_error = exc
-        logger.error("research.chat run %s stream failed: %s", run.id, exc)
-
-    text = "".join(chunks)
-    if stream_error or terminal_event != "run.completed" or not chunks:
-        text, error = _verify(run, hermes)
-        if text is None:
-            on_run_finished(run)
-            yield {"type": "error", "error": error}
-            return
+    """Yield browser-facing events for the turn, then save the reply."""
+    stream = RunStream(run, hermes)
+    yield from stream
+    text = stream.result()
+    if text is None:
+        on_run_finished(run)
+        yield {
+            "type": "error",
+            "error": _ERRORS.get(
+                run.status, "The agent outcome could not be confirmed."
+            ),
+        }
+        return
 
     thread = run.thread
     message = ResearchChatMessage.objects.create(
@@ -335,19 +102,29 @@ def stream_turn(run, hermes):
         content=text,
         run=run,
     )
-    _settle(
-        run,
-        AgentRunStatus.COMPLETED,
-        "Replied.",
-        terminal=True,
-        usage=hermes.fetch_usage(run.hermes_run_id),
-    )
+    complete(run, hermes, "Replied.", text)
     thread.last_run_at = timezone.now()
     thread.save(update_fields=["last_run_at", "updated_at"])
-    sync_pending_learning(run.project)
     on_run_finished(run)
     yield {"type": "done", "messageId": message.id, "runId": run.id}
 
 
-def has_unseen_events(thread):
-    return bool(unseen_events(thread))
+def run_followup(thread_id):
+    """Let the agent react to thread events nobody has answered yet.
+
+    Safe to run more than once: it does nothing while a turn is live (that
+    turn's end asks again) or when every event has been answered.
+    """
+    thread = (
+        ResearchSession.active_objects.filter(id=thread_id)
+        .select_related("project", "user")
+        .first()
+    )
+    if thread is None or thread_has_active_turn(thread) or not unseen_events(thread):
+        return
+    try:
+        run, hermes = start_turn(thread, thread.user)
+    except TurnStartFailed:
+        return
+    for _ in stream_turn(run, hermes):
+        pass

@@ -1,82 +1,99 @@
 """
-Critic delegation helpers — how DARE asks Hermes to pressure-test a staged source.
-
-The Critic's job is adversarial: decide whether a source genuinely supports the
-use it was staged for, under the user's standards. It may read the source
-(web_fetch) and returns a single JSON verdict, which DARE attaches to the staging
-item's critic_metadata.
+The Critic: pressure-tests one staged source against the user's standards and
+attaches its verdict to the item's ``critic_metadata``.
 """
 
-import json
 import logging
-import re
 
-from research.services.scout_service import find_json_object
+import django_rq
+from django.conf import settings
+from django.db import transaction
+from django.utils import timezone
+
+from research.constants import AgentRole, AgentRunStatus, ResearchSessionMode
+from research.models import (
+    ResearchAgentRun,
+    ResearchSession,
+    ResearchStagingItem,
+    SoulFile,
+)
+from research.services.json_reply import find_json_object
+from research.services.profile_service import hermes_for
+from research.services.prompt_builder import critic_prompt
+from research.services.run_service import RunStream, complete, set_detail, start
 
 logger = logging.getLogger(__name__)
 
-CRITIC_BRIEF = """You are Critic, working under the user's standards above.
-
-Pressure-test whether the source genuinely supports the way it is being used — do
-not rubber-stamp it. Use the web tools to check the actual source when that helps.
-Judge against the standards (e.g. correlation is not cause; do not overstate).
-
-Return ONLY a single JSON object — no prose, no markdown fences — shaped exactly:
-{
-  "verdict": "holds | overstated | unsupported | inconclusive",
-  "reasoning": "1-3 sentences, grounded in the source and the standards",
-  "concerns": ["short concern", "..."]
-}
-- holds: genuinely supports the stated use.
-- overstated: relevant, but the claim leans on it harder than it can bear.
-- unsupported: does not actually support the stated use.
-- inconclusive: cannot tell from what is available."""
+VERDICTS = {"holds", "overstated", "unsupported", "inconclusive"}
 
 
-def build_critic_instructions(soul_content):
-    """Compose the run instructions: the soul file (standards) + the Critic brief."""
-    parts = []
-    if soul_content and soul_content.strip():
-        parts.append("# Research standards (soul file)\n" + soul_content.strip())
-    parts.append(CRITIC_BRIEF)
-    return "\n\n".join(parts)
-
-
-def critic_input(item):
-    """The source under review, framed as the Critic's task."""
-    return (
-        f"Source: {item.title}\n"
-        f"URL: {item.url}\n"
-        f"Staged as: {item.evidence_label or 'unlabelled'}\n"
-        f"Claimed relevance: {item.rationale}\n"
-        f"Citation context: {item.citation_context}\n\n"
-        "Pressure-test whether this source genuinely supports that use, under the "
-        "standards."
+def request_critic(item, user):
+    """Create the Critic run for ``item`` and queue it."""
+    project = item.project
+    run = ResearchAgentRun.objects.create(
+        session=ResearchSession.get_or_create_scout_session(project, user),
+        project=project,
+        user=user,
+        role=AgentRole.CRITIC,
+        mode=ResearchSessionMode.SCOUT,
+        task=f"Pressure-test: {item.title}",
+        status=AgentRunStatus.RUNNING,
+        status_detail="Queued…",
+        soul_file_version=SoulFile.current_label(project),
+        allowed_tools=["web"],
+        started_at=timezone.now(),
     )
+    transaction.on_commit(
+        lambda: django_rq.get_queue("default").enqueue(
+            "research.tasks.run_critic_job", run.id, item.id
+        )
+    )
+    return run
 
 
-VALID_VERDICTS = {"holds", "overstated", "unsupported", "inconclusive"}
-
-
-def parse_critic_verdict(output):
-    """Extract the verdict object from the Critic's output, tolerating stray text."""
-    if not output:
-        return None
-    text = output.strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?", "", text).strip()
-        text = re.sub(r"```$", "", text).strip()
-
-    data = find_json_object(text, required_key="verdict")
-    if not isinstance(data, dict):
-        logger.warning("Critic output was not JSON-parseable")
+def parse_verdict(output):
+    """The verdict object in the Critic's reply, or None."""
+    data = find_json_object(output or "", "verdict")
+    if data is None:
+        logger.warning("Critic reply had no verdict object")
         return None
     verdict = str(data.get("verdict") or "").strip().lower()
     concerns = data.get("concerns")
     return {
-        "verdict": verdict if verdict in VALID_VERDICTS else "inconclusive",
+        "verdict": verdict if verdict in VERDICTS else "inconclusive",
         "reasoning": str(data.get("reasoning") or ""),
         "concerns": (
             [str(c) for c in concerns if c] if isinstance(concerns, list) else []
         ),
     }
+
+
+def run_critic(run_id, item_id):
+    run = ResearchAgentRun.objects.filter(id=run_id).first()
+    item = ResearchStagingItem.objects.filter(id=item_id).first()
+    if run is None or item is None:
+        logger.warning("Critic run %s / item %s not found", run_id, item_id)
+        return
+    hermes = hermes_for(run.project)
+    set_detail(run, "Reading the source…")
+    if not start(run, hermes, critic_prompt(item)):
+        return
+    stream = RunStream(
+        run, hermes, lambda call: set_detail(run, "Assessing the source…")
+    )
+    for _ in stream:
+        pass
+    output = stream.result(wait_seconds=settings.HERMES_RUN_WAIT_SECONDS)
+    if output is None:
+        return
+    verdict = parse_verdict(output)
+    if verdict is None:
+        complete(run, hermes, "Critic could not return a verdict.", output)
+        return
+    item.critic_metadata = {
+        **verdict,
+        "runId": run.id,
+        "assessedAt": timezone.now().isoformat(),
+    }
+    item.save(update_fields=["critic_metadata", "updated_at"])
+    complete(run, hermes, f"Critic: {verdict['verdict']}.", output)

@@ -1,28 +1,21 @@
 """
-Per-project Hermes profiles — the isolation boundary for agent memory.
+Per-project Hermes profiles: each project's agent runs in its own profile.
 
-A Hermes profile is simply its own ``HERMES_HOME`` directory. Everything the
-runtime keeps per profile resolves from that root: ``SOUL.md``, the memory tool's
-``memories/{MEMORY,USER}.md`` (``get_hermes_home() / "memories"`` in Hermes's
-``tools/memory_tool.py``), sessions, and ``.env``. So giving each project its own
-directory makes its agent memory isolated *by construction* — not by a naming
-convention we have to keep honouring.
+A profile is its own ``HERMES_HOME`` directory, so a project's SOUL.md,
+memories/ and skills/ are isolated by construction. The gateway serves every
+profile from one listener under ``/p/<profile>/``.
 
-Two things make this cheap. The gateway's multiplex mode serves every profile
-from the one listener under ``/p/<profile>/``, so N projects still means one
-process and one port. And a profile needs nothing but its directory to exist —
-Hermes resolves it, inherits the default config, and creates the rest on demand.
-We still write a config so the toolset and MCP surface are deliberate rather
-than inherited.
-
-The profile's ``.env`` carries a DARE-minted JWT for the project's owner, so the
-audited web tools run as that scholar. Without it a profile's tools resolve no
-credential at all: Hermes does not fall back to the default profile's ``.env``.
+DARE writes everything in a profile: ``config.yaml`` (model, toolsets, the
+approval gate, the MCP server), ``.env`` (the owner's MCP token, the gateway
+key, the model key) and the files the agent loads, rendered from DARE's
+approved state by ``prompt_builder.profile_files``.
 """
 
 import hashlib
 import hmac
 import logging
+import shutil
+import time
 from datetime import timedelta
 from pathlib import Path
 
@@ -33,6 +26,8 @@ from django.db import transaction
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.settings import api_settings as jwt_settings
 from rest_framework_simplejwt.tokens import AccessToken
+
+from research.services.hermes_service import HermesService
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +49,8 @@ _CONFIG_FILENAME = "config.yaml"
 _TOKEN_VAR = "MCP_DARE_API_KEY"
 _API_KEY_VAR = "API_SERVER_KEY"
 _MODEL_KEY_VAR = "DARE_MODEL_API_KEY"
+SKILL_CATEGORY = "dare"
+WARMUP_PROMPT = "Reply with the single word: ready."
 
 
 def profile_name_for(project):
@@ -72,21 +69,15 @@ def profile_base_url_for(project):
     return f"{gateway}/p/{profile_name_for(project)}/"
 
 
-def mint_service_token(user):
-    """A long-lived access token Hermes presents to DARE's MCP gateway as ``user``."""
-    token = AccessToken.for_user(user)
-    token.set_exp(lifetime=timedelta(days=settings.HERMES_PROFILE_TOKEN_DAYS))
-    return token
-
-
 def mint_project_token(project):
     """A long-lived access token for the project's owner.
 
-    The profile's MCP tools authenticate to DARE with this, so `web_search` /
-    `fetch_page` run under the owner's account and every captured GatewayFetch
-    row is attributed to the right scholar instead of one shared identity.
+    The profile's MCP tools authenticate to DARE with it, so searches and page
+    reads run, and are recorded, as that user.
     """
-    return str(mint_service_token(project.user))
+    token = AccessToken.for_user(project.user)
+    token.set_exp(lifetime=timedelta(days=settings.HERMES_PROFILE_TOKEN_DAYS))
+    return str(token)
 
 
 def token_names_user(raw_token, user):
@@ -255,29 +246,19 @@ def _render_config(project):
     )
 
 
-def _write_if_changed(path, content):
-    """Write ``content`` only when it differs from what is on disk.
-
-    Idempotent so provisioning can run on every request, while still letting a
-    change to the template (a new pinned model, a different toolset) reach
-    profiles that already exist.
-    """
+def write_if_changed(path, content):
+    """Write ``content`` only when it differs from what is on disk."""
     try:
-        if path.exists() and path.read_text(encoding="utf-8") == content:
+        if path.read_text(encoding="utf-8") == content:
             return False
     except OSError:
         pass
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     return True
 
 
 def _schedule_warmup(project):
-    """Have a new profile connect its DARE tools before the user's first turn.
-
-    Hermes connects a profile's MCP servers in the background on its first
-    run, a few seconds after that run starts, so a brand-new project's first
-    message would otherwise run without search or Scouts.
-    """
     project_id = project.id
 
     def enqueue():
@@ -291,55 +272,70 @@ def _schedule_warmup(project):
     transaction.on_commit(enqueue)
 
 
-def ensure_project_profile(project, *, refresh_token=False):
-    """Make sure ``project`` has a Hermes profile on disk, and return its name.
+def ensure_project_profile(project):
+    """Create or refresh ``project``'s profile directory, config and secrets.
 
-    Idempotent: safe to call on every run. Creates the directory, writes the
-    config and the owner-scoped token on first use, and records the gateway URL
-    on the project so ``get_hermes_service(project)`` routes there from then on.
-
-    Returns "" when per-project profiles are disabled, which leaves every caller
-    on the shared default profile — the pre-multiplex behaviour.
+    Idempotent, so it runs before every use; a changed template, model or key
+    reaches existing profiles this way.
     """
-    if not settings.HERMES_PROFILE_PER_PROJECT:
-        return ""
-
-    name = profile_name_for(project)
     home = profile_home_for(project)
     is_new = not home.exists()
-    try:
-        home.mkdir(parents=True, exist_ok=True)
-        (home / "memories").mkdir(exist_ok=True)
+    (home / "memories").mkdir(parents=True, exist_ok=True)
+    write_if_changed(home / _CONFIG_FILENAME, _render_config(project))
 
-        _write_if_changed(home / _CONFIG_FILENAME, _render_config(project))
-
-        env_path = home / _ENV_FILENAME
-        if refresh_token or not token_names_user(
-            read_env_value(env_path, _TOKEN_VAR), project.user
-        ):
-            write_env_value(env_path, _TOKEN_VAR, mint_project_token(project))
-            logger.info("Minted a fresh MCP token for Hermes profile %s", name)
-        api_key = profile_api_key(project)
-        if read_env_value(env_path, _API_KEY_VAR) != api_key:
-            write_env_value(env_path, _API_KEY_VAR, api_key)
-        model_key = settings.HERMES_PROFILE_MODEL_API_KEY
-        if model_key and read_env_value(env_path, _MODEL_KEY_VAR) != model_key:
-            write_env_value(env_path, _MODEL_KEY_VAR, model_key)
-    except OSError as exc:
-        # Provisioning is best-effort: a project that cannot get its own profile
-        # must still work, so fall back to the shared default rather than 500.
-        logger.warning(
-            "Could not provision Hermes profile %s at %s: %s", name, home, exc
-        )
-        return ""
+    env_path = home / _ENV_FILENAME
+    if not token_names_user(read_env_value(env_path, _TOKEN_VAR), project.user):
+        write_env_value(env_path, _TOKEN_VAR, mint_project_token(project))
+        logger.info("Minted a fresh MCP token for %s", profile_name_for(project))
+    api_key = profile_api_key(project)
+    if read_env_value(env_path, _API_KEY_VAR) != api_key:
+        write_env_value(env_path, _API_KEY_VAR, api_key)
+    model_key = settings.HERMES_PROFILE_MODEL_API_KEY
+    if model_key and read_env_value(env_path, _MODEL_KEY_VAR) != model_key:
+        write_env_value(env_path, _MODEL_KEY_VAR, model_key)
 
     if is_new:
         _schedule_warmup(project)
 
-    base_url = profile_base_url_for(project)
-    if project.hermes_base_url != base_url:
-        project.hermes_base_url = base_url
-        project.save(update_fields=["hermes_base_url", "updated_at"])
-        logger.info("Project %s bound to Hermes profile %s", project.id, name)
 
-    return name
+def hermes_for(project):
+    """A Hermes client bound to ``project``'s profile, provisioned on first use."""
+    ensure_project_profile(project)
+    return HermesService(profile_base_url_for(project), profile_api_key(project))
+
+
+def write_profile_files(project, files):
+    """Write ``files`` (a ``prompt_builder.ProfileFiles``) into the profile.
+
+    Skills DARE no longer holds are removed, so the profile carries exactly
+    the approved set.
+    """
+    home = profile_home_for(project)
+    write_if_changed(home / "SOUL.md", files.soul)
+    write_if_changed(home / "memories" / "MEMORY.md", files.memory)
+    write_if_changed(home / "memories" / "USER.md", files.user)
+    skills_root = home / "skills" / SKILL_CATEGORY
+    for name, content in files.skills.items():
+        write_if_changed(skills_root / name / "SKILL.md", content)
+    if skills_root.is_dir():
+        for child in skills_root.iterdir():
+            if child.is_dir() and child.name not in files.skills:
+                shutil.rmtree(child, ignore_errors=True)
+
+
+def warm_profile(project):
+    """One tiny run, so a new profile's DARE tools are connected before real use.
+
+    Hermes connects a profile's MCP servers in the background a few seconds
+    into its first run; without this, a new project's first turn has no tools.
+    """
+    hermes = hermes_for(project)
+    run_id = hermes.start_run(
+        input_text=WARMUP_PROMPT,
+        instructions=WARMUP_PROMPT,
+        session_id=f"warmup-{project.id}",
+    )["run_id"]
+    for _ in range(30):
+        if hermes.get_run(run_id).get("status") not in ("started", "running", "queued"):
+            return
+        time.sleep(2)

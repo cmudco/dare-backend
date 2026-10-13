@@ -1,11 +1,10 @@
 """
-Putting a Scout's candidate into the Review Inbox.
+Putting a Scout's finding into the Review Inbox, and the user's decision on it.
 
-One path for both ways a Scout stages: the `stage_finding` tool, called as it
-works, and the JSON envelope an older reply may still carry. Fields are coerced
-at this boundary, and a candidate the user already has — staged, approved,
-or rejected — is not staged twice; the caller is told which, so the agent can
-move on (and, for a rejection, learn why).
+Fields from the ``stage_finding`` tool are coerced here, every source is
+checked before the user sees it, and a finding the user already has (staged,
+approved or rejected) is not staged twice; the Scout is told which, so it can
+move on and, for a rejection, learn why.
 """
 
 import re
@@ -13,22 +12,15 @@ from dataclasses import dataclass
 
 from django.utils import timezone
 
-from research.constants import StagingItemStatus
-from research.models import ResearchStagingItem, SoulFile
+from research.constants import (
+    EVIDENCE_LABELS,
+    SOURCE_KINDS,
+    AgentRole,
+    StagingItemStatus,
+)
+from research.models import ResearchKnowledgeItem, ResearchStagingItem, SoulFile
 from research.services.source_check import check_source
-
-SOURCE_KINDS = {
-    "peer-reviewed",
-    "preprint",
-    "report",
-    "article",
-    "documentation",
-    "official-data",
-    "news",
-    "community",
-    "video",
-}
-EVIDENCE_LABELS = {"supporting", "disputing", "partial", "tangential", "unverifiable"}
+from research.services.thread_service import record_review_event
 
 
 def normalize_title(title):
@@ -143,7 +135,7 @@ def stage_candidate(run, fields):
             "retrievedAt": timezone.now().isoformat(),
             "soulFileId": soul.id if soul else None,
             "soulFileVersion": version.version if version else None,
-            "role": "scout",
+            "role": AgentRole.SCOUT,
             "runId": run.id,
             "check": {"flags": check.flags, **check.checks},
         },
@@ -170,3 +162,53 @@ def merge_learning(run, applied, set_aside):
     run.learning = learning
     run.save(update_fields=["learning", "updated_at"])
     return learning
+
+
+class ReviewInvalid(ValueError):
+    """The review decision cannot be applied; the message says why."""
+
+
+def review_item(item, user, decision, note, tags):
+    """Apply the user's decision on a staged finding.
+
+    Approving promotes it to durable knowledge. The note and reason tags stay
+    on the item and go back into the thread whose Scout staged it.
+    """
+    if decision == "approve":
+        ResearchKnowledgeItem.objects.create(
+            project=item.project,
+            source_staging_item=item,
+            approved_by=user,
+            approved_at=timezone.now(),
+            content=item.content or item.rationale,
+            rationale=item.rationale,
+            provenance=item.provenance,
+            soul_file_version=str((item.provenance or {}).get("soulFileVersion") or ""),
+        )
+        item.status = StagingItemStatus.APPROVED
+    elif decision == "reject":
+        item.status = StagingItemStatus.REJECTED
+        item.rejection_reason = note
+    elif decision == "later":
+        item.status = StagingItemStatus.LATER
+        item.later_reason = note
+    else:
+        raise ReviewInvalid("decision must be one of: approve, reject, later.")
+    item.review_metadata = {
+        **(item.review_metadata or {}),
+        "decision": decision,
+        "note": note,
+        "tags": tags,
+        "decidedAt": timezone.now().isoformat(),
+    }
+    item.save(
+        update_fields=[
+            "status",
+            "rejection_reason",
+            "later_reason",
+            "review_metadata",
+            "updated_at",
+        ]
+    )
+    record_review_event(item, decision, note, tags)
+    return item

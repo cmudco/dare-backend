@@ -26,8 +26,7 @@ from mcp.services.scholarly import (
     work_by_doi,
 )
 from mcp.services.web_fetch import PageUnreadable, fetch_page, web_search
-from research.services.audit_service import run_session_key
-from research.services.scout_service import scout_limits
+from research.constants import scout_limits
 from research.services.thread_service import ThreadTokenInvalid, resolve_run_token
 from research.services.thread_tools import TOOL_DEFS as THREAD_TOOL_DEFS
 from research.services.thread_tools import TOOL_NAMES as THREAD_TOOL_NAMES
@@ -270,7 +269,7 @@ def _capture_fetch(user, tool, content, arguments, run_key="", call_id=""):
 
 def _capture_error(user, tool, error, arguments, run_key="", call_id=""):
     """Persist a gateway call's failure reason so the run audit can show WHY a
-    mcp_dare_* tool failed (paywall / auth / rate-limit), not merely that it did.
+    gateway tool failed (paywall / auth / rate-limit), not merely that it did.
     Records the URL too, so the audit names the page that failed. Capture must
     never break the call it records."""
     if not error:
@@ -454,15 +453,6 @@ def gather_tool_results(user, slugs, query, per_tool_chars=12000):
     return results
 
 
-def gather_tool_context(user, slugs, query, per_tool_chars=12000):
-    """`gather_tool_results` as one text block (successes only), for prompt injection."""
-    return "\n\n".join(
-        f"### {r['slug']} · {r['tool']}\n{r['text']}"
-        for r in gather_tool_results(user, slugs, query, per_tool_chars)
-        if r["text"] and not r["error"]
-    )
-
-
 def _result(rpc_id, result):
     return {"jsonrpc": "2.0", "id": rpc_id, "result": result}
 
@@ -482,7 +472,7 @@ def _handle_tool_call(user, rpc_id, params, run_key=""):
     meta = params.get("_meta") or {}
     scout = _scout_run(arguments)
     run_key = (
-        (run_session_key(scout) if scout else "")
+        (scout.runtime_session_id if scout else "")
         or str(meta.get("dareRun") or "")
         or run_key
     )

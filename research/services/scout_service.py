@@ -1,181 +1,118 @@
 """
-Scout delegation helpers — how DARE asks Hermes to find sources and how it reads
-the result back.
+A Scout run: search, read and stage sources for one task from a chat thread.
 
-The contract: DARE sends the task as the run `input` and the soul file + a Scout
-brief as `instructions`. Scout searches and reads with DARE's gateway tools and
-stages each source with the `stage_finding` tool as it goes. An older Scout reply
-that still carries a JSON envelope of candidates is parsed as a fallback.
+The Scout stages each source with the ``stage_finding`` tool as it works and
+reports what memory changed with ``report_learning``; its closing reply is a
+short summary kept for the audit.
 """
 
-import json
 import logging
-import re
+
+from django.conf import settings
+
+from mcp.services.mcp_gateway import gather_tool_results
+from research.constants import AgentToolCallStatus
+from research.models import ResearchAgentRun, ResearchAgentToolCall, ResearchStagingItem
+from research.services.audit_service import token_count
+from research.services.profile_service import hermes_for
+from research.services.prompt_builder import scout_prompt
+from research.services.run_service import (
+    RunStream,
+    cancelled_before_start,
+    complete,
+    set_detail,
+    start,
+)
 
 logger = logging.getLogger(__name__)
 
-SCOUT_BRIEF = """You are Scout, a source-finder working under the user's standards above.
-
-The request may be informal or terse; that is expected. Restate it to yourself
-as a precise question that keeps their intent (use the project memory and the
-conversation you were launched from), then work it. If it has no research
-intent at all (a greeting, a test), stage nothing and say so in one line.
-
-WHAT COUNTS AS A GOOD SOURCE HERE: %(kind_guidance)s Your memory says what the
-user trusts; let it decide, and label every source honestly with its `kind`.
-
-Pass run="%(run_token)s" on EVERY DARE tool call below.
-
-1. SEARCH: mcp__dare__web_search for the web, mcp__dare__search_papers for
-   published research. At most %(max_searches)d searches in total.
-2. READ before you stage: open the page with mcp__dare__fetch_page and take the
-   facts from what you read. Paywalled DOIs are read from a free copy when one
-   exists. Read at most %(max_candidates)d pages.
-3. STAGE each source the moment you have read it, with mcp__dare__stage_finding.
-   One call per source, at most %(max_candidates)d. Give its working URL, and in
-   citationContext copy one short sentence exactly as it appears on the page:
-   DARE checks the link, the quote, the DOI and the date before the user sees
-   it, and tells you if it refused the source or the user already has it.
-4. Before you finish, call mcp__dare__report_learning once: `applied` = only
-   the remembered preferences or skills that actually changed what you did,
-   with their effect (leave out any that did not apply to this search);
-   `setAside` = each source you held back because of one, with the reason.
-   Empty lists are fine; never invent one.
-5. Reply with two or three plain sentences: what you staged and what is still
-   missing. No JSON, no long report.
-
-Never fabricate: stage only sources you actually read, with details exactly as
-published. Do NOT use your memory or skill tools in a Scout run, and never use
-a runtime-native web, extract or browser tool."""
+_SEARCHES = ("web_search", "search_papers")
 
 
-def scout_limits(depth):
-    """``(max_searches, max_reads)`` the brief gives a Scout of this depth."""
-    return (2, 3) if depth == "quick" else (5, 10)
+def _connected_tool_results(run):
+    """Run the user's connected research tools on the task, as text for the input.
 
-
-def build_scout_instructions(
-    soul_content, run_token, max_candidates, max_searches, kind_guidance=""
-):
-    """Compose the run instructions: the soul file (standards) + the Scout brief."""
-    parts = []
-    if soul_content and soul_content.strip():
-        parts.append(soul_content.strip())
-    parts.append(
-        SCOUT_BRIEF
-        % {
-            "max_candidates": max_candidates,
-            "max_searches": max_searches,
-            "run_token": run_token,
-            "kind_guidance": kind_guidance
-            or "Whatever answers the question best, labelled for what it is.",
-        }
+    DARE calls them itself so credentials stay here; each call is recorded on
+    the run.
+    """
+    slugs = (run.selected_context or {}).get("tools") or run.project.enabled_tools
+    results = gather_tool_results(run.user, slugs, run.task)
+    for r in results:
+        body = r["error"] or r["raw"]
+        ResearchAgentToolCall.objects.create(
+            run=run,
+            tool=f"{r['slug']}__{r['tool']}",
+            arguments={"query": run.task},
+            status=(
+                AgentToolCallStatus.ERROR if r["error"] else AgentToolCallStatus.SUCCESS
+            ),
+            result_summary=body,
+            result_tokens=token_count(body),
+            error=r["error"],
+        )
+    return "\n\n".join(
+        f"### {r['slug']} · {r['tool']}\n{r['text']}"
+        for r in results
+        if r["text"] and not r["error"]
     )
-    return "\n\n".join(parts)
 
 
-def find_json_object(text, required_key=None):
-    """
-    Scan for the first complete JSON object in `text` (optionally one that has
-    `required_key`), tolerating prose around it AND trailing garbage after it —
-    models sometimes echo the contract template after the real object, which
-    breaks whole-string parsing and any greedy first-{-to-last-} match.
-    """
-    decoder = json.JSONDecoder()
-    index = text.find("{")
-    fallback = None
-    while index != -1:
-        try:
-            obj, _ = decoder.raw_decode(text, index)
-        except json.JSONDecodeError:
-            index = text.find("{", index + 1)
-            continue
-        if isinstance(obj, dict):
-            if required_key is None or required_key in obj:
-                return obj
-            if fallback is None:
-                fallback = obj
-        index = text.find("{", index + 1)
-    return fallback
+def _empty_detail(run, counts, output):
+    """Why a Scout staged nothing, in the user's terms."""
+    set_aside = (run.learning or {}).get("setAside") or []
+    refused = [
+        r for r in set_aside if r.get("reason", "").startswith("Failed source check")
+    ]
+    if not counts["searched"] and not counts["read"]:
+        return "Found nothing: the Scout never reached DARE's search tools."
+    if refused:
+        return f"Nothing staged: {len(refused)} source(s) failed DARE's source check."
+    if set_aside:
+        return f"Nothing staged: set aside {len(set_aside)} source(s) per your preferences."
+    detail = (
+        f"Searched {counts['searched']}x, read {counts['read']} pages, "
+        "found nothing relevant."
+    )
+    snippet = " ".join((output or "").split())[:140]
+    return f"{detail} Scout said: “{snippet}…”" if snippet else detail
 
 
-def _scan_objects(text):
-    """Yield every complete JSON object found anywhere in `text`."""
-    decoder = json.JSONDecoder()
-    index = text.find("{")
-    while index != -1:
-        try:
-            obj, end = decoder.raw_decode(text, index)
-        except json.JSONDecodeError:
-            index = text.find("{", index + 1)
-            continue
-        yield obj
-        index = text.find("{", end)
+def run_scout(run_id):
+    run = ResearchAgentRun.objects.filter(id=run_id).first()
+    if run is None or cancelled_before_start(run):
+        return
+    hermes = hermes_for(run.project)
+    set_detail(run, "Querying research tools…")
+    prompt = scout_prompt(run, _connected_tool_results(run))
+    set_detail(run, "Starting Scout…")
+    if not start(run, hermes, prompt):
+        return
 
+    counts = {"searched": 0, "read": 0}
 
-def parse_staging_items(output):
-    """
-    Extract the `stagingItems` array from Scout's output, tolerating stray prose,
-    markdown fences, and trailing junk. Returns a list of dicts (empty if
-    nothing parseable).
-    """
-    if not output:
-        return []
-    text = output.strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?", "", text).strip()
-        text = re.sub(r"```$", "", text).strip()
-
-    data = find_json_object(text, required_key="stagingItems")
-    if isinstance(data, dict) and "stagingItems" in data:
-        items = data.get("stagingItems", [])
-        return (
-            [i for i in items if isinstance(i, dict)] if isinstance(items, list) else []
+    def on_tool(call):
+        name = call.tool.rsplit("__", 1)[-1]
+        if name in _SEARCHES:
+            counts["searched"] += 1
+        elif name == "fetch_page":
+            counts["read"] += 1
+        staged = ResearchStagingItem.active_objects.filter(run=run).count()
+        set_detail(
+            run,
+            f"{counts['searched']} searches · {counts['read']} pages read · "
+            f"{staged} staged",
         )
 
-    # Salvage: a malformed envelope (e.g. the model never closed the outer
-    # brace) still contains complete, individually-parseable item objects.
-    if '"stagingItems"' in text:
-        items = [
-            o
-            for o in _scan_objects(text)
-            if isinstance(o, dict) and o.get("title") and "stagingItems" not in o
-        ]
-        if items:
-            logger.warning(
-                "Scout envelope was malformed; salvaged %d item(s)", len(items)
-            )
-            return items
-
-    logger.warning("Scout output was not JSON-parseable")
-    return []
-
-
-def _clean_rows(rows, keys, limit=20):
-    out = []
-    for row in rows if isinstance(rows, list) else []:
-        if not isinstance(row, dict):
-            continue
-        cleaned = {k: str(row.get(k) or "").strip()[:500] for k in keys}
-        if any(cleaned.values()):
-            out.append(cleaned)
-        if len(out) >= limit:
-            break
-    return out
-
-
-def parse_scout_learning(output):
-    """The run's "because of you" report: what approved memory changed.
-
-    Returns ``{"applied": [...], "setAside": [...]}`` or ``{}`` when the
-    Scout reported nothing (or its envelope had no learning block).
-    """
-    data = find_json_object(output or "", required_key="stagingItems")
-    learning = data.get("learning") if isinstance(data, dict) else None
-    if not isinstance(learning, dict):
-        return {}
-    applied = _clean_rows(learning.get("applied"), ("memory", "effect"))
-    set_aside = _clean_rows(learning.get("setAside"), ("title", "url", "reason"))
-    if not applied and not set_aside:
-        return {}
-    return {"applied": applied, "setAside": set_aside}
+    stream = RunStream(run, hermes, on_tool)
+    for _ in stream:
+        pass
+    output = stream.result(wait_seconds=settings.HERMES_RUN_WAIT_SECONDS)
+    if output is None:
+        return
+    staged = ResearchStagingItem.active_objects.filter(run=run).count()
+    detail = (
+        f"Staged {staged} finding{'s' if staged != 1 else ''}."
+        if staged
+        else _empty_detail(run, counts, output)
+    )
+    complete(run, hermes, detail, output)
