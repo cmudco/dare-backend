@@ -65,7 +65,7 @@ from research.services.okf_service import (
     bundle_filename,
 )
 from research.services.profile_service import profile_name_for
-from research.services.prompt_builder import profile_files
+from research.services.prompt_builder import profile_files, role_briefs
 from research.services.staging_service import ReviewInvalid, review_item
 from research.services.thread_service import redirect_scout, thread_has_active_turn
 
@@ -295,6 +295,13 @@ class ResearchProjectMemoryDocumentView(ResearchAPIView):
             project, serializer.validated_data["entries"], request.user
         )
         return Response({"entries": entries})
+
+
+class ResearchPromptBriefsView(ResearchAPIView):
+    """GET /api/research/prompts/ — every role's brief, as each run gets it."""
+
+    def get(self, request):
+        return Response({"briefs": role_briefs()})
 
 
 class ResearchLearningView(ResearchAPIView):

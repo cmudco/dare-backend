@@ -176,7 +176,7 @@ class RunStream:
         """The confirmed final text, polling up to ``wait_seconds`` if needed."""
         if self._text is not None:
             return self._text
-        return _verify(self.run, self.hermes, wait_seconds)
+        return await_result(self.run, self.hermes, wait_seconds)
 
 
 def _poll(hermes, run):
@@ -187,8 +187,12 @@ def _poll(hermes, run):
         return None
 
 
-def _verify(run, hermes, wait_seconds):
-    """Resolve an ambiguous stream end from Hermes's run record."""
+def await_result(run, hermes, wait_seconds):
+    """The run's final text from Hermes's run record, polling while it works.
+
+    Returns None with the run's real state saved when it did not complete;
+    a run still working after ``wait_seconds`` stays live.
+    """
     record = _poll(hermes, run)
     deadline = time.monotonic() + wait_seconds
     while (

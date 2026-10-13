@@ -30,6 +30,7 @@ from research.models import (
     ResearchSession,
     ResearchStagingItem,
 )
+from research.services.chat_service import finish_turn, start_turn, stream_turn
 from research.services.learning_service import (
     ProposalConflict,
     decide_proposal,
@@ -929,6 +930,37 @@ class QuietStreamTests(ProfileRootMixin, TestCase):
 
         with patch("research.services.run_service.time.sleep"):
             self.assertEqual(stream.result(wait_seconds=60), "done")
+
+    def test_a_chat_reply_that_outlasts_a_quiet_stream_is_saved_later(self):
+        hermes = MagicMock()
+        hermes.start_run.return_value = {"run_id": "run_quiet", "status": "started"}
+        hermes.stream_events.return_value = iter([])
+        hermes.get_run.return_value = {"status": "running"}
+        hermes.fetch_usage.return_value = {}
+
+        with (
+            patch("research.services.chat_service.hermes_for", return_value=hermes),
+            patch("research.services.chat_service.django_rq") as rq,
+        ):
+            run, _ = start_turn(self.thread, self.user, "hello")
+            events = list(stream_turn(run, hermes))
+
+        self.assertEqual(events[-1]["type"], "pending")
+        rq.get_queue.return_value.enqueue.assert_called_once_with(
+            "research.tasks.finish_turn_job", run.id
+        )
+
+        hermes.get_run.return_value = {"status": "completed", "output": "late reply"}
+        with patch("research.services.chat_service.hermes_for", return_value=hermes):
+            finish_turn(run.id)
+
+        run.refresh_from_db()
+        self.assertEqual(run.status, AgentRunStatus.COMPLETED)
+        self.assertTrue(
+            ResearchChatMessage.objects.filter(
+                run=run, role=ChatMessageRole.ASSISTANT, content="late reply"
+            ).exists()
+        )
 
 
 class ScoutBudgetTests(ProfileRootMixin, TestCase):

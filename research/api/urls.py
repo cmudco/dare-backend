@@ -18,6 +18,7 @@ from research.api.views import (
     ResearchProjectOKFBundleView,
     ResearchProjectOKFExportView,
     ResearchProjectViewSet,
+    ResearchPromptBriefsView,
     ResearchSoulFileView,
     ResearchStagingItemCriticView,
     ResearchStagingItemReviewView,
@@ -52,6 +53,7 @@ urlpatterns = [
         ResearchProjectMemoryDocumentView.as_view(),
         name="research-project-memory-document",
     ),
+    path("prompts/", ResearchPromptBriefsView.as_view(), name="research-prompts"),
     path(
         "projects/<int:project_id>/learning/",
         ResearchLearningView.as_view(),

@@ -13,6 +13,7 @@ approved state by ``prompt_builder.profile_files``.
 
 import hashlib
 import hmac
+import json
 import logging
 import shutil
 import time
@@ -50,6 +51,11 @@ _TOKEN_VAR = "MCP_DARE_API_KEY"
 _API_KEY_VAR = "API_SERVER_KEY"
 _MODEL_KEY_VAR = "DARE_MODEL_API_KEY"
 SKILL_CATEGORY = "dare"
+PLATFORM_HINT = (
+    "You are answering inside DARE's research workspace. Replies render as "
+    "Markdown, and a ```mermaid code block renders as a chart: xychart-beta for "
+    "numbers over time, timeline for dates, pie for shares, flowchart for steps."
+)
 WARMUP_PROMPT = "Reply with the single word: ready."
 
 
@@ -231,6 +237,11 @@ def _render_config(project):
         "skills:\n"
         "  write_approval: true\n"
         f"  creation_nudge_interval: {SKILL_REFLECTION_ITERATIONS}\n"
+        "\n"
+        "# Hermes tells API clients to expect plain text; DARE renders Markdown.\n"
+        "platform_hints:\n"
+        "  api_server:\n"
+        f"    replace: {json.dumps(PLATFORM_HINT)}\n"
         "\n"
         "platform_toolsets:\n"
         "  api_server:\n"

@@ -7,7 +7,7 @@ from django_rq import job
 
 from research.models import ResearchProject
 from research.services.artifact_service import run_artifact
-from research.services.chat_service import run_followup
+from research.services.chat_service import finish_turn, run_followup
 from research.services.critic_service import run_critic
 from research.services.profile_service import warm_profile
 from research.services.run_service import notify_thread
@@ -37,6 +37,11 @@ def run_artifact_job(run_id):
 @job("default")
 def run_thread_followup_job(thread_id):
     run_followup(thread_id)
+
+
+@job("default")
+def finish_turn_job(run_id):
+    finish_turn(run_id)
 
 
 @job("default")

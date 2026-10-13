@@ -3,7 +3,9 @@ from unittest.mock import MagicMock, patch
 from django.contrib.auth import get_user_model
 from django.test import TestCase
 from django.utils import timezone
+from rest_framework.test import APIClient
 
+from feature_flags.models import FeatureFlag
 from research.constants import (
     AgentRole,
     AgentRunStatus,
@@ -157,3 +159,20 @@ class PromptBuilderTests(TempProfilesMixin, TestCase):
         self.assertNotIn("QUESTION-MARKER", prompt.input + prompt.instructions)
         self.assertNotIn("SOUL-MARKER", prompt.input + prompt.instructions)
         self.assertEqual(prompt.history, [])
+
+    def test_the_app_can_read_every_role_brief(self):
+        FeatureFlag.objects.update_or_create(
+            key="enable_research", defaults={"default_enabled": True}
+        )
+        client = APIClient()
+        client.force_authenticate(self.user)
+
+        briefs = client.get("/api/research/prompts/").json()["briefs"]
+
+        self.assertEqual(
+            [b["key"] for b in briefs],
+            ["chat", "scout-now", "follow-up", "scout", "critic", "presenter"],
+        )
+        chat = briefs[0]["text"]
+        self.assertIn('thread="<thread>"', chat)
+        self.assertNotIn("SOUL-MARKER", chat)

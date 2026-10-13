@@ -6,9 +6,12 @@ worker for a follow-up turn DARE starts when thread events (finished Scouts,
 review notes) arrive. Both persist the same records.
 """
 
+import django_rq
+from django.conf import settings
 from django.utils import timezone
 
 from research.constants import (
+    LIVE_RUN_STATUSES,
     AgentRole,
     AgentRunStatus,
     ChatMessageRole,
@@ -22,7 +25,7 @@ from research.models import (
 )
 from research.services.profile_service import hermes_for
 from research.services.prompt_builder import chat_prompt
-from research.services.run_service import RunStream, complete, start
+from research.services.run_service import RunStream, await_result, complete, start
 from research.services.thread_service import (
     on_run_finished,
     thread_has_active_turn,
@@ -79,10 +82,19 @@ def start_turn(thread, user, text="", *, scout_now=False):
 
 
 def stream_turn(run, hermes):
-    """Yield browser-facing events for the turn, then save the reply."""
+    """Yield browser-facing events for the turn, then save the reply.
+
+    When the stream goes quiet while Hermes is still working (a slow or
+    retried model call), a worker waits for the reply instead and the thread
+    shows it once it lands.
+    """
     stream = RunStream(run, hermes)
     yield from stream
     text = stream.result()
+    if text is None and run.status in LIVE_RUN_STATUSES:
+        django_rq.get_queue("default").enqueue("research.tasks.finish_turn_job", run.id)
+        yield {"type": "pending", "runId": run.id}
+        return
     if text is None:
         on_run_finished(run)
         yield {
@@ -92,7 +104,11 @@ def stream_turn(run, hermes):
             ),
         }
         return
+    message = _save_reply(run, hermes, text)
+    yield {"type": "done", "messageId": message.id, "runId": run.id}
 
+
+def _save_reply(run, hermes, text):
     thread = run.thread
     message = ResearchChatMessage.objects.create(
         session=thread,
@@ -106,7 +122,24 @@ def stream_turn(run, hermes):
     thread.last_run_at = timezone.now()
     thread.save(update_fields=["last_run_at", "updated_at"])
     on_run_finished(run)
-    yield {"type": "done", "messageId": message.id, "runId": run.id}
+    return message
+
+
+def finish_turn(run_id):
+    """Wait for a turn whose stream ended while Hermes was still working."""
+    run = (
+        ResearchAgentRun.objects.select_related("thread", "project")
+        .filter(id=run_id, role=AgentRole.CHAT, status__in=LIVE_RUN_STATUSES)
+        .first()
+    )
+    if run is None:
+        return
+    hermes = hermes_for(run.project)
+    text = await_result(run, hermes, settings.HERMES_RUN_WAIT_SECONDS)
+    if text is None:
+        on_run_finished(run)
+        return
+    _save_reply(run, hermes, text)
 
 
 def run_followup(thread_id):
