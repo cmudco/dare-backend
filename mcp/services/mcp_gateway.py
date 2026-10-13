@@ -522,6 +522,7 @@ def _handle_tool_call(user, rpc_id, params, run_key=""):
 
     if name in THREAD_TOOL_NAMES:
         text, is_error = call_thread_tool(name, arguments)
+        _capture_fetch(user, name, text, arguments, run_key, call_id)
         result = {"content": [{"type": "text", "text": text}]}
         if is_error:
             result["isError"] = True
