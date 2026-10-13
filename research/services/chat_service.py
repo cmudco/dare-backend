@@ -24,6 +24,7 @@ from research.services.learning_service import sync_pending_learning
 from research.services.thread_service import (
     CHAT_ROLE,
     conversation_history,
+    followup_input,
     on_run_finished,
     thread_token,
     unseen_events,
@@ -100,8 +101,9 @@ def build_hub_instructions(thread, soul_content):
 
 
 FOLLOWUP_INPUT = (
-    "New workspace events arrived since your last reply (listed in the thread "
-    "above). Respond to the user briefly and concretely:\n"
+    "New workspace events arrived since your last reply. Respond to the user "
+    "briefly and concretely, about the new events only; do not repeat earlier "
+    "summaries:\n"
     "- If Scouts finished, summarise what they staged, what they set aside "
     "because of the user's memory, and what is still open.\n"
     "- Only if the events include review notes from the user, acknowledge "
@@ -165,7 +167,7 @@ def start_turn(thread, user, text, *, followup=False, scout_now=False):
     hermes.provision_soul(soul_content)
     try:
         started = hermes.start_run(
-            input_text=FOLLOWUP_INPUT if followup else text,
+            input_text=followup_input(thread, FOLLOWUP_INPUT) if followup else text,
             instructions=build_hub_instructions(thread, soul_content)
             + (f"\n\n{SCOUT_NOW}" if scout_now else ""),
             session_id=thread.hermes_session_id,

@@ -25,6 +25,7 @@ from research.constants import (
     AgentToolCallStatus,
     ChatMessageRole,
     ResearchSessionMode,
+    StagingItemStatus,
     ThreadEventType,
 )
 from research.models import (
@@ -345,9 +346,22 @@ def record_review_event(item, decision, note, tags):
             "runId": run.id,
         },
     )
-    if note or tags:
+    still_waiting = ResearchStagingItem.active_objects.filter(
+        run__thread=thread, status=StagingItemStatus.STAGED
+    ).exists()
+    if not still_waiting and _has_review_notes(unseen_events(thread)):
+        # One reply per review session: after the last finding from this
+        # thread is decided, covering every note left along the way.
         request_followup(thread)
     return event
+
+
+def _has_review_notes(events):
+    return any(
+        e.event_type == ThreadEventType.REVIEW_DECISION
+        and ((e.payload or {}).get("note") or (e.payload or {}).get("tags"))
+        for e in events
+    )
 
 
 # ── What the agent sees ──────────────────────────────────────────────────────
@@ -418,6 +432,12 @@ def conversation_history(thread, before=None, max_messages=60, max_chars=60000):
     while sum(len(h["content"]) for h in history) > max_chars and len(history) > 2:
         history.pop(0)
     return history
+
+
+def followup_input(thread, preamble):
+    """The follow-up prompt, naming only the events the agent hasn't answered."""
+    lines = "\n".join(f"- {_event_line(e)}" for e in unseen_events(thread))
+    return f"{preamble}\n\nNEW SINCE YOUR LAST REPLY (answer only these):\n{lines}"
 
 
 def unseen_events(thread):

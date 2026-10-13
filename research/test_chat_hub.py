@@ -47,6 +47,7 @@ from research.services.profile_service import (
 )
 from research.services.thread_service import (
     on_run_finished,
+    record_review_event,
     run_token,
     scout_summary,
     thread_token,
@@ -403,6 +404,25 @@ class ThreadFollowupTests(ProfileRootMixin, TestCase):
         enqueue.assert_not_called()
         self.thread.refresh_from_db()
         self.assertTrue(self.thread.followup_pending)
+
+
+    def test_notes_get_one_reply_after_the_last_finding_is_decided(self):
+        scout = self._run("scout", AgentRunStatus.COMPLETED)
+        items = [
+            ResearchStagingItem.objects.create(
+                project=self.project, run=scout, title=f"Source {n}", status="staged"
+            )
+            for n in range(3)
+        ]
+        with patch("research.services.thread_service._enqueue") as enqueue:
+            for item in items:
+                item.status = "rejected"
+                item.save()
+                record_review_event(item, "rejected", "vendor blog, skip", [])
+
+        enqueue.assert_called_once_with(
+            "research.tasks.run_thread_followup_job", self.thread.id
+        )
 
 
 class ThreadApiTests(ProfileRootMixin, TestCase):
