@@ -165,16 +165,27 @@ isolation end to end.
 
 ## 5. Tools
 
-The live gateway exposes DARE's own tools only: `web_search`, `search_papers`,
-`fetch_page`, the thread tools (`launch_scouts`, `thread_status`,
-`search_threads`, `search_knowledge`) and the Scout tools (`stage_finding`,
-`report_learning`). Thread and Scout tools are authorized by a signed token in
-their arguments. The user's credentialed tools (Scite, Consensus) are never
-exposed: DARE runs them server-side for each Scout and puts the results in its
-input.
+Each profile connects to DARE's MCP gateway as its owner and names its project
+in the `X-DARE-Project` header. It is offered:
 
-A page that cannot be read (paywall, 404) is a normal reply, not an MCP error,
-so dead links do not trip Hermes's per-server circuit breaker.
+- DARE's own tools: `web_search`, `search_papers`, `fetch_page`;
+- the thread tools (`launch_scouts`, `thread_status`, `search_threads`,
+  `search_knowledge`) and the Scout tools (`stage_finding`, `report_learning`),
+  authorized by a signed token in their arguments;
+- every tool of each MCP server the owner connected and enabled for the
+  project, as `<server>__<tool>` (for example `scite__search`). DARE runs the
+  call with the owner's credentials and records it on the run.
+
+The briefs do not name these tools; the agent finds them in its tool list.
+Connected-tool searches count against a Scout's search budget.
+
+The MCP session id is a fingerprint of the tool set. When the owner connects a
+server or changes a project's tools, the gateway answers the old session with
+404, so Hermes reconnects and lists the tools again on its next keepalive
+(`keepalive_interval: 60` in each profile).
+
+A failed call (a page that cannot be read, a tool error) is a normal reply, not
+an MCP error, so it does not trip Hermes's per-server circuit breaker.
 
 ## 6. Memory and learning
 

@@ -252,8 +252,10 @@ def _render_config(project):
         f"    url: {settings.DARE_MCP_GATEWAY_URL}\n"
         "    transport: http\n"
         "    enabled: true\n"
+        "    keepalive_interval: 60\n"
         "    headers:\n"
         f"      Authorization: Bearer ${{{_TOKEN_VAR}}}\n"
+        f'      X-DARE-Project: "{project.id}"\n'
     )
 
 

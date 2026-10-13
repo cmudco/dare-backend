@@ -337,12 +337,7 @@ class ResearchCancellationTests(TempProfilesMixin, TestCase):
         )
         hermes.get_run.return_value = {"status": "cancelled"}
 
-        with (
-            patch("research.services.scout_service.hermes_for", return_value=hermes),
-            patch(
-                "research.services.scout_service.gather_tool_results", return_value=[]
-            ),
-        ):
+        with patch("research.services.scout_service.hermes_for", return_value=hermes):
             run_scout_job(run.id)
 
         run.refresh_from_db()

@@ -125,7 +125,7 @@ HOW A SESSION GOES
 - Launch with mcp__dare__launch_scouts once the user agrees, or straight away if they said to go. Write each Scout's task so it stands alone. Then say what is running and stop: DARE posts to this thread when each Scout finishes.
 - Findings land in the user's Review Inbox, not in your memory.
 - When the user refers to earlier work, look it up with mcp__dare__search_threads and mcp__dare__search_knowledge before asking for it. An empty knowledge search means nothing is approved yet.
-- mcp__dare__web_search, mcp__dare__search_papers and mcp__dare__fetch_page are for your own quick checks. mcp__dare__stage_finding and mcp__dare__report_learning belong to Scouts.
+- Use your search and reading tools for your own quick checks. mcp__dare__stage_finding and mcp__dare__report_learning belong to Scouts.
 
 Pass thread="%(token)s" to every thread tool.
 
@@ -140,9 +140,9 @@ Every memory and skill write you make waits for the user's approval, so say "I'v
 When something you remember changes what you do, say so in a few words."""
 
 SCOUT_NOW = (
-    "Scout-now mode: if this message asks for research, launch exactly one "
-    "Scout for it now, with no plan (depth deep unless they ask for quick), and "
-    "say in one line what it will look for. Otherwise just reply."
+    "The user pressed Scout: unless this message is small talk, launch exactly "
+    "one Scout for it now instead of answering it yourself (no plan; depth "
+    "deep unless they ask for quick), and say in one line what it will look for."
 )
 
 FOLLOWUP_BRIEF = (
@@ -287,7 +287,7 @@ SCOUT_BRIEF = """You are a Scout: you find and check sources for one task. The P
 Restate the task as a precise question that keeps the user's intent, using the conversation below it. If it has no research intent, stage nothing and say so.
 
 Pass run="%(run_token)s" on every DARE tool call.
-1. Search with mcp__dare__web_search and mcp__dare__search_papers: at most %(max_searches)d searches.
+1. Search with the search tools you have, DARE's and any the user connected: at most %(max_searches)d searches.
 2. Read a source with mcp__dare__fetch_page before you stage it: at most %(max_reads)d pages.
 3. Stage each source with mcp__dare__stage_finding as soon as you have read it. Give its working URL, label its kind honestly, and copy one sentence exactly as it appears on the page into citationContext. DARE checks the link, the quote, the DOI and the date, and tells you when it refuses a source or the user already has it.
 4. Before you finish, call mcp__dare__report_learning once: the remembered preferences or skills that changed what you did, and each source you set aside because of one. Empty lists are fine.
@@ -315,7 +315,7 @@ def _approved_titles(project, limit=30):
     return [i.source_staging_item.title for i in items if i.source_staging_item]
 
 
-def scout_prompt(run, tool_results_text=""):
+def scout_prompt(run):
     """A Scout's brief and its task, plus what only this run has."""
     max_searches, max_reads = scout_limits((run.selected_context or {}).get("depth"))
     instructions = SCOUT_BRIEF % {
@@ -324,12 +324,6 @@ def scout_prompt(run, tool_results_text=""):
         "run_token": run_token(run),
     }
     parts = [f"Your task: {run.task}"]
-    if tool_results_text:
-        parts.append(
-            "Results from the user's connected research tools for this task "
-            "(judge them like any source; stage the relevant ones):\n"
-            + tool_results_text
-        )
     titles = _approved_titles(run.project)
     if titles:
         parts.append(

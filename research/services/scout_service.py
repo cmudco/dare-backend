@@ -1,19 +1,16 @@
 """
 A Scout run: search, read and stage sources for one task from a chat thread.
 
-The Scout stages each source with the ``stage_finding`` tool as it works and
-reports what memory changed with ``report_learning``; its closing reply is a
-short summary kept for the audit.
+The Scout searches with DARE's tools and the user's connected ones, stages
+each source with ``stage_finding`` as it works and reports what memory changed
+with ``report_learning``; its closing reply is a short summary for the audit.
 """
 
 import logging
 
 from django.conf import settings
 
-from mcp.services.mcp_gateway import gather_tool_results
-from research.constants import AgentToolCallStatus
-from research.models import ResearchAgentRun, ResearchAgentToolCall, ResearchStagingItem
-from research.services.audit_service import token_count
+from research.models import ResearchAgentRun, ResearchStagingItem
 from research.services.profile_service import hermes_for
 from research.services.prompt_builder import scout_prompt
 from research.services.run_service import (
@@ -27,34 +24,6 @@ from research.services.run_service import (
 logger = logging.getLogger(__name__)
 
 _SEARCHES = ("web_search", "search_papers")
-
-
-def _connected_tool_results(run):
-    """Run the user's connected research tools on the task, as text for the input.
-
-    DARE calls them itself so credentials stay here; each call is recorded on
-    the run.
-    """
-    slugs = (run.selected_context or {}).get("tools") or run.project.enabled_tools
-    results = gather_tool_results(run.user, slugs, run.task)
-    for r in results:
-        body = r["error"] or r["raw"]
-        ResearchAgentToolCall.objects.create(
-            run=run,
-            tool=f"{r['slug']}__{r['tool']}",
-            arguments={"query": run.task},
-            status=(
-                AgentToolCallStatus.ERROR if r["error"] else AgentToolCallStatus.SUCCESS
-            ),
-            result_summary=body,
-            result_tokens=token_count(body),
-            error=r["error"],
-        )
-    return "\n\n".join(
-        f"### {r['slug']} · {r['tool']}\n{r['text']}"
-        for r in results
-        if r["text"] and not r["error"]
-    )
 
 
 def _empty_detail(run, counts, output):
@@ -82,17 +51,15 @@ def run_scout(run_id):
     if run is None or cancelled_before_start(run):
         return
     hermes = hermes_for(run.project)
-    set_detail(run, "Querying research tools…")
-    prompt = scout_prompt(run, _connected_tool_results(run))
     set_detail(run, "Starting Scout…")
-    if not start(run, hermes, prompt):
+    if not start(run, hermes, scout_prompt(run)):
         return
 
     counts = {"searched": 0, "read": 0}
 
     def on_tool(call):
-        name = call.tool.rsplit("__", 1)[-1]
-        if name in _SEARCHES:
+        name = call.tool.removeprefix("mcp__dare__")
+        if name in _SEARCHES or "__" in name:
             counts["searched"] += 1
         elif name == "fetch_page":
             counts["read"] += 1

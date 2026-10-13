@@ -241,6 +241,14 @@ _TOOL_LABELS = {
 }
 
 
+def _activity_verb(name, arguments):
+    if name == "fetch_page":
+        return "Read further" if arguments.get("offset") else "Read"
+    if name in _TOOL_LABELS:
+        return _TOOL_LABELS[name]
+    return f"Searched {name.split('__', 1)[0]}"
+
+
 def scout_activity(run, limit=8):
     """What the Scout has done so far, newest last: each search and page read.
 
@@ -253,28 +261,36 @@ def scout_activity(run, limit=8):
             "-created_at"
         )
         # Searches and reads only: staging is shown as findings, not activity.
-        if call.tool.rsplit("__", 1)[-1] in _TOOL_LABELS
+        if _is_activity(call.tool.removeprefix("mcp__dare__"))
     ][:limit]
     calls.reverse()
     rows = []
     for call in calls:
-        base = call.tool.rsplit("__", 1)[-1]
+        name = call.tool.removeprefix("mcp__dare__")
         arguments = call.arguments or {}
         rows.append(
             {
-                "verb": (
-                    "Read further" if arguments.get("offset") else _TOOL_LABELS[base]
-                ),
-                "tool": base,
-                "detail": str(arguments.get("url") or arguments.get("query") or "")[
-                    :200
-                ],
+                "verb": _activity_verb(name, arguments),
+                "tool": name,
+                "detail": _activity_detail(arguments),
                 "ok": call.status != AgentToolCallStatus.ERROR,
                 "error": call.error[:160],
                 "at": call.created_at.isoformat(),
             }
         )
     return rows
+
+
+def _activity_detail(arguments):
+    """The URL read or the words searched; connected tools name them their own way."""
+    if arguments.get("url") or arguments.get("query"):
+        return str(arguments.get("url") or arguments.get("query"))[:200]
+    words = [v for k, v in arguments.items() if k != "run" and isinstance(v, str)]
+    return " · ".join(words)[:200]
+
+
+def _is_activity(name):
+    return name in _TOOL_LABELS or "__" in name
 
 
 # ── Follow-up turns ──────────────────────────────────────────────────────────

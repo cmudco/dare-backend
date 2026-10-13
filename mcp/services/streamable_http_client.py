@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from typing import Optional
 
 import httpx
@@ -156,20 +157,33 @@ class StreamableHTTPMCPClient(BaseMCPClient):
             raise MCPProtocolError(f"Invalid remote MCP JSON response: {error}") from error
 
     def _parse_sse_body(self, body: str) -> dict:
-        data_lines: list[str] = []
-        for line in body.splitlines():
-            if line.startswith("data:"):
-                value = line.removeprefix("data:").strip()
-                if value and value != "[DONE]":
-                    data_lines.append(value)
+        """The JSON-RPC response in an SSE body.
 
-        if not data_lines:
-            raise MCPProtocolError("Remote MCP SSE response did not include data")
-
-        try:
-            return json.loads("\n".join(data_lines))
-        except json.JSONDecodeError as error:
-            raise MCPProtocolError(f"Invalid remote MCP SSE JSON response: {error}") from error
+        Each event is its own message, and a server may send notifications
+        (progress, logs) before the response; the response is the message that
+        carries a result or an error.
+        """
+        messages = []
+        for event in re.split(r"\r?\n\r?\n", body):
+            data = "\n".join(
+                line[len("data:") :].removeprefix(" ")
+                for line in event.splitlines()
+                if line.startswith("data:")
+            )
+            if not data or data == "[DONE]":
+                continue
+            try:
+                messages.append(json.loads(data))
+            except json.JSONDecodeError as error:
+                raise MCPProtocolError(
+                    f"Invalid remote MCP SSE JSON response: {error}"
+                ) from error
+        responses = [
+            m for m in messages if isinstance(m, dict) and ("result" in m or "error" in m)
+        ]
+        if not responses:
+            raise MCPProtocolError("Remote MCP SSE response did not include a result")
+        return responses[-1]
 
     def _validate_response(self, response: dict, request_id: int):
         if response.get("id") != request_id:

@@ -1,23 +1,31 @@
 """
-DARE MCP gateway — exposes a user's connected MCP tools to an external agent
-(Hermes) over the MCP Streamable HTTP protocol, while credentials and audit stay
-in DARE.
+DARE's MCP gateway: the tools a research agent (Hermes) calls.
 
-Hermes connects once (`hermes mcp add dare --url <gateway>`); every tool from the
-user's connected servers (Consensus, Scite, Scholar, …) becomes available,
-namespaced `<server>__<tool>`. A tools/call is routed through DARE's existing
-executor, which decrypts creds and logs an MCPToolExecution. No creds leave DARE.
+Each project profile connects as its owner, naming its project in the
+``X-DARE-Project`` header. It is offered DARE's own tools (search, papers,
+page reader), the research-thread tools, and the tools of every MCP server
+the owner connected and enabled for that project, namespaced
+``<server>__<tool>``. DARE runs those calls with the owner's credentials and
+records each one, so credentials and audit stay here.
+
+Each MCP session remembers the tool set it last listed. When the set changes,
+the next response announces ``notifications/tools/list_changed`` ahead of its
+result, and Hermes lists the tools again and updates its own registry.
 """
 
+import hashlib
 import json
 import logging
+import secrets
 from datetime import timedelta
 
 from asgiref.sync import async_to_sync
+from django.core.cache import cache
+from django.db.models import Q
 from django.utils import timezone
 
 from mcp.models import GatewayFetch, UserMCPConnection
-from mcp.services.mcp_tool_executor import mcp_tool_executor
+from mcp.services.mcp_tool_executor import MCPToolExecutorError, mcp_tool_executor
 from mcp.services.scholarly import (
     ScholarlyError,
     doi_in,
@@ -178,13 +186,22 @@ _SEARCH_SLACK, _READ_SLACK = 3, 5
 USER_SEARCHES_PER_MINUTE = 30
 
 
+def _is_search(name):
+    """DARE's search tools and every connected tool count against search budgets."""
+    return name in _SEARCH_TOOLS or _SEP in name
+
+
+def _searches(rows):
+    return rows.filter(Q(tool__in=_SEARCH_TOOLS) | Q(tool__contains=_SEP))
+
+
 def _over_budget(user, name, run, run_key):
     """Why this call should not run, or "" when it may."""
-    if name in _SEARCH_TOOLS:
-        recent = GatewayFetch.all_objects.filter(
-            user=user,
-            tool__in=_SEARCH_TOOLS,
-            created_at__gte=timezone.now() - timedelta(minutes=1),
+    if _is_search(name):
+        recent = _searches(
+            GatewayFetch.all_objects.filter(
+                user=user, created_at__gte=timezone.now() - timedelta(minutes=1)
+            )
         ).count()
         if recent >= USER_SEARCHES_PER_MINUTE:
             return "Too many searches in the last minute. Work with the results you already have."
@@ -192,10 +209,7 @@ def _over_budget(user, name, run, run_key):
         return ""
     max_searches, max_reads = scout_limits((run.selected_context or {}).get("depth"))
     rows = GatewayFetch.all_objects.filter(run_key=run_key)
-    if (
-        name in _SEARCH_TOOLS
-        and rows.filter(tool__in=_SEARCH_TOOLS).count() >= max_searches + _SEARCH_SLACK
-    ):
+    if _is_search(name) and _searches(rows).count() >= max_searches + _SEARCH_SLACK:
         return (
             f"Search budget for this Scout is used up ({max_searches} searches). "
             "Read and stage the best results you already have, then finish."
@@ -211,26 +225,94 @@ def _over_budget(user, name, run, run_key):
     return ""
 
 
-def list_user_tools(user):
-    """Tool definitions exposed to a delegated agent over the live gateway.
+def _connections(user, project):
+    """The owner's live connections that ``project`` enabled, by server slug."""
+    if project is None:
+        return {}
+    wanted = {slug.lower() for slug in project.enabled_tools or []}
+    connections = UserMCPConnection.all_objects.filter(
+        user=user, is_active=True, is_deleted=False
+    ).select_related("server")
+    return {c.server.slug: c for c in connections if c.server.slug.lower() in wanted}
 
-    Tenant isolation (Path B): a live gateway call carries no project/run/owner
-    identity — Hermes forwards none — so the gateway cannot safely decide whose
-    credentials a `<server>__<tool>` call should use. It would fall back to the
-    shared service-user's credentials, leaking one tenant's tools to another.
 
-    So the live gateway exposes ONLY DARE-owned, credential-free builtins
-    (fetch_page). User-credentialed research tools (Consensus, Scite, Scholar)
-    are never exposed here; DARE runs them server-side under the project owner
-    (`gather_tool_results(run.user, …)`) and injects their results into the run.
+def _connected_tool_defs(user, project):
+    defs = []
+    for slug, connection in sorted(_connections(user, project).items()):
+        for tool in connection.cached_tools or []:
+            if not tool.get("name"):
+                continue
+            schema = dict(
+                tool.get("inputSchema")
+                or tool.get("input_schema")
+                or {"type": "object", "properties": {}}
+            )
+            schema["properties"] = {**(schema.get("properties") or {}), "run": _RUN_ARG}
+            defs.append(
+                {
+                    "name": f"{slug}{_SEP}{tool['name']}",
+                    "description": (
+                        f"[{connection.server.name}] {tool.get('description') or ''}"
+                    ).strip(),
+                    "inputSchema": schema,
+                }
+            )
+    return defs
 
-    Research-thread tools ride along: they carry their own authority (a signed
-    thread token in the arguments), so they are safe on a shared connection.
 
-    `user` is accepted for signature stability but intentionally unused — the
-    live surface is identity-independent by design.
-    """
-    return list(_BUILTIN_TOOL_DEFS) + list(THREAD_TOOL_DEFS)
+def list_user_tools(user, project=None):
+    """Every tool the caller's profile is offered."""
+    return [
+        *_BUILTIN_TOOL_DEFS,
+        *THREAD_TOOL_DEFS,
+        *_connected_tool_defs(user, project),
+    ]
+
+
+def _tools_fingerprint(user, project):
+    names = sorted(tool["name"] for tool in list_user_tools(user, project))
+    key = json.dumps([project.id if project else None, names])
+    return hashlib.sha256(key.encode()).hexdigest()
+
+
+_SESSION_TTL = 60 * 60 * 24 * 30
+# A new session is announced once: on reconnect Hermes lists the tools but keeps
+# its old registry, and only a list_changed notice makes it refresh that.
+_PENDING, _ANNOUNCED = "pending", "announced"
+
+
+def _session_key(session_id):
+    return f"mcp-gateway-session:{session_id}"
+
+
+def open_session():
+    session_id = secrets.token_hex(16)
+    cache.set(_session_key(session_id), _PENDING, _SESSION_TTL)
+    return session_id
+
+
+def session_known(session_id):
+    return cache.get(_session_key(session_id)) is not None
+
+
+def mark_listed(session_id, user, project):
+    """A tools/list answered: after an announcement, the client is up to date."""
+    if cache.get(_session_key(session_id)) != _PENDING:
+        cache.set(
+            _session_key(session_id), _tools_fingerprint(user, project), _SESSION_TTL
+        )
+
+
+def announce_change(session_id, user, project):
+    """Whether this reply should carry list_changed; records that it did."""
+    state = cache.get(_session_key(session_id))
+    if state in (_ANNOUNCED, _tools_fingerprint(user, project)):
+        return False
+    cache.set(_session_key(session_id), _ANNOUNCED, _SESSION_TTL)
+    return True
+
+
+TOOLS_CHANGED = {"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}
 
 
 def _doi_from_url(url):
@@ -358,101 +440,6 @@ def _compact_scholarly_hits(text):
     return "\n".join(lines) if lines else None
 
 
-# Common names for a tool's free-text search parameter, in preference order.
-_QUERY_PARAM_NAMES = ("query", "term", "q", "search", "keywords", "question")
-
-
-def _query_param(tool):
-    """
-    Pick the parameter of `tool` that takes the free-text search query, from its
-    input schema. Tools name it differently (Consensus `query`, Scite `term`);
-    sending the wrong name silently degrades to an unfiltered search. Returns
-    None when the tool has no string parameter to carry a query at all.
-    """
-    schema = tool.get("inputSchema") or tool.get("input_schema") or {}
-    props = schema.get("properties") or {}
-    string_props = [
-        name
-        for name, spec in props.items()
-        if isinstance(spec, dict) and spec.get("type") == "string"
-    ]
-    for name in _QUERY_PARAM_NAMES:
-        if name in string_props:
-            return name
-    for name in schema.get("required") or []:
-        if name in string_props:
-            return name
-    return string_props[0] if string_props else None
-
-
-def _search_with_primary_tool(user, conn, query, per_tool_chars):
-    """
-    Run one connection's primary (first cached) tool with the query. Returns a
-    `{"slug", "tool", "text", "raw", "error"}` result — `text` is the prompt
-    injection (compacted for scholarly results, capped), `raw` the complete
-    untrimmed response for the audit record — or None if the connection has no
-    usable search tool. MCP tool failures (`isError`) come back as `error`, not
-    text: an error payload must never be injected as evidence.
-    """
-    slug = conn.server.slug
-    tools = conn.cached_tools or []
-    tool = tools[0] if tools else None
-    tool_name = tool.get("name") if tool else None
-    param = _query_param(tool) if tool_name else None
-    if not param:
-        logger.warning("gather_tool_results: %s has no usable search tool", slug)
-        return None
-
-    def entry(text="", raw="", error=""):
-        return {
-            "slug": slug,
-            "tool": tool_name,
-            "text": text,
-            "raw": raw,
-            "error": error,
-        }
-
-    try:
-        result = async_to_sync(mcp_tool_executor.execute_tool_call)(
-            user, slug, tool_name, {param: query}
-        )
-    except Exception as exc:  # noqa: BLE001 - audit the failure
-        logger.warning("gather_tool_results %s.%s failed: %s", slug, tool_name, exc)
-        return entry(error=str(exc)[:500])
-
-    text = _result_text(result).strip()
-    if isinstance(result, dict) and result.get("isError"):
-        return entry(error=text or "Tool error")
-    if not text:
-        return None
-    _capture_fetch(user, f"{slug}{_SEP}{tool_name}", text, {param: query})
-    compact = _compact_scholarly_hits(text)
-    return entry(text=(compact or text)[:per_tool_chars], raw=text)
-
-
-def gather_tool_results(user, slugs, query, per_tool_chars=12000):
-    """
-    Run the primary tool of each of the user's connected servers whose slug is
-    in `slugs` with the query — so a delegated run (Scout) can draw on
-    credentialed tools (Consensus, Scite, …) that DARE executes on its behalf.
-    Synchronous (for jobs); credentials and audit stay in DARE.
-    """
-    wanted = {s.lower() for s in (slugs or [])}
-    if not wanted:
-        return []
-    connections = UserMCPConnection.all_objects.filter(
-        user=user, is_active=True, is_deleted=False
-    ).select_related("server")
-    results = []
-    for conn in connections:
-        if conn.server.slug.lower() not in wanted:
-            continue
-        entry = _search_with_primary_tool(user, conn, query, per_tool_chars)
-        if entry:
-            results.append(entry)
-    return results
-
-
 def _result(rpc_id, result):
     return {"jsonrpc": "2.0", "id": rpc_id, "result": result}
 
@@ -461,7 +448,7 @@ def _error(rpc_id, code, message):
     return {"jsonrpc": "2.0", "id": rpc_id, "error": {"code": code, "message": message}}
 
 
-def _handle_tool_call(user, rpc_id, params, run_key=""):
+def _handle_tool_call(user, rpc_id, params, run_key="", project=None):
     """Route one tools/call to a gateway builtin or the user's tool executor."""
     name = params.get("name", "")
     arguments = params.get("arguments") or {}
@@ -520,42 +507,41 @@ def _handle_tool_call(user, rpc_id, params, run_key=""):
 
     if _SEP not in name:
         return _error(rpc_id, -32602, f"Unknown tool: {name!r}")
-
-    # Tenant isolation (Path B): a namespaced, user-credentialed tool reached
-    # the live gateway, which has no identity to resolve the owner. Refuse it
-    # rather than fall back to the shared service-user's credentials (a
-    # cross-tenant leak). DARE runs these server-side under the project owner
-    # and provides the results in the run input. Returned as isError so the
-    # agent reads the reason and continues, and the audit records an honest
-    # refusal — never a false success.
-    logger.info("MCP gateway refused credentialed tool %s (server-side only)", name)
-    _capture_error(
-        user,
-        name,
-        "credentialed tool not available on the live gateway",
-        arguments,
-        run_key,
-        call_id,
-    )
-    return _result(
-        rpc_id,
-        {
-            "content": [
-                {
-                    "type": "text",
-                    "text": (
-                        f"{name} cannot be called here. The user's "
-                        "research-tool results are already in your input — use "
-                        "those, and read pages with fetch_page."
-                    ),
-                }
-            ],
-            "isError": True,
-        },
-    )
+    text = _call_connected_tool(user, project, name, arguments, run_key, call_id)
+    return _result(rpc_id, {"content": [{"type": "text", "text": text}]})
 
 
-def handle_jsonrpc(user, payload, run_key=""):
+def _call_connected_tool(user, project, name, arguments, run_key, call_id):
+    """Run a connected server's tool with the owner's credentials.
+
+    Failures come back as text, not MCP errors: three errors would trip the
+    runtime's breaker for every DARE tool.
+    """
+    slug, tool_name = name.split(_SEP, 1)
+    if slug not in _connections(user, project):
+        error = f"{name} is not connected for this project."
+        _capture_error(user, name, error, arguments, run_key, call_id)
+        return f"Not done: {error}"
+    if refusal := _over_budget(user, name, _scout_run(arguments), run_key):
+        return refusal
+    forwarded = {k: v for k, v in arguments.items() if k != "run"}
+    try:
+        result = async_to_sync(mcp_tool_executor.execute_tool_call)(
+            user, slug, tool_name, forwarded
+        )
+    except MCPToolExecutorError as exc:
+        logger.info("Connected tool %s failed: %s", name, exc)
+        _capture_error(user, name, str(exc), arguments, run_key, call_id)
+        return f"Not done: {name} failed ({exc})."
+    text = _result_text(result).strip()
+    if isinstance(result, dict) and result.get("isError"):
+        _capture_error(user, name, text or "Tool error", arguments, run_key, call_id)
+        return f"Not done: {name} reported an error: {text[:500]}"
+    _capture_fetch(user, name, text, arguments, run_key, call_id)
+    return _compact_scholarly_hits(text) or text
+
+
+def handle_jsonrpc(user, payload, run_key="", project=None):
     """
     Handle one MCP JSON-RPC message. Returns the response dict, or None for
     notifications (which take no response). `run_key` is the caller's run/session
@@ -577,8 +563,12 @@ def handle_jsonrpc(user, payload, run_key=""):
     # Notifications (no id) — acknowledge with no body.
     if rpc_id is None or method == "notifications/initialized":
         return None
+    if method == "ping":
+        return _result(rpc_id, {})
     if method == "tools/list":
-        return _result(rpc_id, {"tools": list_user_tools(user)})
+        return _result(rpc_id, {"tools": list_user_tools(user, project)})
     if method == "tools/call":
-        return _handle_tool_call(user, rpc_id, payload.get("params") or {}, run_key)
+        return _handle_tool_call(
+            user, rpc_id, payload.get("params") or {}, run_key, project
+        )
     return _error(rpc_id, -32601, f"Method not found: {method}")
