@@ -26,8 +26,10 @@ import logging
 from datetime import timedelta
 from pathlib import Path
 
+import django_rq
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
+from django.db import transaction
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.settings import api_settings as jwt_settings
 from rest_framework_simplejwt.tokens import AccessToken
@@ -269,6 +271,26 @@ def _write_if_changed(path, content):
     return True
 
 
+def _schedule_warmup(project):
+    """Have a new profile connect its DARE tools before the user's first turn.
+
+    Hermes connects a profile's MCP servers in the background on its first
+    run, a few seconds after that run starts, so a brand-new project's first
+    message would otherwise run without search or Scouts.
+    """
+    project_id = project.id
+
+    def enqueue():
+        try:
+            django_rq.get_queue("default").enqueue(
+                "research.tasks.warm_profile_job", project_id
+            )
+        except Exception:  # noqa: BLE001 - warm-up is an optimisation
+            logger.warning("Could not schedule warm-up for project %s", project_id)
+
+    transaction.on_commit(enqueue)
+
+
 def ensure_project_profile(project, *, refresh_token=False):
     """Make sure ``project`` has a Hermes profile on disk, and return its name.
 
@@ -284,6 +306,7 @@ def ensure_project_profile(project, *, refresh_token=False):
 
     name = profile_name_for(project)
     home = profile_home_for(project)
+    is_new = not home.exists()
     try:
         home.mkdir(parents=True, exist_ok=True)
         (home / "memories").mkdir(exist_ok=True)
@@ -309,6 +332,9 @@ def ensure_project_profile(project, *, refresh_token=False):
             "Could not provision Hermes profile %s at %s: %s", name, home, exc
         )
         return ""
+
+    if is_new:
+        _schedule_warmup(project)
 
     base_url = profile_base_url_for(project)
     if project.hermes_base_url != base_url:

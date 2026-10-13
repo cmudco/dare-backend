@@ -26,6 +26,7 @@ from research.models import (
     ResearchAgentToolCall,
     ResearchArtifact,
     ResearchKnowledgeItem,
+    ResearchProject,
     ResearchSession,
     ResearchStagingItem,
     SoulFile,
@@ -655,3 +656,32 @@ def run_thread_followup_job(thread_id):
         return
     for _ in stream_turn(run, hermes):
         pass
+
+
+WARMUP_PROMPT = "Reply with the single word: ready."
+
+
+@job("default")
+def warm_profile_job(project_id):
+    """One tiny run so a new profile's DARE tools are connected before real use."""
+    project = ResearchProject.objects.filter(id=project_id).first()
+    if project is None:
+        return
+    hermes = get_hermes_service(project)
+    try:
+        started = hermes.start_run(
+            input_text=WARMUP_PROMPT,
+            instructions=WARMUP_PROMPT,
+            session_id=f"warmup-{project_id}",
+        )
+        run_id = started.get("run_id")
+        for _ in range(30):
+            if hermes.get_run(run_id).get("status") not in (
+                "started",
+                "running",
+                "queued",
+            ):
+                break
+            time.sleep(2)
+    except Exception as exc:  # noqa: BLE001 - warm-up is an optimisation
+        logger.warning("Warm-up for project %s failed: %s", project_id, exc)
