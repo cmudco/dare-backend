@@ -142,12 +142,10 @@ HERMES_PROFILE_PREFIX = os.getenv("HERMES_PROFILE_PREFIX", "dare-proj")
 HERMES_PROFILE_MODEL = os.getenv("HERMES_PROFILE_MODEL", "claude-sonnet-5")
 HERMES_PROFILE_MODEL_PROVIDER = os.getenv("HERMES_PROFILE_MODEL_PROVIDER", "anthropic")
 # An OpenAI-compatible gateway (e.g. LiteLLM) every research profile calls instead
-# of a named provider. The key is referenced by env var name, never copied into
-# profile config: Hermes expands ${NAME} from its own environment.
+# of a named provider. Hermes isolates secrets per profile, so DARE writes this key
+# into each profile's own .env rather than relying on a shared environment.
 HERMES_PROFILE_MODEL_BASE_URL = os.getenv("HERMES_PROFILE_MODEL_BASE_URL", "")
-HERMES_PROFILE_MODEL_API_KEY_ENV = os.getenv(
-    "HERMES_PROFILE_MODEL_API_KEY_ENV", "LITELLM_API_KEY"
-)
+HERMES_PROFILE_MODEL_API_KEY = os.getenv("HERMES_PROFILE_MODEL_API_KEY", "")
 # Agent-loop ceiling written into every research profile, so a project does not
 # inherit whatever the host's global Hermes config caps runs at.
 HERMES_PROFILE_MAX_TURNS = int(os.getenv("HERMES_PROFILE_MAX_TURNS", "30"))

@@ -20,6 +20,8 @@ audited web tools run as that scholar. Without it a profile's tools resolve no
 credential at all: Hermes does not fall back to the default profile's ``.env``.
 """
 
+import hashlib
+import hmac
 import logging
 from datetime import timedelta
 from pathlib import Path
@@ -47,6 +49,8 @@ SKILL_REFLECTION_ITERATIONS = 8
 _ENV_FILENAME = ".env"
 _CONFIG_FILENAME = "config.yaml"
 _TOKEN_VAR = "MCP_DARE_API_KEY"
+_API_KEY_VAR = "API_SERVER_KEY"
+_MODEL_KEY_VAR = "DARE_MODEL_API_KEY"
 
 
 def profile_name_for(project):
@@ -97,34 +101,50 @@ def token_names_user(raw_token, user):
     )
 
 
-def read_env_token(env_path):
-    """The ``MCP_DARE_API_KEY`` value in an env file, or "" if absent."""
+def read_env_value(env_path, name):
+    """The value of ``name`` in an env file, or "" if absent."""
     try:
         lines = Path(env_path).read_text(encoding="utf-8").splitlines()
     except OSError:
         return ""
-    prefix = f"{_TOKEN_VAR}="
+    prefix = f"{name}="
     for line in lines:
         if line.startswith(prefix):
             return line[len(prefix) :].strip().strip("\"'")
     return ""
 
 
-def write_env_token(env_path, raw_token):
-    """Set ``MCP_DARE_API_KEY`` in an env file, keeping every other line as it was."""
+def write_env_value(env_path, name, value):
+    """Set ``name`` in an env file, keeping every other line as it was."""
     env_path = Path(env_path)
     try:
         lines = env_path.read_text(encoding="utf-8").splitlines()
     except FileNotFoundError:
         lines = []
-    prefix = f"{_TOKEN_VAR}="
-    entry = f"{prefix}{raw_token}"
+    prefix = f"{name}="
+    entry = f"{prefix}{value}"
     if any(line.startswith(prefix) for line in lines):
         lines = [entry if line.startswith(prefix) else line for line in lines]
     else:
         lines.append(entry)
     env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     env_path.chmod(0o600)
+
+
+def profile_api_key(project):
+    """The bearer key DARE uses to drive ``project``'s profile on the gateway.
+
+    Hermes fails closed on ``/p/<profile>/`` unless that profile's own ``.env``
+    holds an ``API_SERVER_KEY``; it never falls back to the listener's key.
+    Derived from SECRET_KEY, so it needs no storage and a rotated secret
+    re-keys every profile on its next run.
+    """
+    digest = hmac.new(
+        settings.SECRET_KEY.encode(),
+        f"hermes-profile-api:{project.id}".encode(),
+        hashlib.sha256,
+    )
+    return digest.hexdigest()[:48]
 
 
 def _render_config(project):
@@ -167,7 +187,7 @@ def _render_config(project):
     if model and base_url:
         model_block += (
             f"  base_url: {base_url}\n"
-            f"  api_key: ${{{settings.HERMES_PROFILE_MODEL_API_KEY_ENV}}}\n"
+            f"  api_key: ${{{_MODEL_KEY_VAR}}}\n"
             "  api_mode: chat_completions\n"
         )
     fallback_block = "".join(
@@ -271,10 +291,16 @@ def ensure_project_profile(project, *, refresh_token=False):
 
         env_path = home / _ENV_FILENAME
         if refresh_token or not token_names_user(
-            read_env_token(env_path), project.user
+            read_env_value(env_path, _TOKEN_VAR), project.user
         ):
-            write_env_token(env_path, mint_project_token(project))
+            write_env_value(env_path, _TOKEN_VAR, mint_project_token(project))
             logger.info("Minted a fresh MCP token for Hermes profile %s", name)
+        api_key = profile_api_key(project)
+        if read_env_value(env_path, _API_KEY_VAR) != api_key:
+            write_env_value(env_path, _API_KEY_VAR, api_key)
+        model_key = settings.HERMES_PROFILE_MODEL_API_KEY
+        if model_key and read_env_value(env_path, _MODEL_KEY_VAR) != model_key:
+            write_env_value(env_path, _MODEL_KEY_VAR, model_key)
     except OSError as exc:
         # Provisioning is best-effort: a project that cannot get its own profile
         # must still work, so fall back to the shared default rather than 500.

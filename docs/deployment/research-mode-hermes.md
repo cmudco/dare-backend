@@ -175,20 +175,33 @@ gateway:
   multiplex_profiles: true
 ```
 
-Restart the gateway, then confirm routing. A known profile answers and an
-unknown one is refused rather than silently falling back to the default:
+Tested on **Hermes v0.21.7**. From v0.21 a named profile only accepts the
+`API_SERVER_KEY` in its own `.env` and never inherits the listener's key, and
+it only sees secrets from its own `.env`. DARE writes all three per profile:
+
+| Profile `.env` key | What it is |
+|---|---|
+| `API_SERVER_KEY` | Bearer DARE drives this profile with; derived from `SECRET_KEY` per project |
+| `MCP_DARE_API_KEY` | Owner-scoped JWT the profile's MCP tools present to DARE |
+| `DARE_MODEL_API_KEY` | Model gateway key, when `HERMES_PROFILE_MODEL_BASE_URL` is set |
+
+Restart the gateway, then confirm routing and isolation. The listener's own key
+and another project's key are both refused:
 
 ```bash
-curl -s -o /dev/null -w '%{http_code}\n' \
-  -H "Authorization: Bearer $API_SERVER_KEY" \
-  http://127.0.0.1:8642/p/dare-proj1/v1/models          # 200 once project 1 exists
-curl -s -o /dev/null -w '%{http_code}\n' \
-  -H "Authorization: Bearer $API_SERVER_KEY" \
-  http://127.0.0.1:8642/p/not-a-real-profile/v1/models  # 404
+KEY=$(grep '^API_SERVER_KEY=' ~/.hermes/profiles/dare-proj1/.env | cut -d= -f2-)
+curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $KEY" \
+  http://127.0.0.1:8642/p/dare-proj1/v1/models                # 200
+curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $API_SERVER_KEY" \
+  http://127.0.0.1:8642/p/dare-proj1/v1/models                # 401
 ```
 
+On v0.21 each profile opens its own MCP connection at gateway start. Profile
+directories left behind by deleted projects keep retrying with dead tokens and
+delay the API server, so remove them.
+
 DARE provisions each profile lazily on first use — directory, `config.yaml`,
-and an owner-scoped token — so there is nothing to create by hand. Deleting a
+and the keys above — so there is nothing to create by hand. Deleting a
 profile directory is safe; it is rebuilt on the project's next run, minus
 whatever the agent had remembered.
 
@@ -368,6 +381,11 @@ HERMES_PROFILES_ROOT=/home/<user>/.hermes/profiles
 HERMES_PROFILE_PREFIX=dare-proj             # profile name = <prefix><project id>
 HERMES_PROFILE_MODEL=claude-sonnet-5        # pinned into every project profile
 HERMES_PROFILE_MODEL_PROVIDER=anthropic
+# Or route every profile through an OpenAI-compatible gateway such as LiteLLM
+# (provider becomes "custom"; the key is written into each profile's .env):
+# HERMES_PROFILE_MODEL=gpt-6-luna
+# HERMES_PROFILE_MODEL_BASE_URL=https://ai-gateway.example.edu/v1
+# HERMES_PROFILE_MODEL_API_KEY=sk-...
 HERMES_PROFILE_TOKEN_DAYS=365               # owner-scoped MCP token lifetime
 HERMES_STREAM_IDLE_SECONDS=180              # idle bound on a run's event stream
 DARE_MCP_GATEWAY_URL=http://127.0.0.1:8000/mcp/api/gateway/

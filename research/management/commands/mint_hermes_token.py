@@ -20,9 +20,9 @@ from django.core.management.base import BaseCommand, CommandError
 
 from research.services.profile_service import (
     mint_service_token,
-    read_env_token,
+    read_env_value,
     token_names_user,
-    write_env_token,
+    write_env_value,
 )
 
 
@@ -50,12 +50,14 @@ class Command(BaseCommand):
             raise CommandError(f"No active user with email {email}.")
 
         env_path = Path(env_file).expanduser()
-        if if_stale and token_names_user(read_env_token(env_path), user):
+        if if_stale and token_names_user(
+            read_env_value(env_path, "MCP_DARE_API_KEY"), user
+        ):
             self.stdout.write(f"The token in {env_path} is still valid; unchanged.")
             return
 
         token = mint_service_token(user)
-        write_env_token(env_path, str(token))
+        write_env_value(env_path, "MCP_DARE_API_KEY", str(token))
         expires = datetime.fromtimestamp(token["exp"], tz=timezone.utc)
         self.stdout.write(
             self.style.SUCCESS(

@@ -343,7 +343,9 @@ def get_hermes_service(project=None):
                 )
         base = getattr(project, "hermes_base_url", "") or ""
         if profile or base:
-            key = getattr(project, "hermes_api_key", "") or settings.HERMES_API_KEY
+            from research.services.profile_service import profile_api_key
+
+            key = profile_api_key(project) if profile else settings.HERMES_API_KEY
             return HermesService(
                 base_url=base or settings.HERMES_GATEWAY_URL,
                 api_key=key,

@@ -39,8 +39,9 @@ from research.services.learning_service import (
 )
 from research.services.profile_service import (
     ensure_project_profile,
+    profile_api_key,
     profile_home_for,
-    read_env_token,
+    read_env_value,
     token_names_user,
 )
 from research.services.thread_service import (
@@ -781,14 +782,26 @@ class ProfileTokenTests(ProfileRootMixin, TestCase):
 
         ensure_project_profile(self.project)
 
-        token = read_env_token(env_path)
+        token = read_env_value(env_path, "MCP_DARE_API_KEY")
         self.assertTrue(token_names_user(token, self.user))
 
     def test_a_valid_token_is_left_alone(self):
         ensure_project_profile(self.project)
         env_path = profile_home_for(self.project) / ".env"
-        first = read_env_token(env_path)
+        first = read_env_value(env_path, "MCP_DARE_API_KEY")
 
         ensure_project_profile(self.project)
 
-        self.assertEqual(read_env_token(env_path), first)
+        self.assertEqual(read_env_value(env_path, "MCP_DARE_API_KEY"), first)
+
+    def test_each_profile_gets_its_own_gateway_key(self):
+        ensure_project_profile(self.project)
+        ensure_project_profile(self.other_project)
+
+        keys = [
+            read_env_value(profile_home_for(p) / ".env", "API_SERVER_KEY")
+            for p in (self.project, self.other_project)
+        ]
+        self.assertEqual(keys[0], profile_api_key(self.project))
+        self.assertNotEqual(keys[0], keys[1])
+        self.assertGreaterEqual(len(keys[0]), 16)
