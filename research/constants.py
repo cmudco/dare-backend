@@ -398,3 +398,72 @@ class StagingSourceType:
     """Type of staged item (free-form; the contract's default is sourceCandidate)."""
 
     SOURCE_CANDIDATE = "sourceCandidate"
+
+
+class ProjectKind:
+    """What sort of question a project asks; sets which sources count and how fresh.
+
+    ``fresh_months`` flags a staged source older than that (0 = age doesn't matter).
+    ``guidance`` is handed to Scouts verbatim.
+    """
+
+    GENERAL = "general"
+    ACADEMIC = "academic"
+    WORK = "work"
+    MONEY = "money"
+    PERSONAL = "personal"
+    NEWS = "news"
+
+    CONFIG = {
+        GENERAL: {
+            "label": "General",
+            "fresh_months": 0,
+            "guidance": "Use whatever sources answer the question best, and label what each one is.",
+        },
+        ACADEMIC: {
+            "label": "Academic",
+            "fresh_months": 0,
+            "guidance": "Prefer peer-reviewed papers and preprints; use search_papers first.",
+        },
+        WORK: {
+            "label": "Work & tech",
+            "fresh_months": 24,
+            "guidance": (
+                "Prefer official docs, specs, changelogs, engineering write-ups from "
+                "teams that built it, and benchmarks with methods. Papers when they exist."
+            ),
+        },
+        MONEY: {
+            "label": "Money & markets",
+            "fresh_months": 12,
+            "guidance": (
+                "Prefer official data: regulators, exchanges, central banks, fund "
+                "factsheets and offering documents. Numbers must be dated. No tips or "
+                "promotional content; this is research, not advice."
+            ),
+        },
+        PERSONAL: {
+            "label": "Personal & habits",
+            "fresh_months": 0,
+            "guidance": (
+                "Prefer controlled studies and careful practitioner write-ups. Community "
+                "threads are fine for lived experience if labelled community."
+            ),
+        },
+        NEWS: {
+            "label": "News & politics",
+            "fresh_months": 12,
+            "guidance": (
+                "Prefer primary records (court orders, official statements) and "
+                "established outlets; show more than one side; date every claim."
+            ),
+        },
+    }
+
+    @classmethod
+    def choices(cls):
+        return [(key, value["label"]) for key, value in cls.CONFIG.items()]
+
+    @classmethod
+    def config(cls, kind):
+        return cls.CONFIG.get(kind) or cls.CONFIG[cls.GENERAL]

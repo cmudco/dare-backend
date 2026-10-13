@@ -22,6 +22,7 @@ from research.constants import (
     MemoryProposalOrigin,
     MemoryProposalStatus,
     MemoryType,
+    ProjectKind,
     ProjectMemorySource,
     ResearchProjectStatus,
     ResearchSessionMode,
@@ -65,6 +66,12 @@ class ResearchProject(BaseModel):
         choices=ResearchProjectStatus.choices(),
         default=ResearchProjectStatus.ACTIVE,
         help_text="Project workflow status (DARE-owned).",
+    )
+    kind = models.CharField(
+        max_length=24,
+        choices=ProjectKind.choices(),
+        default=ProjectKind.GENERAL,
+        help_text="What sort of question this is; sets which sources count and how fresh.",
     )
     enabled_tools = models.JSONField(
         default=list,

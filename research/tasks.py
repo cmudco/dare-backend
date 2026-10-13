@@ -19,6 +19,7 @@ from research.constants import (
     LIVE_RUN_STATUSES,
     AgentRunStatus,
     AgentToolCallStatus,
+    ProjectKind,
 )
 from research.models import (
     ResearchAgentRun,
@@ -442,6 +443,7 @@ def _run_scout(run_id):
         # justifies; 1 great source or 10 are both fine.
         max_candidates=3 if quick else 10,
         max_searches=2 if quick else 5,
+        kind_guidance=ProjectKind.config(run.project.kind)["guidance"],
     )
     if not _start_run(hermes, run, scout_input, instructions):
         return

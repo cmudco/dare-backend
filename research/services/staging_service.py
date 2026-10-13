@@ -3,7 +3,7 @@ Putting a Scout's candidate into the Review Inbox.
 
 One path for both ways a Scout stages: the `stage_finding` tool, called as it
 works, and the JSON envelope an older reply may still carry. Fields are coerced
-at this boundary, and a candidate the scholar already has — staged, approved,
+at this boundary, and a candidate the user already has — staged, approved,
 or rejected — is not staged twice; the caller is told which, so the agent can
 move on (and, for a rejection, learn why).
 """
@@ -15,8 +15,19 @@ from django.utils import timezone
 
 from research.constants import StagingItemStatus
 from research.models import ResearchStagingItem, SoulFile
+from research.services.source_check import check_source
 
-SOURCE_KINDS = {"peer-reviewed", "preprint", "report", "article", "documentation"}
+SOURCE_KINDS = {
+    "peer-reviewed",
+    "preprint",
+    "report",
+    "article",
+    "documentation",
+    "official-data",
+    "news",
+    "community",
+    "video",
+}
 EVIDENCE_LABELS = {"supporting", "disputing", "partial", "tangential", "unverifiable"}
 
 
@@ -54,7 +65,7 @@ def _duplicate_message(item):
     if item.status == StagingItemStatus.REJECTED:
         reason = item.rejection_reason or (item.review_metadata or {}).get("note")
         return (
-            f"Not staged: the scholar already rejected #{item.id}"
+            f"Not staged: the user already rejected #{item.id}"
             + (f" — their note: “{reason}”." if reason else ".")
             + " Avoid sources like it."
         )
@@ -73,9 +84,36 @@ def stage_candidate(run, fields):
     if duplicate is not None:
         return StageOutcome(None, _duplicate_message(duplicate))
 
+    year = fields.get("year")
+    check = check_source(
+        run,
+        title=title,
+        url=url,
+        doi=_text(fields, "doi", 255),
+        year=year if isinstance(year, int) else None,
+        quote=_text(fields, "citationContext"),
+    )
+    if check.refused:
+        merge_learning(
+            run,
+            [],
+            [
+                {
+                    "title": title,
+                    "url": url,
+                    "reason": f"Failed source check: {check.refused}",
+                }
+            ],
+        )
+        return StageOutcome(
+            None,
+            f"Not staged: {check.refused}. Find a source you can link to and quote.",
+        )
+    url = check.url
+    year = check.checks.get("year")
+
     soul = SoulFile.active_objects.filter(project=run.project).first()
     version = soul.current_version() if soul else None
-    year = fields.get("year")
     confidence = fields.get("confidence")
     kind = _text(fields, "kind").lower()
     label = _text(fields, "evidenceLabel").lower()
@@ -107,9 +145,11 @@ def stage_candidate(run, fields):
             "soulFileVersion": version.version if version else None,
             "role": "scout",
             "runId": run.id,
+            "check": {"flags": check.flags, **check.checks},
         },
     )
-    return StageOutcome(item, f"Staged #{item.id} in the scholar's Review Inbox.")
+    note = f" Flags: {'; '.join(check.flags)}." if check.flags else ""
+    return StageOutcome(item, f"Staged #{item.id} in the user's Review Inbox.{note}")
 
 
 def merge_learning(run, applied, set_aside):

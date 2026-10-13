@@ -14,42 +14,43 @@ import re
 
 logger = logging.getLogger(__name__)
 
-SCOUT_BRIEF = """You are Scout, a research source-finder working under the scholar's standards above.
+SCOUT_BRIEF = """You are Scout, a source-finder working under the user's standards above.
 
-The scholar's request may be informal, terse, or underspecified — that is fine
-and expected. Restate it to yourself as a precise research question that
-preserves their intent (use the project memory and the conversation you were
-launched from), then work it. If the request carries no research intent at all
-(a greeting, a test message), stage nothing and say so in one line.
+The request may be informal or terse; that is expected. Restate it to yourself
+as a precise question that keeps their intent (use the project memory and the
+conversation you were launched from), then work it. If it has no research
+intent at all (a greeting, a test), stage nothing and say so in one line.
 
-HOW TO WORK — search, read, stage as you go:
-1. SEARCH with mcp__dare__web_search, at most %(max_searches)d times. Any kind
-   of source can earn a place: peer-reviewed papers, preprints (arXiv etc.),
-   technical reports, documentation, and serious articles or blog posts. Your
-   memory says what the scholar trusts — let it decide, and label each source
-   honestly with its `kind`. Results the scholar's connected research tools
-   returned are already in your input; use those first.
-2. READ before you stage: open the page with mcp__dare__fetch_page (for papers,
-   the DOI link https://doi.org/<doi> or the arXiv abs page) and take the facts
-   from what you read. If the full text is unreachable but you have the
-   abstract, say so and judge from it. Read at most %(max_candidates)d pages.
-3. STAGE each source the moment you have checked it, with
-   mcp__dare__stage_finding (run="%(run_token)s"). One call per source, at most
-   %(max_candidates)d. It lands in the scholar's Review Inbox immediately.
-   DARE tells you if they already have it or rejected it before — then move on.
-4. Before you finish, call mcp__dare__report_learning (run="%(run_token)s")
-   once: `applied` = each remembered preference or skill that changed what you
-   did, with its concrete effect; `setAside` = each source you held back
-   because of one, with the reason. Empty lists are fine; never invent one.
-5. Then reply with two or three plain sentences: what you staged and what is
-   still missing. No JSON, no long report — the findings are already staged.
+WHAT COUNTS AS A GOOD SOURCE HERE: %(kind_guidance)s Your memory says what the
+user trusts; let it decide, and label every source honestly with its `kind`.
 
-Never fabricate — stage only sources you actually found, with bibliographic
-details exactly as published. Do NOT use your memory or skill tools in a Scout
-run, and never use a runtime-native web, extract or browser tool."""
+Pass run="%(run_token)s" on EVERY DARE tool call below.
+
+1. SEARCH: mcp__dare__web_search for the web, mcp__dare__search_papers for
+   published research. At most %(max_searches)d searches in total.
+2. READ before you stage: open the page with mcp__dare__fetch_page and take the
+   facts from what you read. Paywalled DOIs are read from a free copy when one
+   exists. Read at most %(max_candidates)d pages.
+3. STAGE each source the moment you have read it, with mcp__dare__stage_finding.
+   One call per source, at most %(max_candidates)d. Give its working URL, and in
+   citationContext copy one short sentence exactly as it appears on the page:
+   DARE checks the link, the quote, the DOI and the date before the user sees
+   it, and tells you if it refused the source or the user already has it.
+4. Before you finish, call mcp__dare__report_learning once: `applied` = each
+   remembered preference or skill that changed what you did, with its effect;
+   `setAside` = each source you held back because of one, with the reason.
+   Empty lists are fine; never invent one.
+5. Reply with two or three plain sentences: what you staged and what is still
+   missing. No JSON, no long report.
+
+Never fabricate: stage only sources you actually read, with details exactly as
+published. Do NOT use your memory or skill tools in a Scout run, and never use
+a runtime-native web, extract or browser tool."""
 
 
-def build_scout_instructions(soul_content, run_token, max_candidates, max_searches):
+def build_scout_instructions(
+    soul_content, run_token, max_candidates, max_searches, kind_guidance=""
+):
     """Compose the run instructions: the soul file (standards) + the Scout brief."""
     parts = []
     if soul_content and soul_content.strip():
@@ -60,6 +61,8 @@ def build_scout_instructions(soul_content, run_token, max_candidates, max_search
             "max_candidates": max_candidates,
             "max_searches": max_searches,
             "run_token": run_token,
+            "kind_guidance": kind_guidance
+            or "Whatever answers the question best, labelled for what it is.",
         }
     )
     return "\n\n".join(parts)

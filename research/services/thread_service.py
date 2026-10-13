@@ -240,7 +240,11 @@ def scout_summary(run):
     }
 
 
-_TOOL_LABELS = {"web_search": "Searched", "fetch_page": "Read"}
+_TOOL_LABELS = {
+    "web_search": "Searched",
+    "search_papers": "Searched papers",
+    "fetch_page": "Read",
+}
 
 
 def scout_activity(run, limit=8):

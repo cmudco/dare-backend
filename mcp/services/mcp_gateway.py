@@ -16,7 +16,16 @@ from asgiref.sync import async_to_sync
 
 from mcp.models import GatewayFetch, UserMCPConnection
 from mcp.services.mcp_tool_executor import mcp_tool_executor
+from mcp.services.scholarly import (
+    ScholarlyError,
+    doi_in,
+    open_access_url,
+    search_papers,
+    work_by_doi,
+)
 from mcp.services.web_fetch import PageUnreadable, fetch_page, web_search
+from research.services.audit_service import run_session_key
+from research.services.thread_service import ThreadTokenInvalid, resolve_run_token
 from research.services.thread_tools import TOOL_DEFS as THREAD_TOOL_DEFS
 from research.services.thread_tools import TOOL_NAMES as THREAD_TOOL_NAMES
 from research.services.thread_tools import call_thread_tool
@@ -30,6 +39,11 @@ _SEP = "__"  # namespace separator: <server_slug>__<tool_name>
 # servers the user connected. No namespace prefix (they're the gateway's own).
 # DARE-owned and audited, they run on DARE's API key (not the agent runtime's
 # web tooling), so search + read never depend on the runtime's tools or billing.
+_RUN_ARG = {
+    "type": "string",
+    "description": "Scouts: your run id exactly as given in your instructions, so the call is logged on your run.",
+}
+
 _BUILTIN_TOOL_DEFS = [
     {
         "name": "web_search",
@@ -41,7 +55,24 @@ _BUILTIN_TOOL_DEFS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "The search query"}
+                "query": {"type": "string", "description": "The search query"},
+                "run": _RUN_ARG,
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "search_papers",
+        "description": (
+            "Search published papers and preprints (OpenAlex: journals, arXiv, "
+            "repositories). Returns title, authors, year, venue, citation count, "
+            "DOI, a free copy when one exists, and the abstract."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "What the papers are about"},
+                "run": _RUN_ARG,
             },
             "required": ["query"],
         },
@@ -52,23 +83,60 @@ _BUILTIN_TOOL_DEFS = [
             "Read ONE article/abstract/paper page and return its readable text. "
             "Pass a single 'url' (an article URL, e.g. from web_search results). "
             "Do NOT pass a search-engine results URL (Google/Scholar/DuckDuckGo) "
-            "— use web_search to find pages, then fetch_page to read them. Prefer "
-            "this over any browser or extract tool."
+            "— use web_search to find pages, then fetch_page to read them. A "
+            "paywalled DOI is read from its free copy when one exists."
         ),
         "inputSchema": {
             "type": "object",
             "properties": {
-                "url": {"type": "string", "description": "The http(s) URL to read"}
+                "url": {"type": "string", "description": "The http(s) URL to read"},
+                "run": _RUN_ARG,
             },
             "required": ["url"],
         },
     },
 ]
 
+
+def _fetch_with_free_copy(url):
+    """Read ``url``; if it's a paywalled paper, read its open-access copy instead."""
+    try:
+        return fetch_page(url)
+    except PageUnreadable:
+        doi = doi_in(url)
+        try:
+            work = work_by_doi(doi) if doi else None
+        except ScholarlyError:
+            work = None
+        free = open_access_url(work) if work else ""
+        if not free or free == url:
+            raise
+        text = fetch_page(free)
+        return (
+            f"(The original is paywalled; this is the free copy at {free}.)\n\n{text}"
+        )
+
+
 _BUILTIN_HANDLERS = {
     "web_search": lambda user, arguments: web_search(str(arguments.get("query") or "")),
-    "fetch_page": lambda user, arguments: fetch_page(str(arguments.get("url") or "")),
+    "search_papers": lambda user, arguments: search_papers(
+        str(arguments.get("query") or "")
+    ),
+    "fetch_page": lambda user, arguments: _fetch_with_free_copy(
+        str(arguments.get("url") or "")
+    ),
 }
+
+
+def _scout_run_key(arguments):
+    """The audit key of the Scout run named in ``arguments``, or ""."""
+    token = arguments.get("run")
+    if not token:
+        return ""
+    try:
+        return run_session_key(resolve_run_token(token))
+    except ThreadTokenInvalid:
+        return ""
 
 
 def list_user_tools(user):
@@ -350,13 +418,13 @@ def _handle_tool_call(user, rpc_id, params, run_key=""):
     # runtime forwards the run/session id there. Prefer it; fall back to the
     # header-derived run_key, then to the time-window match downstream.
     meta = params.get("_meta") or {}
-    run_key = str(meta.get("dareRun") or "") or run_key
+    run_key = _scout_run_key(arguments) or str(meta.get("dareRun") or "") or run_key
     call_id = str(meta.get("dareCall") or "")
 
     if name in _BUILTIN_HANDLERS:
         try:
             text = _BUILTIN_HANDLERS[name](user, arguments)
-        except PageUnreadable as exc:
+        except (PageUnreadable, ScholarlyError) as exc:
             # A specific page couldn't be read (paywall / 404 / login wall). That
             # is a normal fetch OUTCOME, not a tool failure — return it WITHOUT
             # isError so the agent moves to another source and the runtime's

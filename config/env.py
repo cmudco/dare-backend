@@ -144,6 +144,8 @@ HERMES_PROFILE_MODEL_PROVIDER = os.getenv("HERMES_PROFILE_MODEL_PROVIDER", "anth
 # An OpenAI-compatible gateway (e.g. LiteLLM) every research profile calls instead
 # of a named provider. Hermes isolates secrets per profile, so DARE writes this key
 # into each profile's own .env rather than relying on a shared environment.
+# Identifies DARE to OpenAlex (paper search); joins its faster "polite pool".
+OPENALEX_MAILTO = os.getenv("OPENALEX_MAILTO", "")
 HERMES_PROFILE_MODEL_BASE_URL = os.getenv("HERMES_PROFILE_MODEL_BASE_URL", "")
 HERMES_PROFILE_MODEL_API_KEY = os.getenv("HERMES_PROFILE_MODEL_API_KEY", "")
 # Agent-loop ceiling written into every research profile, so a project does not

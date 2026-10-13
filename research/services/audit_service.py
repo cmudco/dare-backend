@@ -51,7 +51,7 @@ def token_count(text):
     return len(text) // 4
 
 
-def _run_session_key(run):
+def run_session_key(run):
     """The Hermes session id DARE assigned this run (see `_start_run`) — the
     value the runtime forwards as X-DARE-Run-Session so gateway rows can be
     attributed to this exact run."""
@@ -104,7 +104,7 @@ def _next_gateway_fetch(run, tool, seen_ids, call_id=""):
             tool=base, created_at__gte=run.started_at
         ).exclude(id__in=seen_ids)
         row = (
-            window.filter(run_key=_run_session_key(run)).order_by("created_at").first()
+            window.filter(run_key=run_session_key(run)).order_by("created_at").first()
             or window.filter(run_key="").order_by("created_at").first()
         )
     if row is not None:
@@ -138,7 +138,7 @@ def record_tool_call(run, event, arguments, seen_ids):
             run.id,
             tool,
             event.get("toolCallId") or "",
-            _run_session_key(run),
+            run_session_key(run),
         )
     if row is not None:
         if row.url:

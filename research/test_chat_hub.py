@@ -11,6 +11,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from feature_flags.models import FeatureFlag
+from mcp.services.web_fetch import PageUnreadable
 from research.constants import (
     AgentRunStatus,
     ChatMessageRole,
@@ -713,6 +714,16 @@ class ScoutStagingToolTests(ProfileRootMixin, TestCase):
             mode=ResearchSessionMode.SCOUT,
             status=AgentRunStatus.RUNNING,
         )
+        self.page = "Agreement with humans exceeded 80% on MT-Bench."
+        fetch = patch(
+            "research.services.source_check.fetch_page",
+            side_effect=lambda url: self.page,
+        )
+        self.fetch = fetch.start()
+        self.addCleanup(fetch.stop)
+        lookup = patch("research.services.source_check.work_by_doi", return_value=None)
+        self.lookup = lookup.start()
+        self.addCleanup(lookup.stop)
 
     def stage(self, **fields):
         return call_thread_tool(
@@ -752,6 +763,48 @@ class ScoutStagingToolTests(ProfileRootMixin, TestCase):
 
         self.assertIn("already finished", text)
         self.assertFalse(is_error)
+
+    def test_a_dead_link_is_refused_and_the_user_can_see_why(self):
+        self.fetch.side_effect = PageUnreadable(
+            "Could not read x — the page was not found (HTTP 404) — the link may be wrong"
+        )
+
+        text, is_error = self.stage(title="Ghost paper", url="https://example.org/nope")
+
+        self.assertFalse(is_error)
+        self.assertIn("doesn't work", text)
+        self.assertFalse(ResearchStagingItem.objects.filter(run=self.run).exists())
+        self.run.refresh_from_db()
+        self.assertIn("Failed source check", self.run.learning["setAside"][0]["reason"])
+
+    def test_a_doi_for_a_different_paper_is_refused(self):
+        self.lookup.return_value = {"display_name": "Protein folding with diffusion"}
+
+        text, _ = self.stage(title="Judging LLM-as-a-Judge", doi="10.1234/abc")
+
+        self.assertIn("different paper", text)
+        self.assertFalse(ResearchStagingItem.objects.filter(run=self.run).exists())
+
+    def test_a_quote_missing_from_the_page_is_flagged_not_refused(self):
+        self.stage(
+            title="Judging LLM-as-a-Judge",
+            url="https://arxiv.org/abs/2306.05685",
+            citationContext="GPT-4 agreed with experts 99% of the time",
+        )
+
+        item = ResearchStagingItem.objects.get(run=self.run)
+        self.assertIn(
+            "Quoted line isn't on the page", item.provenance["check"]["flags"]
+        )
+
+    def test_old_data_is_flagged_in_a_money_project(self):
+        self.project.kind = "money"
+        self.project.save()
+
+        self.stage(title="Fund fees 2019", url="https://example.org/fees", year=2019)
+
+        item = ResearchStagingItem.objects.get(run=self.run)
+        self.assertIn("May be out of date (2019)", item.provenance["check"]["flags"])
 
 
 class MemoryNearDuplicateTests(ProfileRootMixin, TestCase):
