@@ -1,11 +1,11 @@
 """
-The learning loop: the runtime proposes, the scholar decides, DARE renders.
+The learning loop: the runtime proposes, the user decides, DARE renders.
 
 Each project profile runs Hermes with ``memory.write_approval`` and
 ``skills.write_approval`` on, so every memory or skill write the agent makes —
 mid-conversation or in its own background reflection — is staged under
 ``<HERMES_HOME>/pending/{memory,skills}/<id>.json`` instead of committed.
-DARE ingests those staged writes as ResearchMemoryProposal rows, the scholar
+DARE ingests those staged writes as ResearchMemoryProposal rows, the user
 approves or rejects each one (and may move it to another layer), and DARE
 renders the approved state back into the profile's files:
 
@@ -114,7 +114,7 @@ def render_learning(project):
 
     Before overwriting, anything already in the files that DARE has never seen
     is raised as a proposal, so memory written before the approval gate was on
-    reaches the scholar instead of vanishing.
+    reaches the user instead of vanishing.
     """
     home = profile_home_for(project)
     if not home.is_dir():
@@ -143,7 +143,7 @@ def render_learning(project):
 
 
 def render_learning_everywhere(user):
-    """Re-render every profile the scholar owns (researcher-wide changes)."""
+    """Re-render every profile the user owns (researcher-wide changes)."""
     for project in ResearchProject.active_objects.filter(user=user):
         try:
             render_learning(project)
@@ -188,9 +188,9 @@ def _capture_unreviewed_file_entries(project, home):
 
 
 def save_researcher_standards(user, standards):
-    """Replace the scholar's researcher-wide entries and render them everywhere.
+    """Replace the user's researcher-wide entries and render them everywhere.
 
-    The scholar is the author here, so there is no proposal to approve.
+    The user is the author here, so there is no proposal to approve.
     Returns the saved list (blank and duplicate entries dropped).
     """
     cleaned = list(dict.fromkeys(s.strip() for s in standards if s.strip()))
@@ -202,7 +202,7 @@ def save_researcher_standards(user, standards):
 
 
 def project_memory_entries(project):
-    """The project's memory as the scholar edits it: one entry per line."""
+    """The project's memory as the user edits it: one entry per line."""
     return _project_memory_entries(project)
 
 
@@ -210,7 +210,7 @@ def save_project_memory(project, entries, user):
     """Make the project's memory exactly ``entries`` and render MEMORY.md.
 
     Unchanged entries keep their rows (and their history and thesis links);
-    removed ones are retired, new ones are added as the scholar's own.
+    removed ones are retired, new ones are added as the user's own.
     """
     wanted = list(
         {_same(e): e.strip() for e in reversed(entries) if e.strip()}.values()
@@ -646,7 +646,7 @@ def _proposal_row(p):
 
 
 def _corrections(project):
-    """Per Scout run, oldest first: how much correcting the scholar did."""
+    """Per Scout run, oldest first: how much correcting the user did."""
     runs = ResearchAgentRun.active_objects.filter(
         project=project, role="scout", completed_at__isnull=False
     ).order_by("started_at")

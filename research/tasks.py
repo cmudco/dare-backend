@@ -203,7 +203,7 @@ def _project_soul(project):
 
 def _knowledge_block(project, per_item_chars=300, max_items=12):
     """
-    The scholar's approved durable knowledge, compact, for injection into a
+    The user's approved durable knowledge, compact, for injection into a
     delegated run — so Scout builds on (not re-finds) the approved record and
     the Presenter grounds artifacts in it.
     """
@@ -213,7 +213,7 @@ def _knowledge_block(project, per_item_chars=300, max_items=12):
     lines = []
     for k in items:
         src = k.source_staging_item
-        cite = f"{src.title} ({src.authors}, {src.year})" if src else "Scholar note"
+        cite = f"{src.title} ({src.authors}, {src.year})" if src else "Your note"
         body = (k.content or k.rationale or "").strip()[:per_item_chars]
         lines.append(f"- {cite}: {body}")
     return "\n".join(lines)
@@ -348,7 +348,7 @@ def _scout_input(run, task, soul_content):
                 f"Scout task for this run: {task}"
             )
 
-    # DARE executes the scholar's connected research tools itself (creds and
+    # DARE executes the user's connected research tools itself (creds and
     # audit stay here) and both logs the calls and injects the results.
     run_tools = (run.selected_context or {}).get("tools") or project.enabled_tools
     try:
@@ -365,7 +365,7 @@ def _scout_input(run, task, soul_content):
                 AgentToolCallStatus.ERROR if r["error"] else AgentToolCallStatus.SUCCESS
             ),
             # The complete raw response, never trimmed — the Runs view lets the
-            # scholar audit exactly what came back; only the prompt injection
+            # user audit exactly what came back; only the prompt injection
             # below is compacted/capped.
             result_summary=r["error"] or r["raw"],
             result_tokens=token_count(r["error"] or r["raw"]),
@@ -378,7 +378,7 @@ def _scout_input(run, task, soul_content):
     )
     if context:
         text += (
-            "\n\nBelow are credentialed results from the scholar's connected "
+            "\n\nBelow are credentialed results from the user's connected "
             "research tools. Evaluate them against the standards and include "
             "the relevant ones in your staging items (cite them), alongside "
             f"what you find via web_search:\n\n{context}"
@@ -387,7 +387,7 @@ def _scout_input(run, task, soul_content):
     knowledge = _knowledge_block(project)
     if knowledge:
         text += (
-            "\n\nThe scholar's approved project knowledge so far — do NOT "
+            "\n\nThe user's approved project knowledge so far — do NOT "
             "re-stage these sources; find new or complementary evidence that "
             f"builds on them:\n{knowledge}"
         )
@@ -396,7 +396,7 @@ def _scout_input(run, task, soul_content):
         if digest:
             text += (
                 "\n\nThe conversation this Scout was launched from (context "
-                "for what the scholar wants; your task above is what to do):\n" + digest
+                "for what the user wants; your task above is what to do):\n" + digest
             )
     return text
 
@@ -564,7 +564,7 @@ def run_artifact_job(run_id):
     knowledge = _knowledge_block(run.project)
     if knowledge:
         artifact_input += (
-            "\n\nGround the artifact in the scholar's approved project "
+            "\n\nGround the artifact in the user's approved project "
             f"knowledge:\n{knowledge}"
         )
 

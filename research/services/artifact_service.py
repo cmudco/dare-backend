@@ -111,7 +111,7 @@ def build_artifact_instructions(soul_content, artifact_type=""):
         )
 
     parts.append(
-        "You are the Presentation Assistant. The scholar describes what they "
+        "You are the Presentation Assistant. The user describes what they "
         "want in plain language — infer the most fitting structure, content "
         "and emphasis from their words and the project's approved knowledge; "
         "never require specifications or ask follow-up questions. Everything "

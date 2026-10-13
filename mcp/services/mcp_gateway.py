@@ -478,7 +478,7 @@ def _handle_tool_call(user, rpc_id, params, run_key=""):
                 {
                     "type": "text",
                     "text": (
-                        f"{name} cannot be called here. The scholar's "
+                        f"{name} cannot be called here. The user's "
                         "research-tool results are already in your input — use "
                         "those, and read pages with fetch_page."
                     ),

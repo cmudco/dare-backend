@@ -4,7 +4,7 @@ Chat threads as the hub of research mode.
 A thread is one persistent conversation. From it the agent launches Scouts
 (parallel Hermes runs, each with an isolated context), and back into it DARE
 pushes what happens elsewhere — a Scout finishing, a review decision with the
-scholar's note, a memory proposal — as event rows both sides can see. When
+user's note, a memory proposal — as event rows both sides can see. When
 events arrive the agent has not reacted to, DARE runs a follow-up turn.
 """
 
@@ -251,7 +251,7 @@ def scout_activity(run, limit=8):
     """What the Scout has done so far, newest last: each search and page read.
 
     Rows are written as each tool call completes, so polling this is how the
-    scholar watches a Scout work rather than a spinner.
+    user watches a Scout work rather than a spinner.
     """
     calls = list(
         ResearchAgentToolCall.active_objects.filter(run=run).order_by("-created_at")[
@@ -372,7 +372,7 @@ def _event_line(message):
     if kind == ThreadEventType.REVIEW_DECISION:
         verdict = {"approve": "approved", "reject": "rejected", "later": "deferred"}
         line = (
-            f"[Review] The scholar {verdict.get(payload.get('decision'), 'reviewed')} "
+            f"[Review] The user {verdict.get(payload.get('decision'), 'reviewed')} "
             f"finding #{payload.get('itemId')} “{payload.get('title', '')}”"
         )
         if payload.get("tags"):
@@ -381,10 +381,10 @@ def _event_line(message):
             line += f". Their note: “{payload['note']}”"
         return line
     if kind == ThreadEventType.MEMORY_PROPOSED:
-        return f"[Memory proposed, awaiting the scholar] {message.content}"
+        return f"[Memory proposed, awaiting the user] {message.content}"
     if kind == ThreadEventType.MEMORY_DECIDED:
         return (
-            f"[Memory {payload.get('status', 'decided')} by the scholar"
+            f"[Memory {payload.get('status', 'decided')} by the user"
             f" as {payload.get('layer', '')}] {message.content}"
         )
     return f"[{kind}] {message.content}"
@@ -442,6 +442,6 @@ def thread_digest(thread, max_chars=4000):
     """A compact brief of the thread for a Scout's isolated context."""
     lines = []
     for turn in conversation_history(thread, max_messages=20):
-        who = "Scholar" if turn["role"] == "user" else "Research chat"
+        who = "User" if turn["role"] == "user" else "Research chat"
         lines.append(f"{who}: {turn['content']}")
     return "\n".join(lines)[-max_chars:]

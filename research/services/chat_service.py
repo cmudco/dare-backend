@@ -1,7 +1,7 @@
 """
 One agent turn in a chat thread, run on Hermes.
 
-Used two ways: streamed live to the browser when the scholar sends a message,
+Used two ways: streamed live to the browser when the user sends a message,
 and drained in a worker for a follow-up turn DARE starts when thread events
 (finished Scouts, review notes) arrive. Both persist the same records.
 """
@@ -36,30 +36,30 @@ class TurnStartFailed(Exception):
     """The runtime could not start the turn; the run is already marked failed."""
 
 
-HUB_BRIEF = """You are the research chat for this project: the scholar's thinking partner and the place research work is planned, launched and discussed. Work under the standards above.
+HUB_BRIEF = """You are the research chat for this project: the user's thinking partner and the place research work is planned, launched and discussed. Work under the standards above.
 
 HOW A SESSION GOES
-1. When the scholar brings a question, ask at most ONE clarifying question if the scope is genuinely ambiguous. Otherwise propose a short plan: which Scouts to run, each with a one-line focus (e.g. "3 Scouts: outcomes, bias, implementation").
-2. Let the scholar edit the plan. Launch when they agree — or straight away if they asked you to just go.
-3. Launch with mcp__dare__launch_scouts. Scouts run in parallel in the background, each with its own isolated context; write each task so it stands alone (scope, population, what counts as evidence, what to exclude). Do not wait for them and do not poll thread_status — tell the scholar they are running and end your reply; DARE tells you when they finish.
-4. Findings go to the scholar's Review Inbox, never into your memory. When Scouts finish, DARE tells you in the thread; summarise what they staged and what is still open.
+1. When the user brings a question, ask at most ONE clarifying question if the scope is genuinely ambiguous. Otherwise propose a short plan: which Scouts to run, each with a one-line focus (e.g. "3 Scouts: outcomes, bias, implementation").
+2. Let the user edit the plan. Launch when they agree — or straight away if they asked you to just go.
+3. Launch with mcp__dare__launch_scouts. Scouts run in parallel in the background, each with its own isolated context; write each task so it stands alone (scope, population, what counts as evidence, what to exclude). Do not wait for them and do not poll thread_status — tell the user they are running and end your reply; DARE tells you when they finish.
+4. Findings go to the user's Review Inbox, never into your memory. When Scouts finish, DARE tells you in the thread; summarise what they staged and what is still open.
 5. Follow-ups like "go deeper on #3" or "drop vendor sources" become new, sharper Scouts.
 
 THREAD TOOLS (pass thread="%(token)s" to every one)
 - mcp__dare__launch_scouts: start up to %(max_scouts)d Scouts: scouts=[{focus, task, depth: "quick"|"deep"}].
 - mcp__dare__thread_status: the live state of this thread's Scouts and their findings.
-- mcp__dare__search_knowledge: search the findings the scholar APPROVED from the Review Inbox. That is separate from your project memory and standards, which are already loaded above — an empty result means "no approved findings yet", never "the project is empty".
+- mcp__dare__search_knowledge: search the findings the user APPROVED from the Review Inbox. That is separate from your project memory and standards, which are already loaded above — an empty result means "no approved findings yet", never "the project is empty".
 - mcp__dare__web_search and mcp__dare__fetch_page for your own quick look-ups. Never use a runtime-native web, extract or browser tool.
 
 WORKSPACE EVENTS
-Lines marked "(DARE workspace event)" are facts DARE recorded: Scouts launching and finishing, the scholar approving or rejecting a finding with a note, memory proposals and decisions. They are not the scholar speaking, but a review note IS the scholar's voice — take it seriously.
+Lines marked "(DARE workspace event)" are facts DARE recorded: Scouts launching and finishing, the user approving or rejecting a finding with a note, memory proposals and decisions. They are not the user speaking, but a review note IS the user's voice — take it seriously.
 
 LEARNING — EVERY CHANGE NEEDS THE SCHOLAR'S APPROVAL
-You have a `memory` tool and a `skill_manage` tool. Every write you make is staged for the scholar to approve; nothing is saved until they do. Say "I've proposed remembering …", never "I'll remember …".
-- target "user" = researcher-wide: how this scholar works in ANY project — method, standards, sources they trust or distrust, citation style, how they want answers. Example: "Prefers peer-reviewed sources; set preprints aside and say so."
+You have a `memory` tool and a `skill_manage` tool. Every write you make is staged for the user to approve; nothing is saved until they do. Say "I've proposed remembering …", never "I'll remember …".
+- target "user" = researcher-wide: how this user works in ANY project — method, standards, sources they trust or distrust, citation style, how they want answers. Example: "Prefers peer-reviewed sources; set preprints aside and say so."
 - target "memory" = this project only: its scope, population, framing, decisions. Example: "Scope: emergency departments only, not radiology."
 - When a review note or a correction reveals a durable preference, propose ONE entry for it, phrased as a rule you will follow. Do not propose transient chatter or research findings.
-- When the scholar has corrected the same kind of thing about three times, or walks you through a method they want reused, propose a skill with skill_manage (action "create", a short lowercase-hyphenated name, a SKILL.md with frontmatter `name` and `description` and numbered steps).
+- When the user has corrected the same kind of thing about three times, or walks you through a method they want reused, propose a skill with skill_manage (action "create", a short lowercase-hyphenated name, a SKILL.md with frontmatter `name` and `description` and numbered steps).
 - Your approved memory and skills are already loaded. Apply them, and when one changes what you do, say so in a few words ("set aside 2 preprints, per your note").
 
 Be honest about tool failures: say plainly what failed and why; do not retry a tool that returned a quota or auth error."""
@@ -87,7 +87,7 @@ def build_hub_instructions(thread, soul_content):
         )
     else:
         parts.append(
-            "# Project\nNo research question is set yet. If the scholar's message "
+            "# Project\nNo research question is set yet. If the user's message "
             "implies one, help them sharpen it."
         )
     return "\n\n".join(parts)
@@ -95,20 +95,20 @@ def build_hub_instructions(thread, soul_content):
 
 FOLLOWUP_INPUT = (
     "New workspace events arrived since your last reply (listed in the thread "
-    "above). Respond to the scholar briefly and concretely:\n"
+    "above). Respond to the user briefly and concretely:\n"
     "- If Scouts finished, summarise what they staged, what they set aside "
-    "because of the scholar's memory, and what is still open.\n"
-    "- Only if the events include review notes from the scholar, acknowledge "
+    "because of the user's memory, and what is still open.\n"
+    "- Only if the events include review notes from the user, acknowledge "
     "them in a sentence and say what you will do differently; if a note reveals "
     "a durable preference, propose ONE memory entry for it now.\n"
     "- State only what the events say. Never guess why something was set aside "
     "or what a study found.\n"
-    "Do not launch new Scouts unless the scholar asked for them."
+    "Do not launch new Scouts unless the user asked for them."
 )
 
 
 SCOUT_NOW = (
-    "The scholar sent this in Scout-now mode: if it is a research request, "
+    "The user sent this in Scout-now mode: if it is a research request, "
     "launch exactly ONE Scout for it immediately with mcp__dare__launch_scouts "
     "— no plan, no questions — writing a self-contained task from their words "
     "and the project context (depth deep unless they ask for quick), then say "
@@ -119,7 +119,7 @@ SCOUT_NOW = (
 
 
 def start_turn(thread, user, text, *, followup=False, scout_now=False):
-    """Create the run, record the scholar's message, and start the Hermes run.
+    """Create the run, record the user's message, and start the Hermes run.
 
     Returns ``(run, hermes)``. Raises TurnStartFailed after marking the run
     failed when the runtime cannot be reached.

@@ -4,7 +4,7 @@ DARE tools the research chat calls over the MCP gateway.
 Authorized by the signed thread token in the arguments, not by the MCP
 connection's identity: the runtime may share one connection across project
 profiles, so only the token reliably says which thread — and so which
-scholar and project — a call acts for.
+user and project — a call acts for.
 """
 
 import json
@@ -38,7 +38,7 @@ TOOL_DEFS = [
         "name": "launch_scouts",
         "description": (
             "Start Scouts for this thread: parallel background searches, each "
-            "with an isolated context, whose findings land in the scholar's "
+            "with an isolated context, whose findings land in the user's "
             "Review Inbox. Returns immediately; DARE reports back in the "
             "thread when each one finishes."
         ),
@@ -55,7 +55,7 @@ TOOL_DEFS = [
                         "properties": {
                             "focus": {
                                 "type": "string",
-                                "description": "2-6 word label shown to the scholar.",
+                                "description": "2-6 word label shown to the user.",
                             },
                             "task": {
                                 "type": "string",
@@ -74,7 +74,7 @@ TOOL_DEFS = [
         "name": "thread_status",
         "description": (
             "Status of this thread's Scouts and what each staged. Call it only "
-            "when the scholar asks how the Scouts are doing — never in a loop "
+            "when the user asks how the Scouts are doing — never in a loop "
             "to wait for them: DARE posts to the thread when they finish."
         ),
         "inputSchema": {
@@ -86,7 +86,7 @@ TOOL_DEFS = [
     {
         "name": "search_knowledge",
         "description": (
-            "Search the scholar's APPROVED knowledge for this project (sources "
+            "Search the user's APPROVED knowledge for this project (sources "
             "they promoted from the Review Inbox). Empty query lists the latest."
         ),
         "inputSchema": {
@@ -109,7 +109,7 @@ SCOUT_TOOL_DEFS = [
     {
         "name": "stage_finding",
         "description": (
-            "Scouts only: put one checked source into the scholar's Review "
+            "Scouts only: put one checked source into the user's Review "
             "Inbox now. Call once per source, as soon as you have read it."
         ),
         "inputSchema": {
@@ -144,7 +144,7 @@ SCOUT_TOOL_DEFS = [
     {
         "name": "report_learning",
         "description": (
-            "Scouts only, once before finishing: what the scholar's remembered "
+            "Scouts only, once before finishing: what the user's remembered "
             "preferences and skills changed in this run."
         ),
         "inputSchema": {
@@ -262,7 +262,7 @@ def _search(thread, arguments):
     if not results:
         reply["note"] = (
             "No approved findings match. Approved knowledge is only what the "
-            "scholar promoted from the Review Inbox — it is separate from the "
+            "user promoted from the Review Inbox — it is separate from the "
             "project memory and standards already in your context, so do not "
             "describe the project as empty."
         )

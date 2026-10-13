@@ -2,7 +2,7 @@
 Critic delegation helpers — how DARE asks Hermes to pressure-test a staged source.
 
 The Critic's job is adversarial: decide whether a source genuinely supports the
-use it was staged for, under the scholar's standards. It may read the source
+use it was staged for, under the user's standards. It may read the source
 (web_fetch) and returns a single JSON verdict, which DARE attaches to the staging
 item's critic_metadata.
 """
@@ -15,7 +15,7 @@ from research.services.scout_service import find_json_object
 
 logger = logging.getLogger(__name__)
 
-CRITIC_BRIEF = """You are Critic, working under the scholar's standards above.
+CRITIC_BRIEF = """You are Critic, working under the user's standards above.
 
 Pressure-test whether the source genuinely supports the way it is being used — do
 not rubber-stamp it. Use the web tools to check the actual source when that helps.

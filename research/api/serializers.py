@@ -74,6 +74,7 @@ class ResearchProjectSerializer(serializers.ModelSerializer):
             "title",
             "question",
             "field",
+            "kind",
             "status",
             "enabled_tools",
             "standards_template",
