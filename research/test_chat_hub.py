@@ -405,7 +405,6 @@ class ThreadFollowupTests(ProfileRootMixin, TestCase):
         self.thread.refresh_from_db()
         self.assertTrue(self.thread.followup_pending)
 
-
     def test_notes_get_one_reply_after_the_last_finding_is_decided(self):
         scout = self._run("scout", AgentRunStatus.COMPLETED)
         items = [
@@ -825,6 +824,22 @@ class ScoutStagingToolTests(ProfileRootMixin, TestCase):
 
         item = ResearchStagingItem.objects.get(run=self.run)
         self.assertIn("May be out of date (2019)", item.provenance["check"]["flags"])
+
+
+class PendingDuplicateTests(ProfileRootMixin, TestCase):
+    def test_the_same_memory_staged_twice_is_proposed_once(self):
+        entry = {"action": "add", "target": "user", "content": "Wants Pakistan data."}
+        self.stage(self.project, "memory", "first", entry, origin="background_review")
+        self.stage(self.project, "memory", "second", entry)
+
+        sync_pending_learning(self.project)
+
+        self.assertEqual(
+            ResearchMemoryProposal.objects.filter(
+                project=self.project, content="Wants Pakistan data."
+            ).count(),
+            1,
+        )
 
 
 class MemoryNearDuplicateTests(ProfileRootMixin, TestCase):

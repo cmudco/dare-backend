@@ -418,9 +418,20 @@ def sync_pending_learning(project):
             profile = ResearcherProfile.active_objects.filter(user=project.user).first()
             if profile:
                 known.update(_known(profile.entries()))
+            # The foreground turn and the background review often stage the
+            # same memory entry; one proposal is enough. Skill proposals are
+            # left alone: two "Improve skill X" can carry different patches.
+            if subsystem == "memory":
+                known.update(
+                    _known(
+                        ResearchMemoryProposal.active_objects.filter(
+                            project=project, status=MemoryProposalStatus.PROPOSED
+                        ).values_list("content", flat=True)
+                    )
+                )
             for index, (op, text, layer) in enumerate(items):
                 # Nothing to decide when the runtime re-proposes what is
-                # already remembered (it often does, punctuation aside).
+                # already remembered or already waiting (punctuation aside).
                 if not text or (
                     op.get("action", "add") == "add" and _same(text) in known
                 ):
@@ -444,6 +455,8 @@ def sync_pending_learning(project):
                         )
                     )
                 if was_created:
+                    if subsystem == "memory":
+                        known.add(_same(text))
                     created.append(proposal)
                     if thread is not None:
                         post_event(
