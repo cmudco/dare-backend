@@ -435,10 +435,33 @@ def conversation_history(thread, before=None, max_messages=60, max_chars=60000):
     return history
 
 
+def _findings_block(run_id, per_item_chars=600):
+    """What a finished Scout found, with the facts, so chat can answer from it."""
+    items = ResearchStagingItem.active_objects.filter(run_id=run_id).order_by("id")
+    lines = []
+    for item in items:
+        kind = (item.provenance or {}).get("kind") or "source"
+        meta = ", ".join(str(v) for v in (item.year, kind) if v)
+        facts = " ".join((item.rationale or "").split())[:per_item_chars]
+        lines.append(f"  #{item.id} {item.title} ({meta}) {item.url}\n    {facts}")
+    return "\n".join(lines)
+
+
 def followup_input(thread, preamble):
-    """The follow-up prompt, naming only the events the agent hasn't answered."""
-    lines = "\n".join(f"- {_event_line(e)}" for e in unseen_events(thread))
-    return f"{preamble}\n\nNEW SINCE YOUR LAST REPLY (answer only these):\n{lines}"
+    """The follow-up prompt: unanswered events, plus what finished Scouts found."""
+    events = unseen_events(thread)
+    lines = "\n".join(f"- {_event_line(e)}" for e in events)
+    findings = [
+        _findings_block((e.payload or {}).get("runId"))
+        for e in events
+        if e.event_type == ThreadEventType.SCOUT_FINISHED
+        and (e.payload or {}).get("runId")
+    ]
+    text = f"{preamble}\n\nNEW SINCE YOUR LAST REPLY:\n{lines}"
+    findings = [block for block in findings if block]
+    if findings:
+        text += "\n\nWHAT THE SCOUTS FOUND (your evidence):\n" + "\n".join(findings)
+    return text
 
 
 def unseen_events(thread):

@@ -102,16 +102,20 @@ def build_hub_instructions(thread, soul_content):
 
 
 FOLLOWUP_INPUT = (
-    "New workspace events arrived since your last reply. Respond to the user "
-    "briefly and concretely, about the new events only; do not repeat earlier "
-    "summaries:\n"
-    "- If Scouts finished, summarise what they staged, what they set aside "
-    "because of the user's memory, and what is still open.\n"
-    "- Only if the events include review notes from the user, acknowledge "
-    "them in a sentence and say what you will do differently; if a note reveals "
-    "a durable preference, propose ONE memory entry for it now.\n"
-    "- State only what the events say. Never guess why something was set aside "
-    "or what a study found.\n"
+    "New workspace events arrived since your last reply. Do not repeat earlier "
+    "replies.\n"
+    "- If Scouts finished: answer the user's original question now, from what "
+    "they found (listed below) together with findings the user already "
+    "approved in earlier sessions (look them up with mcp__dare__search_knowledge "
+    "first). Lead with the answer in the shape the user asked "
+    "for (a table, a ```mermaid chart, or short bullets) and cite findings by "
+    "#number. Use only facts and numbers that appear in the findings; where "
+    "something is missing, say so in one line instead of guessing. Mention that "
+    "the findings are waiting in the Review Inbox, and end with one line on what "
+    "is still open.\n"
+    "- If the events include review notes: acknowledge them in a sentence and "
+    "say what you will do differently; if a note reveals a durable preference, "
+    "propose ONE memory entry for it now.\n"
     "Do not launch new Scouts unless the user asked for them."
 )
 
