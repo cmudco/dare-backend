@@ -244,37 +244,26 @@ def _doi_from_url(url):
 
 def _capture_fetch(user, tool, content, arguments, run_key="", call_id=""):
     """
-    Persist the complete response of a gateway-served call (the agent's reading
-    corpus). Page fetches dedup by URL; everything else is one row per call.
+    Persist the complete response of one gateway-served call (the agent's
+    reading corpus). One row per call, so every call keeps its own run and
+    tool_use id: a re-read of the same page (or the next piece of it) used to
+    overwrite the earlier row and leave that call unmatched in the run audit.
     Capture must never break the call it records.
     """
     if not content:
         return
     url = str(arguments.get("url") or "")[:1000]
     try:
-        if url:
-            GatewayFetch.all_objects.update_or_create(
-                user=user,
-                tool=tool,
-                url=url,
-                defaults={
-                    "doi": _doi_from_url(url),
-                    "arguments": arguments,
-                    "content": content,
-                    "run_key": run_key,
-                    "call_id": call_id,
-                    "error": "",
-                },
-            )
-        else:
-            GatewayFetch.all_objects.create(
-                user=user,
-                tool=tool,
-                arguments=arguments,
-                content=content,
-                run_key=run_key,
-                call_id=call_id,
-            )
+        GatewayFetch.all_objects.create(
+            user=user,
+            tool=tool,
+            url=url,
+            doi=_doi_from_url(url),
+            arguments=arguments,
+            content=content,
+            run_key=run_key,
+            call_id=call_id,
+        )
     except Exception:  # noqa: BLE001 - capture is best-effort by design
         logger.exception("Gateway fetch capture failed for %s", tool)
 
