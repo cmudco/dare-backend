@@ -10,7 +10,9 @@ env = environ.Env()
 environ.Env.read_env(os.path.join(BASE_DIR, ".env"))
 
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY")
-SSO_JWT_KEY = os.getenv("SSO_JWT_KEY", "") # Signs the JWTs this project shares with Research Tools.
+SSO_JWT_KEY = os.getenv(
+    "SSO_JWT_KEY", ""
+)  # Signs the JWTs this project shares with Research Tools.
 DEBUG = os.getenv("DJANGO_DEBUG")
 DJANGO_SETTINGS_MODULE = os.getenv("DJANGO_SETTINGS_MODULE")
 ENVIRONMENT = os.getenv("ENVIRONMENT", "local")
@@ -139,6 +141,13 @@ HERMES_PROFILE_PREFIX = os.getenv("HERMES_PROFILE_PREFIX", "dare-proj")
 # agent is a DARE decision, not a side effect of gateway config.
 HERMES_PROFILE_MODEL = os.getenv("HERMES_PROFILE_MODEL", "claude-sonnet-5")
 HERMES_PROFILE_MODEL_PROVIDER = os.getenv("HERMES_PROFILE_MODEL_PROVIDER", "anthropic")
+# An OpenAI-compatible gateway (e.g. LiteLLM) every research profile calls instead
+# of a named provider. The key is referenced by env var name, never copied into
+# profile config: Hermes expands ${NAME} from its own environment.
+HERMES_PROFILE_MODEL_BASE_URL = os.getenv("HERMES_PROFILE_MODEL_BASE_URL", "")
+HERMES_PROFILE_MODEL_API_KEY_ENV = os.getenv(
+    "HERMES_PROFILE_MODEL_API_KEY_ENV", "LITELLM_API_KEY"
+)
 # Agent-loop ceiling written into every research profile, so a project does not
 # inherit whatever the host's global Hermes config caps runs at.
 HERMES_PROFILE_MAX_TURNS = int(os.getenv("HERMES_PROFILE_MAX_TURNS", "30"))

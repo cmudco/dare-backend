@@ -152,6 +152,9 @@ def _render_config(project):
         )
 
     toolsets = "\n".join(f"    - {name}" for name in PROJECT_TOOLSETS)
+    base_url = (settings.HERMES_PROFILE_MODEL_BASE_URL or "").strip()
+    if base_url:
+        provider = "custom"
     model_block = (
         # Pinned on purpose: an unpinned profile follows whatever the runtime
         # default happens to be, so `hermes model` on the box would re-point
@@ -161,6 +164,12 @@ def _render_config(project):
         if model
         else ""
     )
+    if model and base_url:
+        model_block += (
+            f"  base_url: {base_url}\n"
+            f"  api_key: ${{{settings.HERMES_PROFILE_MODEL_API_KEY_ENV}}}\n"
+            "  api_mode: chat_completions\n"
+        )
     fallback_block = "".join(
         f"  - provider: {provider}\n    model: {fallback}\n"
         for provider, fallback in settings.HERMES_PROFILE_FALLBACK_MODELS
