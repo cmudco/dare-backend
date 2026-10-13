@@ -344,11 +344,32 @@ def _memory_text(op):
     return (op.get("content") or "").strip()
 
 
+def _skill_description(content):
+    match = re.search(r"^description:\s*(.+)$", content or "", re.MULTILINE)
+    return match.group(1).strip().strip("\"'") if match else ""
+
+
+def _skill_op_text(op, fallback_name):
+    name = op.get("name") or fallback_name
+    action = op.get("action", "")
+    if action == "create":
+        description = _skill_description(op.get("content"))
+        return f"New skill “{name}”" + (f": {description}" if description else "")
+    if action in ("write_file", "write"):
+        path = op.get("file_path") or op.get("path") or "a file"
+        return f"Add {path} to skill “{name}”"
+    if action == "delete":
+        return f"Remove skill “{name}”"
+    return f"Improve skill “{name}”"
+
+
 def _skill_text(record):
+    """What a staged skill change does, in plain words rather than op names."""
     payload = record.get("payload") or {}
-    gist = (record.get("summary") or "").strip()
     name = payload.get("name", "")
-    return gist or f"{payload.get('action', 'update')} procedure “{name}”"
+    ops = payload.get("operations") if payload.get("action") == "batch" else [payload]
+    texts = [_skill_op_text(op, name) for op in ops or [] if isinstance(op, dict)]
+    return "; ".join(dict.fromkeys(texts)) or (record.get("summary") or "").strip()
 
 
 def sync_pending_learning(project):

@@ -40,11 +40,12 @@ logger = logging.getLogger(__name__)
 # `code_execution` are inherited by a bare profile and are NOT wanted here.
 PROJECT_TOOLSETS = ["memory", "skills", "todo", "vision"]
 
-# How often the runtime reflects in the background: every N scholar turns for
-# memory, every N tool iterations for procedures. Research turns are dense, so
-# both are tighter than the runtime's general-purpose default of 10.
+# How often the runtime reflects in the background: every N user turns for
+# memory, every N tool iterations for skills. Memory is tight so preferences are
+# caught quickly; skills are loose because a Scout makes 20+ tool calls a run,
+# and a tighter interval proposed the same skill patch several times per run.
 MEMORY_REFLECTION_TURNS = 2
-SKILL_REFLECTION_ITERATIONS = 8
+SKILL_REFLECTION_ITERATIONS = 25
 
 _ENV_FILENAME = ".env"
 _CONFIG_FILENAME = "config.yaml"
