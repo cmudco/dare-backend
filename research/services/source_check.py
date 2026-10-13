@@ -22,6 +22,8 @@ from research.constants import ProjectKind
 logger = logging.getLogger(__name__)
 
 _TITLE_MATCH = 0.6
+_QUOTE_SPAN = 6
+_QUOTE_MATCH = 0.5
 
 
 @dataclass
@@ -34,6 +36,23 @@ class SourceCheck:
 
 def _norm(text):
     return re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
+
+
+def quote_on_page(quote, page):
+    """Whether most of ``quote`` appears on ``page``.
+
+    Page text breaks lines, drops symbols and inlines citations, so an exact
+    match flags real quotes. Counting how many of the quote's six-word spans
+    occur tolerates that; an invented quote shares almost none.
+    """
+    words, text = _norm(quote).split(), _norm(page)
+    if len(words) <= _QUOTE_SPAN:
+        return " ".join(words) in text
+    spans = [
+        " ".join(words[i : i + _QUOTE_SPAN])
+        for i in range(len(words) - _QUOTE_SPAN + 1)
+    ]
+    return sum(span in text for span in spans) / len(spans) >= _QUOTE_MATCH
 
 
 def _page_text(run, url, check):
@@ -107,7 +126,7 @@ def check_source(run, *, title, url, doi, year, quote):
     if check.refused:
         return check
     if quote and text:
-        found = _norm(quote) in _norm(text)
+        found = quote_on_page(quote, text)
         check.checks["quoteFound"] = found
         if not found:
             check.flags.append("Quoted line isn't on the page")
