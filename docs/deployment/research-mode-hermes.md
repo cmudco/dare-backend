@@ -323,8 +323,19 @@ whenever a gateway tool call produces no row, and a separate one when the
 runtime named a `toolCallId` that did not match — grep `research.audit` in the
 worker logs. Silence means every call joined exactly.
 
-A patched local install is kept at `ops/hermes/0001-dare-toolcall-correlation.patch`
-and still applies cleanly to v0.19.
+The patch is required, not optional: without it the run audit falls back to
+matching by order and loses results for re-read pages and parallel calls. Apply
+`ops/hermes/0002-dare-toolcall-correlation-v0.21.7.patch` to the Hermes checkout
+(v0.21.7) after every upgrade, then `hermes gateway restart`:
+
+```bash
+cd ~/.hermes/hermes-agent && git apply /path/to/dare-backend/ops/hermes/0002-dare-toolcall-correlation-v0.21.7.patch
+```
+
+On v0.21 the three hunks live in `agent/tool_executor.py` (`tool_call_id` on
+`tool.completed`), `gateway/platforms/api_server_runs.py` (`toolCallId` in the
+run stream) and `tools/mcp_tool_handlers.py` (MCP `_meta.dareCall`). The v0.19
+version is kept as `0001-dare-toolcall-correlation.patch`.
 
 Historical local patch recipe (diagnostic reference only):
 

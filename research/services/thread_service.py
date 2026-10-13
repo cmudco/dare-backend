@@ -255,11 +255,14 @@ def scout_activity(run, limit=8):
     Rows are written as each tool call completes, so polling this is how the
     user watches a Scout work rather than a spinner.
     """
-    calls = list(
-        ResearchAgentToolCall.active_objects.filter(run=run).order_by("-created_at")[
-            :limit
-        ]
-    )
+    calls = [
+        call
+        for call in ResearchAgentToolCall.active_objects.filter(run=run).order_by(
+            "-created_at"
+        )
+        # Searches and reads only: staging is shown as findings, not activity.
+        if call.tool.rsplit("__", 1)[-1].replace("mcp_dare_", "") in _TOOL_LABELS
+    ][:limit]
     calls.reverse()
     rows = []
     for call in calls:
@@ -267,7 +270,9 @@ def scout_activity(run, limit=8):
         arguments = call.arguments or {}
         rows.append(
             {
-                "verb": _TOOL_LABELS.get(base, "Used"),
+                "verb": (
+                    "Read further" if arguments.get("offset") else _TOOL_LABELS[base]
+                ),
                 "tool": base,
                 "detail": str(arguments.get("url") or arguments.get("query") or "")[
                     :200

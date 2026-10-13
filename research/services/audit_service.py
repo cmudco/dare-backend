@@ -141,6 +141,11 @@ def record_tool_call(run, event, arguments, seen_ids):
             run_session_key(run),
         )
     if row is not None:
+        # The gateway saw the real arguments; the stream only has a preview.
+        real = {
+            k: v for k, v in (row.arguments or {}).items() if k not in ("run", "thread")
+        }
+        arguments = {**arguments, **real}
         if row.url:
             arguments = {**arguments, "url": row.url}
         if row.error:
