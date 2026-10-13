@@ -457,9 +457,26 @@ the port rather than exposing it.
 
 | Layer | Knob | Default |
 |---|---|---|
-| Hermes loop | `agent.max_turns` | 40 |
+| Hermes loop | `HERMES_PROFILE_MAX_TURNS` (written into each profile) | 30 |
 | Scout depth | quick = 2 searches/3 reads · deep = 5 searches/10 reads | per request |
-| Page reads | `MAX_CHARS` (`mcp/services/web_fetch.py`) | 40k chars |
+| Page reads | `PAGE_PIECE_CHARS` per `fetch_page` call (`mcp/services/mcp_gateway.py`); the full page (up to 40k) is stored | 12k chars |
+| Project budget | `RESEARCH_PROJECT_SPEND_CAP_USD`: new turns and Scouts stop once a project has spent this | 0 (off) |
+| Skill reflection | `SKILL_REFLECTION_ITERATIONS` (`profile_service.py`) | every 25 tool calls |
+
+Every run is priced from DARE's `LLM` rate table (`identifier` matches the
+profile model, gateway prefixes such as `us.anthropic.` stripped), counting
+Hermes's `cache_read_tokens` at the cached rate. On GPT-6 Luna through LiteLLM a
+deep Scout costs about one cent, because roughly 90% of its input is cached.
+
+### Source checks
+
+Every `stage_finding` call is checked before the source reaches the Review
+Inbox (`research/services/source_check.py`). Dead links and DOIs that resolve to
+a different paper are refused, and the refusal is shown under the run's set-aside
+sources. A quote missing from the page, a retraction, or data older than the
+project kind allows (`ProjectKind.fresh_months`) is staged with a visible flag.
+Paper search and DOI lookups go to OpenAlex; set `OPENALEX_MAILTO` to a contact
+address to use its faster polite pool.
 
 Hermes owns the execution-loop ceiling. DARE does not independently count
 streamed tool events, impose an eight-minute execution deadline, or start a
