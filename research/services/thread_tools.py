@@ -8,12 +8,16 @@ user and project — a call acts for.
 """
 
 import json
+import re
 from dataclasses import dataclass
 
-from django.db.models import Q
 
-from research.constants import MAX_SCOUTS_PER_LAUNCH
-from research.models import ResearchAgentRun, ResearchKnowledgeItem
+from research.constants import MAX_SCOUTS_PER_LAUNCH, ChatMessageRole
+from research.models import (
+    ResearchAgentRun,
+    ResearchChatMessage,
+    ResearchKnowledgeItem,
+)
 from research.services.cost_service import SpendCapReached, check_spend_cap
 from research.services.staging_service import (
     EVIDENCE_LABELS,
@@ -82,6 +86,22 @@ TOOL_DEFS = [
             "type": "object",
             "properties": {"thread": _THREAD_PARAM},
             "required": ["thread"],
+        },
+    },
+    {
+        "name": "search_threads",
+        "description": (
+            "Search this project's earlier chat threads: what the user asked and "
+            "what you answered before (projections, tables, plans). Use it when "
+            "the user refers to earlier work, instead of asking them to paste it."
+        ),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "thread": _THREAD_PARAM,
+                "query": {"type": "string"},
+            },
+            "required": ["thread", "query"],
         },
     },
     {
@@ -237,20 +257,70 @@ def _status(thread, arguments):
     return {"scouts": [scout_summary(run) for run in runs]}
 
 
+_STOPWORDS = {
+    "the",
+    "and",
+    "for",
+    "with",
+    "what",
+    "how",
+    "are",
+    "was",
+    "this",
+    "that",
+    "from",
+    "my",
+    "of",
+    "in",
+    "to",
+    "a",
+    "an",
+    "on",
+    "is",
+    "it",
+}
+
+
+def _query_words(query):
+    """Meaningful words of a free-text query; a phrase match finds almost nothing."""
+    words = re.findall(r"[a-z0-9£$%.-]+", query.lower())
+    return [w for w in words if len(w) > 1 and w not in _STOPWORDS][:12]
+
+
+def _rank(rows, text_of, words, limit):
+    """Rows mentioning the most query words first, then the newest."""
+    scored = []
+    for index, row in enumerate(rows):
+        text = text_of(row).lower()
+        hits = sum(1 for w in words if w in text)
+        if hits:
+            scored.append((-hits, index, row))
+    return [row for _, _, row in sorted(scored)[:limit]]
+
+
 def _search(thread, arguments):
     query = str(arguments.get("query") or "").strip()[:200]
-    items = ResearchKnowledgeItem.active_objects.filter(
-        project=thread.project
-    ).select_related("source_staging_item")
-    if query:
-        items = items.filter(
-            Q(content__icontains=query)
-            | Q(rationale__icontains=query)
-            | Q(source_staging_item__title__icontains=query)
-            | Q(source_staging_item__authors__icontains=query)
+    items = list(
+        ResearchKnowledgeItem.active_objects.filter(project=thread.project)
+        .select_related("source_staging_item")
+        .order_by("-approved_at")[:200]
+    )
+    words = _query_words(query)
+    if words:
+        items = _rank(
+            items,
+            lambda i: " ".join(
+                [
+                    i.content or "",
+                    i.rationale or "",
+                    getattr(i.source_staging_item, "title", "") or "",
+                ]
+            ),
+            words,
+            10,
         )
     results = []
-    for item in items.order_by("-approved_at")[:10]:
+    for item in items[:10]:
         source = item.source_staging_item
         results.append(
             {
@@ -274,8 +344,37 @@ def _search(thread, arguments):
     return reply
 
 
+def _search_threads(thread, arguments):
+    words = _query_words(str(arguments.get("query") or "")[:200])
+    if not words:
+        raise ToolInputError("'query' needs a few words to search for.")
+    messages = list(
+        ResearchChatMessage.active_objects.filter(
+            project=thread.project,
+            role__in=[ChatMessageRole.USER, ChatMessageRole.ASSISTANT],
+        )
+        .exclude(session=thread)
+        .select_related("session")
+        .order_by("-created_at")[:400]
+    )
+    hits = _rank(messages, lambda m: m.content or "", words, 8)
+    return {
+        "results": [
+            {
+                "thread": m.session.title,
+                "date": m.created_at.date().isoformat(),
+                "who": "user" if m.role == ChatMessageRole.USER else "you",
+                "text": " ".join((m.content or "").split())[:1200],
+            }
+            for m in hits
+        ]
+        or "No earlier thread mentions that."
+    }
+
+
 _HANDLERS = {
     "launch_scouts": _launch,
+    "search_threads": _search_threads,
     "thread_status": _status,
     "search_knowledge": _search,
 }

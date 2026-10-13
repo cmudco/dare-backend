@@ -56,6 +56,7 @@ HOW TO ANSWER
 THREAD TOOLS (pass thread="%(token)s" to every one)
 - mcp__dare__launch_scouts: start up to %(max_scouts)d Scouts: scouts=[{focus, task, depth: "quick"|"deep"}].
 - mcp__dare__thread_status: the live state of this thread's Scouts and their findings.
+- mcp__dare__search_threads: search this project's earlier threads (what was asked and what you answered). When the user refers to earlier work ("wrap it up", "what worked", "that projection"), search it and the approved knowledge first; never ask the user to paste earlier results.
 - mcp__dare__search_knowledge: search the findings the user APPROVED from the Review Inbox. That is separate from your project memory and standards, which are already loaded above — an empty result means "no approved findings yet", never "the project is empty".
 - mcp__dare__web_search, mcp__dare__search_papers and mcp__dare__fetch_page for your own quick look-ups. mcp__dare__stage_finding and mcp__dare__report_learning are for Scouts only; never call them. Never use a runtime-native web, extract or browser tool.
 

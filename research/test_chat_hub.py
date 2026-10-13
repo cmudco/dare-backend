@@ -1023,3 +1023,22 @@ class ScoutBudgetTests(ProfileRootMixin, TestCase):
         search.assert_not_called()
         self.assertIn("budget", reply["result"]["content"][0]["text"])
         self.assertNotIn("isError", reply["result"])
+
+
+class ThreadSearchTests(ProfileRootMixin, TestCase):
+    def test_an_answer_from_an_earlier_thread_can_be_found(self):
+        earlier = ResearchSession.create_thread(self.project, self.user)
+        ResearchChatMessage.objects.create(
+            session=earlier,
+            project=self.project,
+            user=self.user,
+            role=ChatMessageRole.ASSISTANT,
+            content="MIIETF projection: PKR 70-86m in 3 years.",
+        )
+
+        text, _ = call_thread_tool(
+            "search_threads",
+            {"thread": thread_token(self.thread), "query": "the MIIETF projection"},
+        )
+
+        self.assertIn("PKR 70-86m", text)
