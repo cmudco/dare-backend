@@ -79,6 +79,32 @@ def _known(texts):
     return {_same(t) for t in texts}
 
 
+# Share of the shorter entry's words that must appear in the other for the two
+# to count as one lesson. Measured on real pairs: rewordings scored 0.61-0.86,
+# distinct lessons on the same project 0.06-0.21.
+_PARAPHRASE = 0.6
+
+
+def _already_known(text, known):
+    """Whether ``text`` is, or closely rewords, an entry in ``known``.
+
+    The foreground turn and the background review phrase the same lesson
+    differently, so exact matching lets both through.
+    """
+    key = _same(text)
+    if key in known:
+        return True
+    words = set(key.split())
+    for other in known:
+        other_words = set(other.split())
+        shorter = min(len(words), len(other_words))
+        # A short entry is contained in its own refinements; only compare
+        # entries long enough for overlap to mean the same lesson.
+        if shorter >= 8 and len(words & other_words) / shorter >= _PARAPHRASE:
+            return True
+    return False
+
+
 def _entries(text):
     return [e.strip() for e in (text or "").split("§") if e.strip()]
 
@@ -433,7 +459,7 @@ def sync_pending_learning(project):
                 # Nothing to decide when the runtime re-proposes what is
                 # already remembered or already waiting (punctuation aside).
                 if not text or (
-                    op.get("action", "add") == "add" and _same(text) in known
+                    op.get("action", "add") == "add" and _already_known(text, known)
                 ):
                     continue
                 ref = f"{subsystem}:{record.get('id', path.stem)}:{index}"

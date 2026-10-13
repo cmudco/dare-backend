@@ -842,6 +842,31 @@ class PendingDuplicateTests(ProfileRootMixin, TestCase):
         )
 
 
+class ParaphraseDuplicateTests(ProfileRootMixin, TestCase):
+    def test_a_reworded_copy_of_a_waiting_proposal_is_skipped(self):
+        first = "For behavior-change research, prioritize usable quantitative effect estimates and exclude broken studies."
+        second = "For research on behavior-change methods, prioritize usable quantitative effect estimates and exclude broken studies."
+        self.stage(
+            self.project,
+            "memory",
+            "a",
+            {"action": "add", "target": "user", "content": first},
+        )
+        sync_pending_learning(self.project)
+        self.stage(
+            self.project,
+            "memory",
+            "b",
+            {"action": "add", "target": "user", "content": second},
+        )
+
+        sync_pending_learning(self.project)
+
+        self.assertEqual(
+            ResearchMemoryProposal.objects.filter(project=self.project).count(), 1
+        )
+
+
 class MemoryNearDuplicateTests(ProfileRootMixin, TestCase):
     def test_punctuation_does_not_create_a_second_memory(self):
         ResearchProjectMemory.objects.create(
