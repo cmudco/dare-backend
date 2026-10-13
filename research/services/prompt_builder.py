@@ -15,6 +15,7 @@ The last three never repeat a profile file, and every run stores what it was
 sent in ``ResearchAgentRun.prompt``.
 """
 
+import hashlib
 import json
 from dataclasses import dataclass, field
 
@@ -49,6 +50,13 @@ class ProfileFiles:
     memory: str
     user: str
     skills: dict = field(default_factory=dict)
+
+    def fingerprint(self):
+        """Short hash of the files; changes whenever any of them does."""
+        text = json.dumps(
+            [self.soul, self.memory, self.user, self.skills], sort_keys=True
+        )
+        return hashlib.sha256(text.encode()).hexdigest()[:10]
 
     def record(self):
         return {

@@ -176,3 +176,21 @@ class PromptBuilderTests(TempProfilesMixin, TestCase):
         chat = briefs[0]["text"]
         self.assertIn('thread="<thread>"', chat)
         self.assertNotIn("SOUL-MARKER", chat)
+
+    def test_a_thread_moves_to_a_new_session_only_when_its_files_change(self):
+        hermes = MagicMock()
+        hermes.start_run.return_value = {"run_id": "run_x", "status": "started"}
+
+        def session_of_next_turn(text):
+            with patch(
+                "research.services.chat_service.hermes_for", return_value=hermes
+            ):
+                start_turn(self.thread, self.user, text)
+            return hermes.start_run.call_args.kwargs["session_id"]
+
+        first = session_of_next_turn("one")
+        self.assertEqual(session_of_next_turn("two"), first)
+        ResearchProjectMemory.objects.create(
+            project=self.project, label="New", detail="New: a decision"
+        )
+        self.assertNotEqual(session_of_next_turn("three"), first)

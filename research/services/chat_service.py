@@ -115,7 +115,7 @@ def _save_reply(run, hermes, text):
         project=run.project,
         user=run.user,
         role=ChatMessageRole.ASSISTANT,
-        content=text,
+        content=text.strip(),
         run=run,
     )
     complete(run, hermes, "Replied.", text)

@@ -11,7 +11,12 @@ import time
 import requests
 from django.utils import timezone
 
-from research.constants import LIVE_RUN_STATUSES, AgentRunStatus, AgentToolCallStatus
+from research.constants import (
+    LIVE_RUN_STATUSES,
+    AgentRole,
+    AgentRunStatus,
+    AgentToolCallStatus,
+)
 from research.models import ResearchAgentRun
 from research.services.audit_service import record_tool_call
 from research.services.cancellation_service import execute_pending_cancellation
@@ -95,13 +100,19 @@ def start(run, hermes, prompt):
     write_profile_files(run.project, files)
     run.prompt = prompt.record(files)
     run.save(update_fields=["prompt", "updated_at"])
+    session_id = run.runtime_session_id
+    if run.role == AgentRole.CHAT:
+        # Hermes reuses a session's system prompt on every later turn, so a
+        # thread moves to a new session when its files change; history is
+        # sent with every turn either way.
+        session_id = f"{session_id}-{files.fingerprint()}"
 
     for attempt in range(1, _START_ATTEMPTS + 1):
         try:
             started = hermes.start_run(
                 input_text=prompt.input,
                 instructions=prompt.instructions,
-                session_id=run.runtime_session_id,
+                session_id=session_id,
                 session_key=profile_name_for(run.project),
                 conversation_history=prompt.history,
             )
