@@ -23,8 +23,6 @@ from research.api.permissions import IsResearchFeatureEnabled
 from research.api.serializers import (
     ProjectMemoryDocumentSerializer,
     ResearchAgentRunDetailSerializer,
-    ResearchAgentRunSerializer,
-    ResearcherStandardsSerializer,
     ResearchProjectDetailSerializer,
     ResearchProjectSerializer,
     ResearchStagingItemSerializer,
@@ -35,7 +33,6 @@ from research.api.serializers import (
 from research.constants import AgentRole, ResearchSessionMode, ReviewReasonTag
 from research.models import (
     ResearchAgentRun,
-    ResearcherProfile,
     ResearchKnowledgeItem,
     ResearchMemoryProposal,
     ResearchProcedure,
@@ -59,7 +56,6 @@ from research.services.learning_service import (
     prepare_profile,
     proposal_payload,
     save_project_memory,
-    save_researcher_standards,
     save_soul,
     sync_pending_learning,
 )
@@ -301,29 +297,6 @@ class ResearchProjectMemoryDocumentView(ResearchAPIView):
         return Response({"entries": entries})
 
 
-class ResearcherStandardsView(ResearchAPIView):
-    """
-    The scholar's researcher-wide standards — what every project's agent
-    follows about how they work. Written directly by the scholar (no proposal:
-    they are the author), rendered into USER.md of every project they own.
-
-    - GET /api/research/researcher/standards/  - {standards: [...]}
-    - PUT /api/research/researcher/standards/  - replace the list
-    """
-
-    def get(self, request):
-        profile = ResearcherProfile.active_objects.filter(user=request.user).first()
-        return Response({"standards": profile.entries() if profile else []})
-
-    def put(self, request):
-        serializer = ResearcherStandardsSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        standards = save_researcher_standards(
-            request.user, serializer.validated_data["standards"]
-        )
-        return Response({"standards": standards})
-
-
 class ResearchLearningView(ResearchAPIView):
     """
     GET /api/research/projects/{id}/learning/ — what the agent has learned and
@@ -394,10 +367,12 @@ class ResearchAgentRunCancelView(ResearchAPIView):
                 id=run_id,
                 project__user=request.user,
             )
-            return Response(ResearchAgentRunSerializer(run).data)
+            return Response(ResearchAgentRunDetailSerializer(run).data)
 
         response_status = status.HTTP_202_ACCEPTED if attempted else status.HTTP_200_OK
-        return Response(ResearchAgentRunSerializer(run).data, status=response_status)
+        return Response(
+            ResearchAgentRunDetailSerializer(run).data, status=response_status
+        )
 
 
 class ResearchStagingItemCriticView(ResearchAPIView):

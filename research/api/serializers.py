@@ -175,17 +175,6 @@ class ProjectMemoryDocumentSerializer(serializers.Serializer):
     )
 
 
-class ResearcherStandardsSerializer(serializers.Serializer):
-    """The scholar's researcher-wide standards — one rule per entry."""
-
-    standards = serializers.ListField(
-        child=serializers.CharField(
-            max_length=400, trim_whitespace=True, allow_blank=True
-        ),
-        max_length=40,
-    )
-
-
 class ResearchSourceSerializer(serializers.ModelSerializer):
     """A source in the project's library."""
 
@@ -313,6 +302,7 @@ class ResearchAgentRunDetailSerializer(ResearchAgentRunSerializer):
     call and its exact final reply."""
 
     tool_calls = serializers.SerializerMethodField()
+    prompt = serializers.SerializerMethodField()
 
     class Meta(ResearchAgentRunSerializer.Meta):
         fields = ResearchAgentRunSerializer.Meta.fields + [
@@ -327,6 +317,10 @@ class ResearchAgentRunDetailSerializer(ResearchAgentRunSerializer):
             "created_at"
         )
         return ResearchAgentToolCallSerializer(calls, many=True).data
+
+    def get_prompt(self, obj):
+        # Runs from before prompts were recorded have none.
+        return obj.prompt or None
 
 
 class ResearchProjectMemorySerializer(serializers.ModelSerializer):

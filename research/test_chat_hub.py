@@ -489,7 +489,7 @@ class ThreadApiTests(ProfileRootMixin, TestCase):
         self.assertEqual(data["pending"][0]["layer"], MemoryLayer.RESEARCHER)
 
 
-class StandardsAtCreationTests(ProfileRootMixin, TestCase):
+class ProjectCreationTests(ProfileRootMixin, TestCase):
     def setUp(self):
         super().setUp()
         FeatureFlag.objects.update_or_create(
@@ -497,28 +497,6 @@ class StandardsAtCreationTests(ProfileRootMixin, TestCase):
         )
         self.client = APIClient()
         self.client.force_authenticate(self.user)
-
-    def test_saved_standards_reach_every_existing_project(self):
-        response = self.client.put(
-            "/api/research/researcher/standards/",
-            {"standards": ["Peer-reviewed only.", " ", "Peer-reviewed only.", "APA 7"]},
-            format="json",
-        )
-
-        self.assertEqual(response.json()["standards"], ["Peer-reviewed only.", "APA 7"])
-        self.assertIn("APA 7", self.read(self.other_project, "memories", "USER.md"))
-
-    def test_standards_are_private_to_their_scholar(self):
-        ResearcherProfile.objects.create(user=self.user, content="Secret rule.")
-        stranger = User.objects.create_user(
-            email="s2@example.com", password="pw", platform_role=RoleChoice.RESEARCHER
-        )
-        client = APIClient()
-        client.force_authenticate(stranger)
-
-        self.assertEqual(
-            client.get("/api/research/researcher/standards/").json()["standards"], []
-        )
 
     def test_soul_md_is_version_one_and_scope_goes_to_project_memory(self):
         soul = "# Phone bans — standards\n\n## How I work\n\n- APA 7\n"
@@ -613,10 +591,8 @@ class AgentFilesOnDiskTests(ProfileRootMixin, TestCase):
         }
 
     def test_creating_a_project_writes_all_three_files(self):
-        self.client.put(
-            "/api/research/researcher/standards/",
-            {"standards": ["Format citations in APA 7."]},
-            format="json",
+        ResearcherProfile.objects.create(
+            user=self.user, content="Format citations in APA 7."
         )
         soul = "# Identity\n\nYou are a careful reviewer.\n\n## Evidence standards\n\n- Format citations in APA 7.\n"
 
@@ -655,11 +631,6 @@ class AgentFilesOnDiskTests(ProfileRootMixin, TestCase):
             {"entries": ["Exclude: universities", "Working thesis: bans help"]},
             format="json",
         )
-        self.client.put(
-            "/api/research/researcher/standards/",
-            {"standards": ["Peer-reviewed only."]},
-            format="json",
-        )
 
         files = self.files(project)
         self.assertEqual(files["soul"], "# Identity\n\nNew voice.")
@@ -667,10 +638,6 @@ class AgentFilesOnDiskTests(ProfileRootMixin, TestCase):
             files["memory"],
             f"{project_section(project)}\n§\n"
             "Exclude: universities\n§\nWorking thesis: bans help",
-        )
-        self.assertEqual(files["user"], "Peer-reviewed only.")
-        self.assertEqual(
-            self.read(self.other_project, "memories", "USER.md"), "Peer-reviewed only."
         )
 
 

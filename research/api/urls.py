@@ -11,7 +11,6 @@ from research.api.views import (
     ResearchAgentRunRedirectView,
     ResearchAgentRunView,
     ResearchArtifactGenerateView,
-    ResearcherStandardsView,
     ResearchLearningView,
     ResearchMemoryProposalReviewView,
     ResearchProjectGraphView,
@@ -52,11 +51,6 @@ urlpatterns = [
         "projects/<int:project_id>/memory/",
         ResearchProjectMemoryDocumentView.as_view(),
         name="research-project-memory-document",
-    ),
-    path(
-        "researcher/standards/",
-        ResearcherStandardsView.as_view(),
-        name="research-researcher-standards",
     ),
     path(
         "projects/<int:project_id>/learning/",

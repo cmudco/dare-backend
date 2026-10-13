@@ -147,20 +147,6 @@ def save_soul(project, content, user, change_note=""):
     render_learning(project)
 
 
-def save_researcher_standards(user, standards):
-    """Replace the user's researcher-wide entries and render them everywhere.
-
-    The user is the author here, so there is no proposal to approve.
-    Returns the saved list (blank and duplicate entries dropped).
-    """
-    cleaned = list(dict.fromkeys(s.strip() for s in standards if s.strip()))
-    profile, _ = ResearcherProfile.objects.get_or_create(user=user)
-    profile.content = MEMORY_SEPARATOR.join(cleaned)
-    profile.save(update_fields=["content", "updated_at"])
-    render_learning_everywhere(user)
-    return cleaned
-
-
 def save_project_memory(project, entries, user):
     """Make the project's memory exactly ``entries`` and render MEMORY.md.
 
