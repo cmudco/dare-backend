@@ -48,6 +48,7 @@ from research.services.audit_service import record_tool_call, token_count
 from research.services.chat_service import TurnStartFailed, start_turn, stream_turn
 from research.services.cost_service import set_run_cost
 from research.services.learning_service import sync_pending_learning
+from research.services.scout_service import scout_limits
 from research.services.staging_service import merge_learning, stage_candidate
 from research.services.thread_service import (
     on_run_finished,
@@ -478,14 +479,14 @@ def _run_scout(run_id):
     scout_input = _scout_input(run, run.task, soul_content)
 
     _set_status(run, "Starting Scout…")
-    quick = (run.selected_context or {}).get("depth") == "quick"
+    max_searches, max_reads = scout_limits((run.selected_context or {}).get("depth"))
     instructions = build_scout_instructions(
         soul_content,
         run_token(run),
         # Upper bounds, not targets — the brief says stage what the evidence
         # justifies; 1 great source or 10 are both fine.
-        max_candidates=3 if quick else 10,
-        max_searches=2 if quick else 5,
+        max_candidates=max_reads,
+        max_searches=max_searches,
         kind_guidance=ProjectKind.config(run.project.kind)["guidance"],
     )
     if not _start_run(hermes, run, scout_input, instructions):

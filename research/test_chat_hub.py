@@ -977,3 +977,46 @@ class QuietStreamTests(ProfileRootMixin, TestCase):
             output = _verify_terminal_run(hermes, run, "interrupted")
 
         self.assertEqual(output, "done")
+
+
+class ScoutBudgetTests(ProfileRootMixin, TestCase):
+    def test_a_scout_past_its_search_budget_is_told_to_stop(self):
+        from mcp.models import GatewayFetch
+        from mcp.services.mcp_gateway import handle_jsonrpc
+        from research.services.audit_service import run_session_key
+
+        run = ResearchAgentRun.objects.create(
+            session=self.thread,
+            thread=self.thread,
+            project=self.project,
+            user=self.user,
+            role="scout",
+            mode=ResearchSessionMode.SCOUT,
+            status=AgentRunStatus.RUNNING,
+            selected_context={"depth": "quick"},
+        )
+        for n in range(5):
+            GatewayFetch.all_objects.create(
+                user=self.user,
+                tool="web_search",
+                content=f"results {n}",
+                run_key=run_session_key(run),
+            )
+
+        with patch("mcp.services.mcp_gateway.web_search") as search:
+            reply = handle_jsonrpc(
+                self.user,
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "web_search",
+                        "arguments": {"query": "more", "run": run_token(run)},
+                    },
+                },
+            )
+
+        search.assert_not_called()
+        self.assertIn("budget", reply["result"]["content"][0]["text"])
+        self.assertNotIn("isError", reply["result"])

@@ -48,6 +48,11 @@ published. Do NOT use your memory or skill tools in a Scout run, and never use
 a runtime-native web, extract or browser tool."""
 
 
+def scout_limits(depth):
+    """``(max_searches, max_reads)`` the brief gives a Scout of this depth."""
+    return (2, 3) if depth == "quick" else (5, 10)
+
+
 def build_scout_instructions(
     soul_content, run_token, max_candidates, max_searches, kind_guidance=""
 ):

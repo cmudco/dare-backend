@@ -11,8 +11,10 @@ executor, which decrypts creds and logs an MCPToolExecution. No creds leave DARE
 
 import json
 import logging
+from datetime import timedelta
 
 from asgiref.sync import async_to_sync
+from django.utils import timezone
 
 from mcp.models import GatewayFetch, UserMCPConnection
 from mcp.services.mcp_tool_executor import mcp_tool_executor
@@ -25,6 +27,7 @@ from mcp.services.scholarly import (
 )
 from mcp.services.web_fetch import PageUnreadable, fetch_page, web_search
 from research.services.audit_service import run_session_key
+from research.services.scout_service import scout_limits
 from research.services.thread_service import ThreadTokenInvalid, resolve_run_token
 from research.services.thread_tools import TOOL_DEFS as THREAD_TOOL_DEFS
 from research.services.thread_tools import TOOL_NAMES as THREAD_TOOL_NAMES
@@ -156,15 +159,57 @@ _BUILTIN_HANDLERS = {
 }
 
 
-def _scout_run_key(arguments):
-    """The audit key of the Scout run named in ``arguments``, or ""."""
+def _scout_run(arguments):
+    """The live Scout run named in ``arguments``, or None."""
     token = arguments.get("run")
     if not token:
-        return ""
+        return None
     try:
-        return run_session_key(resolve_run_token(token))
+        return resolve_run_token(token)
     except ThreadTokenInvalid:
+        return None
+
+
+_SEARCH_TOOLS = ("web_search", "search_papers")
+# Slack over the brief's limits: the brief asks, this enforces. A model once
+# requested 280 parallel searches in a single turn.
+_SEARCH_SLACK, _READ_SLACK = 3, 5
+# Backstop for calls that name no run (chat's own look-ups, or a Scout that
+# forgot its run id): searches per user per minute.
+USER_SEARCHES_PER_MINUTE = 30
+
+
+def _over_budget(user, name, run, run_key):
+    """Why this call should not run, or "" when it may."""
+    if name in _SEARCH_TOOLS:
+        recent = GatewayFetch.all_objects.filter(
+            user=user,
+            tool__in=_SEARCH_TOOLS,
+            created_at__gte=timezone.now() - timedelta(minutes=1),
+        ).count()
+        if recent >= USER_SEARCHES_PER_MINUTE:
+            return "Too many searches in the last minute. Work with the results you already have."
+    if run is None:
         return ""
+    max_searches, max_reads = scout_limits((run.selected_context or {}).get("depth"))
+    rows = GatewayFetch.all_objects.filter(run_key=run_key)
+    if (
+        name in _SEARCH_TOOLS
+        and rows.filter(tool__in=_SEARCH_TOOLS).count() >= max_searches + _SEARCH_SLACK
+    ):
+        return (
+            f"Search budget for this Scout is used up ({max_searches} searches). "
+            "Read and stage the best results you already have, then finish."
+        )
+    if (
+        name == "fetch_page"
+        and rows.filter(tool="fetch_page").count() >= max_reads + _READ_SLACK
+    ):
+        return (
+            f"Reading budget for this Scout is used up ({max_reads} pages). "
+            "Stage what you have read, then finish."
+        )
+    return ""
 
 
 def list_user_tools(user):
@@ -446,10 +491,20 @@ def _handle_tool_call(user, rpc_id, params, run_key=""):
     # runtime forwards the run/session id there. Prefer it; fall back to the
     # header-derived run_key, then to the time-window match downstream.
     meta = params.get("_meta") or {}
-    run_key = _scout_run_key(arguments) or str(meta.get("dareRun") or "") or run_key
+    scout = _scout_run(arguments)
+    run_key = (
+        (run_session_key(scout) if scout else "")
+        or str(meta.get("dareRun") or "")
+        or run_key
+    )
     call_id = str(meta.get("dareCall") or "")
 
     if name in _BUILTIN_HANDLERS or name == "fetch_page":
+        refusal = _over_budget(user, name, scout, run_key)
+        if refusal:
+            # Not isError: three errors would trip the runtime's breaker for
+            # every DARE tool.
+            return _result(rpc_id, {"content": [{"type": "text", "text": refusal}]})
         try:
             if name == "fetch_page":
                 text, reply = _read_page(user, arguments)
