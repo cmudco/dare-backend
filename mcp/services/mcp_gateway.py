@@ -90,6 +90,10 @@ _BUILTIN_TOOL_DEFS = [
             "type": "object",
             "properties": {
                 "url": {"type": "string", "description": "The http(s) URL to read"},
+                "offset": {
+                    "type": "integer",
+                    "description": "Character to start from, to read further into a long page.",
+                },
                 "run": _RUN_ARG,
             },
             "required": ["url"],
@@ -117,13 +121,37 @@ def _fetch_with_free_copy(url):
         )
 
 
+# How much of a page one fetch_page call returns. The full page is still stored
+# (and quote-checked); a long page is read in pieces so earlier pages don't
+# crowd every later turn of a Scout.
+PAGE_PIECE_CHARS = 12_000
+
+
+def _read_page(user, arguments):
+    """One piece of a page; the whole page is read once and kept for later pieces."""
+    url = str(arguments.get("url") or "")
+    offset = arguments.get("offset") or 0
+    offset = offset if isinstance(offset, int) and offset > 0 else 0
+    cached = (
+        GatewayFetch.all_objects.filter(user=user, tool="fetch_page", url=url, error="")
+        .exclude(content="")
+        .order_by("-id")
+        .first()
+        if offset
+        else None
+    )
+    text = cached.content if cached else _fetch_with_free_copy(url)
+    piece = text[offset : offset + PAGE_PIECE_CHARS]
+    end = offset + len(piece)
+    if end < len(text):
+        piece += f"\n\n(Page continues: {len(text) - end} more characters. Call fetch_page with offset={end} to read on.)"
+    return text, piece
+
+
 _BUILTIN_HANDLERS = {
     "web_search": lambda user, arguments: web_search(str(arguments.get("query") or "")),
     "search_papers": lambda user, arguments: search_papers(
         str(arguments.get("query") or "")
-    ),
-    "fetch_page": lambda user, arguments: _fetch_with_free_copy(
-        str(arguments.get("url") or "")
     ),
 }
 
@@ -421,9 +449,12 @@ def _handle_tool_call(user, rpc_id, params, run_key=""):
     run_key = _scout_run_key(arguments) or str(meta.get("dareRun") or "") or run_key
     call_id = str(meta.get("dareCall") or "")
 
-    if name in _BUILTIN_HANDLERS:
+    if name in _BUILTIN_HANDLERS or name == "fetch_page":
         try:
-            text = _BUILTIN_HANDLERS[name](user, arguments)
+            if name == "fetch_page":
+                text, reply = _read_page(user, arguments)
+            else:
+                text = reply = _BUILTIN_HANDLERS[name](user, arguments)
         except (PageUnreadable, ScholarlyError) as exc:
             # A specific page couldn't be read (paywall / 404 / login wall). That
             # is a normal fetch OUTCOME, not a tool failure — return it WITHOUT
@@ -443,7 +474,7 @@ def _handle_tool_call(user, rpc_id, params, run_key=""):
                 {"content": [{"type": "text", "text": str(exc)}], "isError": True},
             )
         _capture_fetch(user, name, text, arguments, run_key, call_id)
-        return _result(rpc_id, {"content": [{"type": "text", "text": text}]})
+        return _result(rpc_id, {"content": [{"type": "text", "text": reply}]})
 
     if name in THREAD_TOOL_NAMES:
         text, is_error = call_thread_tool(name, arguments)

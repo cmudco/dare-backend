@@ -219,6 +219,23 @@ def _knowledge_block(project, per_item_chars=300, max_items=12):
     return "\n".join(lines)
 
 
+def _empty_scout_detail(run, counts, output):
+    """Why a Scout staged nothing, in the user's terms rather than "0 findings"."""
+    set_aside = (run.learning or {}).get("setAside") or []
+    refused = [
+        r for r in set_aside if r.get("reason", "").startswith("Failed source check")
+    ]
+    if not counts["searched"] and not counts["read"]:
+        return "Found nothing: the Scout never reached DARE's search tools."
+    if refused:
+        return f"Nothing staged: {len(refused)} source(s) failed DARE's source check."
+    if set_aside:
+        return f"Nothing staged: set aside {len(set_aside)} source(s) per your preferences."
+    snippet = " ".join((output or "").split())[:140]
+    detail = f"Searched {counts['searched']}x, read {counts['read']} pages, found nothing relevant."
+    return f"{detail} Scout said: “{snippet}…”" if snippet else detail
+
+
 def _start_run(hermes, run, input_text, instructions):
     """
     Start the Hermes run and record its id. Each delegated run gets a fresh
@@ -456,7 +473,7 @@ def _run_scout(run_id):
         # mislead the Runs audit when Hermes sends none.
         record_tool_call(run, event, {"query": preview}, seen_ids)
         tool = event.get("tool", "")
-        if tool.endswith("web_search"):
+        if tool.endswith(("web_search", "search_papers")):
             counts["searched"] += 1
         elif tool.endswith("fetch_page"):
             counts["read"] += 1
@@ -479,13 +496,9 @@ def _run_scout(run_id):
     staged = ResearchStagingItem.active_objects.filter(run=run).count()
 
     if staged == 0:
-        snippet = " ".join(output.split())[:150]
-        detail = (
-            f"Staged 0 findings — agent replied: “{snippet}…”"
-            if snippet
-            else "Staged 0 findings."
+        _finish(
+            run, _empty_scout_detail(run, counts, output), hermes, raw_output=output
         )
-        _finish(run, detail, hermes, raw_output=output)
     else:
         plural = "s" if staged != 1 else ""
         _finish(run, f"Staged {staged} finding{plural}.", hermes, raw_output=output)
