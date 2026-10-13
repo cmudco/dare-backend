@@ -135,5 +135,5 @@ def check_source(run, *, title, url, doi, year, quote):
     if months and isinstance(year, int):
         age = (timezone.now().year - year) * 12
         if age > months:
-            check.flags.append(f"May be out of date ({year})")
+            check.flags.append(f"Older source ({year}): check it's still current")
     return check

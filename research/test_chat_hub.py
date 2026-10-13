@@ -823,7 +823,10 @@ class ScoutStagingToolTests(ProfileRootMixin, TestCase):
         self.stage(title="Fund fees 2019", url="https://example.org/fees", year=2019)
 
         item = ResearchStagingItem.objects.get(run=self.run)
-        self.assertIn("May be out of date (2019)", item.provenance["check"]["flags"])
+        self.assertIn(
+            "Older source (2019): check it's still current",
+            item.provenance["check"]["flags"],
+        )
 
 
 class PendingDuplicateTests(ProfileRootMixin, TestCase):

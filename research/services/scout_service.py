@@ -36,8 +36,9 @@ Pass run="%(run_token)s" on EVERY DARE tool call below.
    citationContext copy one short sentence exactly as it appears on the page:
    DARE checks the link, the quote, the DOI and the date before the user sees
    it, and tells you if it refused the source or the user already has it.
-4. Before you finish, call mcp__dare__report_learning once: `applied` = each
-   remembered preference or skill that changed what you did, with its effect;
+4. Before you finish, call mcp__dare__report_learning once: `applied` = only
+   the remembered preferences or skills that actually changed what you did,
+   with their effect (leave out any that did not apply to this search);
    `setAside` = each source you held back because of one, with the reason.
    Empty lists are fine; never invent one.
 5. Reply with two or three plain sentences: what you staged and what is still
