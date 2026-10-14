@@ -10,7 +10,7 @@ from rest_framework.test import APIClient
 from assistant.constants import (
     GET_CONVERSATION,
     GET_PROJECT,
-    PROPOSE_FILE_ORGANIZATION,
+    PROPOSE_CHANGES,
     SEARCH_PLATFORM_DOCS,
     AssistantMessageStatus,
     AssistantRole,
@@ -20,8 +20,8 @@ from assistant.domain.page_context import resolve_page_context
 from assistant.models import (
     AssistantKnowledgeSource,
     AssistantMessage,
+    AssistantProposal,
     AssistantThread,
-    FileOrganizationProposal,
 )
 from assistant.services.account_tools import execute_account_tool
 from assistant.services.thread_service import (
@@ -214,84 +214,190 @@ class TurnServiceTests(AssistantTestCase):
         self.assertEqual(reply.status, AssistantMessageStatus.FAILED)
 
 
-class FileOrganizationProposalTests(AssistantTestCase):
+class AssistantProposalTests(AssistantTestCase):
     def make_file(self, user, name):
         return File.active_objects.create(user=user, file=f"files/{name}", name=name)
 
-    def propose(self, arguments, user=None):
+    def make_chat(self, user, title, project=None):
+        return Conversation.active_objects.create(
+            user=user, title=title, project=project
+        )
+
+    def propose(self, actions, user=None):
         return execute_account_tool(
-            PROPOSE_FILE_ORGANIZATION, arguments, user or self.user
+            PROPOSE_CHANGES, {"summary": "Tidy", "actions": actions}, user or self.user
+        )
+
+    def post(self, proposal_id, verb, action_ids=None):
+        body = {} if action_ids is None else {"actionIds": action_ids}
+        return self.client.post(
+            f"/api/assistant/proposals/{proposal_id}/{verb}/", body, format="json"
         )
 
     def test_invalid_or_foreign_plans_are_rejected_with_readable_errors(self):
         mine = self.make_file(self.user, "notes.pdf")
         theirs = self.make_file(self.other, "secret.pdf")
-        self.assertIn("no folders or tags", self.propose({"summary": "x"})["error"])
+        self.assertIn("non-empty list", self.propose([])["error"])
         self.assertIn(
-            "not integers",
-            self.propose({"folders": [{"name": "A", "file_ids": [True]}]})["error"],
+            "unknown type", self.propose([{"type": "rename_everything"}])["error"]
         )
         foreign = self.propose(
-            {"folders": [{"name": "A", "file_ids": [mine.id, theirs.id]}]}
+            [{"type": "add_to_folder", "name": "A", "file_ids": [mine.id, theirs.id]}]
         )
         self.assertIn(str(theirs.id), foreign["error"])
-        self.assertFalse(FileOrganizationProposal.objects.exists())
-
-    def test_proposal_changes_nothing_until_applied(self):
-        paper = self.make_file(self.user, "paper.pdf")
-        result = self.propose(
-            {
-                "summary": "Group research",
-                "folders": [{"name": "Research", "file_ids": [paper.id]}],
-                "tags": [{"label": "reading-list", "file_ids": [paper.id]}],
-            }
+        missing = self.propose(
+            [{"type": "remove_tag", "name": "nope", "file_ids": [mine.id]}]
         )
-        self.assertTrue(result["success"])
-        self.assertFalse(Folder.objects.filter(user=self.user).exists())
+        self.assertIn('no tag named "nope"', missing["error"])
+        self.assertFalse(AssistantProposal.objects.exists())
 
-        response = self.client.post(
-            f"/api/assistant/proposals/{result['proposal_id']}/apply/"
-        )
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["status"], ProposalStatus.APPLIED)
-        folder = Folder.objects.get(user=self.user, name="Research")
-        self.assertEqual(list(folder.files.all()), [paper])
-        self.assertTrue(paper.tags.filter(label="reading-list").exists())
-        # A proposal is decided once.
-        again = self.client.post(
-            f"/api/assistant/proposals/{result['proposal_id']}/apply/"
-        )
-        self.assertEqual(again.status_code, 409)
-
-    def test_other_users_cannot_decide_a_proposal(self):
+    def test_folders_and_tags_apply_undo_and_reapply(self):
         paper = self.make_file(self.user, "paper.pdf")
         proposal_id = self.propose(
-            {"folders": [{"name": "Mine", "file_ids": [paper.id]}]}
+            [
+                {"type": "add_to_folder", "name": "Research", "file_ids": [paper.id]},
+                {"type": "add_tag", "name": "reading-list", "file_ids": [paper.id]},
+            ]
         )["proposal_id"]
+        self.assertFalse(Folder.objects.filter(user=self.user).exists())
+
+        applied = self.post(proposal_id, "apply").json()
+        self.assertEqual(applied["status"], ProposalStatus.APPLIED)
+        self.assertTrue(paper.folders.filter(name="Research").exists())
+        self.assertTrue(paper.tags.filter(label="reading-list").exists())
+
+        undone = self.post(proposal_id, "undo").json()
+        self.assertEqual(undone["status"], ProposalStatus.PENDING)
+        # What the proposal created is gone again, not just emptied.
+        self.assertFalse(Folder.objects.filter(user=self.user).exists())
+        self.assertFalse(Tag.objects.filter(label="reading-list").exists())
+
+        self.post(proposal_id, "apply")
+        self.assertTrue(paper.folders.filter(name="Research").exists())
+
+    def test_undo_keeps_what_was_already_in_place(self):
+        paper = self.make_file(self.user, "paper.pdf")
+        folder = Folder.objects.create(user=self.user, name="Research")
+        folder.files.add(paper)
+        proposal_id = self.propose(
+            [{"type": "add_to_folder", "name": "research", "file_ids": [paper.id]}]
+        )["proposal_id"]
+        notes = self.post(proposal_id, "apply").json()["actions"][0]["notes"]
+        self.assertIn("1 file already in this folder.", notes)
+        self.post(proposal_id, "undo")
+        self.assertTrue(folder.files.filter(pk=paper.pk).exists())
+
+    def test_deleted_files_are_soft_deleted_and_restored_by_undo(self):
+        paper = self.make_file(self.user, "paper.pdf")
+        proposal_id = self.propose([{"type": "delete_files", "file_ids": [paper.id]}])[
+            "proposal_id"
+        ]
+        self.post(proposal_id, "apply")
+        self.assertFalse(File.active_objects.filter(pk=paper.pk).exists())
+        self.assertTrue(
+            File._base_manager.filter(pk=paper.pk, is_deleted=True).exists()
+        )
+        self.post(proposal_id, "undo")
+        self.assertTrue(File.active_objects.filter(pk=paper.pk).exists())
+
+    def test_chats_and_files_sorted_into_a_new_project_and_back(self):
+        paper = self.make_file(self.user, "paper.pdf")
+        old = PersonalProject.active_objects.create(user=self.user, name="Old")
+        moved = self.make_chat(self.user, "Thesis chat", project=old)
+        loose = self.make_chat(self.user, "Loose chat")
+        proposal_id = self.propose(
+            [
+                {
+                    "type": "add_to_project",
+                    "name": "Thesis",
+                    "file_ids": [paper.id],
+                    "conversation_ids": [moved.conversation_id, loose.conversation_id],
+                }
+            ]
+        )["proposal_id"]
+        self.post(proposal_id, "apply")
+        thesis = PersonalProject.active_objects.get(user=self.user, name="Thesis")
+        self.assertEqual(list(thesis.files.all()), [paper])
+        self.assertEqual(
+            set(Conversation.active_objects.filter(project=thesis)), {moved, loose}
+        )
+
+        self.post(proposal_id, "undo")
+        moved.refresh_from_db()
+        loose.refresh_from_db()
+        self.assertEqual((moved.project_id, loose.project_id), (old.id, None))
+        self.assertFalse(PersonalProject.active_objects.filter(name="Thesis").exists())
+
+    def test_deleting_a_project_releases_its_chats_and_undo_restores_both(self):
+        project = PersonalProject.active_objects.create(user=self.user, name="Old")
+        chat = self.make_chat(self.user, "Chat", project=project)
+        proposal_id = self.propose([{"type": "delete_project", "name": "old"}])[
+            "proposal_id"
+        ]
+        self.post(proposal_id, "apply")
+        chat.refresh_from_db()
+        self.assertIsNone(chat.project_id)
+        self.assertFalse(PersonalProject.active_objects.filter(pk=project.pk).exists())
+
+        self.post(proposal_id, "undo")
+        chat.refresh_from_db()
+        self.assertEqual(chat.project_id, project.id)
+        self.assertTrue(PersonalProject.active_objects.filter(pk=project.pk).exists())
+
+    def test_actions_apply_and_undo_one_at_a_time(self):
+        paper = self.make_file(self.user, "paper.pdf")
+        chat = self.make_chat(self.user, "Old chat")
+        proposal_id = self.propose(
+            [
+                {"type": "add_tag", "name": "keep", "file_ids": [paper.id]},
+                {
+                    "type": "delete_conversations",
+                    "conversation_ids": [chat.conversation_id],
+                },
+            ]
+        )["proposal_id"]
+        partial = self.post(proposal_id, "apply", ["2"]).json()
+        self.assertEqual(partial["status"], ProposalStatus.PARTIALLY_APPLIED)
+        self.assertFalse(Conversation.active_objects.filter(pk=chat.pk).exists())
+        self.assertFalse(paper.tags.exists())
+        # Partly applied work cannot be discarded until it is undone.
+        self.assertEqual(self.post(proposal_id, "discard").status_code, 409)
+        self.post(proposal_id, "undo", ["2"])
+        self.assertTrue(Conversation.active_objects.filter(pk=chat.pk).exists())
+
+    def test_discard_and_restore(self):
+        paper = self.make_file(self.user, "paper.pdf")
+        proposal_id = self.propose(
+            [{"type": "add_to_folder", "name": "Research", "file_ids": [paper.id]}]
+        )["proposal_id"]
+        self.assertEqual(
+            self.post(proposal_id, "discard").json()["status"], ProposalStatus.DISCARDED
+        )
+        self.assertEqual(self.post(proposal_id, "apply").status_code, 409)
+        self.assertEqual(
+            self.post(proposal_id, "restore").json()["status"], ProposalStatus.PENDING
+        )
+        self.assertEqual(
+            self.post(proposal_id, "apply").json()["status"], ProposalStatus.APPLIED
+        )
+
+    def test_other_users_cannot_touch_a_proposal(self):
+        paper = self.make_file(self.user, "paper.pdf")
+        proposal_id = self.propose([{"type": "delete_files", "file_ids": [paper.id]}])[
+            "proposal_id"
+        ]
         other_client = APIClient()
         other_client.force_authenticate(self.other)
-        url = f"/api/assistant/proposals/{proposal_id}/apply/"
-        self.assertEqual(other_client.post(url).status_code, 404)
-        self.assertEqual(self.client.post(url).status_code, 200)
+        for verb in ("apply", "undo", "discard", "restore"):
+            url = f"/api/assistant/proposals/{proposal_id}/{verb}/"
+            self.assertEqual(other_client.post(url).status_code, 404)
+        self.assertTrue(File.active_objects.filter(pk=paper.pk).exists())
 
-    def test_tag_taken_by_another_account_is_skipped_not_hijacked(self):
+    def test_tag_taken_by_another_account_is_rejected_not_hijacked(self):
         Tag.objects.create(user=self.other, label="finance")
         paper = self.make_file(self.user, "budget.xlsx")
-        proposal_id = self.propose(
-            {"tags": [{"label": "finance", "file_ids": [paper.id]}]}
-        )["proposal_id"]
-        outcome = self.client.post(
-            f"/api/assistant/proposals/{proposal_id}/apply/"
-        ).json()["outcome"]
-        self.assertEqual(outcome["filesTagged"], 0)
-        self.assertEqual(len(outcome["skipped"]), 1)
+        result = self.propose(
+            [{"type": "add_tag", "name": "finance", "file_ids": [paper.id]}]
+        )
+        self.assertIn("is taken", result["error"])
         self.assertFalse(paper.tags.exists())
-
-    def test_discard_leaves_files_untouched(self):
-        paper = self.make_file(self.user, "paper.pdf")
-        proposal_id = self.propose(
-            {"folders": [{"name": "Research", "file_ids": [paper.id]}]}
-        )["proposal_id"]
-        response = self.client.post(f"/api/assistant/proposals/{proposal_id}/discard/")
-        self.assertEqual(response.json()["status"], ProposalStatus.DISCARDED)
-        self.assertFalse(Folder.objects.filter(user=self.user).exists())

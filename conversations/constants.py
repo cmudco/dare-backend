@@ -44,6 +44,11 @@ class ConversationSource(models.TextChoices):
     SOCRATIC_BOTS = 'SocraticBots', 'SocraticBots'
 
 
+# Reflective interviews need earlier answers throughout the session; zero
+# selects every prior message in the shared history loader.
+SOCRATIC_HISTORY_LIMIT = 0
+
+
 class RagMode(models.TextChoices):
     NAIVE = "naive", "Naive RAG"
     ADVANCED = "advanced", "Advanced RAG"

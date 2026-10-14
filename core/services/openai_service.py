@@ -397,7 +397,7 @@ class OpenAIService:
             "stream": True,
         }
 
-        responses_tools = self._convert_tools_for_responses(tools)
+        responses_tools = OpenAIMessageFormatter.format_tools_for_responses_api(tools)
         if responses_tools:
             params["tools"] = responses_tools
 
@@ -405,47 +405,6 @@ class OpenAIService:
             params["temperature"] = temperature
 
         return await self.client.responses.create(**params)
-
-    @staticmethod
-    def _convert_tools_for_responses(
-        tools: Optional[List[Dict]],
-    ) -> List[Dict]:
-        """
-        Convert Chat Completions tool definitions to Responses API shape.
-
-        Chat Completions nests the schema under a "function" key; the Responses
-        API flattens it. Hosted tools (``{"type": "web_search"}``) pass through
-        untouched.
-
-        Args:
-            tools: Tools in Chat Completions shape
-
-        Returns:
-            Tools in Responses API shape
-        """
-        converted = []
-
-        for tool in tools or []:
-            if tool.get("type") != "function":
-                converted.append(tool)
-                continue
-
-            function = tool.get("function") or {}
-            if not function:
-                # Already flat - keep as-is.
-                converted.append(tool)
-                continue
-
-            converted.append(
-                {
-                    "type": "function",
-                    "name": function.get("name"),
-                    "description": function.get("description", ""),
-                    "parameters": function.get("parameters", {}),
-                }
-            )
-
-        return converted
 
     async def _stream_chat_completions(
         self,

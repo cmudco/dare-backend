@@ -63,12 +63,21 @@ from ..services.document_reprocessing_service import (
     ReprocessingQueueError,
     ReprocessingUnavailable,
 )
+from ..services.trash_service import (
+    deleted_files,
+    move_to_trash,
+    purge_files,
+    restore_files,
+)
 from ..services.library_service import (
     LibraryItemNotFound,
     add_tags_to_files,
+    remove_tags_from_files,
     search_file_contents,
 )
 from .serializers import (
+    DeletedFileSerializer,
+    FileIdsSerializer,
     BulkTagSerializer,
     ContentMatchSerializer,
     ContentSearchQuerySerializer,
@@ -358,7 +367,8 @@ class FileViewSet(viewsets.ModelViewSet):
     )
     def bulk_delete(self, request):
         """
-        Bulk delete multiple files using DRF's built-in delete method for each file.
+        Permanently delete many files (Socratic Books relies on this).
+        DARE moves files to Recently deleted with ``trash`` instead.
         Expected payload: {"fileIds": [1, 2, 3, ...]}
         """
         file_ids = request.data.get("fileIds", [])
@@ -408,6 +418,51 @@ class FileViewSet(viewsets.ModelViewSet):
     @action(
         detail=False,
         methods=["post"],
+        url_path="trash",
+        parser_classes=[CamelCaseJSONParser],
+    )
+    def trash(self, request):
+        """Move files to Recently deleted: {"fileIds": [...]}."""
+        body = FileIdsSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        moved = move_to_trash(request.user, body.validated_data["file_ids"])
+        return Response({"deleted": moved})
+
+    @action(detail=False, methods=["get"], url_path="deleted")
+    def deleted(self, request):
+        """The user's soft-deleted files, most recently deleted first."""
+        page = self.paginate_queryset(deleted_files(request.user))
+        return self.get_paginated_response(DeletedFileSerializer(page, many=True).data)
+
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="restore",
+        parser_classes=[CamelCaseJSONParser],
+    )
+    def restore(self, request):
+        """Bring soft-deleted files back: {"fileIds": [...]}."""
+        body = FileIdsSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        restored = restore_files(request.user, body.validated_data["file_ids"])
+        return Response({"restored": restored})
+
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="purge",
+        parser_classes=[CamelCaseJSONParser],
+    )
+    def purge(self, request):
+        """Permanently delete soft-deleted files: {"fileIds": [...]}."""
+        body = FileIdsSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        deleted = purge_files(request.user, body.validated_data["file_ids"])
+        return Response({"deleted": deleted})
+
+    @action(
+        detail=False,
+        methods=["post"],
         url_path="bulk-tags",
         parser_classes=[CamelCaseJSONParser],
     )
@@ -417,6 +472,22 @@ class FileViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         try:
             files = add_tags_to_files(request.user, **serializer.validated_data)
+        except LibraryItemNotFound:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        return Response({"files": FileTagsSerializer(files, many=True).data})
+
+    @action(
+        detail=False,
+        methods=["post"],
+        url_path="bulk-untag",
+        parser_classes=[CamelCaseJSONParser],
+    )
+    def bulk_untag(self, request):
+        """Remove tags from many files at once: {"fileIds": [...], "tagIds": [...]}."""
+        serializer = BulkTagSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            files = remove_tags_from_files(request.user, **serializer.validated_data)
         except LibraryItemNotFound:
             return Response(status=status.HTTP_404_NOT_FOUND)
         return Response({"files": FileTagsSerializer(files, many=True).data})

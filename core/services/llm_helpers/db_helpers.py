@@ -16,6 +16,7 @@ from channels.db import database_sync_to_async
 
 from conversations.constants import SenderType
 from conversations.models import Conversation, ConversationSummary, Message, Snippet
+from core.services.image_formats import to_provider_image
 from files.models import File
 from prompts.models import Prompt
 
@@ -109,6 +110,16 @@ def save_retrieval_trace(message_obj, payload) -> None:
         message_obj.save(update_fields=["retrieval_trace"])
     except Exception as exc:
         logger.warning("Failed to save retrieval trace: %s", exc)
+
+
+@database_sync_to_async
+def get_live_file_ids(file_ids) -> list:
+    """The ids among ``file_ids`` whose files are not deleted or disabled."""
+    if not file_ids:
+        return []
+    return list(
+        File.active_objects.filter(id__in=file_ids).values_list("id", flat=True)
+    )
 
 
 @database_sync_to_async
@@ -230,15 +241,15 @@ def convert_file_to_base64_dict(media_file: "File") -> Optional[dict]:
     """
     try:
         with media_file.file.open("rb") as f:
-            file_data = f.read()
+            file_data, mime_type = to_provider_image(f.read(), media_file.file_type)
 
         base64_data = base64.b64encode(file_data).decode("utf-8")
-        data_url = f"data:{media_file.file_type};base64,{base64_data}"
+        data_url = f"data:{mime_type};base64,{base64_data}"
 
         return {
             "preview": data_url,
             "name": media_file.name or media_file.file.name,
-            "type": media_file.file_type,
+            "type": mime_type,
         }
     except Exception as e:
         logger.error(f"Error reading media file {media_file.id}: {str(e)}")

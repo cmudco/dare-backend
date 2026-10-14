@@ -524,7 +524,7 @@ class StructuredChunker:
         summary = str(result.get("summary") or "").strip()
         transcription = str(result.get("transcription_markdown") or "").strip()
         if summary:
-            parts.append(f"[Machine-generated page description: {summary}]")
+            parts.append(f"[Image description: {summary}]")
         if transcription:
             parts.append(transcription)
         uncertainty = str(result.get("uncertainty") or "").strip()
@@ -572,7 +572,7 @@ class StructuredChunker:
         description = str(result.get("description") or "").strip()
         visible = str(result.get("visible_text") or "").strip()
         if description:
-            parts.append(f"[Machine-generated figure description: {description}]")
+            parts.append(f"[Figure description: {description}]")
         if visible:
             parts.append(f"Visible text in figure: {visible}")
         uncertainty = str(result.get("uncertainty") or "").strip()

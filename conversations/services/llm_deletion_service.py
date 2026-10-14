@@ -98,7 +98,7 @@ class LLMDeletionSnapshot:
                     "id": agent.pk,
                     "name": agent.name,
                     "owner_email": agent.user.email,
-                    "action_url": "/agents",
+                    "action_url": "/templates/agents",
                 }
                 for agent in self.agents
             ],
@@ -330,7 +330,7 @@ class LLMDeletionService:
                     delivery_type=NotificationDeliveryType.PANEL,
                     category=NotificationCategory.WARNING,
                     action_type=NotificationAction.NAVIGATE,
-                    action_url="/agents",
+                    action_url="/templates/agents",
                     source=AuthSourceChoice.DARE,
                 )
             )
@@ -448,7 +448,7 @@ class LLMDeletionService:
                     delivery_type=NotificationDeliveryType.PANEL,
                     category=NotificationCategory.WARNING,
                     action_type=NotificationAction.NAVIGATE,
-                    action_url="/agents",
+                    action_url="/templates/agents",
                     source=AuthSourceChoice.DARE,
                 )
             )

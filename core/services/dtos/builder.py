@@ -3,7 +3,8 @@
 from dataclasses import replace
 from typing import Any, Dict, Optional
 
-from conversations.constants import Provider, RagMode
+from conversations.constants import SOCRATIC_HISTORY_LIMIT, Provider, RagMode
+from core.services.image_formats import to_provider_data_url
 from users.constants import AuthSourceChoice
 
 from .context_dto import ContextConfig
@@ -35,6 +36,15 @@ ARTIFACT_MIN_MAX_TOKENS = 8000
 # Tools that belong to the memory feature and are switched by its toggle
 # rather than chosen from the tool drawer.
 MEMORY_TOOL_SLUGS = frozenset({"search_sessions"})
+
+
+def _provider_ready(image: Dict[str, Any]) -> Dict[str, Any]:
+    """A chat image re-encoded as PNG when no provider accepts its format."""
+    preview = image.get("preview", "")
+    converted = to_provider_data_url(preview)
+    if converted == preview:
+        return image
+    return {**image, "preview": converted, "type": "image/png"}
 
 
 def resolve_agentic_rag(
@@ -139,9 +149,12 @@ class LLMQueryRequestBuilder:
         bot_meta = message_data.get("bot_meta", {})
         socratic_enabled = is_socratic_bots and not message_data.get("prompt_id")
         if is_socratic_bots:
-            # Reflective interviews need earlier answers throughout the session.
-            # Zero selects all prior messages in the shared history loader.
-            context = replace(context, history_limit=0)
+            context = replace(
+                context,
+                history_limit=message_data.get(
+                    "socratic_history_limit", SOCRATIC_HISTORY_LIMIT
+                ),
+            )
 
         # Get max_tokens from message_data with default
         max_tokens = message_data.get("max_tokens", 8000)
@@ -194,7 +207,7 @@ class LLMQueryRequestBuilder:
 
         # Build media config
         media = MediaConfig(
-            images=message_data.get("images", []),
+            images=[_provider_ready(image) for image in message_data.get("images", [])],
             media_ids=message_data.get("media_ids", []),
         )
 

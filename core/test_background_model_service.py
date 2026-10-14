@@ -8,11 +8,12 @@ from pydantic import BaseModel
 
 from api_keys.models import UserProviderAPIKey
 from billing.constants import LiteLLMKeySourceChoice, UserWalletPreferenceTypeChoice
-from billing.models import LiteLLMKey, UserWalletPreference
+from billing.models import LiteLLMKey, UserWalletPreference, Wallet
 from conversations.models import LLM
 from core.services.background_model_service import (
     BackgroundModelService,
     BackgroundModelUnavailable,
+    BackgroundWalletEmpty,
     resolve_background_model,
     resolve_background_payer,
 )
@@ -132,6 +133,9 @@ class BackgroundModelServiceTests(TestCase):
         self.assertEqual(route.dispatch_user, self.user)
 
     def test_text_call_is_billed_after_usage_is_collected(self):
+        Wallet.objects.update_or_create(
+            user=self.user, defaults={"balance": Decimal("0.000001")}
+        )
         billing = MagicMock()
         service = BackgroundModelService(billing)
         transport = _TextService()
@@ -153,8 +157,29 @@ class BackgroundModelServiceTests(TestCase):
             input_tokens=12,
             output_tokens=3,
             description="Conversation title generation",
+            allow_overdraft=True,
         )
         transport.close.assert_awaited_once()
+
+    def test_empty_dare_wallet_stops_the_call_before_dispatch(self):
+        Wallet.objects.update_or_create(
+            user=self.user, defaults={"balance": Decimal("0")}
+        )
+        billing = MagicMock()
+        service = BackgroundModelService(billing)
+        service_for = AsyncMock()
+
+        with patch.object(service, "_service_for", new=service_for):
+            with self.assertRaises(BackgroundWalletEmpty):
+                async_to_sync(service.complete_text)(
+                    user=self.user,
+                    messages=[{"role": "user", "content": "Name this"}],
+                    description="Conversation title generation",
+                    max_tokens=80,
+                )
+
+        service_for.assert_not_awaited()
+        billing.record_service_usage.assert_not_called()
 
     def test_byo_text_call_records_external_usage(self):
         UserProviderAPIKey.active_objects.update_or_create(

@@ -154,18 +154,19 @@ class AssistantMessage(BaseModel):
         return f"{self.role} message {self.pk} in thread {self.thread_id}"
 
 
-class FileOrganizationProposal(BaseModel):
-    """Folders and tags the assistant suggested; nothing changes until applied.
+class AssistantProposal(BaseModel):
+    """Changes the assistant suggested; nothing changes until the user applies.
 
-    ``plan`` is the validated plan with the file names resolved at proposal
-    time (for display); applying re-checks ownership of every file.
+    ``plan["actions"]`` holds each proposed action with the names resolved at
+    proposal time (for display), whether it is applied, and the journal of
+    what applying it changed, which is exactly what undoing it reverts.
     """
 
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
-        related_name="file_organization_proposals",
-        help_text=_("User whose files the plan organises."),
+        related_name="assistant_proposals",
+        help_text=_("User whose files, chats and projects the plan changes."),
     )
     message = models.ForeignKey(
         AssistantMessage,
@@ -179,29 +180,26 @@ class FileOrganizationProposal(BaseModel):
         max_length=500, help_text=_("One-line description of the plan.")
     )
     plan = models.JSONField(
-        help_text=_("{folders: [{name, files}], tags: [{label, files}]}.")
+        help_text=_("{actions: [{id, type, name, files, conversations, status, ...}]}.")
     )
     status = models.CharField(
-        max_length=16,
+        max_length=24,
         choices=ProposalStatus.choices,
         default=ProposalStatus.PENDING,
-        help_text=_("Pending until the user applies or discards it."),
-    )
-    outcome = models.JSONField(
-        default=dict,
-        blank=True,
-        help_text=_("What applying changed, and anything skipped and why."),
+        help_text=_("How much of the plan is applied, or that it was discarded."),
     )
     decided_at = models.DateTimeField(
-        null=True, blank=True, help_text=_("When the user applied or discarded it.")
+        null=True,
+        blank=True,
+        help_text=_("When the user last applied, undid or discarded part of it."),
     )
 
     objects = models.Manager()
     active_objects = ActiveObjectsManager()
 
     class Meta:
-        verbose_name = _("file organisation proposal")
-        verbose_name_plural = _("file organisation proposals")
+        verbose_name = _("assistant proposal")
+        verbose_name_plural = _("assistant proposals")
         ordering = ["created_at"]
 
     def __str__(self):

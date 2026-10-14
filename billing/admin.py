@@ -13,6 +13,7 @@ from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 from agents.models import Agent
+from billing import litellm_key_service
 from billing.constants import (
     LiteLLMKeySourceChoice,
     TransactionSourceChoice,
@@ -496,6 +497,75 @@ class IsExpiredFilter(admin.SimpleListFilter):
         return queryset
 
 
+class LiteLLMKeyAdminForm(forms.ModelForm):
+    """Keeps the stored API key write-only and offers the gateway's models for the
+    background model instead of free text."""
+
+    api_key = forms.CharField(
+        required=False,
+        max_length=500,
+        label=_("API Key"),
+        widget=forms.PasswordInput(attrs={"autocomplete": "new-password"}),
+    )
+
+    class Meta:
+        model = LiteLLMKey
+        fields = "__all__"
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._mask_api_key()
+        self._offer_background_models()
+
+    def _mask_api_key(self):
+        field = self.fields.get("api_key")
+        if field is None:
+            return
+        if self.instance._state.adding:
+            field.required = True
+            field.help_text = _("LiteLLM proxy API key, stored encrypted.")
+            return
+        key = self.instance.api_key or ""
+        field.help_text = _(
+            "Stored key: %(masked)s. Leave blank to keep it; enter a new key to replace it."
+        ) % {"masked": f"{key[:3]}…{key[-4:]}" if len(key) > 7 else "•" * len(key)}
+
+    def clean_api_key(self):
+        return self.cleaned_data["api_key"] or self.instance.api_key
+
+    def _offer_background_models(self):
+        field = self.fields.get("background_model")
+        if field is None:
+            return
+        if self.instance._state.adding:
+            field.help_text = _(
+                "Save the key first; this then lists the models its gateway serves."
+            )
+            return
+
+        options = litellm_key_service.background_model_options(self.instance)
+        if not options.models:
+            field.help_text = _(
+                "Could not load this gateway's models (%(error)s). Enter a model id."
+            ) % {"error": options.error or _("no models returned")}
+            return
+
+        current = self.instance.background_model
+        choices = [("", _("DARE default (billed to each member's DARE wallet)"))]
+        choices += [(name, f"{name} (recommended)") for name in options.recommended]
+        choices += [
+            (name, name) for name in options.models if name not in options.recommended
+        ]
+        if current and current not in options.models:
+            choices.append((current, f"{current} (not served by this gateway)"))
+        field.widget = forms.Select(choices=choices)
+        field.help_text = _(
+            "Used for conversation titles, summaries, memory, and retrieval query "
+            "analysis, billed to this gateway. DARE default bills members' DARE "
+            "wallets, which fails silently when they are empty."
+        )
+
+
 @admin.register(LiteLLMKey)
 class LiteLLMKeyAdmin(admin.ModelAdmin):
     """
@@ -511,6 +581,7 @@ class LiteLLMKeyAdmin(admin.ModelAdmin):
         context is enforced).
     """
 
+    form = LiteLLMKeyAdminForm
     list_display = (
         "label",
         "source",

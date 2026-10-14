@@ -20,6 +20,7 @@ from billing.gateway_report import (
     parse_gateway_key_report,
     record_gateway_key_report,
 )
+from billing.litellm_probe import LiteLLMProbeResult, ProbedModel
 from billing.models import (
     GroupWallet,
     LiteLLMKey,
@@ -365,6 +366,52 @@ class GroupWalletApiTests(TestCase):
 
         self.client.put(url, {"clearLitellmCap": True}, format="json")
         self.assertFalse(UserRefillOverride.objects.filter(user=self.student).exists())
+
+    def _models_url(self, key):
+        return f"{GROUP_WALLETS}{self.group_wallet.pk}/gateway-keys/{key.pk}/models/"
+
+    def _key_url(self, key):
+        return f"{GROUP_WALLETS}{self.group_wallet.pk}/gateway-keys/{key.pk}/"
+
+    @patch("billing.litellm_models_service.probe_litellm_connection")
+    def test_owner_picks_a_background_model_the_gateway_serves(self, probe):
+        probe.return_value = LiteLLMProbeResult(
+            ok=True,
+            models=[ProbedModel("gemini/gemini-3.8-flash"), ProbedModel("gpt-6")],
+        )
+
+        listed = self.client.get(self._models_url(self.key)).json()
+        self.assertEqual(listed["recommendedModels"], ["gemini/gemini-3.8-flash"])
+
+        rejected = self.client.patch(
+            self._key_url(self.key), {"backgroundModel": "made-up"}, format="json"
+        )
+        self.assertEqual(rejected.status_code, 400)
+
+        saved = self.client.patch(
+            self._key_url(self.key),
+            {"backgroundModel": "gemini/gemini-3.8-flash"},
+            format="json",
+        )
+        self.assertEqual(saved.status_code, 200)
+        self.assertEqual(
+            saved.json()["gatewayKeys"][0]["backgroundModel"],
+            "gemini/gemini-3.8-flash",
+        )
+        self.key.refresh_from_db()
+        self.assertEqual(self.key.background_model, "gemini/gemini-3.8-flash")
+
+    def test_owner_cannot_reach_another_groups_key(self):
+        other_owner = make_user("other-owner@example.com")
+        other_group = AccessCodeGroup.objects.create(
+            access_code="OTHER-1", max_capacity=5, group_owner=other_owner
+        )
+        foreign_key = make_group_key(other_group, other_owner)
+
+        response = self.client.patch(
+            self._key_url(foreign_key), {"backgroundModel": ""}, format="json"
+        )
+        self.assertEqual(response.status_code, 404)
 
     def test_gateway_figures_sit_beside_the_dare_estimate(self):
         record_spend(self.student, self.key, "2.25")

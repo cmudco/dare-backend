@@ -4,6 +4,7 @@ from decimal import Decimal
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db.models import Count, Q, Sum
 from django.db.models.functions import TruncDate
+from django.http import Http404
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from rest_framework import mixins, status, viewsets
@@ -19,6 +20,7 @@ from billing.api.serializers import (
     AllocateSerializer,
     EffectivePolicySerializer,
     FundBudgetSerializer,
+    GatewayKeyUpdateSerializer,
     GroupWalletReadSerializer,
     GroupWalletWriteSerializer,
     LiteLLMKeyCreateSerializer,
@@ -51,7 +53,10 @@ from billing.group_wallet_service import (
     UpdateGroupPolicyRequest,
     UpsertUserOverrideRequest,
 )
-from billing.litellm_key_service import LiteLLMKeyDependencyError
+from billing.litellm_key_service import (
+    BackgroundModelNotServed,
+    LiteLLMKeyDependencyError,
+)
 from billing.litellm_model_policy import recommend_background_models
 from billing.litellm_probe import probe_litellm_connection
 from billing.models import (
@@ -1253,6 +1258,56 @@ class GroupWalletViewSet(viewsets.GenericViewSet, mixins.UpdateModelMixin):
         except ValidationError as exc:
             return _validation_response(exc)
         return Response(GroupWalletReadSerializer(updated).data)
+
+    # --- Gateway keys issued to the group (owner or admin) ---------------
+
+    @action(
+        detail=True,
+        methods=["get"],
+        url_path=r"gateway-keys/(?P<key_id>[^/.]+)/models",
+    )
+    def gateway_key_models(self, request, pk=None, key_id=None):
+        """The models this key's gateway serves, for the background-model picker."""
+        options = litellm_key_service.background_model_options(
+            self._gateway_key(key_id)
+        )
+        return Response(
+            LiteLLMTestResponseSerializer(
+                {
+                    "ok": bool(options.models),
+                    "models": options.models,
+                    "recommended_models": options.recommended,
+                    "error": options.error,
+                }
+            ).data
+        )
+
+    @action(
+        detail=True,
+        methods=["patch"],
+        url_path=r"gateway-keys/(?P<key_id>[^/.]+)",
+    )
+    def gateway_key(self, request, pk=None, key_id=None):
+        key = self._gateway_key(key_id)
+        serializer = GatewayKeyUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        try:
+            litellm_key_service.set_background_model(
+                key, serializer.validated_data["background_model"]
+            )
+        except BackgroundModelNotServed:
+            return Response(
+                {"background_model": [_("This gateway does not serve that model.")]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        return Response(GroupWalletReadSerializer(self.get_object()).data)
+
+    def _gateway_key(self, key_id):
+        group_wallet = self.get_object()
+        try:
+            return litellm_key_service.group_key(group_wallet.group, key_id)
+        except LiteLLMKey.DoesNotExist as error:
+            raise Http404 from error
 
     # --- Per-member override (owner or admin) ------------------------------
 

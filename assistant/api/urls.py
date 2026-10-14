@@ -5,6 +5,8 @@ from assistant.api.views import (
     AssistantNewThreadView,
     AssistantThreadView,
     DiscardProposalView,
+    RestoreProposalView,
+    UndoProposalView,
 )
 
 urlpatterns = [
@@ -16,8 +18,18 @@ urlpatterns = [
         name="apply-proposal",
     ),
     path(
+        "assistant/proposals/<int:proposal_id>/undo/",
+        UndoProposalView.as_view(),
+        name="undo-proposal",
+    ),
+    path(
         "assistant/proposals/<int:proposal_id>/discard/",
         DiscardProposalView.as_view(),
         name="discard-proposal",
+    ),
+    path(
+        "assistant/proposals/<int:proposal_id>/restore/",
+        RestoreProposalView.as_view(),
+        name="restore-proposal",
     ),
 ]
