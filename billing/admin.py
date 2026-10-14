@@ -498,7 +498,15 @@ class IsExpiredFilter(admin.SimpleListFilter):
 
 
 class LiteLLMKeyAdminForm(forms.ModelForm):
-    """Offers the key's gateway models for the background model instead of free text."""
+    """Keeps the stored API key write-only and offers the gateway's models for the
+    background model instead of free text."""
+
+    api_key = forms.CharField(
+        required=False,
+        max_length=500,
+        label=_("API Key"),
+        widget=forms.PasswordInput(attrs={"autocomplete": "new-password"}),
+    )
 
     class Meta:
         model = LiteLLMKey
@@ -506,6 +514,26 @@ class LiteLLMKeyAdminForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self._mask_api_key()
+        self._offer_background_models()
+
+    def _mask_api_key(self):
+        field = self.fields.get("api_key")
+        if field is None:
+            return
+        if self.instance._state.adding:
+            field.required = True
+            field.help_text = _("LiteLLM proxy API key, stored encrypted.")
+            return
+        key = self.instance.api_key or ""
+        field.help_text = _(
+            "Stored key: %(masked)s. Leave blank to keep it; enter a new key to replace it."
+        ) % {"masked": f"{key[:3]}…{key[-4:]}" if len(key) > 7 else "•" * len(key)}
+
+    def clean_api_key(self):
+        return self.cleaned_data["api_key"] or self.instance.api_key
+
+    def _offer_background_models(self):
         field = self.fields.get("background_model")
         if field is None:
             return
