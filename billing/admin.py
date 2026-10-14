@@ -509,7 +509,7 @@ class LiteLLMKeyAdminForm(forms.ModelForm):
         field = self.fields.get("background_model")
         if field is None:
             return
-        if self.instance.pk is None:
+        if self.instance._state.adding:
             field.help_text = _(
                 "Save the key first; this then lists the models its gateway serves."
             )
