@@ -21,6 +21,7 @@ from billing.constants import (
     UserWalletPreferenceTypeChoice,
 )
 from billing.exceptions import PaymentRequiredError
+from billing.limit_alerts import alert_owner_limit_reached
 from billing.models import (
     GroupWallet,
     LiteLLMSpend,
@@ -294,6 +295,7 @@ class WalletService:
         spend_limit = WalletService.get_litellm_spend_limit(member)
         if spend_limit is None or not spend_limit.is_reached:
             return
+        alert_owner_limit_reached(member.access_code_group, member, spend_limit)
         raise PaymentRequiredError(
             _(
                 "You have used your ${limit} allowance on your group's AI gateway. "

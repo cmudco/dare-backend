@@ -25,6 +25,7 @@ from billing.models import (
     GroupWallet,
     LiteLLMKey,
     LiteLLMSpend,
+    MemberLimitAlert,
     SystemRefillPolicy,
     Transaction,
     UserRefillOverride,
@@ -45,6 +46,8 @@ from core.services.background_model_service import (
 )
 from core.services.custom_llm_service import CustomLLMService
 from feature_flags.models import FeatureFlag
+from notifications.constants import NotificationCategory
+from notifications.models import Notification
 from users.models import AccessCodeGroup, User
 
 GROUP_WALLETS = "/api/billing/group-wallets/"
@@ -595,3 +598,68 @@ class GroupOwnerKeyTests(TestCase):
         outsider = make_user("outsider@example.com")
 
         self.assertFalse(LiteLLMKey.visible_for_user(outsider).exists())
+
+
+class MemberLimitAlertTests(TestCase):
+    """The owner hears once when a member is blocked by their limit."""
+
+    def setUp(self):
+        FeatureFlag.objects.update_or_create(
+            key="enable_litellm_wallet", defaults={"default_enabled": True}
+        )
+        self.owner = make_user("prof@example.com")
+        self.group = AccessCodeGroup.objects.create(
+            access_code="ALERT-101", max_capacity=50, group_owner=self.owner
+        )
+        self.group_wallet = GroupWallet.objects.create(
+            group=self.group, litellm_member_cap=Decimal("1")
+        )
+        self.key = make_group_key(self.group, self.owner)
+        self.student = make_user("student@example.com", self.group)
+        activate(self.student, self.key)
+
+    def _send(self):
+        with self.assertRaises(PaymentRequiredError):
+            get_dispatch_credentials_for_user_sync("custom", self.student)
+
+    def _owner_alerts(self):
+        return Notification.objects.filter(user=self.owner)
+
+    def test_a_blocked_member_alerts_the_owner_once(self):
+        record_spend(self.student, self.key, "1")
+
+        self._send()
+        self._send()
+
+        alert = self._owner_alerts().get()
+        self.assertIn("student@example.com", alert.message)
+        self.assertIn("$1.00", alert.message)
+        self.assertEqual(alert.category, NotificationCategory.WARNING)
+        self.assertFalse(Notification.objects.filter(user=self.student).exists())
+
+    def test_a_member_under_the_limit_alerts_no_one(self):
+        record_spend(self.student, self.key, "0.5")
+
+        get_dispatch_credentials_for_user_sync("custom", self.student)
+
+        self.assertFalse(self._owner_alerts().exists())
+
+    def test_using_up_a_raised_limit_alerts_again(self):
+        record_spend(self.student, self.key, "1")
+        self._send()
+        self.group_wallet.litellm_member_cap = Decimal("2")
+        self.group_wallet.save()
+        record_spend(self.student, self.key, "2")
+
+        self._send()
+
+        self.assertEqual(self._owner_alerts().count(), 2)
+
+    def test_a_group_without_an_owner_still_blocks_without_alerting(self):
+        self.group.group_owner = None
+        self.group.save()
+        record_spend(self.student, self.key, "1")
+
+        self._send()
+
+        self.assertFalse(MemberLimitAlert.objects.exists())
