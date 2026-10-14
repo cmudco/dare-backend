@@ -20,6 +20,7 @@ from core.services.api_key_service import get_provider_api_key
 from core.services.dtos.stream_event_dto import LLMStreamEvent
 from core.services.llm_utils import (
     OpenAIErrorHandler,
+    OpenAIMessageFormatter,
     OpenAIStreamProcessor,
     OpenAIUsageExtractor,
     OpenAIVisionHandler,
@@ -27,6 +28,7 @@ from core.services.llm_utils import (
     StreamAggregator,
 )
 from core.services.model_capabilities import ModelCapabilities
+from core.services.model_identity import GatewayWebSearch, gateway_web_search
 
 logger = logging.getLogger(__name__)
 
@@ -50,8 +52,11 @@ OPENAI_CHAT_PARAMS = frozenset(
         "tool_choice",
         "response_format",
         "user",
+        "web_search_options",
     }
 )
+
+WEB_SEARCH_TOOL = {"type": "web_search"}
 
 
 class CustomLLMService:
@@ -133,20 +138,26 @@ class CustomLLMService:
             LLMStreamEvent
         """
         try:
-            # Prepare messages with vision if needed
             prepared_messages = self._prepare_messages(messages, images)
+            search = self._web_search_route(tools)
+            function_tools = [t for t in tools or [] if t != WEB_SEARCH_TOOL] or None
 
-            # Stream chat completions
-            response = await self._stream_chat_completions(
-                prepared_messages,
-                max_tokens,
-                temperature,
-                effort,
-                tools,
-            )
+            if search == GatewayWebSearch.RESPONSES:
+                response = await self._stream_responses(
+                    prepared_messages, max_tokens, temperature, tools
+                )
+                processor = OpenAIStreamProcessor.process_responses_api_stream
+            else:
+                response = await self._stream_chat_completions(
+                    prepared_messages,
+                    max_tokens,
+                    temperature,
+                    effort,
+                    function_tools,
+                    web_search=search == GatewayWebSearch.CHAT_OPTIONS,
+                )
+                processor = OpenAIStreamProcessor.process_chat_completion_stream
 
-            # Process and yield stream events
-            processor = OpenAIStreamProcessor.process_chat_completion_stream
             async for event in processor(response):
                 yield event
 
@@ -311,6 +322,32 @@ class CustomLLMService:
         # Use OpenAI's vision handler format
         return OpenAIVisionHandler.add_images_to_messages(messages, images)
 
+    def _web_search_route(self, tools: Optional[List[Dict]]) -> Optional[str]:
+        """How this turn searches, if it asked to; only LiteLLM gateways search."""
+        if not self.litellm_key_id or WEB_SEARCH_TOOL not in (tools or []):
+            return None
+        return gateway_web_search(self.model)
+
+    async def _stream_responses(
+        self,
+        messages: List[Dict],
+        max_tokens: int,
+        temperature: float,
+        tools: List[Dict],
+    ):
+        """Stream through /v1/responses, the only gateway surface where GPT searches."""
+        params = {
+            "model": self.model,
+            "input": OpenAIMessageFormatter.format_for_responses_api(messages),
+            "max_output_tokens": max_tokens,
+            "tools": OpenAIMessageFormatter.format_tools_for_responses_api(tools),
+            "stream": True,
+            **self._attribution(),
+        }
+        if self.capabilities.supports_temperature:
+            params["temperature"] = temperature
+        return await self.client.responses.create(**params)
+
     async def _stream_chat_completions(
         self,
         messages: List[Dict[str, str]],
@@ -318,6 +355,7 @@ class CustomLLMService:
         temperature: float,
         effort: Optional[str],
         tools: Optional[List[Dict]] = None,
+        web_search: bool = False,
     ):
         """
         Stream using Chat Completions API.
@@ -337,6 +375,8 @@ class CustomLLMService:
             effort,
             tools,
         )
+        if web_search:
+            kwargs["web_search_options"] = {}
 
         return await self.client.chat.completions.create(**kwargs)
 
@@ -405,10 +445,5 @@ class CustomLLMService:
 
     @staticmethod
     def get_web_search_tool() -> Dict:
-        """
-        Web search tool for custom endpoints.
-
-        Note: Most custom endpoints don't support web search.
-        Returns empty dict to indicate no web search support.
-        """
-        return {}
+        """Marker asking for web search; the gateway route is chosen per model."""
+        return dict(WEB_SEARCH_TOOL)

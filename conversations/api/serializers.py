@@ -28,6 +28,7 @@ from dare_tools.models import DareTool
 from files.api.serializers import FileSerializer, TagSerializer
 from mcp.models import MCPServer
 from projects.models import PersonalProject
+from projects.services.project_service import project_model_ref
 from prompts.api.serializers import PromptSerializer
 from prompts.models import Prompt
 from users.constants import VectorDBChoice
@@ -297,13 +298,17 @@ class ConversationSerializer(serializers.ModelSerializer):
 
     def get_selected_model_ref(self, obj):
         """Picker id of the model to preselect: a LiteLLM model when the last
-        answer came through a key, else the DARE model's stringified PK."""
+        answer came through a key, else the DARE model's stringified PK, else
+        the project's default."""
         litellm_key_id = getattr(obj, "_last_litellm_key_id", None)
         litellm_model = getattr(obj, "_last_litellm_model", None)
         if litellm_key_id and litellm_model:
             return litellm_picker_id(litellm_key_id, litellm_model)
         llm_id = getattr(obj, "_fallback_llm_id", None) or obj.selected_model_id
-        return str(llm_id) if llm_id is not None else None
+        if llm_id is not None:
+            return str(llm_id)
+        # A chat that has not answered yet starts on its project's default.
+        return project_model_ref(obj.project) if obj.project_id else None
 
 
 class ConversationSummarySerializer(serializers.ModelSerializer):

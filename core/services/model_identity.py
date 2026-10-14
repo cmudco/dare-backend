@@ -114,6 +114,40 @@ _NON_VISION = re.compile(
 )
 
 
+class GatewayWebSearch:
+    """How web search is requested from a LiteLLM gateway for one model family.
+
+    Measured against the CMU gateway: GPT only searches through /v1/responses
+    (chat completions rejects the tool without a function tool beside it);
+    Gemini searches through chat completions' ``web_search_options`` but the
+    gateway drops it whenever function tools are present.
+    """
+
+    RESPONSES = "responses"
+    CHAT_OPTIONS = "chat_options"
+
+
+_GATEWAY_SEARCH_PATTERNS: Tuple[Tuple[re.Pattern, str], ...] = (
+    (re.compile(r"(?:^|-)(?:gpt-|o[1-9](?:-|$))"), GatewayWebSearch.RESPONSES),
+    (re.compile(r"(?:^|-)gemini-"), GatewayWebSearch.CHAT_OPTIONS),
+)
+_NON_CHAT = re.compile(
+    r"(?:^|-)(?:embedding|tts|whisper|transcribe|dall-e|image|audio|realtime"
+    r"|moderation|rerank)(?:-|$)"
+)
+
+
+def gateway_web_search(raw_identifier: str) -> Optional[str]:
+    """The ``GatewayWebSearch`` route for a gateway model, or None if it cannot search."""
+    canonical = normalize_identifier(raw_identifier)
+    if not canonical or _NON_CHAT.search(canonical):
+        return None
+    for pattern, route in _GATEWAY_SEARCH_PATTERNS:
+        if pattern.search(canonical):
+            return route
+    return None
+
+
 def supports_vision(raw_identifier: str) -> bool:
     """Whether a model family is known to accept image input."""
     canonical = normalize_identifier(raw_identifier)

@@ -43,7 +43,7 @@ from core.services.dtos.llm_descriptor_dto import (
     split_litellm_picker_id,
 )
 from core.services.model_capabilities import family_supports_temperature
-from core.services.model_identity import resolve_family
+from core.services.model_identity import gateway_web_search, resolve_family
 from feature_flags.services import is_flag_enabled_for_user
 
 # === Wallet metadata wire shape ============================================
@@ -151,6 +151,7 @@ def _litellm_entry(litellm_key, model_name: str) -> Dict[str, Any]:
         "default_adaptive_thinking_enabled": False,
         "is_image_generator": False,
         "is_audio_transcriber": False,
+        "supports_web_search": gateway_web_search(model_name) is not None,
         "input_token_rate_per_million": 0,
         "output_token_rate_per_million": 0,
         "tier": None,
@@ -191,6 +192,7 @@ def _filter_for_litellm(litellm_key) -> Tuple[List[Dict[str, Any]], WalletMeta]:
     entries = [_litellm_entry(litellm_key, m.name) for m in cached.models]
     providers = sorted({e["provider"] for e in entries})
     return entries, _litellm_meta(
+        supports_web_search=any(e["supports_web_search"] for e in entries),
         providers=providers,
         is_empty=False,
         stale_probe=cached.is_stale,
@@ -198,6 +200,7 @@ def _filter_for_litellm(litellm_key) -> Tuple[List[Dict[str, Any]], WalletMeta]:
 
 
 def _litellm_meta(
+    supports_web_search: bool = False,
     providers: Optional[List[str]] = None,
     is_empty: bool = False,
     empty_reason: Optional[str] = None,
@@ -205,11 +208,10 @@ def _litellm_meta(
 ) -> WalletMeta:
     """LITELLM-scoped WalletMeta with provider-native features disabled.
 
-    Web search, image generation, audio transcription, and structured output
-    all rely on provider-native API surfaces (OpenAI Responses API, native
-    Anthropic tools, DALL-E, Whisper) that the LiteLLM proxy doesn't
-    transparently forward. The FE reads these flags to hide the
-    corresponding chat toggles when the active wallet is LITELLM.
+    Image generation, audio transcription, and structured output rely on
+    provider-native surfaces (DALL-E, Whisper) the LiteLLM proxy doesn't
+    forward. Web search works for GPT and Gemini models only, so each entry
+    carries ``supports_web_search`` and the wallet flag says whether any does.
     """
     return WalletMeta(
         type=UserWalletPreferenceTypeChoice.LITELLM,
@@ -217,7 +219,7 @@ def _litellm_meta(
         is_empty=is_empty,
         empty_reason=empty_reason,
         stale_probe=stale_probe,
-        supports_web_search=False,
+        supports_web_search=supports_web_search,
         supports_image_generation=False,
         supports_audio_transcription=False,
         supports_structured_output=False,

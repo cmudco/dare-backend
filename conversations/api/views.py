@@ -138,6 +138,7 @@ class ConversationViewSet(ConversationSharingMixin, viewsets.ModelViewSet):
             "prompt__published",
             "user",
             "selected_agent",
+            "project",
         ).prefetch_related("selected_mcp_servers", "selected_dare_tools")
 
     def get_queryset(self):

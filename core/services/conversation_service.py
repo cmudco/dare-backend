@@ -11,7 +11,10 @@ from djangorestframework_camel_case.util import camelize
 from conversations.api.serializers import MessageSerializer
 from conversations.constants import SenderType
 from conversations.models import LLM, Artifact, Conversation, Message
-from core.services.background_model_service import BackgroundModelService
+from core.services.background_model_service import (
+    BackgroundModelService,
+    BackgroundWalletEmpty,
+)
 from core.services.billing_service import BillingService
 from core.services.dtos import LLMDescriptor
 from files.models import File, Tag
@@ -195,6 +198,9 @@ class ConversationService:
                 public_bot_id=public_bot_id,
             )
             return self._sanitize_title(result.value)
+        except BackgroundWalletEmpty:
+            logger.info("Conversation title skipped: DARE wallet is empty")
+            return "New Chat"
         except Exception:
             logger.exception("Conversation title generation failed")
             return "New Chat"

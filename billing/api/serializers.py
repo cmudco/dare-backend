@@ -182,6 +182,7 @@ class GatewayKeySerializer(serializers.Serializer):
 
     id = serializers.UUIDField()
     label = serializers.CharField()
+    background_model = serializers.CharField()
     gateway_spend = serializers.DecimalField(
         max_digits=12, decimal_places=6, allow_null=True
     )
@@ -297,6 +298,13 @@ class MemberRowSerializer(serializers.ModelSerializer):
         if override is None:
             return None
         return UserRefillOverrideSerializer(override).data
+
+
+class GatewayKeyUpdateSerializer(serializers.Serializer):
+    """Body for PATCH /group-wallets/{id}/gateway-keys/{key_id}/. Blank means
+    the group's background calls bill each member's DARE wallet instead."""
+
+    background_model = serializers.CharField(max_length=255, allow_blank=True)
 
 
 class OwnedGroupSerializer(serializers.ModelSerializer):

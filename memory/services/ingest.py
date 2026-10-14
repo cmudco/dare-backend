@@ -10,6 +10,7 @@ from django.db import connection, transaction
 from django.db.models import F
 from pgvector.django import CosineDistance
 
+from core.services.background_model_service import BackgroundWalletEmpty
 from memory.constants import (
     SNAP_SIMILARITY,
     WRITER_RETRIEVE_FLOOR,
@@ -76,17 +77,20 @@ def ingest_turn(
     archive: List[MemoryRow] = [item.record for item in recall.chosen]
 
     keys_in_use = active_keys(user)
-    proposal = propose_decisions(
-        user=user,
-        source_message_id=user_message.id,
-        user_doc=user_doc,
-        archive=archive,
-        user_message=user_text,
-        assistant_message=assistant_text,
-        now=now,
-        model=model,
-        keys_in_use=keys_in_use,
-    )
+    try:
+        proposal = propose_decisions(
+            user=user,
+            source_message_id=user_message.id,
+            user_doc=user_doc,
+            archive=archive,
+            user_message=user_text,
+            assistant_message=assistant_text,
+            now=now,
+            model=model,
+            keys_in_use=keys_in_use,
+        )
+    except BackgroundWalletEmpty:
+        return _skip("DARE wallet is empty")
     decisions = proposal.decisions
     explicit = proposal.explicit
     snap_to_existing_slots(user, decisions, keys_in_use)

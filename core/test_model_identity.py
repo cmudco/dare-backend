@@ -5,7 +5,12 @@ from django.test import SimpleTestCase
 from core.services.custom_llm_service import CustomLLMService
 from core.services.dtos import LLMDescriptor
 from core.services.model_capabilities import ModelCapabilities
-from core.services.model_identity import normalize_identifier, resolve_family
+from core.services.model_identity import (
+    GatewayWebSearch,
+    gateway_web_search,
+    normalize_identifier,
+    resolve_family,
+)
 
 # Identifiers observed on the LiteLLM proxy, paired with the identity each
 # reduces to. Frozen so a normalizer change has to confront the real roster.
@@ -156,3 +161,19 @@ class ProxyParamShapeTests(SimpleTestCase):
             {"model": "m", "output_config": {"effort": "high"}}
         )
         self.assertEqual(params, {"model": "m"})
+
+
+class GatewayWebSearchTests(SimpleTestCase):
+    # Routes measured against the CMU gateway's roster.
+    def test_each_gateway_model_gets_the_route_that_searches(self):
+        cases = {
+            "gpt-5.6-luna": GatewayWebSearch.RESPONSES,
+            "bedrock_mantle/openai.gpt-5.6-luna": GatewayWebSearch.RESPONSES,
+            "gemini/gemini-3.8-flash": GatewayWebSearch.CHAT_OPTIONS,
+            "us.anthropic.claude-haiku-4-5-20251001-v1:0": None,
+            "gemini/gemini-2.5-flash-image": None,
+            "gpt-4o-transcribe": None,
+        }
+        for model, route in cases.items():
+            with self.subTest(model=model):
+                self.assertEqual(gateway_web_search(model), route)

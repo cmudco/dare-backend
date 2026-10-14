@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 from billing.constants import UserWalletPreferenceTypeChoice
 from billing.exceptions import PaymentRequiredError
-from billing.models import LiteLLMKey
+from billing.models import LiteLLMKey, Wallet
 from billing.wallet_router import resolve_active_wallet, resolve_active_wallet_for_bot
 from config import env
 from conversations.models import LLM
@@ -26,6 +26,10 @@ ResultValue = TypeVar("ResultValue")
 
 class BackgroundModelUnavailable(RuntimeError):
     """The configured background model cannot be resolved or invoked."""
+
+
+class BackgroundWalletEmpty(BackgroundModelUnavailable):
+    """The DARE wallet that would pay for the call has no balance."""
 
 
 @dataclass(frozen=True)
@@ -132,6 +136,18 @@ def _platform_model(model_override: Optional[str] = None) -> LLM:
     return model
 
 
+def _assert_funded(payer, route: BackgroundModelRoute) -> None:
+    """DARE-billed calls dispatch on the platform key and debit afterwards, so an
+    empty wallet must stop the call before the platform pays for it."""
+    if route.wallet_type != UserWalletPreferenceTypeChoice.DARE:
+        return
+    balance = (
+        Wallet.objects.filter(user=payer).values_list("balance", flat=True).first()
+    )
+    if balance is None or balance <= 0:
+        raise BackgroundWalletEmpty(f"DARE wallet of user {payer.pk} is empty")
+
+
 class BackgroundModelService:
     """Resolve, invoke, bill, and close one background-model call."""
 
@@ -153,6 +169,7 @@ class BackgroundModelService:
         route = await sync_to_async(resolve_background_model)(
             payer, model_override, public_bot_id
         )
+        await sync_to_async(_assert_funded)(payer, route)
         service = await self._service_for(route)
         try:
             text, usage = await self._collect_text(
@@ -183,6 +200,7 @@ class BackgroundModelService:
         route = await sync_to_async(resolve_background_model)(
             payer, model_override, public_bot_id
         )
+        await sync_to_async(_assert_funded)(payer, route)
         service = await self._service_for(route)
         try:
             parse = getattr(service, "parse_structured_output", None)
@@ -270,10 +288,11 @@ class BackgroundModelService:
                 thread_sensitive=True,
             )(llm=route.persisted_llm, **kwargs)
             return
+        # The funded check ran before dispatch; settle the finished call in full.
         transaction = await sync_to_async(
             self.billing_service.record_service_usage,
             thread_sensitive=True,
-        )(llm=route.persisted_llm, **kwargs)
+        )(llm=route.persisted_llm, allow_overdraft=True, **kwargs)
         await self._update_public_bot_budget(route, transaction)
 
     @staticmethod
