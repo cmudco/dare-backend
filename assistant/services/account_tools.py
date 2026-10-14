@@ -251,7 +251,10 @@ def _project(user, arguments: Dict[str, Any]) -> Dict[str, Any]:
         "name": project.name,
         "description": project.description,
         "instructions_prompt": project.prompt.title if project.prompt else None,
-        "default_model": project.default_model.name if project.default_model else None,
+        "default_model": (
+            project.default_litellm_model_name
+            or (project.default_model.name if project.default_model else None)
+        ),
         "files": project.files.count(),
         "folders": project.folders.count(),
         "libraries": project.libraries.count(),

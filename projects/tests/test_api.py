@@ -4,6 +4,8 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
 
+from billing.constants import LiteLLMKeySourceChoice
+from billing.models import LiteLLMKey
 from conversations.models import LLM, Conversation
 from files.models import File, Folder
 from libraries.models import SharedLibrary, UserLibraryAccess
@@ -274,6 +276,46 @@ class ProjectDefaultsTests(ProjectTestCase):
         self.assertTrue(conversation.web_search_enabled)
         self.assertTrue(conversation.artifacts_enabled)
         self.assertTrue(conversation.memory_enabled)
+
+    def _litellm_key(self, user):
+        return LiteLLMKey.objects.create(
+            label="course gateway",
+            base_url="https://gateway.example/v1",
+            api_key="key",
+            source=LiteLLMKeySourceChoice.USER,
+            owner_user=user,
+            created_by=user,
+        )
+
+    def test_new_chat_starts_on_the_projects_litellm_model(self):
+        key = self._litellm_key(self.user)
+        ref = f"litellm:{key.pk}:gemini/gemini-3.8-flash"
+        project = self.make_project()
+
+        saved = self.client.patch(
+            f"{PROJECTS_URL}{project.id}/", {"defaultModelRef": ref}, format="json"
+        )
+        chat = self.client.post(
+            CONVERSATIONS_URL, {"project": project.id}, format="json"
+        )
+
+        self.assertEqual(saved.status_code, 200)
+        self.assertEqual(saved.data["default_model_ref"], ref)
+        self.assertEqual(chat.data["selected_model_ref"], ref)
+
+    def test_project_rejects_another_users_litellm_key(self):
+        key = self._litellm_key(self.other)
+        project = self.make_project()
+
+        response = self.client.patch(
+            f"{PROJECTS_URL}{project.id}/",
+            {"defaultModelRef": f"litellm:{key.pk}:gpt-6"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        project.refresh_from_db()
+        self.assertIsNone(project.default_litellm_key_id)
 
     def test_project_prompt_overrides_the_users_default_prompt(self):
         default = Prompt.active_objects.create(

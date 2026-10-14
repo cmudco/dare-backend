@@ -58,7 +58,24 @@ class PersonalProject(BaseModel):
         null=True,
         blank=True,
         related_name="personal_projects",
-        help_text=_("Model pre-selected in new project chats."),
+        help_text=_("DARE model pre-selected in new project chats."),
+    )
+    default_litellm_key = models.ForeignKey(
+        "billing.LiteLLMKey",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="personal_projects",
+        help_text=_(
+            "LiteLLM key whose model is pre-selected in new project chats, "
+            "instead of a DARE model."
+        ),
+    )
+    default_litellm_model_name = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        help_text=_("Gateway model id pre-selected through default_litellm_key."),
     )
     web_search_enabled = models.BooleanField(
         default=False, help_text=_("New project chats start with web search on.")
@@ -115,6 +132,13 @@ class PersonalProject(BaseModel):
         verbose_name_plural = _("personal projects")
         ordering = ["-updated_at"]
         indexes = [models.Index(fields=["user", "-updated_at"])]
+        constraints = [
+            models.CheckConstraint(
+                name="project_single_default_model",
+                condition=models.Q(default_model__isnull=True)
+                | models.Q(default_litellm_key__isnull=True),
+            ),
+        ]
 
     def __str__(self):
         return self.name
