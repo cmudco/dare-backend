@@ -572,12 +572,15 @@ class LLMService:
     def _get_web_search_tools(self, llm: LLM) -> list:
         """Get web search tools based on the LLM provider.
 
-        All three providers (OpenAI, Claude, Gemini) support native web search.
+        OpenAI, Claude and Gemini search natively; a custom endpoint gets a
+        marker that ``CustomLLMService`` routes for LiteLLM gateways and drops
+        elsewhere.
         """
         provider_tools = {
             Provider.OPENAI.value: OpenAIService.get_web_search_tool,
             Provider.CLAUDE.value: ClaudeService.get_web_search_tool,
             Provider.GEMINI.value: GeminiService.get_web_search_tool,
+            Provider.CUSTOM.value: CustomLLMService.get_web_search_tool,
         }
 
         tool_func = provider_tools.get(llm.provider)

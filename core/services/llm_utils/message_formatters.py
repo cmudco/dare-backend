@@ -7,7 +7,7 @@ required by various LLM providers (OpenAI, Claude, Gemini).
 
 import base64
 import json
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Optional, Union
 
 from google.genai import types
 
@@ -132,6 +132,47 @@ class GeminiMessageFormatter:
 
 class OpenAIMessageFormatter:
     """OpenAI-specific message formatting utilities."""
+
+    @staticmethod
+    def format_tools_for_responses_api(
+        tools: Optional[List[Dict]],
+    ) -> List[Dict]:
+        """
+        Convert Chat Completions tool definitions to Responses API shape.
+
+        Chat Completions nests the schema under a "function" key; the Responses
+        API flattens it. Hosted tools (``{"type": "web_search"}``) pass through
+        untouched.
+
+        Args:
+            tools: Tools in Chat Completions shape
+
+        Returns:
+            Tools in Responses API shape
+        """
+        converted = []
+
+        for tool in tools or []:
+            if tool.get("type") != "function":
+                converted.append(tool)
+                continue
+
+            function = tool.get("function") or {}
+            if not function:
+                # Already flat - keep as-is.
+                converted.append(tool)
+                continue
+
+            converted.append(
+                {
+                    "type": "function",
+                    "name": function.get("name"),
+                    "description": function.get("description", ""),
+                    "parameters": function.get("parameters", {}),
+                }
+            )
+
+        return converted
 
     @staticmethod
     def format_for_responses_api(messages: List[Dict]) -> Union[str, List]:
