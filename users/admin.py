@@ -8,7 +8,11 @@ from datetime import timedelta
 
 from users.models import User, AccessCodeGroup
 from billing.services import WalletService
-from billing.admin import GroupWalletInline, UserRefillOverrideInline
+from billing.admin import (
+    GroupWalletInline,
+    LiteLLMKeyAdminForm,
+    UserRefillOverrideInline,
+)
 from billing.constants import (
     LiteLLMKeySourceChoice,
     TransactionSourceChoice,
@@ -47,9 +51,10 @@ class LiteLLMCohortKeyInline(admin.TabularInline):
     without rendering those fields on the form.
     """
     model = LiteLLMKey
+    form = LiteLLMKeyAdminForm
     fk_name = "source_group"
     extra = 0
-    fields = ("label", "base_url", "api_key", "expires_at")
+    fields = ("label", "base_url", "api_key", "background_model", "expires_at")
 
     def get_queryset(self, request):
         return super().get_queryset(request).filter(source=LiteLLMKeySourceChoice.ADMIN_GROUP)
