@@ -912,10 +912,11 @@ class LiteLLMSpend(TimeStampMixin):
 
 
 class MemberLimitAlert(TimeStampMixin):
-    """The group owner was told this member used up this limit.
+    """One stretch of a member being blocked by their gateway limit.
 
-    One row per (group, member, limit) keeps a member who keeps retrying from
-    flooding the owner; raising the limit makes the next exhaustion a new row.
+    Opening it tells the owner; closing it, once a raised or removed limit lets
+    the member send again, tells the member. At most one is open per member and
+    group, so a member who keeps retrying does not flood the owner.
     """
 
     group = models.ForeignKey(
@@ -934,13 +935,21 @@ class MemberLimitAlert(TimeStampMixin):
         max_digits=12,
         decimal_places=6,
         verbose_name=_("Limit (USD)"),
-        help_text=_("The spend limit the member had used up when the owner was told."),
+        help_text=_("The spend limit the member had used up when they were blocked."),
+    )
+    resolved_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name=_("Resolved At"),
+        help_text=_("When a limit change let the member send again; empty while blocked."),
     )
 
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=["group", "member", "limit"], name="unique_member_limit_alert"
+                fields=["group", "member"],
+                condition=Q(resolved_at__isnull=True),
+                name="one_open_member_limit_alert",
             )
         ]
         verbose_name = _("Member Limit Alert")
