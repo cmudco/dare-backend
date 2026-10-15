@@ -24,6 +24,10 @@ LIST_CONVERSATIONS_MAX_LIMIT = 100
 PLAN_MAX_ACTIONS = 25
 PLAN_MAX_ITEMS = 100
 PLAN_NAME_MAX_LENGTH = 255
+AGENT_DESCRIPTION_MAX_LENGTH = 1000
+AGENT_PROMPT_MAX_LENGTH = 20000
+LIST_PROMPTS_MAX = 50
+PROMPT_PREVIEW_LENGTH = 400
 
 SEARCH_PLATFORM_DOCS = "search_platform_docs"
 GET_ACCOUNT_OVERVIEW = "get_account_overview"
@@ -32,6 +36,8 @@ GET_CONVERSATION = "get_conversation"
 GET_PROJECT = "get_project"
 LIST_MY_PROJECTS = "list_my_projects"
 LIST_MY_CONVERSATIONS = "list_my_conversations"
+LIST_MY_PROMPTS = "list_my_prompts"
+LIST_MY_MODELS = "list_my_models"
 PROPOSE_CHANGES = "propose_changes"
 START_PAGE_TOUR = "start_page_tour"
 
@@ -63,6 +69,8 @@ ACCOUNT_TOOLS = frozenset(
         LIST_MY_FILES,
         LIST_MY_PROJECTS,
         LIST_MY_CONVERSATIONS,
+        LIST_MY_PROMPTS,
+        LIST_MY_MODELS,
         GET_CONVERSATION,
         GET_PROJECT,
         PROPOSE_CHANGES,
@@ -110,3 +118,4 @@ class ProposalActionType(models.TextChoices):
     )
     DELETE_PROJECT = "delete_project", _("Delete a project")
     DELETE_CONVERSATIONS = "delete_conversations", _("Delete chats")
+    CREATE_AGENT = "create_agent", _("Create an agent")

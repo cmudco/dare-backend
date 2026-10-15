@@ -18,11 +18,14 @@ from assistant.constants import (
     LIST_FILES_MAX_LIMIT,
     LIST_MY_CONVERSATIONS,
     LIST_MY_FILES,
+    LIST_MY_MODELS,
     LIST_MY_PROJECTS,
+    LIST_MY_PROMPTS,
     PROPOSE_CHANGES,
     START_PAGE_TOUR,
     TOUR_PAGES,
 )
+from assistant.services.agent_builder import list_my_models, list_my_prompts
 from assistant.services.proposal_service import propose_changes
 from billing.constants import UserWalletPreferenceTypeChoice
 from billing.models import UserWalletPreference, Wallet
@@ -56,6 +59,10 @@ def execute_account_tool(
         return _list_projects(user)
     if tool_name == LIST_MY_CONVERSATIONS:
         return _list_conversations(user, arguments)
+    if tool_name == LIST_MY_PROMPTS:
+        return list_my_prompts(user, arguments)
+    if tool_name == LIST_MY_MODELS:
+        return list_my_models(user)
     if tool_name == PROPOSE_CHANGES:
         return propose_changes(user, arguments)
     if tool_name == START_PAGE_TOUR:

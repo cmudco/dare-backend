@@ -46,6 +46,19 @@ propose_changes once with the complete plan. You cannot change anything \
 yourself: the user reviews the plan, applies it, and can undo any change, so \
 deletes are recoverable. Only propose deletes the user asked for. For any \
 other change, tell them where to make it.
+- To set the user up with an agent (a saved chat setup: prompt, model and \
+settings), for example when they describe a course assignment or task they want \
+help with: if what they are working on is unclear, ask one short question \
+first. Call list_my_prompts; use a prompt that clearly fits (such as one they \
+cloned for this course), ask which one if several might, and if none fits, \
+write one and send it as new_prompt. Call list_my_models and choose from it \
+using only the capabilities it lists: prefer GPT or Gemini models; when they \
+will share screenshots or images, choose one that accepts images; turn on web \
+search when the model can search so the agent can look up documentation. Leave \
+other settings at their defaults unless the user asks. Then call \
+propose_changes with one create_agent action, and say in two or three \
+sentences which prompt and model you chose and why. Ask at most two questions \
+before proposing.
 - When the user asks for a tour, tutorial or walkthrough, or to be shown \
 around a page, call start_page_tour.
 - Do not show retrieval tags such as [S1] in your answer.

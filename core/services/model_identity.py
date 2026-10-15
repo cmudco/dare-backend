@@ -100,7 +100,7 @@ FAMILIES: Tuple[ModelFamily, ...] = (
 # treated as text-only, so a proxy model outside these families is never
 # recommended for vision work even though the user may still pick it.
 _VISION_PATTERNS: Tuple[re.Pattern, ...] = (
-    re.compile(r"(?:^|-)gpt-(?:4o|4\.1|4-turbo|5)(?:[.-]|$)"),
+    re.compile(r"(?:^|-)gpt-(?:4o|4\.1|4-turbo|5|6)(?:[.-]|$)"),
     re.compile(r"(?:^|-)(?:o1|o3|o4-mini)(?:-pro)?(?:-|$)"),
     re.compile(r"(?:^|-)claude-(?:3|opus|sonnet|haiku|fable|mythos)(?:[.-]|$)"),
     re.compile(r"(?:^|-)gemini-(?:1\.5|2|3)(?:[.-]|$)"),
