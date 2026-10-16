@@ -6,6 +6,8 @@ Kept free of ORM imports so the DARE tool registry can import them.
 from typing import Dict
 
 from assistant.constants import (
+    AGENT_MAX_MODEL_OPTIONS,
+    AGENT_REASON_MAX_LENGTH,
     GET_ACCOUNT_OVERVIEW,
     GET_CONVERSATION,
     GET_PROJECT,
@@ -14,6 +16,7 @@ from assistant.constants import (
     LIST_MY_FILES,
     LIST_MY_MODELS,
     LIST_MY_PROJECTS,
+    SEARCH_MY_PROMPTS,
     PLAN_MAX_ACTIONS,
     PROPOSE_CHANGES,
     SEARCH_PLATFORM_DOCS,
@@ -166,28 +169,94 @@ def list_my_models_schema() -> Dict:
         LIST_MY_MODELS,
         "The chat models the user can use right now, from the wallet that "
         "pays for their chats (their LiteLLM gateway models when that wallet "
-        "is a gateway). Recommended models, the newest GPT and Gemini, come "
-        "first. Per model: model_ref (pass it to create_agent), name, "
-        "recommended, and whether it accepts images and can search the web.",
+        "is a gateway). Recommended models come first, each with "
+        "recommended_as: quality (newest flagship GPT), balanced (newest Gemini "
+        "Flash) or budget (cheapest good option), all within the price limit "
+        "for agents. Per model: model_ref (pass to create_agent), name, "
+        "recommended_as, output price in USD per million tokens (null when "
+        "unknown), and whether it accepts images and can search the web.",
         {},
+    )
+
+
+def search_my_prompts_schema() -> Dict:
+    return _function(
+        SEARCH_MY_PROMPTS,
+        "Search the user's saved prompts (including ones cloned from the "
+        "Prompts library) by keywords in their title or text, best match "
+        "first: prompt_id, title and the start of the text.",
+        {
+            "query": {
+                "type": "string",
+                "description": (
+                    "Keywords from the user's task, such as the course, "
+                    "assignment name or tools, or the prompt title they gave."
+                ),
+            }
+        },
+        required=("query",),
     )
 
 
 _AGENT_SCHEMA = {
     "type": "object",
-    "description": "create_agent only: the model to suggest and whether to search the web.",
+    "description": "create_agent only: the models to offer and whether to search the web.",
     "properties": {
         "description": {
             "type": "string",
             "description": "What the agent helps with, one or two sentences.",
         },
-        "model_ref": {
-            "type": "string",
-            "description": "A model_ref from list_my_models.",
+        "options": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": AGENT_MAX_MODEL_OPTIONS,
+            "description": "Models the user chooses between, best fit first.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "model_ref": {
+                        "type": "string",
+                        "description": "A model_ref from list_my_models.",
+                    },
+                    "why": {
+                        "type": "string",
+                        "maxLength": AGENT_REASON_MAX_LENGTH,
+                        "description": (
+                            "One sentence tying this model's strength and cost "
+                            "to the user's task."
+                        ),
+                    },
+                },
+                "required": ["model_ref", "why"],
+            },
+        },
+        "prompt": {
+            "type": "object",
+            "description": (
+                "One of the user's prompts from search_my_prompts that fits "
+                "this task; omit when none clearly fits."
+            ),
+            "properties": {
+                "prompt_id": {"type": "integer"},
+                "why": {
+                    "type": "string",
+                    "maxLength": AGENT_REASON_MAX_LENGTH,
+                    "description": "One sentence on why this prompt fits the task.",
+                },
+            },
+            "required": ["prompt_id", "why"],
         },
         "enable_web_search": {"type": "boolean"},
+        "web_search_why": {
+            "type": "string",
+            "maxLength": AGENT_REASON_MAX_LENGTH,
+            "description": (
+                "When web search is on: one sentence on what the agent will look "
+                "up for this task, such as the official documentation."
+            ),
+        },
     },
-    "required": ["model_ref", "enable_web_search"],
+    "required": ["options", "enable_web_search", "web_search_why"],
 }
 
 
@@ -210,8 +279,9 @@ def propose_changes_schema() -> Dict:
         "creates the project if it does not exist.\n"
         "- delete_project: name=project; its chats return to the chat list.\n"
         "- delete_conversations: conversation_ids.\n"
-        "- create_agent: name=agent name, agent={model_ref, "
-        "enable_web_search, description}. The user picks its prompt.",
+        "- create_agent: name=agent name, agent={options (1-3 models, each "
+        "with why), enable_web_search, web_search_why, optional prompt "
+        "{prompt_id, why}, description}. The user picks the model on the card.",
         {
             "summary": {
                 "type": "string",

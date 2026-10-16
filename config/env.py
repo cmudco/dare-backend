@@ -1,4 +1,5 @@
 import os
+from decimal import Decimal
 
 import environ
 
@@ -177,3 +178,7 @@ SYFTBOX_SYNC_INTERVAL_SECONDS = int(os.getenv("SYFTBOX_SYNC_INTERVAL_SECONDS", "
 # key), so the model is a cheap one and each user gets a daily message budget.
 ASSISTANT_MODEL_IDENTIFIER = os.getenv("ASSISTANT_MODEL_IDENTIFIER", "gpt-6-luna")
 ASSISTANT_DAILY_MESSAGE_LIMIT = int(os.getenv("ASSISTANT_DAILY_MESSAGE_LIMIT", "50"))
+# Most an agent model Ask DARE recommends may cost, USD per million output tokens.
+ASSISTANT_AGENT_MAX_OUTPUT_RATE = Decimal(
+    os.getenv("ASSISTANT_AGENT_MAX_OUTPUT_RATE", "10")
+)

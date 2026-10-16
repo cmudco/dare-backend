@@ -15,7 +15,13 @@ from assistant.constants import ProposalActionType as Type
 from assistant.constants import ProposalStatus
 from assistant.domain.change_plan import PlannedAction, parse_change_plan
 from assistant.models import AssistantProposal
-from assistant.services.agent_builder import draft_errors, model_roster, stored_agent
+from assistant.services.agent_builder import (
+    ModelChoiceInvalid,
+    choose_model,
+    draft_errors,
+    model_roster,
+    stored_agent,
+)
 from assistant.services.proposal_actions import (
     HANDLERS,
     find_folder,
@@ -112,7 +118,7 @@ def _reference_errors(user, actions, file_names, chat_titles, roster) -> List[st
         ):
             errors.append(f'The tag name "{action.name}" is taken; pick another.')
         if action.agent is not None:
-            errors.extend(draft_errors(action.agent, roster))
+            errors.extend(draft_errors(action.agent, roster, user))
     return errors
 
 
@@ -127,7 +133,7 @@ def _stored(
         "is_new": action.type == Type.CREATE_AGENT
         or (bool(find_new) and find_new(user, action.name) is None),
         "description": action.description,
-        "agent": stored_agent(action.agent, roster) if action.agent else None,
+        "agent": stored_agent(action.agent, roster, user) if action.agent else None,
         "files": [{"id": i, "name": file_names[i]} for i in action.file_ids],
         "conversations": [
             {"id": i, "title": chat_titles[i]} for i in action.conversation_ids
@@ -173,13 +179,25 @@ def _save(proposal: AssistantProposal) -> AssistantProposal:
 
 @transaction.atomic
 def apply_actions(
-    user, proposal_id: int, action_ids: Optional[List[str]] = None
+    user,
+    proposal_id: int,
+    action_ids: Optional[List[str]] = None,
+    model_choices: Optional[Dict[str, str]] = None,
 ) -> AssistantProposal:
-    """Apply the chosen pending actions (all of them by default), in plan order."""
+    """Apply the chosen pending actions (all of them by default), in plan order.
+
+    ``model_choices`` maps a create_agent action id to the offered model the
+    user picked; an action without a choice gets its first option.
+    """
     proposal = _locked(user, proposal_id)
     if proposal.status == ProposalStatus.DISCARDED:
         raise ProposalConflict("Restore this proposal before applying it.")
     for action in _selected(proposal, action_ids, ProposalActionStatus.PENDING):
+        if action["type"] == Type.CREATE_AGENT:
+            try:
+                choose_model(action["agent"], (model_choices or {}).get(action["id"]))
+            except ModelChoiceInvalid as exc:
+                raise ProposalConflict(str(exc))
         apply, _ = HANDLERS[action["type"]]
         journal, notes = apply(user, action)
         action.update(status=ProposalActionStatus.APPLIED, journal=journal, notes=notes)
@@ -199,6 +217,8 @@ def undo_actions(
         journal = action["journal"]
         notes = undo(user, journal) if journal else ["Nothing to undo."]
         action.update(status=ProposalActionStatus.PENDING, journal=None, notes=notes)
+        if action["type"] == Type.CREATE_AGENT:
+            action["agent"]["selected_model_ref"] = None
     return _save(proposal)
 
 
