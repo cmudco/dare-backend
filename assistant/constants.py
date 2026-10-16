@@ -29,6 +29,8 @@ PLAN_MAX_ITEMS = 100
 PLAN_NAME_MAX_LENGTH = 255
 AGENT_DESCRIPTION_MAX_LENGTH = 1000
 AGENT_MAX_MODEL_OPTIONS = 3
+# One sentence on why a model, or web search, suits the user's task.
+AGENT_REASON_MAX_LENGTH = 300
 
 SEARCH_PLATFORM_DOCS = "search_platform_docs"
 GET_ACCOUNT_OVERVIEW = "get_account_overview"

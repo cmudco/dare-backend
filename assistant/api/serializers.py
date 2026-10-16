@@ -24,6 +24,8 @@ class ProposalModelOptionSerializer(serializers.Serializer):
     model_ref = serializers.CharField()
     model_name = serializers.CharField()
     role = serializers.CharField(allow_null=True)
+    why = serializers.CharField()
+    input_usd_per_million_tokens = serializers.CharField(allow_null=True)
     output_usd_per_million_tokens = serializers.CharField(allow_null=True)
 
 
@@ -32,6 +34,7 @@ class ProposalAgentSerializer(serializers.Serializer):
 
     options = ProposalModelOptionSerializer(many=True)
     enable_web_search = serializers.BooleanField()
+    web_search_why = serializers.CharField(allow_blank=True)
     selected_model_ref = serializers.CharField(allow_null=True)
 
 

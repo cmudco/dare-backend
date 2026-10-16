@@ -32,7 +32,9 @@ GATEWAY_PRICES = {
 
 def registry_rates(model_name):
     rate = GATEWAY_PRICES.get(model_name)
-    return None if rate is None else ReferenceRates(Decimal("1"), Decimal(rate))
+    if rate is None:
+        return None
+    return ReferenceRates(Decimal(rate) / 5, Decimal(rate))
 
 
 class AgentBuilderTestCase(TestCase):
@@ -120,12 +122,16 @@ class CreateAgentTests(AgentBuilderTestCase):
     def propose_options(self):
         return self.propose_agent(
             {
-                "model_refs": [
-                    self.ref("gemini/gemini-3.8-flash"),
-                    self.ref("gpt-6.1-sol"),
-                    self.ref("gpt-6-luna"),
+                "options": [
+                    {"model_ref": self.ref(model), "why": f"{model} suits GHPython."}
+                    for model in (
+                        "gemini/gemini-3.8-flash",
+                        "gpt-6.1-sol",
+                        "gpt-6-luna",
+                    )
                 ],
                 "enable_web_search": True,
+                "web_search_why": "Looks up the official Grasshopper docs.",
                 "description": "GHPython help for A2.",
             }
         )["proposal_id"]
@@ -190,14 +196,23 @@ class CreateAgentTests(AgentBuilderTestCase):
     def test_plans_the_user_cannot_carry_are_rejected_with_readable_errors(self):
         cases = {
             "Unknown model_refs": {
-                "model_refs": ["litellm:nope:gpt-6"],
+                "options": [{"model_ref": "litellm:nope:gpt-6", "why": "x"}],
                 "enable_web_search": False,
             },
             "cannot search the web": {
-                "model_refs": [self.ref("us.meta.llama3-1-8b-instruct-v1:0")],
+                "options": [
+                    {
+                        "model_ref": self.ref("us.meta.llama3-1-8b-instruct-v1:0"),
+                        "why": "x",
+                    }
+                ],
                 "enable_web_search": True,
             },
-            "needs agent.model_refs": {"model_refs": [], "enable_web_search": False},
+            "needs agent.options": {"options": [], "enable_web_search": False},
+            "one-sentence `why`": {
+                "options": [{"model_ref": self.ref("gpt-6-luna"), "why": ""}],
+                "enable_web_search": False,
+            },
         }
         for expected, agent in cases.items():
             with self.subTest(expected):

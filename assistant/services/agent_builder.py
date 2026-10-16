@@ -45,9 +45,9 @@ def model_roster(user) -> Roster:
         and not entry["is_audio_transcriber"]
         and is_text_model(entry["identifier"])
     ]
-    prices = {entry["id"]: _output_rate(entry) for entry in chat}
+    prices = {entry["id"]: _rates(entry) for entry in chat}
     picks = recommend_agent_models(
-        (PricedModel(entry["identifier"], prices[entry["id"]]) for entry in chat),
+        (PricedModel(entry["identifier"], prices[entry["id"]][1]) for entry in chat),
         max_output_rate=settings.ASSISTANT_AGENT_MAX_OUTPUT_RATE,
     )
     roles = {pick.identifier: pick.role for pick in picks}
@@ -56,7 +56,8 @@ def model_roster(user) -> Roster:
     return {
         entry["id"]: {
             **entry,
-            "output_rate": prices[entry["id"]],
+            "input_rate": prices[entry["id"]][0],
+            "output_rate": prices[entry["id"]][1],
             "recommended_as": roles.get(entry["identifier"]),
             "accepts_images": (
                 images.get(int(entry["id"]), False)
@@ -68,14 +69,23 @@ def model_roster(user) -> Roster:
     }
 
 
-def _output_rate(entry: Dict[str, Any]) -> Optional[Decimal]:
-    """USD per million output tokens: the DARE model's own rate, or the price
-    registry's for a gateway model (gateway entries carry zero rates)."""
+Rates = Tuple[Optional[Decimal], Optional[Decimal]]
+
+
+def _rates(entry: Dict[str, Any]) -> Rates:
+    """(input, output) USD per million tokens: the DARE model's own rates, or
+    the price registry's for a gateway model (gateway entries carry zeros)."""
     if entry["id"].isdigit():
-        rate = entry["output_token_rate_per_million"]
-        return Decimal(str(rate)) if rate else None
+        output = entry["output_token_rate_per_million"]
+        if not output:
+            return None, None
+        return Decimal(str(entry["input_token_rate_per_million"] or 0)), Decimal(
+            str(output)
+        )
     rates = reference_rates(entry["identifier"])
-    return rates.output_token_rate_per_million if rates else None
+    if rates is None:
+        return None, None
+    return rates.input_token_rate_per_million, rates.output_token_rate_per_million
 
 
 def _price(rate: Optional[Decimal]) -> Optional[str]:
@@ -90,6 +100,7 @@ def list_my_models(user) -> Dict[str, Any]:
                 "model_ref": ref,
                 "name": entry["name"],
                 "recommended_as": entry["recommended_as"],
+                "input_usd_per_million_tokens": _price(entry["input_rate"]),
                 "output_usd_per_million_tokens": _price(entry["output_rate"]),
                 "accepts_images": entry["accepts_images"],
                 "web_search": entry.get("supports_web_search", True),
@@ -123,14 +134,21 @@ def stored_agent(draft: AgentDraft, roster: Roster) -> Dict[str, Any]:
     return {
         "options": [
             {
-                "model_ref": ref,
-                "model_name": roster[ref]["name"],
-                "role": roster[ref]["recommended_as"],
-                "output_usd_per_million_tokens": _price(roster[ref]["output_rate"]),
+                "model_ref": offer.model_ref,
+                "model_name": roster[offer.model_ref]["name"],
+                "role": roster[offer.model_ref]["recommended_as"],
+                "why": offer.why,
+                "input_usd_per_million_tokens": _price(
+                    roster[offer.model_ref]["input_rate"]
+                ),
+                "output_usd_per_million_tokens": _price(
+                    roster[offer.model_ref]["output_rate"]
+                ),
             }
-            for ref in draft.model_refs
+            for offer in draft.offers
         ],
         "enable_web_search": draft.enable_web_search,
+        "web_search_why": draft.web_search_why,
         "selected_model_ref": None,
     }
 

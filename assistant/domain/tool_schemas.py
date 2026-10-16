@@ -7,6 +7,7 @@ from typing import Dict
 
 from assistant.constants import (
     AGENT_MAX_MODEL_OPTIONS,
+    AGENT_REASON_MAX_LENGTH,
     GET_ACCOUNT_OVERVIEW,
     GET_CONVERSATION,
     GET_PROJECT,
@@ -185,16 +186,41 @@ _AGENT_SCHEMA = {
             "type": "string",
             "description": "What the agent helps with, one or two sentences.",
         },
-        "model_refs": {
+        "options": {
             "type": "array",
-            "items": {"type": "string"},
             "minItems": 1,
             "maxItems": AGENT_MAX_MODEL_OPTIONS,
-            "description": "Models from list_my_models the user chooses between, best fit first.",
+            "description": "Models the user chooses between, best fit first.",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "model_ref": {
+                        "type": "string",
+                        "description": "A model_ref from list_my_models.",
+                    },
+                    "why": {
+                        "type": "string",
+                        "maxLength": AGENT_REASON_MAX_LENGTH,
+                        "description": (
+                            "One sentence tying this model's strength and cost "
+                            "to the user's task."
+                        ),
+                    },
+                },
+                "required": ["model_ref", "why"],
+            },
         },
         "enable_web_search": {"type": "boolean"},
+        "web_search_why": {
+            "type": "string",
+            "maxLength": AGENT_REASON_MAX_LENGTH,
+            "description": (
+                "When web search is on: one sentence on what the agent will look "
+                "up for this task, such as the official documentation."
+            ),
+        },
     },
-    "required": ["model_refs", "enable_web_search"],
+    "required": ["options", "enable_web_search", "web_search_why"],
 }
 
 
@@ -217,9 +243,9 @@ def propose_changes_schema() -> Dict:
         "creates the project if it does not exist.\n"
         "- delete_project: name=project; its chats return to the chat list.\n"
         "- delete_conversations: conversation_ids.\n"
-        "- create_agent: name=agent name, agent={model_refs (1-3 options), "
-        "enable_web_search, description}. The user picks the model on the "
-        "card and sets the prompt themselves.",
+        "- create_agent: name=agent name, agent={options (1-3 models, each "
+        "with why), enable_web_search, web_search_why, description}. The user "
+        "picks the model on the card and sets the prompt themselves.",
         {
             "summary": {
                 "type": "string",
