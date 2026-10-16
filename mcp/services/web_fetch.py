@@ -17,12 +17,15 @@ back as if it were page content. The gateway turns the raised error into a tool
 error, so the run's audit shows the call failed instead of a false success.
 """
 
+import base64
+import io
 import ipaddress
 import logging
 import socket
 from urllib.parse import urljoin, urlsplit
 
 import httpx
+from PyPDF2 import PdfReader
 
 from conversations.constants import Provider
 from core.services.api_key_service import get_provider_api_key_sync
@@ -189,18 +192,12 @@ def _fetch_result(message):
 
 
 def _pdf_bytes_text(data):
-    import io
-
-    from PyPDF2 import PdfReader
-
     reader = PdfReader(io.BytesIO(data))
     return "\n".join((page.extract_text() or "") for page in reader.pages).strip()
 
 
 def _pdf_text(b64_data):
     """Extract text from a base64 PDF the fetch tool returned (no model needed)."""
-    import base64
-
     return _pdf_bytes_text(base64.b64decode(b64_data))
 
 
