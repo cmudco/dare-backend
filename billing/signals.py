@@ -2,7 +2,8 @@ import logging
 from decimal import Decimal
 
 from django.conf import settings
-from django.db.models.signals import post_save, pre_delete, pre_save
+from django.db import transaction
+from django.db.models.signals import post_delete, post_save, pre_delete, pre_save
 from django.dispatch import receiver
 
 from api_keys.constants import BillingModeChoice
@@ -10,7 +11,14 @@ from api_keys.models import UserProviderAPIKey
 from billing.constants import LiteLLMKeySourceChoice, UserWalletPreferenceTypeChoice
 from billing.group_wallet import adopt_group_wallet
 from billing.litellm_models_service import invalidate as invalidate_litellm_probe
-from billing.models import LiteLLMKey, UserWalletPreference, Wallet
+from billing.models import (
+    GroupWallet,
+    LiteLLMKey,
+    UserRefillOverride,
+    UserWalletPreference,
+    Wallet,
+)
+from billing.services import WalletService
 from users.models import AccessCodeGroup, User
 
 logger = logging.getLogger(__name__)
@@ -233,3 +241,32 @@ def adopt_group_members_on_key_created(sender, instance, created, **kwargs):
             instance.source_group_id,
             instance.pk,
         )
+
+
+def _limit_unchanged(update_fields, field: str) -> bool:
+    return update_fields is not None and field not in update_fields
+
+
+@receiver(post_save, sender=GroupWallet)
+def release_members_after_group_limit_change(sender, instance, update_fields, **kwargs):
+    """A raised or cleared group limit can unblock members, from any write path."""
+    if _limit_unchanged(update_fields, "litellm_member_cap"):
+        return
+    group_id = instance.group_id
+    transaction.on_commit(
+        lambda: WalletService.release_unblocked_members(group_id=group_id)
+    )
+
+
+@receiver(post_save, sender=UserRefillOverride)
+@receiver(post_delete, sender=UserRefillOverride)
+def release_member_after_override_change(
+    sender, instance, update_fields=None, **kwargs
+):
+    """A raised or removed per-member limit can unblock that member."""
+    if _limit_unchanged(update_fields, "litellm_cap"):
+        return
+    member_id = instance.user_id
+    transaction.on_commit(
+        lambda: WalletService.release_unblocked_members(member_id=member_id)
+    )

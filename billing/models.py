@@ -911,6 +911,54 @@ class LiteLLMSpend(TimeStampMixin):
         return f"LiteLLMSpend<{self.user.email} / {self.litellm_key.label}: {self.total_reference_amount}>"
 
 
+class MemberLimitAlert(TimeStampMixin):
+    """One stretch of a member being blocked by their gateway limit.
+
+    Opening it tells the owner; closing it, once a raised or removed limit lets
+    the member send again, tells the member. At most one is open per member and
+    group, so a member who keeps retrying does not flood the owner.
+    """
+
+    group = models.ForeignKey(
+        AccessCodeGroup,
+        on_delete=models.CASCADE,
+        related_name="member_limit_alerts",
+        verbose_name=_("Group"),
+    )
+    member = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="limit_alerts",
+        verbose_name=_("Member"),
+    )
+    limit = models.DecimalField(
+        max_digits=12,
+        decimal_places=6,
+        verbose_name=_("Limit (USD)"),
+        help_text=_("The spend limit the member had used up when they were blocked."),
+    )
+    resolved_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        verbose_name=_("Resolved At"),
+        help_text=_("When a limit change let the member send again; empty while blocked."),
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["group", "member"],
+                condition=Q(resolved_at__isnull=True),
+                name="one_open_member_limit_alert",
+            )
+        ]
+        verbose_name = _("Member Limit Alert")
+        verbose_name_plural = _("Member Limit Alerts")
+
+    def __str__(self):
+        return f"MemberLimitAlert<{self.member.email} / {self.group.access_code}: {self.limit}>"
+
+
 class UserWalletPreference(TimeStampMixin):
     """
     Per-user pointer to the active wallet for routing LLM calls. Created lazily
