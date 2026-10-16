@@ -3,6 +3,7 @@ from django.conf import settings
 from django.core.validators import MinValueValidator, MaxValueValidator
 
 from common.managers import ActiveObjectsManager
+from agents.constants import AGENT_DEFAULT_HISTORY_LIMIT, AGENT_DEFAULT_MAX_TOKENS
 from common.models import BaseModel
 from conversations.constants import ModelEffort, RagMode
 from workflows.node_handler_constants import StepNodeDefaults
@@ -75,7 +76,7 @@ class Agent(BaseModel):
         help_text="Gateway model id reached through litellm_key"
     )
     max_tokens = models.PositiveIntegerField(
-        default=StepNodeDefaults.MAX_TOKENS,
+        default=AGENT_DEFAULT_MAX_TOKENS,
         help_text="Maximum tokens for LLM response"
     )
     temperature = models.FloatField(
@@ -91,7 +92,7 @@ class Agent(BaseModel):
         help_text="Effort for models that support it; null uses the model default"
     )
     history_limit = models.PositiveIntegerField(
-        default=20,
+        default=AGENT_DEFAULT_HISTORY_LIMIT,
         validators=[MinValueValidator(1), MaxValueValidator(50)],
         help_text="Messages of chat history sent with each turn"
     )
