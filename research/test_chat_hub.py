@@ -913,6 +913,19 @@ class ProfileTokenTests(ProfileRootMixin, TestCase):
 
         self.assertEqual(read_env_value(env_path, "MCP_DARE_API_KEY"), first)
 
+    @override_settings(
+        HERMES_PROFILE_MODEL="claude-haiku-5-5",
+        HERMES_PROFILE_MODEL_PROVIDER="anthropic",
+        HERMES_PROFILE_MODEL_BASE_URL="",
+        HERMES_PROFILE_MODEL_API_KEY="sk-ant-test",
+    )
+    def test_a_named_providers_key_is_written_into_the_profile(self):
+        ensure_project_profile(self.project)
+
+        env_path = profile_home_for(self.project) / ".env"
+        self.assertEqual(read_env_value(env_path, "ANTHROPIC_API_KEY"), "sk-ant-test")
+        self.assertFalse(read_env_value(env_path, "DARE_MODEL_API_KEY"))
+
     def test_each_profile_gets_its_own_gateway_key(self):
         ensure_project_profile(self.project)
         ensure_project_profile(self.other_project)

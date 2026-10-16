@@ -129,7 +129,8 @@ HERMES_PROFILE_PREFIX = os.getenv("HERMES_PROFILE_PREFIX", "dare-proj")
 HERMES_PROFILE_MODEL = os.getenv("HERMES_PROFILE_MODEL", "claude-sonnet-5")
 HERMES_PROFILE_MODEL_PROVIDER = os.getenv("HERMES_PROFILE_MODEL_PROVIDER", "anthropic")
 # An OpenAI-compatible gateway (e.g. LiteLLM) every profile calls instead of a
-# named provider. DARE writes the key into each profile's own .env.
+# named provider. DARE writes the key into each profile's own .env, under the
+# provider's variable (e.g. ANTHROPIC_API_KEY) when no gateway URL is set.
 HERMES_PROFILE_MODEL_BASE_URL = os.getenv("HERMES_PROFILE_MODEL_BASE_URL", "")
 HERMES_PROFILE_MODEL_API_KEY = os.getenv("HERMES_PROFILE_MODEL_API_KEY", "")
 # Ordered fallback chain on rate limits or outages, as comma-separated

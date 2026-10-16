@@ -111,6 +111,10 @@ HERMES_GATEWAY_URL=http://127.0.0.1:8642
 HERMES_PROFILES_ROOT=/home/<user>/.hermes/profiles
 HERMES_PROFILE_MODEL=claude-sonnet-5          # pinned into every profile
 HERMES_PROFILE_MODEL_PROVIDER=anthropic
+# Each profile reads its provider key only from its own .env (Hermes never
+# falls back to the gateway's environment when multiplexing), so DARE writes
+# this key there as ANTHROPIC_API_KEY:
+HERMES_PROFILE_MODEL_API_KEY=sk-ant-...
 # Or route every profile through an OpenAI-compatible gateway (e.g. LiteLLM);
 # the key is written into each profile's own .env:
 # HERMES_PROFILE_MODEL=gpt-6-luna
