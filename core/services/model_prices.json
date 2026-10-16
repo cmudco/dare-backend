@@ -1,6 +1,6 @@
 {
   "_source": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
-  "_synced_on": "2026-09-25",
+  "_synced_on": "2026-10-14",
   "_regenerate_with": "python manage.py sync_model_prices",
   "_note": "Rates are per million tokens. Do not hand-edit: this file is overwritten by the sync command. To override a single model, set the rates on its LLM row instead.",
   "prices": {
@@ -386,6 +386,10 @@
       "input": "0.800000",
       "output": "3.200000"
     },
+    "amazon.nova-2-5-sonic": {
+      "input": "0.330000",
+      "output": "2.750000"
+    },
     "amazon.nova-2-lite-v1:0": {
       "input": "0.300000",
       "output": "2.500000",
@@ -396,9 +400,9 @@
       "output": "0.000000"
     },
     "amazon.nova-2-pro-preview-20251202-v1:0": {
-      "input": "2.187500",
-      "output": "17.500000",
-      "cached_input": "0.546875"
+      "input": "1.250000",
+      "output": "10.000000",
+      "cached_input": "0.312500"
     },
     "amazon.nova-2-sonic-v1:0": {
       "input": "0.330000",
@@ -413,6 +417,11 @@
       "input": "0.035000",
       "output": "0.140000",
       "cached_input": "0.008750"
+    },
+    "amazon.nova-premier-v1:0": {
+      "input": "2.500000",
+      "output": "12.500000",
+      "cached_input": "0.625000"
     },
     "amazon.nova-pro-v1:0": {
       "input": "0.800000",
@@ -440,12 +449,12 @@
       "output": "0.000000"
     },
     "amazon.titan-text-express-v1": {
-      "input": "1.300000",
-      "output": "1.700000"
+      "input": "0.200000",
+      "output": "0.600000"
     },
     "amazon.titan-text-lite-v1": {
-      "input": "0.300000",
-      "output": "0.400000"
+      "input": "0.150000",
+      "output": "0.200000"
     },
     "amazon.titan-text-premier-v1:0": {
       "input": "0.500000",
@@ -501,6 +510,11 @@
       "output": "5.000000",
       "cached_input": "0.100000"
     },
+    "anthropic.claude-haiku-5-5": {
+      "input": "0.100000",
+      "output": "0.500000",
+      "cached_input": "0.010000"
+    },
     "anthropic.claude-instant-v1": {
       "input": "0.800000",
       "output": "2.400000"
@@ -511,8 +525,9 @@
       "cached_input": "0.250000"
     },
     "anthropic.claude-mythos-preview": {
-      "input": "0.000000",
-      "output": "0.000000"
+      "input": "27.500000",
+      "output": "137.500000",
+      "cached_input": "2.750000"
     },
     "anthropic.claude-opus-4-1-20250805-v1:0": {
       "input": "15.000000",
@@ -574,6 +589,11 @@
       "output": "10.000000",
       "cached_input": "0.200000"
     },
+    "anthropic.claude-sonnet-5-5": {
+      "input": "2.000000",
+      "output": "10.000000",
+      "cached_input": "0.100000"
+    },
     "anthropic.claude-v1": {
       "input": "8.000000",
       "output": "24.000000"
@@ -631,14 +651,14 @@
       "output": "0.150000"
     },
     "apac.amazon.nova-2-lite-v1:0": {
-      "input": "0.330000",
-      "output": "2.750000",
-      "cached_input": "0.082500"
+      "input": "0.396000",
+      "output": "3.311000",
+      "cached_input": "0.099000"
     },
     "apac.amazon.nova-2-pro-preview-20251202-v1:0": {
-      "input": "2.187500",
-      "output": "17.500000",
-      "cached_input": "0.546875"
+      "input": "1.375000",
+      "output": "11.000000",
+      "cached_input": "0.343750"
     },
     "apac.amazon.nova-lite-v1:0": {
       "input": "0.063000",
@@ -664,6 +684,11 @@
       "input": "1.100000",
       "output": "5.500000",
       "cached_input": "0.110000"
+    },
+    "apac.anthropic.claude-haiku-5-5": {
+      "input": "0.110000",
+      "output": "0.550000",
+      "cached_input": "0.011000"
     },
     "apac.anthropic.claude-mythos-preview": {
       "input": "27.500000",
@@ -705,6 +730,11 @@
       "output": "11.000000",
       "cached_input": "0.220000"
     },
+    "apac.anthropic.claude-sonnet-5-5": {
+      "input": "2.200000",
+      "output": "11.000000",
+      "cached_input": "0.110000"
+    },
     "au.anthropic.claude-fable-5": {
       "input": "11.000000",
       "output": "55.000000",
@@ -714,6 +744,11 @@
       "input": "1.100000",
       "output": "5.500000",
       "cached_input": "0.110000"
+    },
+    "au.anthropic.claude-haiku-5-5": {
+      "input": "0.110000",
+      "output": "0.550000",
+      "cached_input": "0.011000"
     },
     "au.anthropic.claude-mythos-preview": {
       "input": "27.500000",
@@ -760,9 +795,19 @@
       "output": "11.000000",
       "cached_input": "0.220000"
     },
+    "au.anthropic.claude-sonnet-5-5": {
+      "input": "2.200000",
+      "output": "11.000000",
+      "cached_input": "0.110000"
+    },
     "azure/ada": {
-      "input": "0.100000",
+      "input": "0.110000",
       "output": "0.000000"
+    },
+    "azure/apac/gpt-6.1-sol": {
+      "input": "2.400000",
+      "output": "12.000000",
+      "cached_input": "0.120000"
     },
     "azure/chat-latest": {
       "input": "5.000000",
@@ -973,9 +1018,9 @@
       "cached_input": "0.550000"
     },
     "azure/eu/gpt-5.6": {
-      "input": "5.500000",
-      "output": "33.000000",
-      "cached_input": "0.550000"
+      "input": "4.400000",
+      "output": "22.000000",
+      "cached_input": "0.440000"
     },
     "azure/eu/gpt-5.6-luna": {
       "input": "0.220000",
@@ -993,9 +1038,9 @@
       "cached_input": "0.220000"
     },
     "azure/eu/gpt-6-astra": {
-      "input": "11.000000",
-      "output": "55.000000",
-      "cached_input": "1.100000"
+      "input": "12.000000",
+      "output": "60.000000",
+      "cached_input": "1.200000"
     },
     "azure/eu/gpt-6-luna": {
       "input": "0.120000",
@@ -1006,6 +1051,11 @@
       "input": "2.400000",
       "output": "12.000000",
       "cached_input": "0.240000"
+    },
+    "azure/eu/gpt-6.1-sol": {
+      "input": "2.400000",
+      "output": "12.000000",
+      "cached_input": "0.120000"
     },
     "azure/eu/o1-2024-12-17": {
       "input": "16.500000",
@@ -1091,8 +1141,8 @@
       "output": "1.500000"
     },
     "azure/gpt-3.5-turbo-instruct-0914": {
-      "input": "1.500000",
-      "output": "2.000000"
+      "input": "1.650000",
+      "output": "2.200000"
     },
     "azure/gpt-35-turbo": {
       "input": "0.500000",
@@ -1107,12 +1157,12 @@
       "output": "4.000000"
     },
     "azure/gpt-35-turbo-instruct": {
-      "input": "1.500000",
-      "output": "2.000000"
+      "input": "1.650000",
+      "output": "2.200000"
     },
     "azure/gpt-35-turbo-instruct-0914": {
-      "input": "1.500000",
-      "output": "2.000000"
+      "input": "1.650000",
+      "output": "2.200000"
     },
     "azure/gpt-4": {
       "input": "30.000000",
@@ -1139,16 +1189,16 @@
       "output": "120.000000"
     },
     "azure/gpt-4-turbo": {
-      "input": "10.000000",
-      "output": "30.000000"
+      "input": "11.000000",
+      "output": "33.000000"
     },
     "azure/gpt-4-turbo-2024-04-09": {
-      "input": "10.000000",
-      "output": "30.000000"
+      "input": "11.000000",
+      "output": "33.000000"
     },
     "azure/gpt-4-turbo-vision-preview": {
-      "input": "10.000000",
-      "output": "30.000000"
+      "input": "11.000000",
+      "output": "33.000000"
     },
     "azure/gpt-4.1": {
       "input": "2.000000",
@@ -1209,8 +1259,8 @@
       "output": "10.000000"
     },
     "azure/gpt-4o-mini": {
-      "input": "0.165000",
-      "output": "0.660000",
+      "input": "0.150000",
+      "output": "0.600000",
       "cached_input": "0.075000"
     },
     "azure/gpt-4o-mini-2024-07-18": {
@@ -1219,8 +1269,8 @@
       "cached_input": "0.075000"
     },
     "azure/gpt-4o-mini-audio-preview-2024-12-17": {
-      "input": "2.500000",
-      "output": "10.000000"
+      "input": "0.150000",
+      "output": "0.600000"
     },
     "azure/gpt-4o-mini-realtime-preview-2024-12-17": {
       "input": "0.600000",
@@ -1232,7 +1282,7 @@
       "output": "5.000000"
     },
     "azure/gpt-4o-mini-tts": {
-      "input": "2.500000",
+      "input": "0.600000",
       "output": "10.000000"
     },
     "azure/gpt-4o-realtime-preview-2024-10-01": {
@@ -1441,9 +1491,9 @@
       "cached_input": "3.000000"
     },
     "azure/gpt-5.6": {
-      "input": "5.000000",
-      "output": "30.000000",
-      "cached_input": "0.500000"
+      "input": "4.000000",
+      "output": "20.000000",
+      "cached_input": "0.400000"
     },
     "azure/gpt-5.6-luna": {
       "input": "0.200000",
@@ -1505,6 +1555,16 @@
       "output": "10.000000",
       "cached_input": "0.200000"
     },
+    "azure/gpt-6.1-sol": {
+      "input": "2.000000",
+      "output": "10.000000",
+      "cached_input": "0.100000"
+    },
+    "azure/gpt-6.1-sol-2026-09-29": {
+      "input": "2.000000",
+      "output": "10.000000",
+      "cached_input": "0.100000"
+    },
     "azure/gpt-audio": {
       "input": "2.500000",
       "output": "10.000000"
@@ -1533,6 +1593,16 @@
       "input": "5.000000",
       "output": "30.000000",
       "cached_input": "0.500000"
+    },
+    "azure/gpt-image-1.5": {
+      "input": "5.000000",
+      "output": "10.000000",
+      "cached_input": "1.250000"
+    },
+    "azure/gpt-image-1.5-2025-12-16": {
+      "input": "5.000000",
+      "output": "10.000000",
+      "cached_input": "1.250000"
     },
     "azure/gpt-realtime": {
       "input": "4.000000",
@@ -1586,6 +1656,10 @@
     "azure/mistral-large-latest": {
       "input": "8.000000",
       "output": "24.000000"
+    },
+    "azure/model-router": {
+      "input": "0.140000",
+      "output": "0.000000"
     },
     "azure/o1": {
       "input": "15.000000",
@@ -1651,15 +1725,15 @@
       "cached_input": "0.275000"
     },
     "azure/text-embedding-3-large": {
-      "input": "0.130000",
+      "input": "0.143000",
       "output": "0.000000"
     },
     "azure/text-embedding-3-small": {
-      "input": "0.020000",
+      "input": "0.022000",
       "output": "0.000000"
     },
     "azure/text-embedding-ada-002": {
-      "input": "0.100000",
+      "input": "0.110000",
       "output": "0.000000"
     },
     "azure/us-gov/gpt-5.1": {
@@ -1886,9 +1960,9 @@
       "cached_input": "0.550000"
     },
     "azure/us/gpt-5.6": {
-      "input": "5.500000",
-      "output": "33.000000",
-      "cached_input": "0.550000"
+      "input": "4.400000",
+      "output": "22.000000",
+      "cached_input": "0.440000"
     },
     "azure/us/gpt-5.6-luna": {
       "input": "0.220000",
@@ -1919,6 +1993,11 @@
       "input": "2.200000",
       "output": "11.000000",
       "cached_input": "0.220000"
+    },
+    "azure/us/gpt-6.1-sol": {
+      "input": "2.200000",
+      "output": "11.000000",
+      "cached_input": "0.110000"
     },
     "azure/us/gpt-chat-latest": {
       "input": "5.500000",
@@ -1968,6 +2047,14 @@
     "azure_ai/Codestral-2501": {
       "input": "0.300000",
       "output": "0.900000"
+    },
+    "azure_ai/Cohere-Embed-V5-Fast": {
+      "input": "0.080000",
+      "output": "0.000000"
+    },
+    "azure_ai/Cohere-Embed-V5-Pro": {
+      "input": "0.120000",
+      "output": "0.000000"
     },
     "azure_ai/Cohere-command-a-plus-05-2026": {
       "input": "0.800000",
@@ -2098,6 +2185,11 @@
       "input": "0.200000",
       "output": "0.780000"
     },
+    "azure_ai/MAI-Cyber-1-Flash": {
+      "input": "0.600000",
+      "output": "3.500000",
+      "cached_input": "0.060000"
+    },
     "azure_ai/MAI-DS-R1": {
       "input": "1.350000",
       "output": "5.400000"
@@ -2114,6 +2206,10 @@
     "azure_ai/Meta-Llama-3.1-70B-Instruct": {
       "input": "2.680000",
       "output": "3.540000"
+    },
+    "azure_ai/Microsoft-Decision-1": {
+      "input": "0.042000",
+      "output": "0.000000"
     },
     "azure_ai/Phi-3-medium-128k-instruct": {
       "input": "0.170000",
@@ -2181,10 +2277,20 @@
       "output": "50.000000",
       "cached_input": "0.250000"
     },
+    "azure_ai/claude-fable-5-5": {
+      "input": "10.000000",
+      "output": "50.000000",
+      "cached_input": "0.250000"
+    },
     "azure_ai/claude-haiku-4-5": {
       "input": "1.000000",
       "output": "5.000000",
       "cached_input": "0.100000"
+    },
+    "azure_ai/claude-haiku-5-5": {
+      "input": "0.100000",
+      "output": "0.500000",
+      "cached_input": "0.010000"
     },
     "azure_ai/claude-opus-4-5": {
       "input": "5.000000",
@@ -2231,6 +2337,11 @@
       "output": "10.000000",
       "cached_input": "0.200000"
     },
+    "azure_ai/claude-sonnet-5-5": {
+      "input": "2.000000",
+      "output": "10.000000",
+      "cached_input": "0.200000"
+    },
     "azure_ai/codex-mini": {
       "input": "1.500000",
       "output": "6.000000",
@@ -2256,9 +2367,21 @@
       "input": "0.000000",
       "output": "0.000000"
     },
+    "azure_ai/deepseek-r1": {
+      "input": "1.350000",
+      "output": "5.400000"
+    },
     "azure_ai/deepseek-v3": {
       "input": "1.140000",
       "output": "4.560000"
+    },
+    "azure_ai/deepseek-v3-0324": {
+      "input": "1.140000",
+      "output": "4.560000"
+    },
+    "azure_ai/deepseek-v3.1": {
+      "input": "1.230000",
+      "output": "4.940000"
     },
     "azure_ai/deepseek-v3.2": {
       "input": "0.580000",
@@ -2279,9 +2402,9 @@
       "cached_input": "0.145000"
     },
     "azure_ai/deepseek-v4.1-flash": {
-      "input": "0.375000",
-      "output": "1.500000",
-      "cached_input": "0.008000"
+      "input": "0.300000",
+      "output": "1.200000",
+      "cached_input": "0.006000"
     },
     "azure_ai/embed-v-4-0": {
       "input": "0.120000",
@@ -2357,6 +2480,11 @@
       "output": "10.000000",
       "cached_input": "0.200000"
     },
+    "azure_ai/gpt-6.1-sol": {
+      "input": "2.000000",
+      "output": "10.000000",
+      "cached_input": "0.100000"
+    },
     "azure_ai/gpt-chat-latest": {
       "input": "5.000000",
       "output": "30.000000",
@@ -2365,6 +2493,14 @@
     "azure_ai/gpt-oss-120b": {
       "input": "0.150000",
       "output": "0.600000"
+    },
+    "azure_ai/grok-3": {
+      "input": "3.000000",
+      "output": "15.000000"
+    },
+    "azure_ai/grok-3-mini": {
+      "input": "0.250000",
+      "output": "1.270000"
     },
     "azure_ai/grok-4": {
       "input": "3.000000",
@@ -2388,12 +2524,25 @@
       "output": "2.500000",
       "cached_input": "1.250000"
     },
+    "azure_ai/grok-4-fast-non-reasoning": {
+      "input": "0.200000",
+      "output": "0.500000"
+    },
+    "azure_ai/grok-4-fast-reasoning": {
+      "input": "0.200000",
+      "output": "0.500000"
+    },
     "azure_ai/grok-4.3": {
       "input": "1.250000",
       "output": "2.500000",
       "cached_input": "0.200000"
     },
     "azure_ai/grok-4.6": {
+      "input": "2.000000",
+      "output": "6.000000",
+      "cached_input": "0.500000"
+    },
+    "azure_ai/grok-4.7": {
       "input": "2.000000",
       "output": "6.000000",
       "cached_input": "0.500000"
@@ -2409,6 +2558,10 @@
     "azure_ai/jamba-instruct": {
       "input": "0.500000",
       "output": "0.700000"
+    },
+    "azure_ai/kimi-k2-thinking": {
+      "input": "0.600000",
+      "output": "2.500000"
     },
     "azure_ai/kimi-k2.5": {
       "input": "0.600000",
@@ -2473,11 +2626,6 @@
       "input": "0.140000",
       "output": "0.000000"
     },
-    "azure_ai/muse-spark-1.3": {
-      "input": "1.250000",
-      "output": "4.250000",
-      "cached_input": "0.150000"
-    },
     "babbage-002": {
       "input": "0.400000",
       "output": "0.400000"
@@ -2513,6 +2661,11 @@
       "input": "0.300000",
       "output": "1.200000",
       "cached_input": "0.007000"
+    },
+    "baseten/deepseek-ai/DeepSeek-V4.1-Flash-Fast": {
+      "input": "0.600000",
+      "output": "2.400000",
+      "cached_input": "0.014000"
     },
     "baseten/moonshotai/Kimi-K2-Instruct-0905": {
       "input": "0.600000",
@@ -2680,8 +2833,8 @@
       "output": "1.410000"
     },
     "bedrock/ap-southeast-2/minimax.minimax-m2.5": {
-      "input": "0.309000",
-      "output": "1.236000"
+      "input": "0.310000",
+      "output": "1.240000"
     },
     "bedrock/ap-southeast-2/qwen.qwen3-next-80b-a3b": {
       "input": "0.154500",
@@ -2837,12 +2990,12 @@
       "cached_input": "0.300000"
     },
     "bedrock/moonshotai.kimi-k2-thinking": {
-      "input": "0.730000",
-      "output": "3.030000"
+      "input": "0.600000",
+      "output": "2.500000"
     },
     "bedrock/moonshotai.kimi-k2.5": {
       "input": "0.600000",
-      "output": "3.030000"
+      "output": "3.000000"
     },
     "bedrock/sa-east-1/deepseek.v3.2": {
       "input": "0.740000",
@@ -2999,6 +3152,11 @@
       "output": "6.000000",
       "cached_input": "0.120000"
     },
+    "bedrock/us-gov-east-1/anthropic.claude-haiku-5-5": {
+      "input": "0.120000",
+      "output": "0.600000",
+      "cached_input": "0.012000"
+    },
     "bedrock/us-gov-east-1/anthropic.claude-opus-4-8": {
       "input": "6.000000",
       "output": "30.000000",
@@ -3023,6 +3181,11 @@
       "input": "2.400000",
       "output": "12.000000",
       "cached_input": "0.240000"
+    },
+    "bedrock/us-gov-east-1/anthropic.claude-sonnet-5-5": {
+      "input": "2.400000",
+      "output": "12.000000",
+      "cached_input": "0.120000"
     },
     "bedrock/us-gov-east-1/claude-sonnet-4-5-20250929-v1:0": {
       "input": "3.600000",
@@ -3085,12 +3248,12 @@
       "output": "0.000000"
     },
     "bedrock/us-gov-west-1/amazon.titan-embed-text-v2:0": {
-      "input": "0.200000",
+      "input": "0.110000",
       "output": "0.000000"
     },
     "bedrock/us-gov-west-1/amazon.titan-text-express-v1": {
-      "input": "1.300000",
-      "output": "1.700000"
+      "input": "0.800000",
+      "output": "1.600000"
     },
     "bedrock/us-gov-west-1/amazon.titan-text-lite-v1": {
       "input": "0.300000",
@@ -3109,6 +3272,11 @@
       "input": "1.200000",
       "output": "6.000000",
       "cached_input": "0.120000"
+    },
+    "bedrock/us-gov-west-1/anthropic.claude-haiku-5-5": {
+      "input": "0.120000",
+      "output": "0.600000",
+      "cached_input": "0.012000"
     },
     "bedrock/us-gov-west-1/anthropic.claude-opus-4-8": {
       "input": "6.000000",
@@ -3134,6 +3302,11 @@
       "input": "2.400000",
       "output": "12.000000",
       "cached_input": "0.240000"
+    },
+    "bedrock/us-gov-west-1/anthropic.claude-sonnet-5-5": {
+      "input": "2.400000",
+      "output": "12.000000",
+      "cached_input": "0.120000"
     },
     "bedrock/us-gov-west-1/claude-sonnet-4-5-20250929-v1:0": {
       "input": "3.600000",
@@ -3242,6 +3415,25 @@
       "output": "5.000000",
       "cached_input": "0.100000"
     },
+    "bedrock_mantle/anthropic.claude-haiku-5-5": {
+      "input": "0.110000",
+      "output": "0.550000",
+      "cached_input": "0.011000"
+    },
+    "bedrock_mantle/anthropic.claude-opus-5-5": {
+      "input": "4.400000",
+      "output": "22.000000",
+      "cached_input": "0.220000"
+    },
+    "bedrock_mantle/anthropic.claude-sonnet-5-5": {
+      "input": "2.200000",
+      "output": "11.000000",
+      "cached_input": "0.110000"
+    },
+    "bedrock_mantle/deepseek.v3.1": {
+      "input": "0.580000",
+      "output": "1.680000"
+    },
     "bedrock_mantle/google.gemma-4-26b-a4b": {
       "input": "0.130000",
       "output": "0.400000"
@@ -3253,6 +3445,10 @@
     "bedrock_mantle/google.gemma-4-e2b": {
       "input": "0.040000",
       "output": "0.080000"
+    },
+    "bedrock_mantle/moonshotai.kimi-k2-thinking": {
+      "input": "0.600000",
+      "output": "2.500000"
     },
     "bedrock_mantle/openai.gpt-5.4": {
       "input": "2.750000",
@@ -3299,6 +3495,11 @@
       "output": "11.000000",
       "cached_input": "0.220000"
     },
+    "bedrock_mantle/openai.gpt-6.1-sol": {
+      "input": "2.200000",
+      "output": "11.000000",
+      "cached_input": "0.110000"
+    },
     "bedrock_mantle/openai.gpt-daybreak-blue-5.6-sol": {
       "input": "4.400000",
       "output": "22.000000",
@@ -3320,6 +3521,30 @@
       "input": "0.070000",
       "output": "0.200000"
     },
+    "bedrock_mantle/qwen.qwen3-235b-a22b-2507": {
+      "input": "0.220000",
+      "output": "0.880000"
+    },
+    "bedrock_mantle/qwen.qwen3-32b": {
+      "input": "0.150000",
+      "output": "0.600000"
+    },
+    "bedrock_mantle/qwen.qwen3-coder-30b-a3b-instruct": {
+      "input": "0.150000",
+      "output": "0.600000"
+    },
+    "bedrock_mantle/qwen.qwen3-coder-480b-a35b-instruct": {
+      "input": "0.450000",
+      "output": "1.800000"
+    },
+    "bedrock_mantle/qwen.qwen3-next-80b-a3b-instruct": {
+      "input": "0.140000",
+      "output": "1.200000"
+    },
+    "bedrock_mantle/qwen.qwen3-vl-235b-a22b-instruct": {
+      "input": "0.530000",
+      "output": "2.660000"
+    },
     "bedrock_mantle/us-gov-east-1/openai.gpt-5.4": {
       "input": "3.300000",
       "output": "19.800000",
@@ -3338,6 +3563,21 @@
       "output": "7.920000",
       "cached_input": "0.660000"
     },
+    "bedrock_mantle/us-gov-west-1/anthropic.claude-haiku-5-5": {
+      "input": "0.120000",
+      "output": "0.600000",
+      "cached_input": "0.012000"
+    },
+    "bedrock_mantle/us-gov-west-1/anthropic.claude-opus-5-5": {
+      "input": "4.800000",
+      "output": "24.000000",
+      "cached_input": "0.240000"
+    },
+    "bedrock_mantle/us-gov-west-1/anthropic.claude-sonnet-5-5": {
+      "input": "2.400000",
+      "output": "12.000000",
+      "cached_input": "0.120000"
+    },
     "bedrock_mantle/us-gov-west-1/google.gemma-4-26b-a4b": {
       "input": "0.156000",
       "output": "0.480000"
@@ -3351,19 +3591,19 @@
       "output": "0.096000"
     },
     "bedrock_mantle/us-gov-west-1/openai.gpt-5.4": {
-      "input": "3.300000",
-      "output": "19.800000",
-      "cached_input": "0.330000"
+      "input": "3.375000",
+      "output": "20.250000",
+      "cached_input": "0.337500"
     },
     "bedrock_mantle/us-gov-west-1/openai.gpt-5.6-luna": {
-      "input": "0.264000",
-      "output": "1.584000",
-      "cached_input": "0.026400"
+      "input": "0.270000",
+      "output": "1.620000",
+      "cached_input": "0.027000"
     },
     "bedrock_mantle/us-gov-west-1/openai.gpt-5.6-terra": {
-      "input": "2.640000",
-      "output": "15.840000",
-      "cached_input": "0.264000"
+      "input": "2.700000",
+      "output": "16.200000",
+      "cached_input": "0.270000"
     },
     "bedrock_mantle/us-gov-west-1/openai.gpt-oss-120b": {
       "input": "0.180000",
@@ -3392,6 +3632,22 @@
       "input": "2.200000",
       "output": "6.600000",
       "cached_input": "0.550000"
+    },
+    "bespoke/bespokelabs/Bespoke-Nimble-9B": {
+      "input": "0.000000",
+      "output": "0.000000"
+    },
+    "bespoke/nimble": {
+      "input": "0.000000",
+      "output": "0.000000"
+    },
+    "bespoke/nimble-latest": {
+      "input": "0.000000",
+      "output": "0.000000"
+    },
+    "c4ai-aya-expanse-32b": {
+      "input": "0.500000",
+      "output": "1.500000"
     },
     "cerebras/gemma-4-31b": {
       "input": "0.990000",
@@ -3454,6 +3710,11 @@
       "input": "1.000000",
       "output": "5.000000",
       "cached_input": "0.100000"
+    },
+    "claude-haiku-5-5": {
+      "input": "0.100000",
+      "output": "0.500000",
+      "cached_input": "0.010000"
     },
     "claude-mythos-5": {
       "input": "10.000000",
@@ -3540,9 +3801,26 @@
       "output": "10.000000",
       "cached_input": "0.200000"
     },
+    "claude-sonnet-5-5": {
+      "input": "2.000000",
+      "output": "10.000000",
+      "cached_input": "0.100000"
+    },
     "cloudflare/@cf/aisingapore/gemma-sea-lion-v4-27b-it": {
       "input": "0.351000",
       "output": "0.555000"
+    },
+    "cloudflare/@cf/cloudflare/clef": {
+      "input": "0.240000",
+      "output": "0.000000"
+    },
+    "cloudflare/@cf/cloudflare/clef-flash": {
+      "input": "0.090000",
+      "output": "0.000000"
+    },
+    "cloudflare/@cf/cloudflare/clef-omni": {
+      "input": "0.150000",
+      "output": "0.000000"
     },
     "cloudflare/@cf/deepseek-ai/deepseek-r1-distill-qwen-32b": {
       "input": "0.497000",
@@ -3663,6 +3941,18 @@
       "input": "1.923000",
       "output": "1.923000"
     },
+    "cloudflare/clef": {
+      "input": "0.240000",
+      "output": "0.000000"
+    },
+    "cloudflare/clef-flash": {
+      "input": "0.090000",
+      "output": "0.000000"
+    },
+    "cloudflare/clef-omni": {
+      "input": "0.150000",
+      "output": "0.000000"
+    },
     "codestral/codestral-2405": {
       "input": "0.000000",
       "output": "0.000000"
@@ -3714,6 +4004,14 @@
       "input": "0.120000",
       "output": "0.000000"
     },
+    "cohere/embed-v5.0-fast": {
+      "input": "0.080000",
+      "output": "0.000000"
+    },
+    "cohere/embed-v5.0-pro": {
+      "input": "0.120000",
+      "output": "0.000000"
+    },
     "command-a-03-2025": {
       "input": "2.500000",
       "output": "10.000000"
@@ -3741,6 +4039,40 @@
     "computer-use-preview": {
       "input": "3.000000",
       "output": "12.000000"
+    },
+    "computer-use-preview-2025-03-11": {
+      "input": "3.000000",
+      "output": "12.000000"
+    },
+    "coralbricks/deepseek-v4.1-flash": {
+      "input": "0.010000",
+      "output": "1.200000",
+      "cached_input": "0.000000"
+    },
+    "coralbricks/deepseek-v4.1-flash-fast": {
+      "input": "0.010000",
+      "output": "1.200000",
+      "cached_input": "0.000000"
+    },
+    "coralbricks/deepseek-v4.1-flash-fast-fp4": {
+      "input": "0.010000",
+      "output": "1.200000",
+      "cached_input": "0.000000"
+    },
+    "coralbricks/glm-5.3": {
+      "input": "1.120000",
+      "output": "4.400000",
+      "cached_input": "0.000000"
+    },
+    "coralbricks/glm-5.3-fast": {
+      "input": "1.120000",
+      "output": "4.400000",
+      "cached_input": "0.000000"
+    },
+    "coralbricks/glm-5.3-fp4": {
+      "input": "1.120000",
+      "output": "4.400000",
+      "cached_input": "0.000000"
     },
     "crusoe/Qwen/Qwen3-235B-A22B-Instruct-2507": {
       "input": "3.000000",
@@ -3896,6 +4228,11 @@
       "input": "0.800000",
       "output": "2.400000"
     },
+    "databricks/ai_decide": {
+      "input": "0.000000",
+      "output": "0.000000",
+      "cached_input": "0.000000"
+    },
     "databricks/databricks-bge-large-en": {
       "input": "0.100030",
       "output": "0.000000",
@@ -3950,6 +4287,11 @@
       "input": "5.000030",
       "output": "25.000010",
       "cached_input": "0.500010"
+    },
+    "databricks/databricks-claude-opus-5-5": {
+      "input": "4.000010",
+      "output": "19.999980",
+      "cached_input": "0.199990"
     },
     "databricks/databricks-claude-sonnet-4": {
       "input": "2.999990",
@@ -4165,6 +4507,11 @@
       "input": "0.500010",
       "output": "1.500030",
       "cached_input": "0.500010"
+    },
+    "databricks/databricks-openjev-qwen35-4b": {
+      "input": "0.000000",
+      "output": "0.000000",
+      "cached_input": "0.000000"
     },
     "databricks/databricks-qwen3-embedding-0-6b": {
       "input": "0.020020",
@@ -4923,14 +5270,14 @@
       "output": "0.000000"
     },
     "eu.amazon.nova-2-lite-v1:0": {
-      "input": "0.330000",
-      "output": "2.750000",
-      "cached_input": "0.082500"
+      "input": "0.429000",
+      "output": "3.597000",
+      "cached_input": "0.107250"
     },
     "eu.amazon.nova-2-pro-preview-20251202-v1:0": {
-      "input": "2.187500",
-      "output": "17.500000",
-      "cached_input": "0.546875"
+      "input": "1.375000",
+      "output": "11.000000",
+      "cached_input": "0.343750"
     },
     "eu.amazon.nova-lite-v1:0": {
       "input": "0.078000",
@@ -4986,6 +5333,11 @@
       "input": "1.100000",
       "output": "5.500000",
       "cached_input": "0.110000"
+    },
+    "eu.anthropic.claude-haiku-5-5": {
+      "input": "0.110000",
+      "output": "0.550000",
+      "cached_input": "0.011000"
     },
     "eu.anthropic.claude-opus-4-1-20250805-v1:0": {
       "input": "15.000000",
@@ -5047,6 +5399,11 @@
       "output": "11.000000",
       "cached_input": "0.220000"
     },
+    "eu.anthropic.claude-sonnet-5-5": {
+      "input": "2.200000",
+      "output": "11.000000",
+      "cached_input": "0.110000"
+    },
     "eu.deepseek.v3.2": {
       "input": "0.740000",
       "output": "2.220000"
@@ -5096,15 +5453,11 @@
       "output": "0.500000"
     },
     "fireworks-ai-up-to-4b": {
-      "input": "0.200000",
-      "output": "0.200000"
+      "input": "0.100000",
+      "output": "0.100000"
     },
     "fireworks_ai/WhereIsAI/UAE-Large-V1": {
       "input": "0.016000",
-      "output": "0.000000"
-    },
-    "fireworks_ai/accounts/fireworks/models/": {
-      "input": "0.100000",
       "output": "0.000000"
     },
     "fireworks_ai/accounts/fireworks/models/SSD-1B": {
@@ -5333,9 +5686,9 @@
       "cached_input": "0.044000"
     },
     "fireworks_ai/accounts/fireworks/models/deepseek-v4p1-flash": {
-      "input": "0.220000",
-      "output": "0.660000",
-      "cached_input": "0.007000"
+      "input": "0.300000",
+      "output": "1.200000",
+      "cached_input": "0.006000"
     },
     "fireworks_ai/accounts/fireworks/models/devstral-small-2505": {
       "input": "0.900000",
@@ -6304,6 +6657,11 @@
       "output": "22.500000",
       "cached_input": "0.450000"
     },
+    "fireworks_ai/accounts/fireworks/routers/rune": {
+      "input": "0.042000",
+      "output": "0.000000",
+      "cached_input": "0.008400"
+    },
     "fireworks_ai/deepseek-v4-flash": {
       "input": "0.140000",
       "output": "0.280000",
@@ -6325,9 +6683,9 @@
       "cached_input": "0.044000"
     },
     "fireworks_ai/deepseek-v4p1-flash": {
-      "input": "0.220000",
-      "output": "0.660000",
-      "cached_input": "0.007000"
+      "input": "0.300000",
+      "output": "1.200000",
+      "cached_input": "0.006000"
     },
     "fireworks_ai/deepseek-v4p1-flash-us": {
       "input": "0.450000",
@@ -6775,6 +7133,11 @@
       "input": "0.500000",
       "output": "2.000000"
     },
+    "gemini-nano-banana-2.1": {
+      "input": "1.500000",
+      "output": "7.500000",
+      "cached_input": "0.150000"
+    },
     "gemini-omni-flash-preview": {
       "input": "1.500000",
       "output": "9.000000"
@@ -6788,6 +7151,11 @@
       "input": "0.300000",
       "output": "2.500000",
       "cached_input": "0.000000"
+    },
+    "gemini-robotics-er-2-preview": {
+      "input": "1.000000",
+      "output": "5.000000",
+      "cached_input": "0.100000"
     },
     "gemini/deep-research-max-preview-04-2026": {
       "input": "2.000000",
@@ -6958,6 +7326,11 @@
       "input": "0.750000",
       "output": "4.500000"
     },
+    "gemini/gemini-4-argon": {
+      "input": "2.000000",
+      "output": "10.000000",
+      "cached_input": "0.100000"
+    },
     "gemini/gemini-embedding-001": {
       "input": "0.150000",
       "output": "0.000000"
@@ -6999,6 +7372,10 @@
     "gemini/gemini-live-2.5-flash-preview-native-audio-09-2025": {
       "input": "0.500000",
       "output": "2.000000"
+    },
+    "gemini/gemini-nano-banana-2.1": {
+      "input": "1.500000",
+      "output": "7.500000"
     },
     "gemini/gemini-omni-1.1-flash": {
       "input": "1.500000",
@@ -7094,15 +7471,30 @@
       "input": "0.000000",
       "output": "0.000000"
     },
-    "github_copilot/mai-code-1-flash": {
-      "input": "0.750000",
-      "output": "4.500000",
-      "cached_input": "0.075000"
+    "github_copilot/claude-haiku-4.5": {
+      "input": "1.000000",
+      "output": "5.000000",
+      "cached_input": "0.100000"
     },
-    "github_copilot/mai-code-1-flash-internal": {
-      "input": "0.750000",
-      "output": "4.500000",
-      "cached_input": "0.075000"
+    "github_copilot/claude-haiku-5.5": {
+      "input": "0.100000",
+      "output": "0.500000",
+      "cached_input": "0.010000"
+    },
+    "github_copilot/gemini-4-argon": {
+      "input": "2.000000",
+      "output": "10.000000",
+      "cached_input": "0.100000"
+    },
+    "github_copilot/gpt-5-mini": {
+      "input": "0.250000",
+      "output": "2.000000",
+      "cached_input": "0.025000"
+    },
+    "github_copilot/gpt-5.3-codex": {
+      "input": "1.750000",
+      "output": "14.000000",
+      "cached_input": "0.175000"
     },
     "glm-4-7-251222": {
       "input": "0.000000",
@@ -7127,6 +7519,11 @@
       "input": "1.000000",
       "output": "5.000000",
       "cached_input": "0.100000"
+    },
+    "global.anthropic.claude-haiku-5-5": {
+      "input": "0.100000",
+      "output": "0.500000",
+      "cached_input": "0.010000"
     },
     "global.anthropic.claude-mythos-5-1": {
       "input": "10.000000",
@@ -7183,6 +7580,11 @@
       "output": "10.000000",
       "cached_input": "0.200000"
     },
+    "global.anthropic.claude-sonnet-5-5": {
+      "input": "2.000000",
+      "output": "10.000000",
+      "cached_input": "0.100000"
+    },
     "global.cohere.embed-v4:0": {
       "input": "0.120000",
       "output": "0.000000"
@@ -7232,10 +7634,25 @@
       "output": "10.000000",
       "cached_input": "0.200000"
     },
+    "global.openai.gpt-6.1-sol": {
+      "input": "2.000000",
+      "output": "10.000000",
+      "cached_input": "0.100000"
+    },
     "global.xai.grok-4.6": {
       "input": "2.000000",
       "output": "6.000000",
       "cached_input": "0.500000"
+    },
+    "global.xai.grok-4.7": {
+      "input": "2.000000",
+      "output": "6.000000",
+      "cached_input": "0.500000"
+    },
+    "global.zai.glm-5.3": {
+      "input": "1.680000",
+      "output": "5.280000",
+      "cached_input": "0.312000"
     },
     "gmi/MiniMaxAI/MiniMax-M2.1": {
       "input": "0.300000",
@@ -7438,6 +7855,11 @@
       "output": "0.600000",
       "cached_input": "0.075000"
     },
+    "gpt-4o-mini-search-preview-2025-03-11": {
+      "input": "0.150000",
+      "output": "0.600000",
+      "cached_input": "0.075000"
+    },
     "gpt-4o-mini-transcribe": {
       "input": "1.250000",
       "output": "5.000000"
@@ -7454,11 +7876,20 @@
       "input": "0.600000",
       "output": "10.000000"
     },
+    "gpt-4o-mini-tts-2025-03-20": {
+      "input": "0.600000",
+      "output": "10.000000"
+    },
     "gpt-4o-mini-tts-2025-12-15": {
       "input": "0.600000",
       "output": "10.000000"
     },
     "gpt-4o-search-preview": {
+      "input": "2.500000",
+      "output": "10.000000",
+      "cached_input": "1.250000"
+    },
+    "gpt-4o-search-preview-2025-03-11": {
       "input": "2.500000",
       "output": "10.000000",
       "cached_input": "1.250000"
@@ -7703,6 +8134,11 @@
       "output": "10.000000",
       "cached_input": "0.200000"
     },
+    "gpt-6.1-sol": {
+      "input": "2.000000",
+      "output": "10.000000",
+      "cached_input": "0.100000"
+    },
     "gpt-audio": {
       "input": "2.500000",
       "output": "10.000000"
@@ -7716,6 +8152,10 @@
       "output": "10.000000"
     },
     "gpt-audio-mini": {
+      "input": "0.600000",
+      "output": "2.400000"
+    },
+    "gpt-audio-mini-2025-10-06": {
       "input": "0.600000",
       "output": "2.400000"
     },
@@ -7782,6 +8222,11 @@
       "input": "0.600000",
       "output": "2.400000",
       "cached_input": "0.060000"
+    },
+    "gpt-rosalind-discovery": {
+      "input": "5.000000",
+      "output": "25.000000",
+      "cached_input": "0.500000"
     },
     "gpt-rosalind-research": {
       "input": "5.000000",
@@ -7923,6 +8368,11 @@
       "input": "2.000000",
       "output": "2.000000"
     },
+    "in.moonshotai.kimi-k3": {
+      "input": "3.300000",
+      "output": "16.500000",
+      "cached_input": "0.330000"
+    },
     "inception/mercury-2": {
       "input": "0.250000",
       "output": "0.750000",
@@ -7990,6 +8440,11 @@
       "output": "5.500000",
       "cached_input": "0.110000"
     },
+    "jp.anthropic.claude-haiku-5-5": {
+      "input": "0.110000",
+      "output": "0.550000",
+      "cached_input": "0.011000"
+    },
     "jp.anthropic.claude-opus-4-7": {
       "input": "5.500000",
       "output": "27.500000",
@@ -8024,6 +8479,11 @@
       "input": "2.200000",
       "output": "11.000000",
       "cached_input": "0.220000"
+    },
+    "jp.anthropic.claude-sonnet-5-5": {
+      "input": "2.200000",
+      "output": "11.000000",
+      "cached_input": "0.110000"
     },
     "kimi-k2-thinking-251104": {
       "input": "0.000000",
@@ -8108,6 +8568,18 @@
     "lambda_ai/qwen3-32b-fp8": {
       "input": "0.050000",
       "output": "0.100000"
+    },
+    "laya/english": {
+      "input": "0.000000",
+      "output": "0.000000"
+    },
+    "laya/multilingual": {
+      "input": "0.000000",
+      "output": "0.000000"
+    },
+    "laya/typed-decisions": {
+      "input": "0.000000",
+      "output": "0.000000"
     },
     "lemonade/Gemma-3-4b-it-GGUF": {
       "input": "0.000000",
@@ -8250,20 +8722,20 @@
       "output": "2.560000"
     },
     "meta.llama3-1-405b-instruct-v1:0": {
-      "input": "5.320000",
-      "output": "16.000000"
+      "input": "2.400000",
+      "output": "2.400000"
     },
     "meta.llama3-1-70b-instruct-v1:0": {
-      "input": "0.990000",
-      "output": "0.990000"
+      "input": "0.720000",
+      "output": "0.720000"
     },
     "meta.llama3-1-8b-instruct-v1:0": {
       "input": "0.220000",
       "output": "0.220000"
     },
     "meta.llama3-2-11b-instruct-v1:0": {
-      "input": "0.350000",
-      "output": "0.350000"
+      "input": "0.160000",
+      "output": "0.160000"
     },
     "meta.llama3-2-1b-instruct-v1:0": {
       "input": "0.100000",
@@ -8274,8 +8746,8 @@
       "output": "0.150000"
     },
     "meta.llama3-2-90b-instruct-v1:0": {
-      "input": "2.000000",
-      "output": "2.000000"
+      "input": "0.720000",
+      "output": "0.720000"
     },
     "meta.llama3-3-70b-instruct-v1:0": {
       "input": "0.720000",
@@ -8321,6 +8793,15 @@
       "input": "0.100000",
       "output": "0.200000",
       "cached_input": "0.002000"
+    },
+    "meta/muse-wonder-1.0": {
+      "input": "4.000000",
+      "output": "20.000000",
+      "cached_input": "0.200000"
+    },
+    "microsoft_365_copilot/chat": {
+      "input": "0.000000",
+      "output": "0.000000"
     },
     "minimax.minimax-m2": {
       "input": "0.300000",
@@ -8393,8 +8874,8 @@
       "output": "12.000000"
     },
     "mistral.mistral-large-2407-v1:0": {
-      "input": "3.000000",
-      "output": "9.000000"
+      "input": "2.000000",
+      "output": "6.000000"
     },
     "mistral.mistral-large-3-675b-instruct": {
       "input": "0.500000",
@@ -8542,6 +9023,16 @@
       "input": "0.500000",
       "output": "1.500000",
       "cached_input": "0.050000"
+    },
+    "mistral/mistral-large-4": {
+      "input": "0.680000",
+      "output": "2.090000",
+      "cached_input": "0.068000"
+    },
+    "mistral/mistral-large-4-0": {
+      "input": "0.680000",
+      "output": "2.090000",
+      "cached_input": "0.068000"
     },
     "mistral/mistral-large-latest": {
       "input": "0.500000",
@@ -8714,9 +9205,9 @@
       "output": "3.000000"
     },
     "moonshotai.kimi-k3": {
-      "input": "3.000000",
-      "output": "15.000000",
-      "cached_input": "0.300000"
+      "input": "3.300000",
+      "output": "16.500000",
+      "cached_input": "0.330000"
     },
     "morph/morph-v3-fast": {
       "input": "0.800000",
@@ -8830,6 +9321,10 @@
       "input": "0.600000",
       "output": "3.600000"
     },
+    "nebius/Qwen/Qwen3.8-27B": {
+      "input": "0.450000",
+      "output": "3.000000"
+    },
     "nebius/deepseek-ai/DeepSeek-R1": {
       "input": "0.800000",
       "output": "2.400000"
@@ -8865,6 +9360,10 @@
     "nebius/deepseek-ai/DeepSeek-V4-Pro-0813": {
       "input": "1.320000",
       "output": "3.960000"
+    },
+    "nebius/deepseek-ai/DeepSeek-V4.1-Flash": {
+      "input": "0.300000",
+      "output": "1.200000"
     },
     "nebius/google/gemma-3-27b-it": {
       "input": "0.100000",
@@ -9676,6 +10175,11 @@
       "output": "40.000000",
       "cached_input": "2.500000"
     },
+    "o3-deep-research-2025-06-26": {
+      "input": "10.000000",
+      "output": "40.000000",
+      "cached_input": "2.500000"
+    },
     "o3-mini": {
       "input": "1.100000",
       "output": "4.400000",
@@ -9705,6 +10209,11 @@
       "cached_input": "0.275000"
     },
     "o4-mini-deep-research": {
+      "input": "2.000000",
+      "output": "8.000000",
+      "cached_input": "0.500000"
+    },
+    "o4-mini-deep-research-2025-06-26": {
       "input": "2.000000",
       "output": "8.000000",
       "cached_input": "0.500000"
@@ -10031,2216 +10540,6 @@
       "input": "0.070000",
       "output": "0.200000"
     },
-    "openrouter/aion-labs/aion-2.0": {
-      "input": "0.800000",
-      "output": "1.600000",
-      "cached_input": "0.200000"
-    },
-    "openrouter/aion-labs/aion-3.0": {
-      "input": "3.000000",
-      "output": "6.000000",
-      "cached_input": "0.750000"
-    },
-    "openrouter/aion-labs/aion-3.0-mini": {
-      "input": "0.700000",
-      "output": "1.400000",
-      "cached_input": "0.180000"
-    },
-    "openrouter/aion-labs/aion-3.5": {
-      "input": "3.000000",
-      "output": "6.000000",
-      "cached_input": "0.750000"
-    },
-    "openrouter/aion-labs/aion-3.5-mini": {
-      "input": "0.700000",
-      "output": "1.400000",
-      "cached_input": "0.180000"
-    },
-    "openrouter/aion-labs/aion-rp-llama-3.1-8b": {
-      "input": "0.800000",
-      "output": "1.600000"
-    },
-    "openrouter/amazon/nova-2-lite-v1": {
-      "input": "0.300000",
-      "output": "2.500000"
-    },
-    "openrouter/amazon/nova-lite-v1": {
-      "input": "0.060000",
-      "output": "0.240000"
-    },
-    "openrouter/amazon/nova-micro-v1": {
-      "input": "0.035000",
-      "output": "0.140000"
-    },
-    "openrouter/amazon/nova-premier-v1": {
-      "input": "2.500000",
-      "output": "12.500000",
-      "cached_input": "0.625000"
-    },
-    "openrouter/amazon/nova-pro-v1": {
-      "input": "0.800000",
-      "output": "3.200000"
-    },
-    "openrouter/anthracite-org/magnum-v4-72b": {
-      "input": "2.500000",
-      "output": "5.000000"
-    },
-    "openrouter/anthropic/claude-3-haiku": {
-      "input": "0.250000",
-      "output": "1.250000",
-      "cached_input": "0.030000"
-    },
-    "openrouter/anthropic/claude-3.5-sonnet": {
-      "input": "3.000000",
-      "output": "15.000000"
-    },
-    "openrouter/anthropic/claude-3.7-sonnet": {
-      "input": "3.000000",
-      "output": "15.000000"
-    },
-    "openrouter/anthropic/claude-fable-5": {
-      "input": "10.000000",
-      "output": "50.000000",
-      "cached_input": "1.000000"
-    },
-    "openrouter/anthropic/claude-fable-5.1": {
-      "input": "10.000000",
-      "output": "50.000000",
-      "cached_input": "0.250000"
-    },
-    "openrouter/anthropic/claude-fable-5.1:batch": {
-      "input": "5.000000",
-      "output": "25.000000",
-      "cached_input": "0.125000"
-    },
-    "openrouter/anthropic/claude-fable-5:batch": {
-      "input": "5.000000",
-      "output": "25.000000",
-      "cached_input": "0.500000"
-    },
-    "openrouter/anthropic/claude-haiku-4.5": {
-      "input": "1.000000",
-      "output": "5.000000",
-      "cached_input": "0.100000"
-    },
-    "openrouter/anthropic/claude-haiku-4.5:batch": {
-      "input": "0.500000",
-      "output": "2.500000",
-      "cached_input": "0.050000"
-    },
-    "openrouter/anthropic/claude-opus-4.1": {
-      "input": "15.000000",
-      "output": "75.000000",
-      "cached_input": "1.500000"
-    },
-    "openrouter/anthropic/claude-opus-4.1:batch": {
-      "input": "7.500000",
-      "output": "37.500000",
-      "cached_input": "0.750000"
-    },
-    "openrouter/anthropic/claude-opus-4.5": {
-      "input": "5.000000",
-      "output": "25.000000",
-      "cached_input": "0.500000"
-    },
-    "openrouter/anthropic/claude-opus-4.5:batch": {
-      "input": "2.500000",
-      "output": "12.500000",
-      "cached_input": "0.250000"
-    },
-    "openrouter/anthropic/claude-opus-4.6": {
-      "input": "5.000000",
-      "output": "25.000000",
-      "cached_input": "0.500000"
-    },
-    "openrouter/anthropic/claude-opus-4.6:batch": {
-      "input": "2.500000",
-      "output": "12.500000",
-      "cached_input": "0.250000"
-    },
-    "openrouter/anthropic/claude-opus-4.7": {
-      "input": "5.000000",
-      "output": "25.000000",
-      "cached_input": "0.500000"
-    },
-    "openrouter/anthropic/claude-opus-4.7:batch": {
-      "input": "2.500000",
-      "output": "12.500000",
-      "cached_input": "0.250000"
-    },
-    "openrouter/anthropic/claude-opus-4.8": {
-      "input": "5.000000",
-      "output": "25.000000",
-      "cached_input": "0.500000"
-    },
-    "openrouter/anthropic/claude-opus-4.8:batch": {
-      "input": "2.500000",
-      "output": "12.500000",
-      "cached_input": "0.250000"
-    },
-    "openrouter/anthropic/claude-opus-5": {
-      "input": "5.000000",
-      "output": "25.000000",
-      "cached_input": "0.500000"
-    },
-    "openrouter/anthropic/claude-opus-5.5": {
-      "input": "4.000000",
-      "output": "20.000000",
-      "cached_input": "0.200000"
-    },
-    "openrouter/anthropic/claude-opus-5.5:batch": {
-      "input": "2.000000",
-      "output": "10.000000",
-      "cached_input": "0.100000"
-    },
-    "openrouter/anthropic/claude-opus-5:batch": {
-      "input": "2.500000",
-      "output": "12.500000",
-      "cached_input": "0.250000"
-    },
-    "openrouter/anthropic/claude-sonnet-4": {
-      "input": "3.000000",
-      "output": "15.000000",
-      "cached_input": "0.300000"
-    },
-    "openrouter/anthropic/claude-sonnet-4.5": {
-      "input": "3.000000",
-      "output": "15.000000",
-      "cached_input": "0.300000"
-    },
-    "openrouter/anthropic/claude-sonnet-4.5:batch": {
-      "input": "1.500000",
-      "output": "7.500000",
-      "cached_input": "0.150000"
-    },
-    "openrouter/anthropic/claude-sonnet-4.6": {
-      "input": "3.000000",
-      "output": "15.000000",
-      "cached_input": "0.300000"
-    },
-    "openrouter/anthropic/claude-sonnet-4.6:batch": {
-      "input": "1.500000",
-      "output": "7.500000",
-      "cached_input": "0.150000"
-    },
-    "openrouter/anthropic/claude-sonnet-5": {
-      "input": "2.000000",
-      "output": "10.000000",
-      "cached_input": "0.200000"
-    },
-    "openrouter/anthropic/claude-sonnet-5:batch": {
-      "input": "1.000000",
-      "output": "5.000000",
-      "cached_input": "0.100000"
-    },
-    "openrouter/arcee-ai/trinity-large-thinking": {
-      "input": "0.250000",
-      "output": "0.800000",
-      "cached_input": "0.060000"
-    },
-    "openrouter/baidu/ernie-4.5-vl-424b-a47b": {
-      "input": "0.420000",
-      "output": "1.250000"
-    },
-    "openrouter/bytedance-seed/seed-1.6": {
-      "input": "0.250000",
-      "output": "2.000000"
-    },
-    "openrouter/bytedance-seed/seed-1.6-flash": {
-      "input": "0.075000",
-      "output": "0.300000"
-    },
-    "openrouter/bytedance-seed/seed-2-1-turbo": {
-      "input": "0.500000",
-      "output": "2.500000"
-    },
-    "openrouter/bytedance-seed/seed-2.0-code": {
-      "input": "0.500000",
-      "output": "3.000000"
-    },
-    "openrouter/bytedance-seed/seed-2.0-lite": {
-      "input": "0.250000",
-      "output": "2.000000"
-    },
-    "openrouter/bytedance-seed/seed-2.0-mini": {
-      "input": "0.100000",
-      "output": "0.400000"
-    },
-    "openrouter/bytedance/ui-tars-1.5-7b": {
-      "input": "0.100000",
-      "output": "0.200000",
-      "cached_input": "0.100000"
-    },
-    "openrouter/cognitivecomputations/dolphin-mistral-24b-venice-edition": {
-      "input": "0.200000",
-      "output": "0.900000"
-    },
-    "openrouter/cohere/command-a": {
-      "input": "2.500000",
-      "output": "10.000000"
-    },
-    "openrouter/cohere/command-a-plus": {
-      "input": "0.300000",
-      "output": "1.500000",
-      "cached_input": "0.150000"
-    },
-    "openrouter/cohere/command-r-08-2024": {
-      "input": "0.150000",
-      "output": "0.600000"
-    },
-    "openrouter/cohere/command-r-plus-08-2024": {
-      "input": "2.500000",
-      "output": "10.000000"
-    },
-    "openrouter/cohere/command-r7b-12-2024": {
-      "input": "0.037500",
-      "output": "0.150000"
-    },
-    "openrouter/cohere/north-mini-code:free": {
-      "input": "0.000000",
-      "output": "0.000000"
-    },
-    "openrouter/deepseek/deepseek-chat": {
-      "input": "0.320000",
-      "output": "0.890000"
-    },
-    "openrouter/deepseek/deepseek-chat-v3-0324": {
-      "input": "0.250000",
-      "output": "1.000000"
-    },
-    "openrouter/deepseek/deepseek-chat-v3.1": {
-      "input": "0.250000",
-      "output": "0.950000",
-      "cached_input": "0.130000"
-    },
-    "openrouter/deepseek/deepseek-r1": {
-      "input": "0.700000",
-      "output": "2.500000",
-      "cached_input": "0.140000"
-    },
-    "openrouter/deepseek/deepseek-r1-0528": {
-      "input": "0.500000",
-      "output": "2.150000",
-      "cached_input": "0.350000"
-    },
-    "openrouter/deepseek/deepseek-r1-distill-llama-70b": {
-      "input": "0.800000",
-      "output": "0.800000"
-    },
-    "openrouter/deepseek/deepseek-v3.1-terminus": {
-      "input": "0.270000",
-      "output": "1.000000",
-      "cached_input": "0.135000"
-    },
-    "openrouter/deepseek/deepseek-v3.2": {
-      "input": "0.269000",
-      "output": "0.400000",
-      "cached_input": "0.134500"
-    },
-    "openrouter/deepseek/deepseek-v3.2-exp": {
-      "input": "0.270000",
-      "output": "0.410000",
-      "cached_input": "0.020000"
-    },
-    "openrouter/deepseek/deepseek-v4-flash": {
-      "input": "0.049000",
-      "output": "0.098000",
-      "cached_input": "0.009800"
-    },
-    "openrouter/deepseek/deepseek-v4-flash-0731": {
-      "input": "0.030000",
-      "output": "0.320000",
-      "cached_input": "0.016000"
-    },
-    "openrouter/deepseek/deepseek-v4-flash-vision-exp": {
-      "input": "0.220000",
-      "output": "0.660000",
-      "cached_input": "0.007000"
-    },
-    "openrouter/deepseek/deepseek-v4-pro": {
-      "input": "0.844944",
-      "output": "1.689888",
-      "cached_input": "0.070412"
-    },
-    "openrouter/deepseek/deepseek-v4-pro-0813": {
-      "input": "0.462000",
-      "output": "1.386000",
-      "cached_input": "0.015400"
-    },
-    "openrouter/deepseek/deepseek-v4.1-flash": {
-      "input": "0.300000",
-      "output": "1.200000",
-      "cached_input": "0.006000"
-    },
-    "openrouter/deepseek/deepseek-v4.1-flash:batch": {
-      "input": "0.112000",
-      "output": "0.336000",
-      "cached_input": "0.003360"
-    },
-    "openrouter/dots-studio/dots-3-note-preview:free": {
-      "input": "0.000000",
-      "output": "0.000000"
-    },
-    "openrouter/fireworks/ember-1": {
-      "input": "3.000000",
-      "output": "15.000000",
-      "cached_input": "0.300000"
-    },
-    "openrouter/google/gemini-2.5-flash": {
-      "input": "0.300000",
-      "output": "2.500000",
-      "cached_input": "0.030000"
-    },
-    "openrouter/google/gemini-2.5-flash-image": {
-      "input": "0.300000",
-      "output": "2.500000",
-      "cached_input": "0.030000"
-    },
-    "openrouter/google/gemini-2.5-flash-lite": {
-      "input": "0.100000",
-      "output": "0.400000",
-      "cached_input": "0.010000"
-    },
-    "openrouter/google/gemini-2.5-flash-lite:batch": {
-      "input": "0.050000",
-      "output": "0.200000",
-      "cached_input": "0.010000"
-    },
-    "openrouter/google/gemini-2.5-flash:batch": {
-      "input": "0.150000",
-      "output": "1.250000",
-      "cached_input": "0.030000"
-    },
-    "openrouter/google/gemini-2.5-pro": {
-      "input": "1.250000",
-      "output": "10.000000",
-      "cached_input": "0.125000"
-    },
-    "openrouter/google/gemini-2.5-pro-preview": {
-      "input": "1.250000",
-      "output": "10.000000",
-      "cached_input": "0.125000"
-    },
-    "openrouter/google/gemini-2.5-pro-preview-05-06": {
-      "input": "1.250000",
-      "output": "10.000000",
-      "cached_input": "0.125000"
-    },
-    "openrouter/google/gemini-2.5-pro:batch": {
-      "input": "0.625000",
-      "output": "5.000000",
-      "cached_input": "0.125000"
-    },
-    "openrouter/google/gemini-3-flash-preview": {
-      "input": "0.500000",
-      "output": "3.000000",
-      "cached_input": "0.050000"
-    },
-    "openrouter/google/gemini-3-flash-preview:batch": {
-      "input": "0.250000",
-      "output": "1.500000"
-    },
-    "openrouter/google/gemini-3-pro-image": {
-      "input": "2.000000",
-      "output": "12.000000",
-      "cached_input": "0.200000"
-    },
-    "openrouter/google/gemini-3-pro-image-preview": {
-      "input": "2.000000",
-      "output": "12.000000",
-      "cached_input": "0.200000"
-    },
-    "openrouter/google/gemini-3-pro-preview": {
-      "input": "2.000000",
-      "output": "12.000000",
-      "cached_input": "0.200000"
-    },
-    "openrouter/google/gemini-3.1-flash-image": {
-      "input": "0.500000",
-      "output": "3.000000"
-    },
-    "openrouter/google/gemini-3.1-flash-image-preview": {
-      "input": "0.500000",
-      "output": "3.000000"
-    },
-    "openrouter/google/gemini-3.1-flash-lite": {
-      "input": "0.250000",
-      "output": "1.500000",
-      "cached_input": "0.025000"
-    },
-    "openrouter/google/gemini-3.1-flash-lite-image": {
-      "input": "0.250000",
-      "output": "1.500000"
-    },
-    "openrouter/google/gemini-3.1-flash-lite-preview": {
-      "input": "0.250000",
-      "output": "1.500000",
-      "cached_input": "0.025000"
-    },
-    "openrouter/google/gemini-3.1-flash-lite:batch": {
-      "input": "0.125000",
-      "output": "0.750000",
-      "cached_input": "0.012500"
-    },
-    "openrouter/google/gemini-3.1-pro-preview": {
-      "input": "2.000000",
-      "output": "12.000000",
-      "cached_input": "0.200000"
-    },
-    "openrouter/google/gemini-3.1-pro-preview-customtools": {
-      "input": "2.000000",
-      "output": "12.000000",
-      "cached_input": "0.200000"
-    },
-    "openrouter/google/gemini-3.1-pro-preview:batch": {
-      "input": "1.000000",
-      "output": "6.000000"
-    },
-    "openrouter/google/gemini-3.5-flash": {
-      "input": "1.500000",
-      "output": "9.000000",
-      "cached_input": "0.150000"
-    },
-    "openrouter/google/gemini-3.5-flash-lite": {
-      "input": "0.300000",
-      "output": "2.500000",
-      "cached_input": "0.030000"
-    },
-    "openrouter/google/gemini-3.5-flash-lite:batch": {
-      "input": "0.150000",
-      "output": "1.250000",
-      "cached_input": "0.015000"
-    },
-    "openrouter/google/gemini-3.5-flash:batch": {
-      "input": "0.750000",
-      "output": "4.500000",
-      "cached_input": "0.075000"
-    },
-    "openrouter/google/gemini-3.6-flash": {
-      "input": "0.750000",
-      "output": "3.750000",
-      "cached_input": "0.075000"
-    },
-    "openrouter/google/gemini-3.6-flash:batch": {
-      "input": "0.375000",
-      "output": "1.875000",
-      "cached_input": "0.037500"
-    },
-    "openrouter/google/gemini-3.7-flash": {
-      "input": "0.750000",
-      "output": "3.750000",
-      "cached_input": "0.075000"
-    },
-    "openrouter/google/gemini-3.7-flash:batch": {
-      "input": "0.375000",
-      "output": "1.875000",
-      "cached_input": "0.037500"
-    },
-    "openrouter/google/gemini-3.8-flash": {
-      "input": "0.750000",
-      "output": "3.750000",
-      "cached_input": "0.075000"
-    },
-    "openrouter/google/gemini-3.8-flash:batch": {
-      "input": "0.375000",
-      "output": "1.875000",
-      "cached_input": "0.037500"
-    },
-    "openrouter/google/gemma-2-27b-it": {
-      "input": "0.650000",
-      "output": "0.650000"
-    },
-    "openrouter/google/gemma-3-12b-it": {
-      "input": "0.050000",
-      "output": "0.150000"
-    },
-    "openrouter/google/gemma-3-27b-it": {
-      "input": "0.080000",
-      "output": "0.450000",
-      "cached_input": "0.040000"
-    },
-    "openrouter/google/gemma-3-4b-it": {
-      "input": "0.050000",
-      "output": "0.100000"
-    },
-    "openrouter/google/gemma-4-26b-a4b-it": {
-      "input": "0.090000",
-      "output": "0.300000",
-      "cached_input": "0.050000"
-    },
-    "openrouter/google/gemma-4-26b-a4b-it:free": {
-      "input": "0.000000",
-      "output": "0.000000"
-    },
-    "openrouter/google/gemma-4-31b-it": {
-      "input": "0.090000",
-      "output": "0.340000",
-      "cached_input": "0.050000"
-    },
-    "openrouter/google/gemma-4-31b-it:free": {
-      "input": "0.000000",
-      "output": "0.000000"
-    },
-    "openrouter/gryphe/mythomax-l2-13b": {
-      "input": "0.080000",
-      "output": "0.110000"
-    },
-    "openrouter/ibm-granite/granite-4.0-h-micro": {
-      "input": "0.017000",
-      "output": "0.112000"
-    },
-    "openrouter/ibm-granite/granite-4.2-8b": {
-      "input": "0.060000",
-      "output": "0.250000",
-      "cached_input": "0.015000"
-    },
-    "openrouter/inception/mercury-2": {
-      "input": "0.250000",
-      "output": "0.750000",
-      "cached_input": "0.025000"
-    },
-    "openrouter/inception/mercury-2.5": {
-      "input": "0.040000",
-      "output": "0.150000",
-      "cached_input": "0.004000"
-    },
-    "openrouter/inclusionai/ling-3.0-flash": {
-      "input": "0.021000",
-      "output": "0.063000",
-      "cached_input": "0.004200"
-    },
-    "openrouter/inclusionai/ling-3.0-flash-fin": {
-      "input": "0.060000",
-      "output": "0.180000",
-      "cached_input": "0.012000"
-    },
-    "openrouter/inclusionai/ling-3.0-flash-fin:free": {
-      "input": "0.000000",
-      "output": "0.000000"
-    },
-    "openrouter/inclusionai/ling-3.0-flash-sante:free": {
-      "input": "0.000000",
-      "output": "0.000000"
-    },
-    "openrouter/inclusionai/ling-3.0-flash-vl": {
-      "input": "0.060000",
-      "output": "0.180000",
-      "cached_input": "0.012000"
-    },
-    "openrouter/inclusionai/ling-3.0-flash-vl:free": {
-      "input": "0.000000",
-      "output": "0.000000"
-    },
-    "openrouter/inference-net/schematron-v2-small": {
-      "input": "0.050000",
-      "output": "0.230000",
-      "cached_input": "0.050000"
-    },
-    "openrouter/inference-net/schematron-v2-turbo": {
-      "input": "0.030000",
-      "output": "0.150000",
-      "cached_input": "0.030000"
-    },
-    "openrouter/kwaipilot/kat-coder-pro-v2.5": {
-      "input": "0.740000",
-      "output": "2.960000",
-      "cached_input": "0.150000"
-    },
-    "openrouter/liquid/lfm-2.5-2.6b:free": {
-      "input": "0.000000",
-      "output": "0.000000"
-    },
-    "openrouter/mancer/weaver": {
-      "input": "0.400000",
-      "output": "0.750000"
-    },
-    "openrouter/meituan/longcat-2.0": {
-      "input": "0.300000",
-      "output": "1.200000",
-      "cached_input": "0.006000"
-    },
-    "openrouter/meta-llama/llama-3-70b-instruct": {
-      "input": "0.590000",
-      "output": "0.790000"
-    },
-    "openrouter/meta-llama/llama-3.1-70b-instruct": {
-      "input": "0.400000",
-      "output": "0.400000"
-    },
-    "openrouter/meta-llama/llama-3.1-8b-instruct": {
-      "input": "0.050000",
-      "output": "0.080000",
-      "cached_input": "0.025000"
-    },
-    "openrouter/meta-llama/llama-3.2-1b-instruct": {
-      "input": "0.027000",
-      "output": "0.201000"
-    },
-    "openrouter/meta-llama/llama-3.2-3b-instruct": {
-      "input": "0.050000",
-      "output": "0.330000"
-    },
-    "openrouter/meta-llama/llama-3.3-70b-instruct": {
-      "input": "0.100000",
-      "output": "0.320000"
-    },
-    "openrouter/meta-llama/llama-4-maverick": {
-      "input": "0.187500",
-      "output": "0.652500"
-    },
-    "openrouter/meta-llama/llama-4-scout": {
-      "input": "0.100000",
-      "output": "0.300000"
-    },
-    "openrouter/meta-llama/llama-guard-4-12b": {
-      "input": "0.180000",
-      "output": "0.180000"
-    },
-    "openrouter/meta/muse-glimmer-30b": {
-      "input": "0.300000",
-      "output": "1.200000",
-      "cached_input": "0.040000"
-    },
-    "openrouter/meta/muse-spark-1.1": {
-      "input": "1.250000",
-      "output": "4.250000",
-      "cached_input": "0.150000"
-    },
-    "openrouter/meta/muse-spark-1.2": {
-      "input": "1.250000",
-      "output": "4.250000",
-      "cached_input": "0.150000"
-    },
-    "openrouter/meta/muse-spark-1.2-contributor": {
-      "input": "0.100000",
-      "output": "0.200000",
-      "cached_input": "0.002000"
-    },
-    "openrouter/meta/muse-spark-1.3": {
-      "input": "1.250000",
-      "output": "4.250000",
-      "cached_input": "0.150000"
-    },
-    "openrouter/meta/muse-spark-1.3-contributor": {
-      "input": "0.100000",
-      "output": "0.200000",
-      "cached_input": "0.002000"
-    },
-    "openrouter/microsoft/phi-4": {
-      "input": "0.070000",
-      "output": "0.140000"
-    },
-    "openrouter/microsoft/wizardlm-2-8x22b": {
-      "input": "0.620000",
-      "output": "0.620000"
-    },
-    "openrouter/minimax/minimax-01": {
-      "input": "0.200000",
-      "output": "1.100000"
-    },
-    "openrouter/minimax/minimax-m1": {
-      "input": "0.400000",
-      "output": "2.200000"
-    },
-    "openrouter/minimax/minimax-m2": {
-      "input": "0.300000",
-      "output": "1.200000"
-    },
-    "openrouter/minimax/minimax-m2-her": {
-      "input": "0.300000",
-      "output": "1.200000",
-      "cached_input": "0.030000"
-    },
-    "openrouter/minimax/minimax-m2.1": {
-      "input": "0.300000",
-      "output": "1.200000",
-      "cached_input": "0.030000"
-    },
-    "openrouter/minimax/minimax-m2.5": {
-      "input": "0.270000",
-      "output": "1.080000",
-      "cached_input": "0.027000"
-    },
-    "openrouter/minimax/minimax-m2.7": {
-      "input": "0.300000",
-      "output": "1.200000",
-      "cached_input": "0.060000"
-    },
-    "openrouter/minimax/minimax-m2.7:free": {
-      "input": "0.000000",
-      "output": "0.000000"
-    },
-    "openrouter/minimax/minimax-m3": {
-      "input": "0.300000",
-      "output": "1.200000",
-      "cached_input": "0.060000"
-    },
-    "openrouter/minimax/minimax-m3:free": {
-      "input": "0.000000",
-      "output": "0.000000"
-    },
-    "openrouter/mistralai/codestral-2508": {
-      "input": "0.300000",
-      "output": "0.900000",
-      "cached_input": "0.030000"
-    },
-    "openrouter/mistralai/codestral-2508:batch": {
-      "input": "0.150000",
-      "output": "0.450000",
-      "cached_input": "0.015000"
-    },
-    "openrouter/mistralai/devstral-2512": {
-      "input": "0.400000",
-      "output": "2.000000",
-      "cached_input": "0.040000"
-    },
-    "openrouter/mistralai/ministral-14b-2512": {
-      "input": "0.200000",
-      "output": "0.200000",
-      "cached_input": "0.020000"
-    },
-    "openrouter/mistralai/ministral-3b-2512": {
-      "input": "0.100000",
-      "output": "0.100000",
-      "cached_input": "0.010000"
-    },
-    "openrouter/mistralai/ministral-8b-2512": {
-      "input": "0.150000",
-      "output": "0.150000",
-      "cached_input": "0.015000"
-    },
-    "openrouter/mistralai/ministral-8b-2512:batch": {
-      "input": "0.075000",
-      "output": "0.075000",
-      "cached_input": "0.007500"
-    },
-    "openrouter/mistralai/mistral-7b-instruct": {
-      "input": "0.130000",
-      "output": "0.130000"
-    },
-    "openrouter/mistralai/mistral-large": {
-      "input": "2.000000",
-      "output": "6.000000",
-      "cached_input": "0.200000"
-    },
-    "openrouter/mistralai/mistral-large-2407": {
-      "input": "2.000000",
-      "output": "6.000000",
-      "cached_input": "0.200000"
-    },
-    "openrouter/mistralai/mistral-large-2512": {
-      "input": "0.500000",
-      "output": "1.500000",
-      "cached_input": "0.050000"
-    },
-    "openrouter/mistralai/mistral-large-2512:batch": {
-      "input": "0.250000",
-      "output": "0.750000",
-      "cached_input": "0.025000"
-    },
-    "openrouter/mistralai/mistral-medium-3": {
-      "input": "0.400000",
-      "output": "2.000000",
-      "cached_input": "0.040000"
-    },
-    "openrouter/mistralai/mistral-medium-3-5": {
-      "input": "1.500000",
-      "output": "7.500000"
-    },
-    "openrouter/mistralai/mistral-medium-3-5:batch": {
-      "input": "0.750000",
-      "output": "3.750000"
-    },
-    "openrouter/mistralai/mistral-medium-3.1": {
-      "input": "0.400000",
-      "output": "2.000000",
-      "cached_input": "0.040000"
-    },
-    "openrouter/mistralai/mistral-medium-3.1:batch": {
-      "input": "0.200000",
-      "output": "1.000000",
-      "cached_input": "0.020000"
-    },
-    "openrouter/mistralai/mistral-nemo": {
-      "input": "0.019000",
-      "output": "0.030000"
-    },
-    "openrouter/mistralai/mistral-saba": {
-      "input": "0.200000",
-      "output": "0.600000",
-      "cached_input": "0.020000"
-    },
-    "openrouter/mistralai/mistral-small-24b-instruct-2501": {
-      "input": "0.050000",
-      "output": "0.080000"
-    },
-    "openrouter/mistralai/mistral-small-2603": {
-      "input": "0.150000",
-      "output": "0.600000",
-      "cached_input": "0.015000"
-    },
-    "openrouter/mistralai/mistral-small-2603:batch": {
-      "input": "0.075000",
-      "output": "0.300000",
-      "cached_input": "0.007500"
-    },
-    "openrouter/mistralai/mistral-small-3.1-24b-instruct": {
-      "input": "0.351000",
-      "output": "0.555000"
-    },
-    "openrouter/mistralai/mistral-small-3.2-24b-instruct": {
-      "input": "0.093750",
-      "output": "0.250000"
-    },
-    "openrouter/mistralai/mixtral-8x22b-instruct": {
-      "input": "2.000000",
-      "output": "6.000000",
-      "cached_input": "0.200000"
-    },
-    "openrouter/mistralai/voxtral-small-24b-2507": {
-      "input": "0.100000",
-      "output": "0.300000",
-      "cached_input": "0.010000"
-    },
-    "openrouter/moonshotai/kimi-k2": {
-      "input": "0.570000",
-      "output": "2.300000"
-    },
-    "openrouter/moonshotai/kimi-k2-0905": {
-      "input": "0.600000",
-      "output": "2.500000"
-    },
-    "openrouter/moonshotai/kimi-k2-thinking": {
-      "input": "0.600000",
-      "output": "2.500000",
-      "cached_input": "0.150000"
-    },
-    "openrouter/moonshotai/kimi-k2.5": {
-      "input": "0.450000",
-      "output": "2.250000",
-      "cached_input": "0.070000"
-    },
-    "openrouter/moonshotai/kimi-k2.6": {
-      "input": "0.950000",
-      "output": "4.000000",
-      "cached_input": "0.160000"
-    },
-    "openrouter/moonshotai/kimi-k2.7-code": {
-      "input": "0.656200",
-      "output": "3.300000",
-      "cached_input": "0.180000"
-    },
-    "openrouter/moonshotai/kimi-k3": {
-      "input": "3.000000",
-      "output": "15.000000",
-      "cached_input": "0.300000"
-    },
-    "openrouter/moonshotai/kimi-k3:batch": {
-      "input": "2.280000",
-      "output": "11.400000",
-      "cached_input": "0.228000"
-    },
-    "openrouter/morph/morph-v3-fast": {
-      "input": "0.800000",
-      "output": "1.200000"
-    },
-    "openrouter/morph/morph-v3-large": {
-      "input": "0.900000",
-      "output": "1.900000"
-    },
-    "openrouter/nex-agi/nex-n2.5-mini": {
-      "input": "0.025000",
-      "output": "0.100000",
-      "cached_input": "0.002500"
-    },
-    "openrouter/nex-agi/nex-n2.5-mini:free": {
-      "input": "0.000000",
-      "output": "0.000000"
-    },
-    "openrouter/nex-agi/nex-n2.5-pro": {
-      "input": "0.075000",
-      "output": "0.250000",
-      "cached_input": "0.015000"
-    },
-    "openrouter/nex-agi/nex-n2.5-pro:free": {
-      "input": "0.000000",
-      "output": "0.000000"
-    },
-    "openrouter/nousresearch/hermes-3-llama-3.1-405b": {
-      "input": "1.000000",
-      "output": "1.000000"
-    },
-    "openrouter/nousresearch/hermes-3-llama-3.1-70b": {
-      "input": "0.700000",
-      "output": "0.700000"
-    },
-    "openrouter/nousresearch/hermes-4-405b": {
-      "input": "1.000000",
-      "output": "3.000000"
-    },
-    "openrouter/nvidia/nemotron-3-nano-30b-a3b": {
-      "input": "0.050000",
-      "output": "0.200000",
-      "cached_input": "0.030000"
-    },
-    "openrouter/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free": {
-      "input": "0.000000",
-      "output": "0.000000"
-    },
-    "openrouter/nvidia/nemotron-3-super-120b-a12b": {
-      "input": "0.080000",
-      "output": "0.450000"
-    },
-    "openrouter/nvidia/nemotron-3-super-120b-a12b:free": {
-      "input": "0.000000",
-      "output": "0.000000"
-    },
-    "openrouter/nvidia/nemotron-3-ultra-550b-a55b": {
-      "input": "0.600000",
-      "output": "2.400000",
-      "cached_input": "0.120000"
-    },
-    "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free": {
-      "input": "0.000000",
-      "output": "0.000000"
-    },
-    "openrouter/nvidia/nemotron-3.5-content-safety": {
-      "input": "0.200000",
-      "output": "0.200000"
-    },
-    "openrouter/nvidia/nemotron-3.5-content-safety:free": {
-      "input": "0.000000",
-      "output": "0.000000"
-    },
-    "openrouter/nvidia/nemotron-3.5-lightning": {
-      "input": "0.080000",
-      "output": "0.200000",
-      "cached_input": "0.040000"
-    },
-    "openrouter/nvidia/nemotron-3.5-lightning:free": {
-      "input": "0.000000",
-      "output": "0.000000"
-    },
-    "openrouter/openai/gpt-3.5-turbo": {
-      "input": "0.500000",
-      "output": "1.500000"
-    },
-    "openrouter/openai/gpt-3.5-turbo-0613": {
-      "input": "1.000000",
-      "output": "2.000000"
-    },
-    "openrouter/openai/gpt-3.5-turbo-16k": {
-      "input": "3.000000",
-      "output": "4.000000"
-    },
-    "openrouter/openai/gpt-3.5-turbo-instruct": {
-      "input": "1.500000",
-      "output": "2.000000"
-    },
-    "openrouter/openai/gpt-3.5-turbo:batch": {
-      "input": "0.250000",
-      "output": "0.750000"
-    },
-    "openrouter/openai/gpt-4": {
-      "input": "30.000000",
-      "output": "60.000000"
-    },
-    "openrouter/openai/gpt-4-turbo": {
-      "input": "10.000000",
-      "output": "30.000000"
-    },
-    "openrouter/openai/gpt-4-turbo-preview": {
-      "input": "10.000000",
-      "output": "30.000000"
-    },
-    "openrouter/openai/gpt-4-turbo:batch": {
-      "input": "5.000000",
-      "output": "15.000000"
-    },
-    "openrouter/openai/gpt-4.1": {
-      "input": "2.000000",
-      "output": "8.000000",
-      "cached_input": "0.500000"
-    },
-    "openrouter/openai/gpt-4.1-mini": {
-      "input": "0.400000",
-      "output": "1.600000",
-      "cached_input": "0.100000"
-    },
-    "openrouter/openai/gpt-4.1-mini:batch": {
-      "input": "0.200000",
-      "output": "0.800000",
-      "cached_input": "0.050000"
-    },
-    "openrouter/openai/gpt-4.1-nano": {
-      "input": "0.100000",
-      "output": "0.400000",
-      "cached_input": "0.025000"
-    },
-    "openrouter/openai/gpt-4.1-nano:batch": {
-      "input": "0.050000",
-      "output": "0.200000",
-      "cached_input": "0.012500"
-    },
-    "openrouter/openai/gpt-4.1:batch": {
-      "input": "1.000000",
-      "output": "4.000000",
-      "cached_input": "0.250000"
-    },
-    "openrouter/openai/gpt-4o": {
-      "input": "2.500000",
-      "output": "10.000000",
-      "cached_input": "1.250000"
-    },
-    "openrouter/openai/gpt-4o-2024-05-13": {
-      "input": "5.000000",
-      "output": "15.000000"
-    },
-    "openrouter/openai/gpt-4o-2024-08-06": {
-      "input": "2.500000",
-      "output": "10.000000",
-      "cached_input": "1.250000"
-    },
-    "openrouter/openai/gpt-4o-2024-11-20": {
-      "input": "2.500000",
-      "output": "10.000000",
-      "cached_input": "1.250000"
-    },
-    "openrouter/openai/gpt-4o-mini": {
-      "input": "0.150000",
-      "output": "0.600000",
-      "cached_input": "0.075000"
-    },
-    "openrouter/openai/gpt-4o-mini-2024-07-18": {
-      "input": "0.150000",
-      "output": "0.600000",
-      "cached_input": "0.075000"
-    },
-    "openrouter/openai/gpt-4o-mini:batch": {
-      "input": "0.075000",
-      "output": "0.300000",
-      "cached_input": "0.037500"
-    },
-    "openrouter/openai/gpt-4o:batch": {
-      "input": "1.250000",
-      "output": "5.000000",
-      "cached_input": "0.625000"
-    },
-    "openrouter/openai/gpt-5": {
-      "input": "1.250000",
-      "output": "10.000000",
-      "cached_input": "0.125000"
-    },
-    "openrouter/openai/gpt-5-chat": {
-      "input": "1.250000",
-      "output": "10.000000",
-      "cached_input": "0.125000"
-    },
-    "openrouter/openai/gpt-5-codex": {
-      "input": "1.250000",
-      "output": "10.000000",
-      "cached_input": "0.125000"
-    },
-    "openrouter/openai/gpt-5-image": {
-      "input": "10.000000",
-      "output": "10.000000",
-      "cached_input": "1.250000"
-    },
-    "openrouter/openai/gpt-5-image-mini": {
-      "input": "2.500000",
-      "output": "2.000000",
-      "cached_input": "0.250000"
-    },
-    "openrouter/openai/gpt-5-mini": {
-      "input": "0.250000",
-      "output": "2.000000",
-      "cached_input": "0.025000"
-    },
-    "openrouter/openai/gpt-5-mini:batch": {
-      "input": "0.125000",
-      "output": "1.000000",
-      "cached_input": "0.012500"
-    },
-    "openrouter/openai/gpt-5-nano": {
-      "input": "0.050000",
-      "output": "0.400000",
-      "cached_input": "0.005000"
-    },
-    "openrouter/openai/gpt-5-nano:batch": {
-      "input": "0.025000",
-      "output": "0.200000",
-      "cached_input": "0.002500"
-    },
-    "openrouter/openai/gpt-5-pro": {
-      "input": "15.000000",
-      "output": "120.000000"
-    },
-    "openrouter/openai/gpt-5-pro:batch": {
-      "input": "7.500000",
-      "output": "60.000000"
-    },
-    "openrouter/openai/gpt-5.1": {
-      "input": "1.250000",
-      "output": "10.000000",
-      "cached_input": "0.125000"
-    },
-    "openrouter/openai/gpt-5.1-codex": {
-      "input": "1.250000",
-      "output": "10.000000",
-      "cached_input": "0.130000"
-    },
-    "openrouter/openai/gpt-5.1-codex-max": {
-      "input": "1.250000",
-      "output": "10.000000",
-      "cached_input": "0.125000"
-    },
-    "openrouter/openai/gpt-5.1-codex-mini": {
-      "input": "0.250000",
-      "output": "2.000000",
-      "cached_input": "0.030000"
-    },
-    "openrouter/openai/gpt-5.1:batch": {
-      "input": "0.625000",
-      "output": "5.000000",
-      "cached_input": "0.062500"
-    },
-    "openrouter/openai/gpt-5.2": {
-      "input": "1.750000",
-      "output": "14.000000",
-      "cached_input": "0.175000"
-    },
-    "openrouter/openai/gpt-5.2-chat": {
-      "input": "1.750000",
-      "output": "14.000000",
-      "cached_input": "0.175000"
-    },
-    "openrouter/openai/gpt-5.2-codex": {
-      "input": "1.750000",
-      "output": "14.000000",
-      "cached_input": "0.175000"
-    },
-    "openrouter/openai/gpt-5.2-pro": {
-      "input": "21.000000",
-      "output": "168.000000"
-    },
-    "openrouter/openai/gpt-5.2-pro:batch": {
-      "input": "10.500000",
-      "output": "84.000000"
-    },
-    "openrouter/openai/gpt-5.2:batch": {
-      "input": "0.875000",
-      "output": "7.000000",
-      "cached_input": "0.087500"
-    },
-    "openrouter/openai/gpt-5.3-codex": {
-      "input": "1.750000",
-      "output": "14.000000",
-      "cached_input": "0.175000"
-    },
-    "openrouter/openai/gpt-5.4": {
-      "input": "2.500000",
-      "output": "15.000000",
-      "cached_input": "0.250000"
-    },
-    "openrouter/openai/gpt-5.4-image-2": {
-      "input": "8.000000",
-      "output": "15.000000",
-      "cached_input": "2.000000"
-    },
-    "openrouter/openai/gpt-5.4-mini": {
-      "input": "0.750000",
-      "output": "4.500000",
-      "cached_input": "0.075000"
-    },
-    "openrouter/openai/gpt-5.4-mini:batch": {
-      "input": "0.375000",
-      "output": "2.250000",
-      "cached_input": "0.037500"
-    },
-    "openrouter/openai/gpt-5.4-nano": {
-      "input": "0.200000",
-      "output": "1.250000",
-      "cached_input": "0.020000"
-    },
-    "openrouter/openai/gpt-5.4-nano:batch": {
-      "input": "0.100000",
-      "output": "0.625000",
-      "cached_input": "0.010000"
-    },
-    "openrouter/openai/gpt-5.4-pro": {
-      "input": "30.000000",
-      "output": "180.000000"
-    },
-    "openrouter/openai/gpt-5.4-pro:batch": {
-      "input": "15.000000",
-      "output": "90.000000"
-    },
-    "openrouter/openai/gpt-5.4:batch": {
-      "input": "1.250000",
-      "output": "7.500000",
-      "cached_input": "0.125000"
-    },
-    "openrouter/openai/gpt-5.5": {
-      "input": "5.000000",
-      "output": "30.000000",
-      "cached_input": "0.500000"
-    },
-    "openrouter/openai/gpt-5.5-pro": {
-      "input": "30.000000",
-      "output": "180.000000"
-    },
-    "openrouter/openai/gpt-5.5-pro:batch": {
-      "input": "15.000000",
-      "output": "90.000000"
-    },
-    "openrouter/openai/gpt-5.5:batch": {
-      "input": "2.500000",
-      "output": "15.000000",
-      "cached_input": "0.250000"
-    },
-    "openrouter/openai/gpt-5.6-luna": {
-      "input": "0.200000",
-      "output": "1.200000",
-      "cached_input": "0.020000"
-    },
-    "openrouter/openai/gpt-5.6-luna-pro": {
-      "input": "0.200000",
-      "output": "1.200000",
-      "cached_input": "0.020000"
-    },
-    "openrouter/openai/gpt-5.6-luna-pro:batch": {
-      "input": "0.100000",
-      "output": "0.600000",
-      "cached_input": "0.010000"
-    },
-    "openrouter/openai/gpt-5.6-luna:batch": {
-      "input": "0.100000",
-      "output": "0.600000",
-      "cached_input": "0.010000"
-    },
-    "openrouter/openai/gpt-5.6-sol": {
-      "input": "2.000000",
-      "output": "10.000000",
-      "cached_input": "0.200000"
-    },
-    "openrouter/openai/gpt-5.6-sol-pro": {
-      "input": "2.000000",
-      "output": "10.000000",
-      "cached_input": "0.200000"
-    },
-    "openrouter/openai/gpt-5.6-sol-pro:batch": {
-      "input": "1.000000",
-      "output": "5.000000",
-      "cached_input": "0.100000"
-    },
-    "openrouter/openai/gpt-5.6-sol:batch": {
-      "input": "1.000000",
-      "output": "5.000000",
-      "cached_input": "0.100000"
-    },
-    "openrouter/openai/gpt-5.6-terra": {
-      "input": "2.000000",
-      "output": "12.000000",
-      "cached_input": "0.200000"
-    },
-    "openrouter/openai/gpt-5.6-terra-pro": {
-      "input": "2.000000",
-      "output": "12.000000",
-      "cached_input": "0.200000"
-    },
-    "openrouter/openai/gpt-5.6-terra-pro:batch": {
-      "input": "1.000000",
-      "output": "6.000000",
-      "cached_input": "0.100000"
-    },
-    "openrouter/openai/gpt-5.6-terra:batch": {
-      "input": "1.000000",
-      "output": "6.000000",
-      "cached_input": "0.100000"
-    },
-    "openrouter/openai/gpt-5:batch": {
-      "input": "0.625000",
-      "output": "5.000000",
-      "cached_input": "0.062500"
-    },
-    "openrouter/openai/gpt-6-astra": {
-      "input": "10.000000",
-      "output": "50.000000",
-      "cached_input": "1.000000"
-    },
-    "openrouter/openai/gpt-6-astra-pro": {
-      "input": "10.000000",
-      "output": "50.000000",
-      "cached_input": "1.000000"
-    },
-    "openrouter/openai/gpt-6-astra-pro:batch": {
-      "input": "5.000000",
-      "output": "25.000000",
-      "cached_input": "0.500000"
-    },
-    "openrouter/openai/gpt-6-astra:batch": {
-      "input": "5.000000",
-      "output": "25.000000",
-      "cached_input": "0.500000"
-    },
-    "openrouter/openai/gpt-6-luna": {
-      "input": "0.100000",
-      "output": "0.500000",
-      "cached_input": "0.010000"
-    },
-    "openrouter/openai/gpt-6-luna-pro": {
-      "input": "0.100000",
-      "output": "0.500000",
-      "cached_input": "0.010000"
-    },
-    "openrouter/openai/gpt-6-luna-pro:batch": {
-      "input": "0.050000",
-      "output": "0.250000",
-      "cached_input": "0.005000"
-    },
-    "openrouter/openai/gpt-6-luna:batch": {
-      "input": "0.050000",
-      "output": "0.250000",
-      "cached_input": "0.005000"
-    },
-    "openrouter/openai/gpt-6-sol": {
-      "input": "2.000000",
-      "output": "10.000000",
-      "cached_input": "0.200000"
-    },
-    "openrouter/openai/gpt-6-sol-pro": {
-      "input": "2.000000",
-      "output": "10.000000",
-      "cached_input": "0.200000"
-    },
-    "openrouter/openai/gpt-6-sol-pro:batch": {
-      "input": "1.000000",
-      "output": "5.000000",
-      "cached_input": "0.100000"
-    },
-    "openrouter/openai/gpt-6-sol:batch": {
-      "input": "1.000000",
-      "output": "5.000000",
-      "cached_input": "0.100000"
-    },
-    "openrouter/openai/gpt-audio": {
-      "input": "2.500000",
-      "output": "10.000000"
-    },
-    "openrouter/openai/gpt-audio-mini": {
-      "input": "0.600000",
-      "output": "2.400000"
-    },
-    "openrouter/openai/gpt-chat-latest": {
-      "input": "5.000000",
-      "output": "30.000000",
-      "cached_input": "0.500000"
-    },
-    "openrouter/openai/gpt-oss-120b": {
-      "input": "0.150000",
-      "output": "0.600000",
-      "cached_input": "0.075000"
-    },
-    "openrouter/openai/gpt-oss-120b:batch": {
-      "input": "0.029600",
-      "output": "0.136000"
-    },
-    "openrouter/openai/gpt-oss-20b": {
-      "input": "0.018000",
-      "output": "0.090000",
-      "cached_input": "0.030000"
-    },
-    "openrouter/openai/gpt-oss-20b:batch": {
-      "input": "0.024000",
-      "output": "0.112000"
-    },
-    "openrouter/openai/gpt-oss-safeguard-20b": {
-      "input": "0.075000",
-      "output": "0.300000",
-      "cached_input": "0.037500"
-    },
-    "openrouter/openai/o1": {
-      "input": "15.000000",
-      "output": "60.000000",
-      "cached_input": "7.500000"
-    },
-    "openrouter/openai/o1-pro": {
-      "input": "150.000000",
-      "output": "600.000000"
-    },
-    "openrouter/openai/o3": {
-      "input": "2.000000",
-      "output": "8.000000",
-      "cached_input": "0.500000"
-    },
-    "openrouter/openai/o3-mini": {
-      "input": "1.100000",
-      "output": "4.400000",
-      "cached_input": "0.550000"
-    },
-    "openrouter/openai/o3-mini-high": {
-      "input": "1.100000",
-      "output": "4.400000",
-      "cached_input": "0.550000"
-    },
-    "openrouter/openai/o3-mini:batch": {
-      "input": "0.550000",
-      "output": "2.200000",
-      "cached_input": "0.275000"
-    },
-    "openrouter/openai/o3-pro": {
-      "input": "20.000000",
-      "output": "80.000000"
-    },
-    "openrouter/openai/o3:batch": {
-      "input": "1.000000",
-      "output": "4.000000",
-      "cached_input": "0.250000"
-    },
-    "openrouter/openai/o4-mini": {
-      "input": "1.100000",
-      "output": "4.400000",
-      "cached_input": "0.275000"
-    },
-    "openrouter/openai/o4-mini-high": {
-      "input": "1.100000",
-      "output": "4.400000",
-      "cached_input": "0.275000"
-    },
-    "openrouter/openai/o4-mini:batch": {
-      "input": "0.550000",
-      "output": "2.200000",
-      "cached_input": "0.137500"
-    },
-    "openrouter/openrouter/auto": {
-      "input": "0.000000",
-      "output": "0.000000"
-    },
-    "openrouter/openrouter/bodybuilder": {
-      "input": "0.000000",
-      "output": "0.000000"
-    },
-    "openrouter/openrouter/free": {
-      "input": "0.000000",
-      "output": "0.000000"
-    },
-    "openrouter/perceptron/perceptron-mk1": {
-      "input": "0.150000",
-      "output": "1.500000"
-    },
-    "openrouter/perplexity/sonar": {
-      "input": "1.000000",
-      "output": "1.000000"
-    },
-    "openrouter/perplexity/sonar-deep-research": {
-      "input": "2.000000",
-      "output": "8.000000"
-    },
-    "openrouter/perplexity/sonar-pro": {
-      "input": "3.000000",
-      "output": "15.000000"
-    },
-    "openrouter/perplexity/sonar-pro-search": {
-      "input": "3.000000",
-      "output": "15.000000"
-    },
-    "openrouter/perplexity/sonar-reasoning-pro": {
-      "input": "2.000000",
-      "output": "8.000000"
-    },
-    "openrouter/poolside/laguna-s-2.1": {
-      "input": "0.090000",
-      "output": "0.180000",
-      "cached_input": "0.009000"
-    },
-    "openrouter/poolside/laguna-s-2.1:free": {
-      "input": "0.000000",
-      "output": "0.000000"
-    },
-    "openrouter/poolside/laguna-xs-2.1": {
-      "input": "0.060000",
-      "output": "0.120000",
-      "cached_input": "0.030000"
-    },
-    "openrouter/poolside/laguna-xs-2.1:free": {
-      "input": "0.000000",
-      "output": "0.000000"
-    },
-    "openrouter/prism-ml/ternary-bonsai-2-27b": {
-      "input": "0.075000",
-      "output": "0.500000"
-    },
-    "openrouter/qwen/qwen-2.5-72b-instruct": {
-      "input": "0.360000",
-      "output": "0.400000"
-    },
-    "openrouter/qwen/qwen-2.5-7b-instruct": {
-      "input": "0.100000",
-      "output": "0.200000"
-    },
-    "openrouter/qwen/qwen-2.5-coder-32b-instruct": {
-      "input": "0.660000",
-      "output": "1.000000"
-    },
-    "openrouter/qwen/qwen-plus": {
-      "input": "0.260000",
-      "output": "0.780000",
-      "cached_input": "0.052000"
-    },
-    "openrouter/qwen/qwen-plus-2025-07-28": {
-      "input": "0.260000",
-      "output": "0.780000",
-      "cached_input": "0.052000"
-    },
-    "openrouter/qwen/qwen-vl-plus": {
-      "input": "0.210000",
-      "output": "0.630000"
-    },
-    "openrouter/qwen/qwen2.5-vl-72b-instruct": {
-      "input": "0.800000",
-      "output": "1.000000",
-      "cached_input": "0.400000"
-    },
-    "openrouter/qwen/qwen3-14b": {
-      "input": "0.120000",
-      "output": "0.240000"
-    },
-    "openrouter/qwen/qwen3-235b-a22b": {
-      "input": "0.455000",
-      "output": "1.820000"
-    },
-    "openrouter/qwen/qwen3-235b-a22b-2507": {
-      "input": "0.087500",
-      "output": "0.350000",
-      "cached_input": "0.017500"
-    },
-    "openrouter/qwen/qwen3-235b-a22b-thinking-2507": {
-      "input": "0.230000",
-      "output": "2.300000"
-    },
-    "openrouter/qwen/qwen3-30b-a3b": {
-      "input": "0.120000",
-      "output": "0.500000"
-    },
-    "openrouter/qwen/qwen3-30b-a3b-instruct-2507": {
-      "input": "0.100000",
-      "output": "0.300000"
-    },
-    "openrouter/qwen/qwen3-30b-a3b-thinking-2507": {
-      "input": "0.200000",
-      "output": "2.400000"
-    },
-    "openrouter/qwen/qwen3-32b": {
-      "input": "0.080000",
-      "output": "0.280000"
-    },
-    "openrouter/qwen/qwen3-8b": {
-      "input": "0.117000",
-      "output": "0.455000"
-    },
-    "openrouter/qwen/qwen3-coder": {
-      "input": "0.300000",
-      "output": "1.000000",
-      "cached_input": "0.100000"
-    },
-    "openrouter/qwen/qwen3-coder-30b-a3b-instruct": {
-      "input": "0.070000",
-      "output": "0.280000"
-    },
-    "openrouter/qwen/qwen3-coder-flash": {
-      "input": "0.195000",
-      "output": "0.975000",
-      "cached_input": "0.039000"
-    },
-    "openrouter/qwen/qwen3-coder-next": {
-      "input": "0.120000",
-      "output": "0.800000",
-      "cached_input": "0.070000"
-    },
-    "openrouter/qwen/qwen3-coder-plus": {
-      "input": "0.650000",
-      "output": "3.250000",
-      "cached_input": "0.130000"
-    },
-    "openrouter/qwen/qwen3-max": {
-      "input": "0.780000",
-      "output": "3.900000",
-      "cached_input": "0.156000"
-    },
-    "openrouter/qwen/qwen3-max-thinking": {
-      "input": "0.780000",
-      "output": "3.900000"
-    },
-    "openrouter/qwen/qwen3-next-80b-a3b-instruct": {
-      "input": "0.100000",
-      "output": "1.100000",
-      "cached_input": "0.070000"
-    },
-    "openrouter/qwen/qwen3-next-80b-a3b-thinking": {
-      "input": "0.150000",
-      "output": "1.200000"
-    },
-    "openrouter/qwen/qwen3-vl-235b-a22b-instruct": {
-      "input": "0.210000",
-      "output": "1.900000",
-      "cached_input": "0.100000"
-    },
-    "openrouter/qwen/qwen3-vl-235b-a22b-thinking": {
-      "input": "0.400000",
-      "output": "4.000000"
-    },
-    "openrouter/qwen/qwen3-vl-30b-a3b-instruct": {
-      "input": "0.130000",
-      "output": "0.520000"
-    },
-    "openrouter/qwen/qwen3-vl-30b-a3b-thinking": {
-      "input": "0.200000",
-      "output": "2.400000"
-    },
-    "openrouter/qwen/qwen3-vl-32b-instruct": {
-      "input": "0.104000",
-      "output": "0.416000"
-    },
-    "openrouter/qwen/qwen3-vl-8b-instruct": {
-      "input": "0.117000",
-      "output": "0.455000"
-    },
-    "openrouter/qwen/qwen3-vl-8b-thinking": {
-      "input": "0.180000",
-      "output": "2.100000"
-    },
-    "openrouter/qwen/qwen3.5-122b-a10b": {
-      "input": "0.260000",
-      "output": "2.080000"
-    },
-    "openrouter/qwen/qwen3.5-27b": {
-      "input": "0.195000",
-      "output": "1.560000"
-    },
-    "openrouter/qwen/qwen3.5-35b-a3b": {
-      "input": "0.312500",
-      "output": "1.250000",
-      "cached_input": "0.156250"
-    },
-    "openrouter/qwen/qwen3.5-397b-a17b": {
-      "input": "0.550000",
-      "output": "3.500000",
-      "cached_input": "0.225000"
-    },
-    "openrouter/qwen/qwen3.5-9b": {
-      "input": "0.100000",
-      "output": "0.150000"
-    },
-    "openrouter/qwen/qwen3.5-flash-02-23": {
-      "input": "0.065000",
-      "output": "0.260000"
-    },
-    "openrouter/qwen/qwen3.5-plus-02-15": {
-      "input": "0.260000",
-      "output": "1.560000"
-    },
-    "openrouter/qwen/qwen3.5-plus-20260420": {
-      "input": "0.300000",
-      "output": "1.800000"
-    },
-    "openrouter/qwen/qwen3.6-27b": {
-      "input": "0.320000",
-      "output": "2.700000",
-      "cached_input": "0.150000"
-    },
-    "openrouter/qwen/qwen3.6-35b-a3b": {
-      "input": "0.150000",
-      "output": "1.000000",
-      "cached_input": "0.050000"
-    },
-    "openrouter/qwen/qwen3.6-flash": {
-      "input": "0.187500",
-      "output": "1.125000"
-    },
-    "openrouter/qwen/qwen3.6-max-preview": {
-      "input": "1.027000",
-      "output": "6.162000"
-    },
-    "openrouter/qwen/qwen3.6-plus": {
-      "input": "0.325000",
-      "output": "1.950000"
-    },
-    "openrouter/qwen/qwen3.7-flash": {
-      "input": "0.030000",
-      "output": "0.130000",
-      "cached_input": "0.006000"
-    },
-    "openrouter/qwen/qwen3.7-max": {
-      "input": "1.475000",
-      "output": "4.425000",
-      "cached_input": "0.295000"
-    },
-    "openrouter/qwen/qwen3.7-plus": {
-      "input": "0.320000",
-      "output": "1.280000",
-      "cached_input": "0.064000"
-    },
-    "openrouter/qwen/qwen3.8-2.4t-a95b": {
-      "input": "2.000000",
-      "output": "6.000000",
-      "cached_input": "0.250000"
-    },
-    "openrouter/qwen/qwen3.8-27b": {
-      "input": "0.420000",
-      "output": "3.000000",
-      "cached_input": "0.085000"
-    },
-    "openrouter/qwen/qwen3.8-27b:free": {
-      "input": "0.000000",
-      "output": "0.000000"
-    },
-    "openrouter/qwen/qwen3.8-flash": {
-      "input": "0.150000",
-      "output": "0.470000",
-      "cached_input": "0.016000"
-    },
-    "openrouter/qwen/qwen3.8-max": {
-      "input": "2.000000",
-      "output": "6.000000",
-      "cached_input": "0.250000"
-    },
-    "openrouter/qwen/qwen3.8-max-0902": {
-      "input": "2.000000",
-      "output": "6.000000",
-      "cached_input": "0.250000"
-    },
-    "openrouter/qwen/qwen3.8-max-prime": {
-      "input": "4.000000",
-      "output": "12.000000",
-      "cached_input": "0.500000"
-    },
-    "openrouter/qwen/qwen3.8-omni-flash": {
-      "input": "0.150000",
-      "output": "0.470000",
-      "cached_input": "0.016000"
-    },
-    "openrouter/rekaai/reka-edge": {
-      "input": "0.100000",
-      "output": "0.100000"
-    },
-    "openrouter/rekaai/reka-flash-3": {
-      "input": "0.100000",
-      "output": "0.200000"
-    },
-    "openrouter/relace/relace-apply-3": {
-      "input": "0.850000",
-      "output": "1.250000"
-    },
-    "openrouter/relace/relace-search": {
-      "input": "1.000000",
-      "output": "3.000000"
-    },
-    "openrouter/sakana/fugu-max": {
-      "input": "2.000000",
-      "output": "6.000000",
-      "cached_input": "0.250000"
-    },
-    "openrouter/sakana/fugu-ultra": {
-      "input": "5.000000",
-      "output": "30.000000",
-      "cached_input": "0.500000"
-    },
-    "openrouter/sakana/fugu-ultra-v2": {
-      "input": "5.000000",
-      "output": "30.000000",
-      "cached_input": "0.500000"
-    },
-    "openrouter/sakana/sakana-namazu": {
-      "input": "0.950000",
-      "output": "4.000000",
-      "cached_input": "0.150000"
-    },
-    "openrouter/sao10k/l3-lunaris-8b": {
-      "input": "0.040000",
-      "output": "0.050000"
-    },
-    "openrouter/sao10k/l3.1-euryale-70b": {
-      "input": "0.850000",
-      "output": "0.850000"
-    },
-    "openrouter/sao10k/l3.3-euryale-70b": {
-      "input": "0.650000",
-      "output": "0.750000"
-    },
-    "openrouter/stealth/space-bunny-alpha": {
-      "input": "0.000000",
-      "output": "0.000000"
-    },
-    "openrouter/stepfun/step-3.5-flash": {
-      "input": "0.100000",
-      "output": "0.300000"
-    },
-    "openrouter/stepfun/step-3.7-flash": {
-      "input": "0.200000",
-      "output": "1.150000",
-      "cached_input": "0.040000"
-    },
-    "openrouter/switchpoint/router": {
-      "input": "0.850000",
-      "output": "3.400000"
-    },
-    "openrouter/tencent/hunyuan-a13b-instruct": {
-      "input": "0.140000",
-      "output": "0.570000"
-    },
-    "openrouter/tencent/hy-mt2-1.8b": {
-      "input": "0.044000",
-      "output": "0.177000"
-    },
-    "openrouter/tencent/hy-mt2-30b-a3b": {
-      "input": "0.074000",
-      "output": "0.295000"
-    },
-    "openrouter/tencent/hy-mt2-7b": {
-      "input": "0.074000",
-      "output": "0.295000"
-    },
-    "openrouter/tencent/hy3": {
-      "input": "0.132000",
-      "output": "0.528000",
-      "cached_input": "0.033000"
-    },
-    "openrouter/tencent/hy3-preview": {
-      "input": "0.180000",
-      "output": "0.600000",
-      "cached_input": "0.060000"
-    },
-    "openrouter/tencent/hy4-preview": {
-      "input": "0.834000",
-      "output": "2.501000",
-      "cached_input": "0.042000"
-    },
-    "openrouter/thedrummer/cydonia-24b-v4.1": {
-      "input": "0.300000",
-      "output": "0.500000",
-      "cached_input": "0.150000"
-    },
-    "openrouter/thedrummer/skyfall-36b-v2": {
-      "input": "0.550000",
-      "output": "0.800000",
-      "cached_input": "0.250000"
-    },
-    "openrouter/thedrummer/unslopnemo-12b": {
-      "input": "0.400000",
-      "output": "0.400000"
-    },
-    "openrouter/thinkingmachines/inkling": {
-      "input": "1.000000",
-      "output": "4.050000",
-      "cached_input": "0.170000"
-    },
-    "openrouter/thinkingmachines/inkling-small": {
-      "input": "0.450000",
-      "output": "1.200000",
-      "cached_input": "0.100000"
-    },
-    "openrouter/thinkingmachines/inkling-small:free": {
-      "input": "0.000000",
-      "output": "0.000000"
-    },
-    "openrouter/thinkingmachines/inkling:free": {
-      "input": "0.000000",
-      "output": "0.000000"
-    },
-    "openrouter/typesafe/jev-1.13": {
-      "input": "0.042000",
-      "output": "0.000000"
-    },
-    "openrouter/unbiased/pareto": {
-      "input": "2.500000",
-      "output": "7.500000",
-      "cached_input": "0.250000"
-    },
-    "openrouter/undi95/remm-slerp-l2-13b": {
-      "input": "0.350000",
-      "output": "0.650000"
-    },
-    "openrouter/upstage/solar-mini4": {
-      "input": "0.050000",
-      "output": "0.200000",
-      "cached_input": "0.005000"
-    },
-    "openrouter/upstage/solar-pro-3": {
-      "input": "0.150000",
-      "output": "0.600000",
-      "cached_input": "0.015000"
-    },
-    "openrouter/upstage/solar-pro4": {
-      "input": "0.090000",
-      "output": "0.360000",
-      "cached_input": "0.018000"
-    },
-    "openrouter/writer/palmyra-x5": {
-      "input": "0.600000",
-      "output": "6.000000"
-    },
-    "openrouter/x-ai/grok-4": {
-      "input": "3.000000",
-      "output": "15.000000"
-    },
-    "openrouter/x-ai/grok-4.20": {
-      "input": "1.250000",
-      "output": "2.500000",
-      "cached_input": "0.200000"
-    },
-    "openrouter/x-ai/grok-4.20-multi-agent": {
-      "input": "1.250000",
-      "output": "2.500000",
-      "cached_input": "0.200000"
-    },
-    "openrouter/x-ai/grok-4.3": {
-      "input": "1.250000",
-      "output": "2.500000",
-      "cached_input": "0.200000"
-    },
-    "openrouter/x-ai/grok-4.3:batch": {
-      "input": "1.000000",
-      "output": "2.000000",
-      "cached_input": "0.160000"
-    },
-    "openrouter/x-ai/grok-4.5": {
-      "input": "2.000000",
-      "output": "6.000000",
-      "cached_input": "0.300000"
-    },
-    "openrouter/x-ai/grok-4.6": {
-      "input": "2.000000",
-      "output": "6.000000",
-      "cached_input": "0.500000"
-    },
-    "openrouter/x-ai/grok-4.7": {
-      "input": "1.600000",
-      "output": "4.800000",
-      "cached_input": "0.400000"
-    },
-    "openrouter/x-ai/grok-build-0.1": {
-      "input": "1.000000",
-      "output": "2.000000",
-      "cached_input": "0.200000"
-    },
-    "openrouter/xiaomi/mimo-v2-flash": {
-      "input": "0.100000",
-      "output": "0.300000",
-      "cached_input": "0.010000"
-    },
-    "openrouter/xiaomi/mimo-v2.5": {
-      "input": "0.140000",
-      "output": "0.280000",
-      "cached_input": "0.002800"
-    },
-    "openrouter/xiaomi/mimo-v2.5-pro": {
-      "input": "0.435000",
-      "output": "0.870000",
-      "cached_input": "0.003600"
-    },
-    "openrouter/xiaomi/mimo-v2.6-flash": {
-      "input": "0.140000",
-      "output": "0.280000",
-      "cached_input": "0.002800"
-    },
-    "openrouter/xiaomi/mimo-v2.6-pro": {
-      "input": "0.435000",
-      "output": "0.870000",
-      "cached_input": "0.003600"
-    },
-    "openrouter/xiaomi/mimo-v2.6-pro-ultraspeed": {
-      "input": "4.350000",
-      "output": "8.700000",
-      "cached_input": "0.036000"
-    },
-    "openrouter/z-ai/glm-4.5": {
-      "input": "0.600000",
-      "output": "2.200000",
-      "cached_input": "0.110000"
-    },
-    "openrouter/z-ai/glm-4.5-air": {
-      "input": "0.130000",
-      "output": "0.850000",
-      "cached_input": "0.025000"
-    },
-    "openrouter/z-ai/glm-4.5v": {
-      "input": "0.600000",
-      "output": "1.800000",
-      "cached_input": "0.110000"
-    },
-    "openrouter/z-ai/glm-4.6": {
-      "input": "0.430000",
-      "output": "1.750000",
-      "cached_input": "0.080000"
-    },
-    "openrouter/z-ai/glm-4.6:exacto": {
-      "input": "0.450000",
-      "output": "1.900000"
-    },
-    "openrouter/z-ai/glm-4.6v": {
-      "input": "0.300000",
-      "output": "0.900000",
-      "cached_input": "0.055000"
-    },
-    "openrouter/z-ai/glm-4.7": {
-      "input": "0.400000",
-      "output": "1.750000",
-      "cached_input": "0.080000"
-    },
-    "openrouter/z-ai/glm-4.7-flash": {
-      "input": "0.060500",
-      "output": "0.400000",
-      "cached_input": "0.010000"
-    },
-    "openrouter/z-ai/glm-5": {
-      "input": "0.600000",
-      "output": "1.920000",
-      "cached_input": "0.120000"
-    },
-    "openrouter/z-ai/glm-5-turbo": {
-      "input": "1.200000",
-      "output": "4.000000",
-      "cached_input": "0.240000"
-    },
-    "openrouter/z-ai/glm-5.1": {
-      "input": "0.966000",
-      "output": "3.036000",
-      "cached_input": "0.179400"
-    },
-    "openrouter/z-ai/glm-5.2": {
-      "input": "0.649600",
-      "output": "2.041600",
-      "cached_input": "0.120640"
-    },
-    "openrouter/z-ai/glm-5.2:free": {
-      "input": "0.000000",
-      "output": "0.000000"
-    },
-    "openrouter/z-ai/glm-5.3": {
-      "input": "1.400000",
-      "output": "4.400000",
-      "cached_input": "0.260000"
-    },
-    "openrouter/z-ai/glm-5.3-flash": {
-      "input": "0.045000",
-      "output": "0.600000",
-      "cached_input": "0.028500"
-    },
-    "openrouter/z-ai/glm-5.3-flash:batch": {
-      "input": "0.060000",
-      "output": "0.200000",
-      "cached_input": "0.012000"
-    },
-    "openrouter/z-ai/glm-5.3-flashx": {
-      "input": "0.370000",
-      "output": "1.250000",
-      "cached_input": "0.090000"
-    },
-    "openrouter/z-ai/glm-5.3-prime": {
-      "input": "2.800000",
-      "output": "8.800000",
-      "cached_input": "0.560000"
-    },
-    "openrouter/z-ai/glm-5.3:batch": {
-      "input": "0.450000",
-      "output": "2.000000",
-      "cached_input": "0.100000"
-    },
-    "openrouter/z-ai/glm-5v-turbo": {
-      "input": "1.200000",
-      "output": "4.000000",
-      "cached_input": "0.240000"
-    },
-    "openrouter/~anthropic/claude-fable-latest": {
-      "input": "10.000000",
-      "output": "50.000000",
-      "cached_input": "0.250000"
-    },
-    "openrouter/~anthropic/claude-haiku-latest": {
-      "input": "1.000000",
-      "output": "5.000000",
-      "cached_input": "0.100000"
-    },
-    "openrouter/~anthropic/claude-opus-latest": {
-      "input": "4.000000",
-      "output": "20.000000",
-      "cached_input": "0.200000"
-    },
-    "openrouter/~anthropic/claude-sonnet-latest": {
-      "input": "2.000000",
-      "output": "10.000000",
-      "cached_input": "0.200000"
-    },
-    "openrouter/~deepseek/deepseek-flash-latest": {
-      "input": "0.300000",
-      "output": "1.200000",
-      "cached_input": "0.006000"
-    },
-    "openrouter/~deepseek/deepseek-pro-latest": {
-      "input": "1.320000",
-      "output": "3.960000",
-      "cached_input": "0.044000"
-    },
-    "openrouter/~deepseek/deepseek-v4-flash-latest": {
-      "input": "0.040000",
-      "output": "0.640000",
-      "cached_input": "0.016000"
-    },
-    "openrouter/~google/gemini-flash-latest": {
-      "input": "0.750000",
-      "output": "3.750000",
-      "cached_input": "0.075000"
-    },
-    "openrouter/~google/gemini-pro-latest": {
-      "input": "2.000000",
-      "output": "12.000000",
-      "cached_input": "0.200000"
-    },
-    "openrouter/~moonshotai/kimi-latest": {
-      "input": "3.000000",
-      "output": "15.000000",
-      "cached_input": "0.300000"
-    },
-    "openrouter/~openai/gpt-astra-latest": {
-      "input": "10.000000",
-      "output": "50.000000",
-      "cached_input": "1.000000"
-    },
-    "openrouter/~openai/gpt-luna-latest": {
-      "input": "0.100000",
-      "output": "0.500000",
-      "cached_input": "0.010000"
-    },
-    "openrouter/~openai/gpt-mini-latest": {
-      "input": "0.750000",
-      "output": "4.500000",
-      "cached_input": "0.075000"
-    },
-    "openrouter/~openai/gpt-sol-latest": {
-      "input": "2.000000",
-      "output": "10.000000",
-      "cached_input": "0.200000"
-    },
-    "openrouter/~openai/gpt-terra-latest": {
-      "input": "2.000000",
-      "output": "12.000000",
-      "cached_input": "0.200000"
-    },
-    "openrouter/~x-ai/grok-latest": {
-      "input": "1.600000",
-      "output": "4.800000",
-      "cached_input": "0.400000"
-    },
-    "openrouter/~z-ai/glm-flash-latest": {
-      "input": "0.150000",
-      "output": "0.500000",
-      "cached_input": "0.050000"
-    },
-    "openrouter/~z-ai/glm-latest": {
-      "input": "0.653800",
-      "output": "2.054800",
-      "cached_input": "0.121420"
-    },
     "ovhcloud/DeepSeek-R1-Distill-Llama-70B": {
       "input": "0.670000",
       "output": "0.670000"
@@ -12301,39 +10600,25 @@
       "input": "0.190000",
       "output": "0.190000"
     },
-    "palm/chat-bison": {
-      "input": "0.125000",
-      "output": "0.125000"
-    },
-    "palm/chat-bison-001": {
-      "input": "0.125000",
-      "output": "0.125000"
-    },
-    "palm/text-bison": {
-      "input": "0.125000",
-      "output": "0.125000"
-    },
-    "palm/text-bison-001": {
-      "input": "0.125000",
-      "output": "0.125000"
-    },
-    "palm/text-bison-safety-off": {
-      "input": "0.125000",
-      "output": "0.125000"
-    },
-    "palm/text-bison-safety-recitation-off": {
-      "input": "0.125000",
-      "output": "0.125000"
-    },
     "perplexity/anthropic/claude-fable-5": {
       "input": "10.000000",
       "output": "50.000000",
       "cached_input": "1.000000"
     },
+    "perplexity/anthropic/claude-fable-5-1": {
+      "input": "10.000000",
+      "output": "50.000000",
+      "cached_input": "0.250000"
+    },
     "perplexity/anthropic/claude-haiku-4-5": {
       "input": "1.000000",
       "output": "5.000000",
       "cached_input": "0.100000"
+    },
+    "perplexity/anthropic/claude-haiku-5-5": {
+      "input": "0.100000",
+      "output": "0.500000",
+      "cached_input": "0.010000"
     },
     "perplexity/anthropic/claude-opus-4-5": {
       "input": "5.000000",
@@ -12360,6 +10645,11 @@
       "output": "25.000000",
       "cached_input": "0.500000"
     },
+    "perplexity/anthropic/claude-opus-5-5": {
+      "input": "4.000000",
+      "output": "20.000000",
+      "cached_input": "0.200000"
+    },
     "perplexity/anthropic/claude-sonnet-4-5": {
       "input": "3.000000",
       "output": "15.000000",
@@ -12371,6 +10661,11 @@
       "cached_input": "0.300000"
     },
     "perplexity/anthropic/claude-sonnet-5": {
+      "input": "2.000000",
+      "output": "10.000000",
+      "cached_input": "0.200000"
+    },
+    "perplexity/anthropic/claude-sonnet-5-5": {
       "input": "2.000000",
       "output": "10.000000",
       "cached_input": "0.200000"
@@ -12418,6 +10713,11 @@
       "output": "3.750000",
       "cached_input": "0.075000"
     },
+    "perplexity/google/gemini-3.8-flash": {
+      "input": "0.750000",
+      "output": "3.750000",
+      "cached_input": "0.075000"
+    },
     "perplexity/llama-2-70b-chat": {
       "input": "0.700000",
       "output": "2.800000"
@@ -12448,6 +10748,11 @@
       "output": "2.000000",
       "cached_input": "0.025000"
     },
+    "perplexity/openai/gpt-5-nano": {
+      "input": "0.050000",
+      "output": "0.400000",
+      "cached_input": "0.005000"
+    },
     "perplexity/openai/gpt-5.1": {
       "input": "1.250000",
       "output": "10.000000",
@@ -12457,6 +10762,11 @@
       "input": "1.750000",
       "output": "14.000000",
       "cached_input": "0.175000"
+    },
+    "perplexity/openai/gpt-5.3-codex": {
+      "input": "3.500000",
+      "output": "28.000000",
+      "cached_input": "0.350000"
     },
     "perplexity/openai/gpt-5.4": {
       "input": "2.500000",
@@ -12484,19 +10794,44 @@
       "cached_input": "0.020000"
     },
     "perplexity/openai/gpt-5.6-sol": {
-      "input": "5.000000",
-      "output": "30.000000",
-      "cached_input": "0.500000"
+      "input": "4.000000",
+      "output": "20.000000",
+      "cached_input": "0.400000"
     },
     "perplexity/openai/gpt-5.6-terra": {
       "input": "2.000000",
       "output": "12.000000",
       "cached_input": "0.200000"
     },
+    "perplexity/openai/gpt-6-astra": {
+      "input": "10.000000",
+      "output": "50.000000",
+      "cached_input": "1.000000"
+    },
+    "perplexity/openai/gpt-6-luna": {
+      "input": "0.100000",
+      "output": "0.500000",
+      "cached_input": "0.010000"
+    },
+    "perplexity/openai/gpt-6-sol": {
+      "input": "2.000000",
+      "output": "10.000000",
+      "cached_input": "0.200000"
+    },
+    "perplexity/openai/gpt-6.1-sol": {
+      "input": "2.000000",
+      "output": "10.000000",
+      "cached_input": "0.100000"
+    },
     "perplexity/perplexity/deepseek-v4-flash-0731": {
       "input": "0.130000",
       "output": "0.260000",
       "cached_input": "0.028000"
+    },
+    "perplexity/perplexity/deepseek-v4-pro-0813": {
+      "input": "1.320000",
+      "output": "3.960000",
+      "cached_input": "0.044000"
     },
     "perplexity/perplexity/glm-5.2": {
       "input": "1.400000",
@@ -12553,6 +10888,14 @@
     "perplexity/pplx-7b-online": {
       "input": "0.000000",
       "output": "0.280000"
+    },
+    "perplexity/pplx-decider-v1-27b": {
+      "input": "0.020000",
+      "output": "0.000000"
+    },
+    "perplexity/pplx-decider-v1.1-27b": {
+      "input": "0.020000",
+      "output": "0.000000"
     },
     "perplexity/pplx-embed-context-v1-0.6b": {
       "input": "0.008000",
@@ -12636,6 +10979,11 @@
       "output": "6.000000",
       "cached_input": "0.500000"
     },
+    "perplexity/xai/grok-4.7": {
+      "input": "2.000000",
+      "output": "6.000000",
+      "cached_input": "0.500000"
+    },
     "pinstripes/ps/deepseek-v4-flash": {
       "input": "0.100000",
       "output": "0.200000"
@@ -12659,6 +11007,16 @@
     "pinstripes/ps/qwen3.6-35b-a3b": {
       "input": "0.140000",
       "output": "0.450000"
+    },
+    "prism/deepseek-v4-flash": {
+      "input": "0.170000",
+      "output": "0.210000",
+      "cached_input": "0.070000"
+    },
+    "prism/deepseek-v4.1-flash": {
+      "input": "0.170000",
+      "output": "0.630000",
+      "cached_input": "0.070000"
     },
     "publicai/BSC-LT/ALIA-40b-instruct_Q8_0": {
       "input": "0.000000",
@@ -13154,6 +11512,66 @@
       "input": "0.000000",
       "output": "0.000000"
     },
+    "sail/Qwen/Qwen3.6-35B-A3B": {
+      "input": "0.050000",
+      "output": "0.400000",
+      "cached_input": "0.020000"
+    },
+    "sail/deepseek-ai/DeepSeek-V4-Flash-0731": {
+      "input": "0.090000",
+      "output": "0.180000",
+      "cached_input": "0.020000"
+    },
+    "sail/deepseek-ai/DeepSeek-V4-Pro-0813": {
+      "input": "0.920000",
+      "output": "2.770000",
+      "cached_input": "0.040000"
+    },
+    "sail/deepseek-ai/DeepSeek-V4.1-Flash": {
+      "input": "0.150000",
+      "output": "0.600000",
+      "cached_input": "0.006000"
+    },
+    "sail/google/gemma-4-12B-it": {
+      "input": "0.300000",
+      "output": "2.000000",
+      "cached_input": "0.150000"
+    },
+    "sail/google/gemma-4-31B-it": {
+      "input": "0.400000",
+      "output": "0.600000",
+      "cached_input": "0.200000"
+    },
+    "sail/moonshotai/Kimi-K2.6": {
+      "input": "1.000000",
+      "output": "4.000000",
+      "cached_input": "0.200000"
+    },
+    "sail/moonshotai/Kimi-K3": {
+      "input": "2.500000",
+      "output": "12.500000",
+      "cached_input": "0.250000"
+    },
+    "sail/nvidia/Gemma-4-31B-IT-NVFP4": {
+      "input": "0.140000",
+      "output": "0.400000",
+      "cached_input": "0.070000"
+    },
+    "sail/openai/gpt-oss-120b": {
+      "input": "0.060000",
+      "output": "0.400000",
+      "cached_input": "0.030000"
+    },
+    "sail/zai-org/GLM-5.3": {
+      "input": "0.980000",
+      "output": "3.080000",
+      "cached_input": "0.180000"
+    },
+    "sail/zai-org/GLM-5.3-Flash": {
+      "input": "0.110000",
+      "output": "0.350000",
+      "cached_input": "0.020000"
+    },
     "sambanova/DeepSeek-R1": {
       "input": "5.000000",
       "output": "7.000000"
@@ -13194,6 +11612,26 @@
       "input": "0.000000",
       "output": "0.000000",
       "cached_input": "0.000000"
+    },
+    "scaledown/classify": {
+      "input": "0.050000",
+      "output": "0.000000"
+    },
+    "scaledown/compress": {
+      "input": "0.050000",
+      "output": "0.000000"
+    },
+    "scaledown/decisions": {
+      "input": "0.050000",
+      "output": "0.000000"
+    },
+    "scaledown/extract": {
+      "input": "0.050000",
+      "output": "0.000000"
+    },
+    "scaledown/summarize": {
+      "input": "0.050000",
+      "output": "0.000000"
     },
     "scaleway/BAAI/bge-multilingual-gemma2": {
       "input": "0.100000",
@@ -13355,15 +11793,69 @@
       "input": "0.720000",
       "output": "0.720000"
     },
+    "strands_decider/strands-decider-2B-hobson-v19": {
+      "input": "0.000000",
+      "output": "0.000000"
+    },
     "tencent/deepseek-v4-flash": {
       "input": "0.140000",
       "output": "0.280000",
       "cached_input": "0.002800"
     },
     "tencent/deepseek-v4-pro": {
-      "input": "0.435000",
-      "output": "0.870000",
-      "cached_input": "0.003625"
+      "input": "1.740000",
+      "output": "3.480000",
+      "cached_input": "0.145000"
+    },
+    "tencent/deepseek-v4-pro-0813": {
+      "input": "1.320000",
+      "output": "3.960000",
+      "cached_input": "0.044000"
+    },
+    "tencent/deepseek-v4.1-flash": {
+      "input": "0.300000",
+      "output": "1.200000",
+      "cached_input": "0.006000"
+    },
+    "tencent/glm-5.2": {
+      "input": "1.400000",
+      "output": "4.400000",
+      "cached_input": "0.260000"
+    },
+    "tencent/glm-5.3": {
+      "input": "1.400000",
+      "output": "4.400000",
+      "cached_input": "0.260000"
+    },
+    "tencent/glm-5.3-flash": {
+      "input": "0.150000",
+      "output": "0.500000",
+      "cached_input": "0.030000"
+    },
+    "tencent/glm-5.3-flashx": {
+      "input": "0.370000",
+      "output": "1.250000",
+      "cached_input": "0.075000"
+    },
+    "tencent/kimi-k2.7-code": {
+      "input": "0.950000",
+      "output": "4.000000",
+      "cached_input": "0.190000"
+    },
+    "tencent/kimi-k2.7-code-highspeed": {
+      "input": "1.900000",
+      "output": "8.000000",
+      "cached_input": "0.380000"
+    },
+    "tencent/kimi-k2.8-preview": {
+      "input": "1.000000",
+      "output": "4.000000",
+      "cached_input": "0.250000"
+    },
+    "tencent/kimi-k3": {
+      "input": "3.000000",
+      "output": "15.000000",
+      "cached_input": "0.300000"
     },
     "tencent/minimax-m3": {
       "input": "0.300000",
@@ -13623,8 +12115,12 @@
       "cached_input": "0.250000"
     },
     "together_ai/Qwen/Qwen3.8-Flash": {
-      "input": "0.090000",
-      "output": "0.282000"
+      "input": "0.150000",
+      "output": "0.470000"
+    },
+    "together_ai/Salesforce/Llama-Rank-V1": {
+      "input": "0.100000",
+      "output": "0.000000"
     },
     "together_ai/arcee-ai/trinity-mini": {
       "input": "0.045000",
@@ -13633,10 +12129,6 @@
     "together_ai/arize-ai/qwen-2-1.5b-instruct": {
       "input": "0.100000",
       "output": "0.100000"
-    },
-    "together_ai/baai/bge-base-en-v1.5": {
-      "input": "0.008000",
-      "output": "0.000000"
     },
     "together_ai/deepseek-ai/DeepSeek-R1-0528": {
       "input": "3.000000",
@@ -13725,6 +12217,10 @@
       "input": "0.880000",
       "output": "0.880000"
     },
+    "together_ai/meta-llama/Meta-Llama-3.1-8B": {
+      "input": "0.200000",
+      "output": "0.200000"
+    },
     "together_ai/meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo": {
       "input": "0.180000",
       "output": "0.180000"
@@ -13805,8 +12301,7 @@
     },
     "together_ai/together/Tev1-4B-experimental": {
       "input": "0.042000",
-      "output": "0.000000",
-      "cached_input": "0.042000"
+      "output": "0.000000"
     },
     "together_ai/zai-org/GLM-4.5-Air-FP8": {
       "input": "0.200000",
@@ -13861,6 +12356,11 @@
       "output": "60.000000",
       "cached_input": "0.300000"
     },
+    "us-gov.anthropic.claude-haiku-5-5": {
+      "input": "0.120000",
+      "output": "0.600000",
+      "cached_input": "0.012000"
+    },
     "us-gov.anthropic.claude-opus-4-8": {
       "input": "6.000000",
       "output": "30.000000",
@@ -13885,6 +12385,11 @@
       "input": "2.400000",
       "output": "12.000000",
       "cached_input": "0.240000"
+    },
+    "us-gov.anthropic.claude-sonnet-5-5": {
+      "input": "2.400000",
+      "output": "12.000000",
+      "cached_input": "0.120000"
     },
     "us-gov.nvidia.nemotron-nano-12b-v2": {
       "input": "0.240000",
@@ -13921,9 +12426,9 @@
       "cached_input": "0.082500"
     },
     "us.amazon.nova-2-pro-preview-20251202-v1:0": {
-      "input": "2.187500",
-      "output": "17.500000",
-      "cached_input": "0.546875"
+      "input": "1.375000",
+      "output": "11.000000",
+      "cached_input": "0.343750"
     },
     "us.amazon.nova-lite-v1:0": {
       "input": "0.060000",
@@ -13979,6 +12484,11 @@
       "input": "1.100000",
       "output": "5.500000",
       "cached_input": "0.110000"
+    },
+    "us.anthropic.claude-haiku-5-5": {
+      "input": "0.110000",
+      "output": "0.550000",
+      "cached_input": "0.011000"
     },
     "us.anthropic.claude-mythos-5": {
       "input": "11.000000",
@@ -14055,6 +12565,11 @@
       "output": "11.000000",
       "cached_input": "0.220000"
     },
+    "us.anthropic.claude-sonnet-5-5": {
+      "input": "2.200000",
+      "output": "11.000000",
+      "cached_input": "0.110000"
+    },
     "us.cohere.embed-v4:0": {
       "input": "0.120000",
       "output": "0.000000"
@@ -14068,20 +12583,20 @@
       "output": "1.850000"
     },
     "us.meta.llama3-1-405b-instruct-v1:0": {
-      "input": "5.320000",
-      "output": "16.000000"
+      "input": "2.400000",
+      "output": "2.400000"
     },
     "us.meta.llama3-1-70b-instruct-v1:0": {
-      "input": "0.990000",
-      "output": "0.990000"
+      "input": "0.720000",
+      "output": "0.720000"
     },
     "us.meta.llama3-1-8b-instruct-v1:0": {
       "input": "0.220000",
       "output": "0.220000"
     },
     "us.meta.llama3-2-11b-instruct-v1:0": {
-      "input": "0.350000",
-      "output": "0.350000"
+      "input": "0.160000",
+      "output": "0.160000"
     },
     "us.meta.llama3-2-1b-instruct-v1:0": {
       "input": "0.100000",
@@ -14092,8 +12607,8 @@
       "output": "0.150000"
     },
     "us.meta.llama3-2-90b-instruct-v1:0": {
-      "input": "2.000000",
-      "output": "2.000000"
+      "input": "0.720000",
+      "output": "0.720000"
     },
     "us.meta.llama3-3-70b-instruct-v1:0": {
       "input": "0.720000",
@@ -14156,6 +12671,11 @@
       "output": "11.000000",
       "cached_input": "0.220000"
     },
+    "us.openai.gpt-6.1-sol": {
+      "input": "2.200000",
+      "output": "11.000000",
+      "cached_input": "0.110000"
+    },
     "us.writer.palmyra-x4-v1:0": {
       "input": "2.500000",
       "output": "10.000000"
@@ -14168,6 +12688,16 @@
       "input": "2.200000",
       "output": "6.600000",
       "cached_input": "0.550000"
+    },
+    "us.xai.grok-4.7": {
+      "input": "2.200000",
+      "output": "6.600000",
+      "cached_input": "0.550000"
+    },
+    "us.zai.glm-5.3": {
+      "input": "1.848000",
+      "output": "5.808000",
+      "cached_input": "0.343200"
     },
     "v0/v0-1.0-md": {
       "input": "3.000000",
@@ -14676,6 +13206,16 @@
       "output": "5.000000",
       "cached_input": "0.100000"
     },
+    "vertex_ai/claude-haiku-5-5": {
+      "input": "0.100000",
+      "output": "0.500000",
+      "cached_input": "0.010000"
+    },
+    "vertex_ai/claude-haiku-5-5@default": {
+      "input": "0.100000",
+      "output": "0.500000",
+      "cached_input": "0.010000"
+    },
     "vertex_ai/claude-opus-4-5": {
       "input": "5.000000",
       "output": "25.000000",
@@ -14760,6 +13300,16 @@
       "input": "2.000000",
       "output": "10.000000",
       "cached_input": "0.200000"
+    },
+    "vertex_ai/claude-sonnet-5-5": {
+      "input": "2.000000",
+      "output": "10.000000",
+      "cached_input": "0.100000"
+    },
+    "vertex_ai/claude-sonnet-5-5@default": {
+      "input": "2.000000",
+      "output": "10.000000",
+      "cached_input": "0.100000"
     },
     "vertex_ai/claude-sonnet-5@default": {
       "input": "2.000000",
@@ -14938,9 +13488,27 @@
       "output": "7.500000",
       "cached_input": "0.150000"
     },
+    "vertex_ai/gemini-3.8-flash-lite-tts": {
+      "input": "0.500000",
+      "output": "6.000000"
+    },
+    "vertex_ai/gemini-3.8-flash-tts": {
+      "input": "0.500000",
+      "output": "9.000000"
+    },
     "vertex_ai/gemini-3.8-live": {
       "input": "0.750000",
       "output": "4.500000"
+    },
+    "vertex_ai/gemini-4-argon": {
+      "input": "2.000000",
+      "output": "10.000000",
+      "cached_input": "0.100000"
+    },
+    "vertex_ai/gemini-4-argon-cyber-permissive": {
+      "input": "4.000000",
+      "output": "20.000000",
+      "cached_input": "0.200000"
     },
     "vertex_ai/gemini-embedding-2": {
       "input": "0.200000",
@@ -14950,6 +13518,11 @@
       "input": "0.200000",
       "output": "0.000000"
     },
+    "vertex_ai/gemini-nano-banana-2.1": {
+      "input": "1.500000",
+      "output": "7.500000",
+      "cached_input": "0.150000"
+    },
     "vertex_ai/gemini-omni-1.1-flash": {
       "input": "1.500000",
       "output": "9.000000"
@@ -14957,6 +13530,11 @@
     "vertex_ai/gemini-omni-1.1-flash-preview": {
       "input": "1.500000",
       "output": "9.000000"
+    },
+    "vertex_ai/gemini-robotics-er-2-preview": {
+      "input": "1.000000",
+      "output": "5.000000",
+      "cached_input": "0.100000"
     },
     "vertex_ai/gemma-4-26b-a4b-it": {
       "input": "0.150000",
@@ -15136,6 +13714,38 @@
       "input": "0.150000",
       "output": "1.200000"
     },
+    "vertex_ai/semantic-ranker-default": {
+      "input": "0.000000",
+      "output": "0.000000"
+    },
+    "vertex_ai/semantic-ranker-default-002": {
+      "input": "0.000000",
+      "output": "0.000000"
+    },
+    "vertex_ai/semantic-ranker-default-003": {
+      "input": "0.000000",
+      "output": "0.000000"
+    },
+    "vertex_ai/semantic-ranker-default-004": {
+      "input": "0.000000",
+      "output": "0.000000"
+    },
+    "vertex_ai/semantic-ranker-default@latest": {
+      "input": "0.000000",
+      "output": "0.000000"
+    },
+    "vertex_ai/semantic-ranker-fast": {
+      "input": "0.000000",
+      "output": "0.000000"
+    },
+    "vertex_ai/semantic-ranker-fast-004": {
+      "input": "0.000000",
+      "output": "0.000000"
+    },
+    "vertex_ai/semantic-ranker-fast@latest": {
+      "input": "0.000000",
+      "output": "0.000000"
+    },
     "vertex_ai/xai/grok-4.1-fast-non-reasoning": {
       "input": "0.200000",
       "output": "0.500000",
@@ -15166,6 +13776,11 @@
       "output": "6.000000",
       "cached_input": "0.500000"
     },
+    "vertex_ai/xai/grok-4.7": {
+      "input": "2.000000",
+      "output": "6.000000",
+      "cached_input": "0.500000"
+    },
     "vertex_ai/zai-org/glm-4.7-maas": {
       "input": "0.600000",
       "output": "2.200000",
@@ -15191,6 +13806,10 @@
       "output": "2.156250",
       "cached_input": "0.086250"
     },
+    "voyage/rerank-1": {
+      "input": "0.050000",
+      "output": "0.000000"
+    },
     "voyage/rerank-2": {
       "input": "0.050000",
       "output": "0.000000"
@@ -15212,6 +13831,10 @@
       "output": "0.000000"
     },
     "voyage/rerank-3-lite": {
+      "input": "0.020000",
+      "output": "0.000000"
+    },
+    "voyage/rerank-lite-1": {
       "input": "0.020000",
       "output": "0.000000"
     },
@@ -15276,6 +13899,10 @@
       "output": "0.000000"
     },
     "voyage/voyage-large-2": {
+      "input": "0.120000",
+      "output": "0.000000"
+    },
+    "voyage/voyage-large-2-instruct": {
       "input": "0.120000",
       "output": "0.000000"
     },
