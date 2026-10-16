@@ -17,9 +17,15 @@ back as if it were page content. The gateway turns the raised error into a tool
 error, so the run's audit shows the call failed instead of a false success.
 """
 
+import base64
+import io
+import ipaddress
 import logging
+import socket
+from urllib.parse import urljoin, urlsplit
 
 import httpx
+from PyPDF2 import PdfReader
 
 from conversations.constants import Provider
 from core.services.api_key_service import get_provider_api_key_sync
@@ -119,6 +125,61 @@ def _probe_reason(url):
     return None
 
 
+_PDF_MAX_BYTES = 20 * 1024 * 1024
+_PDF_MAX_REDIRECTS = 3
+
+
+def _is_public_url(url):
+    """True when every address the URL's host resolves to is on the public internet."""
+    parts = urlsplit(url)
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        return False
+    try:
+        infos = socket.getaddrinfo(parts.hostname, parts.port or None)
+    except OSError:
+        return False
+    return bool(infos) and all(
+        ipaddress.ip_address(info[4][0]).is_global for info in infos
+    )
+
+
+def _direct_pdf_text(url):
+    """Download a public PDF and extract its text, or return "".
+
+    The reader skips some large official PDFs that a plain download serves fine.
+    Each hop must resolve to a public address, so this never reaches DARE's own
+    network.
+    """
+    for _ in range(_PDF_MAX_REDIRECTS + 1):
+        if not _is_public_url(url):
+            return ""
+        try:
+            with httpx.stream(
+                "GET", url, timeout=20, headers={"User-Agent": _PROBE_UA}
+            ) as resp:
+                if resp.is_redirect and resp.headers.get("location"):
+                    url = urljoin(url, resp.headers["location"])
+                    continue
+                if resp.status_code != 200 or "pdf" not in resp.headers.get(
+                    "content-type", ""
+                ):
+                    return ""
+                body = bytearray()
+                for chunk in resp.iter_bytes():
+                    body.extend(chunk)
+                    if len(body) > _PDF_MAX_BYTES:
+                        return ""
+        except httpx.HTTPError as exc:
+            logger.info("Direct PDF download failed for %s: %s", url, exc)
+            return ""
+        try:
+            return _pdf_bytes_text(bytes(body))
+        except Exception as exc:  # noqa: BLE001 - unreadable PDF; report as a miss
+            logger.info("Direct PDF extraction failed for %s: %s", url, exc)
+            return ""
+    return ""
+
+
 def _fetch_result(message):
     """The web_fetch tool-result block as a plain dict, or None. Dicts (via
     model_dump) navigate reliably across SDK versions; nested SDK attribute
@@ -130,15 +191,14 @@ def _fetch_result(message):
     return None
 
 
+def _pdf_bytes_text(data):
+    reader = PdfReader(io.BytesIO(data))
+    return "\n".join((page.extract_text() or "") for page in reader.pages).strip()
+
+
 def _pdf_text(b64_data):
     """Extract text from a base64 PDF the fetch tool returned (no model needed)."""
-    import base64
-    import io
-
-    from PyPDF2 import PdfReader
-
-    reader = PdfReader(io.BytesIO(base64.b64decode(b64_data)))
-    return "\n".join((page.extract_text() or "") for page in reader.pages).strip()
+    return _pdf_bytes_text(base64.b64decode(b64_data))
 
 
 def _document_text(result):
@@ -200,6 +260,9 @@ def fetch_page(url):
 
     result = _fetch_result(message)
     if result is None:
+        text = _direct_pdf_text(url)
+        if text:
+            return text[:MAX_CHARS]
         raise PageUnreadable(f"The reader did not fetch {url}.")
 
     content = result.get("content") or {}
@@ -212,7 +275,7 @@ def fetch_page(url):
             "tool or system error; try a different source)."
         )
 
-    text = _document_text(result)
+    text = _document_text(result) or _direct_pdf_text(url)
     if not text:
         # The reader hides the real HTTP status (it returns empty text for a
         # 403, a 404, and a JS-only 200 alike). Probe for the true reason so the

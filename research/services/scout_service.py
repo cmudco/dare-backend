@@ -1,169 +1,85 @@
 """
-Scout delegation helpers — how DARE asks Hermes to find sources and how it reads
-the result back.
+A Scout run: search, read and stage sources for one task from a chat thread.
 
-The contract: DARE sends the task as the run `input` and the soul file + a Scout
-brief as `instructions`. Scout uses Hermes's `web_search` tool and returns a single
-JSON object of source candidates, which DARE parses into staging items.
+The Scout searches with DARE's tools and the user's connected ones, stages
+each source with ``stage_finding`` as it works and reports what memory changed
+with ``report_learning``; its closing reply is a short summary for the audit.
 """
 
-import json
 import logging
-import re
+
+from django.conf import settings
+
+from research.models import ResearchAgentRun, ResearchStagingItem
+from research.services.profile_service import hermes_for
+from research.services.prompt_builder import scout_prompt
+from research.services.run_service import (
+    RunStream,
+    cancelled_before_start,
+    complete,
+    set_detail,
+    start,
+)
 
 logger = logging.getLogger(__name__)
 
-SCOUT_BRIEF = """You are Scout, a research source-finder working under the scholar's standards above.
-
-The scholar's request may be informal, terse, or underspecified — that is fine
-and expected. First restate it to yourself as a precise research question that
-preserves their intent (use the project's research question and approved
-knowledge for context), then execute the workflow for that question. Never
-refuse or stall because a request is vague; interpret it generously. The one
-exception: if the request carries no research intent at all (a greeting, small
-talk, a test message), do not search — return {"stagingItems": []} immediately.
-
-Workflow — search first, then READ before you stage:
-1. SEARCH. The scholar's connected research tools (Scite, Consensus, Scholar)
-   are run for you inside DARE — when present, their results are already in your
-   input. Use those first and PRIORITIZE peer-reviewed scholarly results over
-   generic web snippets, drawing candidates from EVERY tool that returned
-   results. For coverage they lack, run `mcp__dare__web_search` (older runtimes
-   name it `mcp_dare_web_search`; DARE's own web search — it returns result
-   links) AT MOST %(max_searches)d times. Do NOT use
-   any runtime-native web_search / web_extract / browser tool, and do NOT try to
-   call consensus__search or scite__search_literature directly — the scholarly
-   tools run only server-side under the scholar's account, never from here.
-2. READ before you stage. Fetch a promising source's page with the `fetch_page`
-   MCP tool (for papers, the DOI link: https://doi.org/<doi>) and quote the
-   fetched text in `citationContext`. If the full text cannot be fetched
-   (paywall, fetch error) but the credentialed results gave you the paper's
-   abstract, you MAY ground `citationContext` in that published abstract — it
-   is the authors' own summary, not a search snippet — and judge the evidence
-   from it. Only fall to `evidenceLabel: "unverifiable"` with low confidence
-   when you have neither fetched text nor an abstract. Fetch AT MOST
-   %(max_candidates)d pages, and read a page ONLY with `fetch_page`
-   (`mcp__dare__fetch_page`, or `mcp_dare_fetch_page` on older runtimes)
-   — never `web_extract` or a browser tool, which bypass DARE's audited gateway.
-3. Never fabricate — only include sources you actually found, with bibliographic
-   details exactly as published, including `doi` whenever known.
-
-Return ONLY a single JSON object — no prose, no markdown code fences — shaped exactly:
-{"stagingItems": [
-  {
-    "title": "string",
-    "authors": "string, semicolon-separated",
-    "year": 2024,
-    "venue": "string",
-    "doi": "string or empty",
-    "url": "string",
-    "rationale": "why this source matters for the task",
-    "confidence": 0.0,
-    "confidenceRationale": "why this confidence level",
-    "evidenceLabel": "supporting | disputing | partial | tangential | unverifiable",
-    "citationContext": "a short relevant quote/context when available",
-    "sourceTool": "which search surfaced this candidate: scite | consensus | web"
-  }
-]}
-Stage as many genuinely relevant sources as the evidence justifies, up to
-%(max_candidates)d — do not pad to reach the cap, and do not drop a strong
-source just to stay short. `confidence` is a number from 0.0 to 1.0."""
+_SEARCHES = ("web_search", "search_papers")
 
 
-def build_scout_instructions(soul_content, max_candidates=4, max_searches=4):
-    """Compose the run instructions: the soul file (standards) + the Scout brief."""
-    parts = []
-    if soul_content and soul_content.strip():
-        parts.append("# Research standards (soul file)\n" + soul_content.strip())
-    parts.append(
-        SCOUT_BRIEF % {"max_candidates": max_candidates, "max_searches": max_searches}
+def _empty_detail(run, counts, output):
+    """Why a Scout staged nothing, in the user's terms."""
+    set_aside = (run.learning or {}).get("setAside") or []
+    refused = [
+        r for r in set_aside if r.get("reason", "").startswith("Failed source check")
+    ]
+    if not counts["searched"] and not counts["read"]:
+        return "Found nothing: the Scout never reached DARE's search tools."
+    if refused:
+        return f"Nothing staged: {len(refused)} source(s) failed DARE's source check."
+    if set_aside:
+        return f"Nothing staged: set aside {len(set_aside)} source(s) per your preferences."
+    detail = (
+        f"Searched {counts['searched']}x, read {counts['read']} pages, "
+        "found nothing relevant."
     )
-    # Live tool surface (Path B): the gateway exposes only DARE-owned,
-    # credential-free builtins. The scholar's research tools run server-side
-    # (their results are injected into the input), so they aren't callable here.
-    parts.append(
-        "TOOLS FOR THIS RUN: mcp__dare__web_search and mcp__dare__fetch_page "
-        "only (older runtimes name these mcp_dare_web_search / "
-        "mcp_dare_fetch_page) — "
-        "DARE's own web search and reader. Do NOT use any runtime-native "
-        "web_search, web_extract, or browser tool. The scholar's research tools "
-        "are not callable from here — their results are already in your input."
-    )
-    return "\n\n".join(parts)
+    snippet = " ".join((output or "").split())[:140]
+    return f"{detail} Scout said: “{snippet}…”" if snippet else detail
 
 
-def find_json_object(text, required_key=None):
-    """
-    Scan for the first complete JSON object in `text` (optionally one that has
-    `required_key`), tolerating prose around it AND trailing garbage after it —
-    models sometimes echo the contract template after the real object, which
-    breaks whole-string parsing and any greedy first-{-to-last-} match.
-    """
-    decoder = json.JSONDecoder()
-    index = text.find("{")
-    fallback = None
-    while index != -1:
-        try:
-            obj, _ = decoder.raw_decode(text, index)
-        except json.JSONDecodeError:
-            index = text.find("{", index + 1)
-            continue
-        if isinstance(obj, dict):
-            if required_key is None or required_key in obj:
-                return obj
-            if fallback is None:
-                fallback = obj
-        index = text.find("{", index + 1)
-    return fallback
+def run_scout(run_id):
+    run = ResearchAgentRun.objects.filter(id=run_id).first()
+    if run is None or cancelled_before_start(run):
+        return
+    hermes = hermes_for(run.project)
+    set_detail(run, "Starting Scout…")
+    if not start(run, hermes, scout_prompt(run)):
+        return
 
+    counts = {"searched": 0, "read": 0}
 
-def _scan_objects(text):
-    """Yield every complete JSON object found anywhere in `text`."""
-    decoder = json.JSONDecoder()
-    index = text.find("{")
-    while index != -1:
-        try:
-            obj, end = decoder.raw_decode(text, index)
-        except json.JSONDecodeError:
-            index = text.find("{", index + 1)
-            continue
-        yield obj
-        index = text.find("{", end)
-
-
-def parse_staging_items(output):
-    """
-    Extract the `stagingItems` array from Scout's output, tolerating stray prose,
-    markdown fences, and trailing junk. Returns a list of dicts (empty if
-    nothing parseable).
-    """
-    if not output:
-        return []
-    text = output.strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?", "", text).strip()
-        text = re.sub(r"```$", "", text).strip()
-
-    data = find_json_object(text, required_key="stagingItems")
-    if isinstance(data, dict) and "stagingItems" in data:
-        items = data.get("stagingItems", [])
-        return (
-            [i for i in items if isinstance(i, dict)] if isinstance(items, list) else []
+    def on_tool(call):
+        name = call.tool.removeprefix("mcp__dare__")
+        if name in _SEARCHES or "__" in name:
+            counts["searched"] += 1
+        elif name == "fetch_page":
+            counts["read"] += 1
+        staged = ResearchStagingItem.active_objects.filter(run=run).count()
+        set_detail(
+            run,
+            f"{counts['searched']} searches · {counts['read']} pages read · "
+            f"{staged} staged",
         )
 
-    # Salvage: a malformed envelope (e.g. the model never closed the outer
-    # brace) still contains complete, individually-parseable item objects.
-    if '"stagingItems"' in text:
-        items = [
-            o
-            for o in _scan_objects(text)
-            if isinstance(o, dict) and o.get("title") and "stagingItems" not in o
-        ]
-        if items:
-            logger.warning(
-                "Scout envelope was malformed; salvaged %d item(s)", len(items)
-            )
-            return items
-
-    logger.warning("Scout output was not JSON-parseable")
-    return []
+    stream = RunStream(run, hermes, on_tool)
+    for _ in stream:
+        pass
+    output = stream.result(wait_seconds=settings.HERMES_RUN_WAIT_SECONDS)
+    if output is None:
+        return
+    staged = ResearchStagingItem.active_objects.filter(run=run).count()
+    detail = (
+        f"Staged {staged} finding{'s' if staged != 1 else ''}."
+        if staged
+        else _empty_detail(run, counts, output)
+    )
+    complete(run, hermes, detail, output)

@@ -7,9 +7,10 @@ import json
 import logging
 import zipfile
 
+from asgiref.sync import sync_to_async
+from django.db.models import F
 from django.http import HttpResponse, StreamingHttpResponse
 from django.shortcuts import get_object_or_404
-from django.utils import timezone
 from djangorestframework_camel_case.render import CamelCaseJSONRenderer
 from rest_framework import mixins, status, viewsets
 from rest_framework.permissions import IsAuthenticated
@@ -20,61 +21,53 @@ from rest_framework.views import APIView
 from common.permissions import IsResearcherOrAbove
 from research.api.permissions import IsResearchFeatureEnabled
 from research.api.serializers import (
+    ProjectMemoryDocumentSerializer,
     ResearchAgentRunDetailSerializer,
-    ResearchAgentRunSerializer,
-    ResearchChatMessageSerializer,
     ResearchProjectDetailSerializer,
     ResearchProjectSerializer,
     ResearchStagingItemSerializer,
+    ResearchThreadSerializer,
+    soul_payload,
+    thread_detail,
 )
-from research.constants import (
-    AgentRunStatus,
-    AgentToolCallStatus,
-    ChatMessageRole,
-    MemoryProposalStatus,
-    ProjectMemorySource,
-    ResearchSessionMode,
-    SoulFileOrigin,
-    StagingItemStatus,
-)
+from research.constants import AgentRole, ResearchSessionMode, ReviewReasonTag
 from research.models import (
     ResearchAgentRun,
-    ResearchChatMessage,
     ResearchKnowledgeItem,
-    ResearchAgentMemorySnapshot,
-    ResearchProject,
     ResearchMemoryProposal,
+    ResearchProcedure,
+    ResearchProject,
     ResearchProjectMemory,
     ResearchSession,
     ResearchStagingItem,
     ResearchThesisSource,
-    SoulFile,
-    SoulFileVersion,
 )
-from research.services import (
-    get_hermes_service,
-    request_run_cancellation,
-    safe_hermes_usage,
-)
+from research.services.artifact_service import request_artifact
+from research.services.cancellation_service import request_run_cancellation
+from research.services.chat_service import TurnStartFailed, start_turn, stream_turn
+from research.services.cost_service import SpendCapReached, check_spend_cap
+from research.services.critic_service import request_critic
 from research.services.graph_service import build_evidence_graph
-from research.services.profile_service import (
-    absorb_user_memory,
-    forget_project_memory,
-    propose_project_memory,
+from research.services.learning_service import (
+    ProposalConflict,
+    ProposalInvalid,
+    decide_proposal,
+    learning_overview,
+    prepare_profile,
+    proposal_payload,
+    save_project_memory,
+    save_soul,
+    sync_pending_learning,
 )
 from research.services.okf_service import (
     build_okf_bundle,
     build_okf_view,
     bundle_filename,
 )
-from research.tasks import (
-    _knowledge_block,
-    _project_memory_block,
-    _record_tool_call,
-    run_artifact_job,
-    run_critic_job,
-    run_scout_job,
-)
+from research.services.profile_service import profile_name_for
+from research.services.prompt_builder import profile_files, role_briefs
+from research.services.staging_service import ReviewInvalid, review_item
+from research.services.thread_service import redirect_scout, thread_has_active_turn
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +120,7 @@ class ResearchProjectViewSet(
         return ResearchProject.active_objects.filter(user=self.request.user)
 
     def perform_create(self, serializer):
-        serializer.save(user=self.request.user)
+        prepare_profile(serializer.save(user=self.request.user))
 
 
 class ServerSentEventRenderer(BaseRenderer):
@@ -144,512 +137,221 @@ def _sse(payload):
     return f"data: {json.dumps(payload)}\n\n"
 
 
-# Standing chat framing, layered over the soul file: chat is for thinking, the
-# Artifacts tab is for producing — large payloads don't belong in a transcript.
-CHAT_BRIEF = (
-    "You are the project's research assistant in hands-on chat — think live "
-    "with the scholar under the standards above. If they ask you to produce a "
-    "renderable artifact (a diagram, deck, document, or figure), give at most "
-    "a brief sketch of what it could contain and point them to the Artifacts "
-    "tab, which generates and saves artifacts properly — do not paste large "
-    "artifact payloads into the chat. "
-    "Be honest about tool failures: if a tool errors, tell the scholar plainly "
-    "what failed and why (quota exhausted, auth, not found, blocked/paywalled) "
-    "instead of guessing or blaming the wrong layer, and do not retry a tool "
-    "that returned a quota or auth error — switch approaches or say what you need. "
-    "When you search or read the web, use mcp__dare__web_search and "
-    "mcp__dare__fetch_page only (older runtimes name these mcp_dare_web_search / "
-    "mcp_dare_fetch_page) — DARE's own audited web search and reader; never a "
-    "runtime-native web_search, web_extract, or browser tool."
-)
-
-# Memory discipline. The runtime keeps two operational files (MEMORY.md for the
-# project, USER.md for the person) that persist across sessions. They stayed
-# empty because the `memory` toolset was not in platform_toolsets.api_server —
-# the agent had no tool to write with. With it enabled, the agent still must not
-# use them as a back door around the review gate: a research CLAIM only becomes
-# durable when the scholar approves it into ResearchKnowledgeItem. These files
-# are for working context, not findings.
-MEMORY_BRIEF = (
-    "MEMORY DISCIPLINE. You have a `memory` tool with two durable stores that "
-    "outlive this session:\n"
-    "- project memory (MEMORY.md): stable facts about THIS project — its "
-    "corpus and where it lives, the working thesis, methodological choices and "
-    "protocol rules, decisions already taken and rejected directions, recurring "
-    "collaborators.\n"
-    "- user memory (USER.md): stable facts about THIS scholar — their name, "
-    "field and seniority, how they like answers delivered, tools and formats "
-    "they prefer, constraints such as deadlines.\n"
-    "USER.md is SHARED across every project this scholar owns, so only put a "
-    "fact there if it stays true in a project you know nothing about. Their "
-    "name and how they like answers travel; a collaborator, an advisor, a "
-    "deadline or a corpus belongs to the project that has it, even when the "
-    "sentence is phrased about the scholar. 'My advisor is Dr. X' in a project "
-    "means Dr. X advises THIS project — that is project memory, not user "
-    "memory. When in doubt, write it to the project: a fact in the wrong "
-    "project is noise, a fact in every project is noise everywhere.\n"
-    "Write when a fact is durable and would be expensive to re-derive next "
-    "session. Do NOT write transient chatter, anything already in the approved "
-    "knowledge base, or a research finding — findings become durable only "
-    "through the scholar's review gate, never by you writing them to memory. "
-    "Store ONE fact per entry. Never combine an identity fact, a preference and "
-    "a project fact in a single entry: `replace` swaps a whole matched entry, so "
-    "a combined entry silently loses its other facts the moment any one of them "
-    "changes. Name, affiliation, delivery preference and corpus size are four "
-    "entries, not one.\n"
-    "When the scholar contradicts something, replace only the entry that is "
-    "wrong, and re-add any other fact that entry happened to carry. After a "
-    "correction, confirm what is still remembered, not just what changed. "
-    "Never store secrets, credentials or personal data the scholar has not "
-    "chosen to share. Say in one short line what you saved."
-)
+_DONE = object()
 
 
-def _recent_transcript(session, max_turns=12, max_chars=6000):
-    """The running chat transcript (prior turns) so the agent has verbatim memory
-    of THIS conversation. DARE owns the history, so we replay it rather than trust
-    the runtime's session summary, which drops specifics (the amnesia root cause)."""
-    msgs = list(
-        ResearchChatMessage.active_objects.filter(session=session).order_by(
-            "-created_at"
-        )[:max_turns]
-    )
-    msgs.reverse()
-    lines = [
-        f"{'Scholar' if m.role == ChatMessageRole.USER else 'You'}: {m.content}"
-        for m in msgs
-    ]
-    return "\n\n".join(lines)[-max_chars:]
+async def _async_chunks(chunks):
+    """Serve a blocking generator chunk by chunk under ASGI.
 
-
-def _chat_instructions(project, soul_content, history=""):
-    """Soul + chat framing + project context + the running conversation transcript."""
-    parts = [soul_content] if soul_content else []
-    parts.append(CHAT_BRIEF)
-    parts.append(MEMORY_BRIEF)
-    context = []
-    if project.question and project.question.strip():
-        context.append(
-            "The project's research question (what this project is about): "
-            + project.question.strip()
-        )
-    else:
-        context.append(
-            "This project has no research question set yet. If the scholar's "
-            "message implies a research topic, help them articulate and sharpen "
-            "it into one — never claim you have no idea what the project is about."
-        )
-    knowledge = _knowledge_block(project)
-    if knowledge:
-        context.append(f"The scholar's approved project knowledge so far:\n{knowledge}")
-    if context:
-        parts.append("# Project context\n" + "\n\n".join(context))
-    memory = _project_memory_block(project)
-    if memory:
-        parts.append(
-            "# Project memory (durable, DARE-owned — your persistent memory for "
-            "THIS project across sessions; rely on it)\n" + memory
-        )
-    if history:
-        parts.append(
-            "# Conversation so far (oldest first, most recent last)\n"
-            "This is the running transcript of THIS chat — it is your memory of the "
-            "conversation. Refer to it directly; never claim the chat just began.\n\n"
-            + history
-        )
-    return "\n\n".join(parts)
-
-
-class ResearchChatView(ResearchAPIView):
+    Django consumes a *sync* iterator in full before sending anything when it
+    runs under ASGI, which silently turned the SSE stream into one response at
+    the end. Pulling each chunk through sync_to_async keeps the ORM and the
+    blocking Hermes read in a sync thread while every event flushes as it comes.
     """
-    Hands-on chat for a project — one persistent chat session, backed by Hermes.
+    pull = sync_to_async(next)
+    while True:
+        chunk = await pull(chunks, _DONE)
+        if chunk is _DONE:
+            return
+        yield chunk
 
-    - GET  /api/research/projects/{id}/chat/  - the chat transcript
-    - POST /api/research/projects/{id}/chat/  - send a message; streams the
-      assistant reply back as SSE (proxying Hermes `message.delta` events).
+
+class ResearchThreadListView(ResearchAPIView):
+    """
+    A project's chat threads — the hub of research mode.
+
+    - GET  /api/research/projects/{id}/threads/  - threads, most recent first
+    - POST /api/research/projects/{id}/threads/  - start a thread {title?}
+    """
+
+    def get(self, request, project_id):
+        project = get_object_or_404(
+            ResearchProject.active_objects, id=project_id, user=request.user
+        )
+        threads = ResearchSession.active_objects.filter(
+            project=project, mode=ResearchSessionMode.CHAT
+        ).order_by(F("last_run_at").desc(nulls_last=True), "-created_at")
+        return Response(ResearchThreadSerializer(threads, many=True).data)
+
+    def post(self, request, project_id):
+        project = get_object_or_404(
+            ResearchProject.active_objects, id=project_id, user=request.user
+        )
+        title = str(request.data.get("title") or "").strip()[:255]
+        thread = ResearchSession.create_thread(project, request.user, title)
+        return Response(
+            ResearchThreadSerializer(thread).data, status=status.HTTP_201_CREATED
+        )
+
+
+def _owned_thread(request, thread_id):
+    return get_object_or_404(
+        ResearchSession.active_objects.select_related("project"),
+        id=thread_id,
+        mode=ResearchSessionMode.CHAT,
+        project__user=request.user,
+    )
+
+
+class ResearchThreadView(ResearchAPIView):
+    """
+    - GET   /api/research/threads/{id}/  - the thread: messages and events, its
+      Scouts, pending memory proposals, and whether an agent turn is live
+    - PATCH /api/research/threads/{id}/  - rename {title}
+    """
+
+    def get(self, request, thread_id):
+        thread = _owned_thread(request, thread_id)
+        sync_pending_learning(thread.project)
+        return Response(thread_detail(thread))
+
+    def patch(self, request, thread_id):
+        thread = _owned_thread(request, thread_id)
+        title = str(request.data.get("title") or "").strip()[:255]
+        if not title:
+            return Response(
+                {"error": "A non-empty 'title' is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        thread.title = title
+        thread.save(update_fields=["title", "updated_at"])
+        return Response(ResearchThreadSerializer(thread).data)
+
+
+class ResearchThreadMessageView(ResearchAPIView):
+    """
+    POST /api/research/threads/{id}/messages/ {message, mode?} — one scholar
+    turn; streams the agent's reply as SSE: ``delta`` / ``tool`` / ``done`` /
+    ``error``. ``mode: "scout"`` asks the agent to launch one Scout for the
+    message straight away, when it is a research request.
     """
 
     renderer_classes = [CamelCaseJSONRenderer, ServerSentEventRenderer]
 
-    def _get_project(self, request, project_id):
-        return get_object_or_404(
-            ResearchProject.active_objects, id=project_id, user=request.user
-        )
-
-    def get(self, request, project_id):
-        project = self._get_project(request, project_id)
-        session = ResearchSession.active_objects.filter(
-            project=project, mode=ResearchSessionMode.CHAT
-        ).first()
-        messages = (
-            ResearchChatMessage.active_objects.filter(session=session).order_by(
-                "created_at"
-            )
-            if session
-            else ResearchChatMessage.objects.none()
-        )
-        return Response(ResearchChatMessageSerializer(messages, many=True).data)
-
-    def post(self, request, project_id):
-        project = self._get_project(request, project_id)
-        message = (request.data.get("message") or "").strip()
+    def post(self, request, thread_id):
+        thread = _owned_thread(request, thread_id)
+        message = str(request.data.get("message") or "").strip()
         if not message:
             return Response(
                 {"error": "A non-empty 'message' is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
-        session = ResearchSession.get_or_create_chat_session(project, request.user)
-        # Capture the prior turns BEFORE recording this new message, so the agent
-        # gets verbatim conversation memory (fixes the "this chat just began" amnesia).
-        history = _recent_transcript(session)
-        soul = SoulFile.active_objects.filter(project=project).first()
-        soul_version = soul.current_version() if soul else None
-        soul_content = soul_version.content if soul_version else ""
-        soul_label = f"v{soul_version.version}" if soul_version else ""
-
-        run = ResearchAgentRun.objects.create(
-            session=session,
-            project=project,
-            user=request.user,
-            role="main-assistant",
-            mode=ResearchSessionMode.CHAT,
-            task=message,
-            status=AgentRunStatus.RUNNING,
-            soul_file_version=soul_label,
-            started_at=timezone.now(),
-        )
-        ResearchChatMessage.objects.create(
-            session=session,
-            project=project,
-            user=request.user,
-            role=ChatMessageRole.USER,
-            content=message,
-        )
-
-        hermes = get_hermes_service(project)
-        # Anchor: write DARE's soul into the gateway SOUL.md (read fresh each
-        # run); instructions remain a resilient fallback overlay.
-        hermes.provision_soul(soul_content)
+        if thread_has_active_turn(thread):
+            return Response(
+                {"error": "The agent is still replying in this thread."},
+                status=status.HTTP_409_CONFLICT,
+            )
         try:
-            started = hermes.start_run(
-                input_text=message,
-                instructions=_chat_instructions(project, soul_content, history=history),
-                session_id=session.hermes_session_id,
-                session_key=f"dare-proj{project.id}",
+            check_spend_cap(thread.project)
+        except SpendCapReached as exc:
+            return Response(
+                {"error": str(exc)}, status=status.HTTP_402_PAYMENT_REQUIRED
             )
-            hermes_run_id = started["run_id"]
-            logger.info(
-                "research.chat run %s started: project=%s session=%s "
-                "prior_turns=%s msg_chars=%s hermes_run=%s",
-                run.id,
-                project.id,
-                session.id,
-                (history.count("\n\n") + 1 if history else 0),
-                len(message),
-                hermes_run_id,
-            )
-        except Exception as exc:  # noqa: BLE001 - surface as a failed run
-            logger.error("research.chat run %s start_run failed: %s", run.id, exc)
-            run.status = AgentRunStatus.FAILED
-            run.error = str(exc)
-            run.completed_at = timezone.now()
-            run.save(update_fields=["status", "error", "completed_at", "updated_at"])
+        scout_now = request.data.get("mode") == "scout"
+        try:
+            run, hermes = start_turn(thread, request.user, message, scout_now=scout_now)
+        except TurnStartFailed as exc:
             return Response(
                 {"error": f"Could not start the agent run: {exc}"},
                 status=status.HTTP_502_BAD_GATEWAY,
             )
 
-        run.hermes_run_id = hermes_run_id
-        run.save(update_fields=["hermes_run_id", "updated_at"])
-
         def event_stream():
-            chunks = []
-            seen_ids = set()  # GatewayFetch rows already claimed by this run's audit
-            terminal_event = ""
-            stream_error = None
-            try:
-                for event in hermes.stream_events(hermes_run_id):
-                    event_type = event.get("event")
-                    if event_type == "message.delta":
-                        delta = event.get("delta", "")
-                        if delta:
-                            chunks.append(delta)
-                            yield _sse({"type": "delta", "delta": delta})
-                    elif event_type == "tool.started":
-                        yield _sse(
-                            {
-                                "type": "tool",
-                                "phase": "started",
-                                "tool": event.get("tool", ""),
-                            }
-                        )
-                    elif event_type == "tool.completed":
-                        # Same recorder as the delegated jobs: reads the outcome
-                        # from the captured GatewayFetch row (run-key first, then
-                        # in-order), so paywalls read as failures and no call
-                        # borrows another's reason.
-                        tool_name = event.get("tool", "")
-                        call = _record_tool_call(run, event, {}, seen_ids)
-                        is_error = call.status == AgentToolCallStatus.ERROR
-                        logger.info(
-                            "research.chat run %s tool %s -> %s%s",
-                            run.id,
-                            tool_name,
-                            "error" if is_error else "ok",
-                            f" ({call.error[:120]})" if call.error else "",
-                        )
-                        yield _sse(
-                            {
-                                "type": "tool",
-                                "phase": "completed",
-                                "tool": tool_name,
-                            }
-                        )
-                    elif event_type == "run.completed":
-                        terminal_event = event_type
-                        break
-                    elif event_type in {"run.failed", "run.cancelled"}:
-                        terminal_event = event_type
-                        break
-            except Exception as exc:  # noqa: BLE001 - verify instead of guessing
-                stream_error = exc
-                logger.error(
-                    "research.chat run %s stream failed: %s",
-                    run.id,
-                    exc,
-                    exc_info=True,
-                )
-
-            if stream_error or terminal_event != "run.completed" or not chunks:
-                try:
-                    terminal = hermes.get_run(hermes_run_id)
-                except Exception:  # noqa: BLE001 - preserve honest ambiguity
-                    run.status = AgentRunStatus.OUTCOME_UNKNOWN
-                    run.status_detail = (
-                        "Hermes outcome unconfirmed; terminal status is unavailable."
-                    )
-                    run.completed_at = None
-                    run.save(
-                        update_fields=[
-                            "status",
-                            "status_detail",
-                            "completed_at",
-                            "updated_at",
-                        ]
-                    )
-                    yield _sse(
-                        {
-                            "type": "error",
-                            "error": "The agent outcome could not be confirmed.",
-                        }
-                    )
-                    return
-
-                terminal_status = str(terminal.get("status") or "").lower()
-                if terminal_status == AgentRunStatus.COMPLETED:
-                    terminal_output = terminal.get("output")
-                    chunks = [
-                        terminal_output if isinstance(terminal_output, str) else ""
-                    ]
-                elif terminal_status == AgentRunStatus.FAILED:
-                    run.status = AgentRunStatus.FAILED
-                    run.status_detail = "Hermes confirmed that the chat run failed."
-                    run.error = "Hermes reported a failed run."
-                    run.completed_at = timezone.now()
-                    run.save(
-                        update_fields=[
-                            "status",
-                            "status_detail",
-                            "error",
-                            "completed_at",
-                            "updated_at",
-                        ]
-                    )
-                    yield _sse({"type": "error", "error": "The agent run failed."})
-                    return
-                elif terminal_status == AgentRunStatus.CANCELLED:
-                    run.status = AgentRunStatus.CANCELLED
-                    run.status_detail = (
-                        "Hermes confirmed that the chat run was cancelled."
-                    )
-                    run.completed_at = timezone.now()
-                    fields = ["status", "status_detail", "completed_at", "updated_at"]
-                    if (
-                        run.cancellation_requested_at
-                        and not run.cancellation_confirmed_at
-                    ):
-                        run.cancellation_confirmed_at = timezone.now()
-                        fields.append("cancellation_confirmed_at")
-                    usage = safe_hermes_usage(terminal.get("usage"))
-                    if usage:
-                        run.usage = usage
-                        fields.append("usage")
-                    run.save(update_fields=fields)
-                    yield _sse(
-                        {"type": "error", "error": "The agent run was cancelled."}
-                    )
-                    return
-                elif terminal_status in {
-                    AgentRunStatus.STARTED,
-                    AgentRunStatus.QUEUED,
-                    AgentRunStatus.RUNNING,
-                    AgentRunStatus.WAITING_FOR_APPROVAL,
-                    AgentRunStatus.STOPPING,
-                }:
-                    run.status = terminal_status
-                    run.status_detail = f"Hermes still reports {terminal_status}; terminal outcome is pending."
-                    run.completed_at = None
-                    run.save(
-                        update_fields=[
-                            "status",
-                            "status_detail",
-                            "completed_at",
-                            "updated_at",
-                        ]
-                    )
-                    yield _sse(
-                        {"type": "error", "error": "The agent run is still active."}
-                    )
-                    return
-                else:
-                    run.status = AgentRunStatus.OUTCOME_UNKNOWN
-                    run.status_detail = (
-                        "Hermes returned an unrecognized terminal status."
-                    )
-                    run.completed_at = None
-                    run.save(
-                        update_fields=[
-                            "status",
-                            "status_detail",
-                            "completed_at",
-                            "updated_at",
-                        ]
-                    )
-                    yield _sse(
-                        {
-                            "type": "error",
-                            "error": "The agent outcome could not be confirmed.",
-                        }
-                    )
-                    return
-
-            assistant_message = ResearchChatMessage.objects.create(
-                session=session,
-                project=project,
-                user=request.user,
-                role=ChatMessageRole.ASSISTANT,
-                content="".join(chunks),
-                run=run,
-            )
-            run.status = AgentRunStatus.COMPLETED
-            run.completed_at = timezone.now()
-            run.usage = hermes.fetch_usage(hermes_run_id)
-            run.save(update_fields=["status", "completed_at", "usage", "updated_at"])
-            logger.info(
-                "research.chat run %s completed: reply_chars=%s usage=%s",
-                run.id,
-                len("".join(chunks)),
-                run.usage,
-            )
-            session.last_run_at = timezone.now()
-            session.save(update_fields=["last_run_at", "updated_at"])
-            # Chat is where the agent most often learns something, and it does
-            # not go through tasks._finish — so raise the decision here too, or
-            # the Context badge would stay dark until someone went looking.
-            try:
-                propose_project_memory(project)
-            except Exception:  # noqa: BLE001 - never break a delivered reply
-                logger.warning(
-                    "Could not raise memory proposals for project %s",
-                    project.id,
-                    exc_info=True,
-                )
-            yield _sse(
-                {
-                    "type": "done",
-                    "messageId": assistant_message.id,
-                    "runId": run.id,
-                }
-            )
+            yield _sse({"type": "started", "runId": run.id})
+            for event in stream_turn(run, hermes):
+                yield _sse(event)
 
         response = StreamingHttpResponse(
-            event_stream(), content_type="text/event-stream"
+            _async_chunks(event_stream()), content_type="text/event-stream"
         )
         response["Cache-Control"] = "no-cache"
         response["X-Accel-Buffering"] = "no"
         return response
 
 
-class ResearchScoutView(ResearchAPIView):
+class ResearchProjectMemoryDocumentView(ResearchAPIView):
     """
-    Delegated Scout discovery for a project.
+    The project's MEMORY.md, edited as a document.
 
-    POST /api/research/projects/{id}/scout/ — creates a run and enqueues a
-    background job (runs are long: web search + synthesis), returning immediately
-    with the run id. The client polls GET /api/research/agent-runs/{id}/ for live
-    status; staged findings land in the Review Inbox when the run completes.
+    - GET /api/research/projects/{id}/memory/  - {entries: [...]}
+    - PUT /api/research/projects/{id}/memory/  - make memory exactly these
+      entries (the scholar is the author, so no proposal) and render the file
     """
 
-    def post(self, request, project_id):
+    def _project(self, request, project_id):
+        return get_object_or_404(
+            ResearchProject.active_objects, id=project_id, user=request.user
+        )
+
+    def get(self, request, project_id):
+        project = self._project(request, project_id)
+        return Response({"entries": ResearchProjectMemory.entries_for(project)})
+
+    def put(self, request, project_id):
+        project = self._project(request, project_id)
+        serializer = ProjectMemoryDocumentSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        entries = save_project_memory(
+            project, serializer.validated_data["entries"], request.user
+        )
+        return Response({"entries": entries})
+
+
+class ResearchPromptBriefsView(ResearchAPIView):
+    """GET /api/research/prompts/ — every role's brief, as each run gets it."""
+
+    def get(self, request):
+        return Response({"briefs": role_briefs()})
+
+
+class ResearchLearningView(ResearchAPIView):
+    """
+    GET /api/research/projects/{id}/learning/ — what the agent has learned and
+    how: approved memory per layer, procedures, pending proposals, the decision
+    timeline, and corrections per Scout run (the "is it getting better" chart).
+    """
+
+    def get(self, request, project_id):
         project = get_object_or_404(
             ResearchProject.active_objects, id=project_id, user=request.user
         )
-        task = (request.data.get("task") or request.data.get("query") or "").strip()
-        if not task:
+        return Response(learning_overview(project))
+
+
+class ResearchAgentRunRedirectView(ResearchAPIView):
+    """
+    POST /api/research/agent-runs/{id}/redirect/ {instruction} — stop a
+    thread's Scout and start a replacement that follows the instruction.
+    """
+
+    def post(self, request, run_id):
+        run = get_object_or_404(
+            ResearchAgentRun.active_objects.select_related("thread"),
+            id=run_id,
+            project__user=request.user,
+            role=AgentRole.SCOUT,
+            thread__isnull=False,
+        )
+        instruction = str(request.data.get("instruction") or "").strip()[:1000]
+        if not instruction:
             return Response(
-                {"error": "A non-empty 'task' is required."},
+                {"error": "A non-empty 'instruction' is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        # 'quick' caps the search/read budget (the token-cost lever); anything
-        # else gets the default deep run.
-        depth = "quick" if request.data.get("depth") == "quick" else "deep"
-        # Per-run tool selection from the composer; sanitized against the
-        # project's enabled set (a run can narrow the toolset, never widen it).
-        requested = request.data.get("tools")
-        tools = (
-            [t for t in requested if isinstance(t, str) and t in project.enabled_tools]
-            if isinstance(requested, list)
-            else list(project.enabled_tools)
-        )
-
-        session = ResearchSession.get_or_create_scout_session(project, request.user)
-        soul = SoulFile.active_objects.filter(project=project).first()
-        version = soul.current_version() if soul else None
-        soul_label = f"v{version.version}" if version else ""
-
-        run = ResearchAgentRun.objects.create(
-            session=session,
-            project=project,
-            user=request.user,
-            role="scout",
-            mode=ResearchSessionMode.SCOUT,
-            task=task,
-            status=AgentRunStatus.RUNNING,
-            status_detail="Queued…",
-            soul_file_version=soul_label,
-            allowed_tools=tools or ["web"],
-            selected_context={"depth": depth, "tools": tools},
-            started_at=timezone.now(),
-        )
-        run_scout_job.delay(run.id)
+        replacement = redirect_scout(run, instruction)
         return Response(
-            {"runId": run.id, "status": run.status},
+            {
+                "runId": replacement.id,
+                "replacedRunId": run.id if replacement.id != run.id else None,
+                "steered": replacement.id == run.id,
+            },
             status=status.HTTP_202_ACCEPTED,
         )
 
 
 class ResearchAgentRunView(ResearchAPIView):
-    """GET /api/research/agent-runs/{id}/ — a run's live status (for polling)
-    and full run-details audit payload (adds the agent's exact final response)."""
-
-    # Terminal states whose final output is worth backfilling from Hermes.
-    _BACKFILLABLE = {
-        AgentRunStatus.COMPLETED,
-        AgentRunStatus.FAILED,
-        AgentRunStatus.CANCELLED,
-        AgentRunStatus.OUTCOME_UNKNOWN,
-    }
+    """GET /api/research/agent-runs/{id}/ — one run's full audit: status, what
+    it was sent, every tool call and its final reply."""
 
     def get(self, request, run_id):
         run = get_object_or_404(
@@ -657,27 +359,7 @@ class ResearchAgentRunView(ResearchAPIView):
             id=run_id,
             project__user=request.user,
         )
-        if (
-            not run.raw_output
-            and run.hermes_run_id
-            and run.status in self._BACKFILLABLE
-        ):
-            self._backfill_raw_output(run)
         return Response(ResearchAgentRunDetailSerializer(run).data)
-
-    @staticmethod
-    def _backfill_raw_output(run):
-        """Best-effort pull of the final response from Hermes for runs that
-        predate raw_output persistence, while its run record is still retained.
-        Absence stays honest — the record may have expired (Hermes TTL)."""
-        try:
-            terminal = get_hermes_service(run.project).get_run(run.hermes_run_id)
-        except Exception:  # noqa: BLE001 - absence is an honest state, not an error
-            return
-        output = terminal.get("output")
-        if isinstance(output, str) and output.strip():
-            run.raw_output = output
-            run.save(update_fields=["raw_output", "updated_at"])
 
 
 class ResearchAgentRunCancelView(ResearchAPIView):
@@ -692,18 +374,17 @@ class ResearchAgentRunCancelView(ResearchAPIView):
                 id=run_id,
                 project__user=request.user,
             )
-            return Response(ResearchAgentRunSerializer(run).data)
+            return Response(ResearchAgentRunDetailSerializer(run).data)
 
         response_status = status.HTTP_202_ACCEPTED if attempted else status.HTTP_200_OK
-        return Response(ResearchAgentRunSerializer(run).data, status=response_status)
+        return Response(
+            ResearchAgentRunDetailSerializer(run).data, status=response_status
+        )
 
 
 class ResearchStagingItemCriticView(ResearchAPIView):
-    """
-    POST /api/research/staging-items/{id}/critic/ — enqueue a Critic run that
-    pressure-tests the staged source against the standards. The verdict lands on
-    the item's criticMetadata. Returns {runId}; poll GET /agent-runs/{id}/.
-    """
+    """POST /api/research/staging-items/{id}/critic/ — queue a Critic run that
+    pressure-tests the staged source; its verdict lands on criticMetadata."""
 
     def post(self, request, item_id):
         item = get_object_or_404(
@@ -711,26 +392,7 @@ class ResearchStagingItemCriticView(ResearchAPIView):
             id=item_id,
             project__user=request.user,
         )
-        project = item.project
-        session = ResearchSession.get_or_create_scout_session(project, request.user)
-        soul = SoulFile.active_objects.filter(project=project).first()
-        version = soul.current_version() if soul else None
-        soul_label = f"v{version.version}" if version else ""
-
-        run = ResearchAgentRun.objects.create(
-            session=session,
-            project=project,
-            user=request.user,
-            role="critic",
-            mode=ResearchSessionMode.SCOUT,
-            task=f"Pressure-test: {item.title}",
-            status=AgentRunStatus.RUNNING,
-            status_detail="Queued…",
-            soul_file_version=soul_label,
-            allowed_tools=["web"],
-            started_at=timezone.now(),
-        )
-        run_critic_job.delay(run.id, item.id)
+        run = request_critic(item, request.user)
         return Response(
             {"runId": run.id, "status": run.status},
             status=status.HTTP_202_ACCEPTED,
@@ -738,46 +400,21 @@ class ResearchStagingItemCriticView(ResearchAPIView):
 
 
 class ResearchArtifactGenerateView(ResearchAPIView):
-    """
-    POST /api/research/projects/{id}/artifact/ {prompt, artifactType?} — enqueue a
-    delegated run that produces a renderable artifact via the JSON contract.
-    Returns {runId}; poll GET /agent-runs/{id}/. The artifact lands in the project.
-    """
+    """POST /api/research/projects/{id}/artifact/ {prompt, artifactType?} —
+    queue a Presenter run; the artifact lands in the project."""
 
     def post(self, request, project_id):
         project = get_object_or_404(
             ResearchProject.active_objects, id=project_id, user=request.user
         )
-        prompt = (request.data.get("prompt") or "").strip()
+        prompt = str(request.data.get("prompt") or "").strip()
         if not prompt:
             return Response(
                 {"error": "A non-empty 'prompt' is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        artifact_type = (
-            request.data.get("artifact_type") or request.data.get("artifactType") or ""
-        ).strip()
-
-        session = ResearchSession.get_or_create_artifact_session(project, request.user)
-        soul = SoulFile.active_objects.filter(project=project).first()
-        version = soul.current_version() if soul else None
-        soul_label = f"v{version.version}" if version else ""
-
-        run = ResearchAgentRun.objects.create(
-            session=session,
-            project=project,
-            user=request.user,
-            role="presenter",
-            mode=ResearchSessionMode.ARTIFACT,
-            task=prompt,
-            status=AgentRunStatus.RUNNING,
-            status_detail="Queued…",
-            soul_file_version=soul_label,
-            allowed_tools=["skills"],
-            selected_context={"artifactType": artifact_type},
-            started_at=timezone.now(),
-        )
-        run_artifact_job.delay(run.id)
+        artifact_type = str(request.data.get("artifact_type") or "").strip()
+        run = request_artifact(project, request.user, prompt, artifact_type)
         return Response(
             {"runId": run.id, "status": run.status},
             status=status.HTTP_202_ACCEPTED,
@@ -873,7 +510,7 @@ class ResearchThesisSourceLinkView(ResearchAPIView):
         thesis = self._thesis(request, memory_id)
         source = get_object_or_404(
             ResearchKnowledgeItem.active_objects,
-            id=request.data.get("sourceId") or request.data.get("source_id"),
+            id=request.data.get("source_id"),
             project=thesis.project,
         )
         stance = (request.data.get("stance") or "").strip()
@@ -916,227 +553,108 @@ class ResearchThesisSourceLinkDetailView(ResearchAPIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-def _record_and_diff_memory(project, files, keep=12):
-    """Snapshot this project's memory if it changed, and return its recent history.
-
-    The runtime edits MEMORY.md and USER.md in place, so without this the files
-    can only say what the agent believes *now*. Snapshotting on read is enough to
-    reconstruct how they got there, and it stays off the run path — a slow or
-    failing snapshot can never break a chat.
-
-    Each entry reports what changed against the snapshot before it, so the
-    workspace can show "the agent learned X on Tuesday" rather than a wall of
-    current text.
-    """
-    latest = (
-        ResearchAgentMemorySnapshot.active_objects.filter(project=project)
-        .order_by("-created_at")
-        .first()
-    )
-    if latest is None or not latest.matches(files):
-        # Only when the text actually moved, so an idle project stores nothing.
-        latest = ResearchAgentMemorySnapshot.objects.create(
-            project=project,
-            soul=files.get("soul", ""),
-            memory=files.get("memory", ""),
-            user=files.get("user", ""),
-        )
-
-    snaps = list(
-        ResearchAgentMemorySnapshot.active_objects.filter(project=project).order_by(
-            "-created_at"
-        )[:keep]
-    )
-    history = []
-    for index, snap in enumerate(snaps):
-        older = snaps[index + 1] if index + 1 < len(snaps) else None
-        entry = {"id": snap.id, "takenAt": snap.created_at}
-        for field in ("memory", "user"):
-            now = ResearchAgentMemorySnapshot.entries(getattr(snap, field))
-            before = (
-                ResearchAgentMemorySnapshot.entries(getattr(older, field))
-                if older
-                else []
-            )
-            entry[field] = {
-                "count": len(now),
-                "added": [e for e in now if e not in before],
-                "removed": [e for e in before if e not in now],
-            }
-        entry["isFirst"] = older is None
-        history.append(entry)
-    return history
-
-
 class ResearchAgentMemoryView(ResearchAPIView):
     """
-    GET /api/research/projects/{id}/agent-memory/ — the operational memory files
-    (SOUL.md, MEMORY.md, USER.md) of THIS project's Hermes profile, read-only.
-
-    Project-scoped on purpose. These files are per-profile, and each project owns
-    a profile, so answering without a project would hand back whichever profile
-    happened to be the default — which is how one scholar's USER.md became
-    visible to everyone.
+    GET /api/research/projects/{id}/agent-memory/ — the files this project's
+    agent loads on every run, exactly as DARE renders them: SOUL.md,
+    MEMORY.md, USER.md and the approved skills.
     """
 
     def get(self, request, project_id):
         project = get_object_or_404(
             ResearchProject.active_objects, id=project_id, user=request.user
         )
-        files = get_hermes_service(project).read_agent_memory()
-        # Anything the agent learned about the scholar here belongs to the
-        # scholar, not to this project — fold it into their DARE record and push
-        # it to their other projects, so the next one they open already knows
-        # them. The project's own MEMORY.md is untouched and stays private.
-        files["sharedTo"] = absorb_user_memory(project, files.get("user", ""))
-        propose_project_memory(project)
-        files["history"] = _record_and_diff_memory(project, files)
-        # What the scholar has already thrown out. A dropped entry otherwise
-        # reads as the agent forgetting on its own, when the usual cause is
-        # someone discarding it — the timeline should name which.
-        files["discarded"] = list(
-            ResearchMemoryProposal.active_objects.filter(
-                project=project, status=MemoryProposalStatus.REJECTED
-            ).values_list("content", flat=True)
+        sync_pending_learning(project)
+        files = profile_files(project)
+        return Response(
+            {
+                "profile": profile_name_for(project),
+                "soul": files.soul,
+                "memory": files.memory,
+                "user": files.user,
+                "skills": [
+                    {
+                        "name": p.name,
+                        "description": p.description,
+                        "scope": "project" if p.project_id else "researcher",
+                    }
+                    for p in ResearchProcedure.current_for(project).order_by("name")
+                ],
+            }
         )
-        return Response(files)
-
-
-def _memory_label(content, limit=48):
-    """A short title for a promoted memory.
-
-    Agents tend to write "Working thesis: ...", "Method decision: ...",
-    "Corpus: ..." — that leading clause is exactly the label a scholar would
-    have written, so use it when it is there and fall back to a trimmed opening
-    otherwise. Better a title taken from the fact than the same three words on
-    every row.
-    """
-    text = (content or "").strip()
-    head = text.split(":", 1)[0].strip() if ":" in text[:limit] else ""
-    if head and len(head) <= limit:
-        return head
-    return (text[: limit - 1] + "\u2026") if len(text) > limit else text or "Note"
 
 
 class ResearchMemoryProposalReviewView(ResearchAPIView):
     """
-    Scholar review of something the agent wants to remember.
+    POST /api/research/memory-proposals/{id}/review/ {decision, layer?}
 
-    POST /api/research/memory-proposals/{id}/review/  body {decision}
-    - accept -> promoted to ResearchProjectMemory, which DARE owns and versions
-    - reject -> status rejected, and the entry is dropped from the profile's
-      MEMORY.md so the agent stops repeating it back
-
-    The agent writes project memory as it works, because a run that had to wait
-    for approval before remembering anything would be useless. This is the gate
-    on the other side: what the agent finds useful stays in its working memory,
-    and only what the scholar accepts becomes part of the project's record.
+    accept -> applied to the layer (researcher-wide, project, or — for a
+    procedure — researcher-wide unless layer=project), then rendered into the
+    profiles it reaches; reject -> nothing is saved.
     """
 
     def post(self, request, proposal_id):
         proposal = get_object_or_404(
-            ResearchMemoryProposal.objects.select_related("project"),
+            ResearchMemoryProposal.objects.select_related("project", "thread"),
             id=proposal_id,
             project__user=request.user,
         )
-        decision = (request.data or {}).get("decision", "")
-        if decision not in ("accept", "reject"):
-            return Response(
-                {"detail": "decision must be 'accept' or 'reject'."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        if proposal.status != MemoryProposalStatus.PROPOSED:
-            return Response(
-                {"detail": f"This proposal was already {proposal.status}."},
-                status=status.HTTP_409_CONFLICT,
-            )
-
-        if decision == "accept":
-            ResearchProjectMemory.objects.create(
-                project=proposal.project,
-                added_by=request.user,
-                # Every promoted row said "From the agent", which the source
-                # field already records and which crowds out the labels that
-                # carry meaning — "Working thesis", "Decision", "Open question".
-                # Take the fact's own opening clause when it has one; the text
-                # is a better title than a constant.
-                label=_memory_label(proposal.content),
-                detail=proposal.content,
-                source=ProjectMemorySource.PROPOSAL,
-            )
-            proposal.status = MemoryProposalStatus.ACCEPTED
-            proposal.accepted_by = request.user
-            proposal.accepted_at = timezone.now()
-            proposal.save(update_fields=["status", "accepted_by", "accepted_at"])
-        else:
-            proposal.status = MemoryProposalStatus.REJECTED
-            proposal.save(update_fields=["status", "updated_at"])
-            # Rejecting has to reach the file, or the agent keeps believing it
-            # and proposes it again on the next read.
-            forget_project_memory(proposal.project, proposal.content)
-
-        return Response({"id": proposal.id, "status": proposal.status})
+        decision = str((request.data or {}).get("decision") or "")
+        layer = (request.data or {}).get("layer") or None
+        try:
+            decide_proposal(proposal, request.user, decision, layer=layer)
+        except ProposalConflict as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+        except ProposalInvalid as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(proposal_payload(proposal))
 
 
 class ResearchStagingItemReviewView(ResearchAPIView):
     """
     Scholar review of a staged candidate.
 
-    POST /api/research/staging-items/{id}/review/  body {decision, reason?}
+    POST /api/research/staging-items/{id}/review/  body {decision, reason?, tags?}
     - approve -> promote to a ResearchKnowledgeItem (the durability gate)
     - reject  -> status rejected (+ reason)
     - later   -> status later   (+ reason)
+
+    The note and reason tags are kept on the item and, when a thread's Scout
+    staged it, pushed into that thread so the agent can learn from them.
     """
 
     def post(self, request, item_id):
         item = get_object_or_404(
-            ResearchStagingItem.active_objects,
+            ResearchStagingItem.active_objects.select_related("run__thread"),
             id=item_id,
             project__user=request.user,
         )
-        decision = (request.data.get("decision") or "").strip()
-        reason = (request.data.get("reason") or "").strip()
-
-        if decision == "approve":
-            ResearchKnowledgeItem.objects.create(
-                project=item.project,
-                source_staging_item=item,
-                approved_by=request.user,
-                approved_at=timezone.now(),
-                content=item.content or item.rationale,
-                rationale=item.rationale,
-                provenance=item.provenance,
-                soul_file_version=str(
-                    (item.provenance or {}).get("soulFileVersion") or ""
-                ),
-            )
-            item.status = StagingItemStatus.APPROVED
-            item.save(update_fields=["status", "updated_at"])
-        elif decision == "reject":
-            item.status = StagingItemStatus.REJECTED
-            item.rejection_reason = reason
-            item.save(update_fields=["status", "rejection_reason", "updated_at"])
-        elif decision == "later":
-            item.status = StagingItemStatus.LATER
-            item.later_reason = reason
-            item.save(update_fields=["status", "later_reason", "updated_at"])
-        else:
+        decision = str(request.data.get("decision") or "").strip()
+        note = str(request.data.get("reason") or "").strip()[:2000]
+        raw_tags = request.data.get("tags") or []
+        if not isinstance(raw_tags, list) or any(
+            tag not in ReviewReasonTag.values() for tag in raw_tags
+        ):
             return Response(
-                {"error": "decision must be one of: approve, reject, later."},
+                {"error": "tags must be a list of known reason tags."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
+        try:
+            review_item(
+                item, request.user, decision, note, list(dict.fromkeys(raw_tags))
+            )
+        except ReviewInvalid as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         return Response(ResearchStagingItemSerializer(item).data)
 
 
 class ResearchSoulFileView(ResearchAPIView):
     """
-    The project's versioned soul file (standards).
+    The project's SOUL.md, versioned.
 
     - GET /api/research/projects/{id}/soul/  - the current version
-    - PUT /api/research/projects/{id}/soul/  {content, changeNote?} - write a new
-      version (the old one is kept; staging items keep the version that governed
-      them).
+    - PUT /api/research/projects/{id}/soul/  {content, changeNote?} - save a new
+      version; staged findings keep the version that governed them
     """
 
     def _project(self, request, project_id):
@@ -1144,46 +662,16 @@ class ResearchSoulFileView(ResearchAPIView):
             ResearchProject.active_objects, id=project_id, user=request.user
         )
 
-    def _serialize(self, soul):
-        version = soul.current_version() if soul else None
-        if not version:
-            return None
-        return {
-            "id": soul.id,
-            "version": version.version,
-            "content": version.content,
-            "origin": version.origin,
-            "updatedAt": version.created_at,
-        }
-
     def get(self, request, project_id):
-        project = self._project(request, project_id)
-        soul = SoulFile.active_objects.filter(project=project).first()
-        return Response(self._serialize(soul))
+        return Response(soul_payload(self._project(request, project_id)))
 
     def put(self, request, project_id):
         project = self._project(request, project_id)
         content = request.data.get("content")
-        if content is None:
+        if not isinstance(content, str):
             return Response(
                 {"error": "'content' is required."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        change_note = request.data.get("change_note") or ""
-        soul, _ = SoulFile.objects.get_or_create(project=project)
-        latest = (
-            SoulFileVersion.active_objects.filter(soul_file=soul)
-            .order_by("-version")
-            .first()
-        )
-        SoulFileVersion.objects.create(
-            soul_file=soul,
-            version=(latest.version + 1) if latest else 1,
-            content=content,
-            origin=SoulFileOrigin.EDIT,
-            change_note=change_note,
-            created_by=request.user,
-        )
-        # Keep THIS project's profile SOUL.md in sync with the new version.
-        get_hermes_service(project).provision_soul(content)
-        return Response(self._serialize(soul))
+        save_soul(project, content, request.user, request.data.get("change_note") or "")
+        return Response(soul_payload(project))

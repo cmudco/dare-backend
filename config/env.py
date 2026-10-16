@@ -10,7 +10,9 @@ env = environ.Env()
 environ.Env.read_env(os.path.join(BASE_DIR, ".env"))
 
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY")
-SSO_JWT_KEY = os.getenv("SSO_JWT_KEY", "") # Signs the JWTs this project shares with Research Tools.
+SSO_JWT_KEY = os.getenv(
+    "SSO_JWT_KEY", ""
+)  # Signs the JWTs this project shares with Research Tools.
 DEBUG = os.getenv("DJANGO_DEBUG")
 DJANGO_SETTINGS_MODULE = os.getenv("DJANGO_SETTINGS_MODULE")
 ENVIRONMENT = os.getenv("ENVIRONMENT", "local")
@@ -115,39 +117,43 @@ MCP_USE_DOCKER = os.getenv("MCP_USE_DOCKER", "False") == "True"
 
 # Hermes agent runtime (delegated research-agent runtime for Research Mode)
 HERMES_GATEWAY_URL = os.getenv("HERMES_GATEWAY_URL", "http://127.0.0.1:8642")
-HERMES_API_KEY = os.getenv("HERMES_API_KEY", "dev-spike-local")
-# DARE writes its canonical soul into the gateway profile's SOUL.md (the anchor).
-HERMES_SYNC_SOUL = os.getenv("HERMES_SYNC_SOUL", "True") == "True"
-HERMES_SOUL_PATH = os.getenv(
-    "HERMES_SOUL_PATH", os.path.expanduser("~/.hermes/SOUL.md")
-)
-# One project = one Hermes profile. A profile is its own HERMES_HOME directory,
-# so its SOUL.md and memories/{MEMORY,USER}.md are isolated by construction
-# rather than by convention. The gateway serves every profile from the single
-# multiplex listener under /p/<profile>/, so this costs no extra process.
-# Off => every project shares the one default profile (the pre-multiplex path).
-HERMES_PROFILE_PER_PROJECT = os.getenv("HERMES_PROFILE_PER_PROJECT", "True") == "True"
+# One project = one Hermes profile: its own HERMES_HOME directory, served by
+# the gateway's multiplex listener under /p/<profile>/.
 HERMES_PROFILES_ROOT = os.getenv(
     "HERMES_PROFILES_ROOT", os.path.expanduser("~/.hermes/profiles")
 )
 # Profile names must match Hermes's [a-z0-9][a-z0-9_-]{0,63}.
 HERMES_PROFILE_PREFIX = os.getenv("HERMES_PROFILE_PREFIX", "dare-proj")
-# Model pinned into every project profile. A profile with no model of its own
-# inherits the runtime's current default, which means an operator running
-# `hermes model` silently re-points every research project — and a model that
-# refuses (content_filter) takes chat down with it. Pin it so the project's
-# agent is a DARE decision, not a side effect of gateway config.
+# Model pinned into every project profile, so `hermes model` on the gateway host
+# cannot silently re-point research projects.
 HERMES_PROFILE_MODEL = os.getenv("HERMES_PROFILE_MODEL", "claude-sonnet-5")
 HERMES_PROFILE_MODEL_PROVIDER = os.getenv("HERMES_PROFILE_MODEL_PROVIDER", "anthropic")
-# Lifetime of the DARE-minted JWT written into a profile's .env so its MCP tools
-# (web search / page fetch) run as the project's owner, not a shared identity.
+# An OpenAI-compatible gateway (e.g. LiteLLM) every profile calls instead of a
+# named provider. DARE writes the key into each profile's own .env.
+HERMES_PROFILE_MODEL_BASE_URL = os.getenv("HERMES_PROFILE_MODEL_BASE_URL", "")
+HERMES_PROFILE_MODEL_API_KEY = os.getenv("HERMES_PROFILE_MODEL_API_KEY", "")
+# Ordered fallback chain on rate limits or outages, as comma-separated
+# "provider=model" pairs, e.g. "nous=poolside/laguna-s-2.1:free".
+HERMES_PROFILE_FALLBACK_MODELS = [
+    tuple(part.strip().split("=", 1))
+    for part in os.getenv("HERMES_PROFILE_FALLBACK_MODELS", "").split(",")
+    if "=" in part
+]
+# Agent-loop ceiling written into every profile.
+HERMES_PROFILE_MAX_TURNS = int(os.getenv("HERMES_PROFILE_MAX_TURNS", "30"))
+# Lifetime of the owner's JWT in a profile's .env (its DARE tools run as them).
 HERMES_PROFILE_TOKEN_DAYS = int(os.getenv("HERMES_PROFILE_TOKEN_DAYS", "365"))
-
-# How long a run's SSE stream may go without a real event before DARE stops
-# reading and resolves the outcome from Hermes's pollable run record instead.
-# Generous: a deep run can think for a while between tool calls. See
-# HermesService.stream_events for why a plain socket timeout is not enough.
+# A run's event stream may go this long without an event before DARE stops
+# reading and asks Hermes for the run's state instead.
 HERMES_STREAM_IDLE_SECONDS = int(os.getenv("HERMES_STREAM_IDLE_SECONDS", "180"))
+# How long a background run keeps polling Hermes once its stream went quiet.
+HERMES_RUN_WAIT_SECONDS = int(os.getenv("HERMES_RUN_WAIT_SECONDS", "1800"))
+# How long a run waits for Hermes to load a new profile's DARE tools.
+HERMES_TOOLS_WAIT_SECONDS = int(os.getenv("HERMES_TOOLS_WAIT_SECONDS", "90"))
+# Most a research project may spend on agent runs, in USD (0 = no cap).
+RESEARCH_PROJECT_SPEND_CAP_USD = float(os.getenv("RESEARCH_PROJECT_SPEND_CAP_USD", "0"))
+# Identifies DARE to OpenAlex (paper search); joins its faster "polite pool".
+OPENALEX_MAILTO = os.getenv("OPENALEX_MAILTO", "")
 # Where a profile's MCP client reaches back to DARE. This is written into each
 # profile's config.yaml, so it must be resolvable from the machine running the
 # gateway, not from the browser.
