@@ -49,6 +49,9 @@ _CONFIG_FILENAME = "config.yaml"
 _TOKEN_VAR = "MCP_DARE_API_KEY"
 _API_KEY_VAR = "API_SERVER_KEY"
 _MODEL_KEY_VAR = "DARE_MODEL_API_KEY"
+# A named provider's key must sit in the profile's own .env: when multiplexing,
+# Hermes never reads a provider key from the gateway's environment.
+_PROVIDER_KEY_VARS = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}
 SKILL_CATEGORY = "dare"
 PLATFORM_HINT = (
     "You are answering inside DARE's research workspace. Replies render as "
@@ -269,6 +272,16 @@ def write_if_changed(path, content):
     return True
 
 
+def _model_key_var():
+    """Where the profile's model key goes: the gateway's variable, or the
+    named provider's own."""
+    if (settings.HERMES_PROFILE_MODEL_BASE_URL or "").strip():
+        return _MODEL_KEY_VAR
+    return _PROVIDER_KEY_VARS.get(
+        (settings.HERMES_PROFILE_MODEL_PROVIDER or "").strip()
+    )
+
+
 def ensure_project_profile(project):
     """Create or refresh ``project``'s profile directory, config and secrets.
 
@@ -287,8 +300,9 @@ def ensure_project_profile(project):
     if read_env_value(env_path, _API_KEY_VAR) != api_key:
         write_env_value(env_path, _API_KEY_VAR, api_key)
     model_key = settings.HERMES_PROFILE_MODEL_API_KEY
-    if model_key and read_env_value(env_path, _MODEL_KEY_VAR) != model_key:
-        write_env_value(env_path, _MODEL_KEY_VAR, model_key)
+    key_var = _model_key_var()
+    if model_key and key_var and read_env_value(env_path, key_var) != model_key:
+        write_env_value(env_path, key_var, model_key)
 
 
 def hermes_for(project):
