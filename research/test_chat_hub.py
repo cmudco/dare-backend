@@ -776,6 +776,35 @@ class ScoutStagingToolTests(ProfileRootMixin, TestCase):
             "Quoted line isn't on the page", item.provenance["check"]["flags"]
         )
 
+    def test_the_same_figures_from_another_page_are_not_staged_twice(self):
+        rates = "Electricity 26.32p/kWh, 54.83p/day; gas 7.97p/kWh, 29.68p/day."
+        self.page = "Electricity 26.32p/kWh, 54.83p/day; gas 7.97p/kWh, 29.68p/day."
+        self.stage(
+            title="Price cap news", url="https://example.org/news", finding=rates
+        )
+        text, _ = self.stage(
+            title="Price cap rates table",
+            url="https://example.org/rates",
+            finding=f"Ofgem's cap: {rates}",
+        )
+
+        self.assertEqual(ResearchStagingItem.objects.filter(run=self.run).count(), 1)
+        self.assertIn("already waiting in the Review Inbox", text)
+
+    def test_a_partial_answer_cannot_be_near_certain(self):
+        self.page = "Agreement was 0.8 across 3k raters on MT-Bench overall."
+        self.stage(
+            title="MT-Bench",
+            url="https://example.org/mt-bench",
+            evidenceLabel="partial",
+            confidence=0.94,
+            citationContext="Agreement was 0.8 across 3k raters on MT-Bench overall.",
+        )
+
+        item = ResearchStagingItem.objects.get(run=self.run)
+        self.assertEqual(item.confidence, 0.65)
+        self.assertEqual(item.provenance["agentConfidence"], 0.94)
+
     def test_a_quote_that_does_not_back_the_finding_is_flagged(self):
         self.page = "Date: 26 August 2026. Agreement with humans exceeded 80%."
         self.stage(

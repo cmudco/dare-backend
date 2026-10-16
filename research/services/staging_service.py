@@ -38,26 +38,40 @@ def _text(fields, key, limit=None):
     return value[:limit] if limit else value
 
 
-def _existing(run, title, url):
+_TERM = re.compile(r"\d+(?:[.,]\d+)?|[a-z]{5,}")
+_YEAR = re.compile(r"(19|20)\d\d")
+WEAK_QUOTE_FLAG = "Quote may not back the finding"
+# Figures two findings must share to be the same finding from another page.
+_SAME_FIGURES = 3
+
+
+def _figures(text):
+    """The distinctive numbers in ``text``: not years, not small counts."""
+    return {
+        t
+        for t in _TERM.findall((text or "").lower())
+        if t[0].isdigit() and len(t) >= 3 and not _YEAR.fullmatch(t)
+    }
+
+
+def _existing(run, title, url, finding):
+    """A finding the project already has: same link, same title, or the same
+    figures reported from another page."""
     key = normalize_title(title)
+    figures = _figures(finding)
     candidates = ResearchStagingItem.active_objects.filter(project=run.project)
     if url:
         match = candidates.filter(url=url).first()
         if match:
             return match
     for item in candidates.only(
-        "id", "title", "status", "rejection_reason", "review_metadata"
+        "id", "title", "finding", "status", "rejection_reason", "review_metadata"
     ):
         if normalize_title(item.title) == key:
             return item
+        if len(figures & _figures(item.finding)) >= _SAME_FIGURES:
+            return item
     return None
-
-
-_TERM = re.compile(r"\d+(?:[.,]\d+)?|[a-z]{5,}")
-WEAK_QUOTE_FLAG = "Quote may not back the finding"
-
-
-_YEAR = re.compile(r"(19|20)\d\d")
 
 
 def _quote_backs(finding, quote):
@@ -68,6 +82,27 @@ def _quote_backs(finding, quote):
     if any(not _YEAR.fullmatch(t) for t in figures):
         return True
     return len(quote.split()) >= 8 and len(shared) >= 2
+
+
+# How sure a finding can be, given how it bears on the task: one that only
+# partly answers it cannot be near-certain, whatever the Scout says.
+_CONFIDENCE_CAP = {
+    "supporting": 0.95,
+    "disputing": 0.95,
+    "partial": 0.65,
+    "tangential": 0.4,
+    "unverifiable": 0.3,
+}
+_FLAG_PENALTY = 0.15
+
+
+def calibrated_confidence(raw, label, flags):
+    """The Scout's confidence, held to what its label and DARE's checks allow."""
+    if not isinstance(raw, (int, float)) or isinstance(raw, bool):
+        return None
+    value = min(float(raw), _CONFIDENCE_CAP.get(label, 0.5))
+    value -= _FLAG_PENALTY * len(flags)
+    return round(min(max(value, 0.05), 1.0), 2)
 
 
 def _duplicate_message(item):
@@ -89,7 +124,7 @@ def stage_candidate(run, fields):
     url = _text(fields, "url", 1024)
     if not title:
         return StageOutcome(None, "Not staged: a finding needs a title.")
-    duplicate = _existing(run, title, url)
+    duplicate = _existing(run, title, url, _text(fields, "finding"))
     if duplicate is not None:
         return StageOutcome(None, _duplicate_message(duplicate))
     if not _text(fields, "finding"):
@@ -145,11 +180,7 @@ def stage_candidate(run, fields):
         url=url,
         finding=_text(fields, "finding"),
         rationale=_text(fields, "rationale"),
-        confidence=(
-            min(max(float(confidence), 0.0), 1.0)
-            if isinstance(confidence, (int, float)) and not isinstance(confidence, bool)
-            else None
-        ),
+        confidence=calibrated_confidence(confidence, label, check.flags),
         evidence_label=label if label in EVIDENCE_LABELS else "",
         citation_context=_text(fields, "citationContext"),
         status=StagingItemStatus.STAGED,
@@ -162,6 +193,7 @@ def stage_candidate(run, fields):
             "soulFileVersion": version.version if version else None,
             "role": AgentRole.SCOUT,
             "runId": run.id,
+            "agentConfidence": confidence,
             "check": {"flags": check.flags, **check.checks},
         },
     )
