@@ -51,7 +51,10 @@ _SEP = "__"  # namespace separator: <server_slug>__<tool_name>
 # web tooling), so search + read never depend on the runtime's tools or billing.
 _RUN_ARG = {
     "type": "string",
-    "description": "Scouts: your run id exactly as given in your instructions, so the call is logged on your run.",
+    "description": (
+        "Your run id exactly as given in your instructions (a Scout's r…, or the "
+        "chat's thread id t…), so the call counts against the right budget."
+    ),
 }
 
 _BUILTIN_TOOL_DEFS = [
@@ -68,7 +71,7 @@ _BUILTIN_TOOL_DEFS = [
                 "query": {"type": "string", "description": "The search query"},
                 "run": _RUN_ARG,
             },
-            "required": ["query"],
+            "required": ["query", "run"],
         },
     },
     {
@@ -84,7 +87,7 @@ _BUILTIN_TOOL_DEFS = [
                 "query": {"type": "string", "description": "What the papers are about"},
                 "run": _RUN_ARG,
             },
-            "required": ["query"],
+            "required": ["query", "run"],
         },
     },
     {
@@ -106,7 +109,7 @@ _BUILTIN_TOOL_DEFS = [
                 },
                 "run": _RUN_ARG,
             },
-            "required": ["url"],
+            "required": ["url", "run"],
         },
     },
 ]

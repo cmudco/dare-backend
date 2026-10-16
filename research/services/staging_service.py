@@ -53,6 +53,23 @@ def _existing(run, title, url):
     return None
 
 
+_TERM = re.compile(r"\d+(?:[.,]\d+)?|[a-z]{5,}")
+WEAK_QUOTE_FLAG = "Quote may not back the finding"
+
+
+_YEAR = re.compile(r"(19|20)\d\d")
+
+
+def _quote_backs(finding, quote):
+    """The quote carries one of the finding's figures (not a year), or is a
+    sentence sharing its terms; a heading or a bare date does neither."""
+    shared = set(_TERM.findall(finding.lower())) & set(_TERM.findall(quote.lower()))
+    figures = {t for t in shared if t[0].isdigit() and len(t) >= 3}
+    if any(not _YEAR.fullmatch(t) for t in figures):
+        return True
+    return len(quote.split()) >= 8 and len(shared) >= 2
+
+
 def _duplicate_message(item):
     if item.status == StagingItemStatus.REJECTED:
         reason = item.rejection_reason or (item.review_metadata or {}).get("note")
@@ -75,6 +92,12 @@ def stage_candidate(run, fields):
     duplicate = _existing(run, title, url)
     if duplicate is not None:
         return StageOutcome(None, _duplicate_message(duplicate))
+    if not _text(fields, "finding"):
+        return StageOutcome(
+            None,
+            "Not staged: say what this source establishes for your task in "
+            "`finding`. If it established nothing, do not stage it.",
+        )
 
     year = fields.get("year")
     check = check_source(
@@ -103,6 +126,8 @@ def stage_candidate(run, fields):
         )
     url = check.url
     year = check.checks.get("year")
+    if not _quote_backs(_text(fields, "finding"), _text(fields, "citationContext")):
+        check.flags.append(WEAK_QUOTE_FLAG)
 
     soul = SoulFile.active_objects.filter(project=run.project).first()
     version = soul.current_version() if soul else None
@@ -118,13 +143,13 @@ def stage_candidate(run, fields):
         venue=_text(fields, "venue", 255),
         doi=_text(fields, "doi", 255),
         url=url,
+        finding=_text(fields, "finding"),
         rationale=_text(fields, "rationale"),
         confidence=(
             min(max(float(confidence), 0.0), 1.0)
             if isinstance(confidence, (int, float)) and not isinstance(confidence, bool)
             else None
         ),
-        confidence_rationale=_text(fields, "confidenceRationale"),
         evidence_label=label if label in EVIDENCE_LABELS else "",
         citation_context=_text(fields, "citationContext"),
         status=StagingItemStatus.STAGED,
@@ -180,7 +205,7 @@ def review_item(item, user, decision, note, tags):
             source_staging_item=item,
             approved_by=user,
             approved_at=timezone.now(),
-            content=item.content or item.rationale,
+            content=item.finding or item.rationale,
             rationale=item.rationale,
             provenance=item.provenance,
             soul_file_version=str((item.provenance or {}).get("soulFileVersion") or ""),

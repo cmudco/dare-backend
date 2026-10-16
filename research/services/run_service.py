@@ -23,9 +23,14 @@ from research.services.cancellation_service import execute_pending_cancellation
 from research.services.cost_service import set_run_cost
 from research.services.hermes_service import safe_hermes_usage
 from research.services.learning_service import sync_pending_learning
-from research.services.profile_service import profile_name_for, write_profile_files
+from research.services.profile_service import (
+    profile_name_for,
+    wait_for_tools,
+    write_profile_files,
+)
 from research.services.prompt_builder import profile_files
 from research.services.thread_service import on_run_finished
+from research.services.tool_readiness import tools_connected
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +103,9 @@ def start(run, hermes, prompt):
         return False
     files = profile_files(run.project)
     write_profile_files(run.project, files)
+    if not tools_connected(run.project_id):
+        set_detail(run, "Connecting the agent's tools…")
+        wait_for_tools(run.project)
     run.prompt = prompt.record(files)
     run.save(update_fields=["prompt", "updated_at"])
     session_id = run.runtime_session_id

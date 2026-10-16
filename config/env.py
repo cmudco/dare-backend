@@ -148,6 +148,8 @@ HERMES_PROFILE_TOKEN_DAYS = int(os.getenv("HERMES_PROFILE_TOKEN_DAYS", "365"))
 HERMES_STREAM_IDLE_SECONDS = int(os.getenv("HERMES_STREAM_IDLE_SECONDS", "180"))
 # How long a background run keeps polling Hermes once its stream went quiet.
 HERMES_RUN_WAIT_SECONDS = int(os.getenv("HERMES_RUN_WAIT_SECONDS", "1800"))
+# How long a run waits for Hermes to load a new profile's DARE tools.
+HERMES_TOOLS_WAIT_SECONDS = int(os.getenv("HERMES_TOOLS_WAIT_SECONDS", "90"))
 # Most a research project may spend on agent runs, in USD (0 = no cap).
 RESEARCH_PROJECT_SPEND_CAP_USD = float(os.getenv("RESEARCH_PROJECT_SPEND_CAP_USD", "0"))
 # Identifies DARE to OpenAlex (paper search); joins its faster "polite pool".

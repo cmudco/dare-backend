@@ -236,6 +236,7 @@ class ResearchAgentRunSerializer(serializers.ModelSerializer):
     tool_call_count = serializers.SerializerMethodField()
     cancellation = serializers.SerializerMethodField()
     focus = serializers.SerializerMethodField()
+    coverage = serializers.SerializerMethodField()
 
     class Meta:
         model = ResearchAgentRun
@@ -259,9 +260,25 @@ class ResearchAgentRunSerializer(serializers.ModelSerializer):
             "learning",
             "focus",
             "tool_call_count",
+            "coverage",
             "cancellation",
         ]
         read_only_fields = fields
+
+    def get_coverage(self, obj):
+        """How wide a Scout looked: searches run and pages read."""
+        if obj.role != AgentRole.SCOUT:
+            return None
+        searches = reads = 0
+        for tool in ResearchAgentToolCall.active_objects.filter(run=obj).values_list(
+            "tool", flat=True
+        ):
+            name = tool.removeprefix("mcp__dare__")
+            if name == "fetch_page":
+                reads += 1
+            elif name in ("web_search", "search_papers") or "__" in name:
+                searches += 1
+        return {"searches": searches, "reads": reads}
 
     def get_focus(self, obj):
         return (obj.selected_context or {}).get("focus") or ""
@@ -445,7 +462,11 @@ def thread_detail(thread):
 
 
 class ResearchStagingItemSerializer(serializers.ModelSerializer):
-    """A staged review candidate — the canonical §11 shape (camelCased)."""
+    """A finding a Scout staged, with the task it was found for."""
+
+    thread_id = serializers.SerializerMethodField()
+    focus = serializers.SerializerMethodField()
+    task = serializers.SerializerMethodField()
 
     class Meta:
         model = ResearchStagingItem
@@ -458,9 +479,9 @@ class ResearchStagingItemSerializer(serializers.ModelSerializer):
             "doi",
             "url",
             "abstract",
+            "finding",
             "rationale",
             "confidence",
-            "confidence_rationale",
             "evidence_label",
             "citation_context",
             "provenance",
@@ -470,86 +491,38 @@ class ResearchStagingItemSerializer(serializers.ModelSerializer):
             "critic_metadata",
             "review_metadata",
             "thread_id",
+            "focus",
+            "task",
             "created_at",
         ]
         read_only_fields = fields
 
-    thread_id = serializers.SerializerMethodField()
-
     def get_thread_id(self, obj):
-        return obj.run.thread_id if obj.run_id and obj.run else None
+        return obj.run.thread_id if obj.run else None
+
+    def get_focus(self, obj):
+        return (obj.run.selected_context or {}).get("focus", "") if obj.run else ""
+
+    def get_task(self, obj):
+        return obj.run.task if obj.run else ""
 
 
 class ResearchKnowledgeItemSerializer(serializers.ModelSerializer):
-    """
-    Approved durable knowledge. Bibliographic display fields are read from the
-    source staging item (the contract references it rather than duplicating it).
-    """
-
-    title = serializers.SerializerMethodField()
-    authors = serializers.SerializerMethodField()
-    year = serializers.SerializerMethodField()
-    venue = serializers.SerializerMethodField()
-    url = serializers.SerializerMethodField()
-    confidence = serializers.SerializerMethodField()
-    evidence_label = serializers.SerializerMethodField()
-    citation_context = serializers.SerializerMethodField()
+    """Approved knowledge: the finding it was approved from, in full, plus when."""
 
     class Meta:
         model = ResearchKnowledgeItem
-        fields = [
-            "id",
-            "title",
-            "authors",
-            "year",
-            "venue",
-            "url",
-            "rationale",
-            "confidence",
-            "evidence_label",
-            "citation_context",
-            "provenance",
-            "soul_file_version",
-            "used_in",
-            "approved_at",
-            "created_at",
-        ]
+        fields = ["id", "used_in", "approved_at", "created_at"]
         read_only_fields = fields
 
-    def _staged(self, obj):
-        return obj.source_staging_item
-
-    def get_title(self, obj):
-        s = self._staged(obj)
-        return s.title if s else ""
-
-    def get_authors(self, obj):
-        s = self._staged(obj)
-        return s.authors if s else ""
-
-    def get_year(self, obj):
-        s = self._staged(obj)
-        return s.year if s else None
-
-    def get_venue(self, obj):
-        s = self._staged(obj)
-        return s.venue if s else ""
-
-    def get_url(self, obj):
-        s = self._staged(obj)
-        return s.url if s else ""
-
-    def get_confidence(self, obj):
-        s = self._staged(obj)
-        return s.confidence if s else None
-
-    def get_evidence_label(self, obj):
-        s = self._staged(obj)
-        return s.evidence_label if s else ""
-
-    def get_citation_context(self, obj):
-        s = self._staged(obj)
-        return s.citation_context if s else ""
+    def to_representation(self, obj):
+        staged = obj.source_staging_item
+        evidence = ResearchStagingItemSerializer(staged).data if staged else {}
+        return {
+            **evidence,
+            **super().to_representation(obj),
+            "staging_item_id": staged.id if staged else None,
+        }
 
 
 class ResearchArtifactSerializer(serializers.ModelSerializer):
@@ -627,14 +600,18 @@ class ResearchProjectDetailSerializer(ResearchProjectSerializer):
         return ResearchMemoryProposalSerializer(proposals, many=True).data
 
     def get_review_items(self, obj):
-        items = ResearchStagingItem.active_objects.filter(project=obj).order_by(
-            "-created_at"
+        items = (
+            ResearchStagingItem.active_objects.filter(project=obj)
+            .select_related("run")
+            .order_by("-created_at")
         )
         return ResearchStagingItemSerializer(items, many=True).data
 
     def get_knowledge_items(self, obj):
-        items = ResearchKnowledgeItem.active_objects.filter(project=obj).order_by(
-            "-created_at"
+        items = (
+            ResearchKnowledgeItem.active_objects.filter(project=obj)
+            .select_related("source_staging_item__run")
+            .order_by("-created_at")
         )
         return ResearchKnowledgeItemSerializer(items, many=True).data
 

@@ -700,7 +700,13 @@ class ScoutStagingToolTests(ProfileRootMixin, TestCase):
 
     def stage(self, **fields):
         return call_thread_tool(
-            "stage_finding", {"run": run_token(self.run), "rationale": "n=3k", **fields}
+            "stage_finding",
+            {
+                "run": run_token(self.run),
+                "finding": "Agreement was 0.8 across 3k raters.",
+                "rationale": "n=3k",
+                **fields,
+            },
         )
 
     def test_a_finding_lands_in_the_inbox_while_the_scout_works(self):
@@ -768,6 +774,20 @@ class ScoutStagingToolTests(ProfileRootMixin, TestCase):
         item = ResearchStagingItem.objects.get(run=self.run)
         self.assertIn(
             "Quoted line isn't on the page", item.provenance["check"]["flags"]
+        )
+
+    def test_a_quote_that_does_not_back_the_finding_is_flagged(self):
+        self.page = "Date: 26 August 2026. Agreement with humans exceeded 80%."
+        self.stage(
+            title="MT-Bench agreement",
+            url="https://example.org/mt-bench",
+            finding="Agreement with human raters exceeded 80% on MT-Bench.",
+            citationContext="Date: 26 August 2026",
+        )
+
+        item = ResearchStagingItem.objects.get(run=self.run)
+        self.assertIn(
+            "Quote may not back the finding", item.provenance["check"]["flags"]
         )
 
     def test_old_data_is_flagged_in_a_money_project(self):

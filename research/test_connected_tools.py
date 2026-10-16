@@ -7,6 +7,7 @@ from rest_framework.test import APIClient
 from mcp.models import GatewayFetch, MCPServer, UserMCPConnection
 from mcp.services.mcp_tool_executor import MCPToolExecutorError
 from research.models import ResearchProject
+from research.services.tool_readiness import tools_connected
 from users.constants import RoleChoice
 
 User = get_user_model()
@@ -65,6 +66,11 @@ class ConnectedToolTests(TestCase):
         self.project.enabled_tools = ["web"]
         self.project.save()
         self.assertNotIn("scite__search", self.tool_names(self.project))
+
+    def test_hermes_reaching_the_gateway_marks_the_project_ready(self):
+        self.assertFalse(tools_connected(self.project.id))
+        self.tool_names(self.project)
+        self.assertTrue(tools_connected(self.project.id))
 
     def test_another_users_project_does_not_unlock_tools(self):
         stranger = User.objects.create_user(

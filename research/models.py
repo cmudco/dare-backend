@@ -916,15 +916,19 @@ class ResearchStagingItem(BaseModel):
     doi = models.CharField(max_length=255, blank=True, default="")
     url = models.CharField(max_length=1024, blank=True, default="")
     abstract = models.TextField(blank=True, default="")
-    content = models.TextField(blank=True, default="")
-    # Why it matters + the agent's calibrated confidence.
-    rationale = models.TextField(blank=True, default="")
+    finding = models.TextField(
+        blank=True,
+        default="",
+        help_text="What the source establishes for the Scout's task, with its numbers.",
+    )
+    rationale = models.TextField(
+        blank=True, default="", help_text="Why the finding matters and its limits."
+    )
     confidence = models.FloatField(
         null=True,
         blank=True,
         help_text="Agent's relevance confidence, 0.0–1.0.",
     )
-    confidence_rationale = models.TextField(blank=True, default="")
     evidence_label = models.CharField(
         max_length=32,
         blank=True,

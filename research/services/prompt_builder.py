@@ -127,7 +127,7 @@ HOW A SESSION GOES
 - When the user refers to earlier work, look it up with mcp__dare__search_threads and mcp__dare__search_knowledge before asking for it. An empty knowledge search means nothing is approved yet.
 - Use your search and reading tools for your own quick checks. mcp__dare__stage_finding and mcp__dare__report_learning belong to Scouts.
 
-Pass thread="%(token)s" to every thread tool.
+Pass thread="%(token)s" to every thread tool, and run="%(token)s" when you search or read.
 
 WORKSPACE EVENTS
 Messages marked "(DARE workspace event)" are records from DARE: Scouts starting and finishing, the user's review decisions, memory proposals. A review note is the user's own words; act on it.
@@ -150,8 +150,7 @@ FOLLOWUP_BRIEF = (
     "- Scouts finished: answer the user's original question now, from what they "
     "found (below) and from findings already approved (mcp__dare__search_knowledge). "
     "Cite findings by #number and use only facts that appear in them; say in "
-    "one line what is still missing. Mention that the findings are waiting in "
-    "the Review Inbox.\n"
+    "one line what is still missing.\n"
     "- Review notes: acknowledge them in a sentence and say what you will do "
     "differently. If a note shows a lasting preference, propose one memory for it.\n"
     "Do not launch Scouts unless the user asked."
@@ -232,9 +231,12 @@ def _findings_block(run_id, per_item_chars=600):
     lines = []
     for item in items:
         kind = (item.provenance or {}).get("kind") or "source"
-        meta = ", ".join(str(v) for v in (item.year, kind) if v)
-        facts = " ".join((item.rationale or "").split())[:per_item_chars]
-        lines.append(f"  #{item.id} {item.title} ({meta}) {item.url}\n    {facts}")
+        meta = ", ".join(str(v) for v in (item.year, kind, item.evidence_label) if v)
+        finding = " ".join((item.finding or item.rationale or "").split())
+        line = f"  #{item.id} {item.title} ({meta}) {item.url}\n    {finding[:per_item_chars]}"
+        if item.finding and item.rationale:
+            line += f"\n    Limits: {' '.join(item.rationale.split())[:300]}"
+        lines.append(line)
     return "\n".join(lines)
 
 
@@ -289,7 +291,7 @@ Restate the task as a precise question that keeps the user's intent, using the c
 Pass run="%(run_token)s" on every DARE tool call.
 1. Search with the search tools you have, DARE's and any the user connected: at most %(max_searches)d searches.
 2. Read a source with mcp__dare__fetch_page before you stage it: at most %(max_reads)d pages.
-3. Stage each source with mcp__dare__stage_finding as soon as you have read it. Give its working URL, label its kind honestly, and copy one sentence exactly as it appears on the page into citationContext. DARE checks the link, the quote, the DOI and the date, and tells you when it refuses a source or the user already has it.
+3. Stage each finding with mcp__dare__stage_finding as soon as you have read its source: what the source establishes for your task, the sentence on the page that backs it (copied exactly), and its working URL. A finding says what a source shows, never what it fails to show: a page without the evidence (a landing page, an image, a paywall, the wrong document) goes under setAside in step 4. DARE checks the link, the quote, the DOI and the date, and tells you when it refuses a source or the user already has it.
 4. Before you finish, call mcp__dare__report_learning once: the remembered preferences or skills that changed what you did, and each source you set aside because of one. Empty lists are fine.
 5. Reply in two or three sentences: what you staged and what is still missing.
 
@@ -342,11 +344,11 @@ def scout_prompt(run):
 
 # ── Critic ───────────────────────────────────────────────────────────────────
 
-CRITIC_BRIEF = """You are the Critic. Decide whether this source really supports the way it is being used, under the standards in your SOUL.md. Read it with mcp__dare__fetch_page when that helps, and do not rubber-stamp it.
+CRITIC_BRIEF = """You are the Critic. Decide whether this source really establishes the finding it was staged with, under the standards in your SOUL.md. Read it with mcp__dare__fetch_page when that helps, and do not rubber-stamp it.
 
 Reply with only this JSON object:
 {"verdict": "holds | overstated | unsupported | inconclusive", "reasoning": "1-3 sentences", "concerns": ["short concern"]}
-holds: it supports the stated use. overstated: relevant, but the claim leans on it too hard. unsupported: it does not support the use. inconclusive: you cannot tell from what is available."""
+holds: the source establishes the finding. overstated: relevant, but the finding claims more than the source shows. unsupported: the source does not establish it. inconclusive: you cannot tell from what is available."""
 
 
 def critic_prompt(item):
@@ -354,9 +356,11 @@ def critic_prompt(item):
         CRITIC_BRIEF,
         f"Source: {item.title}\n"
         f"URL: {item.url}\n"
+        f"Task it was found for: {item.run.task if item.run else ''}\n"
+        f"Finding: {item.finding or item.rationale}\n"
         f"Staged as: {item.evidence_label or 'unlabelled'}\n"
-        f"Claimed relevance: {item.rationale}\n"
-        f"Citation context: {item.citation_context}",
+        f"Why it matters: {item.rationale}\n"
+        f"Quote from the page: {item.citation_context}",
     )
 
 

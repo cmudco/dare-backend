@@ -20,15 +20,14 @@ import time
 from datetime import timedelta
 from pathlib import Path
 
-import django_rq
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
-from django.db import transaction
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.settings import api_settings as jwt_settings
 from rest_framework_simplejwt.tokens import AccessToken
 
 from research.services.hermes_service import HermesService
+from research.services.tool_readiness import tools_connected
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +55,6 @@ PLATFORM_HINT = (
     "Markdown, and a ```mermaid code block renders as a chart: xychart-beta for "
     "numbers over time, timeline for dates, pie for shares, flowchart for steps."
 )
-WARMUP_PROMPT = "Reply with the single word: ready."
 
 
 def profile_name_for(project):
@@ -271,20 +269,6 @@ def write_if_changed(path, content):
     return True
 
 
-def _schedule_warmup(project):
-    project_id = project.id
-
-    def enqueue():
-        try:
-            django_rq.get_queue("default").enqueue(
-                "research.tasks.warm_profile_job", project_id
-            )
-        except Exception:  # noqa: BLE001 - warm-up is an optimisation
-            logger.warning("Could not schedule warm-up for project %s", project_id)
-
-    transaction.on_commit(enqueue)
-
-
 def ensure_project_profile(project):
     """Create or refresh ``project``'s profile directory, config and secrets.
 
@@ -292,7 +276,6 @@ def ensure_project_profile(project):
     reaches existing profiles this way.
     """
     home = profile_home_for(project)
-    is_new = not home.exists()
     (home / "memories").mkdir(parents=True, exist_ok=True)
     write_if_changed(home / _CONFIG_FILENAME, _render_config(project))
 
@@ -306,9 +289,6 @@ def ensure_project_profile(project):
     model_key = settings.HERMES_PROFILE_MODEL_API_KEY
     if model_key and read_env_value(env_path, _MODEL_KEY_VAR) != model_key:
         write_env_value(env_path, _MODEL_KEY_VAR, model_key)
-
-    if is_new:
-        _schedule_warmup(project)
 
 
 def hermes_for(project):
@@ -336,19 +316,18 @@ def write_profile_files(project, files):
                 shutil.rmtree(child, ignore_errors=True)
 
 
-def warm_profile(project):
-    """One tiny run, so a new profile's DARE tools are connected before real use.
+def wait_for_tools(project):
+    """Wait until Hermes has loaded ``project``'s DARE tools; True once it has.
 
-    Hermes connects a profile's MCP servers in the background a few seconds
-    into its first run; without this, a new project's first turn has no tools.
+    Hermes starts serving a new profile, and connects its MCP servers, only when
+    its profile watcher notices the profile, some seconds after it is written.
+    A run started before then has no DARE tools. DARE's gateway records when
+    Hermes first reaches it for the project, so a run can wait for that.
     """
-    hermes = hermes_for(project)
-    run_id = hermes.start_run(
-        input_text=WARMUP_PROMPT,
-        instructions=WARMUP_PROMPT,
-        session_id=f"warmup-{project.id}",
-    )["run_id"]
-    for _ in range(30):
-        if hermes.get_run(run_id).get("status") not in ("started", "running", "queued"):
-            return
-        time.sleep(2)
+    deadline = time.monotonic() + settings.HERMES_TOOLS_WAIT_SECONDS
+    while not tools_connected(project.id):
+        if time.monotonic() >= deadline:
+            logger.warning("Hermes has not loaded the DARE tools for %s", project.id)
+            return False
+        time.sleep(1)
+    return True

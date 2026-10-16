@@ -47,6 +47,7 @@ from mcp.services.credential_service import MCPCredentialService
 from mcp.services.mcp_manager import mcp_manager, MCPManagerError
 from mcp.services.oauth_service import mcp_oauth_service, MCPOAuthError
 from research.models import ResearchProject
+from research.services.tool_readiness import mark_tools_connected
 
 logger = logging.getLogger(__name__)
 
@@ -450,6 +451,8 @@ class MCPGatewayView(APIView):
             reply = Response(response)
             reply["Mcp-Session-Id"] = open_session()
             return reply
+        if project is not None:
+            mark_tools_connected(project.id)
         if method == "tools/list" and session_id:
             mark_listed(session_id, request.user, project)
         elif (

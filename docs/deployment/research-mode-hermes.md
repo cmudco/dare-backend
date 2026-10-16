@@ -124,7 +124,7 @@ OPENALEX_MAILTO=ops@example.edu               # OpenAlex polite pool
 Defaults that rarely change: `HERMES_PROFILE_PREFIX` (`dare-proj`),
 `HERMES_PROFILE_MAX_TURNS` (30), `HERMES_PROFILE_TOKEN_DAYS` (365),
 `HERMES_STREAM_IDLE_SECONDS` (180), `HERMES_RUN_WAIT_SECONDS` (1800),
-`HERMES_PROFILE_FALLBACK_MODELS` (none).
+`HERMES_TOOLS_WAIT_SECONDS` (90), `HERMES_PROFILE_FALLBACK_MODELS` (none).
 
 - **Never set a provider without a model.** Hermes would fall through to that
   provider's flagship; DARE raises `ImproperlyConfigured` instead.
@@ -146,8 +146,13 @@ profile is created when the project is.
 | `.env` | `API_SERVER_KEY` (derived from `SECRET_KEY` and the project id), `MCP_DARE_API_KEY` (the owner's JWT, re-minted when stale), `DARE_MODEL_API_KEY` |
 | `SOUL.md`, `memories/*.md`, `skills/dare/` | Rendered from DARE's approved state (§1) |
 
-A new profile gets a warm-up run so its MCP tools are connected before the first
-real turn. Profiles of deleted projects keep retrying with dead tokens and slow
+Hermes serves a new profile, and connects its MCP servers, only once its profile
+watcher notices the directory, some seconds after DARE writes it. DARE's gateway
+records when Hermes first reaches it for a project (its tool listing, then a
+keepalive ping every 60 seconds), and every run waits for that (up to
+`HERMES_TOOLS_WAIT_SECONDS`, shown as "Connecting the agent's tools…") so a new
+project's first turn has its tools. The flag lives in the Django cache, so that
+cache must be shared by the web and worker processes (Redis). Profiles of deleted projects keep retrying with dead tokens and slow
 the gateway's start; remove their directories.
 
 Confirm routing and isolation (the listener key must be refused):

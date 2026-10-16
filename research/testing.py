@@ -14,6 +14,8 @@ class TempProfilesMixin:
         super().setUp()
         self.root = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
-        override = override_settings(HERMES_PROFILES_ROOT=str(self.root))
+        override = override_settings(
+            HERMES_PROFILES_ROOT=str(self.root), HERMES_TOOLS_WAIT_SECONDS=0
+        )
         override.enable()
         self.addCleanup(override.disable)

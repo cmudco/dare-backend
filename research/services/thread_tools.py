@@ -126,8 +126,9 @@ SCOUT_TOOL_DEFS = [
     {
         "name": "stage_finding",
         "description": (
-            "Scouts only: put one checked source into the user's Review "
-            "Inbox now. Call once per source, as soon as you have read it."
+            "Scouts only: put one finding from a source you read into the "
+            "user's Review Inbox. Call once per source, as soon as you have "
+            "read it."
         ),
         "inputSchema": {
             "type": "object",
@@ -144,18 +145,50 @@ SCOUT_TOOL_DEFS = [
                     "enum": sorted(SOURCE_KINDS),
                     "description": "What sort of source this is.",
                 },
-                "evidenceLabel": {"type": "string", "enum": sorted(EVIDENCE_LABELS)},
-                "confidence": {"type": "number", "description": "0.0 to 1.0"},
-                "rationale": {
+                "finding": {
                     "type": "string",
-                    "description": "Why it matters: design, n, the key numbers.",
+                    "description": (
+                        "What this source establishes for your task, in one or "
+                        "two sentences that stand on their own, with its numbers "
+                        "and dates. Its limits go in rationale. A page that does "
+                        "not answer the task is not a finding: do not stage it; "
+                        "list it under setAside in report_learning."
+                    ),
                 },
                 "citationContext": {
                     "type": "string",
-                    "description": "A short passage from what you read.",
+                    "description": (
+                        "The sentence on the page that backs the finding, "
+                        "copied exactly."
+                    ),
+                },
+                "evidenceLabel": {
+                    "type": "string",
+                    "enum": sorted(EVIDENCE_LABELS),
+                    "description": (
+                        "How the finding bears on your task: supporting (answers "
+                        "it or backs its claim), disputing (cuts against it), "
+                        "partial (answers part of it, or only under conditions), "
+                        "tangential (background, not an answer), unverifiable "
+                        "(you could not read enough to judge)."
+                    ),
+                },
+                "confidence": {
+                    "type": "number",
+                    "description": (
+                        "0.0 to 1.0: how fully and reliably this finding answers "
+                        "your task."
+                    ),
+                },
+                "rationale": {
+                    "type": "string",
+                    "description": (
+                        "Why it matters and its limits: design, sample, who "
+                        "published it, what it does not show."
+                    ),
                 },
             },
-            "required": ["run", "title", "rationale"],
+            "required": ["run", "title", "finding", "citationContext"],
         },
     },
     {
@@ -326,7 +359,7 @@ def _search(thread, arguments):
                 "year": source.year if source else None,
                 "url": source.url if source else "",
                 "evidenceLabel": source.evidence_label if source else "",
-                "summary": (item.content or item.rationale or "")[:600],
+                "finding": (item.content or item.rationale or "")[:600],
             }
         )
     reply = {"query": query, "results": results}
