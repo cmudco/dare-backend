@@ -20,12 +20,29 @@ class ProposalConversationSerializer(serializers.Serializer):
     title = serializers.CharField()
 
 
-class ProposalAgentSerializer(serializers.Serializer):
-    """The model a create_agent action suggests; the user picks the prompt."""
-
+class ProposalModelOptionSerializer(serializers.Serializer):
     model_ref = serializers.CharField()
     model_name = serializers.CharField()
+    role = serializers.CharField(allow_null=True)
+    why = serializers.CharField()
+    input_usd_per_million_tokens = serializers.CharField(allow_null=True)
+    output_usd_per_million_tokens = serializers.CharField(allow_null=True)
+
+
+class ProposalPromptSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    title = serializers.CharField()
+    why = serializers.CharField()
+
+
+class ProposalAgentSerializer(serializers.Serializer):
+    """The models a create_agent action offers; the user picks one on apply."""
+
+    prompt = ProposalPromptSerializer(allow_null=True)
+    options = ProposalModelOptionSerializer(many=True)
     enable_web_search = serializers.BooleanField()
+    web_search_why = serializers.CharField(allow_blank=True)
+    selected_model_ref = serializers.CharField(allow_null=True)
 
 
 class ProposalActionSerializer(serializers.Serializer):
@@ -61,6 +78,11 @@ class ProposalActionIdsSerializer(serializers.Serializer):
         max_length=PLAN_MAX_ACTIONS,
         required=False,
     )
+    model_choices = serializers.DictField(
+        child=serializers.CharField(max_length=512),
+        required=False,
+        help_text="Apply only: create_agent action id -> the offered model picked.",
+    )
 
 
 class AssistantMessageSerializer(serializers.ModelSerializer):
@@ -83,6 +105,18 @@ class AssistantMessageSerializer(serializers.ModelSerializer):
 class AssistantUsageSerializer(serializers.Serializer):
     used_today = serializers.IntegerField()
     daily_limit = serializers.IntegerField()
+
+
+class AssistantThreadSummarySerializer(serializers.Serializer):
+    """One past conversation in the history menu."""
+
+    id = serializers.IntegerField()
+    title = serializers.CharField(allow_null=True)
+    last_message_at = serializers.DateTimeField()
+    is_open = serializers.SerializerMethodField()
+
+    def get_is_open(self, thread) -> bool:
+        return thread.closed_at is None
 
 
 class AssistantThreadSerializer(serializers.Serializer):

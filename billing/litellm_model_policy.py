@@ -2,6 +2,9 @@
 
 import re
 from collections.abc import Iterable
+from dataclasses import dataclass
+from decimal import Decimal
+from typing import Optional
 
 from core.services.model_identity import supports_vision
 
@@ -78,24 +81,80 @@ def is_text_model(model: str) -> bool:
     return not _NON_TEXT.search(model)
 
 
-def recommend_agent_models(models: Iterable[str]) -> list[str]:
-    """The newest flagship GPT, then the newest full Gemini: chat agent defaults."""
-    candidates = _unique_text_models(models)
-    gpt = max(
-        (model for model in candidates if _gpt_tier(model) is not None),
-        key=_gpt_rank,
-        default=None,
+@dataclass(frozen=True)
+class PricedModel:
+    """A chat model and its output price in USD per million tokens, if known."""
+
+    identifier: str
+    output_rate: Optional[Decimal]
+
+
+class AgentModelRole:
+    """Why a model is offered for an agent; also the order they are offered in."""
+
+    QUALITY = "quality"
+    BALANCED = "balanced"
+    BUDGET = "budget"
+
+
+@dataclass(frozen=True)
+class AgentModelPick:
+    identifier: str
+    role: str
+
+
+def recommend_agent_models(
+    models: Iterable[PricedModel], *, max_output_rate: Decimal
+) -> list[AgentModelPick]:
+    """Up to three agent models for the user to choose between.
+
+    Quality is the newest flagship GPT, balanced the newest Gemini Flash (or
+    other full Gemini), budget the newest GPT Luna (or Gemini Flash-Lite). A
+    model without a known price, or priced above ``max_output_rate``, is
+    never offered: a newer model is not worth a student's capped allowance
+    when it costs several times more.
+    """
+    affordable = _unique_text_models(
+        model.identifier
+        for model in models
+        if model.output_rate is not None and model.output_rate <= max_output_rate
     )
-    gemini = max(
+    gemini = [model for model in affordable if _GEMINI.search(model)]
+    full_gemini = [model for model in gemini if "lite" not in model.casefold()]
+    picks = (
         (
-            model
-            for model in candidates
-            if _GEMINI.search(model) and "lite" not in model.casefold()
+            AgentModelRole.QUALITY,
+            _newest_gpt(affordable, tiers=("sol", None, "terra")),
         ),
-        key=_gemini_rank,
-        default=None,
+        (
+            AgentModelRole.BALANCED,
+            _newest(
+                [m for m in full_gemini if _GEMINI_FLASH.search(m)] or full_gemini,
+                _gemini_rank,
+            ),
+        ),
+        (
+            AgentModelRole.BUDGET,
+            _newest_gpt(affordable, tiers=("luna",))
+            or _newest([m for m in gemini if m not in full_gemini], _gemini_rank),
+        ),
     )
-    return [model for model in (gpt, gemini) if model]
+    return [AgentModelPick(model, role) for role, model in picks if model]
+
+
+def _newest_gpt(models: list[str], *, tiers) -> Optional[str]:
+    return _newest(
+        [
+            model
+            for model in models
+            if _gpt_tier(model) is not None and _gpt_tier_name(model) in tiers
+        ],
+        _gpt_rank,
+    )
+
+
+def _newest(models: list[str], rank) -> Optional[str]:
+    return max(models, key=rank, default=None)
 
 
 def recommend_vision_models(models: Iterable[str]) -> list[str]:
@@ -172,12 +231,17 @@ def _haiku_rank(model: str) -> tuple[int, int, str]:
     return major, minor, model.casefold()
 
 
-def _gpt_tier(model: str):
+def _gpt_tier_name(model: str) -> Optional[str]:
     match = _GPT_VERSION.search(model)
-    if not match:
+    if not match or not match.group("tier"):
         return None
-    tier = (match.group("tier") or "").lower() or None
-    return _GPT_TIERS.get(tier)
+    return match.group("tier").lower()
+
+
+def _gpt_tier(model: str):
+    if not _GPT_VERSION.search(model):
+        return None
+    return _GPT_TIERS.get(_gpt_tier_name(model))
 
 
 def _gpt_rank(model: str) -> tuple:
