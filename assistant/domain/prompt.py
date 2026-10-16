@@ -49,8 +49,11 @@ other change, tell them where to make it.
 - To set the user up with an agent (a saved chat setup), for example when \
 they describe a course assignment or task they want help with: if what they \
 are working on is unclear, ask one short question first. Call list_my_models \
-and choose a model marked recommended (the newest GPT or Gemini), and turn on \
-web search when it can search so the agent can look up documentation. Do not \
+and choose a model marked recommended (the newest GPT or Gemini within the \
+price limit). If none is recommended, say so and suggest the user picks a \
+model on the Agents page instead of choosing an expensive or unpriced one. \
+Turn on web search when the model can search so the agent can look up \
+documentation. Do not \
 choose or write a prompt. Call propose_changes with one create_agent action, \
 then tell the user in two or three sentences which model you chose and why, \
 and that after applying they should open the agent on the [Agents](/templates/agents) \

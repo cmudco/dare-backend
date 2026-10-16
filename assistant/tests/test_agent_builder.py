@@ -1,9 +1,10 @@
 """Ask DARE setting up agents: suggesting a model and web search, never a prompt."""
 
+from decimal import Decimal
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
 from agents.models import Agent
@@ -14,16 +15,23 @@ from billing.constants import LiteLLMKeySourceChoice, UserWalletPreferenceTypeCh
 from billing.models import LiteLLMKey
 from conversations.models import LLM
 from conversations.services.llm_filter_service import WalletMeta, _litellm_entry
+from core.services.reference_pricing import ReferenceRates
 
-GATEWAY_MODELS = (
-    "gpt-5.5",
-    "gpt-6.1-sol",
-    "gemini/gemini-3.8-flash",
-    "gemini/gemini-3.5-flash-lite",
-    "us.meta.llama3-1-8b-instruct-v1:0",
-    "text-embedding-3-small",
-    "gpt-4o-transcribe",
-)
+# Gateway models with registry output prices (USD per million tokens).
+GATEWAY_PRICES = {
+    "gpt-5.5": "30",
+    "gpt-6.1-sol": "10",
+    "gemini/gemini-3.8-flash": "3.75",
+    "gemini/gemini-3.5-flash-lite": "2.5",
+    "us.meta.llama3-1-8b-instruct-v1:0": None,
+    "text-embedding-3-small": "0.02",
+    "gpt-4o-transcribe": "10",
+}
+
+
+def registry_rates(model_name):
+    rate = GATEWAY_PRICES.get(model_name)
+    return None if rate is None else ReferenceRates(Decimal("1"), Decimal(rate))
 
 
 class AgentBuilderTestCase(TestCase):
@@ -46,12 +54,18 @@ class AgentBuilderTestCase(TestCase):
         roster = patch(
             "assistant.services.agent_builder.filter_for_active_wallet",
             return_value=(
-                [_litellm_entry(self.key, model) for model in GATEWAY_MODELS],
+                [_litellm_entry(self.key, model) for model in GATEWAY_PRICES],
                 WalletMeta(type=UserWalletPreferenceTypeChoice.LITELLM),
             ),
         )
         roster.start()
         self.addCleanup(roster.stop)
+        prices = patch(
+            "assistant.services.agent_builder.reference_rates",
+            side_effect=registry_rates,
+        )
+        prices.start()
+        self.addCleanup(prices.stop)
 
     def ref(self, model):
         return f"litellm:{self.key.pk}:{model}"
@@ -83,6 +97,14 @@ class ListModelsTests(AgentBuilderTestCase):
         self.assertNotIn("text-embedding-3-small", names)
         self.assertNotIn("gpt-4o-transcribe", names)
         self.assertTrue(models[0]["accepts_images"] and models[0]["web_search"])
+        self.assertEqual(models[0]["output_usd_per_million_tokens"], "10")
+
+    @override_settings(ASSISTANT_AGENT_MAX_OUTPUT_RATE=Decimal("5"))
+    def test_a_lower_ceiling_drops_the_gpt_that_no_longer_fits(self):
+        models = execute_account_tool(LIST_MY_MODELS, {}, self.user)["models"]
+
+        recommended = [m["name"] for m in models if m["recommended"]]
+        self.assertEqual(recommended, ["gemini/gemini-3.8-flash"])
 
 
 class CreateAgentTests(AgentBuilderTestCase):
@@ -134,16 +156,29 @@ class CreateAgentTests(AgentBuilderTestCase):
 
 
 class DareWalletTests(TestCase):
-    def test_dare_models_report_images_from_the_catalogue(self):
+    """DARE models are priced from their own rows, not the registry."""
+
+    def test_dare_models_are_ranked_by_their_database_price(self):
         user = get_user_model().objects.create_user(email="dare@example.com")
-        seeing = LLM.objects.create(
-            name="Seeing Model",
-            identifier="seeing-model",
+        LLM.objects.filter(is_active=True).update(is_active=False)
+        affordable = LLM.objects.create(
+            name="GPT-8 Sol",
+            identifier="gpt-8-sol",
             provider="openai",
             supports_vision=True,
+            output_token_rate_per_million=Decimal("8"),
+        )
+        LLM.objects.create(
+            name="GPT-9 Sol",
+            identifier="gpt-9-sol",
+            provider="openai",
+            output_token_rate_per_million=Decimal("60"),
         )
 
         models = execute_account_tool(LIST_MY_MODELS, {}, user)["models"]
 
-        entry = next(m for m in models if m["model_ref"] == str(seeing.pk))
-        self.assertTrue(entry["accepts_images"])
+        self.assertEqual(
+            [m["model_ref"] for m in models if m["recommended"]],
+            [str(affordable.pk)],
+        )
+        self.assertTrue(models[0]["accepts_images"])

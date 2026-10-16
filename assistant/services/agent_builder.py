@@ -5,15 +5,23 @@ The assistant suggests a model and web search only; the user sets the
 agent's prompt on the Agents page.
 """
 
-from typing import Any, Dict, List, Tuple
+from decimal import Decimal
+from typing import Any, Dict, List, Optional, Tuple
+
+from django.conf import settings
 
 from agents.models import Agent
 from assistant.domain.agent_draft import AgentDraft
-from billing.litellm_model_policy import is_text_model, recommend_agent_models
+from billing.litellm_model_policy import (
+    PricedModel,
+    is_text_model,
+    recommend_agent_models,
+)
 from conversations.models import LLM
 from conversations.services.llm_filter_service import filter_for_active_wallet
 from core.services.model_identity import supports_vision
 from core.services.model_ref import ModelRefUnavailable, resolve_model_ref
+from core.services.reference_pricing import reference_rates
 
 Roster = Dict[str, Dict[str, Any]]
 
@@ -21,7 +29,8 @@ Roster = Dict[str, Dict[str, Any]]
 def model_roster(user) -> Roster:
     """The chat models the user's active wallet offers, keyed by picker id.
 
-    Recommended models (the newest flagship GPT and Gemini) come first.
+    Recommended models (the newest affordable flagship GPT and Gemini) come
+    first.
     """
     catalog = LLM.visible_for_user(user).order_by("tier", "name")
     entries, _ = filter_for_active_wallet(user, catalog)
@@ -33,11 +42,18 @@ def model_roster(user) -> Roster:
         and not entry["is_audio_transcriber"]
         and is_text_model(entry["identifier"])
     ]
-    recommended = set(recommend_agent_models(entry["identifier"] for entry in chat))
+    prices = {entry["id"]: _output_rate(entry) for entry in chat}
+    recommended = set(
+        recommend_agent_models(
+            (PricedModel(entry["identifier"], prices[entry["id"]]) for entry in chat),
+            max_output_rate=settings.ASSISTANT_AGENT_MAX_OUTPUT_RATE,
+        )
+    )
     chat.sort(key=lambda entry: entry["identifier"] not in recommended)
     return {
         entry["id"]: {
             **entry,
+            "output_rate": prices[entry["id"]],
             "recommended": entry["identifier"] in recommended,
             "accepts_images": (
                 images.get(int(entry["id"]), False)
@@ -49,6 +65,16 @@ def model_roster(user) -> Roster:
     }
 
 
+def _output_rate(entry: Dict[str, Any]) -> Optional[Decimal]:
+    """USD per million output tokens: the DARE model's own rate, or the price
+    registry's for a gateway model (gateway entries carry zero rates)."""
+    if entry["id"].isdigit():
+        rate = entry["output_token_rate_per_million"]
+        return Decimal(str(rate)) if rate else None
+    rates = reference_rates(entry["identifier"])
+    return rates.output_token_rate_per_million if rates else None
+
+
 def list_my_models(user) -> Dict[str, Any]:
     return {
         "success": True,
@@ -57,6 +83,11 @@ def list_my_models(user) -> Dict[str, Any]:
                 "model_ref": ref,
                 "name": entry["name"],
                 "recommended": entry["recommended"],
+                "output_usd_per_million_tokens": (
+                    str(entry["output_rate"])
+                    if entry["output_rate"] is not None
+                    else None
+                ),
                 "accepts_images": entry["accepts_images"],
                 "web_search": entry.get("supports_web_search", True),
             }

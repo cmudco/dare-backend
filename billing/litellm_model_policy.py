@@ -2,6 +2,9 @@
 
 import re
 from collections.abc import Iterable
+from dataclasses import dataclass
+from decimal import Decimal
+from typing import Optional
 
 from core.services.model_identity import supports_vision
 
@@ -78,9 +81,29 @@ def is_text_model(model: str) -> bool:
     return not _NON_TEXT.search(model)
 
 
-def recommend_agent_models(models: Iterable[str]) -> list[str]:
-    """The newest flagship GPT, then the newest full Gemini: chat agent defaults."""
-    candidates = _unique_text_models(models)
+@dataclass(frozen=True)
+class PricedModel:
+    """A chat model and its output price in USD per million tokens, if known."""
+
+    identifier: str
+    output_rate: Optional[Decimal]
+
+
+def recommend_agent_models(
+    models: Iterable[PricedModel], *, max_output_rate: Decimal
+) -> list[str]:
+    """The newest affordable flagship GPT, then the newest affordable Gemini.
+
+    A model without a known price, or priced above ``max_output_rate``, is
+    never recommended: a newer model is not worth a student's capped allowance
+    when it costs several times more. At equal versions Gemini Flash beats Pro.
+    """
+    affordable = {
+        model.identifier
+        for model in models
+        if model.output_rate is not None and model.output_rate <= max_output_rate
+    }
+    candidates = _unique_text_models(affordable)
     gpt = max(
         (model for model in candidates if _gpt_tier(model) is not None),
         key=_gpt_rank,
@@ -92,7 +115,10 @@ def recommend_agent_models(models: Iterable[str]) -> list[str]:
             for model in candidates
             if _GEMINI.search(model) and "lite" not in model.casefold()
         ),
-        key=_gemini_rank,
+        key=lambda model: (
+            *_gemini_rank(model)[:4],
+            _GEMINI_FLASH.search(model) is not None,
+        ),
         default=None,
     )
     return [model for model in (gpt, gemini) if model]

@@ -1,6 +1,9 @@
+from decimal import Decimal
+
 from django.test import SimpleTestCase
 
 from billing.litellm_model_policy import (
+    PricedModel,
     is_text_model,
     recommend_agent_models,
     recommend_background_models,
@@ -151,41 +154,66 @@ class VisionModelPolicyTests(SimpleTestCase):
         )
 
 
-# The CMU gateway roster as Ask DARE saw it when it picked gpt-5.5.
-GATEWAY_ROSTER = [
-    "us.anthropic.claude-opus-5-5",
-    "bedrock_mantle/openai.gpt-5.5",
-    "bedrock_mantle/openai.gpt-5.6-sol",
-    "gemini/gemini-3.8-flash",
-    "gemini/gemini-3.1-pro-preview",
-    "gemini/gemini-3.5-flash-lite",
-    "gemini/gemini-2.5-flash-image",
-    "gpt-5.4-pro",
-    "gpt-5.5",
-    "gpt-6-astra",
-    "gpt-6-luna",
-    "gpt-6.1-sol",
-    "gpt-6-sol",
-    "gpt-image-2",
-    "text-embedding-3-small",
-    "gpt-4o-transcribe",
-]
+def priced(prices):
+    return [
+        PricedModel(model, None if rate is None else Decimal(rate))
+        for model, rate in prices.items()
+    ]
+
+
+CEILING = Decimal("10")
+
+# The CMU gateway roster with output prices (USD per million tokens).
+GATEWAY_PRICES = {
+    "bedrock_mantle/openai.gpt-5.5": "30",
+    "gemini/gemini-3.8-flash": "3.75",
+    "gemini/gemini-3.1-pro-preview": "12",
+    "gemini/gemini-3.5-flash-lite": "2.5",
+    "gpt-5.4-pro": "180",
+    "gpt-5.5": "30",
+    "gpt-5.6-sol": "20",
+    "gpt-6-astra": "50",
+    "gpt-6-luna": "0.5",
+    "gpt-6.1-sol": "10",
+    "gpt-6-sol": "10",
+    "text-embedding-3-small": "0",
+}
 
 
 class AgentModelRecommendationTests(SimpleTestCase):
-    def test_recommends_the_newest_flagship_gpt_then_the_newest_gemini(self):
+    def recommend(self, prices):
+        return recommend_agent_models(priced(prices), max_output_rate=CEILING)
+
+    def test_recommends_the_newest_affordable_flagship_gpt_and_gemini(self):
         self.assertEqual(
-            recommend_agent_models(GATEWAY_ROSTER),
+            self.recommend(GATEWAY_PRICES),
             ["gpt-6.1-sol", "gemini/gemini-3.8-flash"],
         )
 
-    def test_prefers_the_clean_id_over_a_provider_alias(self):
+    def test_a_newer_model_above_the_ceiling_loses_to_an_affordable_one(self):
+        prices = {**GATEWAY_PRICES, "gpt-7-sol": "60", "gemini/gemini-4.0-flash": "15"}
+
         self.assertEqual(
-            recommend_agent_models(
-                ["bedrock_mantle/openai.gpt-5.6-sol", "gpt-5.6-sol"]
-            ),
-            ["gpt-5.6-sol"],
+            self.recommend(prices), ["gpt-6.1-sol", "gemini/gemini-3.8-flash"]
         )
+
+    def test_an_unpriced_model_is_never_recommended(self):
+        prices = {**GATEWAY_PRICES, "gpt-7-sol": None}
+
+        self.assertEqual(self.recommend(prices)[0], "gpt-6.1-sol")
+
+    def test_flash_beats_pro_at_the_same_version(self):
+        prices = {"gemini/gemini-3.9-pro": "8", "gemini/gemini-3.9-flash": "4"}
+
+        self.assertEqual(self.recommend(prices), ["gemini/gemini-3.9-flash"])
+
+    def test_nothing_affordable_means_no_recommendation(self):
+        self.assertEqual(self.recommend({"gpt-6-astra": "50", "gpt-5.5": "30"}), [])
+
+    def test_prefers_the_clean_id_over_a_provider_alias(self):
+        prices = {"bedrock_mantle/openai.gpt-6-sol": "10", "gpt-6-sol": "10"}
+
+        self.assertEqual(self.recommend(prices), ["gpt-6-sol"])
 
     def test_non_chat_models_are_not_text_models(self):
         for model in ("text-embedding-3-small", "gpt-4o-transcribe", "gpt-image-2"):

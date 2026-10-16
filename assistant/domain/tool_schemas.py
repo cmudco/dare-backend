@@ -166,9 +166,11 @@ def list_my_models_schema() -> Dict:
         LIST_MY_MODELS,
         "The chat models the user can use right now, from the wallet that "
         "pays for their chats (their LiteLLM gateway models when that wallet "
-        "is a gateway). Recommended models, the newest GPT and Gemini, come "
-        "first. Per model: model_ref (pass it to create_agent), name, "
-        "recommended, and whether it accepts images and can search the web.",
+        "is a gateway). Recommended models, the newest GPT and Gemini within "
+        "the price limit for agents, come first. Per model: model_ref (pass it "
+        "to create_agent), name, recommended, output price in USD per million "
+        "tokens (null when unknown), and whether it accepts images and can "
+        "search the web.",
         {},
     )
 
