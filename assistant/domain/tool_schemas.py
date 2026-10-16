@@ -16,6 +16,7 @@ from assistant.constants import (
     LIST_MY_FILES,
     LIST_MY_MODELS,
     LIST_MY_PROJECTS,
+    SEARCH_MY_PROMPTS,
     PLAN_MAX_ACTIONS,
     PROPOSE_CHANGES,
     SEARCH_PLATFORM_DOCS,
@@ -178,6 +179,25 @@ def list_my_models_schema() -> Dict:
     )
 
 
+def search_my_prompts_schema() -> Dict:
+    return _function(
+        SEARCH_MY_PROMPTS,
+        "Search the user's saved prompts (including ones cloned from the "
+        "Prompts library) by keywords in their title or text, best match "
+        "first: prompt_id, title and the start of the text.",
+        {
+            "query": {
+                "type": "string",
+                "description": (
+                    "Keywords from the user's task, such as the course, "
+                    "assignment name or tools, or the prompt title they gave."
+                ),
+            }
+        },
+        required=("query",),
+    )
+
+
 _AGENT_SCHEMA = {
     "type": "object",
     "description": "create_agent only: the models to offer and whether to search the web.",
@@ -209,6 +229,22 @@ _AGENT_SCHEMA = {
                 },
                 "required": ["model_ref", "why"],
             },
+        },
+        "prompt": {
+            "type": "object",
+            "description": (
+                "One of the user's prompts from search_my_prompts that fits "
+                "this task; omit when none clearly fits."
+            ),
+            "properties": {
+                "prompt_id": {"type": "integer"},
+                "why": {
+                    "type": "string",
+                    "maxLength": AGENT_REASON_MAX_LENGTH,
+                    "description": "One sentence on why this prompt fits the task.",
+                },
+            },
+            "required": ["prompt_id", "why"],
         },
         "enable_web_search": {"type": "boolean"},
         "web_search_why": {
@@ -244,8 +280,8 @@ def propose_changes_schema() -> Dict:
         "- delete_project: name=project; its chats return to the chat list.\n"
         "- delete_conversations: conversation_ids.\n"
         "- create_agent: name=agent name, agent={options (1-3 models, each "
-        "with why), enable_web_search, web_search_why, description}. The user "
-        "picks the model on the card and sets the prompt themselves.",
+        "with why), enable_web_search, web_search_why, optional prompt "
+        "{prompt_id, why}, description}. The user picks the model on the card.",
         {
             "summary": {
                 "type": "string",

@@ -29,9 +29,16 @@ class ProposalModelOptionSerializer(serializers.Serializer):
     output_usd_per_million_tokens = serializers.CharField(allow_null=True)
 
 
+class ProposalPromptSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    title = serializers.CharField()
+    why = serializers.CharField()
+
+
 class ProposalAgentSerializer(serializers.Serializer):
     """The models a create_agent action offers; the user picks one on apply."""
 
+    prompt = ProposalPromptSerializer(allow_null=True)
     options = ProposalModelOptionSerializer(many=True)
     enable_web_search = serializers.BooleanField()
     web_search_why = serializers.CharField(allow_blank=True)

@@ -8,7 +8,12 @@ from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
 from agents.models import Agent
-from assistant.constants import LIST_MY_MODELS, PROPOSE_CHANGES, ProposalStatus
+from assistant.constants import (
+    LIST_MY_MODELS,
+    PROPOSE_CHANGES,
+    SEARCH_MY_PROMPTS,
+    ProposalStatus,
+)
 from assistant.models import AssistantProposal
 from assistant.services.account_tools import execute_account_tool
 from billing.constants import LiteLLMKeySourceChoice, UserWalletPreferenceTypeChoice
@@ -16,6 +21,7 @@ from billing.models import LiteLLMKey
 from conversations.models import LLM
 from conversations.services.llm_filter_service import WalletMeta, _litellm_entry
 from core.services.reference_pricing import ReferenceRates
+from prompts.models import Prompt
 
 # Gateway models with registry output prices (USD per million tokens).
 GATEWAY_PRICES = {
@@ -219,6 +225,88 @@ class CreateAgentTests(AgentBuilderTestCase):
                 self.assertIn(expected, self.propose_agent(agent)["error"])
         self.assertIn("needs an `agent`", self.propose_agent(None)["error"])
         self.assertFalse(AssistantProposal.objects.exists())
+
+
+class PromptSuggestionTests(AgentBuilderTestCase):
+    def setUp(self):
+        super().setUp()
+        self.a2 = Prompt.active_objects.create(
+            user=self.user,
+            title="A2 Parametric Span coach",
+            content="Help students with GHPython in Grasshopper.",
+        )
+        Prompt.active_objects.create(
+            user=self.user, title="Essay coach", content="Mentions Grasshopper once."
+        )
+        other = get_user_model().objects.create_user(email="other-prompts@example.com")
+        Prompt.active_objects.create(
+            user=other, title="A2 Parametric Span (theirs)", content="x"
+        )
+
+    def search(self, query):
+        return execute_account_tool(SEARCH_MY_PROMPTS, {"query": query}, self.user)
+
+    def test_title_matches_rank_first_and_other_users_prompts_never_appear(self):
+        prompts = self.search("A2 Parametric Span Grasshopper")["prompts"]
+
+        self.assertEqual(
+            [p["title"] for p in prompts], ["A2 Parametric Span coach", "Essay coach"]
+        )
+
+    def test_only_the_newest_version_of_a_prompt_is_found(self):
+        newer = Prompt.active_objects.create(
+            user=self.user,
+            title="A2 Parametric Span coach",
+            content="v2",
+            parent=self.a2,
+        )
+
+        ids = [p["prompt_id"] for p in self.search("parametric")["prompts"]]
+
+        self.assertEqual(ids, [newer.id])
+
+    def test_a_query_without_keywords_is_rejected(self):
+        self.assertIn("keywords", self.search("a b")["error"])
+
+    def propose(self, prompt):
+        return self.propose_agent(
+            {
+                "options": [{"model_ref": self.ref("gpt-6-luna"), "why": "Cheap."}],
+                "enable_web_search": False,
+                "prompt": prompt,
+            }
+        )
+
+    def test_a_suggested_prompt_is_shown_and_set_on_apply(self):
+        proposal_id = self.propose(
+            {"prompt_id": self.a2.id, "why": "It is the A2 course prompt."}
+        )["proposal_id"]
+
+        applied = self.post(proposal_id, "apply").json()
+
+        self.assertEqual(
+            applied["actions"][0]["agent"]["prompt"],
+            {
+                "id": self.a2.id,
+                "title": "A2 Parametric Span coach",
+                "why": "It is the A2 course prompt.",
+            },
+        )
+        self.assertEqual(Agent.active_objects.get(user=self.user).prompt, self.a2)
+
+    def test_a_blank_suggestion_means_no_prompt(self):
+        proposal_id = self.propose({"prompt_id": 0, "why": ""})["proposal_id"]
+
+        self.post(proposal_id, "apply")
+
+        self.assertIsNone(Agent.active_objects.get(user=self.user).prompt_id)
+
+    def test_another_users_prompt_cannot_be_suggested(self):
+        theirs = Prompt.active_objects.exclude(user=self.user).get()
+
+        result = self.propose({"prompt_id": theirs.id, "why": "x"})
+
+        self.assertIn("Unknown prompt_id", result["error"])
 
 
 class DareWalletTests(TestCase):

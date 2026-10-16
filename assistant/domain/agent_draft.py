@@ -1,10 +1,10 @@
 """Validation of a model-written agent setup inside a create_agent action.
 
 The assistant offers one to three models, each with a sentence on why it
-suits the user's task, and whether (and why) to search the web; the user
-picks one of the models when applying, and the prompt themselves. Whether
-the models are ones the user can use is checked against their roster by the
-proposal service.
+suits the user's task, whether (and why) to search the web, and optionally
+one of the user's own prompts it found for the task; the user picks one of
+the models when applying. Whether the models and prompt are the user's to
+use is checked against their data by the proposal service.
 """
 
 from dataclasses import dataclass
@@ -24,11 +24,18 @@ class ModelOffer:
 
 
 @dataclass(frozen=True)
+class PromptSuggestion:
+    prompt_id: int
+    why: str
+
+
+@dataclass(frozen=True)
 class AgentDraft:
     description: str
     offers: Tuple[ModelOffer, ...]
     enable_web_search: bool
     web_search_why: str
+    prompt: Optional[PromptSuggestion]
 
     @property
     def model_refs(self) -> Tuple[str, ...]:
@@ -60,7 +67,20 @@ def parse_agent_draft(raw: Any, label: str, errors: List[str]) -> Optional[Agent
         web_search_why=(
             web_search_why[:AGENT_REASON_MAX_LENGTH] if enable_web_search else ""
         ),
+        prompt=_prompt(raw.get("prompt")),
     )
+
+
+def _prompt(raw: Any) -> Optional[PromptSuggestion]:
+    """The suggested prompt, or None; models that fill every field send a zero
+    id or a blank reason when they found none."""
+    if not isinstance(raw, dict):
+        return None
+    prompt_id = raw.get("prompt_id")
+    why = str(raw.get("why") or "").strip()
+    if type(prompt_id) is not int or prompt_id <= 0 or not why:
+        return None
+    return PromptSuggestion(prompt_id, why[:AGENT_REASON_MAX_LENGTH])
 
 
 def _offers(raw: Any) -> Optional[Tuple[ModelOffer, ...]]:
