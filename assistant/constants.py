@@ -12,6 +12,9 @@ PAGE_PATH_MAX_LENGTH = 512
 HISTORY_MESSAGES = 20
 # Messages a thread returns to the client when it is opened.
 THREAD_PAYLOAD_MESSAGES = 100
+# Past conversations listed in the history menu, newest first.
+THREAD_HISTORY_LIMIT = 50
+THREAD_TITLE_LENGTH = 80
 MAX_OUTPUT_TOKENS = 4000
 DOCS_SEARCH_TOP_K = 6
 # After either cap the model must answer with what it has found.

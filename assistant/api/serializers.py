@@ -85,6 +85,18 @@ class AssistantUsageSerializer(serializers.Serializer):
     daily_limit = serializers.IntegerField()
 
 
+class AssistantThreadSummarySerializer(serializers.Serializer):
+    """One past conversation in the history menu."""
+
+    id = serializers.IntegerField()
+    title = serializers.CharField(allow_null=True)
+    last_message_at = serializers.DateTimeField()
+    is_open = serializers.SerializerMethodField()
+
+    def get_is_open(self, thread) -> bool:
+        return thread.closed_at is None
+
+
 class AssistantThreadSerializer(serializers.Serializer):
     id = serializers.IntegerField()
     messages = AssistantMessageSerializer(many=True)

@@ -6,6 +6,7 @@ from rest_framework.views import APIView
 from assistant.api.serializers import (
     AssistantProposalSerializer,
     AssistantThreadSerializer,
+    AssistantThreadSummarySerializer,
     ProposalActionIdsSerializer,
 )
 from assistant.services.proposal_service import (
@@ -17,9 +18,12 @@ from assistant.services.proposal_service import (
     undo_actions,
 )
 from assistant.services.thread_service import (
+    AssistantThreadNotFound,
     open_thread,
     recent_messages,
+    reopen_thread,
     start_new_thread,
+    thread_history,
     usage,
 )
 
@@ -53,6 +57,32 @@ class AssistantNewThreadView(APIView):
         return Response(
             _thread_payload(thread, request.user), status=status.HTTP_201_CREATED
         )
+
+
+class AssistantThreadHistoryView(APIView):
+    """The user's past conversations with the assistant, newest first."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        return Response(
+            AssistantThreadSummarySerializer(
+                thread_history(request.user), many=True
+            ).data
+        )
+
+
+class AssistantOpenThreadView(APIView):
+    """Switch to a past conversation; it becomes the open thread."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, thread_id: int):
+        try:
+            thread = reopen_thread(request.user, thread_id)
+        except AssistantThreadNotFound:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        return Response(_thread_payload(thread, request.user))
 
 
 class ProposalView(APIView):
