@@ -20,12 +20,19 @@ class ProposalConversationSerializer(serializers.Serializer):
     title = serializers.CharField()
 
 
-class ProposalAgentSerializer(serializers.Serializer):
-    """The model a create_agent action suggests; the user picks the prompt."""
-
+class ProposalModelOptionSerializer(serializers.Serializer):
     model_ref = serializers.CharField()
     model_name = serializers.CharField()
+    role = serializers.CharField(allow_null=True)
+    output_usd_per_million_tokens = serializers.CharField(allow_null=True)
+
+
+class ProposalAgentSerializer(serializers.Serializer):
+    """The models a create_agent action offers; the user picks one on apply."""
+
+    options = ProposalModelOptionSerializer(many=True)
     enable_web_search = serializers.BooleanField()
+    selected_model_ref = serializers.CharField(allow_null=True)
 
 
 class ProposalActionSerializer(serializers.Serializer):
@@ -60,6 +67,11 @@ class ProposalActionIdsSerializer(serializers.Serializer):
         child=serializers.CharField(max_length=8),
         max_length=PLAN_MAX_ACTIONS,
         required=False,
+    )
+    model_choices = serializers.DictField(
+        child=serializers.CharField(max_length=512),
+        required=False,
+        help_text="Apply only: create_agent action id -> the offered model picked.",
     )
 
 

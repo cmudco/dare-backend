@@ -3,6 +3,7 @@ from decimal import Decimal
 from django.test import SimpleTestCase
 
 from billing.litellm_model_policy import (
+    AgentModelRole,
     PricedModel,
     is_text_model,
     recommend_agent_models,
@@ -182,30 +183,62 @@ GATEWAY_PRICES = {
 
 class AgentModelRecommendationTests(SimpleTestCase):
     def recommend(self, prices):
-        return recommend_agent_models(priced(prices), max_output_rate=CEILING)
+        return [
+            (pick.role, pick.identifier)
+            for pick in recommend_agent_models(priced(prices), max_output_rate=CEILING)
+        ]
 
-    def test_recommends_the_newest_affordable_flagship_gpt_and_gemini(self):
+    def test_offers_quality_balanced_and_budget_picks(self):
         self.assertEqual(
             self.recommend(GATEWAY_PRICES),
-            ["gpt-6.1-sol", "gemini/gemini-3.8-flash"],
+            [
+                (AgentModelRole.QUALITY, "gpt-6.1-sol"),
+                (AgentModelRole.BALANCED, "gemini/gemini-3.8-flash"),
+                (AgentModelRole.BUDGET, "gpt-6-luna"),
+            ],
         )
 
     def test_a_newer_model_above_the_ceiling_loses_to_an_affordable_one(self):
-        prices = {**GATEWAY_PRICES, "gpt-7-sol": "60", "gemini/gemini-4.0-flash": "15"}
+        prices = {
+            **GATEWAY_PRICES,
+            "gpt-7-sol": "60",
+            "gemini/gemini-4.0-flash": "15",
+        }
 
         self.assertEqual(
-            self.recommend(prices), ["gpt-6.1-sol", "gemini/gemini-3.8-flash"]
+            self.recommend(prices)[:2],
+            [
+                (AgentModelRole.QUALITY, "gpt-6.1-sol"),
+                (AgentModelRole.BALANCED, "gemini/gemini-3.8-flash"),
+            ],
         )
 
-    def test_an_unpriced_model_is_never_recommended(self):
+    def test_an_unpriced_model_is_never_offered(self):
         prices = {**GATEWAY_PRICES, "gpt-7-sol": None}
 
-        self.assertEqual(self.recommend(prices)[0], "gpt-6.1-sol")
+        self.assertEqual(self.recommend(prices)[0][1], "gpt-6.1-sol")
 
     def test_flash_beats_pro_at_the_same_version(self):
         prices = {"gemini/gemini-3.9-pro": "8", "gemini/gemini-3.9-flash": "4"}
 
-        self.assertEqual(self.recommend(prices), ["gemini/gemini-3.9-flash"])
+        self.assertEqual(
+            self.recommend(prices),
+            [(AgentModelRole.BALANCED, "gemini/gemini-3.9-flash")],
+        )
+
+    def test_flash_lite_is_the_budget_pick_without_a_luna(self):
+        prices = {
+            "gemini/gemini-3.8-flash": "3.75",
+            "gemini/gemini-3.5-flash-lite": "2.5",
+        }
+
+        self.assertEqual(
+            self.recommend(prices),
+            [
+                (AgentModelRole.BALANCED, "gemini/gemini-3.8-flash"),
+                (AgentModelRole.BUDGET, "gemini/gemini-3.5-flash-lite"),
+            ],
+        )
 
     def test_nothing_affordable_means_no_recommendation(self):
         self.assertEqual(self.recommend({"gpt-6-astra": "50", "gpt-5.5": "30"}), [])
@@ -213,7 +246,9 @@ class AgentModelRecommendationTests(SimpleTestCase):
     def test_prefers_the_clean_id_over_a_provider_alias(self):
         prices = {"bedrock_mantle/openai.gpt-6-sol": "10", "gpt-6-sol": "10"}
 
-        self.assertEqual(self.recommend(prices), ["gpt-6-sol"])
+        self.assertEqual(
+            self.recommend(prices), [(AgentModelRole.QUALITY, "gpt-6-sol")]
+        )
 
     def test_non_chat_models_are_not_text_models(self):
         for model in ("text-embedding-3-small", "gpt-4o-transcribe", "gpt-image-2"):

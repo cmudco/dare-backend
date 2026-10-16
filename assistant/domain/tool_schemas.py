@@ -6,6 +6,7 @@ Kept free of ORM imports so the DARE tool registry can import them.
 from typing import Dict
 
 from assistant.constants import (
+    AGENT_MAX_MODEL_OPTIONS,
     GET_ACCOUNT_OVERVIEW,
     GET_CONVERSATION,
     GET_PROJECT,
@@ -166,30 +167,34 @@ def list_my_models_schema() -> Dict:
         LIST_MY_MODELS,
         "The chat models the user can use right now, from the wallet that "
         "pays for their chats (their LiteLLM gateway models when that wallet "
-        "is a gateway). Recommended models, the newest GPT and Gemini within "
-        "the price limit for agents, come first. Per model: model_ref (pass it "
-        "to create_agent), name, recommended, output price in USD per million "
-        "tokens (null when unknown), and whether it accepts images and can "
-        "search the web.",
+        "is a gateway). Recommended models come first, each with "
+        "recommended_as: quality (newest flagship GPT), balanced (newest Gemini "
+        "Flash) or budget (cheapest good option), all within the price limit "
+        "for agents. Per model: model_ref (pass to create_agent), name, "
+        "recommended_as, output price in USD per million tokens (null when "
+        "unknown), and whether it accepts images and can search the web.",
         {},
     )
 
 
 _AGENT_SCHEMA = {
     "type": "object",
-    "description": "create_agent only: the model to suggest and whether to search the web.",
+    "description": "create_agent only: the models to offer and whether to search the web.",
     "properties": {
         "description": {
             "type": "string",
             "description": "What the agent helps with, one or two sentences.",
         },
-        "model_ref": {
-            "type": "string",
-            "description": "A model_ref from list_my_models.",
+        "model_refs": {
+            "type": "array",
+            "items": {"type": "string"},
+            "minItems": 1,
+            "maxItems": AGENT_MAX_MODEL_OPTIONS,
+            "description": "Models from list_my_models the user chooses between, best fit first.",
         },
         "enable_web_search": {"type": "boolean"},
     },
-    "required": ["model_ref", "enable_web_search"],
+    "required": ["model_refs", "enable_web_search"],
 }
 
 
@@ -212,8 +217,9 @@ def propose_changes_schema() -> Dict:
         "creates the project if it does not exist.\n"
         "- delete_project: name=project; its chats return to the chat list.\n"
         "- delete_conversations: conversation_ids.\n"
-        "- create_agent: name=agent name, agent={model_ref, "
-        "enable_web_search, description}. The user picks its prompt.",
+        "- create_agent: name=agent name, agent={model_refs (1-3 options), "
+        "enable_web_search, description}. The user picks the model on the "
+        "card and sets the prompt themselves.",
         {
             "summary": {
                 "type": "string",

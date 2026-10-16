@@ -91,17 +91,17 @@ class ProposalView(APIView):
     permission_classes = [IsAuthenticated]
     takes_action_ids = False
 
-    def change(self, user, proposal_id: int, action_ids):
+    def change(self, user, proposal_id: int, body: dict):
         raise NotImplementedError
 
     def post(self, request, proposal_id: int):
-        action_ids = None
+        body = {}
         if self.takes_action_ids:
-            body = ProposalActionIdsSerializer(data=request.data)
-            body.is_valid(raise_exception=True)
-            action_ids = body.validated_data.get("action_ids")
+            serializer = ProposalActionIdsSerializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+            body = serializer.validated_data
         try:
-            proposal = self.change(request.user, proposal_id, action_ids)
+            proposal = self.change(request.user, proposal_id, body)
         except ProposalNotFound:
             return Response(status=status.HTTP_404_NOT_FOUND)
         except ProposalConflict as conflict:
@@ -112,22 +112,27 @@ class ProposalView(APIView):
 class ApplyProposalView(ProposalView):
     takes_action_ids = True
 
-    def change(self, user, proposal_id, action_ids):
-        return apply_actions(user, proposal_id, action_ids)
+    def change(self, user, proposal_id, body):
+        return apply_actions(
+            user,
+            proposal_id,
+            body.get("action_ids"),
+            model_choices=body.get("model_choices"),
+        )
 
 
 class UndoProposalView(ProposalView):
     takes_action_ids = True
 
-    def change(self, user, proposal_id, action_ids):
-        return undo_actions(user, proposal_id, action_ids)
+    def change(self, user, proposal_id, body):
+        return undo_actions(user, proposal_id, body.get("action_ids"))
 
 
 class DiscardProposalView(ProposalView):
-    def change(self, user, proposal_id, action_ids):
+    def change(self, user, proposal_id, body):
         return discard_proposal(user, proposal_id)
 
 
 class RestoreProposalView(ProposalView):
-    def change(self, user, proposal_id, action_ids):
+    def change(self, user, proposal_id, body):
         return restore_proposal(user, proposal_id)

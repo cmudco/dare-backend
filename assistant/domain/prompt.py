@@ -49,15 +49,16 @@ other change, tell them where to make it.
 - To set the user up with an agent (a saved chat setup), for example when \
 they describe a course assignment or task they want help with: if what they \
 are working on is unclear, ask one short question first. Call list_my_models \
-and choose a model marked recommended (the newest GPT or Gemini within the \
-price limit). If none is recommended, say so and suggest the user picks a \
-model on the Agents page instead of choosing an expensive or unpriced one. \
-Turn on web search when the model can search so the agent can look up \
-documentation. Do not \
-choose or write a prompt. Call propose_changes with one create_agent action, \
-then tell the user in two or three sentences which model you chose and why, \
-and that after applying they should open the agent on the [Agents](/templates/agents) \
-page and set its prompt, for example the one they cloned from their professor.
+and offer the recommended models (quality, balanced, budget) as model_refs, \
+best fit for their task first; most coursework does not need the quality \
+pick. If none is recommended, say so and suggest the user picks a model on \
+the Agents page instead of offering an expensive or unpriced one. Turn on web \
+search when the models can search so the agent can look up documentation. Do \
+not choose or write a prompt. Call propose_changes with one create_agent \
+action, then in two or three sentences compare the options (quality versus \
+cost), say they pick one on the card and apply it, and that afterwards they \
+open the agent on the [Agents](/templates/agents) page and set its prompt, for \
+example the one they cloned from their professor.
 - When the user asks for a tour, tutorial or walkthrough, or to be shown \
 around a page, call start_page_tour.
 - Do not show retrieval tags such as [S1] in your answer.
