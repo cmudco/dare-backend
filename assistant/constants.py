@@ -12,6 +12,9 @@ PAGE_PATH_MAX_LENGTH = 512
 HISTORY_MESSAGES = 20
 # Messages a thread returns to the client when it is opened.
 THREAD_PAYLOAD_MESSAGES = 100
+# Past conversations listed in the history menu, newest first.
+THREAD_HISTORY_LIMIT = 50
+THREAD_TITLE_LENGTH = 80
 MAX_OUTPUT_TOKENS = 4000
 DOCS_SEARCH_TOP_K = 6
 # After either cap the model must answer with what it has found.
@@ -24,6 +27,13 @@ LIST_CONVERSATIONS_MAX_LIMIT = 100
 PLAN_MAX_ACTIONS = 25
 PLAN_MAX_ITEMS = 100
 PLAN_NAME_MAX_LENGTH = 255
+AGENT_DESCRIPTION_MAX_LENGTH = 1000
+AGENT_MAX_MODEL_OPTIONS = 3
+# One sentence on why a model, or web search, suits the user's task.
+AGENT_REASON_MAX_LENGTH = 300
+# search_my_prompts: best matches returned, and the preview of each prompt.
+PROMPT_SEARCH_RESULTS = 5
+PROMPT_PREVIEW_LENGTH = 300
 
 SEARCH_PLATFORM_DOCS = "search_platform_docs"
 GET_ACCOUNT_OVERVIEW = "get_account_overview"
@@ -32,6 +42,8 @@ GET_CONVERSATION = "get_conversation"
 GET_PROJECT = "get_project"
 LIST_MY_PROJECTS = "list_my_projects"
 LIST_MY_CONVERSATIONS = "list_my_conversations"
+LIST_MY_MODELS = "list_my_models"
+SEARCH_MY_PROMPTS = "search_my_prompts"
 PROPOSE_CHANGES = "propose_changes"
 START_PAGE_TOUR = "start_page_tour"
 
@@ -63,6 +75,8 @@ ACCOUNT_TOOLS = frozenset(
         LIST_MY_FILES,
         LIST_MY_PROJECTS,
         LIST_MY_CONVERSATIONS,
+        LIST_MY_MODELS,
+        SEARCH_MY_PROMPTS,
         GET_CONVERSATION,
         GET_PROJECT,
         PROPOSE_CHANGES,
@@ -110,3 +124,4 @@ class ProposalActionType(models.TextChoices):
     )
     DELETE_PROJECT = "delete_project", _("Delete a project")
     DELETE_CONVERSATIONS = "delete_conversations", _("Delete chats")
+    CREATE_AGENT = "create_agent", _("Create an agent")

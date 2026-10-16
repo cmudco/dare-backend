@@ -3,7 +3,9 @@ from django.conf import settings
 from django.core.validators import MinValueValidator, MaxValueValidator
 
 from common.managers import ActiveObjectsManager
+from agents.constants import AGENT_DEFAULT_HISTORY_LIMIT, AGENT_DEFAULT_MAX_TOKENS
 from common.models import BaseModel
+from conversations.constants import ModelEffort, RagMode
 from workflows.node_handler_constants import StepNodeDefaults
 
 
@@ -30,7 +32,9 @@ class Agent(BaseModel):
     prompt = models.ForeignKey(
         'prompts.Prompt',
         on_delete=models.PROTECT,
-        help_text="Prompt template for this agent"
+        null=True,
+        blank=True,
+        help_text="Prompt template for this agent; empty keeps the chat's prompt"
     )
     content_files = models.ManyToManyField(
         'files.File',
@@ -44,21 +48,59 @@ class Agent(BaseModel):
         blank=True,
         help_text="Files to be processed using embeddings/vector search"
     )
+    libraries = models.ManyToManyField(
+        'libraries.SharedLibrary',
+        related_name='agents',
+        blank=True,
+        help_text="Shared libraries searched for context"
+    )
     llm = models.ForeignKey(
         'conversations.LLM',
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
-        help_text="Language model for this agent"
+        help_text="DARE model for this agent"
+    )
+    litellm_key = models.ForeignKey(
+        'billing.LiteLLMKey',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='agents',
+        help_text="LiteLLM key whose gateway model this agent uses, instead of a DARE model"
+    )
+    litellm_model_name = models.CharField(
+        max_length=255,
+        blank=True,
+        default='',
+        help_text="Gateway model id reached through litellm_key"
     )
     max_tokens = models.PositiveIntegerField(
-        default=StepNodeDefaults.MAX_TOKENS,
+        default=AGENT_DEFAULT_MAX_TOKENS,
         help_text="Maximum tokens for LLM response"
     )
     temperature = models.FloatField(
         default=StepNodeDefaults.TEMPERATURE,
         validators=[MinValueValidator(0.0), MaxValueValidator(2.0)],
         help_text="Temperature setting for the LLM"
+    )
+    effort = models.CharField(
+        max_length=20,
+        choices=ModelEffort.choices,
+        null=True,
+        blank=True,
+        help_text="Effort for models that support it; null uses the model default"
+    )
+    history_limit = models.PositiveIntegerField(
+        default=AGENT_DEFAULT_HISTORY_LIMIT,
+        validators=[MinValueValidator(1), MaxValueValidator(50)],
+        help_text="Messages of chat history sent with each turn"
+    )
+    rag_mode = models.CharField(
+        max_length=20,
+        choices=RagMode.choices,
+        default=RagMode.ADVANCED,
+        help_text="Retrieval mode for the agent's files and libraries"
     )
     max_context_snippets = models.PositiveIntegerField(
         default=StepNodeDefaults.MAX_CONTEXT_SNIPPETS,
@@ -71,6 +113,30 @@ class Agent(BaseModel):
     enable_web_search = models.BooleanField(
         default=False,
         help_text="If true, enable web search for this agent's LLM"
+    )
+    web_fetch_enabled = models.BooleanField(
+        default=False,
+        help_text="Let the model fetch URLs and PDFs named in the chat"
+    )
+    artifacts_enabled = models.BooleanField(
+        default=False,
+        help_text="Let the model produce documents, slides and long-form artifacts"
+    )
+    memory_enabled = models.BooleanField(
+        default=False,
+        help_text="Recall and record cross-conversation memory in the agent's chats"
+    )
+    mcp_servers = models.ManyToManyField(
+        'mcp.MCPServer',
+        related_name='agents',
+        blank=True,
+        help_text="MCP servers whose tools the agent can call"
+    )
+    dare_tools = models.ManyToManyField(
+        'dare_tools.DareTool',
+        related_name='agents',
+        blank=True,
+        help_text="DARE tools the agent can call"
     )
     version = models.PositiveIntegerField(
         default=1,
@@ -89,6 +155,12 @@ class Agent(BaseModel):
 
     class Meta:
         ordering = ['-created_at']
+        constraints = [
+            models.CheckConstraint(
+                name='agent_single_model',
+                condition=models.Q(llm__isnull=True) | models.Q(litellm_key__isnull=True),
+            )
+        ]
 
     def __str__(self):
         return f"{self.name} ({self.user.email})"

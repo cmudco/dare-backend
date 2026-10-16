@@ -9,7 +9,7 @@ from django.db.models.functions import Coalesce, Greatest
 from django.utils import timezone
 
 from conversations.models import Conversation
-from core.services.dtos.llm_descriptor_dto import litellm_picker_id
+from core.services.model_ref import model_ref
 from files.models import File
 from libraries.models import UserLibraryAccess
 from projects.constants import ProjectMemoryScope
@@ -27,13 +27,11 @@ class ProjectChatSources:
 
 def project_model_ref(project: PersonalProject) -> Optional[str]:
     """Picker id of the project's default model, in the same form chats use."""
-    if project.default_litellm_key_id and project.default_litellm_model_name:
-        return litellm_picker_id(
-            project.default_litellm_key_id, project.default_litellm_model_name
-        )
-    if project.default_model_id:
-        return str(project.default_model_id)
-    return None
+    return model_ref(
+        project.default_model_id,
+        project.default_litellm_key_id,
+        project.default_litellm_model_name,
+    )
 
 
 def owned_projects(user) -> QuerySet:

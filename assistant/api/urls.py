@@ -3,6 +3,8 @@ from django.urls import path
 from assistant.api.views import (
     ApplyProposalView,
     AssistantNewThreadView,
+    AssistantOpenThreadView,
+    AssistantThreadHistoryView,
     AssistantThreadView,
     DiscardProposalView,
     RestoreProposalView,
@@ -12,6 +14,12 @@ from assistant.api.views import (
 urlpatterns = [
     path("assistant/thread/", AssistantThreadView.as_view(), name="thread"),
     path("assistant/thread/new/", AssistantNewThreadView.as_view(), name="new-thread"),
+    path("assistant/threads/", AssistantThreadHistoryView.as_view(), name="threads"),
+    path(
+        "assistant/threads/<int:thread_id>/open/",
+        AssistantOpenThreadView.as_view(),
+        name="open-thread",
+    ),
     path(
         "assistant/proposals/<int:proposal_id>/apply/",
         ApplyProposalView.as_view(),

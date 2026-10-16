@@ -38,6 +38,7 @@ from projects.models import PersonalProject
 
 THREAD_URL = "/api/assistant/thread/"
 NEW_THREAD_URL = "/api/assistant/thread/new/"
+THREADS_URL = "/api/assistant/threads/"
 
 
 @override_settings(ASSISTANT_MODEL_IDENTIFIER="assistant-test-model")
@@ -113,6 +114,55 @@ class ThreadApiTests(AssistantTestCase):
         theirs = other_client.get(THREAD_URL).json()
         self.assertNotEqual(theirs["id"], mine)
         self.assertEqual(theirs["messages"], [])
+
+
+class ThreadHistoryTests(AssistantTestCase):
+    def ask(self, question, user=None):
+        begin_turn(user or self.user, question, "/files")
+
+    def test_history_lists_conversations_with_messages_titled_by_first_question(self):
+        self.ask("How do I organise my files?")
+        self.ask("And folders?")
+        first = self.client.get(THREAD_URL).json()["id"]
+        self.client.post(NEW_THREAD_URL)
+        self.ask("Set up an agent for my course")
+        self.client.post(NEW_THREAD_URL)
+
+        history = self.client.get(THREADS_URL).json()
+
+        self.assertEqual(
+            [thread["title"] for thread in history],
+            ["Set up an agent for my course", "How do I organise my files?"],
+        )
+        self.assertEqual(history[1]["id"], first)
+        self.assertFalse(any(thread["isOpen"] for thread in history))
+
+    def test_opening_a_past_conversation_makes_new_questions_land_there(self):
+        self.ask("First conversation")
+        first = self.client.get(THREAD_URL).json()["id"]
+        self.client.post(NEW_THREAD_URL)
+        self.ask("Second conversation")
+
+        opened = self.client.post(f"{THREADS_URL}{first}/open/").json()
+
+        self.assertEqual(opened["id"], first)
+        self.assertEqual(opened["messages"][0]["content"], "First conversation")
+        self.ask("Follow-up")
+        self.assertEqual(self.client.get(THREAD_URL).json()["id"], first)
+        self.assertEqual(
+            AssistantThread.objects.filter(user=self.user, closed_at=None).count(), 1
+        )
+
+    def test_another_users_conversation_cannot_be_listed_or_opened(self):
+        self.ask("Mine")
+        self.ask("Theirs", user=self.other)
+        theirs = AssistantThread.objects.get(user=self.other).id
+
+        titles = [thread["title"] for thread in self.client.get(THREADS_URL).json()]
+        response = self.client.post(f"{THREADS_URL}{theirs}/open/")
+
+        self.assertEqual(titles, ["Mine"])
+        self.assertEqual(response.status_code, 404)
 
 
 class BudgetTests(AssistantTestCase):

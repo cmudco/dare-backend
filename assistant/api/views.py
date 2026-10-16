@@ -6,6 +6,7 @@ from rest_framework.views import APIView
 from assistant.api.serializers import (
     AssistantProposalSerializer,
     AssistantThreadSerializer,
+    AssistantThreadSummarySerializer,
     ProposalActionIdsSerializer,
 )
 from assistant.services.proposal_service import (
@@ -17,9 +18,12 @@ from assistant.services.proposal_service import (
     undo_actions,
 )
 from assistant.services.thread_service import (
+    AssistantThreadNotFound,
     open_thread,
     recent_messages,
+    reopen_thread,
     start_new_thread,
+    thread_history,
     usage,
 )
 
@@ -55,23 +59,49 @@ class AssistantNewThreadView(APIView):
         )
 
 
+class AssistantThreadHistoryView(APIView):
+    """The user's past conversations with the assistant, newest first."""
+
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        return Response(
+            AssistantThreadSummarySerializer(
+                thread_history(request.user), many=True
+            ).data
+        )
+
+
+class AssistantOpenThreadView(APIView):
+    """Switch to a past conversation; it becomes the open thread."""
+
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, thread_id: int):
+        try:
+            thread = reopen_thread(request.user, thread_id)
+        except AssistantThreadNotFound:
+            return Response(status=status.HTTP_404_NOT_FOUND)
+        return Response(_thread_payload(thread, request.user))
+
+
 class ProposalView(APIView):
     """Move one of the user's proposals between applied, pending and discarded."""
 
     permission_classes = [IsAuthenticated]
     takes_action_ids = False
 
-    def change(self, user, proposal_id: int, action_ids):
+    def change(self, user, proposal_id: int, body: dict):
         raise NotImplementedError
 
     def post(self, request, proposal_id: int):
-        action_ids = None
+        body = {}
         if self.takes_action_ids:
-            body = ProposalActionIdsSerializer(data=request.data)
-            body.is_valid(raise_exception=True)
-            action_ids = body.validated_data.get("action_ids")
+            serializer = ProposalActionIdsSerializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+            body = serializer.validated_data
         try:
-            proposal = self.change(request.user, proposal_id, action_ids)
+            proposal = self.change(request.user, proposal_id, body)
         except ProposalNotFound:
             return Response(status=status.HTTP_404_NOT_FOUND)
         except ProposalConflict as conflict:
@@ -82,22 +112,27 @@ class ProposalView(APIView):
 class ApplyProposalView(ProposalView):
     takes_action_ids = True
 
-    def change(self, user, proposal_id, action_ids):
-        return apply_actions(user, proposal_id, action_ids)
+    def change(self, user, proposal_id, body):
+        return apply_actions(
+            user,
+            proposal_id,
+            body.get("action_ids"),
+            model_choices=body.get("model_choices"),
+        )
 
 
 class UndoProposalView(ProposalView):
     takes_action_ids = True
 
-    def change(self, user, proposal_id, action_ids):
-        return undo_actions(user, proposal_id, action_ids)
+    def change(self, user, proposal_id, body):
+        return undo_actions(user, proposal_id, body.get("action_ids"))
 
 
 class DiscardProposalView(ProposalView):
-    def change(self, user, proposal_id, action_ids):
+    def change(self, user, proposal_id, body):
         return discard_proposal(user, proposal_id)
 
 
 class RestoreProposalView(ProposalView):
-    def change(self, user, proposal_id, action_ids):
+    def change(self, user, proposal_id, body):
         return restore_proposal(user, proposal_id)

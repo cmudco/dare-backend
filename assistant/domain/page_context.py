@@ -54,8 +54,9 @@ PAGES = {
         Page(
             "agents",
             "Templates: Agents",
-            "Agents pair a prompt with a model, files and settings, on the "
-            "Templates page.",
+            "Agents are saved chat setups: a prompt, a model (a DARE or "
+            "LiteLLM gateway model), settings, sources and tools, applied to a "
+            "chat from its Prompts menu. You can set one up for the user.",
         ),
         Page(
             "workflows",

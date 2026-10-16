@@ -10,6 +10,7 @@ from core.services.model_identity import (
     gateway_web_search,
     normalize_identifier,
     resolve_family,
+    supports_vision,
 )
 
 # Identifiers observed on the LiteLLM proxy, paired with the identity each
@@ -177,3 +178,20 @@ class GatewayWebSearchTests(SimpleTestCase):
         for model, route in cases.items():
             with self.subTest(model=model):
                 self.assertEqual(gateway_web_search(model), route)
+
+
+class SupportsVisionTests(SimpleTestCase):
+    def test_current_gateway_chat_models_accept_images(self):
+        for model in (
+            "gpt-6.1-sol",
+            "gpt-6-luna",
+            "gpt-5.6-luna",
+            "gemini/gemini-3.8-flash",
+        ):
+            with self.subTest(model=model):
+                self.assertTrue(supports_vision(model))
+
+    def test_audio_and_embedding_models_do_not(self):
+        for model in ("gpt-4o-transcribe", "text-embedding-3-large"):
+            with self.subTest(model=model):
+                self.assertFalse(supports_vision(model))
