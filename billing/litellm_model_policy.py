@@ -1,4 +1,4 @@
-"""Pure recommendation policy for LiteLLM background models."""
+"""Pure recommendation policy for LiteLLM models: background work, vision, agents."""
 
 import re
 from collections.abc import Iterable
@@ -18,9 +18,15 @@ _GEMINI_VERSION = re.compile(
     r"gemini[\W_]*(?P<major>\d+)(?:[\W_]+(?P<minor>\d+))?",
     re.IGNORECASE,
 )
+_GPT_VERSION = re.compile(
+    r"(?:^|[/_.-])gpt-(?P<major>\d+)(?:\.(?P<minor>\d+))?(?:-(?P<tier>[a-z]+))?(?:$|[/_.:])",
+    re.IGNORECASE,
+)
+# Flagship tiers only; mini, nano and pro variants are not chat defaults.
+_GPT_TIERS = {"sol": 3, None: 2, "terra": 2, "luna": 1}
 _NON_TEXT = re.compile(
     r"(?:^|[/_.-])"
-    r"(audio|embedding|image|moderation|realtime|rerank|speech|transcrib|tts|whisper)"
+    r"(audio|embedding|image|moderation|realtime|rerank|speech|transcribe|tts|whisper)"
     r"(?:$|[/_.-])",
     re.IGNORECASE,
 )
@@ -65,6 +71,31 @@ def recommend_background_models(
     )
 
     return _merge(groups, limit)
+
+
+def is_text_model(model: str) -> bool:
+    """Whether a model answers chat, as opposed to embedding, audio or images."""
+    return not _NON_TEXT.search(model)
+
+
+def recommend_agent_models(models: Iterable[str]) -> list[str]:
+    """The newest flagship GPT, then the newest full Gemini: chat agent defaults."""
+    candidates = _unique_text_models(models)
+    gpt = max(
+        (model for model in candidates if _gpt_tier(model) is not None),
+        key=_gpt_rank,
+        default=None,
+    )
+    gemini = max(
+        (
+            model
+            for model in candidates
+            if _GEMINI.search(model) and "lite" not in model.casefold()
+        ),
+        key=_gemini_rank,
+        default=None,
+    )
+    return [model for model in (gpt, gemini) if model]
 
 
 def recommend_vision_models(models: Iterable[str]) -> list[str]:
@@ -139,3 +170,18 @@ def _haiku_rank(model: str) -> tuple[int, int, str]:
     major = int(match.group("major")) if match else 0
     minor = int(match.group("minor") or 0) if match else 0
     return major, minor, model.casefold()
+
+
+def _gpt_tier(model: str):
+    match = _GPT_VERSION.search(model)
+    if not match:
+        return None
+    tier = (match.group("tier") or "").lower() or None
+    return _GPT_TIERS.get(tier)
+
+
+def _gpt_rank(model: str) -> tuple:
+    match = _GPT_VERSION.search(model)
+    major, minor = int(match.group("major")), int(match.group("minor") or 0)
+    # The clean model id beats provider-prefixed aliases of the same model.
+    return major, minor, _gpt_tier(model), -model.count("/"), -len(model)

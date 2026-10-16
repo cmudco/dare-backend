@@ -6,7 +6,6 @@ Kept free of ORM imports so the DARE tool registry can import them.
 from typing import Dict
 
 from assistant.constants import (
-    AGENT_PROMPT_MAX_LENGTH,
     GET_ACCOUNT_OVERVIEW,
     GET_CONVERSATION,
     GET_PROJECT,
@@ -15,7 +14,6 @@ from assistant.constants import (
     LIST_MY_FILES,
     LIST_MY_MODELS,
     LIST_MY_PROJECTS,
-    LIST_MY_PROMPTS,
     PLAN_MAX_ACTIONS,
     PROPOSE_CHANGES,
     SEARCH_PLATFORM_DOCS,
@@ -163,36 +161,21 @@ def list_my_conversations_schema() -> Dict:
     )
 
 
-def list_my_prompts_schema() -> Dict:
-    return _function(
-        LIST_MY_PROMPTS,
-        "The user's saved prompts (newest version of each), including ones "
-        "they cloned from a shared prompt: id, title, the start of the text "
-        "and when it was last edited.",
-        {
-            "title_contains": {
-                "type": "string",
-                "description": "Only prompts whose title contains this text.",
-            }
-        },
-    )
-
-
 def list_my_models_schema() -> Dict:
     return _function(
         LIST_MY_MODELS,
         "The chat models the user can use right now, from the wallet that "
         "pays for their chats (their LiteLLM gateway models when that wallet "
-        "is a gateway). Per model: model_ref (pass it to create_agent), name, "
-        "and whether it accepts images, can search the web or fetch pages, "
-        "and takes temperature or effort settings.",
+        "is a gateway). Recommended models, the newest GPT and Gemini, come "
+        "first. Per model: model_ref (pass it to create_agent), name, "
+        "recommended, and whether it accepts images and can search the web.",
         {},
     )
 
 
 _AGENT_SCHEMA = {
     "type": "object",
-    "description": "create_agent only: the agent's setup.",
+    "description": "create_agent only: the model to suggest and whether to search the web.",
     "properties": {
         "description": {
             "type": "string",
@@ -202,42 +185,9 @@ _AGENT_SCHEMA = {
             "type": "string",
             "description": "A model_ref from list_my_models.",
         },
-        "prompt_id": {
-            "type": "integer",
-            "description": "An id from list_my_prompts. Omit when sending new_prompt.",
-        },
-        "new_prompt": {
-            "type": "object",
-            "description": "A prompt to create for the agent, when the user has none that fits.",
-            "properties": {
-                "title": {"type": "string"},
-                "content": {
-                    "type": "string",
-                    "maxLength": AGENT_PROMPT_MAX_LENGTH,
-                    "description": "The system prompt text.",
-                },
-            },
-            "required": ["title", "content"],
-        },
-        "temperature": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 1,
-            "description": "Only for models that take temperature; omit for the default.",
-        },
-        "effort": {
-            "type": "string",
-            "enum": ["low", "medium", "high", "xhigh", "max"],
-            "description": "Only for models with effort; omit for the model default.",
-        },
-        "max_tokens": {"type": "integer", "minimum": 256, "maximum": 65536},
-        "history_limit": {"type": "integer", "minimum": 1, "maximum": 50},
         "enable_web_search": {"type": "boolean"},
-        "web_fetch_enabled": {"type": "boolean"},
-        "artifacts_enabled": {"type": "boolean"},
-        "memory_enabled": {"type": "boolean"},
     },
-    "required": ["model_ref"],
+    "required": ["model_ref", "enable_web_search"],
 }
 
 
@@ -260,8 +210,8 @@ def propose_changes_schema() -> Dict:
         "creates the project if it does not exist.\n"
         "- delete_project: name=project; its chats return to the chat list.\n"
         "- delete_conversations: conversation_ids.\n"
-        "- create_agent: name=agent name, agent={model_ref, prompt_id or "
-        "new_prompt, optional settings}.",
+        "- create_agent: name=agent name, agent={model_ref, "
+        "enable_web_search, description}. The user picks its prompt.",
         {
             "summary": {
                 "type": "string",

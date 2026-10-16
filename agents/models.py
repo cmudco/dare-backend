@@ -31,7 +31,9 @@ class Agent(BaseModel):
     prompt = models.ForeignKey(
         'prompts.Prompt',
         on_delete=models.PROTECT,
-        help_text="Prompt template for this agent"
+        null=True,
+        blank=True,
+        help_text="Prompt template for this agent; empty keeps the chat's prompt"
     )
     content_files = models.ManyToManyField(
         'files.File',

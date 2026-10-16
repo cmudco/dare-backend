@@ -93,6 +93,28 @@ class AgentModelTests(AgentTestCase):
         self.assertIn("model_ref", response.data)
 
 
+class PromptlessAgentTests(AgentTestCase):
+    def test_an_agent_without_a_prompt_keeps_the_chats_prompt(self):
+        agent_id = self.client.post(
+            AGENTS_URL,
+            {"name": "Model only", "modelRef": self.gateway_ref},
+            format="json",
+        ).data["id"]
+        chat = Conversation.active_objects.create(
+            user=self.user, title="A2", prompt=self.prompt
+        )
+
+        response = self.client.post(
+            f"{CONVERSATIONS_URL}{chat.conversation_id}/apply-agent/",
+            {"agent": agent_id},
+            format="json",
+        )
+
+        self.assertEqual(response.data["selected_model_ref"], self.gateway_ref)
+        chat.refresh_from_db()
+        self.assertEqual(chat.prompt_id, self.prompt.id)
+
+
 class AgentOwnershipTests(AgentTestCase):
     def test_another_users_prompt_is_rejected(self):
         theirs = Prompt.active_objects.create(user=self.other, title="T", content="x")

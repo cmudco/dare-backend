@@ -112,7 +112,7 @@ def _reference_errors(user, actions, file_names, chat_titles, roster) -> List[st
         ):
             errors.append(f'The tag name "{action.name}" is taken; pick another.')
         if action.agent is not None:
-            errors.extend(draft_errors(action.agent, user, roster))
+            errors.extend(draft_errors(action.agent, roster))
     return errors
 
 
@@ -127,7 +127,7 @@ def _stored(
         "is_new": action.type == Type.CREATE_AGENT
         or (bool(find_new) and find_new(user, action.name) is None),
         "description": action.description,
-        "agent": stored_agent(action.agent, user, roster) if action.agent else None,
+        "agent": stored_agent(action.agent, roster) if action.agent else None,
         "files": [{"id": i, "name": file_names[i]} for i in action.file_ids],
         "conversations": [
             {"id": i, "title": chat_titles[i]} for i in action.conversation_ids

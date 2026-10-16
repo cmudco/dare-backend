@@ -20,26 +20,12 @@ class ProposalConversationSerializer(serializers.Serializer):
     title = serializers.CharField()
 
 
-class ProposalNewPromptSerializer(serializers.Serializer):
-    title = serializers.CharField()
-    content = serializers.CharField()
-
-
 class ProposalAgentSerializer(serializers.Serializer):
-    """The setup a create_agent action proposes; None settings keep defaults."""
+    """The model a create_agent action suggests; the user picks the prompt."""
 
     model_ref = serializers.CharField()
     model_name = serializers.CharField()
-    prompt_title = serializers.CharField()
-    new_prompt = ProposalNewPromptSerializer(allow_null=True)
-    temperature = serializers.FloatField(allow_null=True)
-    effort = serializers.CharField(allow_null=True)
-    max_tokens = serializers.IntegerField(allow_null=True)
-    history_limit = serializers.IntegerField(allow_null=True)
     enable_web_search = serializers.BooleanField()
-    web_fetch_enabled = serializers.BooleanField()
-    artifacts_enabled = serializers.BooleanField()
-    memory_enabled = serializers.BooleanField()
 
 
 class ProposalActionSerializer(serializers.Serializer):

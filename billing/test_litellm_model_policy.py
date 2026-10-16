@@ -1,6 +1,8 @@
 from django.test import SimpleTestCase
 
 from billing.litellm_model_policy import (
+    is_text_model,
+    recommend_agent_models,
     recommend_background_models,
     recommend_vision_models,
 )
@@ -147,3 +149,46 @@ class VisionModelPolicyTests(SimpleTestCase):
                 "anthropic/claude-sonnet-4-5",
             ],
         )
+
+
+# The CMU gateway roster as Ask DARE saw it when it picked gpt-5.5.
+GATEWAY_ROSTER = [
+    "us.anthropic.claude-opus-5-5",
+    "bedrock_mantle/openai.gpt-5.5",
+    "bedrock_mantle/openai.gpt-5.6-sol",
+    "gemini/gemini-3.8-flash",
+    "gemini/gemini-3.1-pro-preview",
+    "gemini/gemini-3.5-flash-lite",
+    "gemini/gemini-2.5-flash-image",
+    "gpt-5.4-pro",
+    "gpt-5.5",
+    "gpt-6-astra",
+    "gpt-6-luna",
+    "gpt-6.1-sol",
+    "gpt-6-sol",
+    "gpt-image-2",
+    "text-embedding-3-small",
+    "gpt-4o-transcribe",
+]
+
+
+class AgentModelRecommendationTests(SimpleTestCase):
+    def test_recommends_the_newest_flagship_gpt_then_the_newest_gemini(self):
+        self.assertEqual(
+            recommend_agent_models(GATEWAY_ROSTER),
+            ["gpt-6.1-sol", "gemini/gemini-3.8-flash"],
+        )
+
+    def test_prefers_the_clean_id_over_a_provider_alias(self):
+        self.assertEqual(
+            recommend_agent_models(
+                ["bedrock_mantle/openai.gpt-5.6-sol", "gpt-5.6-sol"]
+            ),
+            ["gpt-5.6-sol"],
+        )
+
+    def test_non_chat_models_are_not_text_models(self):
+        for model in ("text-embedding-3-small", "gpt-4o-transcribe", "gpt-image-2"):
+            with self.subTest(model=model):
+                self.assertFalse(is_text_model(model))
+        self.assertTrue(is_text_model("gpt-6.1-sol"))

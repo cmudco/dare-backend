@@ -15,7 +15,6 @@ from assistant.domain.tool_schemas import (get_account_overview_schema,
                                            list_my_files_schema,
                                            list_my_models_schema,
                                            list_my_projects_schema,
-                                           list_my_prompts_schema,
                                            propose_changes_schema,
                                            search_platform_docs_schema,
                                            start_page_tour_schema)
@@ -944,9 +943,6 @@ class DareToolRegistry:
             "list_my_conversations",
             "List My Conversations",
             list_my_conversations_schema,
-        ),
-        "list_my_prompts": _assistant_tool(
-            "list_my_prompts", "List My Prompts", list_my_prompts_schema
         ),
         "list_my_models": _assistant_tool(
             "list_my_models", "List My Models", list_my_models_schema
