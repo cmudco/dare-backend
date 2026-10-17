@@ -714,6 +714,14 @@ class ArtifactSerializer(serializers.ModelSerializer):
         ]
 
 
+class SnippetArtifactRequestSerializer(serializers.Serializer):
+    """Open a code block from an assistant message as an editable artifact."""
+
+    message_id = serializers.IntegerField()
+    language = serializers.CharField(max_length=40, allow_blank=True)
+    content = serializers.CharField(max_length=200_000, trim_whitespace=False)
+
+
 class ArtifactListSerializer(serializers.ModelSerializer):
     """
     Lightweight artifact serializer for lists (content loaded on demand).

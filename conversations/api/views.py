@@ -44,6 +44,7 @@ from conversations.models import (
     ModelCardData,
     Snippet,
 )
+from conversations.services.artifact_service import open_snippet_artifact
 from conversations.services.conversation_preference_service import (
     ConversationPreferenceError,
     ConversationPreferenceService,
@@ -87,6 +88,7 @@ from .serializers import (
     MessageSerializer,
     ModelCardDataListSerializer,
     ModelCardDataSerializer,
+    SnippetArtifactRequestSerializer,
 )
 
 # fmt: on
@@ -531,6 +533,30 @@ class ConversationViewSet(ConversationSharingMixin, viewsets.ModelViewSet):
         serializer = ArtifactListSerializer(queryset, many=True)
         return Response(serializer.data)
 
+    @list_artifacts.mapping.post
+    def create_snippet_artifact(self, request, conversation_id=None):
+        """Open a message code block as an artifact (idempotent per block)."""
+        conversation = self.get_object()
+        if conversation.user_id != request.user.id:
+            raise NotFound()
+
+        payload = SnippetArtifactRequestSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+        data = payload.validated_data
+
+        message = get_object_or_404(
+            Message.active_objects, id=data["message_id"], conversation=conversation
+        )
+        artifact, created = open_snippet_artifact(
+            message=message,
+            language=data["language"],
+            content=data["content"],
+        )
+        return Response(
+            ArtifactSerializer(artifact).data,
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
+
     @action(detail=True, methods=["get"], url_path="artifacts/(?P<artifact_id>[^/.]+)")
     def artifact_detail(self, request, conversation_id=None, artifact_id=None):
         """Get detailed information about a specific artifact."""
@@ -948,9 +974,18 @@ class ArtifactContentView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        # Create new version with updated content
+        # Branch from the newest version so editing an older one never
+        # produces a duplicate version number.
         with transaction.atomic():
-            new_artifact = artifact.create_new_version()
+            latest = (
+                Artifact.active_objects.select_for_update()
+                .filter(artifact_group=artifact.artifact_group)
+                .order_by("-version")
+                .first()
+                if artifact.artifact_group
+                else None
+            )
+            new_artifact = (latest or artifact).create_new_version()
             new_artifact.content = new_content
             new_artifact.status = ArtifactStatus.COMPLETED
             new_artifact.save(update_fields=["content", "status", "updated_at"])

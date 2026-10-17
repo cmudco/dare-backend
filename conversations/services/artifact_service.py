@@ -1,16 +1,17 @@
 """Public persistence helpers for DARE artifacts."""
 
-from typing import Any, Dict, Optional
+import hashlib
+from typing import Any, Dict, Optional, Tuple
 
 from asgiref.sync import sync_to_async
 from django.db import transaction
 
-from conversations.constants import ArtifactStatus
+from conversations.constants import SNIPPET_ARTIFACT_SOURCE_TOOL, ArtifactStatus
+from conversations.domain.snippet_artifacts import snippet_artifact_shape
 from conversations.models import Artifact, ArtifactGroup, Conversation, Message
 
 
-@sync_to_async
-def create_artifact(
+def create_artifact_sync(
     *,
     conversation: Optional[Conversation],
     message: Optional[Message],
@@ -52,6 +53,51 @@ def create_artifact(
         group.latest_version = artifact
         group.save(update_fields=["latest_version"])
     return artifact
+
+
+create_artifact = sync_to_async(create_artifact_sync)
+
+
+def open_snippet_artifact(
+    *, message: Message, language: str, content: str
+) -> Tuple[Artifact, bool]:
+    """Return the artifact for a message's code block, creating it on first open.
+
+    A block is keyed by (message, hash of its original code), so reopening it
+    returns the newest saved version instead of a fresh copy.
+    """
+    source_hash = hashlib.sha256(f"{language}\n{content}".encode()).hexdigest()
+    existing = (
+        Artifact.active_objects.filter(
+            conversation_id=message.conversation_id,
+            source_tool=SNIPPET_ARTIFACT_SOURCE_TOOL,
+            metadata__source_message_id=message.id,
+            metadata__source_hash=source_hash,
+        )
+        .select_related("artifact_group__latest_version")
+        .first()
+    )
+    if existing:
+        latest = existing.artifact_group and existing.artifact_group.latest_version
+        return latest or existing, False
+
+    shape = snippet_artifact_shape(language, content)
+    artifact = create_artifact_sync(
+        conversation=message.conversation,
+        message=None,
+        title=shape.title,
+        content=content,
+        artifact_type=shape.artifact_type,
+        filename=shape.filename,
+        content_type=shape.content_type,
+        source_tool=SNIPPET_ARTIFACT_SOURCE_TOOL,
+        metadata={
+            "language": shape.language,
+            "source_message_id": message.id,
+            "source_hash": source_hash,
+        },
+    )
+    return artifact, True
 
 
 @sync_to_async
