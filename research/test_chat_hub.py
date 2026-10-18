@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from rest_framework.test import APIClient
 
 from feature_flags.models import FeatureFlag
@@ -419,6 +420,24 @@ class ThreadApiTests(ProfileRootMixin, TestCase):
             password="pw",
             platform_role=RoleChoice.RESEARCHER,
         )
+
+    def test_the_project_list_says_when_it_last_ran(self):
+        def last_run():
+            projects = self.client.get("/api/research/projects/").json()["results"]
+            return next(p for p in projects if p["id"] == self.project.id)["lastRunAt"]
+
+        self.assertIsNone(last_run())
+        run = ResearchAgentRun.objects.create(
+            session=self.thread,
+            thread=self.thread,
+            project=self.project,
+            user=self.user,
+            role=AgentRole.SCOUT,
+            mode=ResearchSessionMode.SCOUT,
+            status="completed",
+        )
+
+        self.assertEqual(parse_datetime(last_run()), run.created_at)
 
     def test_threads_belong_to_their_owner(self):
         outsider = APIClient()
