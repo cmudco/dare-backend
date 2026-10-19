@@ -5,12 +5,16 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from django.conf import settings
 from django.db import IntegrityError, transaction
+from django.db.models import Max, OuterRef, QuerySet, Subquery
+from django.db.models.functions import Substr
 from django.utils import timezone
 from django.utils.translation import gettext as _
 
 from assistant.constants import (
     HISTORY_MESSAGES,
+    THREAD_HISTORY_LIMIT,
     THREAD_PAYLOAD_MESSAGES,
+    THREAD_TITLE_LENGTH,
     AssistantMessageStatus,
     AssistantRole,
 )
@@ -31,6 +35,10 @@ class AssistantLimitReached(Exception):
 
 class AssistantUnavailable(Exception):
     """The assistant is not configured (no active model)."""
+
+
+class AssistantThreadNotFound(Exception):
+    """No thread with that id belongs to the user."""
 
 
 @dataclass(frozen=True)
@@ -72,6 +80,52 @@ def start_new_thread(user) -> AssistantThread:
         closed_at=timezone.now()
     )
     return AssistantThread.active_objects.create(user=user)
+
+
+def thread_history(user) -> QuerySet:
+    """The user's conversations that have messages, most recently active first,
+    titled by their first question."""
+    messages = AssistantMessage.active_objects.filter(thread=OuterRef("pk"))
+    first_question = (
+        messages.filter(role=AssistantRole.USER)
+        .order_by("created_at", "id")
+        .values("content")[:1]
+    )
+    return (
+        AssistantThread.active_objects.filter(user=user)
+        .annotate(
+            last_message_at=Max("messages__created_at"),
+            title=Substr(Subquery(first_question), 1, THREAD_TITLE_LENGTH),
+        )
+        .filter(last_message_at__isnull=False)
+        .order_by("-last_message_at")[:THREAD_HISTORY_LIMIT]
+    )
+
+
+@transaction.atomic
+def reopen_thread(user, thread_id: int) -> AssistantThread:
+    """Make one of the user's past threads the open one; new messages go there."""
+    # Locking every thread of the user serialises concurrent switches, which
+    # would otherwise race on the one-open-thread constraint.
+    threads = {
+        thread.pk: thread
+        for thread in AssistantThread.active_objects.select_for_update().filter(
+            user=user
+        )
+    }
+    thread = threads.get(thread_id)
+    if thread is None:
+        raise AssistantThreadNotFound()
+    if thread.closed_at is None:
+        return thread
+    now = timezone.now()
+    for other in threads.values():
+        if other.closed_at is None:
+            other.closed_at = now
+            other.save(update_fields=["closed_at", "updated_at"])
+    thread.closed_at = None
+    thread.save(update_fields=["closed_at", "updated_at"])
+    return thread
 
 
 def recent_messages(thread: AssistantThread) -> List[AssistantMessage]:
