@@ -220,8 +220,11 @@ class BotModelProblemTests(TestCase):
     def setUp(self):
         self.owner = make_user("owner@example.com")
         self.key = make_personal_key(self.owner)
-        self.model = LLM.objects.filter(is_active=True).first() or LLM.objects.create(
+        self.model = LLM.objects.create(
             name="Test", identifier="test-model", provider="claude"
+        )
+        FeatureFlag.objects.update_or_create(
+            key="enable_litellm_wallet", defaults={"default_enabled": True}
         )
         listed = patch(
             "billing.litellm_models_service.list_models",
