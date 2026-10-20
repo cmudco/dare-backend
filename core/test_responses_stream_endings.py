@@ -2,9 +2,13 @@ from types import SimpleNamespace
 
 from asgiref.sync import async_to_sync
 from django.test import SimpleTestCase
+from google.genai.types import FinishReason
 
 from core.services.dtos.stream_event_dto import StreamEventKind
-from core.services.llm_utils.stream_processors import OpenAIStreamProcessor
+from core.services.llm_utils.stream_processors import (OUT_OF_TOKENS_NOTE,
+                                                       ClaudeStreamProcessor,
+                                                       GeminiStreamProcessor,
+                                                       OpenAIStreamProcessor)
 
 
 def _stream(*chunks):
@@ -61,3 +65,71 @@ class ResponsesStreamEndingTests(SimpleTestCase):
         text, _ = _run(_ending("response.failed", error="server overloaded"))
 
         self.assertEqual(text, "Error: server overloaded")
+
+
+def _collect(processor, *chunks):
+    async def collect():
+        return [event async for event in processor(_stream(*chunks))]
+
+    events = async_to_sync(collect)()
+    return "".join(e.text for e in events if e.kind == StreamEventKind.TEXT_DELTA)
+
+
+def _chat_chunk(content=None, finish_reason=None):
+    return SimpleNamespace(
+        choices=[
+            SimpleNamespace(
+                delta=SimpleNamespace(content=content, tool_calls=None),
+                finish_reason=finish_reason,
+            )
+        ],
+        usage=None,
+    )
+
+
+class OutOfTokensAcrossProvidersTests(SimpleTestCase):
+    def test_chat_completions_length_stop(self):
+        text = _collect(
+            OpenAIStreamProcessor.process_chat_completion_stream,
+            _chat_chunk("Partial"),
+            _chat_chunk(finish_reason="length"),
+        )
+
+        self.assertEqual(text, "Partial\n\n" + OUT_OF_TOKENS_NOTE)
+
+    def test_chat_completions_normal_stop_adds_nothing(self):
+        text = _collect(
+            OpenAIStreamProcessor.process_chat_completion_stream,
+            _chat_chunk("Done"),
+            _chat_chunk(finish_reason="stop"),
+        )
+
+        self.assertEqual(text, "Done")
+
+    def test_claude_max_tokens_stop(self):
+        text = _collect(
+            ClaudeStreamProcessor.process_stream,
+            SimpleNamespace(
+                type="message_delta",
+                delta=SimpleNamespace(stop_reason="max_tokens"),
+                usage=SimpleNamespace(output_tokens=256),
+            ),
+        )
+
+        self.assertEqual(text, OUT_OF_TOKENS_NOTE)
+
+    def test_gemini_max_tokens_with_no_text_parts(self):
+        text = _collect(
+            GeminiStreamProcessor.process_stream,
+            SimpleNamespace(
+                candidates=[
+                    SimpleNamespace(
+                        finish_reason=FinishReason.MAX_TOKENS,
+                        content=SimpleNamespace(parts=None),
+                    )
+                ],
+                usage_metadata=None,
+            ),
+        )
+
+        self.assertEqual(text, OUT_OF_TOKENS_NOTE)

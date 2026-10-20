@@ -31,7 +31,18 @@ from .web_search_extractors import (
 )
 
 WEB_FETCH_PREVIEW_CHARS = 4000
+OUT_OF_TOKENS_NOTE = (
+    "_The response stopped because the model ran out of output tokens. "
+    "Raise Max Tokens in this chat's settings and try again._"
+)
 logger = logging.getLogger(__name__)
+
+
+def _out_of_tokens_event(wrote_text: bool) -> LLMStreamEvent:
+    """The note shown when a provider stops at the output-token limit."""
+    return LLMStreamEvent.text_delta(
+        ("\n\n" if wrote_text else "") + OUT_OF_TOKENS_NOTE
+    )
 
 
 def _safe_get(obj, attr: str, default=None):
@@ -259,10 +270,13 @@ class OpenAIStreamProcessor:
                     )
                 )
 
+        wrote_text = False
+
         async for chunk in response:
             choice = chunk.choices[0] if chunk.choices else None
 
             if choice and choice.delta.content:
+                wrote_text = True
                 yield LLMStreamEvent.text_delta(choice.delta.content)
 
             if choice and choice.delta.tool_calls:
@@ -297,6 +311,8 @@ class OpenAIStreamProcessor:
                     yield event
 
             grounding_extractor.process_gateway_chunk(chunk)
+            if choice and choice.finish_reason == "length":
+                yield _out_of_tokens_event(wrote_text)
 
             usage = OpenAIUsageExtractor.extract_from_chat_completion(chunk)
             if usage:
@@ -386,12 +402,7 @@ class OpenAIStreamProcessor:
             if chunk.type == "response.incomplete":
                 details = getattr(chunk.response, "incomplete_details", None)
                 if getattr(details, "reason", None) == "max_output_tokens":
-                    yield LLMStreamEvent.text_delta(
-                        ("\n\n" if wrote_text else "")
-                        + "_The response stopped because the model ran out of "
-                        "output tokens. Raise Max Tokens in this chat's settings "
-                        "and try again._"
-                    )
+                    yield _out_of_tokens_event(wrote_text)
 
             if chunk.type in ("response.completed", "response.incomplete"):
                 usage = OpenAIUsageExtractor.extract_from_responses_api(chunk) or {}
@@ -435,6 +446,7 @@ class ClaudeStreamProcessor:
         current_replay_block_index = None
         current_replay_input_json = ""
         provider_tool_calls_yielded = False
+        wrote_text = False
 
         async for event in response:
             # Handle content block start (for tool use and web search results)
@@ -514,6 +526,7 @@ class ClaudeStreamProcessor:
                         current_replay_block["text"] = (
                             current_replay_block.get("text", "") + event.delta.text
                         )
+                    wrote_text = True
                     yield LLMStreamEvent.text_delta(event.delta.text)
                 # Handle tool input JSON delta
                 elif hasattr(event.delta, "partial_json"):
@@ -597,6 +610,8 @@ class ClaudeStreamProcessor:
                         stop_reason,
                         usage.get("output_tokens"),
                     )
+                if stop_reason == "max_tokens":
+                    yield _out_of_tokens_event(wrote_text)
 
                 if provider_tool_calls:
                     usage["provider_tool_calls"] = _merge_provider_tool_calls(
@@ -652,16 +667,22 @@ class GeminiStreamProcessor:
         usage_extractor = GeminiUsageExtractor()
         web_search_extractor = GeminiWebSearchExtractor()
         url_context_results = {}
+        wrote_text = False
+        hit_token_limit = False
 
         # Use async for to properly iterate over async stream
         async for chunk in response:
             # Handle candidates (both text and function calls)
             if hasattr(chunk, "candidates") and chunk.candidates:
                 for candidate in chunk.candidates:
+                    finish_reason = getattr(candidate, "finish_reason", None)
+                    if getattr(finish_reason, "value", finish_reason) == "MAX_TOKENS":
+                        hit_token_limit = True
                     if hasattr(candidate, "content") and candidate.content:
-                        for part in candidate.content.parts:
+                        for part in candidate.content.parts or []:
                             # Handle text parts
                             if hasattr(part, "text") and part.text:
+                                wrote_text = True
                                 yield LLMStreamEvent.text_delta(part.text)
 
                             # Handle function calls (Gemini's tool calling).
@@ -703,6 +724,9 @@ class GeminiStreamProcessor:
             provisional = usage_extractor.provisional_usage()
             if provisional:
                 yield LLMStreamEvent.usage_frame(provisional)
+
+        if hit_token_limit:
+            yield _out_of_tokens_event(wrote_text)
 
         # Yield final usage frame with provider tool calls and web search sources
         usage = usage_extractor.get_final_usage() or {}
