@@ -108,6 +108,33 @@ def _sanitize_web_fetch_result(block) -> Dict:
     return {key: value for key, value in result.items() if value is not None}
 
 
+def _sanitize_web_search_result(block) -> Dict:
+    """Build a compact, persistence-safe result for Anthropic web search.
+
+    ``encrypted_content`` is dropped: it is only replayable inside the
+    original response, and titles + URLs are what a later turn needs to
+    know the search actually returned something.
+    """
+    content = _safe_get(block, "content")
+    if not isinstance(content, list):
+        return {
+            "type": _safe_get(block, "type"),
+            "error_code": _safe_get(content, "error_code") or "unknown_error",
+        }
+
+    results = []
+    for item in content:
+        if _safe_get(item, "type") != "web_search_result":
+            continue
+        entry = {
+            "title": _safe_get(item, "title"),
+            "url": _safe_get(item, "url"),
+            "page_age": _safe_get(item, "page_age"),
+        }
+        results.append({key: value for key, value in entry.items() if value})
+    return {"type": _safe_get(block, "type"), "results": results}
+
+
 def _merge_provider_tool_calls(
     tool_calls: List[Dict], results: List[Dict]
 ) -> List[Dict]:
@@ -216,6 +243,9 @@ class OpenAIStreamProcessor:
         current_tool_calls: Dict[int, Dict[str, str]] = {}  # by delta index
         started_indexes = set()
         ready_indexes = set()
+        # Gateway Gemini searches through web_search_options on this path.
+        grounding_extractor = GeminiWebSearchExtractor()
+        sources_sent = 0
 
         def _ready_events(indexes):
             for idx in sorted(indexes):
@@ -266,13 +296,23 @@ class OpenAIStreamProcessor:
                 for event in _ready_events(current_tool_calls.keys()):
                     yield event
 
+            grounding_extractor.process_gateway_chunk(chunk)
+
             usage = OpenAIUsageExtractor.extract_from_chat_completion(chunk)
             if usage:
+                sources = grounding_extractor.get_sources()
+                if sources:
+                    usage["web_search_sources"] = sources
+                    sources_sent = len(sources)
                 yield LLMStreamEvent.usage_frame(usage)
 
         # Fallback: providers that never send finish_reason == "tool_calls"
         for event in _ready_events(current_tool_calls.keys()):
             yield event
+
+        sources = grounding_extractor.get_sources()
+        if len(sources) > sources_sent:
+            yield LLMStreamEvent.usage_frame({"web_search_sources": sources})
 
     @staticmethod
     async def process_responses_api_stream(
@@ -416,6 +456,13 @@ class ClaudeStreamProcessor:
                             {
                                 "tool_call_id": _safe_get(block, "tool_use_id"),
                                 "result": _sanitize_web_fetch_result(block),
+                            }
+                        )
+                    elif block.type == "web_search_tool_result":
+                        provider_tool_results.append(
+                            {
+                                "tool_call_id": _safe_get(block, "tool_use_id"),
+                                "result": _sanitize_web_search_result(block),
                             }
                         )
                     # Extract web search sources from tool result blocks

@@ -258,6 +258,24 @@ class GeminiWebSearchExtractor:
         if hasattr(candidate, 'grounding_metadata') and candidate.grounding_metadata:
             self._extract_from_metadata(candidate.grounding_metadata)
 
+    def process_gateway_chunk(self, chunk: Any) -> None:
+        """Extract sources from a LiteLLM chat-completions chunk.
+
+        The gateway forwards Gemini grounding as a top-level
+        ``vertex_ai_grounding_metadata`` list of plain dicts (camelCase keys).
+        """
+        extra = getattr(chunk, "model_extra", None) or {}
+        for metadata in extra.get("vertex_ai_grounding_metadata") or []:
+            for grounding_chunk in (metadata or {}).get("groundingChunks") or []:
+                web = (grounding_chunk or {}).get("web") or {}
+                url = web.get("uri")
+                if url and url not in self._sources:
+                    self._sources[url] = WebSearchSource(
+                        url=url,
+                        title=web.get("title", ""),
+                        provider="gemini",
+                    )
+
     def process_response(self, response: Any) -> None:
         """
         Process a non-streaming response to extract grounding metadata.
