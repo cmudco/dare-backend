@@ -334,6 +334,7 @@ class OpenAIStreamProcessor:
             LLMStreamEvent
         """
         web_search_extractor = OpenAIWebSearchExtractor()
+        wrote_text = False
 
         async for chunk in response:
             if not hasattr(chunk, "type"):
@@ -342,6 +343,7 @@ class OpenAIStreamProcessor:
             # Handle text delta events
             if chunk.type == "response.output_text.delta":
                 if hasattr(chunk, "delta") and chunk.delta:
+                    wrote_text = True
                     yield LLMStreamEvent.text_delta(chunk.delta)
 
             # A finished function call arrives as a completed output item with
@@ -370,8 +372,28 @@ class OpenAIStreamProcessor:
             # Extract web search sources from streaming events
             web_search_extractor.process_chunk(chunk)
 
-            # Handle completion event with usage
-            if chunk.type == "response.completed":
+            if chunk.type == "response.failed":
+                error = getattr(getattr(chunk, "response", None), "error", None)
+                message = getattr(error, "message", None) or "the provider failed"
+                yield LLMStreamEvent.text_delta(f"Error: {message}")
+
+            if chunk.type == "error":
+                message = getattr(chunk, "message", None) or "the provider failed"
+                yield LLMStreamEvent.text_delta(f"Error: {message}")
+
+            # Reasoning models can spend the whole output budget thinking and
+            # searching, ending incomplete with no answer at all.
+            if chunk.type == "response.incomplete":
+                details = getattr(chunk.response, "incomplete_details", None)
+                if getattr(details, "reason", None) == "max_output_tokens":
+                    yield LLMStreamEvent.text_delta(
+                        ("\n\n" if wrote_text else "")
+                        + "_The response stopped because the model ran out of "
+                        "output tokens. Raise Max Tokens in this chat's settings "
+                        "and try again._"
+                    )
+
+            if chunk.type in ("response.completed", "response.incomplete"):
                 usage = OpenAIUsageExtractor.extract_from_responses_api(chunk) or {}
 
                 # Include web search sources in usage data
