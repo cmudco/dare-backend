@@ -23,6 +23,7 @@ from rest_framework.permissions import AllowAny, IsAdminUser, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from agents.services.agent_service import apply_agent
 from conversations.api.content_negotiation import ArtifactDownloadContentNegotiation
 from conversations.api.mixins import ConversationSharingMixin
 from conversations.constants import (
@@ -43,6 +44,7 @@ from conversations.models import (
     ModelCardData,
     Snippet,
 )
+from conversations.services.artifact_service import open_snippet_artifact
 from conversations.services.conversation_preference_service import (
     ConversationPreferenceError,
     ConversationPreferenceService,
@@ -74,6 +76,7 @@ from users.constants import AuthSourceChoice
 from users.utils import detect_platform_from_request
 
 from .serializers import (
+    ApplyAgentSerializer,
     ArtifactCheckpointSerializer,
     ArtifactListSerializer,
     ArtifactSerializer,
@@ -85,6 +88,7 @@ from .serializers import (
     MessageSerializer,
     ModelCardDataListSerializer,
     ModelCardDataSerializer,
+    SnippetArtifactRequestSerializer,
 )
 
 # fmt: on
@@ -435,6 +439,24 @@ class ConversationViewSet(ConversationSharingMixin, viewsets.ModelViewSet):
         serializer = self.get_serializer(updated_conversation)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="apply-agent",
+        permission_classes=[IsAuthenticated],
+    )
+    def apply_agent(self, request, conversation_id=None):
+        """Give the chat an agent's whole setup, or detach it with `agent: null`."""
+        conversation = self.get_object()
+        serializer = ApplyAgentSerializer(
+            data=request.data, context=self.get_serializer_context()
+        )
+        serializer.is_valid(raise_exception=True)
+        apply_agent(conversation, serializer.validated_data["agent"])
+        return Response(
+            self.get_serializer(self.get_queryset().get(pk=conversation.pk)).data
+        )
+
     @action(detail=True, methods=["get"], url_path="messages")
     def list_messages(self, request, conversation_id=None):
         """
@@ -510,6 +532,30 @@ class ConversationViewSet(ConversationSharingMixin, viewsets.ModelViewSet):
 
         serializer = ArtifactListSerializer(queryset, many=True)
         return Response(serializer.data)
+
+    @list_artifacts.mapping.post
+    def create_snippet_artifact(self, request, conversation_id=None):
+        """Open a message code block as an artifact (idempotent per block)."""
+        conversation = self.get_object()
+        if conversation.user_id != request.user.id:
+            raise NotFound()
+
+        payload = SnippetArtifactRequestSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+        data = payload.validated_data
+
+        message = get_object_or_404(
+            Message.active_objects, id=data["message_id"], conversation=conversation
+        )
+        artifact, created = open_snippet_artifact(
+            message=message,
+            language=data["language"],
+            content=data["content"],
+        )
+        return Response(
+            ArtifactSerializer(artifact).data,
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
 
     @action(detail=True, methods=["get"], url_path="artifacts/(?P<artifact_id>[^/.]+)")
     def artifact_detail(self, request, conversation_id=None, artifact_id=None):
@@ -928,9 +974,18 @@ class ArtifactContentView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
-        # Create new version with updated content
+        # Branch from the newest version so editing an older one never
+        # produces a duplicate version number.
         with transaction.atomic():
-            new_artifact = artifact.create_new_version()
+            latest = (
+                Artifact.active_objects.select_for_update()
+                .filter(artifact_group=artifact.artifact_group)
+                .order_by("-version")
+                .first()
+                if artifact.artifact_group
+                else None
+            )
+            new_artifact = (latest or artifact).create_new_version()
             new_artifact.content = new_content
             new_artifact.status = ArtifactStatus.COMPLETED
             new_artifact.save(update_fields=["content", "status", "updated_at"])

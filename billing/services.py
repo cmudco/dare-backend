@@ -21,9 +21,11 @@ from billing.constants import (
     UserWalletPreferenceTypeChoice,
 )
 from billing.exceptions import PaymentRequiredError
+from billing.limit_alerts import alert_owner_limit_reached, close_limit_alert
 from billing.models import (
     GroupWallet,
     LiteLLMSpend,
+    MemberLimitAlert,
     SystemRefillPolicy,
     Transaction,
     UserRefillOverride,
@@ -294,6 +296,7 @@ class WalletService:
         spend_limit = WalletService.get_litellm_spend_limit(member)
         if spend_limit is None or not spend_limit.is_reached:
             return
+        alert_owner_limit_reached(member.access_code_group, member, spend_limit)
         raise PaymentRequiredError(
             _(
                 "You have used your ${limit} allowance on your group's AI gateway. "
@@ -302,6 +305,41 @@ class WalletService:
             code=LITELLM_SPEND_LIMIT_REACHED,
             details={"limit": str(spend_limit.limit), "used": str(spend_limit.used)},
         )
+
+    @staticmethod
+    def release_unblocked_members(
+        *, group_id: Optional[int] = None, member_id: Optional[int] = None
+    ) -> None:
+        """Close the open blocks a limit change has lifted and tell those members.
+
+        A member who has since left the group is closed without a message: the
+        group's limit no longer applies to them.
+        """
+        alerts = MemberLimitAlert.objects.filter(resolved_at__isnull=True)
+        if group_id is not None:
+            alerts = alerts.filter(group_id=group_id)
+        if member_id is not None:
+            alerts = alerts.filter(member_id=member_id)
+        alerts = list(alerts.select_related("group"))
+        if not alerts:
+            return
+        members = (
+            User.objects.select_related(
+                "refill_override", "access_code_group__group_wallet"
+            )
+            .prefetch_related(MEMBER_SPEND_PREFETCH)
+            .in_bulk([alert.member_id for alert in alerts])
+        )
+        for alert in alerts:
+            member = members[alert.member_id]
+            if member.access_code_group_id != alert.group_id:
+                close_limit_alert(alert, None, notify=False)
+                continue
+            spend_limit = WalletService.get_litellm_spend_limit(member)
+            if spend_limit is not None and spend_limit.is_reached:
+                continue
+            alert.member = member
+            close_limit_alert(alert, spend_limit, notify=True)
 
     @staticmethod
     def _override_for(user) -> Optional[UserRefillOverride]:

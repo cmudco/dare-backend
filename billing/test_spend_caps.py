@@ -20,11 +20,13 @@ from billing.gateway_report import (
     parse_gateway_key_report,
     record_gateway_key_report,
 )
+from billing.group_wallet_service import GroupWalletService, UpsertUserOverrideRequest
 from billing.litellm_probe import LiteLLMProbeResult, ProbedModel
 from billing.models import (
     GroupWallet,
     LiteLLMKey,
     LiteLLMSpend,
+    MemberLimitAlert,
     SystemRefillPolicy,
     Transaction,
     UserRefillOverride,
@@ -45,6 +47,8 @@ from core.services.background_model_service import (
 )
 from core.services.custom_llm_service import CustomLLMService
 from feature_flags.models import FeatureFlag
+from notifications.constants import NotificationCategory
+from notifications.models import Notification
 from users.models import AccessCodeGroup, User
 
 GROUP_WALLETS = "/api/billing/group-wallets/"
@@ -595,3 +599,147 @@ class GroupOwnerKeyTests(TestCase):
         outsider = make_user("outsider@example.com")
 
         self.assertFalse(LiteLLMKey.visible_for_user(outsider).exists())
+
+
+class MemberLimitAlertTests(TestCase):
+    """The owner hears once when a member is blocked by their limit."""
+
+    def setUp(self):
+        FeatureFlag.objects.update_or_create(
+            key="enable_litellm_wallet", defaults={"default_enabled": True}
+        )
+        self.owner = make_user("prof@example.com")
+        self.group = AccessCodeGroup.objects.create(
+            access_code="ALERT-101", max_capacity=50, group_owner=self.owner
+        )
+        self.group_wallet = GroupWallet.objects.create(
+            group=self.group, litellm_member_cap=Decimal("1")
+        )
+        self.key = make_group_key(self.group, self.owner)
+        self.student = make_user("student@example.com", self.group)
+        activate(self.student, self.key)
+
+    def _send(self):
+        with self.assertRaises(PaymentRequiredError):
+            get_dispatch_credentials_for_user_sync("custom", self.student)
+
+    def _owner_alerts(self):
+        return Notification.objects.filter(user=self.owner)
+
+    def test_a_blocked_member_alerts_the_owner_once(self):
+        record_spend(self.student, self.key, "1")
+
+        self._send()
+        self._send()
+
+        alert = self._owner_alerts().get()
+        self.assertIn("student@example.com", alert.message)
+        self.assertIn("$1.00", alert.message)
+        self.assertEqual(alert.category, NotificationCategory.WARNING)
+        self.assertFalse(Notification.objects.filter(user=self.student).exists())
+
+    def test_a_member_under_the_limit_alerts_no_one(self):
+        record_spend(self.student, self.key, "0.5")
+
+        get_dispatch_credentials_for_user_sync("custom", self.student)
+
+        self.assertFalse(self._owner_alerts().exists())
+
+    def _set_group_limit(self, amount):
+        self.group_wallet.litellm_member_cap = amount
+        with self.captureOnCommitCallbacks(execute=True):
+            self.group_wallet.save()
+
+    def _student_alerts(self):
+        return Notification.objects.filter(user=self.student)
+
+    def test_using_up_a_raised_limit_alerts_again(self):
+        record_spend(self.student, self.key, "1")
+        self._send()
+        self._set_group_limit(Decimal("2"))
+        record_spend(self.student, self.key, "2")
+
+        self._send()
+
+        self.assertEqual(self._owner_alerts().count(), 2)
+
+    def test_raising_the_group_limit_tells_the_blocked_member(self):
+        record_spend(self.student, self.key, "1")
+        self._send()
+
+        self._set_group_limit(Decimal("20"))
+
+        notice = self._student_alerts().get()
+        self.assertIn("$20.00", notice.message)
+        self.assertEqual(notice.category, NotificationCategory.SUCCESS)
+        self.assertFalse(MemberLimitAlert.objects.filter(resolved_at=None).exists())
+        get_dispatch_credentials_for_user_sync("custom", self.student)
+
+    def test_a_raise_that_still_blocks_tells_no_one(self):
+        record_spend(self.student, self.key, "3")
+        self._send()
+
+        self._set_group_limit(Decimal("2"))
+
+        self.assertFalse(self._student_alerts().exists())
+        self.assertTrue(MemberLimitAlert.objects.filter(resolved_at=None).exists())
+
+    def test_members_who_were_never_blocked_hear_nothing(self):
+        bystander = make_user("bystander@example.com", self.group)
+        activate(bystander, self.key)
+        record_spend(self.student, self.key, "1")
+        self._send()
+
+        self._set_group_limit(Decimal("20"))
+
+        self.assertFalse(Notification.objects.filter(user=bystander).exists())
+
+    def test_the_owner_raising_one_members_override_tells_them(self):
+        UserRefillOverride.objects.create(user=self.student, litellm_cap=Decimal("0.3"))
+        record_spend(self.student, self.key, "0.3")
+        self._send()
+
+        with self.captureOnCommitCallbacks(execute=True):
+            GroupWalletService.upsert_user_override(
+                UpsertUserOverrideRequest(
+                    owner_or_admin=self.owner,
+                    target_user_id=self.student.pk,
+                    litellm_cap=Decimal("5"),
+                )
+            )
+
+        self.assertIn("$5.00", self._student_alerts().get().message)
+
+    def test_removing_every_limit_says_the_limit_was_removed(self):
+        override = UserRefillOverride.objects.create(
+            user=self.student, litellm_cap=Decimal("0.3")
+        )
+        record_spend(self.student, self.key, "0.3")
+        self._send()
+        self.group_wallet.litellm_member_cap = None
+        self.group_wallet.save()
+
+        with self.captureOnCommitCallbacks(execute=True):
+            override.delete()
+
+        self.assertIn("was removed", self._student_alerts().get().message)
+
+    def test_a_member_who_left_the_group_is_released_silently(self):
+        record_spend(self.student, self.key, "1")
+        self._send()
+        self.student.access_code_group = None
+        self.student.save()
+
+        self._set_group_limit(Decimal("20"))
+
+        self.assertFalse(self._student_alerts().exists())
+        self.assertFalse(MemberLimitAlert.objects.filter(resolved_at=None).exists())
+
+    def test_a_group_without_an_owner_still_blocks_without_alerting(self):
+        self.group.group_owner = None
+        self.group.save()
+        record_spend(self.student, self.key, "1")
+
+        self._send()
+
+        self.assertFalse(MemberLimitAlert.objects.exists())

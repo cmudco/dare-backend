@@ -91,6 +91,8 @@ class ArtifactType(models.TextChoices):
     DOCX = 'docx', 'Word Document'
     PPTX = 'pptx', 'PowerPoint Presentation'
     PDF = 'pdf', 'PDF Document'
+    HTML = 'html', 'HTML Page'
+    SVG = 'svg', 'SVG Image'
 
 
 class ArtifactStatus(models.TextChoices):
@@ -275,4 +277,39 @@ ARTIFACT_CONTENT_TYPES = {
     'code': 'text/plain',
     'react': 'application/vnd.dare.react+jsx',
     'pdf': 'application/pdf',
+    'html': 'text/html',
+    'svg': 'image/svg+xml',
+}
+
+# source_tool for artifacts a user opens from a chat code block.
+SNIPPET_ARTIFACT_SOURCE_TOOL = 'code_block'
+
+# Fenced-code language -> (artifact type, file extension).
+SNIPPET_ARTIFACT_LANGUAGES = {
+    'jsx': (ArtifactType.REACT, 'jsx'),
+    'tsx': (ArtifactType.REACT, 'tsx'),
+    'html': (ArtifactType.HTML, 'html'),
+    'svg': (ArtifactType.SVG, 'svg'),
+    'mermaid': (ArtifactType.DIAGRAM, 'mmd'),
+    'python': (ArtifactType.CODE, 'py'),
+    'py': (ArtifactType.CODE, 'py'),
+    'javascript': (ArtifactType.CODE, 'js'),
+    'js': (ArtifactType.CODE, 'js'),
+    'typescript': (ArtifactType.CODE, 'ts'),
+    'ts': (ArtifactType.CODE, 'ts'),
+    'java': (ArtifactType.CODE, 'java'),
+    'c': (ArtifactType.CODE, 'c'),
+    'cpp': (ArtifactType.CODE, 'cpp'),
+    'csharp': (ArtifactType.CODE, 'cs'),
+    'go': (ArtifactType.CODE, 'go'),
+    'rust': (ArtifactType.CODE, 'rs'),
+    'ruby': (ArtifactType.CODE, 'rb'),
+    'php': (ArtifactType.CODE, 'php'),
+    'sql': (ArtifactType.CODE, 'sql'),
+    'css': (ArtifactType.CODE, 'css'),
+    'bash': (ArtifactType.CODE, 'sh'),
+    'shell': (ArtifactType.CODE, 'sh'),
+    'r': (ArtifactType.CODE, 'r'),
+    'json': (ArtifactType.CODE, 'json'),
+    'yaml': (ArtifactType.CODE, 'yaml'),
 }

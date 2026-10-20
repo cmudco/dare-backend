@@ -11,6 +11,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from django.db.models import Q
 
 from assistant.constants import ProposalActionType as Type
+from assistant.services.agent_builder import create_agent, remove_agent
 from conversations.constants import ConversationSource
 from conversations.models import Conversation
 from files.models import File, Folder, Tag
@@ -228,6 +229,17 @@ def _undo_delete_conversations(user, journal: Journal) -> Notes:
     return []
 
 
+# --- Agents ------------------------------------------------------------------
+
+
+def _apply_create_agent(user, action: Action) -> Tuple[Journal, Notes]:
+    return create_agent(user, action["name"], action["description"], action["agent"])
+
+
+def _undo_create_agent(user, journal: Journal) -> Notes:
+    return remove_agent(user, journal)
+
+
 # --- Projects ----------------------------------------------------------------
 
 
@@ -397,4 +409,5 @@ HANDLERS: Dict[
         _apply_delete_conversations,
         _undo_delete_conversations,
     ),
+    Type.CREATE_AGENT: (_apply_create_agent, _undo_create_agent),
 }

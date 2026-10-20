@@ -1,11 +1,7 @@
-import uuid
-
 from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
 
-from billing.models import LiteLLMKey
-from conversations.models import LLM
-from core.services.dtos.llm_descriptor_dto import split_litellm_picker_id
+from core.services.model_ref import ModelRefUnavailable, resolve_model_ref
 from files.models import File, Folder
 from libraries.models import SharedLibrary, UserLibraryAccess
 from projects.constants import (
@@ -119,43 +115,15 @@ class PersonalProjectSerializer(serializers.ModelSerializer):
 
     def validate_default_model_ref(self, value):
         """Resolve the picker id into the project's default-model columns."""
-        cleared = {
-            "default_model": None,
-            "default_litellm_key": None,
-            "default_litellm_model_name": "",
+        try:
+            choice = resolve_model_ref(self.context["request"].user, value)
+        except ModelRefUnavailable as exc:
+            raise serializers.ValidationError(str(exc))
+        return {
+            "default_model": choice.llm,
+            "default_litellm_key": choice.litellm_key,
+            "default_litellm_model_name": choice.litellm_model_name,
         }
-        if not value:
-            return cleared
-
-        litellm = split_litellm_picker_id(value)
-        if litellm is not None:
-            key_id, model_name = litellm
-            try:
-                key = (
-                    LiteLLMKey.visible_for_user(self.context["request"].user)
-                    .filter(pk=uuid.UUID(key_id))
-                    .first()
-                )
-            except ValueError:
-                key = None
-            if key is None:
-                raise serializers.ValidationError(
-                    _("That LiteLLM key is not available.")
-                )
-            return {
-                **cleared,
-                "default_litellm_key": key,
-                "default_litellm_model_name": model_name,
-            }
-
-        model = (
-            LLM.objects.filter(is_active=True, pk=int(value)).first()
-            if value.isdigit()
-            else None
-        )
-        if model is None:
-            raise serializers.ValidationError(_("That model is not available."))
-        return {**cleared, "default_model": model}
 
     def validate(self, attrs):
         attrs.update(attrs.pop("default_model_ref", {}))

@@ -9,6 +9,7 @@ from typing import Any, List, Optional, Tuple
 
 from assistant.constants import PLAN_MAX_ACTIONS, PLAN_MAX_ITEMS, PLAN_NAME_MAX_LENGTH
 from assistant.constants import ProposalActionType as Type
+from assistant.domain.agent_draft import AgentDraft, parse_agent_draft
 from projects.constants import PROJECT_DESCRIPTION_MAX_LENGTH, PROJECT_NAME_MAX_LENGTH
 
 NAMED = {
@@ -20,6 +21,7 @@ NAMED = {
     Type.ADD_TO_PROJECT,
     Type.REMOVE_FROM_PROJECT,
     Type.DELETE_PROJECT,
+    Type.CREATE_AGENT,
 }
 FILES_ONLY = {
     Type.ADD_TO_FOLDER,
@@ -44,6 +46,7 @@ class PlannedAction:
     description: str
     file_ids: Tuple[int, ...]
     conversation_ids: Tuple[str, ...]
+    agent: Optional[AgentDraft] = None
 
 
 @dataclass(frozen=True)
@@ -113,6 +116,21 @@ def _action(entry: Any, label: str, errors: List[str]) -> Optional[PlannedAction
     ):
         errors.append(f"{label} takes only a name.")
         return None
+    if kind == Type.CREATE_AGENT:
+        if file_ids or conversation_ids:
+            errors.append(f"{label} takes a name and an agent, no ids.")
+            return None
+        agent = parse_agent_draft(entry.get("agent"), label, errors)
+        if agent is None:
+            return None
+        return PlannedAction(
+            type=kind,
+            name=name,
+            description=agent.description,
+            file_ids=(),
+            conversation_ids=(),
+            agent=agent,
+        )
     description = ""
     if kind == Type.CREATE_PROJECT:
         description = str(entry.get("description") or "").strip()

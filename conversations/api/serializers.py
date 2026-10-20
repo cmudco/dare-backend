@@ -4,6 +4,7 @@ from djangorestframework_camel_case.util import camelize
 from rest_framework import serializers
 
 from agents.models import Agent
+from agents.services.agent_service import agent_model_ref
 from conversations.constants import ToolCallOrigin
 from conversations.models import (
     LLM,
@@ -79,6 +80,22 @@ class OwnedProjectField(serializers.PrimaryKeyRelatedField):
         if not user.is_authenticated:
             return PersonalProject.objects.none()
         return PersonalProject.active_objects.filter(user=user)
+
+
+class ApplyAgentSerializer(serializers.Serializer):
+    agent = serializers.PrimaryKeyRelatedField(
+        queryset=Agent.active_objects.none(),
+        allow_null=True,
+        help_text="The user's agent to apply, or null to detach the current one.",
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["agent"].queryset = Agent.active_objects.filter(
+            user=self.context["request"].user
+        ).prefetch_related(
+            "content_files", "embedding_files", "libraries", "mcp_servers", "dare_tools"
+        )
 
 
 class ConversationSerializer(serializers.ModelSerializer):
@@ -307,6 +324,11 @@ class ConversationSerializer(serializers.ModelSerializer):
         llm_id = getattr(obj, "_fallback_llm_id", None) or obj.selected_model_id
         if llm_id is not None:
             return str(llm_id)
+        # Applying a gateway agent leaves no DARE model; its model is the choice.
+        if obj.selected_agent_id:
+            agent_ref = agent_model_ref(obj.selected_agent)
+            if agent_ref:
+                return agent_ref
         # A chat that has not answered yet starts on its project's default.
         return project_model_ref(obj.project) if obj.project_id else None
 
@@ -690,6 +712,14 @@ class ArtifactSerializer(serializers.ModelSerializer):
             {"id": v.id, "version": v.version, "createdAt": v.created_at.isoformat()}
             for v in versions
         ]
+
+
+class SnippetArtifactRequestSerializer(serializers.Serializer):
+    """Open a code block from an assistant message as an editable artifact."""
+
+    message_id = serializers.IntegerField()
+    language = serializers.CharField(max_length=40, allow_blank=True)
+    content = serializers.CharField(max_length=200_000, trim_whitespace=False)
 
 
 class ArtifactListSerializer(serializers.ModelSerializer):
