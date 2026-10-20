@@ -186,18 +186,15 @@ class OpenAIMessageFormatter:
             String for plain text-only, list of input items once the history
             carries tool turns or images
         """
-        if OpenAIMessageFormatter._has_tool_turns(messages):
-            # Tool turns must stay structured: flattening them to
-            # "assistant: " / "tool: ..." lines drops the call_id linkage the
-            # model needs to tie a result back to the call it made.
-            return OpenAIMessageFormatter._build_tool_aware_input(messages)
+        # Tool turns must stay structured: flattening them to
+        # "assistant: " / "tool: ..." lines drops the call_id linkage the
+        # model needs to tie a result back to the call it made.
+        if OpenAIMessageFormatter._has_tool_turns(
+            messages
+        ) or MessageFormatter.has_multimodal_content(messages):
+            return OpenAIMessageFormatter._build_input_items(messages)
 
-        has_multimodal = MessageFormatter.has_multimodal_content(messages)
-
-        if not has_multimodal:
-            return "\n".join([f"{msg['role']}: {msg['content']}" for msg in messages])
-
-        return OpenAIMessageFormatter._build_multimodal_content(messages)
+        return "\n".join([f"{msg['role']}: {msg['content']}" for msg in messages])
 
     @staticmethod
     def _has_tool_turns(messages: List[Dict]) -> bool:
@@ -207,9 +204,9 @@ class OpenAIMessageFormatter:
         )
 
     @staticmethod
-    def _build_tool_aware_input(messages: List[Dict]) -> List[Dict]:
+    def _build_input_items(messages: List[Dict]) -> List[Dict]:
         """
-        Build Responses API input items from a history containing tool turns.
+        Build Responses API input items from a history with tool turns or images.
 
         The internal schema is Chat Completions shaped — an assistant turn
         carrying ``tool_calls`` followed by one ``role:"tool"`` turn per
@@ -287,35 +284,6 @@ class OpenAIMessageFormatter:
                 )
 
         return parts
-
-    @staticmethod
-    def _build_multimodal_content(messages: List[Dict]) -> List:
-        """
-        Build multimodal content array for Responses API.
-
-        Args:
-            messages: List of message dictionaries
-
-        Returns:
-            List of content items
-        """
-        input_data = []
-        for msg in messages:
-            role_prefix = f"{msg['role']}: "
-            content = msg.get("content", "")
-
-            if isinstance(content, str):
-                input_data.append({"type": "text", "text": role_prefix + content})
-                continue
-
-            # Process structured content (text + images)
-            for item in content:
-                if item.get("type") == "text":
-                    input_data.append({"type": "text", "text": role_prefix + item["text"]})
-                elif item.get("type") == "image_url":
-                    input_data.append({"type": "image_url", "image_url": item["image_url"]["url"]})
-
-        return input_data
 
     @staticmethod
     def flatten_to_text(messages: List[Dict]) -> str:
