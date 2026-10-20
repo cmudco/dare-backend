@@ -8,7 +8,7 @@ import logging
 import zipfile
 
 from asgiref.sync import sync_to_async
-from django.db.models import F
+from django.db.models import F, Max
 from django.http import HttpResponse, StreamingHttpResponse
 from django.shortcuts import get_object_or_404
 from djangorestframework_camel_case.render import CamelCaseJSONRenderer
@@ -117,7 +117,9 @@ class ResearchProjectViewSet(
         return ResearchProjectSerializer
 
     def get_queryset(self):
-        return ResearchProject.active_objects.filter(user=self.request.user)
+        return ResearchProject.active_objects.filter(user=self.request.user).annotate(
+            last_run_at=Max("agent_runs__created_at")
+        )
 
     def perform_create(self, serializer):
         prepare_profile(serializer.save(user=self.request.user))

@@ -61,6 +61,7 @@ class ResearchProjectSerializer(serializers.ModelSerializer):
     pending_review_count = serializers.SerializerMethodField()
     approved_count = serializers.SerializerMethodField()
     source_count = serializers.SerializerMethodField()
+    last_run_at = serializers.SerializerMethodField()
     # Write-only: file metadata from the create wizard, persisted as sources.
     sources = serializers.ListField(
         child=serializers.DictField(),
@@ -102,6 +103,7 @@ class ResearchProjectSerializer(serializers.ModelSerializer):
             "soul_content",
             "created_at",
             "updated_at",
+            "last_run_at",
         ]
         read_only_fields = [
             "id",
@@ -111,7 +113,12 @@ class ResearchProjectSerializer(serializers.ModelSerializer):
             "source_count",
             "created_at",
             "updated_at",
+            "last_run_at",
         ]
+
+    def get_last_run_at(self, obj):
+        """When the project's newest agent run started (annotated by the view)."""
+        return getattr(obj, "last_run_at", None)
 
     def get_pending_review_count(self, obj):
         return ResearchStagingItem.active_objects.filter(
