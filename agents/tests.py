@@ -1,7 +1,9 @@
 """Agents: model choice (DARE or gateway), full chat setup, versions, applying to chats."""
 
 from django.contrib.auth import get_user_model
+from django.db import connection
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 from rest_framework.test import APIClient
 
 from agents.models import Agent
@@ -288,3 +290,26 @@ class ApplyAgentTests(AgentTestCase):
         )
 
         self.assertEqual(response.status_code, 404)
+
+
+class AgentListQueryCountTests(AgentTestCase):
+    def add_agent(self):
+        agent = Agent.active_objects.create(
+            user=self.user, name="Helper", prompt=self.prompt, llm=self.model
+        )
+        agent.content_files.add(self.make_file(self.user, f"content-{agent.pk}.pdf"))
+        agent.embedding_files.add(self.make_file(self.user, f"embed-{agent.pk}.pdf"))
+
+    def count_list_queries(self):
+        with CaptureQueriesContext(connection) as queries:
+            response = self.client.get(AGENTS_URL)
+        self.assertEqual(response.status_code, 200)
+        return len(queries)
+
+    def test_listing_agents_costs_the_same_queries_for_one_or_many(self):
+        self.add_agent()
+        few = self.count_list_queries()
+        for _ in range(3):
+            self.add_agent()
+
+        self.assertEqual(self.count_list_queries(), few)
