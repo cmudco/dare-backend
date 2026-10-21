@@ -16,6 +16,11 @@ import logging
 from copy import deepcopy
 from typing import AsyncGenerator, Dict, List
 
+from core.services.code_sandbox import (
+    OPENAI_CONTAINER_FEE,
+    OPENAI_PROVIDER,
+    SANDBOX_TOOL_NAME,
+)
 from core.services.dtos.stream_event_dto import LLMStreamEvent, StreamEventKind
 from core.services.dtos.tool_dto import ToolCallRequest
 
@@ -334,6 +339,8 @@ class OpenAIStreamProcessor:
             LLMStreamEvent
         """
         web_search_extractor = OpenAIWebSearchExtractor()
+        sandbox_calls: List[Dict] = []
+        sandbox_containers = set()
 
         async for chunk in response:
             if not hasattr(chunk, "type"):
@@ -366,6 +373,9 @@ class OpenAIStreamProcessor:
                     yield LLMStreamEvent.tool_call_ready(
                         ToolCallRequest(id=call_id, name=name, arguments=arguments)
                     )
+                elif item is not None and item.type == "code_interpreter_call":
+                    sandbox_containers.add(item.container_id)
+                    sandbox_calls.append(_sandbox_tool_call(item))
 
             # Extract web search sources from streaming events
             web_search_extractor.process_chunk(chunk)
@@ -378,8 +388,56 @@ class OpenAIStreamProcessor:
                 sources = web_search_extractor.get_sources()
                 if sources:
                     usage["web_search_sources"] = sources
+                if sandbox_calls:
+                    usage["provider_tool_calls"] = sandbox_calls
+                    usage["sandbox_fee"] = float(
+                        OPENAI_CONTAINER_FEE * len(sandbox_containers)
+                    )
+                    citations = _sandbox_file_citations(chunk.response)
+                    if citations:
+                        usage["sandbox_citations"] = citations
 
                 yield LLMStreamEvent.usage_frame(usage)
+
+
+# Persisted sandbox output is for display, not replay; cap what a loop can print.
+SANDBOX_LOG_LIMIT = 8000
+
+
+def _sandbox_tool_call(item) -> Dict:
+    """An OpenAI code_interpreter_call as a provider-executed tool call."""
+    logs = "\n".join(
+        output.logs
+        for output in item.outputs or []
+        if output.type == "logs" and output.logs
+    )
+    return {
+        "id": item.id,
+        "provider": OPENAI_PROVIDER,
+        "name": SANDBOX_TOOL_NAME,
+        "arguments": {"code": item.code or ""},
+        "result": {"code": item.code or "", "logs": logs[:SANDBOX_LOG_LIMIT]},
+        "status": "completed" if item.status == "completed" else "failed",
+    }
+
+
+def _sandbox_file_citations(response) -> List[Dict]:
+    """Files the model cited from its container, in answer order."""
+    citations = []
+    for item in response.output:
+        if item.type != "message":
+            continue
+        for part in item.content:
+            for annotation in getattr(part, "annotations", None) or []:
+                if annotation.type == "container_file_citation":
+                    citations.append(
+                        {
+                            "container_id": annotation.container_id,
+                            "file_id": annotation.file_id,
+                            "filename": annotation.filename,
+                        }
+                    )
+    return citations
 
 
 class ClaudeStreamProcessor:

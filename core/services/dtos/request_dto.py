@@ -110,6 +110,10 @@ class LLMQueryRequest:
         """Check if Claude web fetch is enabled."""
         return self.generation.web_fetch_enabled
 
+    def requires_code_sandbox(self) -> bool:
+        """Check if the provider code sandbox is enabled."""
+        return self.generation.code_sandbox_enabled
+
     def requires_image_generation(self) -> bool:
         """Check if image generation is enabled."""
         return self.generation.image_generation_enabled

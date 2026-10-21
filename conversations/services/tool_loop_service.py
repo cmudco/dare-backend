@@ -41,6 +41,7 @@ from conversations.services.tool_execution_service import (
     ToolExecutionService,
     tool_execution_service,
 )
+from core.services.code_sandbox import SANDBOX_TOOL_TYPE, SandboxFile
 from core.services.dtos import (
     LLMQueryRequest,
     StreamEventKind,
@@ -70,8 +71,9 @@ class ToolLoopResult:
 
     ``token_usage`` carries the summed token totals plus the extras the
     finalization helpers read (``web_search_sources``,
-    ``provider_tool_calls``, ``memory_context``) — the same dict shape the
-    single-call flow produced, so finalization is unchanged.
+    ``provider_tool_calls``, ``sandbox_files``, ``memory_context``) — the
+    same dict shape the single-call flow produced, so finalization is
+    unchanged.
     """
 
     text: str = ""
@@ -99,6 +101,10 @@ class ToolLoopService:
         self.stream_idle_timeout_seconds = float(
             os.environ.get("LLM_STREAM_IDLE_TIMEOUT_SECONDS", "45")
         )
+        # The provider sends nothing while sandbox code runs or files upload.
+        self.sandbox_idle_timeout_seconds = float(
+            os.environ.get("LLM_SANDBOX_IDLE_TIMEOUT_SECONDS", "300")
+        )
 
     async def _stream_round(self, prepared, messages, tools):
         """Yield provider events, failing when a stream goes silent.
@@ -108,11 +114,14 @@ class ToolLoopService:
         case that otherwise leaves an empty assistant placeholder forever.
         """
         iterator = self.llm_service.stream_round(prepared, messages, tools).__aiter__()
+        idle_timeout = (
+            self.sandbox_idle_timeout_seconds
+            if any(tool.get("type") == SANDBOX_TOOL_TYPE for tool in tools or [])
+            else self.stream_idle_timeout_seconds
+        )
         while True:
             try:
-                event = await asyncio.wait_for(
-                    anext(iterator), timeout=self.stream_idle_timeout_seconds
-                )
+                event = await asyncio.wait_for(anext(iterator), timeout=idle_timeout)
             except StopAsyncIteration:
                 # The HTTP client stack can absorb a task cancellation while
                 # closing the response and report a clean end of stream
@@ -123,8 +132,7 @@ class ToolLoopService:
             except TimeoutError as exc:
                 await iterator.aclose()
                 raise TimeoutError(
-                    "The model stream was idle for "
-                    f"{self.stream_idle_timeout_seconds:g} seconds"
+                    f"The model stream was idle for {idle_timeout:g} seconds"
                 ) from exc
             if _cancel_requested():
                 await iterator.aclose()
@@ -190,6 +198,7 @@ class ToolLoopService:
         thinking_accum = ""
         web_search_sources: List[Dict] = []
         provider_tool_calls: List[Dict] = []
+        sandbox_files: List[SandboxFile] = []
         sent_provider_ids: set = set()
         empty_stream_retried = False
 
@@ -308,6 +317,7 @@ class ToolLoopService:
                         usage.observe(round_index, observed_usage)
                         if event.usage.get("web_search_sources"):
                             web_search_sources = event.usage["web_search_sources"]
+                        sandbox_files.extend(event.usage.get("sandbox_files") or [])
                         for provider_call in (
                             event.usage.get("provider_tool_calls") or []
                         ):
@@ -453,6 +463,8 @@ class ToolLoopService:
             token_usage["web_search_sources"] = web_search_sources
         if provider_tool_calls:
             token_usage["provider_tool_calls"] = provider_tool_calls
+        if sandbox_files:
+            token_usage["sandbox_files"] = sandbox_files
         if prepared.memory_context:
             token_usage["memory_context"] = prepared.memory_context
 
