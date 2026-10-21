@@ -55,6 +55,14 @@ def sandbox_files_note(names: List[str]) -> str:
     )
 
 
+# Tags a reply's sandbox outputs so regeneration can replace exactly those.
+SANDBOX_OUTPUT_MARKER = {"source": SANDBOX_TOOL_NAME}
+
+
+def sandbox_outputs(message) -> List[File]:
+    return list(message.files.filter(generation_params=SANDBOX_OUTPUT_MARKER))
+
+
 def save_sandbox_file(sandbox_file: SandboxFile, user) -> File:
     """Keep a sandbox output as the user's generated file."""
     file_type = (
@@ -70,6 +78,7 @@ def save_sandbox_file(sandbox_file: SandboxFile, user) -> File:
         is_media=is_image,
         media_type="generated_image" if is_image else None,
         is_generated=True,
+        generation_params=SANDBOX_OUTPUT_MARKER,
         storage_backend=(user.storage_backend if user else StorageBackendChoice.LOCAL),
     )
     file_obj.file.save(

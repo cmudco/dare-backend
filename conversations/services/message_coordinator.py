@@ -69,7 +69,7 @@ from conversations.services.web_search_source_service import WebSearchSourceServ
 from conversations.services.websocket_response_service import WebSocketResponseService
 from core.services.api_key_service import get_chat_dispatch_credentials
 from core.services.billing_service import BillingService
-from core.services.code_sandbox import save_sandbox_file
+from core.services.code_sandbox import sandbox_outputs, save_sandbox_file
 from core.services.conversation_service import ConversationService
 from core.services.dtos import LLMDescriptor, LLMQueryRequestBuilder
 from core.services.file_upload_service import FileUploadService
@@ -287,15 +287,21 @@ class MessageCoordinator:
         await save_tool_calls()
 
     async def _save_sandbox_files(
-        self, message_obj: "Message", token_usage: Optional[Dict]
+        self, message_obj: "Message", token_usage: Optional[Dict], regenerate: bool
     ) -> None:
-        """Attach the charts and files the code sandbox produced to the reply."""
-        sandbox_files = (token_usage or {}).get("sandbox_files")
-        if not sandbox_files:
+        """Attach the charts and files the code sandbox produced to the reply.
+
+        A regenerated reply drops the previous attempt's outputs even when the
+        new attempt produced none.
+        """
+        sandbox_files = (token_usage or {}).get("sandbox_files") or []
+        if not sandbox_files and not regenerate:
             return
 
         @database_sync_to_async
         def attach():
+            if regenerate:
+                message_obj.files.remove(*sandbox_outputs(message_obj))
             for sandbox_file in sandbox_files:
                 message_obj.files.add(save_sandbox_file(sandbox_file, self.user))
 
@@ -830,7 +836,7 @@ class MessageCoordinator:
                 await self._save_provider_tool_calls(
                     message_obj, token_usage, regenerate
                 )
-                await self._save_sandbox_files(message_obj, token_usage)
+                await self._save_sandbox_files(message_obj, token_usage, regenerate)
                 await self._save_memory_context(message_obj, token_usage)
                 logger.info(
                     "[journey] mid=%s finalizing: text=%d chars, tokens=%s/%s",
