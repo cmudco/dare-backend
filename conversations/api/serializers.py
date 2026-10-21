@@ -255,6 +255,7 @@ class ConversationSerializer(serializers.ModelSerializer):
             "history_limit",
             "web_search_enabled",
             "web_fetch_enabled",
+            "code_sandbox_enabled",
             "image_generation_enabled",
             "audio_transcription_enabled",
             "artifacts_enabled",
