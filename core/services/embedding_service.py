@@ -1,3 +1,4 @@
+import math
 from typing import Dict, List, Tuple
 
 import tiktoken
@@ -22,6 +23,11 @@ class EmbeddingService:
         """Count document text without interpreting tokenizer sentinel strings."""
         return len(self.tokenizer.encode(text, disallowed_special=()))
 
+    def _request_cost(self, text: str) -> int:
+        # OpenAI enforces its per-request cap on a chars/4 estimate, which exceeds
+        # the real token count for whitespace-heavy text such as markdown tables.
+        return max(self._count_tokens(text), math.ceil(len(text) / 4))
+
     def _batch_chunks_by_tokens(self, chunks: List[str]) -> List[List[str]]:
         """
         Split chunks into batches that fit within the token limit.
@@ -32,7 +38,7 @@ class EmbeddingService:
         current_batch_tokens = 0
 
         for chunk in chunks:
-            chunk_tokens = self._count_tokens(chunk)
+            chunk_tokens = self._request_cost(chunk)
 
             if chunk_tokens > self.max_tokens_per_request:
                 if current_batch:
