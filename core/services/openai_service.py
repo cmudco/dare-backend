@@ -17,7 +17,11 @@ from pydantic import BaseModel
 from config import env
 from conversations.models import LLM
 from core.services.api_key_service import get_provider_api_key
-from core.services.code_sandbox import SANDBOX_TOOL_TYPE, OpenAISandboxFiles
+from core.services.code_sandbox import (
+    OPENAI_CODE_INTERPRETER,
+    SANDBOX_TOOL_TYPE,
+    OpenAISandboxFiles,
+)
 from core.services.dtos.stream_event_dto import LLMStreamEvent
 from core.services.llm_utils import (
     OpenAIErrorHandler,
@@ -404,7 +408,7 @@ class OpenAIService:
         responses_tools = OpenAIMessageFormatter.format_tools_for_responses_api(tools)
         if responses_tools:
             params["tools"] = responses_tools
-        if any(tool.get("type") == SANDBOX_TOOL_TYPE for tool in tools):
+        if any(tool.get("type") == OPENAI_CODE_INTERPRETER for tool in tools):
             params["include"] = ["code_interpreter_call.outputs"]
 
         if self.capabilities.supports_temperature:
@@ -420,7 +424,7 @@ class OpenAIService:
             self.client, self.api_key
         ).provider_file_ids(tool["dare_file_ids"], tool["dare_owner_ids"])
         return {
-            "type": SANDBOX_TOOL_TYPE,
+            "type": OPENAI_CODE_INTERPRETER,
             "container": {"type": "auto", "file_ids": file_ids},
         }
 

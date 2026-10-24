@@ -15,7 +15,7 @@ class Migration(migrations.Migration):
             name="code_sandbox_enabled",
             field=models.BooleanField(
                 default=False,
-                help_text="Let OpenAI models run Python on the agent's full-text files",
+                help_text="Let OpenAI and Claude models run Python on the agent's full-text files",
             ),
         ),
     ]

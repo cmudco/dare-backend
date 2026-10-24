@@ -14,9 +14,11 @@ import base64
 import json
 import logging
 from copy import deepcopy
-from typing import AsyncGenerator, Dict, List
+from typing import AsyncGenerator, Dict, List, Optional
 
 from core.services.code_sandbox import (
+    ANTHROPIC_CODE_EXECUTION_SUBTOOLS,
+    ANTHROPIC_PROVIDER,
     OPENAI_CONTAINER_FEE,
     OPENAI_PROVIDER,
     SANDBOX_TOOL_NAME,
@@ -473,6 +475,60 @@ def _sandbox_file_citations(response) -> List[Dict]:
     return citations
 
 
+_CLAUDE_SANDBOX_RESULT_TYPES = (
+    "bash_code_execution_tool_result",
+    "text_editor_code_execution_tool_result",
+)
+
+
+def _claude_sandbox_call(call: Dict, result: Optional[Dict]) -> Dict:
+    """A Claude code execution step as a provider-executed sandbox call.
+
+    Bash steps show the command and what it printed; file steps show the
+    file Claude wrote (usually the script it then runs).
+    """
+    try:
+        arguments = json.loads(call.get("arguments") or "{}")
+    except (TypeError, ValueError):
+        arguments = {}
+    result = result or {}
+    if call["name"] == "bash_code_execution":
+        code = arguments.get("command") or ""
+        logs = "\n".join(
+            part for part in (result.get("stdout"), result.get("stderr")) if part
+        )
+    else:
+        header = f"# {arguments.get('command', '')} {arguments.get('path', '')}"
+        body = arguments.get("file_text") or arguments.get("new_str") or ""
+        code = f"{header.rstrip()}\n{body}".rstrip()
+        logs = result.get("content") if isinstance(result.get("content"), str) else ""
+    failed = (
+        not result
+        or str(result.get("type", "")).endswith("_error")
+        or (result.get("return_code") or 0) != 0
+    )
+    return {
+        "id": call["id"],
+        "provider": ANTHROPIC_PROVIDER,
+        "name": SANDBOX_TOOL_NAME,
+        "arguments": {"code": code},
+        "result": {"code": code, "logs": (logs or "")[:SANDBOX_LOG_LIMIT]},
+        "status": "failed" if failed else "completed",
+    }
+
+
+def _claude_sandbox_output_file_ids(sandbox_results: Dict[str, Dict]) -> List[str]:
+    """Ids of the files Claude left in its output folder, in run order."""
+    return [
+        output["file_id"]
+        for result in sandbox_results.values()
+        for output in result.get("content") or []
+        if isinstance(output, dict)
+        and output.get("type") == "bash_code_execution_output"
+        and output.get("file_id")
+    ]
+
+
 class ClaudeStreamProcessor:
     """Claude-specific stream processing."""
 
@@ -505,6 +561,19 @@ class ClaudeStreamProcessor:
         current_replay_input_json = ""
         provider_tool_calls_yielded = False
         wrote_text = False
+        sandbox_results: Dict[str, Dict] = {}
+
+        def merged_provider_tool_calls() -> List[Dict]:
+            return [
+                (
+                    _claude_sandbox_call(call, sandbox_results.get(call["id"]))
+                    if call["name"] in ANTHROPIC_CODE_EXECUTION_SUBTOOLS
+                    else call
+                )
+                for call in _merge_provider_tool_calls(
+                    provider_tool_calls, provider_tool_results
+                )
+            ]
 
         async for event in response:
             # Handle content block start (for tool use and web search results)
@@ -556,6 +625,10 @@ class ClaudeStreamProcessor:
                                 "tool_call_id": _safe_get(block, "tool_use_id"),
                                 "result": _sanitize_web_search_result(block),
                             }
+                        )
+                    elif block.type in _CLAUDE_SANDBOX_RESULT_TYPES:
+                        sandbox_results[_safe_get(block, "tool_use_id")] = (
+                            _safe_to_dict(_safe_get(block, "content", {}))
                         )
                     # Extract web search sources from tool result blocks
                     web_search_extractor.process_event(event)
@@ -672,11 +745,14 @@ class ClaudeStreamProcessor:
                     yield _out_of_tokens_event(wrote_text)
 
                 if provider_tool_calls:
-                    usage["provider_tool_calls"] = _merge_provider_tool_calls(
-                        provider_tool_calls,
-                        provider_tool_results,
-                    )
+                    usage["provider_tool_calls"] = merged_provider_tool_calls()
                     provider_tool_calls_yielded = True
+                output_file_ids = _claude_sandbox_output_file_ids(sandbox_results)
+                if output_file_ids:
+                    usage["sandbox_output_file_ids"] = output_file_ids
+                container = _safe_get(event.delta, "container")
+                if container:
+                    usage["sandbox_container_id"] = _safe_get(container, "id")
 
                 # Include web search sources in usage data
                 sources = web_search_extractor.get_sources()
@@ -688,12 +764,7 @@ class ClaudeStreamProcessor:
 
         # Provider tool calls that never made it into a usage frame
         if provider_tool_calls and not provider_tool_calls_yielded:
-            final_data = {
-                "provider_tool_calls": _merge_provider_tool_calls(
-                    provider_tool_calls,
-                    provider_tool_results,
-                )
-            }
+            final_data = {"provider_tool_calls": merged_provider_tool_calls()}
             sources = web_search_extractor.get_sources()
             if sources:
                 final_data["web_search_sources"] = sources

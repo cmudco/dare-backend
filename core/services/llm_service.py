@@ -11,7 +11,12 @@ from core.services.api_key_service import (
     get_provider_api_key,
 )
 from core.services.claude_service import ClaudeService
-from core.services.code_sandbox import sandbox_tool
+from core.services.code_sandbox import (
+    ANTHROPIC_PROVIDER,
+    OPENAI_PROVIDER,
+    SandboxScope,
+    sandbox_tool,
+)
 from core.services.custom_llm_service import CustomLLMService
 from core.services.document_processor import DocumentProcessor
 from core.services.dtos import (
@@ -164,12 +169,12 @@ class LLMService:
             bot_id=request.bot_id,
             litellm_model_ref=request.litellm_model_ref,
         )
-        sandbox_owner_ids = self._code_sandbox_owner_ids(request, ai_service)
+        sandbox_scope = self._code_sandbox_scope(request, ai_service)
         self._pending_memory_context = []
         self._pending_context_trace = None
         if messages is None:
             messages = await self._build_messages_for_request(
-                request, llm, code_sandbox_owner_ids=sandbox_owner_ids
+                request, llm, code_sandbox=sandbox_scope
             )
         context_trace = self._pending_context_trace
 
@@ -185,10 +190,10 @@ class LLMService:
         tools_start = time.monotonic()
         all_tools = await self.tool_fetcher.get_all_tools(request, llm, None)
         llm_tools = self._append_web_tools(request, llm, all_tools)
-        if sandbox_owner_ids:
+        if sandbox_scope:
             llm_tools = [
                 *(llm_tools or []),
-                sandbox_tool(request.context.file_ids, sandbox_owner_ids),
+                sandbox_tool(request.context.file_ids, sandbox_scope),
             ]
         tools_ms = int((time.monotonic() - tools_start) * 1000)
 
@@ -263,28 +268,33 @@ class LLMService:
         return llm
 
     @staticmethod
-    def _code_sandbox_owner_ids(
+    def _code_sandbox_scope(
         request: LLMQueryRequest, ai_service: Any
-    ) -> Optional[List[int]]:
-        """Owners whose files may enter the sandbox, or None when it is off.
+    ) -> Optional[SandboxScope]:
+        """The provider sandbox and the owners whose files may enter it, or
+        None when it is off.
 
-        Only OpenAI called directly runs it; a LiteLLM route is a CustomLLMService.
+        Only OpenAI and Anthropic called directly run one; a LiteLLM route is a
+        CustomLLMService.
         """
-        if not (
-            request.requires_code_sandbox()
-            and isinstance(ai_service, OpenAIService)
-            and ai_service.base_url is None
-        ):
+        if not request.requires_code_sandbox():
+            return None
+        if isinstance(ai_service, OpenAIService) and ai_service.base_url is None:
+            provider = OPENAI_PROVIDER
+        elif isinstance(ai_service, ClaudeService):
+            provider = ANTHROPIC_PROVIDER
+        else:
             return None
         owner_ids = [request.user.id if request.user else None]
         owner_ids.append(request.context.file_owner_id)
-        return [owner_id for owner_id in owner_ids if owner_id] or None
+        owner_ids = [owner_id for owner_id in owner_ids if owner_id]
+        return SandboxScope(provider, owner_ids) if owner_ids else None
 
     async def _build_messages_for_request(
         self,
         request: LLMQueryRequest,
         llm: LLM,
-        code_sandbox_owner_ids: Optional[List[int]] = None,
+        code_sandbox: Optional[SandboxScope] = None,
     ) -> List[Dict[str, str]]:
         """Build messages array based on request type (Socratic vs Standard).
 
@@ -306,7 +316,7 @@ class LLMService:
         if is_socratic:
             return await self._build_socratic_mode_messages(request)
         else:
-            return await self._build_standard_messages(request, code_sandbox_owner_ids)
+            return await self._build_standard_messages(request, code_sandbox)
 
     async def _build_socratic_mode_messages(
         self, request: LLMQueryRequest
@@ -333,14 +343,14 @@ class LLMService:
     async def _build_standard_messages(
         self,
         request: LLMQueryRequest,
-        code_sandbox_owner_ids: Optional[List[int]] = None,
+        code_sandbox: Optional[SandboxScope] = None,
     ) -> List[Dict[str, str]]:
         """Build messages for standard (non-Socratic) mode."""
         result = await build_standard_messages(
             request,
             self.document_processor,
             self.file_processor,
-            code_sandbox_owner_ids=code_sandbox_owner_ids,
+            code_sandbox=code_sandbox,
         )
         # Store memory context for inclusion in final usage data
         self._pending_memory_context = result.memory_context
