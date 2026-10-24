@@ -255,7 +255,11 @@ class ProjectDefaultsTests(ProjectTestCase):
         prompt = Prompt.active_objects.create(
             user=self.user, title="Reviewer", content="Review like NSF."
         )
-        model = LLM.objects.filter(is_active=True).first()
+        model = LLM.objects.create(
+            name="Project Test Model",
+            identifier="project-test-model",
+            provider="openai",
+        )
         project = self.make_project(
             prompt=prompt,
             default_model=model,

@@ -1,5 +1,7 @@
+from importlib import import_module
 from unittest.mock import patch
 
+from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
@@ -9,6 +11,8 @@ from mcp.services.mcp_tool_executor import MCPToolExecutorError
 from research.models import ResearchProject
 from research.services.tool_readiness import tools_connected
 from users.constants import RoleChoice
+
+research_servers = import_module("mcp.migrations.0007_seed_remote_research_mcp_servers")
 
 User = get_user_model()
 GATEWAY = "/mcp/api/gateway/"
@@ -34,7 +38,7 @@ class ConnectedToolTests(TestCase):
         self.project = ResearchProject.objects.create(
             user=self.user, title="P", enabled_tools=["web", "scite"]
         )
-        # Scite is in the seeded catalog.
+        research_servers.seed_remote_research_servers(apps, None)
         server = MCPServer.all_objects.get(slug="scite")
         UserMCPConnection.all_objects.create(
             user=self.user, server=server, cached_tools=[SEARCH_TOOL]

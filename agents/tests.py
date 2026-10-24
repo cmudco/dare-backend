@@ -24,7 +24,9 @@ class AgentTestCase(TestCase):
         users = get_user_model().objects
         cls.user = users.create_user(email="agents-owner@example.com", password="x")
         cls.other = users.create_user(email="agents-other@example.com", password="x")
-        cls.model = LLM.objects.filter(is_active=True).first()
+        cls.model = LLM.objects.create(
+            name="Agent Test Model", identifier="agent-test-model", provider="openai"
+        )
 
     def setUp(self):
         self.client = APIClient()
