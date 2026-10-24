@@ -58,10 +58,14 @@ class ClaudeUsageObservabilityTests(SimpleTestCase):
             event async for event in ClaudeStreamProcessor.process_stream(stream())
         ]
 
-        self.assertEqual([event.kind for event in events], [StreamEventKind.USAGE] * 2)
+        self.assertEqual(
+            [event.kind for event in events],
+            [StreamEventKind.USAGE, StreamEventKind.TEXT_DELTA, StreamEventKind.USAGE],
+        )
         self.assertTrue(events[0].usage["provisional"])
-        self.assertEqual(events[1].usage["stop_reason"], "max_tokens")
-        self.assertEqual(events[1].usage["thinking_tokens"], 312)
+        self.assertIn("ran out of output tokens", events[1].text)
+        self.assertEqual(events[2].usage["stop_reason"], "max_tokens")
+        self.assertEqual(events[2].usage["thinking_tokens"], 312)
 
     async def test_streams_provider_thinking_summary_separately_from_answer(self):
         async def stream():

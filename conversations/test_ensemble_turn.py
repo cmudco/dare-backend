@@ -1,5 +1,8 @@
 """Boundary and policy decisions behind a panel/council turn."""
 
+from importlib import import_module
+
+from django.apps import apps
 from django.test import SimpleTestCase, TestCase
 from rest_framework.test import APIClient
 
@@ -12,6 +15,8 @@ from core.services.dtos.builder import ARTIFACT_TOOL_SLUGS
 from core.services.dtos.ensemble_dto import EnsembleRequest
 from feature_flags.models import FeatureFlag, UserFeatureOverride
 from users.models import User
+
+ensemble_flag = import_module("feature_flags.migrations.0007_seed_ensemble_flag")
 
 
 class EnsembleRequestTests(SimpleTestCase):
@@ -98,7 +103,8 @@ class EnsembleFlagGateTests(TestCase):
         self.user = User.objects.create_user(
             email="ensemble-gate@example.com", password="password"
         )
-        self.flag = FeatureFlag.objects.get(key="enable_ensemble")
+        ensemble_flag.seed(apps, None)
+        self.flag = FeatureFlag.objects.get(key=ensemble_flag.KEY)
 
     def test_off_by_default(self):
         self.assertFalse(ensemble_enabled_for(self.user))
