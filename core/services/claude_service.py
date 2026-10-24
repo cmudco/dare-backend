@@ -15,6 +15,14 @@ from django.core.exceptions import SynchronousOnlyOperation
 from config import env
 from conversations.models import LLM
 from core.services.api_key_service import get_provider_api_key_sync
+from core.services.code_sandbox import (
+    ANTHROPIC_CODE_EXECUTION_TOOL,
+    ANTHROPIC_CONTAINER_FEE,
+    SANDBOX_TOOL_NAME,
+    AnthropicSandboxFiles,
+    attach_container_uploads,
+    sandbox_marker,
+)
 from core.services.dtos.stream_event_dto import LLMStreamEvent
 from core.services.llm_utils import (
     ClaudeErrorHandler,
@@ -55,6 +63,9 @@ class ClaudeService:
         self.model = llm.identifier
         self.is_reasoning = llm.is_reasoning
         self.capabilities = ModelCapabilities.from_llm(llm)
+        # One service runs every round of a turn; later rounds (tool results,
+        # a paused turn) continue in the container that already holds the files.
+        self._sandbox_container_id: Optional[str] = None
 
     @property
     def client(self) -> AsyncAnthropic:
@@ -108,6 +119,8 @@ class ClaudeService:
             prepared_messages = self._prepare_messages(messages, images)
 
             # Step 2: Create streaming response
+            sandbox = sandbox_marker(tools)
+            new_container = self._sandbox_container_id is None
             stream = await self._create_stream(
                 prepared_messages, max_tokens, temperature, effort, tools
             )
@@ -120,6 +133,13 @@ class ClaudeService:
                     usage["request_max_tokens"] = max_tokens
                     if resolved_effort:
                         usage["effort"] = resolved_effort
+                    container_id = usage.pop("sandbox_container_id", None)
+                    if sandbox and container_id:
+                        self._sandbox_container_id = container_id
+                    if sandbox and usage.get("stop_reason"):
+                        await self._collect_sandbox_outputs(
+                            usage, sandbox, new_container
+                        )
                     yield LLMStreamEvent.usage_frame(usage)
                 else:
                     yield event
@@ -280,11 +300,45 @@ class ClaudeService:
         Returns:
             Claude message stream
         """
+        sandbox = sandbox_marker(tools)
         call_params = self._build_stream_params(
-            messages, max_tokens, temperature, effort, tools
+            messages,
+            max_tokens,
+            temperature,
+            effort,
+            [tool for tool in tools or [] if tool is not sandbox],
         )
+        if sandbox:
+            await self._open_sandbox(call_params, sandbox)
 
         return await self.client.messages.create(**call_params)
+
+    async def _open_sandbox(self, params: Dict, sandbox: Dict) -> None:
+        """Swap DARE's sandbox marker for code execution holding the files."""
+        params["tools"] = [*params.get("tools", []), ANTHROPIC_CODE_EXECUTION_TOOL]
+        if self._sandbox_container_id:
+            params["container"] = self._sandbox_container_id
+            return
+        file_ids = await AnthropicSandboxFiles(
+            self.client, self.api_key
+        ).provider_file_ids(sandbox["dare_file_ids"], sandbox["dare_owner_ids"])
+        attach_container_uploads(params["messages"], file_ids)
+
+    async def _collect_sandbox_outputs(
+        self, usage: Dict, sandbox: Dict, new_container: bool
+    ) -> None:
+        """Download the files the model saved and price its container."""
+        file_ids = usage.pop("sandbox_output_file_ids", None) or []
+        if file_ids:
+            usage["sandbox_files"] = await AnthropicSandboxFiles(
+                self.client, self.api_key
+            ).download(file_ids)
+        ran_code = any(
+            call.get("name") == SANDBOX_TOOL_NAME
+            for call in usage.get("provider_tool_calls") or []
+        )
+        if new_container and (sandbox["dare_file_ids"] or ran_code):
+            usage["sandbox_fee"] = float(ANTHROPIC_CONTAINER_FEE)
 
     def _build_stream_params(
         self,

@@ -120,7 +120,7 @@ class Agent(BaseModel):
     )
     code_sandbox_enabled = models.BooleanField(
         default=False,
-        help_text="Let OpenAI models run Python on the agent's full-text files"
+        help_text="Let OpenAI and Claude models run Python on the agent's full-text files"
     )
     artifacts_enabled = models.BooleanField(
         default=False,

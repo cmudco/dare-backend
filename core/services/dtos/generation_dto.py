@@ -1,7 +1,7 @@
 """Generation configuration DTO for LLM requests."""
 
 from dataclasses import dataclass
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 
 
 @dataclass(frozen=True)
@@ -18,7 +18,7 @@ class GenerationConfig:
         prompt_id: Custom prompt template ID
         web_search_enabled: Enable web search tool
         web_fetch_enabled: Enable Claude web fetch for explicit URLs/PDFs
-        code_sandbox_enabled: Let OpenAI run Python on the full-text files
+        code_sandbox_enabled: Let OpenAI or Claude run Python on the full-text files
         image_generation_enabled: Enable image generation (DALL-E)
         image_generation_settings: DALL-E settings (size, quality, style)
         audio_transcription_enabled: Enable audio transcription (Whisper)
