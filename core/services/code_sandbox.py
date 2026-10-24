@@ -8,17 +8,29 @@ their own tool.
 """
 
 import hashlib
+import logging
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import PurePosixPath
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional, Tuple
 
+import anthropic
+import openai
 from asgiref.sync import sync_to_async
 from django.core.files.base import ContentFile
+from django.utils import timezone
 
+from conversations.constants import Provider
+from core.services.api_key_service import (
+    get_dispatch_credentials_for_user_sync,
+    get_provider_api_key_sync,
+)
 from core.storage.constants import StorageBackendChoice
 from files.constants import FileStatus
 from files.models import File, SandboxUpload
+
+logger = logging.getLogger(__name__)
 
 SANDBOX_TOOL_TYPE = "dare_code_sandbox"
 SANDBOX_TOOL_NAME = "code_sandbox"
@@ -28,6 +40,10 @@ ANTHROPIC_PROVIDER = "anthropic"
 OPENAI_CODE_INTERPRETER = "code_interpreter"
 # OpenAI bills each 1 GB container session (kept alive up to 20 idle minutes).
 OPENAI_CONTAINER_FEE = Decimal("0.03")
+# OpenAI deletes uploaded copies on its own after this; Anthropic has no expiry.
+OPENAI_UPLOAD_LIFETIME = timedelta(days=7)
+# A cached copy this close to expiry is re-uploaded so it can't vanish mid-turn.
+UPLOAD_EXPIRY_MARGIN = timedelta(hours=1)
 
 ANTHROPIC_CODE_EXECUTION_TOOL = {
     "type": "code_execution_20260521",
@@ -193,35 +209,59 @@ class SandboxFiles:
         )
         return [await self._provider_file_id(file) for file in files]
 
-    async def _upload(self, name: str, content: bytes) -> str:
+    async def _upload(
+        self, name: str, content: bytes
+    ) -> Tuple[str, Optional[datetime]]:
+        """Upload a copy; return its provider id and when it expires."""
+        raise NotImplementedError
+
+    async def _delete(self, provider_file_id: str) -> None:
         raise NotImplementedError
 
     async def _provider_file_id(self, file: File) -> str:
-        cached = await self._cached(file)
-        if cached:
-            return cached
+        previous = await self._previous(file)
+        if previous and self._still_valid(previous):
+            return previous.provider_file_id
         name = file.name or file.file.name
         content = await sync_to_async(self._read)(file)
-        provider_file_id = await self._upload(name, content)
+        provider_file_id, expires_at = await self._upload(name, content)
         await sync_to_async(SandboxUpload.objects.update_or_create)(
             file=file,
             provider=self.provider,
             credential_fingerprint=self.fingerprint,
-            defaults={"provider_file_id": provider_file_id},
+            defaults={"provider_file_id": provider_file_id, "expires_at": expires_at},
         )
+        if previous:
+            # An expired copy is usually gone already; one without an expiry
+            # would otherwise stay at the provider forever.
+            await self._delete_quietly(previous.provider_file_id)
         return provider_file_id
 
     @sync_to_async
-    def _cached(self, file: File) -> Optional[str]:
-        return (
-            SandboxUpload.objects.filter(
-                file=file,
-                provider=self.provider,
-                credential_fingerprint=self.fingerprint,
+    def _previous(self, file: File) -> Optional[SandboxUpload]:
+        return SandboxUpload.objects.filter(
+            file=file,
+            provider=self.provider,
+            credential_fingerprint=self.fingerprint,
+        ).first()
+
+    def _still_valid(self, upload: SandboxUpload) -> bool:
+        if upload.expires_at is None:
+            return self.provider == ANTHROPIC_PROVIDER
+        return upload.expires_at > timezone.now() + UPLOAD_EXPIRY_MARGIN
+
+    async def _delete_quietly(self, provider_file_id: str) -> None:
+        try:
+            await self._delete(provider_file_id)
+        except (openai.NotFoundError, anthropic.NotFoundError):
+            pass
+        except Exception:
+            logger.warning(
+                "Could not delete %s sandbox copy %s",
+                self.provider,
+                provider_file_id,
+                exc_info=True,
             )
-            .values_list("provider_file_id", flat=True)
-            .first()
-        )
 
     @staticmethod
     def _read(file: File) -> bytes:
@@ -232,11 +272,19 @@ class SandboxFiles:
 class OpenAISandboxFiles(SandboxFiles):
     provider = OPENAI_PROVIDER
 
-    async def _upload(self, name: str, content: bytes) -> str:
+    async def _upload(self, name: str, content: bytes) -> Tuple[str, datetime]:
         uploaded = await self.client.files.create(
-            file=(name, content), purpose="user_data"
+            file=(name, content),
+            purpose="user_data",
+            expires_after={
+                "anchor": "created_at",
+                "seconds": int(OPENAI_UPLOAD_LIFETIME.total_seconds()),
+            },
         )
-        return uploaded.id
+        return uploaded.id, timezone.now() + OPENAI_UPLOAD_LIFETIME
+
+    async def _delete(self, provider_file_id: str) -> None:
+        await self.client.files.delete(provider_file_id)
 
     async def download(self, citations: List[Dict]) -> List[SandboxFile]:
         """Fetch each cited container file once."""
@@ -260,21 +308,28 @@ class OpenAISandboxFiles(SandboxFiles):
 class AnthropicSandboxFiles(SandboxFiles):
     provider = ANTHROPIC_PROVIDER
 
-    async def _upload(self, name: str, content: bytes) -> str:
+    async def _upload(self, name: str, content: bytes) -> Tuple[str, None]:
         uploaded = await self.client.beta.files.upload(file=(name, content))
-        return uploaded.id
+        return uploaded.id, None
+
+    async def _delete(self, provider_file_id: str) -> None:
+        await self.client.beta.files.delete(provider_file_id)
 
     async def download(self, file_ids: List[str]) -> List[SandboxFile]:
-        """Fetch each file the model left in its output folder once."""
+        """Fetch each file the model left in its output folder once, then
+        delete Anthropic's copy: DARE keeps its own, and Anthropic keeps
+        generated files until they are deleted."""
         downloaded: List[SandboxFile] = []
         for file_id in dict.fromkeys(file_ids):
-            metadata = await self.client.beta.files.retrieve_metadata(file_id)
-            if not sandbox_output_name(metadata.filename):
-                continue
-            response = await self.client.beta.files.download(file_id)
-            kept = sandbox_output(metadata.filename, await response.read())
-            if kept:
-                downloaded.append(kept)
+            try:
+                metadata = await self.client.beta.files.retrieve_metadata(file_id)
+                if sandbox_output_name(metadata.filename):
+                    response = await self.client.beta.files.download(file_id)
+                    kept = sandbox_output(metadata.filename, await response.read())
+                    if kept:
+                        downloaded.append(kept)
+            finally:
+                await self._delete_quietly(file_id)
         return downloaded
 
 
@@ -304,3 +359,69 @@ def attach_container_uploads(messages: List[Dict], file_ids: List[str]) -> None:
     results = [block for block in blocks if block.get("type") == "tool_result"]
     rest = [block for block in blocks if block.get("type") != "tool_result"]
     turn["content"] = [*results, *uploads, *rest]
+
+
+_DARE_PROVIDER = {
+    OPENAI_PROVIDER: Provider.OPENAI.value,
+    ANTHROPIC_PROVIDER: Provider.CLAUDE.value,
+}
+
+
+def provider_copies(file_id: int, using: str = "default") -> List[Dict]:
+    """The provider copies of a DARE file, as plain data for a background job."""
+    return list(
+        SandboxUpload.objects.using(using)
+        .filter(file_id=file_id)
+        .values("provider", "credential_fingerprint", "provider_file_id")
+    )
+
+
+def delete_provider_copies(copies: List[Dict], owner_id: Optional[int]) -> None:
+    """Delete a removed file's copies at OpenAI and Anthropic.
+
+    A copy uploaded with a key DARE can no longer resolve (a deleted user's
+    own key) is left behind; OpenAI copies still expire on their own.
+    """
+    for copy in copies:
+        api_key = _uploading_key(
+            copy["provider"], copy["credential_fingerprint"], owner_id
+        )
+        if api_key is None:
+            logger.warning(
+                "No key left to delete %s copy %s",
+                copy["provider"],
+                copy["provider_file_id"],
+            )
+            continue
+        try:
+            if copy["provider"] == OPENAI_PROVIDER:
+                openai.OpenAI(api_key=api_key).files.delete(copy["provider_file_id"])
+            else:
+                anthropic.Anthropic(api_key=api_key).beta.files.delete(
+                    copy["provider_file_id"]
+                )
+        except (openai.NotFoundError, anthropic.NotFoundError):
+            pass  # Already expired or deleted.
+
+
+def _uploading_key(
+    provider: str, fingerprint: str, owner_id: Optional[int]
+) -> Optional[str]:
+    """The key whose fingerprint the copy was stored under, if DARE still has it."""
+    from users.models import User
+
+    dare_provider = _DARE_PROVIDER[provider]
+    resolvers = [lambda: get_provider_api_key_sync(dare_provider)]
+    owner = User.objects.filter(pk=owner_id).first() if owner_id else None
+    if owner is not None:
+        resolvers.append(
+            lambda: get_dispatch_credentials_for_user_sync(dare_provider, owner).api_key
+        )
+    for resolve in resolvers:
+        try:
+            api_key = resolve()
+        except Exception:
+            continue
+        if api_key and credential_fingerprint(api_key) == fingerprint:
+            return api_key
+    return None

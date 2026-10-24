@@ -39,6 +39,14 @@ def refresh_file_embeddings(file_id, user_id, chunk_size=None, overlap_size=None
 
 
 @job("default", retry=Retry(max=3))
+def delete_sandbox_copies(copies, owner_id):
+    """Delete a removed file's copies in the OpenAI and Anthropic sandboxes."""
+    from core.services.code_sandbox import delete_provider_copies
+
+    delete_provider_copies(copies, owner_id)
+
+
+@job("default", retry=Retry(max=3))
 def delete_file_vectors(file_id, user_id, index_targets=None):
     """Delete the file's vectors, then its map rows.
 

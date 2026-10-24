@@ -677,6 +677,11 @@ class SandboxUpload(TimeStampMixin):
     provider_file_id = models.CharField(
         max_length=128, help_text="Provider's id for the uploaded copy."
     )
+    expires_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When the provider deletes the copy; empty if it never expires.",
+    )
 
     class Meta:
         constraints = [
