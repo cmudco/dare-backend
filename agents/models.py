@@ -118,6 +118,10 @@ class Agent(BaseModel):
         default=False,
         help_text="Let the model fetch URLs and PDFs named in the chat"
     )
+    code_sandbox_enabled = models.BooleanField(
+        default=False,
+        help_text="Let OpenAI models run Python on the agent's full-text files"
+    )
     artifacts_enabled = models.BooleanField(
         default=False,
         help_text="Let the model produce documents, slides and long-form artifacts"

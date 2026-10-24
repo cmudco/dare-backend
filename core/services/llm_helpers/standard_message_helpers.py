@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 from channels.db import database_sync_to_async
 
 from conversations.constants import RagMode
+from core.services.code_sandbox import sandbox_file_names, sandbox_files_note
 from core.services.document_processor import DocumentProcessor
 from core.services.dtos import LLMQueryRequest
 from core.services.file_processor import FileProcessor
@@ -125,6 +126,7 @@ async def build_standard_messages(
     request: LLMQueryRequest,
     document_processor: DocumentProcessor,
     file_processor: FileProcessor,
+    code_sandbox_owner_ids: Optional[List[int]] = None,
 ) -> MessageBuildResult:
     """
     Build messages for standard (non-Socratic) mode.
@@ -146,6 +148,8 @@ async def build_standard_messages(
         request: LLMQueryRequest containing all query parameters
         document_processor: DocumentProcessor for vector search
         file_processor: FileProcessor for reading file contents
+        code_sandbox_owner_ids: When set, full-text files go to the provider
+            sandbox instead of the prompt, scoped to these owners
 
     Returns:
         MessageBuildResult with messages and any memory context items used
@@ -191,8 +195,17 @@ async def build_standard_messages(
                 messages.append({"role": "user", "content": summary_context})
                 stage["count"] = len(request.context.referenced_summary_ids)
 
-    # Add full file contents
-    if request.context.file_ids:
+    # Add full file contents, or name them when they live in the sandbox
+    if request.context.file_ids and code_sandbox_owner_ids:
+        with trace.stage("files") as stage:
+            names = await sandbox_file_names(
+                list(request.context.file_ids), code_sandbox_owner_ids
+            )
+            if names:
+                messages.append({"role": "user", "content": sandbox_files_note(names)})
+                full_file_names = names
+                stage["files"] = [{"name": name, "sandbox": True} for name in names]
+    elif request.context.file_ids:
         with trace.stage("files") as stage:
             file_contents = await get_full_file_contents(
                 request.context.file_ids, file_processor

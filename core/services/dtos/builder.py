@@ -191,6 +191,7 @@ class LLMQueryRequestBuilder:
             prompt_id=message_data.get("prompt_id"),
             web_search_enabled=message_data.get("web_search_enabled", False),
             web_fetch_enabled=message_data.get("web_fetch_enabled", False),
+            code_sandbox_enabled=message_data.get("code_sandbox_enabled", False),
             image_generation_enabled=message_data.get(
                 "image_generation_enabled", False
             ),
