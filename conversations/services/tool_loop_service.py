@@ -220,6 +220,7 @@ class ToolLoopService:
             round_thinking = ""
             round_thinking_blocks: List[Dict[str, str]] = []
             round_provider_content: Dict[int, Dict[str, Any]] = {}
+            round_stop_reason = None
             logger.info(
                 "[journey] mid=%s round %d start (tools=%s)",
                 turn_key,
@@ -314,6 +315,9 @@ class ToolLoopService:
                             continue
                         if round_thinking:
                             observed_usage["thinking_summary"] = round_thinking
+                        round_stop_reason = (
+                            observed_usage.get("stop_reason") or round_stop_reason
+                        )
                         usage.observe(round_index, observed_usage)
                         if event.usage.get("web_search_sources"):
                             web_search_sources = event.usage["web_search_sources"]
@@ -390,6 +394,24 @@ class ToolLoopService:
             )
             if result.interrupted:
                 break
+            if (
+                not pending_calls
+                and round_stop_reason == "pause_turn"
+                and round_provider_content
+            ):
+                # Anthropic paused a long server-tool turn (e.g. many sandbox
+                # runs); echoing its content back lets the model carry on.
+                messages.append(
+                    build_assistant_tool_call_turn(
+                        round_text,
+                        [],
+                        provider_assistant_content=[
+                            round_provider_content[index]
+                            for index in sorted(round_provider_content)
+                        ],
+                    )
+                )
+                continue
             if not pending_calls:
                 if not round_has_text and not text_accum and not empty_stream_retried:
                     # Anthropic can occasionally close a successful HTTP 200

@@ -578,7 +578,7 @@ class Conversation(BaseModel):
     )
     code_sandbox_enabled = models.BooleanField(
         default=False,
-        help_text="Let OpenAI models run Python on the chat's full-text files.",
+        help_text="Let OpenAI and Claude models run Python on the chat's full-text files.",
     )
     image_generation_enabled = models.BooleanField(
         default=False, help_text="Enable AI image generation for this conversation."
