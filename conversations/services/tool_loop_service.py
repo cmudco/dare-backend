@@ -98,8 +98,10 @@ class ToolLoopService:
         self.llm_service = llm_service
         self.config = config
         self.execution_service: ToolExecutionService = tool_execution_service
+        # Providers send nothing while a model writes a long tool argument (a
+        # whole document) or reasons; a 24k-character document took 75s.
         self.stream_idle_timeout_seconds = float(
-            os.environ.get("LLM_STREAM_IDLE_TIMEOUT_SECONDS", "45")
+            os.environ.get("LLM_STREAM_IDLE_TIMEOUT_SECONDS", "120")
         )
         # The provider sends nothing while sandbox code runs or files upload.
         self.sandbox_idle_timeout_seconds = float(

@@ -1272,17 +1272,18 @@ class ModelCardDataViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_object(self):
         slug = self.kwargs.get("slug")
+        cards = ModelCardData.objects.prefetch_related("source_clusters__sources")
 
         # Try exact slug match first
         try:
-            return ModelCardData.objects.get(slug=slug)
+            return cards.get(slug=slug)
         except ModelCardData.DoesNotExist:
             pass
 
         # Fallback: search name_variants
-        for card in ModelCardData.objects.all():
+        for card in ModelCardData.objects.only("id", "name_variants"):
             if slug in [v.lower().replace(" ", "-") for v in card.name_variants]:
-                return card
+                return cards.get(pk=card.pk)
 
         raise NotFound("Model card not found")
 
