@@ -1,8 +1,11 @@
 from django.contrib import admin
 from django.shortcuts import redirect
 from django.urls import reverse
+from django.utils.html import format_html_join
+from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
 
+from core.constants import BackgroundModelSource, BackgroundTask
 from core.models import DareConfig, PlatformSettings
 from core.services.background_model_service import (
     BackgroundModelUnavailable,
@@ -27,8 +30,23 @@ class DareConfigAdmin(admin.ModelAdmin):
 
 @admin.register(PlatformSettings)
 class PlatformSettingsAdmin(admin.ModelAdmin):
-    fields = ("background_model", "background_model_in_use", "updated_at")
-    readonly_fields = ("background_model_in_use", "updated_at")
+    fieldsets = (
+        (None, {"fields": ("background_model",)}),
+        (
+            _("Per-task overrides (optional)"),
+            {
+                "fields": tuple(PlatformSettings.TASK_FIELDS.values()),
+                "description": _(
+                    "Pick a different model for one task, for example a cheaper "
+                    "model for titles. Users who chose their own background model "
+                    "in Settings, and LiteLLM keys with a background model, keep "
+                    "using theirs."
+                ),
+            },
+        ),
+        (_("In use now"), {"fields": ("models_in_use", "updated_at")}),
+    )
+    readonly_fields = ("models_in_use", "updated_at")
 
     def has_add_permission(self, request):
         return False
@@ -37,26 +55,25 @@ class PlatformSettingsAdmin(admin.ModelAdmin):
         return False
 
     def changelist_view(self, request, extra_context=None):
-        settings, _ = PlatformSettings.objects.get_or_create(
+        settings, _created = PlatformSettings.objects.get_or_create(
             pk=PlatformSettings.SINGLETON_ID
         )
         return redirect(
             reverse("admin:core_platformsettings_change", args=[settings.pk])
         )
 
-    @admin.display(description=_("In use now"))
-    def background_model_in_use(self, obj):
-        try:
-            model = platform_background_model()
-        except BackgroundModelUnavailable as error:
-            return str(error)
-        source = (
-            _("this setting")
-            if obj.background_model_id == model.pk
-            else _("the BACKGROUND_MODEL environment variable")
-        )
-        return _("%(name)s (%(identifier)s), from %(source)s") % {
-            "name": model.name,
-            "identifier": model.identifier,
-            "source": source,
-        }
+    @admin.display(description=_("Platform models"))
+    def models_in_use(self, obj):
+        rows = []
+        for task in BackgroundTask:
+            try:
+                model, source = platform_background_model(task)
+                line = _("%(name)s (%(identifier)s) · %(source)s") % {
+                    "name": model.name,
+                    "identifier": model.identifier,
+                    "source": BackgroundModelSource(source).label,
+                }
+            except BackgroundModelUnavailable as error:
+                line = str(error)
+            rows.append((task.label, line))
+        return format_html_join(mark_safe("<br>"), "{}: {}", rows)

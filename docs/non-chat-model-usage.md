@@ -23,7 +23,7 @@ selected chat model.
 
 | Layer | When it runs | Model source | Credential and routing path | Controlled by Background model? |
 | --- | --- | --- | --- | --- |
-| Conversation title | After the first message creates a conversation | Shared background model; platform default `gpt-5.6-luna` | `BackgroundModelService`, using the active DARE, BYO, group, public-bot, or LiteLLM wallet route | Yes |
+| Conversation title | After the first message creates a conversation | Shared background model (see resolution order below) | `BackgroundModelService`, using the active DARE, BYO, group, public-bot, or LiteLLM wallet route | Yes |
 | Rolling conversation summary | After each configured group of completed assistant replies; default group size is five | Shared background model | `BackgroundModelService`; queued on the default worker | Yes |
 | Memory extraction | After eligible chat turns and during user-requested historical import | Shared background model | `BackgroundModelService`; queued on the memory worker | Yes |
 | Advanced RAG query analysis | Before retrieval when Advanced RAG is enabled; produces intent, keywords, rewrite, and HyDE text | Shared background model | `BackgroundModelService`; falls back to the raw query if analysis fails | Yes |
@@ -38,24 +38,42 @@ selected chat model.
 
 ## The shared Background model path
 
-The four shared jobs call `core/services/background_model_service.py`. The
-service resolves both the model and who pays:
+The four shared jobs call `core/services/background_model_service.py`, passing
+the job as a `BackgroundTask` (`titles`, `summaries`, `memory`,
+`query_analysis`). `resolve_background_model(user, task)` picks the model in
+this order:
 
-- **LiteLLM wallet:** uses the saved `LiteLLMKey.background_model` and the
-  proxy's OpenAI-compatible endpoint. Usage belongs to that proxy route.
-- **BYO provider key:** uses the user's provider credential directly. DARE
-  records the route but does not debit a DARE wallet.
-- **DARE or group wallet:** uses the system provider credential and attributes
-  usage to the applicable wallet and budget.
+1. **LiteLLM key model:** an active LiteLLM wallet whose key has a
+   `background_model` runs that model on the proxy.
+2. **The user's choice:** `User.background_model`, set in Settings → Background
+   models, while the active wallet still offers it (a BYO wallet offers only
+   the providers the user holds keys for; model groups still apply).
+3. **Per-task platform override:** `PlatformSettings.title_model`,
+   `summary_model`, `memory_model` or `query_analysis_model`.
+4. **Platform default:** `PlatformSettings.background_model`.
+5. **Server default:** the `BACKGROUND_MODEL` environment variable, currently
+   `gpt-5.6-luna` in `config/env.py`.
+
+A choice that is no longer eligible is skipped with a warning. Admins edit the
+platform rows in the Django admin (Platform settings) or in Settings →
+Background models; both write the same single row, and changes apply on the
+next call without a restart.
+
+Who pays follows the model that runs:
+
+- **LiteLLM wallet:** the proxy route records the usage. A key without its own
+  background model runs the platform model on the DARE wallet.
+- **BYO provider key:** runs on the user's key when they hold one for the
+  model's provider, recorded at no DARE cost; otherwise the DARE wallet pays.
+- **DARE or group wallet:** uses the system provider credential; an empty DARE
+  wallet stops the call before dispatch.
 - **Public bot:** preserves the bot owner/payer attribution rather than billing
   the anonymous viewer.
 
-The platform fallback is `BACKGROUND_MODEL`, currently defaulting to
-`gpt-5.6-luna` in `config/env.py`. A per-call override can replace it for an
-internal caller, but the four production call sites above normally share the
-same resolver. The background jobs need structured output, which the OpenAI
-and proxy services implement; pointing `BACKGROUND_MODEL` at a Claude or
-Gemini catalog row fails loudly with `BackgroundModelUnavailable`.
+Memory extraction and query analysis need structured output. OpenAI and proxy
+models use their native Pydantic parser; Claude and Gemini receive the same
+schema as a closed JSON schema and the answer is validated before use. Models
+without a structured path (local Llama) are not offered.
 
 ### Shared call sites
 

@@ -37,7 +37,10 @@ class PlatformSettingsAdminTests(TestCase):
         settings = PlatformSettings.objects.get()
         self.assertEqual(settings.background_model, self.text_model)
         page = self.client.get(self.change_url).content.decode()
-        self.assertIn("Admin Text (test-admin-text-model), from this setting", page)
+        self.assertIn(
+            "Conversation titles: Admin Text (test-admin-text-model) · Platform default",
+            page,
+        )
 
     def test_image_and_inactive_models_are_not_offered(self):
         image_model, _ = LLM.objects.update_or_create(
@@ -65,3 +68,26 @@ class PlatformSettingsAdminTests(TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertTrue(response.context["adminform"].form.errors)
         self.assertIsNone(PlatformSettings.objects.get().background_model)
+
+    def test_task_override_is_saved_and_shown_for_that_task(self):
+        flash, _ = LLM.objects.update_or_create(
+            identifier="test-admin-flash",
+            defaults={"name": "Admin Flash", "provider": "gemini", "is_active": True},
+        )
+        self.client.get(reverse("admin:core_platformsettings_changelist"))
+
+        self.client.post(
+            self.change_url,
+            {"background_model": self.text_model.pk, "title_model": flash.pk},
+        )
+
+        page = self.client.get(self.change_url).content.decode()
+        self.assertIn(
+            "Conversation titles: Admin Flash (test-admin-flash) · "
+            "Platform setting for this task",
+            page,
+        )
+        self.assertIn(
+            "Memory extraction: Admin Text (test-admin-text-model) · Platform default",
+            page,
+        )

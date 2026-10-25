@@ -22,24 +22,25 @@ class SyftBoxBackfillMigrationTests(TransactionTestCase):
     after = "0038_backfill_syftbox_accounts"
 
     def _migrate(self, target):
-        """
-        Roll users to `target`. 0038 changes no schema, so the real models are
-        identical to the historical ones -- only whether it has *run* differs.
-        """
         executor = MigrationExecutor(connection)
         executor.loader.build_graph()
         executor.migrate([(self.app, target)])
         executor.loader.build_graph()
 
+    def _apps(self, target):
+        """Historical models: later migrations add columns the old schema lacks."""
+        executor = MigrationExecutor(connection)
+        return executor.loader.project_state([(self.app, target)]).apps
+
     def tearDown(self):
         # Leave the database on the latest schema for whatever runs next.
-        self._migrate(self.after)
+        executor = MigrationExecutor(connection)
+        executor.migrate(executor.loader.graph.leaf_nodes())
 
     def _seed(self):
         from core.models import DareConfig
-        from django.contrib.auth import get_user_model
 
-        User = get_user_model()
+        User = self._apps(self.before).get_model("users", "User")
 
         linked = User.objects.create(
             email="linked@example.com",
@@ -105,9 +106,8 @@ class SyftBoxBackfillMigrationTests(TransactionTestCase):
         self._seed()
 
         self._migrate(self.after)
-        from django.contrib.auth import get_user_model
-
-        user = get_user_model().objects.get(email="linked@example.com")
+        User = self._apps(self.after).get_model("users", "User")
+        user = User.objects.get(email="linked@example.com")
         self.assertEqual(user.syftbox_access_token, "user-access")
         self.assertEqual(user.syftbox_refresh_token, "user-refresh")
 

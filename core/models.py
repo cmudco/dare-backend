@@ -4,13 +4,37 @@ from django.utils.translation import gettext_lazy as _
 
 from common.managers import ActiveObjectsManager
 from common.models import BaseModel, TimeStampMixin
+from conversations.constants import Provider
+from core.constants import BackgroundTask
 from core.fields import EncryptedCharField
 from syftbox.mixins import SyftBoxTokenMixin
 
-# Models that can run titles, summaries, memory and query analysis.
+# Models that can run titles, summaries, memory and query analysis. Memory and
+# query analysis need structured output, which these providers' services offer.
 BACKGROUND_MODEL_CHOICES = Q(
-    is_active=True, is_image_generator=False, is_audio_transcriber=False
+    is_active=True,
+    is_image_generator=False,
+    is_audio_transcriber=False,
+    provider__in=(
+        Provider.OPENAI.value,
+        Provider.CLAUDE.value,
+        Provider.GEMINI.value,
+        Provider.CUSTOM.value,
+    ),
 )
+
+
+def _task_model_field(verbose_name):
+    return models.ForeignKey(
+        "conversations.LLM",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="+",
+        limit_choices_to=BACKGROUND_MODEL_CHOICES,
+        verbose_name=verbose_name,
+        help_text=_("Leave empty to use the default background model."),
+    )
 
 
 class DareConfig(SyftBoxTokenMixin, BaseModel):
@@ -67,6 +91,17 @@ class PlatformSettings(TimeStampMixin):
             "keep using that model."
         ),
     )
+    title_model = _task_model_field(_("Conversation titles"))
+    summary_model = _task_model_field(_("Conversation summaries"))
+    memory_model = _task_model_field(_("Memory extraction"))
+    query_analysis_model = _task_model_field(_("Retrieval query analysis"))
+
+    TASK_FIELDS = {
+        BackgroundTask.TITLES: "title_model",
+        BackgroundTask.SUMMARIES: "summary_model",
+        BackgroundTask.MEMORY: "memory_model",
+        BackgroundTask.QUERY_ANALYSIS: "query_analysis_model",
+    }
 
     class Meta:
         verbose_name = _("Platform settings")

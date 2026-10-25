@@ -102,8 +102,9 @@ Real plans returned for two queries:
 | `how did a widow prove she was married…` | `exploratory` | `["widow","marriage","evidence",…]` | + a period-accurate HyDE passage |
 
 The query plan now uses the same background-model boundary as titles, summaries,
-and memory extraction. DARE defaults to GPT-5.6 Luna; LiteLLM wallets use the
-single background model selected for that proxy. Every call is attributed to the
+and memory extraction, and admins can give it its own model (Platform settings →
+Retrieval query analysis). Claude, Gemini, OpenAI and proxy models all work.
+Every call is attributed to the
 active wallet, and any resolution, transport, or parsing failure safely falls
 back to the raw query.
 
@@ -181,7 +182,7 @@ We bumped the document path from 500 chars (~96 tok) to **1,500 chars / 180 over
 | Flag | Default | Effect |
 |---|---|---|
 | `RAG_RERANKER_MODEL` | `BAAI/bge-reranker-v2-m3` | reranker model |
-| `BACKGROUND_MODEL` | `gpt-5.6-luna` | DARE background model for titles, summaries, memory, and query analysis |
+| `BACKGROUND_MODEL` | `gpt-5.6-luna` | server default background model, used when Platform settings name none |
 | `RAG_GROUNDING_THRESHOLD` | model-specific | optional "not found" cutoff for the reranker score scale |
 | `RAG_CONTEXT_CHAR_BUDGET` | `12000` | max assembled context chars |
 | `RAG_CHUNK_SIZE` / `RAG_OVERLAP_SIZE` | `1500` / `180` | document-path chunking |
