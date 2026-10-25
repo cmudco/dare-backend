@@ -697,6 +697,24 @@ class MessageCoordinator:
         task.cancel()
         return True
 
+    def active_generation_ids(self) -> List[int]:
+        """AI message ids still streaming (and stoppable) on this coordinator."""
+        return [
+            mid
+            for mid in self._cancellable_message_ids
+            if mid in self._generation_tasks and not self._generation_tasks[mid].done()
+        ]
+
+    async def send_active_generations(self) -> None:
+        """Tell a re-attaching client which messages are still being generated.
+
+        Persisted history holds only the empty placeholder until the turn is
+        finalized, so without this a client that switched away and back
+        renders a running turn as finished.
+        """
+        for message_id in self.active_generation_ids():
+            await self.send({"type": "generation_active", "messageId": message_id})
+
     async def stream_ai_response(
         self,
         message_data: Dict[str, Any],

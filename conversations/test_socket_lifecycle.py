@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from django.test import SimpleTestCase
 
@@ -50,6 +50,60 @@ class ChatNamespaceDisconnectTests(SimpleTestCase):
         await namespace.on_disconnect("socket-id")
 
         self.assertEqual(namespace.sessions, {})
+
+
+class ChatNamespaceSwitchAwayTests(SimpleTestCase):
+    """A turn keeps streaming while the user views another chat and comes back."""
+
+    def setUp(self):
+        self.namespace = ChatNamespace()
+        self.namespace.sessions["socket-id"] = {
+            "user": SimpleNamespace(id=7),
+            "subscriptions": {"conv"},
+            "is_public": False,
+        }
+        self.namespace.conversation_service = SimpleNamespace(
+            get_conversation=AsyncMock(return_value=SimpleNamespace(id=1))
+        )
+        self.namespace._pause_conversation_artifacts = AsyncMock()
+        self.running = SimpleNamespace(
+            active_generation_ids=lambda: [42],
+            cancel_generation=lambda message_id: message_id == 42,
+            send_conversation_history=AsyncMock(),
+            send_active_generations=AsyncMock(),
+            send_latest_learning_progress=AsyncMock(),
+        )
+        self.namespace.coordinators = {"socket-id_conv": self.running}
+        patcher = patch("conversations.namespaces.chat.sio")
+        patcher.start().configure_mock(enter_room=AsyncMock(), leave_room=AsyncMock())
+        self.addCleanup(patcher.stop)
+
+    async def test_switch_away_and_back_keeps_the_running_turn_stoppable(self):
+        await self.namespace.on_unsubscribe_conversation(
+            "socket-id", {"conversationId": "conv"}
+        )
+        self.assertIs(self.namespace.coordinators["socket-id_conv"], self.running)
+
+        result = await self.namespace.on_subscribe_conversation(
+            "socket-id", {"conversationId": "conv"}
+        )
+
+        self.assertTrue(result["success"])
+        self.assertIs(self.namespace.coordinators["socket-id_conv"], self.running)
+        self.running.send_active_generations.assert_awaited_once()
+        stop = await self.namespace.on_stop_generation(
+            "socket-id", {"conversationId": "conv", "messageId": 42}
+        )
+        self.assertEqual(stop, {"success": True})
+
+    async def test_unsubscribe_drops_an_idle_coordinator(self):
+        self.running.active_generation_ids = lambda: []
+
+        await self.namespace.on_unsubscribe_conversation(
+            "socket-id", {"conversationId": "conv"}
+        )
+
+        self.assertEqual(self.namespace.coordinators, {})
 
 
 class WorkflowNamespaceDisconnectTests(SimpleTestCase):
