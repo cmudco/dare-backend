@@ -247,11 +247,16 @@ class ClaudeService:
             if response.stop_reason == "refusal":
                 raise ValueError("Claude refused to generate structured output")
 
-            if not response.content:
+            # Thinking models put a thinking block before the JSON text block.
+            text = next(
+                (block.text for block in response.content if block.type == "text"),
+                None,
+            )
+            if not text:
                 raise ValueError("Empty response from Claude structured output")
 
             usage = getattr(response, "usage", None)
-            return json.loads(response.content[0].text), {
+            return json.loads(text), {
                 "input_tokens": int(getattr(usage, "input_tokens", 0) or 0),
                 "output_tokens": int(getattr(usage, "output_tokens", 0) or 0),
             }
