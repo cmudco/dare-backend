@@ -31,13 +31,13 @@ Subscribe to real-time updates for a conversation. Returns conversation history 
 
 **Callback response:** `{ success: boolean, error?: string, conversationId?: string }`
 
-After subscribing, the server emits a `message` event with `type: 'conversation_history'` containing full message history.
+After subscribing, the server emits a `message` event with `type: 'conversation_history'` containing full message history, then one `generation_active` event per AI turn still streaming in that conversation.
 
 ---
 
 #### `unsubscribe_conversation`
 
-Leave a conversation room. Stops receiving updates.
+Leave a conversation room. Stops receiving updates. A turn that is still streaming keeps running; re-subscribing on the same socket re-attaches to it, so `stop_generation` still works.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
@@ -297,6 +297,16 @@ Auto-generated conversation title.
 
 ```typescript
 { type: 'conversation_title', title: string }
+```
+
+---
+
+#### `message` (type: `generation_active`)
+
+Sent after `subscribe_conversation` for each AI message whose turn is still streaming. Persisted history holds only the empty placeholder until the turn finishes, so the client marks this message as streaming. The turn's later `ai_stream` and final `message` events arrive as usual.
+
+```typescript
+{ type: 'generation_active', messageId: number }
 ```
 
 ---
