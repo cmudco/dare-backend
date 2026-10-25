@@ -13,6 +13,7 @@ from billing.models import LiteLLMKey, Wallet
 from billing.wallet_router import resolve_active_wallet, resolve_active_wallet_for_bot
 from config import env
 from conversations.models import LLM
+from core.models import BACKGROUND_MODEL_CHOICES, PlatformSettings
 from core.services.billing_service import BillingService
 from core.services.dtos import LLMDescriptor, StreamEventKind
 from core.services.dtos.llm_descriptor_dto import litellm_picker_id
@@ -121,14 +122,32 @@ def resolve_background_model(
     )
 
 
+def platform_background_model() -> LLM:
+    """The admin's default while it is still eligible, else BACKGROUND_MODEL."""
+    chosen_id = (
+        PlatformSettings.objects.filter(pk=PlatformSettings.SINGLETON_ID)
+        .values_list("background_model_id", flat=True)
+        .first()
+    )
+    if chosen_id is not None:
+        chosen = LLM.objects.filter(BACKGROUND_MODEL_CHOICES, pk=chosen_id).first()
+        if chosen is not None:
+            return chosen
+        logger.warning(
+            "Admin background model %s is no longer eligible; using BACKGROUND_MODEL",
+            chosen_id,
+        )
+    return _catalog_model(env.BACKGROUND_MODEL)
+
+
 def _platform_model(model_override: Optional[str] = None) -> LLM:
-    identifier = model_override or env.BACKGROUND_MODEL
-    model = LLM.objects.filter(
-        identifier=identifier,
-        is_active=True,
-        is_image_generator=False,
-        is_audio_transcriber=False,
-    ).first()
+    if model_override:
+        return _catalog_model(model_override)
+    return platform_background_model()
+
+
+def _catalog_model(identifier: str) -> LLM:
+    model = LLM.objects.filter(BACKGROUND_MODEL_CHOICES, identifier=identifier).first()
     if model is None:
         raise BackgroundModelUnavailable(
             f"Background model '{identifier}' is not active in the model catalog"

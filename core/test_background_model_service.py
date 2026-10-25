@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from asgiref.sync import async_to_sync
+from django.db import IntegrityError, transaction
 from django.test import TestCase, override_settings
 from pydantic import BaseModel
 
@@ -10,10 +11,12 @@ from api_keys.models import UserProviderAPIKey
 from billing.constants import LiteLLMKeySourceChoice, UserWalletPreferenceTypeChoice
 from billing.models import LiteLLMKey, UserWalletPreference, Wallet
 from conversations.models import LLM
+from core.models import PlatformSettings
 from core.services.background_model_service import (
     BackgroundModelService,
     BackgroundModelUnavailable,
     BackgroundWalletEmpty,
+    platform_background_model,
     resolve_background_model,
     resolve_background_payer,
 )
@@ -265,3 +268,57 @@ class BackgroundModelServiceTests(TestCase):
         preference.active_wallet_ref_id = str(key.pk)
         preference.save()
         return key
+
+    def _admin_default(self):
+        model, _ = LLM.objects.update_or_create(
+            identifier="test-admin-background-model",
+            defaults={
+                "name": "Admin Background",
+                "provider": "claude",
+                "is_active": True,
+            },
+        )
+        PlatformSettings.objects.create(
+            pk=PlatformSettings.SINGLETON_ID, background_model=model
+        )
+        return model
+
+    def test_admin_default_replaces_the_environment_model(self):
+        haiku = self._admin_default()
+
+        route = resolve_background_model(self.user)
+
+        self.assertEqual(route.model, haiku)
+        self.assertEqual(platform_background_model(), haiku)
+
+    def test_empty_admin_default_uses_the_environment_model(self):
+        PlatformSettings.objects.create(pk=PlatformSettings.SINGLETON_ID)
+
+        self.assertEqual(platform_background_model(), self.luna)
+
+    def test_deactivated_admin_default_falls_back_to_the_environment_model(self):
+        haiku = self._admin_default()
+        haiku.is_active = False
+        haiku.save(update_fields=["is_active"])
+
+        with self.assertLogs(
+            "core.services.background_model_service", level="WARNING"
+        ) as logs:
+            model = platform_background_model()
+
+        self.assertEqual(model, self.luna)
+        self.assertIn("no longer eligible", logs.output[0])
+
+    def test_litellm_key_background_model_outranks_the_admin_default(self):
+        self._admin_default()
+        self._use_litellm("gateway/gpt-5.6-luna")
+
+        route = resolve_background_model(self.user)
+
+        self.assertEqual(route.model.identifier, "gateway/gpt-5.6-luna")
+
+    def test_platform_settings_allow_only_one_row(self):
+        PlatformSettings.objects.create(pk=PlatformSettings.SINGLETON_ID)
+
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            PlatformSettings.objects.create(pk=2)
