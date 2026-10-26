@@ -22,7 +22,7 @@ from core.services.document_enrichment_service import DocumentEnrichmentService
 from core.services.document_parsers.pdf_outline import extract_pdf_outline
 from core.services.document_parsing_service import DocumentParsingService
 from core.services.document_text_sanitizer import sanitize_document_text
-from core.services.dtos.parsed_document_dto import ParsedDocument
+from core.services.dtos.parsed_document_dto import ParsedDocument, text_only_document
 from core.services.embedding_service import EmbeddingService
 from core.services.file_processing_journey import FileProcessingJourney
 from core.services.file_processor import FileProcessor
@@ -41,6 +41,7 @@ from core.services.rag.structured_chunker import (
     StructuredChunk,
     StructuredChunker,
 )
+from core.services.table_card import build_table_card, is_table_file
 from core.services.vector_integrity import (
     VectorIntegrityError,
     validate_generated,
@@ -208,11 +209,25 @@ class DocumentProcessor:
                     backend=file.user.vector_db,
                 )
             with journey.stage("embedding") as stage:
-                vectors, prepared_map = self._embed_with_structure(
-                    file,
+                index_parsed, index_model, index_content = (
                     parsed,
                     enrichment.document_model,
                     content,
+                )
+                file_name = file.name or file.file.name
+                if is_table_file(file_name):
+                    # The full table stays in extracted_text for full-file
+                    # reading and the Code sandbox; search gets one summary.
+                    with file.file.open("rb") as handle:
+                        card = build_table_card(handle.read(), file_name)
+                    index_parsed = text_only_document(card, parser="basic")
+                    index_model, index_content = index_parsed.to_dict(), card
+                    stage.add_details(indexed_as="table summary")
+                vectors, prepared_map = self._embed_with_structure(
+                    file,
+                    index_parsed,
+                    index_model,
+                    index_content,
                     effective_chunk_size,
                     effective_overlap_size,
                 )
@@ -221,7 +236,7 @@ class DocumentProcessor:
                         "No searchable text was produced; the previous index was retained."
                     )
                 stage.add_details(
-                    text_characters=len(content),
+                    text_characters=len(index_content),
                     chunks=len(vectors),
                     chunk_size=effective_chunk_size,
                     overlap_size=effective_overlap_size,
