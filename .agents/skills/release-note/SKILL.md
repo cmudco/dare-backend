@@ -6,9 +6,12 @@ description: Draft and create a What's New release note so users see a user-faci
 # Release notes for the What's New dialog
 
 DARE shows each user a What's New dialog the first time they open the app after a release goes
-live. Releases live in the database (`release_notes` app) and are published from Django admin. This
-skill turns shipped changes into a release note, creates it as a **draft**, and leaves publishing
-to a person.
+live. Releases are rows in the `release_notes` app. This skill turns shipped changes into release
+copy and delivers it one of two ways:
+
+- **Admin paste** — for a small, one-off note: hand the user the JSON to paste into Django admin.
+- **Data migration** — for a release that ships with a PR: the note goes live on each environment
+  when that deploy runs `migrate`, with no shell or admin access needed.
 
 ## 1. Decide whether it is worth announcing
 
@@ -72,32 +75,53 @@ Write the draft as JSON in a scratch location (not the repo):
 Show the user the title, summary, and items as they will read in the dialog, and revise until they
 approve. Do not create anything before that.
 
-## 5. Create the draft
+## 5. Pick the delivery path
 
-From an activated venv at the backend root:
+Ask the user which path, recommending by size: one or two small items with no PR in flight →
+**admin paste**; anything that ships with a PR, or that must reach production (where there is no
+shell access) → **migration**.
+
+### Admin paste
+
+Give the user the approved JSON in a single code block, then the steps:
+
+1. Django admin → **Release notes** → **Import from JSON**.
+2. Paste, tick **Publish now** (or leave it unticked to review a draft first), **Import**.
+
+The import validates every field (including `link_path`), saves nothing unless the whole release
+is valid, and refuses a version that already exists. With a backend shell, the same import runs as
+`python manage.py create_release_note draft.json [--publish]` (`-` reads stdin).
+
+### Data migration
+
+Add `release_notes/migrations/NNNN_release_YYYY_MM_DD.py` in the backend PR that ships the
+change, copying `0002_release_2026_10_27.py`: only the `RELEASE` dict and the dependency change.
+Keep it self-contained — historical models via `apps.get_model`, never app imports — so later schema
+changes cannot break it.
+
+- `dependencies` points at the latest `release_notes` migration on the branch.
+- It publishes at the moment `migrate` runs and is safe to re-run (matched on source + version,
+  items replaced); the reverse deletes it.
+- A frontend-only feature still needs this backend migration; merge and deploy it with or after
+  the frontend change so the "Try it" link exists when the note appears.
+
+Verify locally, then check the dialog in the browser:
 
 ```bash
-python manage.py create_release_note /path/to/draft.json
+python manage.py migrate release_notes
+python manage.py test release_notes
 ```
 
-The command validates every field (including `link_path`), rolls back on any error, refuses a
-duplicate version, and never publishes. It prints the admin URL of the new draft.
+## 6. Edits after it is live
 
-For a deployed environment, run the same command in that environment's backend, piping the JSON
-on stdin with `-` (for example over ssh). Writing to a shared environment needs the user's explicit
-go-ahead first. Where no shell access exists, enter the same content in Django admin under
-**Release notes → Add**.
-
-## 6. Publish
-
-Publishing is the user's call. In admin, open the draft and set **Published at** to now, or use the
-**Publish selected releases now** action. A future time schedules it. Users see it on their next
-app load.
+Fix copy in admin where available. Otherwise ship a follow-up migration that updates the same
+version. Editing a live release does not re-show it to users who already dismissed it; announce
+anything important as a new release.
 
 ## Gotchas
 
+- Two branches that each add a release migration produce two `release_notes` leaf migrations;
+  renumber the later one onto the earlier before merging.
 - Always publish at the current time. A release back-dated earlier than one a user already
   dismissed is never shown to them, and releases dated before a user signed up are never shown.
 - The dialog shows at most 5 unseen releases at once, newest first.
-- Editing a live release does not re-show it to users who already dismissed it; ship a new release
-  for anything important.
