@@ -79,6 +79,7 @@ LOCAL_APPS = [
     "libraries",
     "projects",
     "assistant",
+    "release_notes",
 ]
 
 THIRD_PARTY_APPS = [

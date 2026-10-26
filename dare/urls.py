@@ -41,6 +41,7 @@ app_paths = [
     path("", include("libraries.urls", namespace="libraries")),
     path("", include("projects.urls", namespace="projects")),
     path("", include("assistant.urls", namespace="assistant")),
+    path("", include("release_notes.urls", namespace="release_notes")),
     path("", include("core.urls", namespace="core")),
     path("syftbox/", include("syftbox.urls", namespace="syftbox")),
 ]
