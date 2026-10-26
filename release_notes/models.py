@@ -145,7 +145,10 @@ class ReleaseNoteSeenState(models.Model):
     last_seen_published_at = models.DateTimeField(
         help_text=_("published_at of the newest release the user has dismissed."),
     )
-    updated_at = models.DateTimeField(auto_now=True)
+    updated_at = models.DateTimeField(
+        auto_now=True,
+        help_text=_("When the watermark last moved."),
+    )
 
     class Meta:
         verbose_name = _("Release note seen state")
