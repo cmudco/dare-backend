@@ -43,6 +43,11 @@ python manage.py showmigrations
 Regenerate the OpenAPI schema so `docs/api/dare-backend.md` and the served schema stay in sync with
 the code.
 
+## If the change is user-facing
+
+When the change alters what users can see or do, suggest a What's New release note with the
+`release-note` skill so the change is announced in the in-app dialog once it ships.
+
 ## Branch and PR conventions
 
 Feature branches are cut from `dev`, not `main`:
