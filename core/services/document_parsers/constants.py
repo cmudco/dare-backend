@@ -5,9 +5,11 @@ PARSER_NOTEBOOK = "notebook"
 PARSER_BASIC = "basic"
 
 # Formats routed through Docling in Advanced mode. Advanced means "let
-# Docling find the structure", so plain text and CSV go through it too:
-# Docling reads .txt as Markdown (headings, lists, tables when present) and
-# .csv as a table. JSON has no Docling backend and keeps the basic reader.
+# Docling find the structure", so plain text goes through it too: Docling
+# reads .txt as Markdown (headings, lists, tables when present). JSON has no
+# Docling backend and keeps the basic reader. Spreadsheets skip Docling: they
+# are searched by a summary card (see ``table_card``), and Docling's Markdown
+# rendering of a large sheet is slow and many times the file's size.
 DOCLING_EXTENSIONS = frozenset(
     {
         "pdf",
@@ -15,9 +17,7 @@ DOCLING_EXTENSIONS = frozenset(
         "markdown",
         "txt",
         "text",
-        "csv",
         "docx",
-        "xlsx",
         "pptx",
         "html",
         "htm",

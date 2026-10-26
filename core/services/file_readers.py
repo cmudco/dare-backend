@@ -72,11 +72,11 @@ def read_bytes_as_text(data: bytes, filename: str) -> str:
 
     if name.endswith(".pdf"):
         return read_pdf(data)
-    if name.endswith((".txt", ".md", ".json", ".csv")):
+    if name.endswith((".txt", ".md", ".json", ".csv", ".tsv")):
         return decode_text(data)
     if name.endswith(".docx"):
         return read_docx(data)
-    if name.endswith(".xlsx"):
+    if name.endswith((".xlsx", ".xlsm")):
         return read_xlsx(data)
     if name.endswith(".xls"):
         return read_xls(data)
