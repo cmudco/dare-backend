@@ -1,12 +1,12 @@
 from datetime import timedelta
 
 from django.contrib.auth import get_user_model
-from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
 
 from release_notes.constants import UNSEEN_RELEASE_NOTES_LIMIT, ReleaseNoteItemKind
 from release_notes.models import ReleaseNote, ReleaseNoteItem, ReleaseNoteSeenState
+from release_notes.tests.base import CleanReleaseNotesTestCase
 from users.constants import AuthSourceChoice
 
 LIST_URL = "/api/release-notes/"
@@ -17,9 +17,10 @@ def seen_url(note_id: int) -> str:
     return f"/api/release-notes/{note_id}/seen/"
 
 
-class ReleaseNoteTestCase(TestCase):
+class ReleaseNoteTestCase(CleanReleaseNotesTestCase):
     @classmethod
     def setUpTestData(cls):
+        super().setUpTestData()
         cls.now = timezone.now()
         cls.user = get_user_model().objects.create_user(
             email="release-notes@example.com", password="x"
