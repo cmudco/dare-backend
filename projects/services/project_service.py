@@ -1,18 +1,23 @@
 """Use cases for personal projects: listing, new-chat defaults, deletion, memory scope."""
 
+import math
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Iterable, Optional, Tuple
 
 from django.db import transaction
-from django.db.models import Count, Max, Q, QuerySet
-from django.db.models.functions import Coalesce, Greatest
+from django.db.models import Count, F, IntegerField, Max, Q, QuerySet, Sum
+from django.db.models.functions import Coalesce, Greatest, Length
 from django.utils import timezone
 
 from conversations.models import Conversation
 from core.services.model_ref import model_ref
 from files.models import File
 from libraries.models import UserLibraryAccess
-from projects.constants import ProjectMemoryScope
+from projects.constants import (
+    FULL_FILES_TOKEN_LIMIT,
+    ProjectMemoryScope,
+    ProjectSourceMode,
+)
 from projects.models import PersonalProject
 from prompts.services.prompt_service import PromptService, PromptServiceError
 
@@ -21,8 +26,20 @@ _LIVE_CHATS = Q(conversations__is_active=True, conversations__is_deleted=False)
 
 @dataclass(frozen=True)
 class ProjectChatSources:
-    embedding_ids: Tuple[int, ...]
+    file_ids: Tuple[int, ...]
     library_ids: Tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class SourceSize:
+    """Rough prompt cost of reading a set of files in full."""
+
+    file_count: int
+    estimated_tokens: int
+
+    @property
+    def fits_full_files(self) -> bool:
+        return self.estimated_tokens <= FULL_FILES_TOKEN_LIMIT
 
 
 def project_model_ref(project: PersonalProject) -> Optional[str]:
@@ -54,16 +71,49 @@ def owned_projects(user) -> QuerySet:
     )
 
 
+def _document_files(user) -> QuerySet:
+    return File.active_objects.filter(user=user, is_media=False)
+
+
+def estimate_source_size(files: QuerySet) -> SourceSize:
+    """Estimate tokens at four characters each from the cached extraction.
+
+    A file not parsed yet counts its byte size, which overstates the text, so
+    an unparsed file can push a set into search but never sneak it past.
+    """
+    totals = files.aggregate(
+        file_count=Count("id", distinct=True),
+        chars=Sum(
+            Coalesce(Length("extracted_text"), F("size"), output_field=IntegerField())
+        ),
+    )
+    return SourceSize(
+        file_count=totals["file_count"],
+        estimated_tokens=math.ceil((totals["chars"] or 0) / 4),
+    )
+
+
+def selected_source_files(
+    user, file_ids: Iterable[int], folder_ids: Iterable[int]
+) -> QuerySet:
+    """The user's documents picked directly or through the given folders."""
+    ids = _document_files(user).filter(
+        Q(id__in=list(file_ids))
+        | Q(folders__id__in=list(folder_ids), folders__user=user)
+    )
+    return _document_files(user).filter(id__in=ids.values("id"))
+
+
 def resolve_chat_sources(project: PersonalProject) -> ProjectChatSources:
     """Expand the project's files, folders and libraries into chat selections.
 
     Folders are expanded at chat creation, so files added to a folder later
     reach new chats but never rewrite an existing chat's selection.
     """
-    files = File.active_objects.filter(user=project.user, is_media=False).filter(
+    files = _document_files(project.user).filter(
         Q(personal_projects=project) | Q(folders__personal_projects=project)
     )
-    embedding_ids = tuple(files.order_by("id").values_list("id", flat=True).distinct())
+    file_ids = tuple(files.order_by("id").values_list("id", flat=True).distinct())
     library_ids = tuple(
         UserLibraryAccess.active_objects.filter(
             user=project.user, library__personal_projects=project
@@ -72,7 +122,15 @@ def resolve_chat_sources(project: PersonalProject) -> ProjectChatSources:
         .values_list("library_id", flat=True)
         .distinct()
     )
-    return ProjectChatSources(embedding_ids=embedding_ids, library_ids=library_ids)
+    return ProjectChatSources(file_ids=file_ids, library_ids=library_ids)
+
+
+def chat_reads_full_files(project: PersonalProject, file_ids: Tuple[int, ...]) -> bool:
+    """Full files only while they fit; folders that grew past the limit search."""
+    if project.source_mode != ProjectSourceMode.FULL or not file_ids:
+        return False
+    files = _document_files(project.user).filter(id__in=file_ids)
+    return estimate_source_size(files).fits_full_files
 
 
 def start_chat_in_project(conversation: Conversation) -> None:
@@ -82,7 +140,12 @@ def start_chat_in_project(conversation: Conversation) -> None:
     """
     project = conversation.project
     sources = resolve_chat_sources(project)
-    conversation.selected_embedding_ids = list(sources.embedding_ids)
+    if chat_reads_full_files(project, sources.file_ids):
+        conversation.selected_file_ids = list(sources.file_ids)
+        conversation.selected_embedding_ids = []
+    else:
+        conversation.selected_file_ids = []
+        conversation.selected_embedding_ids = list(sources.file_ids)
     conversation.selected_library_ids = list(sources.library_ids)
     if project.prompt_id:
         conversation.prompt_id = project.prompt_id
@@ -93,6 +156,7 @@ def start_chat_in_project(conversation: Conversation) -> None:
     conversation.memory_enabled = project.memory_enabled
     conversation.save(
         update_fields=[
+            "selected_file_ids",
             "selected_embedding_ids",
             "selected_library_ids",
             "prompt",
