@@ -6,6 +6,7 @@ from asgiref.sync import async_to_sync
 
 from conversations.constants import SenderType
 from conversations.models import LLM, Conversation, Message
+from core.constants import BackgroundTask
 from core.services.background_model_service import BackgroundModelService
 
 logger = logging.getLogger(__name__)
@@ -59,6 +60,7 @@ def generate_conversation_summary(
             description=f"Conversation summary for {conversation.conversation_id}",
             max_tokens=SUMMARY_MAX_TOKENS,
             temperature=SUMMARY_TEMPERATURE,
+            task=BackgroundTask.SUMMARIES,
             public_bot_id=(
                 conversation.bot_id if conversation.user_id is None else None
             ),

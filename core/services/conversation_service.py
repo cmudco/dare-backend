@@ -9,6 +9,7 @@ from conversations.api.serializers import MessageSerializer
 from conversations.constants import SenderType
 from conversations.models import Conversation, Message
 from conversations.services.message_query_service import messages_for_display
+from core.constants import BackgroundTask
 from core.services.background_model_service import (
     BackgroundModelService,
     BackgroundWalletEmpty,
@@ -182,6 +183,7 @@ class ConversationService:
                 messages=messages,
                 description="Conversation title generation",
                 max_tokens=80,
+                task=BackgroundTask.TITLES,
                 public_bot_id=public_bot_id,
             )
             return self._sanitize_title(result.value)

@@ -203,6 +203,13 @@ class User(SyftBoxTokenMixin, AbstractUser, IsDeletedMixin):
         verbose_name=_("Vision Model"),
         help_text=_("Preferred model for scanned-page transcription and figure description; empty means the wallet's recommendation.")
     )
+    background_model = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        verbose_name=_("Background Model"),
+        help_text=_("Model for titles, summaries, memory extraction and retrieval query analysis; empty means the platform default.")
+    )
     # Additional fields sourced from onboarding form
     role = models.TextField(
         blank=True,

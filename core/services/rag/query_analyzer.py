@@ -6,6 +6,7 @@ from typing import Literal, Optional
 from asgiref.sync import async_to_sync
 from pydantic import BaseModel
 
+from core.constants import BackgroundTask
 from core.services.background_model_service import BackgroundModelService
 from core.services.rag.dtos import QueryPlan
 from users.models import User
@@ -68,6 +69,7 @@ class QueryAnalyzer:
                 response_model=QueryPlanResponse,
                 description="Advanced RAG query analysis",
                 max_tokens=512,
+                task=BackgroundTask.QUERY_ANALYSIS,
                 public_bot_id=payer_bot_id,
             )
             data = result.value
