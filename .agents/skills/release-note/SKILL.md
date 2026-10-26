@@ -95,7 +95,9 @@ is valid, and refuses a version that already exists. With a backend shell, the s
 ### Data migration
 
 Add `release_notes/migrations/NNNN_release_YYYY_MM_DD.py` in the backend PR that ships the
-change, copying `0002_release_2026_10_27.py`: only the `RELEASE` dict and the dependency change.
+change, copying `0002_release_2026_10_27.py`: only the `RELEASES` list (one entry per release,
+in the order the dialog shows them) and the dependency change. A big release can be split into a
+few themed entries so the dialog steps through them.
 Keep it self-contained — historical models via `apps.get_model`, never app imports — so later schema
 changes cannot break it.
 
@@ -110,6 +112,8 @@ Verify locally, then check the dialog in the browser:
 ```bash
 python manage.py migrate release_notes
 python manage.py test release_notes
+# Migrations skip model validation; check every live item the way the admin import would:
+python manage.py shell -c "from release_notes.models import ReleaseNoteItem as I; [i.full_clean() for i in I.objects.all()]; print('valid')"
 ```
 
 ## 6. Edits after it is live
