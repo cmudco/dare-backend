@@ -11,7 +11,11 @@ from files.models import File, Folder
 from libraries.models import SharedLibrary, UserLibraryAccess
 from memory.models import MemoryRecord
 from memory.services.store import shortlist
-from projects.constants import ProjectMemoryScope
+from projects.constants import (
+    FULL_FILES_TOKEN_LIMIT,
+    ProjectMemoryScope,
+    ProjectSourceMode,
+)
 from projects.models import PersonalProject
 from projects.services.project_service import memory_scope_project_id
 from prompts.models import Prompt
@@ -33,9 +37,13 @@ class ProjectTestCase(TestCase):
         self.client = APIClient()
         self.client.force_authenticate(self.user)
 
-    def make_file(self, user, name, *, is_media=False):
+    def make_file(self, user, name, *, is_media=False, text=None):
         return File.active_objects.create(
-            user=user, file=f"files/{name}", name=name, is_media=is_media
+            user=user,
+            file=f"files/{name}",
+            name=name,
+            is_media=is_media,
+            extracted_text=text,
         )
 
     def make_project(self, user=None, **fields):
@@ -497,3 +505,114 @@ class ProjectMemoryScopeTests(ProjectTestCase):
         self.project.save(update_fields=["memory_scope"])
 
         self.assertEqual(memory_scope_project_id(self.project.id), self.project.id)
+
+
+TOO_LARGE_TEXT = "x" * (FULL_FILES_TOKEN_LIMIT * 4 + 4)
+
+
+class ProjectSourceModeTests(ProjectTestCase):
+    def start_chat(self, project):
+        response = self.client.post(
+            CONVERSATIONS_URL, {"project": project.id}, format="json"
+        )
+        return Conversation.active_objects.get(
+            conversation_id=response.data["conversation_id"]
+        )
+
+    def test_full_files_project_starts_chats_reading_files_in_full(self):
+        direct = self.make_file(self.user, "memo.pdf", text="short memo")
+        in_folder = self.make_file(self.user, "notes.pdf", text="short notes")
+        folder = Folder.objects.create(user=self.user, name="Notes")
+        folder.files.add(in_folder)
+        project = self.make_project(source_mode=ProjectSourceMode.FULL)
+        project.files.add(direct)
+        project.folders.add(folder)
+
+        conversation = self.start_chat(project)
+
+        self.assertEqual(
+            sorted(conversation.selected_file_ids), sorted([direct.id, in_folder.id])
+        )
+        self.assertEqual(conversation.selected_embedding_ids, [])
+
+    def test_search_project_starts_chats_searching_files(self):
+        file = self.make_file(self.user, "memo.pdf", text="short memo")
+        project = self.make_project()
+        project.files.add(file)
+
+        conversation = self.start_chat(project)
+
+        self.assertEqual(conversation.selected_embedding_ids, [file.id])
+        self.assertEqual(conversation.selected_file_ids, [])
+
+    def test_full_files_falls_back_to_search_once_folders_grow_too_large(self):
+        folder = Folder.objects.create(user=self.user, name="Archive")
+        folder.files.add(self.make_file(self.user, "small.pdf", text="small"))
+        project = self.make_project(source_mode=ProjectSourceMode.FULL)
+        project.folders.add(folder)
+        grown = self.make_file(self.user, "huge.pdf", text=TOO_LARGE_TEXT)
+        folder.files.add(grown)
+
+        conversation = self.start_chat(project)
+
+        self.assertEqual(conversation.selected_file_ids, [])
+        self.assertIn(grown.id, conversation.selected_embedding_ids)
+
+    def test_full_files_mode_is_rejected_for_sources_over_the_limit(self):
+        project = self.make_project()
+        huge = self.make_file(self.user, "huge.pdf", text=TOO_LARGE_TEXT)
+        small = self.make_file(self.user, "small.pdf", text="small")
+        url = f"{PROJECTS_URL}{project.id}/"
+
+        rejected = self.client.patch(
+            url, {"file_ids": [huge.id], "source_mode": "full"}, format="json"
+        )
+        accepted = self.client.patch(
+            url, {"file_ids": [small.id], "source_mode": "full"}, format="json"
+        )
+
+        self.assertEqual(rejected.status_code, 400)
+        self.assertIn("source_mode", rejected.data)
+        self.assertEqual(accepted.status_code, 200)
+        self.assertEqual(accepted.data["source_mode"], "full")
+
+    def test_adding_a_large_file_to_a_full_files_project_is_accepted(self):
+        project = self.make_project(source_mode=ProjectSourceMode.FULL)
+        huge = self.make_file(self.user, "huge.pdf", text=TOO_LARGE_TEXT)
+
+        response = self.client.patch(
+            f"{PROJECTS_URL}{project.id}/", {"file_ids": [huge.id]}, format="json"
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["source_mode"], "full")
+        self.assertEqual(response.data["file_ids"], [huge.id])
+
+    def test_source_size_counts_files_and_folder_files_once(self):
+        shared = self.make_file(self.user, "a.pdf", text="a" * 400)
+        only_folder = self.make_file(self.user, "b.pdf", text="b" * 400)
+        folder = Folder.objects.create(user=self.user, name="Both")
+        folder.files.add(shared, only_folder)
+
+        response = self.client.post(
+            f"{PROJECTS_URL}source-size/",
+            {"file_ids": [shared.id], "folder_ids": [folder.id]},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["file_count"], 2)
+        self.assertEqual(response.data["estimated_tokens"], 200)
+        self.assertEqual(response.data["token_limit"], FULL_FILES_TOKEN_LIMIT)
+        self.assertTrue(response.data["fits_full_files"])
+
+    def test_source_size_rejects_another_users_files(self):
+        theirs = self.make_file(self.other, "theirs.pdf", text="secret")
+        mine = self.make_file(self.user, "mine.pdf", text="mine")
+        url = f"{PROJECTS_URL}source-size/"
+
+        rejected = self.client.post(url, {"file_ids": [theirs.id]}, format="json")
+        accepted = self.client.post(url, {"file_ids": [mine.id]}, format="json")
+
+        self.assertEqual(rejected.status_code, 400)
+        self.assertEqual(accepted.status_code, 200)

@@ -9,6 +9,7 @@ from projects.constants import (
     PROJECT_NAME_MAX_LENGTH,
     ProjectIcon,
     ProjectMemoryScope,
+    ProjectSourceMode,
 )
 
 
@@ -93,6 +94,15 @@ class PersonalProject(BaseModel):
         help_text=_(
             "Whether project chats recall all memories or only those learned "
             "in this project's chats. Read on every turn."
+        ),
+    )
+    source_mode = models.CharField(
+        max_length=16,
+        choices=ProjectSourceMode.choices,
+        default=ProjectSourceMode.SEARCH,
+        help_text=_(
+            "Whether new project chats search the project's files or read them "
+            "in full. Shared libraries are always searched."
         ),
     )
     files = models.ManyToManyField(
