@@ -145,7 +145,7 @@ The full map, including every how-to and explanation, is [docs/index.md](https:/
 - `core/services/` — the service layer (LLM providers, vector stores, MCP, email)
 - `docs/` — architecture, configuration, admin, API reference, deployment, and integration guides
 - Docker Compose stack (API, RQ worker, Postgres + pgvector, Redis, Weaviate) and `requirements/`
-- Supporting docs — `docs/tutorials/quickstart.md`, `docs/how-to/deploy.md`, `.github/CONTRIBUTING.md`, `CHANGELOG.md`, `.github/SECURITY.md`, `docs/brand.md`
+- Supporting docs — `docs/tutorials/quickstart.md`, `docs/how-to/deploy.md`, `.github/CONTRIBUTING.md`, `CHANGELOG.md`, `.github/SECURITY.md`, `BRAND.md`
 
 ## What is not included in this repo?
 
@@ -168,7 +168,7 @@ DARE is an Open Forum for AI (OFAI) initiative, Carnegie Mellon University Libra
 
 The DARE name and marks are owned by Carnegie Mellon University. Use of the name, wordmark,
 Scotty dog mark, header lockup, and footer badge is governed by the
-[DARE Brand Guidelines & Usage Policy](https://github.com/cmudco/dare-backend/blob/main/docs/brand.md), independently of the software license.
+[DARE Brand Guidelines & Usage Policy](https://github.com/cmudco/dare-backend/blob/main/BRAND.md), independently of the software license.
 
 This software integrates with third-party APIs (Anthropic, OpenAI, Google, and others); use of those
 APIs is subject to each provider's own Terms of Service.
@@ -206,6 +206,6 @@ DARE is built and maintained by contributors at Carnegie Mellon University and i
 
 This project is licensed under the [GNU Affero General Public License v3.0](https://github.com/cmudco/dare-backend/blob/main/LICENSE) (AGPL-3.0-only).
 The software license does not grant rights to the DARE name or marks; see the
-[DARE Brand Guidelines & Usage Policy](https://github.com/cmudco/dare-backend/blob/main/docs/brand.md).
+[DARE Brand Guidelines & Usage Policy](https://github.com/cmudco/dare-backend/blob/main/BRAND.md).
 
 See the [LICENSE](https://github.com/cmudco/dare-backend/blob/main/LICENSE) file for the full license text, or visit <https://www.gnu.org/licenses/agpl-3.0.en.html>.
