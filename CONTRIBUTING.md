@@ -108,7 +108,7 @@ Each PR should include:
 - Inherit from `viewsets.ModelViewSet` for standard CRUD.
 - Always declare `permission_classes`. Default to `[IsAuthenticated]`.
 - Filter querysets by user in `get_queryset()` for any user-owned resource.
-- Use serializer field separation for read vs. write (see [docs/code-standards.md](https://github.com/cmudco/dare-backend/blob/main/docs/code-standards.md) and [docs/serialization.md](https://github.com/cmudco/dare-backend/blob/main/docs/serialization.md)).
+- Use serializer field separation for read vs. write (see [rules.md](https://github.com/cmudco/dare-backend/blob/main/rules.md) and [docs/reference/serialization.md](https://github.com/cmudco/dare-backend/blob/main/docs/reference/serialization.md)).
 
 ### Background jobs
 

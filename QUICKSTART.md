@@ -57,7 +57,7 @@ In a second terminal, start a background worker:
 
 ```bash
 source .venv/bin/activate
-OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES python -Wd manage.py rqworker default -v 3
+python manage.py rqworker default -v 2    # macOS: add --worker-class rq.SimpleWorker
 ```
 
 ---
@@ -69,4 +69,4 @@ Registration is gated by an **access code**. Log in to the admin panel at
 access code — then anyone can use that code to register their own account.
 
 The API is at **http://localhost:8000/**; Swagger UI at `/api/docs/`.
-Full variable reference: [docs/configuration.md](docs/configuration.md).
+Full variable reference: [docs/reference/configuration.md](docs/reference/configuration.md).

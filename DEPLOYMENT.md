@@ -10,7 +10,7 @@ This guide covers two deployment paths:
 1. **Docker path** — the simplest way to stand up the full stack; recommended for most deployments
 2. **Bare-metal path** — for production hosts or environments where Docker is not available
 
-For environment variable reference, see [docs/configuration.md](docs/configuration.md).
+For environment variable reference, see [docs/reference/configuration.md](docs/reference/configuration.md).
 
 ---
 
@@ -35,6 +35,37 @@ For environment variable reference, see [docs/configuration.md](docs/configurati
 | With local Ollama models | 8 vCPU | 24 GB+ | 150 GB SSD | Depends heavily on model size. The compose profile reserves 8 GB and caps Ollama at 16 GB by default. |
 
 Plan extra disk for uploaded media, Postgres backups, Weaviate data, and model files. For production, monitor volume growth and keep database/media backups outside the host.
+
+---
+
+## Production Topology
+
+The cloud provider is flexible. What matters is a long-running ASGI process, a background
+worker, Redis, Postgres, media storage, and a reverse proxy that supports WebSocket upgrades.
+
+| Component | Role | Notes |
+|---|---|---|
+| Reverse proxy | TLS termination and HTTP/WebSocket routing | Nginx, ALB, Caddy, or equivalent. Must pass Socket.IO upgrade headers. |
+| DARE web | Django ASGI API and Socket.IO server | Run with Uvicorn or Gunicorn + Uvicorn workers. |
+| DARE worker | Django RQ worker | Processes file ingestion, embeddings, email, and other async jobs. |
+| Postgres + pgvector | Primary relational database | Use managed Postgres where possible. Back up regularly. |
+| Redis | RQ queues, cache, Socket.IO pub/sub | Enable authentication and private networking in production. |
+| Vector store | RAG embeddings | Weaviate for self-hosted deployments, Pinecone for managed deployments. |
+| Object/media storage | Uploaded files and generated media | Local disk is acceptable for small installs; use durable object storage for production. |
+
+Network:
+
+- Terminate public traffic at the reverse proxy over HTTPS; never expose Uvicorn directly.
+- The proxy must support long-lived Socket.IO connections.
+- Postgres, Redis, and Weaviate should be reachable only from trusted hosts or private networks.
+- List frontend origins in `CORS_ALLOWED_ORIGINS` and `CSRF_TRUSTED_ORIGINS`.
+
+Secrets: use `.example.env` as the template, but never deploy its example values. At minimum,
+set fresh `DJANGO_SECRET_KEY`, `DARE_INTERNAL_KEY`, `SSO_JWT_KEY`, database credentials, the Redis
+password (if AUTH is on), and provider API keys.
+
+Backups: Postgres, uploaded media, Weaviate data (if self-hosted), and the environment
+configuration, stored securely outside the repository. Test a restore before relying on them.
 
 ---
 
@@ -100,7 +131,7 @@ curl http://localhost:8000/api/health/
 curl http://localhost:8000/api/ready/
 ```
 
-The web container waits for Postgres and Redis, then runs migrations before starting Uvicorn. Static and media files are stored in named Docker volumes. See [docs/local-setup-notes.md](docs/local-setup-notes.md) for local-dev gotchas (email verification, wallet credit, model catalog).
+The web container waits for Postgres and Redis, then runs migrations before starting Uvicorn. Static and media files are stored in named Docker volumes. New users need a verified email and wallet credit before chat runs; `scripts/dev-setup.sh --demo-user` creates a ready demo account, and [docs/how-to/run-quillmark.md](docs/how-to/run-quillmark.md) covers the document renderer.
 
 To enable optional services:
 
@@ -180,7 +211,7 @@ git clone https://github.com/cmudco/dare-backend.git && cd dare-backend
 
 # Create env file
 cp .example.env .env
-# Edit .env per docs/configuration.md
+# Edit .env per docs/reference/configuration.md
 
 # Python environment
 python3.13 -m venv .venv
@@ -295,16 +326,58 @@ If you see migrations applied, Swagger loads, and the worker reports an active d
 
 ## Upgrading
 
-```bash
-git pull
-source .venv/bin/activate
-pip install -r requirements/prod.txt
-python manage.py migrate
-python manage.py collectstatic --noinput
-sudo systemctl restart dare-api dare-worker
-```
+`devops/deploy.sh` automates this sequence; review its paths and service names before using it in
+a new environment.
+
+1. Announce the deployment window if users may be affected.
+2. Pull the target commit or release tag and activate the virtual environment.
+3. On native Debian/Ubuntu API and RQ hosts, run `bash devops/install_document_runtime.sh`, then
+   `pip install -r requirements/prod.txt`.
+4. With the workers' Python environment, run `python devops/check_document_runtime.py`, then
+   `python manage.py check`.
+5. `python manage.py migrate`, then `python manage.py collectstatic --noinput`.
+6. Restart the API and worker services, e.g. `sudo systemctl restart dare-api dare-worker`.
+7. Verify `/api/health/` and `/api/ready/`.
 
 Run migrations *before* restarting the API server when the upgrade includes schema changes.
+
+### Deployment order across repos
+
+1. **dare-backend**: everything else depends on it.
+2. **socraticbots-backend**: depends on the DARE API.
+3. **dare-frontend**: depends on the DARE API.
+4. **socraticbots-frontend**: depends on the Socratic Bots API.
+
+Deploy a backend before any frontend that relies on its new API shape.
+
+### Rollback
+
+1. Revert to the previous known-good commit or release tag.
+2. Reinstall dependencies if the lock set changed.
+3. Restart the API and worker services.
+4. Verify the health endpoints and key user flows.
+
+Database rollbacks are migration-specific. Prefer forward-fix migrations unless the migration was
+explicitly designed to reverse safely.
+
+### Document parsing runtime
+
+`opencv-python` is installed transitively by Docling → RapidOCR. Its Linux wheel links to
+`libGL.so.1` even though parsing does not open a display. Do not install the headless wheel
+alongside it: both own `cv2`. Docker installs `libgl1` and GLib and checks the runtime during the
+build. Native deployments must install these libraries on every worker host, and any external
+deploy script must run the same install and check steps. A passing API health check does not
+exercise the document worker's native libraries.
+
+After deploying, reprocess an affected file in Advanced mode and confirm its structure and image
+descriptions. The Basic fallback can preserve text after an Advanced parser error, but does not
+repair a missing runtime library.
+
+OpenAI-compatible image-description responses that are empty, malformed JSON, or token-limited get
+at most one more attempt. A token-limited response doubles the output allowance for that retry;
+every attempt is metered and wallet credit is checked again before retrying. Refusals and
+content-filtered responses are not retried. Persistent failures stay available through the
+retry-image-descriptions action, and successful descriptions stay cached.
 
 ---
 
@@ -316,8 +389,8 @@ Run migrations *before* restarting the API server when the upgrade includes sche
 | `redis.exceptions.ConnectionError` | Redis not running, or wrong `REDIS_HOST/PORT` | `redis-cli ping`; check `.env` |
 | `WeaviateConnectionError` | Weaviate container not running | `docker compose ps weaviate` |
 | `ollama: connection refused` | Ollama container not running, or `OLLAMA_HOST` mismatch | `docker compose ps ollama` |
-| `OBJC_DISABLE_INITIALIZE_FORK_SAFETY` errors on macOS | RQ worker forking issue | Prefix worker command with that env var |
+| RQ worker crashes on macOS (`OBJC_DISABLE_INITIALIZE_FORK_SAFETY` errors) | The default forking worker | Run `rqworker default --worker-class rq.SimpleWorker` |
 | Background jobs stuck | Worker not running | Start the `rqworker` process |
 | 502 from Nginx | Uvicorn bound to wrong host or crashed | `journalctl -u dare-api -f` |
 
-For more, see [docs/admin-guide.md](docs/admin-guide.md).
+For more, see [docs/how-to/administer-dare.md](docs/how-to/administer-dare.md).

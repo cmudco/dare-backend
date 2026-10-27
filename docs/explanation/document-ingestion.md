@@ -1,4 +1,9 @@
-# Verified document index publication
+# Document ingestion
+
+How an uploaded file becomes a search index DARE can trust: who may write it, how a new index is
+verified before it goes live, what is recorded, and how interrupted runs are recovered.
+
+## Verified index publication
 
 Basic and Advanced uploads use the same indexing contract after chunking. Basic text is cut by LangChain's recursive splitter on paragraph, line and sentence boundaries with the configured overlap; Advanced keeps its structural chunking.
 
@@ -8,17 +13,24 @@ Basic and Advanced uploads use the same indexing contract after chunking. Basic 
 4. Exact chunk identities, count, persisted metadata (including source and embedding text), dimensions and finite values must match. Visibility mismatches receive at most three reads, with 0.5- and 1-second waits. Transport failures fail closed. Vector values are not compared bit-for-bit because storage may change floating-point precision.
 5. Only verified generations become active. The File pointer, map replacement and published attempt record commit together. Failure rolls back the map and pointer, saves failed-attempt evidence outside the rolled-back transaction, and tries to clean only the staged generation. Previous vectors are retired after successful publication.
 
+Verification proves consistency at publication time, not indefinite durability; [live index
+health](#live-index-health) answers the later question. Existing uploads are unchanged until
+explicitly reprocessed. Weaviate initialization adds a non-searchable `file_type` property if it
+is missing; older objects do not need rewriting.
+
+## Ownership and cancellation
+
+Parsing, enrichment and status writes are conditioned on the file's owner and ingestion token. Deletion or replacement of the token cancels the old attempt. Cancellation returns without reporting an ingestion error; the worker log records the file ID. A deleted file's attempt rows are deleted with it.
+
+Embedding, entity extraction, vector upsert and readback verification run outside the publication transaction. Prepared map rows stay in memory until verification succeeds. A short transaction then locks the owned file, replaces its map and publishes the verified generation together. A superseded or deleted attempt cannot publish. Unpublished staged vectors are cleaned up on failure or cancellation; a failed replacement retains the previous map and generation.
+
+Deletion locks the current file before snapshotting its vector generations and backends, including staged attempts. Cleanup is queued after commit using those stable identifiers. Cleanup failures propagate to RQ with three immediate retries, without requiring RQ's separate retry scheduler. Enqueue still depends on Redis availability; durable delivery during a Redis outage would require a transactional outbox.
+
 ## Evidence
 
 `VectorIndexAttempt` is available read-only in Django admin under **Vector index attempts**. It records file, owner, backend, generation, status, expected/generated/attempted/acknowledged/verified counts, verification timestamp and elapsed seconds, and a safe failure reason. Successful indexing also includes these details in the existing file processing journey.
 
 The initial attempt row is created before the publication transaction. A killed worker therefore leaves a `running` attempt, not a false success. Counters are finalized on normal completion or handled failure; they are not live progress counters. On a hard kill they may remain zero and must not be interpreted as proof that no writes occurred. Acknowledged counts are lower bounds when a connection fails before the client receives the server's acknowledgement. A `verified_count` is recorded only after the complete generation passes validation. Empty-text outcomes create no active generation and are recorded as `empty`.
-
-## Rollout and compatibility
-
-Apply `files.0026_vectorindexattempt` before restarting the API and all ingestion workers. The table is additive and does not modify existing indexes. Weaviate initialization adds a non-searchable `file_type` property if missing; old objects do not require rewriting. Rolling back application code can leave the additive table/property in place.
-
-Existing uploads are unchanged until explicitly reprocessed. Verification proves consistency at publication time, not indefinite durability. This change does not implement periodic drift detection, bulk repair, or automatic recovery of attempts abandoned by killed workers. It does not establish the cause of historical production data loss.
 
 ## Generation lifecycle
 
@@ -46,6 +58,10 @@ published generation is still active. RQ itself only expires a dead worker's
 "started" registry entry after the job's own timeout, which is why a queue
 dashboard can show dozens of running jobs with no worker alive.
 
+Reconciliation checks that the observed job ID, token and timestamp still match before marking an
+attempt interrupted, so it cannot overwrite an attempt that changed while the sweep was
+inspecting RQ.
+
 The sweep runs in three places, none of which needs a new process or a
 deployment change: every worker runs it once at startup (a restarted worker is
 the first to know its predecessor's jobs are dead) and at the same time
@@ -65,6 +81,10 @@ running a job, so a dead worker is recognised within about two minutes. A
 `SimpleWorker` heartbeats once per job with the job's timeout as TTL, so on
 that class detection waits for the job timeout.
 
+Keep `rqscheduler` running so the recurring sweep fires. Review interrupted files and failed
+cleanup jobs before selectively retrying them; do not replay successful paid work
+indiscriminately.
+
 ## Live index health
 
 Publication verifies a generation once. `GET /api/files/{id}/index-health/`
@@ -76,8 +96,18 @@ the content comparison already happened at publication, and a listing without
 vectors or text stays cheap for large documents. A `verified` result means the
 index is complete right now; `incomplete` or `missing` means reprocess the
 file; `unavailable` means the database could not be reached and says nothing
-about the vectors. Apply `files.0027_vectorindexattempt_finished_at` with this
-change.
+about the vectors.
+
+## Vision concurrency
+
+Page transcription and figure description can run in bounded parallel batches. Each operation owns its File instance, provider client, telemetry, and thread database connections. Results retain input order; a cancelled ingestion stops submitting further batches. Async provider clients close within the event loop that used them.
+
+`DOCUMENT_ENRICHMENT_CONCURRENCY` defaults to 2 and is bounded between 1 and 4. Set it to 1 to return to serial execution. This limit applies per document job, so account for the total worker count when sizing provider traffic.
+
+All wallet types use the same concurrency setting. DARE requests retain the estimated-credit check before each paid request. Completed document-vision calls are recorded atomically even if concurrent charges take the balance negative; this does not reserve funds or impose a strict overspend limit across jobs. Other billing callers retain the default insufficient-balance rejection. Cache behavior and provider usage accounting remain part of each operation.
+
+Paid-provider latency and extraction-quality benchmarks have not been run, so there is no
+measured production speedup figure for concurrency above 1.
 
 ## Memory per stage
 
@@ -96,4 +126,3 @@ minutes on a vision provider. Ingestion therefore releases the converters
 horse exits after the job anyway, and a long-lived worker reloads them on its
 next parse (about 20 s). Bulk commands such as `backfill_document_models` keep
 the models loaded between files.
-

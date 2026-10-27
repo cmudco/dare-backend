@@ -89,7 +89,7 @@ In the admin, navigate to **Access Code Groups** and create a new group. Each gr
 
 ## 4. Model groups (LLM access control)
 
-Each user belongs to one or more **model groups**. Each model group has a set of LLM models (e.g., `gpt-4o`, `claude-3.5-sonnet`) that members can invoke.
+A user's models come from the **model group** on their access code group. Each model group has a set of allowed LLMs. A user whose access code group has no model group (or an inactive one) can use every active model.
 
 ### Creating a model group
 
@@ -102,15 +102,15 @@ In `/admin/`:
 
 ### Assigning users to model groups
 
-- Edit a user → set their `model_groups`.
-- Or assign automatically via access code (configure on the access code group).
+- Set **Model group** on the access code group; everyone registered with that code gets it.
+- To move one user, change their access code group.
 
 ### Adding a new model
 
 When a new LLM is released:
 
-1. Add a record in **AI Models** with:
-   - Provider (`openai` / `anthropic` / `google` / `ollama`)
+1. Add a record in **LLMs** with:
+   - Provider (`openai` / `claude` / `gemini` / `llama` / `custom`)
    - Model identifier (e.g., `gpt-5`)
    - Pricing (`input_token_rate_per_million`, `output_token_rate_per_million`)
    - Display name and description
@@ -253,4 +253,4 @@ python manage.py shell
 | Token cost off | Verify `input_token_rate_per_million` / `output_token_rate_per_million` on the model record |
 | Access code rejected | Admin → access code group → verify expiry and remaining uses |
 
-For deeper issues, see [DEPLOYMENT.md § Troubleshooting](../DEPLOYMENT.md#troubleshooting).
+For deeper issues, see [DEPLOYMENT.md § Troubleshooting](../../DEPLOYMENT.md#troubleshooting).

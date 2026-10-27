@@ -40,7 +40,7 @@ python manage.py showmigrations
 
 ## If the change touches the API
 
-Regenerate the OpenAPI schema so `docs/api/dare-backend.md` and the served schema stay in sync with
+Regenerate the OpenAPI schema so `docs/reference/rest-api.md` and the served schema stay in sync with
 the code.
 
 ## If the change is user-facing

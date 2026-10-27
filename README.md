@@ -73,20 +73,12 @@ flowchart TB
     services --> ollama
 ```
 
-See [docs/architecture.md](https://github.com/cmudco/dare-backend/blob/main/docs/architecture.md) for the full diagram and
-[docs/architecture/overview.md](https://github.com/cmudco/dare-backend/blob/main/docs/architecture/overview.md) for component-level detail.
+See [docs/explanation/architecture.md](https://github.com/cmudco/dare-backend/blob/main/docs/explanation/architecture.md) for the full diagrams and
+component-level detail.
 
 ## Quick Start
 
 Fastest path — Docker brings up the whole stack (API, worker, Postgres, Redis, Weaviate):
-
-For local development, `scripts/dev-setup.sh --demo-user` does all of the below in one command
-(submodule init, env files, build, demo login) — see [INSTALL.md](INSTALL.md).
-
-Document generation is powered by
-[quillmark-mcp](https://github.com/tonguetoquill/quillmark-mcp) (Typst
-rendering over MCP), vendored as the `quillmark-mcp/` git submodule and run as
-a service in the compose stack.
 
 ```bash
 # 1. Clone (with the quillmark-mcp submodule)
@@ -107,26 +99,36 @@ curl http://localhost:8000/api/health/
 
 The API is at `http://localhost:8000/`; Swagger UI at `http://localhost:8000/api/docs/`.
 
+For local development, `scripts/dev-setup.sh --demo-user` does all of this in one command
+(submodule init, env files, build, demo login); see
+[DEPLOYMENT.md](https://github.com/cmudco/dare-backend/blob/main/DEPLOYMENT.md#quick-start-recommended).
+
+Document generation is powered by
+[quillmark-mcp](https://github.com/tonguetoquill/quillmark-mcp) (Typst
+rendering over MCP), vendored as the `quillmark-mcp/` git submodule and run as
+a service in the compose stack.
+
 See **[QUICKSTART.md](https://github.com/cmudco/dare-backend/blob/main/QUICKSTART.md)** for the full walkthrough — the local-Python path,
 collecting static files, and creating an access code so users can register — and
 **[DEPLOYMENT.md](https://github.com/cmudco/dare-backend/blob/main/DEPLOYMENT.md)** for production and server deployment.
 
 ## Documentation
 
-| Doc | What's in it |
-| --- | --- |
-| [QUICKSTART.md](https://github.com/cmudco/dare-backend/blob/main/QUICKSTART.md) | Run the backend locally — Docker stack, or local Python in a venv |
-| [DEPLOYMENT.md](https://github.com/cmudco/dare-backend/blob/main/DEPLOYMENT.md) | Production deployment — Docker and bare metal |
-| [docs/configuration.md](https://github.com/cmudco/dare-backend/blob/main/docs/configuration.md) | Every environment variable, with type, default, and description |
-| [docs/architecture.md](https://github.com/cmudco/dare-backend/blob/main/docs/architecture.md) | Component diagram and request flows |
-| [docs/admin-guide.md](https://github.com/cmudco/dare-backend/blob/main/docs/admin-guide.md) | User/role management, access codes, analytics |
-| [CONTRIBUTING.md](https://github.com/cmudco/dare-backend/blob/main/CONTRIBUTING.md) | Issues, pull requests, coding standards |
-| [CHANGELOG.md](https://github.com/cmudco/dare-backend/blob/main/CHANGELOG.md) | Release notes |
-| [SECURITY.md](https://github.com/cmudco/dare-backend/blob/main/SECURITY.md) | Vulnerability disclosure process |
-| [docs/integration/socraticbooks-dare-proxy.md](https://github.com/cmudco/dare-backend/blob/main/docs/integration/socraticbooks-dare-proxy.md) | DARE/SocraticBooks integration contract and update rules |
-| [docs/architecture/socketio-events.md](https://github.com/cmudco/dare-backend/blob/main/docs/architecture/socketio-events.md) | Socket.IO event reference |
-| [docs/api/dare-backend.md](https://github.com/cmudco/dare-backend/blob/main/docs/api/dare-backend.md) | REST API reference |
-| [docs/code-standards.md](https://github.com/cmudco/dare-backend/blob/main/docs/code-standards.md) | Coding conventions |
+| Kind | Doc | What's in it |
+| --- | --- | --- |
+| Tutorial | [QUICKSTART.md](https://github.com/cmudco/dare-backend/blob/main/QUICKSTART.md) | Run the backend locally: Docker stack, or local Python in a venv |
+| Tutorial | [docs/tutorials/getting-started.md](https://github.com/cmudco/dare-backend/blob/main/docs/tutorials/getting-started.md) | Run the whole DARE platform locally and send a first chat |
+| How-to | [DEPLOYMENT.md](https://github.com/cmudco/dare-backend/blob/main/DEPLOYMENT.md) | Production deployment, upgrades, rollback |
+| How-to | [docs/how-to/administer-dare.md](https://github.com/cmudco/dare-backend/blob/main/docs/how-to/administer-dare.md) | Users, roles, access codes, model groups, analytics |
+| Reference | [docs/reference/configuration.md](https://github.com/cmudco/dare-backend/blob/main/docs/reference/configuration.md) | Every environment variable, with type, default, and description |
+| Reference | [docs/reference/rest-api.md](https://github.com/cmudco/dare-backend/blob/main/docs/reference/rest-api.md) | REST API reference |
+| Reference | [docs/reference/socketio-events.md](https://github.com/cmudco/dare-backend/blob/main/docs/reference/socketio-events.md) | Socket.IO event reference |
+| Reference | [docs/reference/socratic-bots-integration.md](https://github.com/cmudco/dare-backend/blob/main/docs/reference/socratic-bots-integration.md) | DARE/Socratic Bots integration contract |
+| Explanation | [docs/explanation/architecture.md](https://github.com/cmudco/dare-backend/blob/main/docs/explanation/architecture.md) | Platform and backend architecture |
+| Project | [CONTRIBUTING.md](https://github.com/cmudco/dare-backend/blob/main/CONTRIBUTING.md), [rules.md](https://github.com/cmudco/dare-backend/blob/main/rules.md) | How to contribute; coding rules |
+| Project | [CHANGELOG.md](https://github.com/cmudco/dare-backend/blob/main/CHANGELOG.md), [SECURITY.md](https://github.com/cmudco/dare-backend/blob/main/SECURITY.md) | Release notes; vulnerability disclosure |
+
+The full map, including every how-to and explanation, is [docs/index.md](https://github.com/cmudco/dare-backend/blob/main/docs/index.md).
 
 ## Tech Stack
 

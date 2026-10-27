@@ -1,4 +1,4 @@
-# Local setup notes
+# Run the Quillmark document renderer
 
 DARE supports two local workflows. Existing contributors normally run Django
 and Vite directly and put only Quillmark in Docker. A full Docker Compose stack
@@ -10,7 +10,7 @@ Set up and migrate the backend using the normal repository instructions, then:
 
 ```bash
 scripts/quillmark-setup.sh
-.venv/bin/python manage.py runserver 8000
+.venv/bin/uvicorn dare.asgi:application --port 8000 --reload
 ```
 
 Run the frontend separately:

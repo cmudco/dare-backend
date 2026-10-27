@@ -1,6 +1,6 @@
 # Advanced RAG — Implementation & Results (2026)
 
-> **Companion to** [`rag-audit-and-strategy-2026.md`](./rag-audit-and-strategy-2026.md). That doc described the problem and the strategy (Tracks A/B/C). **This doc records what we actually built, what we measured, and why we made the calls we made.** Everything here was validated against a live corpus — the **Civil War pension records** shared library (4,989 chunks, `text-embedding-3-large` @ 3072d), imported from CMU — running locally on an Apple M1 Pro. Only embeddings leave the machine; retrieval, reranking, and diversification are all local.
+> **This doc records what we actually built, what we measured, and why we made the calls we made.** Everything here was validated against a live corpus — the **Civil War pension records** shared library (4,989 chunks, `text-embedding-3-large` @ 3072d), imported from CMU — running locally on an Apple M1 Pro. Only embeddings leave the machine; retrieval, reranking, and diversification are all local.
 
 ---
 
@@ -257,8 +257,6 @@ the new generation. Files whose OCR finished or partly finished are rebuilt
 from the stored transcriptions without re-running vision; a scanned PDF that
 never went through OCR approval has no transcription to rebuild from, so it
 retains its old index and pauses for approval like a first-time upload.
-Design:
-`docs/superpowers/specs/2026-09-02-graph-reference-resolution-design.md`.
 
 Every chunk also gets entity mentions from two local, free lanes at ingest
 (`core/services/rag/entity_extractor.py`, patterns in `core/config/entities.py`):
@@ -285,10 +283,7 @@ key recurs elsewhere in the user's library. Three flags gate this:
 `RAG_ENTITY_NER_ENABLED` turns the GLiNER lane off while identifiers keep
 running, `RAG_ENTITY_MODEL` picks the checkpoint (loaded lazily on first
 use), and `RAG_ENTITY_HOPS_ENABLED` turns off the cross-file hop without
-touching ingest. Design:
-[`2026-09-02-cross-document-links-design.md`](./superpowers/specs/2026-09-02-cross-document-links-design.md);
-spike with the extractor comparison:
-[`2026-09-02-entity-extraction-spike.md`](./superpowers/spikes/2026-09-02-entity-extraction-spike.md).
+touching ingest.
 
 
 ### Evidence-integrity fixes (September 2026)

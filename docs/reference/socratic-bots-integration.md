@@ -47,7 +47,7 @@ Breaking changes require a coordinated DARE backend and SocraticBooks backend de
 
 ## Related Docs
 
-- [Getting Started](../getting-started.md)
-- [Socket.IO Events](../architecture/socketio-events.md)
-- [Serialization Contract](../serialization.md)
-- [API Reference](../api/dare-backend.md)
+- [Getting Started](../tutorials/getting-started.md)
+- [Socket.IO Events](socketio-events.md)
+- [Serialization Contract](serialization.md)
+- [API Reference](rest-api.md)

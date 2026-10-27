@@ -1,6 +1,6 @@
 # The Tool Loop — Chat Tool-Calling Architecture (2026)
 
-> **Companion to** [`advanced-rag-implementation.md`](./advanced-rag-implementation.md) (Track A) and the agentic RAG work (Track B). This doc explains how a chat message flows from the socket to the LLM and back when tools are involved: the **bounded multi-round tool loop**, the **provider-native tool-turn message schema**, the **unified frontend event protocol**, and **cross-round billing**. Read this before touching anything in the `socket → coordinator → loop → provider` path.
+> **Companion to** [`advanced-rag.md`](advanced-rag.md) (Track A) and the agentic RAG work (Track B). This doc explains how a chat message flows from the socket to the LLM and back when tools are involved: the **bounded multi-round tool loop**, the **provider-native tool-turn message schema**, the **unified frontend event protocol**, and **cross-round billing**. Read this before touching anything in the `socket → coordinator → loop → provider` path.
 
 ---
 

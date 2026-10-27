@@ -24,7 +24,7 @@ cp .example.env .env
 ```
 
 At minimum set `DJANGO_SECRET_KEY` and one provider key (`OPENAI_API_KEY`, `CLAUDE_API_KEY`, or
-`GEMINI_API_KEY`). Every variable is documented in `docs/configuration.md`.
+`GEMINI_API_KEY`). Every variable is documented in `docs/reference/configuration.md`.
 
 ## Path 1 — Docker (brings up the whole stack)
 

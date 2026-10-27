@@ -209,7 +209,7 @@ is deliberately distinct from confirmed loss), `unverifiable` (indexed before
 map rows existed, so only presence is known), `not_indexed`, and `processing`.
 Owner only. The check reads identities, not vectors or text, so it is cheap
 enough for the Map tab to run on open; the full content comparison happens
-once at publication (see `docs/ingestion-verification.md`).
+once at publication (see `docs/explanation/document-ingestion.md`).
 
 ### Reprocess a stored document
 

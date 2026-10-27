@@ -30,6 +30,6 @@ black . && isort .
   `core/services/llm_utils/provider_message_converters.py` adds it; route any new Gemini
   history path through it.
 - **The env example is `.example.env`**, not `.env.example`. Every variable is in
-  `docs/configuration.md`.
+  `docs/reference/configuration.md`.
 - **The frontend's docs site copies files from this repo's `docs/`.** Renaming or moving one
   breaks `dare-frontend/docs-site/scripts/sync-content.mjs`; update it in a paired PR.
