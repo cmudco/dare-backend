@@ -99,4 +99,4 @@ before starting a second one.
 - `run-workers` — background jobs; needed before uploaded files will process.
 - The frontend lives in a separate repo, [dare-frontend](https://github.com/cmudco/dare-frontend),
   and defaults to `http://localhost:5173`.
-- `README.md` for the project overview, `DEPLOYMENT.md` for production.
+- `README.md` for the project overview, `docs/how-to/deploy.md` for production.

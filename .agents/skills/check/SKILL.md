@@ -66,5 +66,5 @@ backwards-incompatible.
 
 ## Related
 
-- `CONTRIBUTING.md` — the full contribution guide this skill summarizes.
-- `rules.md` — the repo's coding standards, in detail.
+- `.github/CONTRIBUTING.md` — the full contribution guide this skill summarizes.
+- `docs/reference/rules.md` — the repo's coding standards, in detail.

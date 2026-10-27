@@ -2,7 +2,7 @@
 
 Thanks for your interest in contributing. This guide covers issues, pull requests, and the coding standards we follow.
 
-The canonical online version of this guide is available at [https://github.com/cmudco/dare-backend/blob/main/CONTRIBUTING.md](https://github.com/cmudco/dare-backend/blob/main/CONTRIBUTING.md).
+The canonical online version of this guide is available at [https://github.com/cmudco/dare-backend/blob/main/.github/CONTRIBUTING.md](https://github.com/cmudco/dare-backend/blob/main/.github/CONTRIBUTING.md).
 
 ## Filing issues
 
@@ -32,7 +32,7 @@ Include:
 
 ### Security issues
 
-**Do not** open public issues for security vulnerabilities. See [SECURITY.md](https://github.com/cmudco/dare-backend/blob/main/SECURITY.md) for the disclosure process.
+**Do not** open public issues for security vulnerabilities. See [.github/SECURITY.md](https://github.com/cmudco/dare-backend/blob/main/.github/SECURITY.md) for the disclosure process.
 
 ---
 
@@ -108,7 +108,7 @@ Each PR should include:
 - Inherit from `viewsets.ModelViewSet` for standard CRUD.
 - Always declare `permission_classes`. Default to `[IsAuthenticated]`.
 - Filter querysets by user in `get_queryset()` for any user-owned resource.
-- Use serializer field separation for read vs. write (see [rules.md](https://github.com/cmudco/dare-backend/blob/main/rules.md) and [docs/reference/serialization.md](https://github.com/cmudco/dare-backend/blob/main/docs/reference/serialization.md)).
+- Use serializer field separation for read vs. write (see [docs/reference/rules.md](https://github.com/cmudco/dare-backend/blob/main/docs/reference/rules.md) and [docs/reference/serialization.md](https://github.com/cmudco/dare-backend/blob/main/docs/reference/serialization.md)).
 
 ### Background jobs
 
@@ -154,7 +154,7 @@ already knows how to run the backend, start workers, and check a change before y
 | File | What it is |
 | --- | --- |
 | `AGENTS.md` | Project instructions — architecture, conventions, patterns. Read by Codex and other tools following the `AGENTS.md` convention. |
-| `CLAUDE.md` | Imports `AGENTS.md`, plus any Claude Code-specific notes. |
+| `.claude/CLAUDE.md` | Imports `AGENTS.md`, plus any Claude Code-specific notes. |
 | `.agents/skills/<name>/SKILL.md` | Task procedures — `run-backend`, `run-workers`, `check`. |
 | `.claude/skills/<name>` | Symlinks to the above, because Claude Code scans a different path. |
 
@@ -162,7 +162,7 @@ Invoke a skill by name — `/run-backend` in Claude Code, `$run-backend` in Code
 the task and let the agent load the matching skill on its own.
 
 To add or change a skill, edit the file under `.agents/skills/`; the `.claude/skills/` symlink
-needs no change. See [`.agents/README.md`](.agents/README.md) for the layout, how to add a new
+needs no change. See [`.agents/README.md`](../.agents/README.md) for the layout, how to add a new
 skill, and the Windows symlink caveat.
 
 Treat these files like code: they are reviewed in PRs, and a stale skill is worse than no skill.

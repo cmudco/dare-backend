@@ -3,8 +3,8 @@
 Run the whole DARE platform on your machine (backend, background worker, and frontend), create
 an account, and send a first chat message. It takes about 20 minutes on a fresh machine.
 
-For the backend alone, [QUICKSTART.md](../../QUICKSTART.md) is shorter. For Socratic Bots, finish
-this tutorial first, then follow the Socratic Bots backend's `QUICKSTART.md`.
+For the backend alone, [docs/tutorials/quickstart.md](quickstart.md) is shorter. For Socratic Bots, finish
+this tutorial first, then follow the Socratic Bots backend's `docs/tutorials/quickstart.md`.
 
 ## What you will run
 

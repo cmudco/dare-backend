@@ -121,7 +121,7 @@ authentication → view → serializer → model → Postgres → response.
   models declare only `active_objects`, which hides retired rows, and there is no `objects`
   manager on them; reverse relations filter the same way. Use `_base_manager` to see every row.
 - **Slow work goes to RQ.** File ingestion, embeddings and memory writes run in workers so the
-  web process stays responsive. Each job must be safe to retry (`rules.md`, section 7).
+  web process stays responsive. Each job must be safe to retry (`docs/reference/rules.md`, section 7).
 - **camelCase at the boundary.** REST and socket payloads are camelCase; Python stays snake_case.
   See [serialization.md](../reference/serialization.md).
 

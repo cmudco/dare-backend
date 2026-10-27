@@ -34,7 +34,7 @@ DARE — Dietrich Analysis Research Education — must always appear in all capi
 
 The canonical DARE header lockup is:
 
-![The Scotty dog mark to the left of the DARE wordmark, with “A Carnegie Mellon University Project” beneath it](docs/assets/brand/dare-header-lockup.png)
+![The Scotty dog mark to the left of the DARE wordmark, with “A Carnegie Mellon University Project” beneath it](assets/brand/dare-header-lockup.png)
 
 The Scotty dog mark appears to the left of the wordmark. "DARE" appears as the primary wordmark. "A Carnegie Mellon University Project" appears beneath it in smaller text as a descriptor. Any deployment that uses the DARE name must display this lockup in the header. It may not be modified, and "A Carnegie Mellon University Project" may not be removed.
 
@@ -42,7 +42,7 @@ The Scotty dog mark appears to the left of the wordmark. "DARE" appears as the p
 
 Any deployment that uses the DARE name must display the following in the footer:
 
-![The Scotty dog mark beside the words “Powered by DARE”](docs/assets/brand/powered-by-dare-footer-badge.png)
+![The Scotty dog mark beside the words “Powered by DARE”](assets/brand/powered-by-dare-footer-badge.png)
 
 Use of the Scotty mark in the header lockup and footer badge is authorized by Carnegie Mellon University for all compliant DARE deployments.
 
@@ -103,7 +103,7 @@ If you wish to use the DARE name or marks in your deployment, you must comply wi
 
 **Permitted additionally:**
 
-![Example partner lockup with “State University” beside the canonical DARE header lockup](docs/assets/brand/dare-partner-lockup-example.png)
+![Example partner lockup with “State University” beside the canonical DARE header lockup](assets/brand/dare-partner-lockup-example.png)
 
 - Your institution's name and mark displayed in the header alongside the DARE lockup (e.g., "State University DARE — A Carnegie Mellon University Project")
 - Full co-labeling in the header; the DARE lockup and "A Carnegie Mellon University Project" descriptor must remain present and unmodified
@@ -146,7 +146,7 @@ If you wish to deploy under the DARE name while removing or significantly modify
 
 Additional tools released as part of the DARE ecosystem follow a consistent sub-project branding pattern:
 
-![The Scotty shield and DARE wordmark above a sample application name](docs/assets/brand/dare-subproject-lockup-example.png)
+![The Scotty shield and DARE wordmark above a sample application name](assets/brand/dare-subproject-lockup-example.png)
 
 The DARE lockup sits above the application name, establishing lineage to the broader DARE ecosystem. Each sub-project carries its own software license and IP disclosure. Compliance with this brand policy applies to each sub-project independently.
 

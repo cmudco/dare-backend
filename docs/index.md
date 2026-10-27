@@ -9,13 +9,13 @@ Pages are grouped by what you are trying to do.
 
 - [Getting Started](tutorials/getting-started.md): run backend, worker and frontend locally, and
   send a first chat.
-- [Backend Quick Start](../QUICKSTART.md): the backend alone, with Docker or local Python.
+- [Backend Quick Start](tutorials/quickstart.md): the backend alone, with Docker or local Python.
 - [Memory walkthrough](tutorials/memory-walkthrough.md): a guided tour of chat memory in the
   browser.
 
 ## How-to guides: reach a goal
 
-- [Deploy to production](../DEPLOYMENT.md): Docker or bare metal, upgrades, rollback.
+- [Deploy to production](how-to/deploy.md): Docker or bare metal, upgrades, rollback.
 - [Administer DARE](how-to/administer-dare.md): users, roles, access codes, model groups,
   analytics.
 - [Deploy research mode](how-to/deploy-research-mode.md): run research agents on Hermes.
@@ -32,7 +32,7 @@ Pages are grouped by what you are trying to do.
 - [Non-chat model usage](reference/non-chat-model-usage.md): every model call outside the chat
   reply.
 - [Scite data](reference/scite-data.md): what the Scite MCP server returns.
-- [Coding rules](../rules.md): the standards every change follows.
+- [Coding rules](reference/rules.md): the standards every change follows.
 
 ## Explanation: understand why
 

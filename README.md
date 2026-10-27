@@ -101,32 +101,32 @@ The API is at `http://localhost:8000/`; Swagger UI at `http://localhost:8000/api
 
 For local development, `scripts/dev-setup.sh --demo-user` does all of this in one command
 (submodule init, env files, build, demo login); see
-[DEPLOYMENT.md](https://github.com/cmudco/dare-backend/blob/main/DEPLOYMENT.md#quick-start-recommended).
+[docs/how-to/deploy.md](https://github.com/cmudco/dare-backend/blob/main/docs/how-to/deploy.md#quick-start-recommended).
 
 Document generation is powered by
 [quillmark-mcp](https://github.com/tonguetoquill/quillmark-mcp) (Typst
 rendering over MCP), vendored as the `quillmark-mcp/` git submodule and run as
 a service in the compose stack.
 
-See **[QUICKSTART.md](https://github.com/cmudco/dare-backend/blob/main/QUICKSTART.md)** for the full walkthrough — the local-Python path,
+See **[docs/tutorials/quickstart.md](https://github.com/cmudco/dare-backend/blob/main/docs/tutorials/quickstart.md)** for the full walkthrough — the local-Python path,
 collecting static files, and creating an access code so users can register — and
-**[DEPLOYMENT.md](https://github.com/cmudco/dare-backend/blob/main/DEPLOYMENT.md)** for production and server deployment.
+**[docs/how-to/deploy.md](https://github.com/cmudco/dare-backend/blob/main/docs/how-to/deploy.md)** for production and server deployment.
 
 ## Documentation
 
 | Kind | Doc | What's in it |
 | --- | --- | --- |
-| Tutorial | [QUICKSTART.md](https://github.com/cmudco/dare-backend/blob/main/QUICKSTART.md) | Run the backend locally: Docker stack, or local Python in a venv |
+| Tutorial | [docs/tutorials/quickstart.md](https://github.com/cmudco/dare-backend/blob/main/docs/tutorials/quickstart.md) | Run the backend locally: Docker stack, or local Python in a venv |
 | Tutorial | [docs/tutorials/getting-started.md](https://github.com/cmudco/dare-backend/blob/main/docs/tutorials/getting-started.md) | Run the whole DARE platform locally and send a first chat |
-| How-to | [DEPLOYMENT.md](https://github.com/cmudco/dare-backend/blob/main/DEPLOYMENT.md) | Production deployment, upgrades, rollback |
+| How-to | [docs/how-to/deploy.md](https://github.com/cmudco/dare-backend/blob/main/docs/how-to/deploy.md) | Production deployment, upgrades, rollback |
 | How-to | [docs/how-to/administer-dare.md](https://github.com/cmudco/dare-backend/blob/main/docs/how-to/administer-dare.md) | Users, roles, access codes, model groups, analytics |
 | Reference | [docs/reference/configuration.md](https://github.com/cmudco/dare-backend/blob/main/docs/reference/configuration.md) | Every environment variable, with type, default, and description |
 | Reference | [docs/reference/rest-api.md](https://github.com/cmudco/dare-backend/blob/main/docs/reference/rest-api.md) | REST API reference |
 | Reference | [docs/reference/socketio-events.md](https://github.com/cmudco/dare-backend/blob/main/docs/reference/socketio-events.md) | Socket.IO event reference |
 | Reference | [docs/reference/socratic-bots-integration.md](https://github.com/cmudco/dare-backend/blob/main/docs/reference/socratic-bots-integration.md) | DARE/Socratic Bots integration contract |
 | Explanation | [docs/explanation/architecture.md](https://github.com/cmudco/dare-backend/blob/main/docs/explanation/architecture.md) | Platform and backend architecture |
-| Project | [CONTRIBUTING.md](https://github.com/cmudco/dare-backend/blob/main/CONTRIBUTING.md), [rules.md](https://github.com/cmudco/dare-backend/blob/main/rules.md) | How to contribute; coding rules |
-| Project | [CHANGELOG.md](https://github.com/cmudco/dare-backend/blob/main/CHANGELOG.md), [SECURITY.md](https://github.com/cmudco/dare-backend/blob/main/SECURITY.md) | Release notes; vulnerability disclosure |
+| Project | [.github/CONTRIBUTING.md](https://github.com/cmudco/dare-backend/blob/main/.github/CONTRIBUTING.md), [docs/reference/rules.md](https://github.com/cmudco/dare-backend/blob/main/docs/reference/rules.md) | How to contribute; coding rules |
+| Project | [CHANGELOG.md](https://github.com/cmudco/dare-backend/blob/main/CHANGELOG.md), [.github/SECURITY.md](https://github.com/cmudco/dare-backend/blob/main/.github/SECURITY.md) | Release notes; vulnerability disclosure |
 
 The full map, including every how-to and explanation, is [docs/index.md](https://github.com/cmudco/dare-backend/blob/main/docs/index.md).
 
@@ -145,7 +145,7 @@ The full map, including every how-to and explanation, is [docs/index.md](https:/
 - `core/services/` — the service layer (LLM providers, vector stores, MCP, email)
 - `docs/` — architecture, configuration, admin, API reference, deployment, and integration guides
 - Docker Compose stack (API, RQ worker, Postgres + pgvector, Redis, Weaviate) and `requirements/`
-- Supporting docs — `QUICKSTART.md`, `DEPLOYMENT.md`, `CONTRIBUTING.md`, `CHANGELOG.md`, `SECURITY.md`, `BRAND.md`
+- Supporting docs — `docs/tutorials/quickstart.md`, `docs/how-to/deploy.md`, `.github/CONTRIBUTING.md`, `CHANGELOG.md`, `.github/SECURITY.md`, `docs/brand.md`
 
 ## What is not included in this repo?
 
@@ -160,7 +160,7 @@ The full map, including every how-to and explanation, is [docs/index.md](https:/
 
 - **Found a bug or have a feature request?** Open an issue on the project's GitHub repository.
 - **Questions or general inquiries?** Email the project team at vks@andrew.cmu.edu.
-- **Security disclosures:** see [SECURITY.md](https://github.com/cmudco/dare-backend/blob/main/SECURITY.md).
+- **Security disclosures:** see [.github/SECURITY.md](https://github.com/cmudco/dare-backend/blob/main/.github/SECURITY.md).
 
 ## Acknowledgements
 
@@ -168,7 +168,7 @@ DARE is an Open Forum for AI (OFAI) initiative, Carnegie Mellon University Libra
 
 The DARE name and marks are owned by Carnegie Mellon University. Use of the name, wordmark,
 Scotty dog mark, header lockup, and footer badge is governed by the
-[DARE Brand Guidelines & Usage Policy](https://github.com/cmudco/dare-backend/blob/main/BRAND.md), independently of the software license.
+[DARE Brand Guidelines & Usage Policy](https://github.com/cmudco/dare-backend/blob/main/docs/brand.md), independently of the software license.
 
 This software integrates with third-party APIs (Anthropic, OpenAI, Google, and others); use of those
 APIs is subject to each provider's own Terms of Service.
@@ -206,6 +206,6 @@ DARE is built and maintained by contributors at Carnegie Mellon University and i
 
 This project is licensed under the [GNU Affero General Public License v3.0](https://github.com/cmudco/dare-backend/blob/main/LICENSE) (AGPL-3.0-only).
 The software license does not grant rights to the DARE name or marks; see the
-[DARE Brand Guidelines & Usage Policy](https://github.com/cmudco/dare-backend/blob/main/BRAND.md).
+[DARE Brand Guidelines & Usage Policy](https://github.com/cmudco/dare-backend/blob/main/docs/brand.md).
 
 See the [LICENSE](https://github.com/cmudco/dare-backend/blob/main/LICENSE) file for the full license text, or visit <https://www.gnu.org/licenses/agpl-3.0.en.html>.

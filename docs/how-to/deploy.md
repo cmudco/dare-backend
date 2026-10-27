@@ -1,6 +1,6 @@
 # DARE Backend — Deployment Guide
 
-> **Just want to run it locally?** See [QUICKSTART.md](QUICKSTART.md) — the **Docker** path stands up
+> **Just want to run it locally?** See [docs/tutorials/quickstart.md](../tutorials/quickstart.md) — the **Docker** path stands up
 > the whole stack (API, worker, Postgres, Redis, Weaviate) in one command, or the **Local Python**
 > path runs Django directly in a venv. **This guide is for deploying to a server** and is the fuller
 > reference behind that quick start.
@@ -10,7 +10,7 @@ This guide covers two deployment paths:
 1. **Docker path** — the simplest way to stand up the full stack; recommended for most deployments
 2. **Bare-metal path** — for production hosts or environments where Docker is not available
 
-For environment variable reference, see [docs/reference/configuration.md](docs/reference/configuration.md).
+For environment variable reference, see [docs/reference/configuration.md](../reference/configuration.md).
 
 ---
 
@@ -131,7 +131,7 @@ curl http://localhost:8000/api/health/
 curl http://localhost:8000/api/ready/
 ```
 
-The web container waits for Postgres and Redis, then runs migrations before starting Uvicorn. Static and media files are stored in named Docker volumes. New users need a verified email and wallet credit before chat runs; `scripts/dev-setup.sh --demo-user` creates a ready demo account, and [docs/how-to/run-quillmark.md](docs/how-to/run-quillmark.md) covers the document renderer.
+The web container waits for Postgres and Redis, then runs migrations before starting Uvicorn. Static and media files are stored in named Docker volumes. New users need a verified email and wallet credit before chat runs; `scripts/dev-setup.sh --demo-user` creates a ready demo account, and [docs/how-to/run-quillmark.md](run-quillmark.md) covers the document renderer.
 
 To enable optional services:
 
@@ -393,4 +393,4 @@ retry-image-descriptions action, and successful descriptions stay cached.
 | Background jobs stuck | Worker not running | Start the `rqworker` process |
 | 502 from Nginx | Uvicorn bound to wrong host or crashed | `journalctl -u dare-api -f` |
 
-For more, see [docs/how-to/administer-dare.md](docs/how-to/administer-dare.md).
+For more, see [docs/how-to/administer-dare.md](administer-dare.md).

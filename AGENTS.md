@@ -3,7 +3,7 @@
 Django ASGI backend for DARE: REST and Socket.IO on port 8000. The frontend is the separate
 `dare-frontend` repo.
 
-Read and follow `rules.md` before changing code. Procedures live in `.agents/skills/`:
+Read and follow `docs/reference/rules.md` before changing code. Procedures live in `.agents/skills/`:
 `run-backend`, `run-workers`, `check`, `release-note`.
 
 ## Commands

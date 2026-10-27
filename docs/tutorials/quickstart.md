@@ -1,7 +1,7 @@
 # DARE Backend — Quick Start
 
 Get the backend running locally. Pick **one** of the two paths below.
-For deploying to a server, see [DEPLOYMENT.md](DEPLOYMENT.md).
+For deploying to a server, see [docs/how-to/deploy.md](../how-to/deploy.md).
 
 ## Prerequisites
 
@@ -69,4 +69,4 @@ Registration is gated by an **access code**. Log in to the admin panel at
 access code — then anyone can use that code to register their own account.
 
 The API is at **http://localhost:8000/**; Swagger UI at `/api/docs/`.
-Full variable reference: [docs/reference/configuration.md](docs/reference/configuration.md).
+Full variable reference: [docs/reference/configuration.md](../reference/configuration.md).

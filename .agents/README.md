@@ -7,7 +7,7 @@ This directory holds configuration for AI coding agents, in the
 
 ```
 AGENTS.md                          project instructions (source of truth)
-CLAUDE.md                          imports AGENTS.md, plus Claude Code specifics
+.claude/CLAUDE.md                  imports AGENTS.md, plus Claude Code specifics
 .agents/skills/<name>/SKILL.md     skills (source of truth)
 .claude/skills/<name>              symlink -> ../../.agents/skills/<name>
 ```
