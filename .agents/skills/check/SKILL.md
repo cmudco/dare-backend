@@ -5,8 +5,8 @@ description: Run the DARE backend's local check suite — Black, isort, and the 
 
 # Check the DARE backend before a PR
 
-Run these from an activated venv at the repo root. All three must pass before a PR is opened —
-they are the same checks CI runs.
+Run these from an activated venv at the repo root. All three must pass before a PR is opened.
+CI only deploys and runs none of them, so nothing else catches a failure.
 
 ```bash
 black --check .
