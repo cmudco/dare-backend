@@ -1,23 +1,21 @@
-# Memory: a walkthrough you can follow in the browser
+# Memory walkthrough
 
-One conversation, thirteen messages, starting from nothing. Each step adds one
-brick and shows you the brick that just landed.
+Follow one conversation of thirteen messages in the browser to watch chat memory fill up from
+nothing. Each step adds one memory and shows you where it landed.
 
-Type the message, wait for the reply to finish, then look where the step tells
-you to look. Nothing here needs the terminal.
+Type the message, wait for the reply to finish, then look where the step tells you to look.
+Nothing here needs the terminal.
 
 **Where things are**
 
-- **The switch** — the *Conversation Context* popover above the composer has a
+- **The switch.** The *Conversation Context* popover above the composer has a
   **Memory** toggle. Off, nothing is read and nothing is written.
-- **What the reply saw** — the memory chip on each assistant message.
-- **What was written** — the memory-write panel on that same message. It
+- **What the reply saw.** The memory chip on each assistant message.
+- **What was written.** The memory-write panel on that same message. It
   appears a moment *after* the reply finishes, because the writer runs once the
   turn is over.
-- **The store** — the **Memory** page: Profile, the cards below it, Archive
+- **The store.** The **Memory** page: Profile, the cards below it, Archive
   (replaced memories), Tidy-up (suggestions).
-
----
 
 ## Step 0 — start empty
 
@@ -25,8 +23,6 @@ Memory page → **Forget everything**. Profile empty, no cards. Now turn the
 **Memory** toggle **on** in a new conversation.
 
 Everything below happens in that one conversation.
-
----
 
 ## Step 1 — say who you are
 
@@ -38,8 +34,6 @@ Everything below happens in that one conversation.
 "remember this", and it still went into the profile — what to call someone is
 how to address them, and it would be wrong on every turn it failed to reach.
 
----
-
 ## Step 2 — a hard constraint
 
 > quick heads up, I'm severely allergic to peanuts
@@ -50,15 +44,11 @@ how to address them, and it would be wrong on every turn it failed to reach.
 same memory shown in the file that goes into every prompt. Safety never waits
 to be looked up.
 
----
-
 ## Step 3 — where you live
 
 > I live in Lahore
 
 **Expect:** an **Identity** line. Remember this one — step 12 moves you.
-
----
 
 ## Step 4 — what you do
 
@@ -70,16 +60,12 @@ to be looked up.
 later change of job cannot quietly delete the stack. Neither reaches the
 profile: they are looked up when a question needs them.
 
----
-
 ## Step 5 — how you want to be answered
 
 > keep your answers short by the way, I really don't like walls of text
 
 **Expect:** a **Communication** line in the profile. Like step 1, no permission
 needed — it is a request about the next answer, not a disclosure about you.
-
----
 
 ## Step 6 — a rule, not a fact
 
@@ -89,8 +75,6 @@ needed — it is a request about the next answer, not a disclosure about you.
 
 **Expect:** it is stored with its situation ("when reviewing code"), and it is
 **not** in the profile. A rule should only appear when its moment arrives.
-
----
 
 ## Step 7 — the moment arrives (the important one)
 
@@ -107,8 +91,6 @@ needed — it is a request about the next answer, not a disclosure about you.
 "review", "blunt", or "rule". That is the whole point of the behavior layer: it
 is fetched by the situation, not by matching words. The reply should be blunt.
 
----
-
 ## Step 8 — the other important one
 
 > book me somewhere nice for dinner tonight
@@ -123,8 +105,6 @@ run with Haiku 4.5 it suggested two Lahore restaurants and never raised the
 allergy, even with it in the prompt. The chip is the honest check — it shows
 what the model was handed, which is the only part this system controls.
 
----
-
 ## Step 9 — something private, said in passing
 
 > I've been getting migraines pretty often lately
@@ -135,8 +115,6 @@ what the model was handed, which is the only part this system controls.
 cannot. Saying nothing about a migraine costs nothing, so it is held back. (An
 allergy is the opposite case, which is why step 2 behaved differently.)
 
----
-
 ## Step 10 — a number
 
 > my portfolio is sitting at about 8M right now
@@ -146,18 +124,14 @@ tense, with the date in the sentence. A measured value is only true on the day
 it was measured, and read back next year "is 8M" would be a lie no one could
 detect.
 
----
-
 ## Step 11 — an unrelated question
 
 > explain how the TCP three-way handshake works
 
 **Look at:** the memory chip.
 
-**Expect:** the profile, and **nothing else**. No allergy, no job, no bouldering
-habit. Returning nothing is a correct answer.
-
----
+**Expect:** the profile, and **nothing else**. No allergy, no job, no code-review
+rule. Returning nothing is a correct answer.
 
 ## Step 12 — change your mind
 
@@ -169,8 +143,6 @@ habit. Returning nothing is a correct answer.
 Archive, marked as replaced, with Islamabad named as what replaced it. Nothing
 is ever deleted; it is retired.
 
----
-
 ## Step 13 — repeat yourself
 
 > reminder, I'm severely allergic to peanuts
@@ -180,8 +152,6 @@ is ever deleted; it is retired.
 **Expect:** **nothing new was stored**, and it says so: the existing memory now
 stands on 2 tellings. Repetition is the only durability signal there is, and
 Tidy-up uses it to decide what deserves a permanent seat.
-
----
 
 ## After the thirteen: two more things
 
@@ -197,28 +167,24 @@ week" searches the week rather than the phrase.
 **Open Tidy-up.**
 
 On a store this small it will probably be empty, and empty is the correct
-answer — it only speaks when something is genuinely wrong (two cards saying the
+answer — it only speaks when something is wrong (two cards saying the
 same thing, a fact repeated enough to deserve the profile, a slot whose name no
 longer matches, a profile over budget). It only ever *suggests*: nothing moves
 until you approve it.
-
----
 
 ## The four layers, in one line each
 
 | Layer | What it holds | When it is read |
 |---|---|---|
-| **Profile** | who you are, how to answer you, hard limits | every single turn |
+| **Profile** | who you are, how to answer you, hard limits | every turn |
 | **Knowledge** | durable facts about your life and work | when a question reaches for one |
 | **Behavior** | rules with a situation attached | when that situation arrives |
 | **Transcript** | every message, word for word | when the assistant searches it |
 
 The first three are put into the prompt for you. The fourth is a tool the
-assistant chooses to use — because "what did we decide" is obviously a lookup,
+assistant chooses to use, because "what did we decide" is clearly a lookup,
 while an allergy behind "book me somewhere nice" is something it could never
 know to go looking for.
-
----
 
 ## If something looks wrong
 

@@ -1,14 +1,15 @@
-# DARE Backend API Reference
+# REST API
 
-The DARE backend API is auto-documented using **drf-spectacular** (OpenAPI 3.0).
+Use this page for the API's modules, authentication and the behaviour the schema does not spell
+out. **drf-spectacular** generates the full OpenAPI 3.0 schema.
 
-## Interactive Documentation
+## Interactive documentation
 
-When the backend is running locally:
+With the backend running locally:
 
-- **OpenAPI Schema**: [http://localhost:8000/api/schema/](http://localhost:8000/api/schema/) — Raw JSON/YAML schema for code generation and the most reliable local API reference
-- **Swagger UI**: [http://localhost:8000/api/docs/](http://localhost:8000/api/docs/) — Interactive API explorer. This page loads Swagger UI assets from a CDN, so it may not render on offline or restricted networks.
-- **ReDoc**: [http://localhost:8000/api/redoc/](http://localhost:8000/api/redoc/) — Clean, readable API reference
+- **OpenAPI Schema**: [http://localhost:8000/api/schema/](http://localhost:8000/api/schema/) — raw JSON/YAML schema for code generation and the most reliable local API reference
+- **Swagger UI**: [http://localhost:8000/api/docs/](http://localhost:8000/api/docs/) — interactive API explorer. It loads Swagger UI assets from a CDN, so it may not render on offline or restricted networks.
+- **ReDoc**: [http://localhost:8000/api/redoc/](http://localhost:8000/api/redoc/) — readable API reference
 
 ## Authentication
 
@@ -18,9 +19,9 @@ All endpoints require JWT authentication unless noted otherwise. Include the acc
 Authorization: Bearer <access_token>
 ```
 
-Tokens are obtained via `POST /users/api/dj-rest-auth/login/` and refreshed via `POST /users/api/dj-rest-auth/token/refresh/`.
+Get tokens from `POST /users/api/dj-rest-auth/login/` and refresh them with `POST /users/api/dj-rest-auth/token/refresh/`.
 
-## API Overview
+## API overview
 
 | Module | Base Path | Description |
 |---|---|---|
@@ -134,9 +135,9 @@ Failed-image retries preserve successful descriptions. Full Advanced reprocessin
 
 Deploy the API and restart background workers before releasing a frontend that sends `modelIdentifier`. This is an additive request field and requires no database migration.
 
-## Improving Documentation
+## Documenting endpoints
 
-To add descriptions to endpoints, use `@extend_schema` decorators on custom `@action` methods:
+To add descriptions to endpoints, put `@extend_schema` decorators on custom `@action` methods:
 
 ```python
 from drf_spectacular.utils import extend_schema, OpenApiParameter
@@ -209,7 +210,7 @@ is deliberately distinct from confirmed loss), `unverifiable` (indexed before
 map rows existed, so only presence is known), `not_indexed`, and `processing`.
 Owner only. The check reads identities, not vectors or text, so it is cheap
 enough for the Map tab to run on open; the full content comparison happens
-once at publication (see `docs/explanation/document-ingestion.md`).
+once at publication (see [Document ingestion](../explanation/document-ingestion.md)).
 
 ### Reprocess a stored document
 

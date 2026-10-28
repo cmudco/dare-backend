@@ -1,19 +1,15 @@
-# The Tool Loop — Chat Tool-Calling Architecture (2026)
+# Tool loop
 
-> **Companion to** [`advanced-rag.md`](advanced-rag.md) (Track A) and the agentic RAG work (Track B). This doc explains how a chat message flows from the socket to the LLM and back when tools are involved: the **bounded multi-round tool loop**, the **provider-native tool-turn message schema**, the **unified frontend event protocol**, and **cross-round billing**. Read this before touching anything in the `socket → coordinator → loop → provider` path.
+Read this before you touch anything in the `socket → coordinator → loop → provider` path. It shows how a chat message flows from the socket to the LLM and back when tools are involved: the **bounded multi-round tool loop**, the **provider-native tool-turn message schema**, the **unified frontend event protocol**, and **cross-round billing**. It pairs with [Advanced RAG](advanced-rag.md) (Track A) and the agentic RAG work (Track B).
 
----
-
-## 0. TL;DR
+## 0. Summary
 
 - A chat turn is a **loop**, not a pipeline: the model streams, calls tools, sees the results as native `role:"tool"` turns, and streams again — up to `MAX_TOOL_ROUNDS` (5), after which one final call runs with tools stripped, forcing a text answer. Termination is guaranteed.
 - The model can **chain tools across rounds** (search → search again, search → chart). Failures come back as error turns the model can read and react to — a failed call never kills the turn.
 - The internal message schema is **OpenAI's tool format everywhere**; Claude and Gemini get translated at the provider edge by dedicated converters. The LiteLLM wallet proxy consumes the internal format directly for every provider.
-- The frontend gets **one event vocabulary** for every tool origin (DARE / MCP / provider-native), including a "the model is writing a tool call" signal with live argument-size progress — the longest previously-silent window in the product.
+- The frontend gets **one event vocabulary** for every tool origin (DARE / MCP / provider-native), including a "the model is writing a tool call" signal with live argument-size progress.
 - **Billing sums across rounds.** Each model call's tokens accumulate; `Message.input_tokens/output_tokens` hold the true turn total and `Message.usage_details` keeps the per-round breakdown.
 - Retrieval scope for agentic RAG (`search_documents`) comes from the request DTO, never from model arguments — the model chooses *when* to search, not *what* it may see.
-
----
 
 ## 1. The flow, end to end
 
@@ -52,9 +48,7 @@ sequenceDiagram
     CO-->>FE: final message (complete persisted toolCalls incl. rounds)
 ```
 
-Key invariant: **the prompt is built exactly once per turn** (`LLMService.prepare_chat`). Rounds append tool turns to the round-1 message list and re-stream. That is what guarantees RAG pre-injection, snippet persistence, and the retrieval trace each run once — the old flow rebuilt the prompt for its synthesis call and re-ran retrieval against the tool-result blob, clobbering the turn's citations.
-
----
+Key invariant: **the prompt is built exactly once per turn** (`LLMService.prepare_chat`). Rounds append tool turns to the round-1 message list and re-stream. That guarantees RAG pre-injection, snippet persistence and the retrieval trace each run once. Rebuilding the prompt for a later call would re-run retrieval against the tool-result blob and overwrite the turn's citations.
 
 ## 2. The round lifecycle
 
@@ -80,8 +74,6 @@ flowchart TD
 ```
 
 Failure semantics: `ToolExecutionService` **never raises**. A failed call becomes a `ToolCallResult` whose content is `"Error: …"` — persisted, emitted to the FE as `status:"failed"`, and appended as a `role:"tool"` turn so the model can acknowledge or retry in the next round.
-
----
 
 ## 3. Internal message schema (OpenAI format) & provider converters
 
@@ -112,8 +104,6 @@ Two provider gotchas encoded in the converters (`core/services/llm_utils/provide
 
 History replays the same way: `core/services/llm_helpers/history_helpers.py` reconstructs structured tool turns from persisted `MessageToolCall` rows (grouped by `round_index`), full-fidelity for the most recent `TOOL_HISTORY_MESSAGE_WINDOW` (6) assistant messages, compressed to a one-line `[used tools: …]` note beyond that.
 
----
-
 ## 4. The streaming layer: `LLMStreamEvent`
 
 Every provider SDK stream is normalized into typed events by `core/services/llm_utils/stream_processors.py`:
@@ -132,9 +122,7 @@ How early each provider reveals a call:
 - **OpenAI**: first delta carrying `function.name`; `READY` at `finish_reason == "tool_calls"`.
 - **Gemini**: calls arrive whole — `START` + `READY` back-to-back; ids are synthesized by the loop (`tc-<msg>-r<round>-<n>`).
 
-`LLMService.query()` still exists for single-shot consumers (workflows, summaries, learning progress) — it downgrades events to the legacy `(chunk, usage)` tuples internally. **Chat does not use `query()` anymore**; it uses `prepare_chat()` + `stream_round()`.
-
----
+`LLMService.query()` serves single-shot consumers (workflows, summaries, learning progress) and downgrades events to `(chunk, usage)` tuples internally. **Chat does not use `query()`**; it uses `prepare_chat()` + `stream_round()`.
 
 ## 5. Frontend event protocol (one vocabulary)
 
@@ -148,11 +136,9 @@ Emitted by `conversations/services/tool_event_service.py` (`ToolEventEmitter`), 
 | `tool_call_result` | pending fields + status `completed`\|`failed`, error?, exactly one of `dareResult`/`mcpResult`/`providerResult` | done — typed result matches the persisted-history shape |
 | `tool_rounds_capped` | messageId, round | loop hit the cap; final answer is being forced |
 
-Rounds are **1-based** on the wire and in the DB. Text still streams via `ai_stream` with cumulative content; post-tool text **appends** after a `\n\n` (the old flow *replaced* what the user had already read). The completion `message` event carries the full persisted `toolCalls` array (statuses + rounds), which the FE spread-merges over live state — so live and reloaded conversations render identically.
+Rounds are **1-based** on the wire and in the DB. Text still streams via `ai_stream` with cumulative content; post-tool text **appends** after a `\n\n` and never replaces what the user has already read. The completion `message` event carries the full persisted `toolCalls` array (statuses + rounds), which the FE spread-merges over live state — so live and reloaded conversations render identically.
 
-Replaced (deleted, no compat shims): `mcp_tool_call`/`mcp_tool_result`, `dareToolCall`/`dareToolResult`, provider `tool_call`/`tool_result`.
-
----
+These events were removed with no compatibility shims; do not emit them: `mcp_tool_call`/`mcp_tool_result`, `dareToolCall`/`dareToolResult`, provider `tool_call`/`tool_result`.
 
 ## 6. Billing across rounds
 
@@ -166,9 +152,7 @@ flowchart LR
     ACC -->|per-round list| UD["Message.usage_details<br/>[{round, input_tokens, output_tokens}]"]
 ```
 
-The old flow kept only the **last** call's usage — with tools, the tool-deciding round's tokens were silently unbilled. Now a 3-call turn bills all 3 calls, and `usage_details` makes the breakdown auditable. On a mid-stream balance cutoff the loop returns `interrupted` and the coordinator **skips finalize** (the partial debit already happened), preventing double billing.
-
----
+Every round is billed: a 3-call turn bills all 3 calls, not only the last one, and `usage_details` makes the breakdown auditable. On a mid-stream balance cutoff the loop returns `interrupted` and the coordinator **skips finalize** (the partial debit already happened), preventing double billing.
 
 ## 7. File map
 
@@ -194,9 +178,9 @@ The old flow kept only the **last** call's usage — with tools, the tool-decidi
 3. Seed migration for the `DareTool` row (pattern: `dare_tools/migrations/0003_add_search_documents_tool.py`).
 4. Executor: plain sync function → registry `executor`; needs request context / async / ORM → route it in `ToolExecutionService._execute_dare` like `RETRIEVAL_TOOLS` / `ARTIFACT_TOOLS`.
 
-Nothing else — events, persistence, rounds, history replay, and billing come for free from the loop.
+Nothing else: events, persistence, rounds, history replay and billing come from the loop.
 
-## 9. Known follow-ups (deliberately not built yet)
+## 9. Known follow-ups (not built)
 
 - **Progressive artifact rendering** — args-progress events exist; the artifact panel still renders whole. A `generating` artifact state + partial-args streaming is the natural next rung.
 - **CRAG-style corrective retrieval** — grade retrieved passages, re-search on weak results. The loop is the prerequisite; the grounding stage already computes confidence.

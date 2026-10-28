@@ -1,9 +1,9 @@
-# Getting Started
+# Getting started
 
 Run the whole DARE platform on your machine (backend, background worker, and frontend), create
 an account, and send a first chat message. It takes about 20 minutes on a fresh machine.
 
-For the backend alone, [docs/tutorials/quickstart.md](quickstart.md) is shorter. For Socratic Bots, finish
+For the backend alone, the [quick start](quickstart.md) is shorter. For Socratic Bots, finish
 this tutorial first, then follow the Socratic Bots backend's `docs/tutorials/quickstart.md`.
 
 ## What you will run
@@ -113,7 +113,7 @@ Registration needs an access code.
 ## 6. Send a first message
 
 Sign in, start a new conversation, pick a model, and send a message. The reply streams in. If it
-doesn't, see below.
+does not, see [Troubleshooting](#troubleshooting).
 
 You now have the full platform running. Next:
 
@@ -121,7 +121,7 @@ You now have the full platform running. Next:
 - [Memory walkthrough](memory-walkthrough.md): a guided tour of chat memory in the browser.
 - [Architecture](../explanation/architecture.md): how the pieces fit together.
 
-## If something doesn't work
+## Troubleshooting
 
 | Symptom | Fix |
 |---|---|

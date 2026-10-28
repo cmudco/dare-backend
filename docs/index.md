@@ -1,21 +1,20 @@
-# DARE Backend Documentation
+# Documentation
 
-The DARE backend handles accounts, LLM calls, real-time chat and workflow streaming over
-Socket.IO, file processing and RAG, billing, and research mode.
-
-Pages are grouped by what you are trying to do.
+This map lists every backend doc, grouped by what you are trying to do. The backend handles
+accounts, LLM calls, real-time chat and workflow streaming over Socket.IO, file processing and RAG,
+billing, and research mode.
 
 ## Tutorials: learn by doing
 
-- [Getting Started](tutorials/getting-started.md): run backend, worker and frontend locally, and
+- [Getting started](tutorials/getting-started.md): run backend, worker and frontend locally, and
   send a first chat.
-- [Backend Quick Start](tutorials/quickstart.md): the backend alone, with Docker or local Python.
+- [Quick start](tutorials/quickstart.md): the backend alone, with Docker or local Python.
 - [Memory walkthrough](tutorials/memory-walkthrough.md): a guided tour of chat memory in the
   browser.
 
 ## How-to guides: reach a goal
 
-- [Deploy to production](how-to/deploy.md): Docker or bare metal, upgrades, rollback.
+- [Deploy](how-to/deploy.md): Docker or bare metal, upgrades, rollback.
 - [Administer DARE](how-to/administer-dare.md): users, roles, access codes, model groups,
   analytics.
 - [Deploy research mode](how-to/deploy-research-mode.md): run research agents on Hermes.
@@ -43,7 +42,7 @@ Pages are grouped by what you are trying to do.
 - [Tool loop](explanation/tool-loop.md): multi-round tool calling across providers.
 - [Advanced RAG](explanation/advanced-rag.md): the retrieval pipeline and its measurements.
 - [Shared libraries](explanation/shared-libraries.md): importing an external vector corpus.
-- [Quillmark](explanation/quillmark.md): how document generation plugs into chat.
+- [Quillmark integration](explanation/quillmark.md): how document generation plugs into chat.
 
 ## With a backend running
 

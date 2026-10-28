@@ -1,8 +1,9 @@
-# Data Flows
+# Data flows
 
-Key user flows through the DARE platform with detailed step-by-step breakdowns.
+Follow the main user flows through DARE step by step: chat, file upload, workflow runs,
+Socratic Bots sign-in and artifact generation.
 
-## 1. Chat Message Flow
+## 1. Chat message flow
 
 When a user sends a message in a conversation:
 
@@ -44,13 +45,14 @@ sequenceDiagram
     SIO-->>FE: Final message with metadata
 ```
 
-**Key services involved:**
+**Key services:**
+
 - `conversations/namespaces/chat.py` — Socket.IO event handler
 - `conversations/services/message_coordinator.py` — Orchestrates the full flow
 - `conversations/services/websocket_response_service.py` — Formats and emits events
 - `core/services/llm_service.py` → provider implementation — LLM streaming
 
-## 2. File Upload & RAG Processing
+## 2. File upload & RAG processing
 
 When a user uploads a file for use as conversation context:
 
@@ -111,7 +113,8 @@ sequenceDiagram
     FE-->>User: Show "Ready" status
 ```
 
-**Key services involved:**
+**Key services:**
+
 - `files/api/views.py` — Upload endpoint
 - `core/services/document_parsers/docling_parser.py` — Structured parse and local figure classification
 - `core/services/document_enrichment_service.py` — Figure/page routing, vision, cache, billing, and reading-order rebuild
@@ -119,7 +122,7 @@ sequenceDiagram
 - `core/services/embedding_service.py` — Vector embedding generation
 - `core/services/vector_service.py` — Pinecone/Weaviate storage
 
-## 3. Workflow Execution
+## 3. Workflow execution
 
 When a user runs a multi-step workflow:
 
@@ -180,7 +183,8 @@ sequenceDiagram
     SIO-->>FE: Show completion summary
 ```
 
-**Key services involved:**
+**Key services:**
+
 - `conversations/namespaces/workflow.py` — Socket.IO event handler
 - `workflows/services/workflow_coordinator.py` — Entry point facade
 - `workflows/services/live_executor.py` — Full execution engine
@@ -189,7 +193,7 @@ sequenceDiagram
 - `workflows/services/run_ordering.py` — DAG topological sort
 - `workflows/handlers/registry.py` — Node handler lookup by type
 
-## 4. SocraticBooks Authentication Flow
+## 4. Socratic Bots authentication flow
 
 When a user logs in through the Socratic Books platform:
 
@@ -215,11 +219,12 @@ sequenceDiagram
     SR-->>User: Redirect to dashboard
 ```
 
-**Two auth modes exist:**
-- **Bearer JWT** — For user-authenticated requests (SB passes the DARE-issued JWT)
-- **X-Internal-Key** — For service-to-service calls without user context (file uploads from webhooks, role management)
+**Two auth modes:**
 
-## 5. Artifact Generation Flow
+- **Bearer JWT.** User-authenticated requests; SB passes the DARE-issued JWT.
+- **X-Internal-Key.** Service-to-service calls without user context (file uploads from webhooks, role management).
+
+## 5. Artifact generation flow
 
 When the AI generates a long-form artifact (document, code, etc.):
 

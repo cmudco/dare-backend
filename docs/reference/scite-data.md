@@ -1,19 +1,16 @@
-# Scite — what data it gives us, and how Research Mode uses it
+# Scite data
 
-This documents the **real** data DARE receives from the Scite MCP server, captured
-from live calls, so we know exactly what we're working with (and what we'd lose
-without it). Scite is the scholarly workhorse behind Scout.
+This page shows the data DARE receives from the Scite MCP server, captured from live calls, and
+how research mode uses each field. Scite is the main scholarly source behind Scout.
 
 ## What Scite is
 
-A scholarly search engine **plus** a citation-intelligence database. Its unique
-value over a plain search engine: for every paper it tracks *how it has been
-cited* — whether citing papers **support**, **contrast**, or merely **mention**
-it ("smart citations"). That citation direction is computed by Scite; nobody
-else hands it to us.
+A scholarly search engine **plus** a citation-intelligence database. For every paper it tracks
+*how it has been cited*: whether citing papers **support**, **contrast**, or only **mention** it
+("smart citations"). Scite computes that citation direction; no other connected source provides it.
 
-The scholar connects their own Scite account to DARE over MCP. DARE calls Scite
-on their behalf (credentials stay in DARE), so no keys leave the platform.
+The scholar connects their own Scite account to DARE over MCP. DARE calls Scite on their behalf
+and the credentials stay in DARE.
 
 ### Subscription / usage (as of the trial)
 
@@ -24,18 +21,20 @@ on their behalf (credentials stay in DARE), so no keys leave the platform.
 
 A scout run makes ~1–3 Scite calls (one pre-fetch + the agent's own searches),
 so **Basic's 250/mo ≈ 80–250 scout runs/month**. In production the **client uses
-their own Scite key**; DARE just routes the calls.
+their own Scite key**; DARE only routes the calls.
 
 ## The tool we use: `search_literature`
 
-This is the one Scout relies on. One call returns up to 10 papers.
+Scout relies on this tool. One call returns up to 10 papers.
 
 ### Top-level response
+
 ```json
 { "total": 1775448, "count": 10, "query": "...", "limit": 10, "offset": 0, "hits": [ ... ] }
 ```
 
-### Per-paper fields (one `hits[]` entry) — REAL example
+### Per-paper fields (one `hits[]` entry), real example
+
 ```json
 {
   "doi": "10.1037/cep0000336",
@@ -57,7 +56,7 @@ This is the one Scout relies on. One call returns up to 10 papers.
 }
 ```
 
-### Field-by-field — what it is and how DARE uses it
+### Field by field
 
 | Field | What it is | How Research Mode uses it |
 |-------|-----------|---------------------------|
@@ -71,15 +70,15 @@ This is the one Scout relies on. One call returns up to 10 papers.
 | `relevancyScore` | Scite's ranking | Ordering only; DARE does **not** invent its own score |
 | `access.url` | A (often paywalled) access link | Not used for staging; the DOI link is preferred |
 
-### Why the abstract + tally matter most
-Together they're often **enough to stage a high-quality finding without opening
-the paper**: the abstract gives the claim and a quotable line, the tally gives
-the evidence direction. The full-text `fetch_page` is reserved for promising
-papers that need a deeper read — and academic papers are frequently PDFs or
-paywalled (`contentDenied: true`), so the abstract is often the most reliable
-text we get.
+### Why the abstract and tally matter most
+
+Together they are often **enough to stage a good finding without opening the paper**: the
+abstract gives the claim and a quotable line, and the tally gives the evidence direction. The
+full-text `fetch_page` is for promising papers that need a deeper read. Academic papers are often
+PDFs or paywalled (`contentDenied: true`), so the abstract is often the most reliable text DARE gets.
 
 ### What DARE injects vs. stores
+
 - **Stored (audit):** the complete raw response, untrimmed — visible in the Runs view.
 - **Injected (agent context):** a compacted view — title, authors, year, journal,
   DOI link, the citation tally, **and a ~700-char abstract** per paper. ~5× smaller
@@ -87,8 +86,8 @@ text we get.
 
 ## The other 13 tools (specialized datasets)
 
-Scout doesn't use these by default; they're domain-specific and only relevant to
-medical/regulatory research. Catalogued for completeness:
+Scout does not use these by default. They are domain-specific and matter only for
+medical or regulatory research:
 
 | Tool | Dataset |
 |------|---------|
@@ -103,15 +102,14 @@ medical/regulatory research. Catalogued for completeness:
 `search_*` tools share params `q` (query), `f` (filters), `p` (page), `s`/`sortDir`
 (sort); `get_*` tools take an `id` to fetch one record's full detail.
 
-## Bottom line for the subscription decision
+## Subscription decision
 
-Scite is **load-bearing** for Research Mode: it provides the scholarly search,
-the abstracts that ground findings, and — uniquely — the supporting/contrasting
-citation tally that drives the evidence labels and the graph's colour. Consensus
-(also connected) overlaps on search but **does not** give the citation direction,
-and web search gives neither. Drop Scite and the feature still runs, but it loses
-its sharpest evidence signal.
-
-For the pilot, keep Scite (Basic, $12/mo is cheap and the trial covers now). In
-production the client supplies their own Scite key, sized to their volume
-(Basic 250/mo for light use, Pro 2,500/mo for heavy).
+- **Scite is load-bearing for research mode.** It provides the scholarly search, the abstracts
+  that ground findings, and the supporting/contrasting citation tally that drives the evidence
+  labels and the graph's colour.
+- **The alternatives cover less.** Consensus (also connected) overlaps on search but does **not**
+  give the citation direction; web search gives neither. Without Scite the feature still runs but
+  loses its strongest evidence signal.
+- **Pilot:** keep Scite Basic ($12/mo; the trial covers it now).
+- **Production:** the client supplies their own Scite key, sized to their volume (Basic 250/mo for
+  light use, Pro 2,500/mo for heavy).

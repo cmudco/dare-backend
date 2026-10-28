@@ -1,10 +1,10 @@
-# DARE Backend Engineering Rules
+# Coding rules
 
-These rules are the default for new work and touched code. Exceptions need a concrete reason in the PR.
+Follow these rules for new work and any code you touch; an exception needs a concrete reason in the PR.
 
 ## 1. Start with the contract
 
-Before implementation, define:
+Define the contract before you write the implementation:
 
 - request, response, and socket-event shapes;
 - the owner of each field and default;
@@ -140,7 +140,7 @@ Further rules:
 
 ## 11. Micro-examples
 
-Examples clarify a rule; they are not templates to copy blindly.
+Each example clarifies a rule; it is not a template to copy.
 
 ### Validate once
 
@@ -199,8 +199,25 @@ Leave touched code cleaner than you found it, but keep cleanup evidence-driven a
 
 ## Project conventions
 
-- Format with Black and check imports with isort using the Black profile.
-- Use `ActiveObjectsManager` for live rows and the unfiltered manager only intentionally.
-- Add `help_text`, meaningful `related_name` values, and useful `__str__` methods to models.
-- Wrap user-facing strings with Django translation utilities.
-- Mermaid diagrams use alphanumeric node IDs, quoted labels with punctuation, and prefixed reserved words such as `node_end`.
+- **Formatting.** Black with its default line length (88) and isort. Apply with `black .` and
+  `isort .`; check with `black --check .` and `isort -c .`. The repo has no isort config file.
+- **Type hints.** Add them to new code, especially in `core/services/` and any module with a
+  public surface.
+- **Models.** Inherit `BaseModel` from `common/models.py` (`created_at`, `updated_at`,
+  `is_active`, `is_deleted`). Most models declare only `active_objects`
+  (`ActiveObjectsManager`); reach for `_base_manager` only when you need every row.
+- **Model fields.** Add `help_text`, meaningful `related_name` values and a useful `__str__`.
+- **Constants.** Put them in the app's `constants.py` as `TextChoices` or `IntegerChoices`.
+- **Translation.** Wrap user-facing strings with `gettext_lazy as _`. Do not translate logged
+  exceptions or developer-facing error messages.
+- **REST views.** Use `viewsets.ModelViewSet` for standard CRUD. Always declare
+  `permission_classes`, defaulting to `[IsAuthenticated]`.
+- **Serializers.** Keep read and write fields separate; casing rules are in
+  [serialization.md](serialization.md).
+- **Background jobs.** Send blocking, slow or external work through Django RQ with
+  `@job("<queue>")` on a queue defined in `RQ_QUEUES` (`config/settings/common.py`). Log enough to
+  diagnose a failure from `python manage.py rqstats` and the worker log.
+- **Tests.** Use `TestCase` for database tests and `SimpleTestCase` otherwise. Mock LLM APIs,
+  vector stores and email.
+- **Mermaid.** Use alphanumeric node IDs, quote labels that contain punctuation, and prefix
+  reserved words (`node_end`).

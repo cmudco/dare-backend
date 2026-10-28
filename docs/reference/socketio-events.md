@@ -1,6 +1,6 @@
-# Socket.IO Event Contract
+# Socket.IO events
 
-Complete reference for all real-time events in the DARE platform. The backend uses **python-socketio** with Redis pub/sub. All payload keys are **camelCase** (backend applies `camelize()` before emission). Event names are **snake_case**.
+Look up every real-time event and payload on the `/chat` and `/workflow` namespaces here. The backend uses **python-socketio** with Redis pub/sub. All payload keys are **camelCase** (backend applies `camelize()` before emission). Event names are **snake_case**.
 
 ## Authentication
 
@@ -14,11 +14,9 @@ socket = io('/chat', { auth: { token: 'jwt_access_token' } })
 socket = io('/chat', { auth: { sessionId: 'uuid', conversationId: 'uuid' } })
 ```
 
----
+## /chat namespace
 
-## /chat Namespace
-
-### Client → Server Events
+### Client → server events
 
 #### `subscribe_conversation`
 
@@ -33,8 +31,6 @@ Subscribe to real-time updates for a conversation. Returns conversation history 
 
 After subscribing, the server emits a `message` event with `type: 'conversation_history'` containing full message history, then one `generation_active` event per AI turn still streaming in that conversation.
 
----
-
 #### `unsubscribe_conversation`
 
 Leave a conversation room. Stops receiving updates. A turn that is still streaming keeps running; re-subscribing on the same socket re-attaches to it, so `stop_generation` still works.
@@ -44,8 +40,6 @@ Leave a conversation room. Stops receiving updates. A turn that is still streami
 | `conversationId` | `string` | Yes | Conversation UUID |
 
 **Callback response:** `{ success: boolean, error?: string }`
-
----
 
 #### `send_message`
 
@@ -60,8 +54,6 @@ Send a chat message. Triggers LLM streaming response.
 
 **Callback response:** `{ success: boolean, error?: string }`
 
----
-
 #### `send_voice_message`
 
 Send an audio recording for transcription + LLM response.
@@ -75,8 +67,6 @@ Send an audio recording for transcription + LLM response.
 
 **Callback response:** `{ success: boolean, error?: string, text?: string }`
 
----
-
 #### `edit_message`
 
 Edit a previously sent message. Triggers re-generation of AI response.
@@ -88,8 +78,6 @@ Edit a previously sent message. Triggers re-generation of AI response.
 | `message` | `string` | Yes | New message content |
 
 **Callback response:** `{ success: boolean, error?: string }`
-
----
 
 #### `regenerate_response`
 
@@ -103,8 +91,6 @@ Regenerate an AI response for a specific message.
 
 **Callback response:** `{ success: boolean, error?: string }`
 
----
-
 #### `continue_artifact`
 
 Resume generation of a paused artifact.
@@ -115,8 +101,6 @@ Resume generation of a paused artifact.
 | `artifactId` | `number` | Yes | Artifact ID to continue |
 
 **Callback response:** `{ success: boolean, error?: string }`
-
----
 
 #### `pause_artifact`
 
@@ -129,9 +113,7 @@ Pause an in-progress artifact generation.
 
 **Callback response:** `{ success: boolean, error?: string }`
 
----
-
-### Server → Client Events
+### Server → client events
 
 All server-to-client events in the `/chat` namespace are sent as a single `message` event with a `type` field that discriminates the payload shape.
 
@@ -145,8 +127,6 @@ Sent immediately after `subscribe_conversation`. Contains full message history.
   conversationHistory: Message[]
 }
 ```
-
----
 
 #### `message` (type: `message`)
 
@@ -185,8 +165,6 @@ A complete message (user or assistant). Sent when a message is fully processed.
 }
 ```
 
----
-
 #### `message` (type: `ai_stream`)
 
 Streaming chunks during AI response generation.
@@ -202,8 +180,6 @@ Streaming chunks during AI response generation.
 }
 ```
 
----
-
 #### `message` (type: `artifact_init`)
 
 Artifact generation has started.
@@ -217,8 +193,6 @@ Artifact generation has started.
   estimatedSections: number
 }
 ```
-
----
 
 #### `message` (type: `artifact_stream`)
 
@@ -234,8 +208,6 @@ Streaming artifact content.
 }
 ```
 
----
-
 #### `message` (type: `artifact_pause`)
 
 Artifact generation paused (user-initiated or section boundary).
@@ -248,8 +220,6 @@ Artifact generation paused (user-initiated or section boundary).
   sectionsRemaining: number
 }
 ```
-
----
 
 #### `message` (type: `artifact_complete`)
 
@@ -264,8 +234,6 @@ Artifact generation finished.
 }
 ```
 
----
-
 #### `message` (type: `voice_processing`)
 
 Voice message is being transcribed.
@@ -273,8 +241,6 @@ Voice message is being transcribed.
 ```typescript
 { type: 'voice_processing', status: 'transcribing' }
 ```
-
----
 
 #### `message` (type: `voice_transcription`)
 
@@ -289,8 +255,6 @@ Voice transcription result.
 }
 ```
 
----
-
 #### `message` (type: `conversation_title`)
 
 Auto-generated conversation title.
@@ -299,8 +263,6 @@ Auto-generated conversation title.
 { type: 'conversation_title', title: string }
 ```
 
----
-
 #### `message` (type: `generation_active`)
 
 Sent after `subscribe_conversation` for each AI message whose turn is still streaming. Persisted history holds only the empty placeholder until the turn finishes, so the client marks this message as streaming. The turn's later `ai_stream` and final `message` events arrive as usual.
@@ -308,8 +270,6 @@ Sent after `subscribe_conversation` for each AI message whose turn is still stre
 ```typescript
 { type: 'generation_active', messageId: number }
 ```
-
----
 
 #### `message` (type: `edit_message`)
 
@@ -323,8 +283,6 @@ Confirmation that a message was edited.
   isEdited: boolean
 }
 ```
-
----
 
 #### `message` (type: `progress_stream` / `progress_complete` / `progress_error`)
 
@@ -348,8 +306,6 @@ finishes; `messageId` remains the assessed message's database ID as a string.
 { type: 'progress_error', message: string }
 ```
 
----
-
 #### `message` (type: `error`)
 
 Error during message processing.
@@ -363,11 +319,9 @@ Error during message processing.
 }
 ```
 
----
+## /workflow namespace
 
-## /workflow Namespace
-
-### Client → Server Events
+### Client → server events
 
 #### `subscribe_workflow`
 
@@ -388,8 +342,6 @@ Subscribe to a workflow's execution state. Returns latest run and batch status.
 }
 ```
 
----
-
 #### `subscribe_workflow_run`
 
 Subscribe to a specific workflow run.
@@ -400,8 +352,6 @@ Subscribe to a specific workflow run.
 
 **Callback response:** `{ success: boolean, error?: string, workflowRunId?: number }`
 
----
-
 #### `unsubscribe_workflow_run`
 
 Leave a workflow run room.
@@ -411,8 +361,6 @@ Leave a workflow run room.
 | `workflowRunId` | `number` | Yes | Workflow run ID |
 
 **Callback response:** `{ success: boolean, error?: string }`
-
----
 
 #### `start_execution`
 
@@ -426,8 +374,6 @@ Start or resume a workflow execution.
 
 **Callback response:** `{ success: boolean, error?: string, workflowRunId?: number }`
 
----
-
 #### `execute_single_step`
 
 Execute a single node in manual mode.
@@ -439,8 +385,6 @@ Execute a single node in manual mode.
 | `workflowRunId` | `number` | No | Existing run to continue |
 
 **Callback response:** `{ success: boolean, error?: string, workflowRunId?: number }`
-
----
 
 #### `submit_validation`
 
@@ -455,8 +399,6 @@ Submit a human validation decision at a routing node.
 
 **Callback response:** `{ success: boolean, error?: string }`
 
----
-
 #### `start_batch_execution`
 
 Execute a workflow against multiple files.
@@ -468,9 +410,7 @@ Execute a workflow against multiple files.
 
 **Callback response:** `{ success: boolean, error?: string, batchId?: number }`
 
----
-
-### Server → Client Events
+### Server → client events
 
 #### `workflow_event` (type: `step_started`)
 
@@ -487,8 +427,6 @@ A node has begun execution.
 }
 ```
 
----
-
 #### `workflow_event` (type: `step_streaming`)
 
 Streaming LLM output from a step node.
@@ -502,8 +440,6 @@ Streaming LLM output from a step node.
   workflowRunId?: number
 }
 ```
-
----
 
 #### `workflow_event` (type: `step_completed`)
 
@@ -524,8 +460,6 @@ A node has finished execution.
 }
 ```
 
----
-
 #### `workflow_event` (type: `step_error`)
 
 A node encountered an error.
@@ -539,8 +473,6 @@ A node encountered an error.
   workflowRunId?: number
 }
 ```
-
----
 
 #### `workflow_event` (type: `execution_complete`)
 
@@ -557,8 +489,6 @@ The entire workflow run has finished.
 }
 ```
 
----
-
 #### `workflow_event` (type: `validation_required`)
 
 A routing node requires human input.
@@ -574,8 +504,6 @@ A routing node requires human input.
 }
 ```
 
----
-
 #### `workflow_event` (type: `batch_started`)
 
 Batch execution has begun.
@@ -588,8 +516,6 @@ Batch execution has begun.
   workflowId: number
 }
 ```
-
----
 
 #### `workflow_event` (type: `batch_progress`)
 
@@ -608,8 +534,6 @@ Progress update for a file in the batch.
 }
 ```
 
----
-
 #### `workflow_event` (type: `batch_complete`)
 
 Batch execution finished.
@@ -623,8 +547,6 @@ Batch execution finished.
   totalFiles: number
 }
 ```
-
----
 
 #### `workflow_status`
 
@@ -650,9 +572,7 @@ Full snapshot of a workflow run state. Sent on subscribe and after significant s
 }
 ```
 
----
-
-## Shared Data Types
+## Shared data types
 
 ### Snippet
 
@@ -697,9 +617,7 @@ Full snapshot of a workflow run state. Sent on subscribe and after significant s
 }
 ```
 
----
-
-## Implementation Notes
+## Implementation notes
 
 - **Event names** are snake_case; **payload keys** are camelCase
 - Backend applies `camelize()` before all emissions

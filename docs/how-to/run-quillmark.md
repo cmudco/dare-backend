@@ -1,12 +1,14 @@
 # Run the Quillmark document renderer
 
-DARE supports two local workflows. Existing contributors normally run Django
-and Vite directly and put only Quillmark in Docker. A full Docker Compose stack
-remains available for clean-machine onboarding.
+Run Quillmark, the CMU PDF renderer, next to a local DARE so chat can generate documents. There
+are two ways:
 
-## Existing Python + Vite workflow (recommended)
+- **Python + Vite (recommended).** Run Django and Vite as usual and put only Quillmark in Docker.
+- **Full Docker.** One script brings up the whole backend stack on a fresh machine.
 
-Set up and migrate the backend using the normal repository instructions, then:
+## Python + Vite workflow (recommended)
+
+Set up and migrate the backend as in the [quick start](../tutorials/quickstart.md), then:
 
 ```bash
 scripts/quillmark-setup.sh
@@ -21,10 +23,9 @@ npm install
 npm run dev
 ```
 
-This starts only `quillmark-mcp` in Docker on loopback port 8090. Django,
-Redis/Postgres, and the frontend keep using the contributor's normal workflow.
-The setup script initializes the Quillmark submodule, waits for it to become
-healthy, and configures DARE's `quillmark` MCP catalog row to use
+The setup script starts only `quillmark-mcp` in Docker on loopback port 8090. Django,
+Redis/Postgres and the frontend run as usual. The script initializes the Quillmark submodule,
+waits for it to become healthy, and points DARE's `quillmark` MCP catalog row at
 `http://127.0.0.1:8090/mcp`.
 
 To stop the renderer:
@@ -35,25 +36,23 @@ docker compose -f docker-compose.quillmark.yml down
 
 ## Full Docker workflow
 
-For a fresh machine, the existing all-in-one helper remains available:
+On a fresh machine, use the all-in-one helper:
 
 ```bash
 scripts/dev-setup.sh --demo-user
 ```
 
-It initializes submodules, prepares local Docker overrides, starts the complete
-backend stack, and optionally creates a verified funded demo account. The
-frontend still runs separately with `npm run dev`.
+It initializes submodules, prepares local Docker overrides, starts the full backend stack, and
+with `--demo-user` creates a verified, funded demo account. Run the frontend separately with
+`npm run dev`.
 
 ## Connect and test
 
-Log in, open `/mcp`, and connect **CMU Documents (Quillmark)**. Selecting that
-server exposes its tools automatically to the model. The separate Documents
-picker is only a convenience for choosing one of the currently advertised
-templates; it does not enable tools by itself.
+Log in, open `/mcp`, and connect **CMU Documents (Quillmark)**. Selecting that server exposes its
+tools to the model. The Documents picker only helps you choose one of the advertised templates;
+it does not enable tools by itself.
 
-New users must have a verified email and wallet credit before chat requests can
-run. `scripts/dev-setup.sh --demo-user` handles both for the Docker workflow.
+New users need a verified email and wallet credit before chat requests run. `scripts/dev-setup.sh --demo-user` handles both for the Docker workflow.
 
 ## Deployment configuration
 

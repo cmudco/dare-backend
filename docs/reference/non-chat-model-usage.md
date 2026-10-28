@@ -1,9 +1,8 @@
-# Non-chat model usage in DARE
+# Non-chat model usage
 
-This document inventories model calls that happen outside the user's primary
-chat-model response. It separates the shared **Background model** setting from
-embedding, retrieval, document, media, tool, and maintenance models that use
-independent paths.
+Use this inventory to find every model call outside the user's main chat reply. It separates the
+shared **Background model** setting from the embedding, retrieval, document, media, tool and
+maintenance models that use their own paths.
 
 ## Executive summary
 
@@ -14,10 +13,9 @@ The Background model selector controls four text-generation jobs:
 3. memory extraction, including historical memory import; and
 4. Advanced RAG query analysis.
 
-It does **not** currently control embeddings, reranking, document vision,
-transcription, image generation, MCP web tools, or maintenance commands. Those
-layers are described below because they otherwise look like hidden uses of the
-selected chat model.
+It does **not** control embeddings, reranking, document vision, transcription, image generation,
+MCP web tools, or maintenance commands. Those layers are listed below so they do not look like
+hidden uses of the selected chat model.
 
 ## Complete runtime inventory
 
@@ -51,10 +49,10 @@ this order:
 3. **Per-task platform override:** `PlatformSettings.title_model`,
    `summary_model`, `memory_model` or `query_analysis_model`.
 4. **Platform default:** `PlatformSettings.background_model`.
-5. **Server default:** the `BACKGROUND_MODEL` environment variable, currently
-   `gpt-5.6-luna` in `config/env.py`.
+5. **Server default:** the `BACKGROUND_MODEL` environment variable (default `gpt-5.6-luna` in
+   `config/env.py`).
 
-A choice that is no longer eligible is skipped with a warning. Admins edit the
+An ineligible choice is skipped with a warning. Admins edit the
 platform rows in the Django admin (Platform settings) or in Settings →
 Background models; both write the same single row, and changes apply on the
 next call without a restart.
@@ -85,7 +83,7 @@ without a structured path (local Llama) are not offered.
   including one repair attempt for malformed structured output.
 - `core/services/rag/query_analyzer.py` — structured retrieval-query analysis.
 
-## Embeddings are separate on purpose—but not yet unified in routing
+## Embeddings are separate on purpose, but not unified in routing
 
 Embeddings convert text into vectors for similarity search; they do not write a
 chat response.
@@ -97,7 +95,7 @@ dimensions. It embeds individual extracted memory statements and retrieval
 queries—not entire conversations. If embedding fails, memory retrieval can
 still use lexical and recency signals.
 
-This path currently uses the server OpenAI key directly. An embeddings model
+This path uses the server OpenAI key directly. An embeddings model
 exposed by a LiteLLM proxy is **not** selected automatically, even if the proxy
 lists one.
 
@@ -122,21 +120,21 @@ stores, so changing either model requires a compatible re-embedding migration.
 
 ## Document ingestion layers
 
-`core/services/document_parsers/docling_parser.py` runs Docling locally to
-recover document structure. For content that needs visual interpretation,
-`core/services/document_enrichment_service.py` separately invokes the configured
-Gemini vision model. The default is `gemini-3.1-flash-lite`, but the service can
-choose another visible compatible model if configuration or availability
-requires it.
+`core/services/document_parsers/docling_parser.py` runs Docling locally to recover document
+structure. For content that needs visual interpretation,
+`core/services/document_enrichment_service.py` calls the vision model that
+`core/services/vision_model_service.py` resolves: the user's `vision_model` (or the per-run
+override) when the active wallet offers it, otherwise the wallet's first recommendation. For a
+catalog wallet that is `DOCUMENT_ENRICHMENT_MODEL` (default `gemini-3.1-flash-lite`) when visible,
+then the cheapest vision-capable model.
 
-Document vision is wallet-aware, but it is not the same setting as the shared
-Background model. This distinction matters: choosing Luna for titles and
-memory does not move PDF figure analysis away from Gemini.
+Document vision is wallet-aware, but it is not the same setting as the shared Background model:
+choosing Luna for titles and memory does not change the model that reads PDF figures.
 
 ## Explicit non-chat modalities
 
-Audio transcription and image generation are user-triggered and visible in the
-product, but they are still separate model layers:
+Audio transcription and image generation are user-triggered and visible in the product, but they
+are separate model layers:
 
 - `core/services/whisper_service.py` and
   `conversations/services/audio_transcription_service.py` handle Whisper and
@@ -158,7 +156,7 @@ models:
 - `api_keys/services.py` makes small provider calls only to validate a newly
   entered API key. These are setup probes, not content-generation layers.
 - `conversations/management/commands/update_model_card_public_sentiment.py`
-  uses `claude-sonnet-4-20250514` in an operator-run maintenance command for
+  uses `claude-sonnet-5` (`CRAWL_MODEL`) in an operator-run maintenance command for
   web research and sentiment updates. It is not part of user request runtime.
 
 ## Recommendation policy shown in the LiteLLM UI
@@ -171,9 +169,8 @@ roster:
 2. the newest available Gemini Flash models in descending version order; then
 3. other Gemini models if fewer than four recommendations have been filled.
 
-Duplicate Luna aliases are collapsed. GPT-5.6 Sol and Terra are deliberately
-excluded from the recommendation box, although every proxy model remains
-available in the full dropdown.
+Duplicate Luna aliases are collapsed. GPT-5.6 Sol and Terra are excluded from the recommendation
+box on purpose; every proxy model stays available in the full dropdown.
 
 ## Architectural follow-ups
 

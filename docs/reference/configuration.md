@@ -1,156 +1,244 @@
-# Configuration Reference
+# Configuration
 
-Every environment variable consumed by the DARE backend, with type, default, and description. Variables are loaded from `.env` at startup via `config/env.py`.
+The backend reads every variable from `.env` at startup in `config/env.py`, and the settings
+modules in `config/settings/` (`common`, `local`, `production`) use those values. Copy
+`.example.env` to `.env` and edit it.
 
-A working template lives at `.example.env` — copy it to `.env` and edit.
+Defaults below are the code defaults, used when a variable is unset. `.example.env` sets some of
+them differently for local development.
 
----
+## Values that must match across services
 
-## Django Core
+| Variable | Must equal |
+| --- | --- |
+| `SSO_JWT_KEY` | The same variable in socraticbooks-backend, which verifies DARE's JWTs |
+| `DARE_INTERNAL_KEY` | The same variable in socraticbooks-backend and voice-agent-runtime |
 
-| Variable | Type | Default | Description |
-|---|---|---|---|
-| `DJANGO_SETTINGS_MODULE` | string | `config.settings.local` | Settings module to load. Use `config.settings.production` in prod. |
-| `DJANGO_SECRET_KEY` | string | *(required)* | Django secret key. **Rotate this** from the example value before any non-local use. |
-| `DJANGO_DEBUG` | bool | `False` | Enables debug responses and the Django debug toolbar. Must be `False` in production. |
-| `ENVIRONMENT` | string | `local` | Free-form environment label (`local`, `staging`, `production`). Used in logs and Sentry tags. |
-| `SITE_ID` | int | `1` | Django sites framework site ID. |
-| `ALLOWED_HOSTS` | csv | `127.0.0.1,localhost` | Comma-separated hostnames Django will serve. |
-| `CORS_ALLOWED_ORIGINS` | csv | *(none)* | Comma-separated origins permitted to make CORS requests. |
-| `CSRF_TRUSTED_ORIGINS` | csv | *(none)* | Comma-separated origins trusted for CSRF-protected POSTs. |
+## Django core
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `DJANGO_SETTINGS_MODULE` | `config.settings.production` | Settings module. `manage.py`, `dare/asgi.py` and `dare/wsgi.py` fall back to production when unset; `.example.env` sets `config.settings.local`. |
+| `DJANGO_SECRET_KEY` | **Required** | Django secret key. Replace the example value before any non-local use. |
+| `SSO_JWT_KEY` | *(empty)* | Signs the JWTs DARE issues (SimpleJWT `SIGNING_KEY`). Set it in every deployment. |
+| `DJANGO_DEBUG` | `False` | Debug responses when exactly `True`. Must be `False` in production. |
+| `ENVIRONMENT` | `local` | One of `local`, `dare-staging`, `dare-production`, `gt-production` (`config/environment.py`). Any other value logs a warning and falls back to `local`. |
+| `SITE_ID` | `1` | Django sites framework site ID. |
+| `ALLOWED_HOSTS` | `127.0.0.1,localhost` | Comma-separated hostnames Django serves. |
+| `CORS_ALLOWED_ORIGINS` | `https://dare-front.hss.cmu.edu` | Comma-separated origins allowed to make CORS requests. Production settings only; local settings allow all origins. |
+| `CSRF_TRUSTED_ORIGINS` | `https://dare-front.hss.cmu.edu` | Comma-separated origins trusted for CSRF-protected POSTs. Production settings only. |
 
 ## Database
 
-| Variable | Type | Default | Description |
-|---|---|---|---|
-| `USE_POSTGRES` | bool | `False` | When `True`, connect to Postgres using `DB_*` below. When `False`, use SQLite at `dare_local.db`. |
-| `DB_NAME` | string | *(empty)* | Postgres database name. |
-| `DB_USER` | string | `postgres` | Postgres user. |
-| `DB_PASSWORD` | string | *(empty)* | Postgres password. |
-| `DB_HOST` | string | `localhost` | Postgres host. |
-| `DB_PORT` | string | `5432` | Postgres port. |
+| Variable | Default | Description |
+| --- | --- | --- |
+| `USE_POSTGRES` | `False` | Local settings only: `True` connects to Postgres with the `DB_*` values; otherwise SQLite at `db.sqlite3`. Production settings always use Postgres. |
+| `DB_NAME` | *(none)* | Postgres database name. |
+| `DB_USER` | *(none)* | Postgres user. |
+| `DB_PASSWORD` | *(none)* | Postgres password. Docker Compose refuses to start without it. |
+| `DB_HOST` | *(none)* | Postgres host. |
+| `DB_PORT` | *(none)* | Postgres port. |
 
-## Redis & Background Jobs
+## Redis and background jobs
 
-| Variable | Type | Default | Description |
-|---|---|---|---|
-| `REDIS_HOST` | string | `localhost` | Redis server host. Used by Django RQ and Channels. |
-| `REDIS_PORT` | int | `6379` | Redis server port. |
-| `REDIS_DB` | int | `0` | Redis logical database number. |
-| `REDIS_PASSWORD` | string | *(none)* | Redis password, if AUTH is enabled. |
+| Variable | Default | Description |
+| --- | --- | --- |
+| `REDIS_HOST` | `127.0.0.1` | Redis host for RQ, the cache and the channel layer. |
+| `REDIS_PORT` | `6379` | Redis port. |
+| `REDIS_DB` | `1` | Redis logical database. |
+| `REDIS_PASSWORD` | *(none)* | Redis password when AUTH is on. |
+| `INGESTION_RECONCILE_INTERVAL_SECONDS` | `300` | How often the scheduler sweeps files stranded in Processing by a dead worker. `0` disables the recurring sweep; workers still sweep at startup. |
+| `CONVERSATION_SUMMARY_JOBS_ENABLED` | `False` | Enable rolling conversation summaries. Off by default to keep ingestion workers free. |
 
-## LLM Provider Keys
+## LLM providers
 
-At least one provider key should be set. Missing keys disable the corresponding provider but do not block startup.
+`OPENAI_API_KEY`, `CLAUDE_API_KEY`, `GEMINI_API_KEY`, `PINECONE_API_KEY` and
+`PINECONE_INDEX_NAME` must be present in the environment, or startup fails with
+`ImproperlyConfigured`. An empty value is allowed and disables that provider.
 
-| Variable | Type | Default | Description |
-|---|---|---|---|
-| `OPENAI_API_KEY` | string | *(none)* | OpenAI API key (`sk-...`). Required for GPT models. |
-| `CLAUDE_API_KEY` | string | *(none)* | Anthropic API key (`sk-ant-...`). Required for Claude models. |
-| `GEMINI_API_KEY` | string | *(none)* | Google AI API key. Required for Gemini models. |
-| `OLLAMA_HOST` | url | `http://localhost:11434` | Ollama server URL for self-hosted LLaMA models. |
+| Variable | Default | Description |
+| --- | --- | --- |
+| `OPENAI_API_KEY` | **Required** (may be empty) | OpenAI API key, for GPT models. |
+| `CLAUDE_API_KEY` | **Required** (may be empty) | Anthropic API key, for Claude models. |
+| `GEMINI_API_KEY` | **Required** (may be empty) | Google AI API key, for Gemini models. |
+| `OLLAMA_HOST` | `http://localhost:11434` | Ollama server URL for self-hosted LLaMA models. |
+| `BACKGROUND_MODEL` | `gpt-5.6-luna` | Model for titles, summaries, memory extraction and Advanced RAG query analysis. |
+| `LLM_STREAM_IDLE_TIMEOUT_SECONDS` | `120` | How long a provider stream may stay silent before the tool loop fails the round. |
+| `LLM_SANDBOX_IDLE_TIMEOUT_SECONDS` | `300` | The same limit while sandbox code runs or files upload. |
+| `BOT_WALLET_ENFORCEMENT_ENABLED` | `0` | `1` applies bot wallet routing (the chatter pays; anonymous chats fall back to the bot owner). |
 
-## Vector Stores
+## Vector stores
 
-DARE supports both Pinecone (managed) and Weaviate (self-hosted). Either or both can be configured; users choose at runtime via preferences.
+You can configure Pinecone (managed), Weaviate (self-hosted) or both; users choose in their
+preferences.
 
-### Pinecone
+| Variable | Default | Description |
+| --- | --- | --- |
+| `PINECONE_API_KEY` | **Required** (may be empty) | Pinecone API key. |
+| `PINECONE_INDEX_NAME` | **Required** (may be empty) | Pinecone index for document embeddings. |
+| `WEAVIATE_HOST` | `localhost` | Weaviate host. |
+| `WEAVIATE_PORT` | `8080` | Weaviate HTTP port. |
+| `WEAVIATE_GRPC_PORT` | `50051` | Weaviate gRPC port. Searches use gRPC, so remap it whenever you remap the HTTP port. |
+| `WEAVIATE_COLLECTION_NAME` | `Document` | Collection for stored embeddings. |
+| `WEAVIATE_SKIP_INIT_CHECKS` | `True` | Skip startup connectivity checks. |
+| `WEAVIATE_AUTOSCHEMA_ENABLED` | `False` | Let Weaviate auto-create the schema. Not recommended in production. |
+| `SOURCE_WEAVIATE_URL` | *(none)* | Source Weaviate for `manage.py import_library`, separate from DARE's own. |
+| `SOURCE_WEAVIATE_CLASS` | *(none)* | Source class for `import_library`. |
+| `SOURCE_WEAVIATE_API_KEY` | *(none)* | Source API key for `import_library`. |
 
-| Variable | Type | Default | Description |
-|---|---|---|---|
-| `PINECONE_API_KEY` | string | *(none)* | Pinecone API key. |
-| `PINECONE_INDEX_NAME` | string | *(none)* | Pinecone index to read/write document embeddings. |
+## Document processing
 
-### Weaviate
+| Variable | Default | Description |
+| --- | --- | --- |
+| `DOCUMENT_ENRICHMENT_ENABLED` | `True` | Docling figure descriptions and scanned-page transcription. |
+| `DOCUMENT_ENRICHMENT_MODEL` | `gemini-3.1-flash-lite` | Vision model, resolved from DARE's LLM catalog so billing stays consistent. |
+| `DOCUMENT_ENRICHMENT_CONCURRENCY` | `2` | Simultaneous vision operations per document, clamped to 1–4. |
+| `DOCUMENT_ENRICHMENT_MAX_FIGURES` | `40` | Most figures described per document. |
+| `DOCUMENT_OCR_AUTO_PAGE_LIMIT` | `10` | Pages transcribed automatically. |
+| `DOCUMENT_OCR_MAX_PAGE_LIMIT` | `100` | Most pages a user can choose to transcribe. |
+| `DOCUMENT_OCR_ESTIMATED_INPUT_TOKENS_PER_PAGE` | `5000` | Input tokens per page for the cost estimate. |
+| `DOCUMENT_OCR_ESTIMATED_OUTPUT_TOKENS_PER_PAGE` | `2000` | Output tokens per page for the cost estimate. |
+| `DOCUMENT_OCR_JOB_TIMEOUT_SECONDS` | `3600` | RQ timeout for a transcription job. |
 
-| Variable | Type | Default | Description |
-|---|---|---|---|
-| `WEAVIATE_HOST` | string | `localhost` | Weaviate server host. |
-| `WEAVIATE_PORT` | int | `8080` | Weaviate REST port. |
-| `WEAVIATE_COLLECTION_NAME` | string | `Document` | Collection (class) name for stored embeddings. |
-| `WEAVIATE_SKIP_INIT_CHECKS` | bool | `True` | Skip startup connectivity checks. |
-| `WEAVIATE_AUTOSCHEMA_ENABLED` | bool | `False` | Allow Weaviate to auto-create schema (not recommended for prod). |
+## Advanced RAG
 
-- `RAG_GRAPH_EXPAND_ENABLED` (default `true`): in Advanced RAG on the document path, follow stored in-document references ("see section 7.2") one hop from each retrieved chunk before reranking. Set to `false` to disable the expand stage without touching ingest.
-- `RAG_ENTITY_NER_ENABLED` (default `true`): run the GLiNER named-entity lane at ingest alongside the regex identifier lane. Set to `false` to turn it off; identifiers still run.
-- `RAG_ENTITY_MODEL` (default `urchade/gliner_small-v2.1`): the GLiNER checkpoint used by the NER lane, loaded lazily on first use.
-- `RAG_ENTITY_HOPS_ENABLED` (default `true`): in Advanced RAG, when at least two files are selected, follow a hit's rarest shared entity into one chunk of another selected file during the expand stage.
+These are read from Django settings first, then the environment. Boolean flags treat `0`,
+`false`, `no` and `off` as off.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `RAG_RERANKER_MODEL` | `BAAI/bge-reranker-v2-m3` | Reranker. BGE gives calibrated 0–1 scores; `cross-encoder/ms-marco-MiniLM-L-6-v2` is the fast local option (raw logits). |
+| `RAG_GROUNDING_THRESHOLD` | `0.3` (BGE) or `0.0` (MiniLM / MS MARCO) | Grounding cutoff on the reranker's score scale. |
+| `RAG_RERANKER_DEVICE` | auto | Device for the reranker model. |
+| `RAG_RERANKER_MAX_LEN` | `512` | Reranker max sequence length. |
+| `RAG_CONTEXT_CHAR_BUDGET` | `16000` | Characters of retrieved context per prompt. |
+| `RAG_SNIPPET_CHAR_CAP` | `2000` | Characters kept per snippet. |
+| `RAG_GRAPH_EXPAND_ENABLED` | `true` | On the document path, follow stored in-document references ("see section 7.2") one hop from each retrieved chunk before reranking. Turning it off leaves ingest unchanged. |
+| `RAG_ENTITY_NER_ENABLED` | `true` | Run the GLiNER named-entity lane at ingest alongside the regex identifier lane. Identifiers still run when it is off. |
+| `RAG_ENTITY_MODEL` | `urchade/gliner_small-v2.1` | GLiNER checkpoint for the NER lane, loaded on first use. |
+| `RAG_ENTITY_HOPS_ENABLED` | `true` | With two or more files selected, follow a hit's rarest shared entity into one chunk of another selected file during the expand stage. |
 
 ## Email
 
-| Variable | Type | Default | Description |
-|---|---|---|---|
-| `EMAIL_BACKEND` | string | `django.core.mail.backends.console.EmailBackend` | Django email backend. Use `django.core.mail.backends.smtp.EmailBackend` in prod. |
-| `EMAIL_HOST` | string | *(none)* | SMTP host. |
-| `EMAIL_PORT` | int | `587` | SMTP port. |
-| `EMAIL_HOST_USER` | string | *(none)* | SMTP username. |
-| `EMAIL_HOST_PASSWORD` | string | *(none)* | SMTP password. |
-| `EMAIL_FROM` | string | *(none)* | Default `From:` address for outbound mail. |
-| `EMAIL_USE_TLS` | bool | `False` | Negotiate TLS via STARTTLS (port 587). |
-| `EMAIL_USE_SSL` | bool | `False` | Use TLS from connect (port 465). Mutually exclusive with `EMAIL_USE_TLS`. |
+The backend picks the email backend itself (`config/settings/common.py`); there is no
+`EMAIL_BACKEND` variable. Every backend also writes an `EmailLog` row.
 
-## Cross-Platform URLs
+- **`EMAIL_HOST_USER` and `EMAIL_HOST_PASSWORD` set:** sends through Resend, with
+  `EMAIL_HOST_PASSWORD` as the Resend API key.
+- **Only `EMAIL_HOST` set:** sends over SMTP.
+- **Neither:** prints mail to the console.
 
-Used for unified authentication, password-reset emails, and inter-service callbacks.
+| Variable | Default | Description |
+| --- | --- | --- |
+| `EMAIL_HOST` | *(none)* | SMTP host. |
+| `EMAIL_PORT` | `587` | SMTP port. |
+| `EMAIL_HOST_USER` | *(none)* | SMTP username. |
+| `EMAIL_HOST_PASSWORD` | *(none)* | SMTP password, or the Resend API key. |
+| `EMAIL_FROM` | *(none)* | Default `From:` address. |
+| `EMAIL_USE_TLS` | `False` | Read by `config/env.py` but not passed to Django settings, so it has no effect. |
+| `EMAIL_USE_SSL` | `False` | Read by `config/env.py` but not passed to Django settings, so it has no effect. |
 
-| Variable | Type | Default | Description |
-|---|---|---|---|
-| `FRONTEND_CONFIRM_EMAIL_URL` | url | *(none)* | Base URL for email-confirmation links. |
-| `FRONTEND_PASSWORD_RESET_URL` | url | *(none)* | Base URL for password-reset links. |
-| `DARE_FRONTEND_URL` | url | *(none)* | Public URL of the DARE frontend. |
-| `DARE_BACKEND_URL` | url | *(none)* | Public URL of this backend. |
-| `SOCRATIC_BOTS_FRONTEND_URL` | url | *(none)* | Partner platform frontend URL (optional). |
-| `SOCRATIC_BOTS_BACKEND_URL` | url | *(none)* | Partner platform backend URL (optional). |
-| `DARE_INTERNAL_KEY` | string | `local-dev-internal-key` | Shared secret for partner backends calling internal endpoints. **Rotate** in production. |
+## Cross-platform URLs and keys
+
+Used for unified authentication, email links and inter-service calls.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `FRONTEND_CONFIRM_EMAIL_URL` | *(none)* | Base URL for email-confirmation links. |
+| `FRONTEND_PASSWORD_RESET_URL` | *(none)* | Base URL for password-reset links. |
+| `DARE_FRONTEND_URL` | *(none)* | Public URL of the DARE frontend. |
+| `DARE_BACKEND_URL` | *(none)* | Public URL of this backend. |
+| `SOCRATIC_BOTS_FRONTEND_URL` | *(none)* | Socratic Bots frontend URL (optional). |
+| `SOCRATIC_BOTS_BACKEND_URL` | *(none)* | Socratic Bots backend URL (optional). |
+| `DARE_INTERNAL_KEY` | `local-dev-internal-key` | Shared secret for partner backends calling internal endpoints. Replace it in production. |
+
+## Research mode (Hermes)
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `HERMES_GATEWAY_URL` | `http://127.0.0.1:8642` | Hermes agent gateway. |
+| `HERMES_PROFILES_ROOT` | `~/.hermes/profiles` | Directory of per-project Hermes profiles (one `HERMES_HOME` each, served under `/p/<profile>/`). |
+| `HERMES_PROFILE_PREFIX` | `dare-proj` | Profile name prefix. Names must match `[a-z0-9][a-z0-9_-]{0,63}`. |
+| `HERMES_PROFILE_MODEL` | `claude-sonnet-5` | Model pinned into every project profile. |
+| `HERMES_PROFILE_MODEL_PROVIDER` | `anthropic` | Provider for that model. |
+| `HERMES_PROFILE_MODEL_BASE_URL` | *(empty)* | OpenAI-compatible gateway (such as LiteLLM) that every profile calls instead of a named provider. |
+| `HERMES_PROFILE_MODEL_API_KEY` | *(empty)* | Key DARE writes into each profile's `.env`, under the provider's variable when no gateway URL is set. |
+| `HERMES_PROFILE_FALLBACK_MODELS` | *(empty)* | Ordered fallback chain on rate limits or outages: comma-separated `provider=model` pairs. |
+| `HERMES_PROFILE_MAX_TURNS` | `30` | Agent-loop ceiling written into every profile. |
+| `HERMES_PROFILE_TOKEN_DAYS` | `365` | Lifetime of the owner's JWT in a profile's `.env`. |
+| `HERMES_STREAM_IDLE_SECONDS` | `180` | How long a run's event stream may stay silent before DARE polls Hermes for the run's state. |
+| `HERMES_RUN_WAIT_SECONDS` | `1800` | How long a background run keeps polling once its stream goes quiet. |
+| `HERMES_TOOLS_WAIT_SECONDS` | `90` | How long a run waits for Hermes to load a new profile's DARE tools. |
+| `RESEARCH_PROJECT_SPEND_CAP_USD` | `0` | Most a research project may spend on agent runs, in USD. `0` means no cap. |
+| `OPENALEX_MAILTO` | *(empty)* | Identifies DARE to OpenAlex paper search, which joins its faster polite pool. |
+| `DARE_MCP_GATEWAY_URL` | `DARE_BACKEND_URL` + `/mcp/api/gateway/` | Where a profile's MCP client reaches DARE. Must resolve from the gateway host, not the browser. |
+
+## Platform assistant (Ask DARE)
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `ASSISTANT_MODEL_IDENTIFIER` | `gpt-6-luna` | Model for the in-app assistant, paid by the platform. Must be an active model. |
+| `ASSISTANT_DAILY_MESSAGE_LIMIT` | `50` | Assistant messages per user per day. |
+| `ASSISTANT_AGENT_MAX_OUTPUT_RATE` | `10` | Highest output price, in USD per million tokens, of an agent model the assistant recommends. |
 
 ## Observability
 
-| Variable | Type | Default | Description |
-|---|---|---|---|
-| `SENTRY_DSN` | url | *(none)* | Sentry DSN. Empty disables Sentry reporting. |
+| Variable | Default | Description |
+| --- | --- | --- |
+| `SENTRY_DSN` | *(none)* | Sentry DSN. Empty disables Sentry. |
+| `SENTRY_ENVIRONMENT` | `development` | Environment tag that separates dev, staging and production in Sentry. |
+| `SENTRY_TRACES_SAMPLE_RATE` | `0.1` | Fraction of requests traced for performance monitoring. |
 
-## MCP (Model Context Protocol)
+## MCP
 
-| Variable | Type | Default | Description |
-|---|---|---|---|
-| `MCP_USE_DOCKER` | bool | `False` | When `True`, MCP servers are launched in Docker containers; otherwise as subprocesses. |
+| Variable | Default | Description |
+| --- | --- | --- |
+| `MCP_USE_DOCKER` | `False` | `True` launches MCP servers in Docker containers; otherwise they run as subprocesses. |
 
 ## SyftBox
 
 [SyftBox](https://syftbox.net) integration for federated data sharing.
 
-| Variable | Type | Default | Description |
-|---|---|---|---|
-| `SYFTBOX_ENABLED` | bool | `False` | Enable SyftBox sync. |
-| `SYFTBOX_DATASITES_ROOT` | path | *(none)* | Root path for local SyftBox datasites. |
-| `SYFTBOX_APP_NAME` | string | `dare` | App name registered with SyftBox. |
-| `SYFTBOX_BASE_URL` | url | `https://syftbox.net` | SyftBox base URL. |
-| `SYFTBOX_SYNC_INTERVAL_SECONDS` | int | `300` | Sync interval in seconds. |
+| Variable | Default | Description |
+| --- | --- | --- |
+| `SYFTBOX_ENABLED` | `False` | Enable SyftBox sync. |
+| `SYFTBOX_DATASITES_ROOT` | *(none)* | Root path for local SyftBox datasites. |
+| `SYFTBOX_APP_NAME` | `dare` | App name registered with SyftBox. |
+| `SYFTBOX_BASE_URL` | `https://syftbox.net` | SyftBox base URL. |
+| `SYFTBOX_SYNC_INTERVAL_SECONDS` | `300` | Sync interval in seconds. |
 
----
+## Docker Compose
 
-## Adding a new variable
+`docker-compose.yml` reads these from `.env` and overrides the matching runtime variables inside
+the `web` and `worker` containers.
 
-1. Add the variable to `.example.env` with a placeholder or default.
-2. Add it to your local `.env`.
-3. Declare it in `config/env.py`:
+| Variable | Default | Description |
+| --- | --- | --- |
+| `WEB_PORT` | `8000` | Host port for the API. |
+| `POSTGRES_PORT` | `5432` | Host port for Postgres. |
+| `WEAVIATE_CONSOLE_PORT` | `8081` | Host port for the Weaviate console (`debug` profile). |
+| `OLLAMA_PORT` | `11434` | Host port for Ollama (`llama` profile). |
+| `QUILLMARK_DEBUG_PORT` | `8090` | Loopback port for quillmark-mcp, for debugging. |
+| `DOCKER_DJANGO_SETTINGS_MODULE` | `config.settings.production` | `DJANGO_SETTINGS_MODULE` inside the containers. |
+| `DOCKER_DJANGO_DEBUG` | `False` | `DJANGO_DEBUG` inside the containers. |
+| `DOCKER_ENVIRONMENT` | `production` | `ENVIRONMENT` inside the containers. |
+| `DOCKER_DB_HOST` | `postgres` | `DB_HOST` inside the containers. |
+| `DOCKER_REDIS_HOST` | `redis` | `REDIS_HOST` inside the containers. |
+| `DOCKER_WEAVIATE_HOST` | `weaviate` | `WEAVIATE_HOST` inside the containers. |
+| `DOCKER_OLLAMA_HOST` | `http://ollama:11434` | `OLLAMA_HOST` inside the containers. |
+| `OLLAMA_MEMORY_LIMIT` | `16G` | Memory cap for the Ollama container. |
+| `OLLAMA_MEMORY_RESERVATION` | `8G` | Memory reserved for the Ollama container. |
+| `UVICORN_WORKERS` | `1` | Uvicorn workers in the `web` container when not in debug mode. |
+| `LOG_LEVEL` | `info` | Uvicorn log level in the `web` container. |
 
-   ```python
-   MY_VAR = os.getenv("MY_VAR", "default_value")
-   ```
+## Adding a variable
 
-4. Import where needed:
-
-   ```python
-   from config import env
-   value = env.MY_VAR
-   ```
-
-5. Document it in this file.
+1. Add it to `.example.env` with a placeholder or default.
+2. Declare it in `config/env.py`, for example `MY_VAR = os.getenv("MY_VAR", "default_value")`.
+3. Read it with `from config import env` and `env.MY_VAR`, or expose it in `config/settings/common.py`.
+4. Document it in this file.
 
 ## Validating configuration
-
-A quick check after editing `.env`:
 
 ```bash
 python manage.py check

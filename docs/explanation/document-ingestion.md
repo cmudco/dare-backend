@@ -1,7 +1,7 @@
 # Document ingestion
 
-How an uploaded file becomes a search index DARE can trust: who may write it, how a new index is
-verified before it goes live, what is recorded, and how interrupted runs are recovered.
+This page explains how an uploaded file becomes a search index DARE can trust: who may write it,
+how a new index is verified before it goes live, what is recorded, and how interrupted runs recover.
 
 ## Verified index publication
 
@@ -13,9 +13,9 @@ Basic and Advanced uploads use the same indexing contract after chunking. Basic 
 4. Exact chunk identities, count, persisted metadata (including source and embedding text), dimensions and finite values must match. Visibility mismatches receive at most three reads, with 0.5- and 1-second waits. Transport failures fail closed. Vector values are not compared bit-for-bit because storage may change floating-point precision.
 5. Only verified generations become active. The File pointer, map replacement and published attempt record commit together. Failure rolls back the map and pointer, saves failed-attempt evidence outside the rolled-back transaction, and tries to clean only the staged generation. Previous vectors are retired after successful publication.
 
-Verification proves consistency at publication time, not indefinite durability; [live index
-health](#live-index-health) answers the later question. Existing uploads are unchanged until
-explicitly reprocessed. Weaviate initialization adds a non-searchable `file_type` property if it
+Verification proves consistency at publication time, not lasting durability; [live index
+health](#live-index-health) answers the later question. Existing uploads stay as they are until
+someone reprocesses them. Weaviate initialization adds a non-searchable `file_type` property if it
 is missing; older objects do not need rewriting.
 
 ## Ownership and cancellation
@@ -46,34 +46,38 @@ its rows with it.
 
 ## Interrupted ingestions
 
-A file only leaves Processing when its job finishes, so a killed worker used to
-leave it there forever; the lease on the File row is only reclaimed by the next
-explicit reprocess. `core.services.ingestion_reconciliation` asks RQ whether
-each Processing file's job is still alive (queued, or started on a worker that
-is still heartbeating) and, when it is not, records the interruption: the
-journey attempt is failed, `running` attempt rows become `abandoned`, and the
-file becomes **Failed** with an "interrupted" message, or **Processed** with a
-"previous index retained" note when the interrupted run was a replacement and a
-published generation is still active. RQ itself only expires a dead worker's
-"started" registry entry after the job's own timeout, which is why a queue
-dashboard can show dozens of running jobs with no worker alive.
+A file leaves Processing only when its job finishes, and only an explicit reprocess reclaims the
+lease on the File row, so a killed worker would leave the file stuck.
+`core.services.ingestion_reconciliation` asks RQ whether each Processing file's job is still alive
+(queued, or started on a worker that is still heartbeating). When it is not, it records the
+interruption:
+
+- the journey attempt is failed;
+- `running` attempt rows become `abandoned`;
+- the file becomes **Failed** with an "interrupted" message, or **Processed** with a "previous
+  index retained" note when the interrupted run was a replacement and a published generation is
+  still active.
+
+RQ expires a dead worker's "started" registry entry only after the job's own timeout, which is why
+a queue dashboard can show dozens of running jobs with no worker alive.
 
 Reconciliation checks that the observed job ID, token and timestamp still match before marking an
 attempt interrupted, so it cannot overwrite an attempt that changed while the sweep was
 inspecting RQ.
 
-The sweep runs in three places, none of which needs a new process or a
-deployment change: every worker runs it once at startup (a restarted worker is
-the first to know its predecessor's jobs are dead) and at the same time
-(re)registers a recurring job with rq-scheduler, which the already-running
-`rqscheduler` process enqueues on the default queue every
-`INGESTION_RECONCILE_INTERVAL_SECONDS` (default 300; 0 disables); and
-`python manage.py reconcile_ingestion` runs it by hand. Registration is
-idempotent (fixed job id, cancelled and re-added on each worker start) and
-also queues one follow-up sweep two minutes later, because a worker that
-systemd restarts within seconds of a crash still sees its predecessor listed
-as alive. Worker job failures are also reported to Sentry through the RQ
-integration.
+The sweep runs in three places, none of which needs a new process or a deployment change:
+
+- **Worker startup.** Every worker runs it once when it starts (a restarted worker is the first
+  to know its predecessor's jobs are dead).
+- **Recurring job.** At the same startup each worker (re)registers a recurring job with
+  rq-scheduler, which the running `rqscheduler` process enqueues on the default queue every
+  `INGESTION_RECONCILE_INTERVAL_SECONDS` (default 300; 0 disables).
+- **By hand.** `python manage.py reconcile_ingestion`.
+
+Registration is idempotent (fixed job id, cancelled and re-added on each worker start). It also
+queues one follow-up sweep two minutes later, because a worker that systemd restarts within
+seconds of a crash still sees its predecessor listed as alive. Worker job failures also reach
+Sentry through the RQ integration.
 
 Detection latency depends on RQ's worker heartbeat: a forking worker (the
 default-queue workers) refreshes its key every 30 s with a 90 s TTL while
@@ -82,8 +86,7 @@ running a job, so a dead worker is recognised within about two minutes. A
 that class detection waits for the job timeout.
 
 Keep `rqscheduler` running so the recurring sweep fires. Review interrupted files and failed
-cleanup jobs before selectively retrying them; do not replay successful paid work
-indiscriminately.
+cleanup jobs before you retry them selectively; do not replay successful paid work wholesale.
 
 ## Live index health
 
@@ -106,8 +109,8 @@ Page transcription and figure description can run in bounded parallel batches. E
 
 All wallet types use the same concurrency setting. DARE requests retain the estimated-credit check before each paid request. Completed document-vision calls are recorded atomically even if concurrent charges take the balance negative; this does not reserve funds or impose a strict overspend limit across jobs. Other billing callers retain the default insufficient-balance rejection. Cache behavior and provider usage accounting remain part of each operation.
 
-Paid-provider latency and extraction-quality benchmarks have not been run, so there is no
-measured production speedup figure for concurrency above 1.
+No paid-provider latency or extraction-quality benchmarks exist yet, so there is no measured
+production speedup for concurrency above 1.
 
 ## Memory per stage
 

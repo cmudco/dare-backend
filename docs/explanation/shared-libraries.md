@@ -1,4 +1,6 @@
-# Shared Libraries — importing an external vector corpus into DARE
+# Shared libraries
+
+This page explains how DARE imports an external vector corpus and makes it searchable in chat.
 
 ## What this feature is
 
@@ -7,25 +9,23 @@ to their library and search inside normal DARE chat — alongside their own
 documents. The first one is the CMU Civil War pension corpus (~5k transcribed
 PDF pages).
 
-The reusable capability underneath it: **given an external resource that already
-holds chunked text (e.g. someone else's Weaviate collection), we can read its
-chunks + metadata, re-vectorize them into *our* vector DB, and expose the result
-as a searchable corpus** — usable today in chat (RAG), and later in workflows,
-research mode, etc.
+The reusable capability underneath: **given an external resource that already holds chunked text
+(for example someone else's Weaviate collection), DARE reads its chunks and metadata,
+re-vectorizes them into its own vector DB, and exposes the result as a searchable corpus**. Chat
+(RAG) uses it now; workflows and research mode could use it later.
 
 ## Value proposition
 
-- We don't have to own or re-author the source data — we ingest a copy of its
-  **text**, once.
-- The corpus becomes first-class DARE knowledge: it flows through the exact same
-  retrieval path as an uploaded file, so chat citations, snippets, and future
-  workflow steps work with zero special-casing.
-- Entitlement is per-user and cheap (a row), so the same global corpus serves
-  everyone who adds it — no per-user copies of the vectors.
+- **No ownership needed.** DARE does not own or re-author the source data; it ingests a copy of
+  its **text**, once.
+- **First-class knowledge.** The corpus flows through the same retrieval path as an uploaded
+  file, so chat citations, snippets and future workflow steps need no special cases.
+- **Cheap entitlement.** Access is one row per user, so the same global corpus serves everyone who
+  adds it, with no per-user copies of the vectors.
 
-It is a **partial import capability**: it reads a source over plain REST and
-re-embeds. It is not (yet) a live federation/proxy to the source, and not a
-generic connector for arbitrary databases — see "Scope / future" below.
+It is a **partial import capability**: it reads a source over plain REST and re-embeds. It is not
+a live federation/proxy to the source, and not a generic connector for arbitrary databases (see
+[Scope / future](#scope--future)).
 
 ## Architecture — two stores, one thin link
 
@@ -67,8 +67,8 @@ data. The `weaviate_class` name is the only thread between them.
 5. Stamp `object_count` back onto the `SharedLibrary` row.
 
 Embedding happens **once per chunk, here**. Queries only embed the question.
-Re-run only when the source data changes or we switch embedding models. Cost is
-trivial — the whole ~1.7M-token corpus re-embeds for ~$0.22.
+Re-run only when the source data changes or DARE switches embedding models. The whole
+~1.7M-token corpus re-embeds for about $0.22.
 
 ```bash
 python manage.py import_library --library civil-war-pensions \
@@ -78,8 +78,7 @@ python manage.py import_library --library civil-war-pensions \
 # --use-source-vectors   trust the source's vectors (ONLY if compat-checked, below)
 ```
 
-The source connection can also be configured via env, which is cleaner for
-staging/prod dry-runs:
+You can also set the source connection in env, which is cleaner for staging/prod dry-runs:
 
 ```env
 SOURCE_WEAVIATE_URL=https://<source-weaviate-host>
@@ -116,8 +115,8 @@ cosine(that, the source's stored vector for the same chunk)
   ~0.04  -> different model, MUST re-embed (the default)
 ```
 
-Run this gate before trusting any external vectors. We default to re-embedding
-precisely because the label is never the proof.
+Run this check before you trust any external vectors. The importer re-embeds by default because
+the label is never the proof.
 
 ## Querying (retrieval)
 
@@ -131,8 +130,8 @@ citations. Selection persists per conversation (`selected_library_ids`).
 
 - Currently Weaviate-hosted libraries (the store layer is backend-agnostic;
   Pinecone routing exists but is unused).
-- Read path is REST-only because the source's gRPC/GraphQL were unavailable to
-  us — fine, since we only need the text.
+- The read path is REST-only because the source's gRPC/GraphQL were not available. REST is enough,
+  since only the text is needed.
 - Natural extensions: surfacing libraries in workflows and research mode, an
   admin UI to register/import a library, and more source connectors beyond
   Weaviate.

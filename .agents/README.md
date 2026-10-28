@@ -1,35 +1,28 @@
 # Agent configuration
 
-This directory holds configuration for AI coding agents, in the
-[Agent Skills](https://agentskills.io) open format that Codex, Claude Code, and other tools share.
+This directory holds skills for AI coding agents, in the [Agent Skills](https://agentskills.io)
+format that Codex, Claude Code and other tools share.
 
 ## Layout
 
 ```
 AGENTS.md                          project instructions (source of truth)
-.claude/CLAUDE.md                  imports AGENTS.md, plus Claude Code specifics
+.claude/CLAUDE.md                  imports AGENTS.md for Claude Code
 .agents/skills/<name>/SKILL.md     skills (source of truth)
 .claude/skills/<name>              symlink -> ../../.agents/skills/<name>
 ```
 
-Skills are one directory each, holding a `SKILL.md` with YAML frontmatter (`name`, `description`)
-and a Markdown body. The description is what an agent matches against to decide when to load the
-skill, so it should say when the skill applies — not just what it does.
+Each skill is a directory with a `SKILL.md`: YAML frontmatter (`name`, `description`) and a
+Markdown body. Agents match on the description, so it says when the skill applies, not only what
+it does.
 
 ## Why two directories
 
-The two tools scan different paths and neither reads the other's:
+Codex reads `.agents/skills/`; Claude Code reads `.claude/skills/`. The real files live in
+`.agents/skills/`, and each `.claude/skills/` entry is a symlink to one, so both tools load the
+same copy.
 
-| Tool        | Scans                          |
-| ----------- | ------------------------------ |
-| Codex CLI   | `.agents/skills/<name>/SKILL.md` |
-| Claude Code | `.claude/skills/<name>/SKILL.md` |
-
-`.agents/skills/` holds the real files. Each entry under `.claude/skills/` is a symlink to its
-`.agents/skills/` counterpart — Claude Code follows the symlink and reads `SKILL.md` from the
-target. One copy of every skill, both tools pick it up.
-
-## Adding a skill
+## Add a skill
 
 ```bash
 mkdir -p .agents/skills/my-skill
@@ -37,17 +30,15 @@ $EDITOR .agents/skills/my-skill/SKILL.md
 ln -s ../../.agents/skills/my-skill .claude/skills/my-skill
 ```
 
-Commit both the directory and the symlink.
+Commit the directory and the symlink.
 
 ## Windows
 
-Git stores symlinks natively, but checking them out on Windows needs `core.symlinks=true`, which
-requires either Developer Mode or an elevated shell:
+Symlinks need `core.symlinks=true`, which needs Developer Mode or an elevated shell:
 
 ```bash
 git config --global core.symlinks true
 ```
 
-Without it, each `.claude/skills/<name>` entry checks out as a plain text file containing the link
-target, and Claude Code will not find the skill. Codex is unaffected — it reads `.agents/skills/`
-directly.
+Without it, each `.claude/skills/<name>` checks out as a text file and Claude Code skips the
+skill. Codex is unaffected.

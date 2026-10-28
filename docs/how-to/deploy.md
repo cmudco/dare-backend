@@ -1,139 +1,111 @@
-# DARE Backend — Deployment Guide
+# Deploy
 
-> **Just want to run it locally?** See [docs/tutorials/quickstart.md](../tutorials/quickstart.md) — the **Docker** path stands up
-> the whole stack (API, worker, Postgres, Redis, Weaviate) in one command, or the **Local Python**
-> path runs Django directly in a venv. **This guide is for deploying to a server** and is the fuller
-> reference behind that quick start.
-
-This guide covers two deployment paths:
-
-1. **Docker path** — the simplest way to stand up the full stack; recommended for most deployments
-2. **Bare-metal path** — for production hosts or environments where Docker is not available
-
-For environment variable reference, see [docs/reference/configuration.md](../reference/configuration.md).
-
----
+Use this to run the DARE backend on a server, with Docker or on bare metal, and to upgrade or
+roll it back. To run it on your own machine, use [docs/tutorials/quickstart.md](../tutorials/quickstart.md).
+Every environment variable is in [docs/reference/configuration.md](../reference/configuration.md).
 
 ## Prerequisites
 
 | Requirement | Version | Notes |
-|---|---|---|
-| Python | 3.13.x | Required by the current backend dependency set |
-| PostgreSQL | 16+ | Bundled in Docker via `pgvector/pgvector:pg16`; required for production |
-| Redis | 6+ | Required for background jobs and Socket.IO pub/sub |
-| Docker + Compose | 24+ | Recommended for single-server backend deployment |
-| Node.js | 18+ | Only required if running the frontend on the same host |
+| --- | --- | --- |
+| Python | 3.13.x | Required by the current dependency set |
+| PostgreSQL | 16+ | Required in production; Docker bundles `pgvector/pgvector:pg16` |
+| Redis | 6+ | Background jobs and Socket.IO pub/sub |
+| Docker + Compose | 24+ | Recommended for a single-server deployment |
+| Node.js | 18+ | Only if the frontend runs on the same host |
 
----
-
-## Single-Server Resource Minimums
+### Single-server resource minimums
 
 | Profile | CPU | RAM | Storage | Notes |
-|---|---:|---:|---:|---|
-| Backend + Postgres + Redis + Weaviate | 2 vCPU | 4 GB | 30 GB SSD | Viable for low traffic, small uploads, and managed/external LLM APIs. |
-| Recommended production baseline | 4 vCPU | 8 GB | 80 GB SSD | Better headroom for file processing, RQ jobs, Weaviate indexes, logs, and backups. |
-| With local Ollama models | 8 vCPU | 24 GB+ | 150 GB SSD | Depends heavily on model size. The compose profile reserves 8 GB and caps Ollama at 16 GB by default. |
+| --- | ---: | ---: | ---: | --- |
+| Backend + Postgres + Redis + Weaviate | 2 vCPU | 4 GB | 30 GB SSD | Low traffic, small uploads, external LLM APIs |
+| Recommended production baseline | 4 vCPU | 8 GB | 80 GB SSD | Headroom for file processing, RQ jobs, Weaviate indexes, logs and backups |
+| With local Ollama models | 8 vCPU | 24 GB+ | 150 GB SSD | Depends on model size; the compose profile reserves 8 GB and caps Ollama at 16 GB |
 
-Plan extra disk for uploaded media, Postgres backups, Weaviate data, and model files. For production, monitor volume growth and keep database/media backups outside the host.
+Plan extra disk for uploaded media, Postgres backups, Weaviate data and model files. Watch volume
+growth and keep database and media backups off the host.
 
----
+## Production topology
 
-## Production Topology
-
-The cloud provider is flexible. What matters is a long-running ASGI process, a background
-worker, Redis, Postgres, media storage, and a reverse proxy that supports WebSocket upgrades.
+Any cloud provider works. You need a long-running ASGI process, a background worker, Redis,
+Postgres, media storage, and a reverse proxy that supports WebSocket upgrades.
 
 | Component | Role | Notes |
-|---|---|---|
-| Reverse proxy | TLS termination and HTTP/WebSocket routing | Nginx, ALB, Caddy, or equivalent. Must pass Socket.IO upgrade headers. |
-| DARE web | Django ASGI API and Socket.IO server | Run with Uvicorn or Gunicorn + Uvicorn workers. |
-| DARE worker | Django RQ worker | Processes file ingestion, embeddings, email, and other async jobs. |
-| Postgres + pgvector | Primary relational database | Use managed Postgres where possible. Back up regularly. |
-| Redis | RQ queues, cache, Socket.IO pub/sub | Enable authentication and private networking in production. |
-| Vector store | RAG embeddings | Weaviate for self-hosted deployments, Pinecone for managed deployments. |
-| Object/media storage | Uploaded files and generated media | Local disk is acceptable for small installs; use durable object storage for production. |
+| --- | --- | --- |
+| Reverse proxy | TLS termination, HTTP and WebSocket routing | Nginx, ALB, Caddy or equivalent; must pass Socket.IO upgrade headers |
+| DARE web | Django ASGI API and Socket.IO server | Uvicorn, or Gunicorn with Uvicorn workers |
+| DARE worker | Django RQ worker | File ingestion, embeddings, email and other async jobs |
+| Postgres + pgvector | Primary database | Prefer managed Postgres; back it up regularly |
+| Redis | RQ queues, cache, Socket.IO pub/sub | Enable AUTH and private networking |
+| Vector store | RAG embeddings | Weaviate when self-hosted, Pinecone when managed |
+| Object or media storage | Uploads and generated media | Local disk suits small installs; use durable object storage in production |
 
-Network:
+## Production checklist
 
-- Terminate public traffic at the reverse proxy over HTTPS; never expose Uvicorn directly.
-- The proxy must support long-lived Socket.IO connections.
-- Postgres, Redis, and Weaviate should be reachable only from trusted hosts or private networks.
-- List frontend origins in `CORS_ALLOWED_ORIGINS` and `CSRF_TRUSTED_ORIGINS`.
+- **Secrets.** Start from `.example.env` but never deploy its example values. Set fresh
+  `DJANGO_SECRET_KEY`, `DARE_INTERNAL_KEY`, `SSO_JWT_KEY`, database credentials, the Redis
+  password (if AUTH is on) and provider API keys.
+- **Debug off.** `DJANGO_DEBUG=False` and `ALLOWED_HOSTS` limited to your hostnames.
+- **TLS.** Terminate public HTTPS at the reverse proxy; never expose Uvicorn directly. The proxy
+  must hold long-lived Socket.IO connections.
+- **Private network.** Postgres, Redis and Weaviate are reachable only from trusted hosts.
+- **Origins.** List every frontend origin in `CORS_ALLOWED_ORIGINS` and `CSRF_TRUSTED_ORIGINS`.
+- **Workers.** Run `default` workers, exactly one `memory` worker and one `rqscheduler` (see
+  [Process management](#6-process-management)).
+- **Document runtime.** Every worker host has the OpenCV system libraries (see
+  [Document parsing runtime](#document-parsing-runtime)).
+- **Backups.** Back up Postgres, uploaded media, Weaviate data (if self-hosted) and the environment
+  configuration, stored securely outside the repository. Test a restore before you rely on them.
 
-Secrets: use `.example.env` as the template, but never deploy its example values. At minimum,
-set fresh `DJANGO_SECRET_KEY`, `DARE_INTERNAL_KEY`, `SSO_JWT_KEY`, database credentials, the Redis
-password (if AUTH is on), and provider API keys.
+## Path 1: Docker
 
-Backups: Postgres, uploaded media, Weaviate data (if self-hosted), and the environment
-configuration, stored securely outside the repository. Test a restore before relying on them.
+The bundled `docker-compose.yml` runs:
 
----
-
-## Path 1: Docker Setup
-
-The bundled `docker-compose.yml` provisions:
-
-- **DARE web** (Django ASGI API + Socket.IO) on `${WEB_PORT:-8000}`
-- **DARE worker** (RQ background worker)
+- **DARE web** (Django ASGI API and Socket.IO) on `${WEB_PORT:-8000}`
+- **DARE worker** (one RQ worker on the `default` queue)
 - **Postgres + pgvector** on `${POSTGRES_PORT:-5432}`
 - **Redis** on `${REDIS_PORT:-6379}`
 - **Weaviate** on `${WEAVIATE_PORT:-8080}` and `${WEAVIATE_GRPC_PORT:-50051}`
-- **Weaviate console** on `${WEAVIATE_CONSOLE_PORT:-8081}` when the `debug` profile is enabled
-- **Ollama** on `${OLLAMA_PORT:-11434}` when the `llama` profile is enabled
-- **[quillmark-mcp](https://github.com/tonguetoquill/quillmark-mcp)** (document generation, built from the `quillmark-mcp/` git submodule) on `127.0.0.1:${QUILLMARK_DEBUG_PORT:-8090}` (debug only — DARE talks to it over the compose network)
+- **Weaviate console** on `${WEAVIATE_CONSOLE_PORT:-8081}`, with the `debug` profile
+- **Ollama** on `${OLLAMA_PORT:-11434}`, with the `llama` profile
+- **[quillmark-mcp](https://github.com/tonguetoquill/quillmark-mcp)** (document generation, built
+  from the `quillmark-mcp/` submodule) on `127.0.0.1:${QUILLMARK_DEBUG_PORT:-8090}`, for debugging
+  only; DARE reaches it over the compose network
 
-### Quick start (recommended)
+`scripts/dev-setup.sh` automates the steps below for local development; see the
+[quick start](../tutorials/quickstart.md).
+
+### 1. Clone with submodules
 
 ```bash
-# 1. Clone with submodules
 git clone --recurse-submodules https://github.com/cmudco/dare-backend.git
 cd dare-backend
-# Already cloned without submodules? Run: git submodule update --init
-
-# 2. One-command setup: checks Docker, inits the submodule, creates .env +
-#    docker-compose.override.yml, builds and starts the stack (migrations
-#    run automatically), and optionally creates a verified demo superuser
-#    with a $100 wallet.
-scripts/dev-setup.sh --demo-user
-
-# 3. Set your Anthropic key in docker-compose.override.yml (CLAUDE_API_KEY),
-#    then reload:
-docker compose up -d
+# Cloned without submodules? Run: git submodule update --init
 ```
 
-Then start the frontend:
+### 2. Configure
+
+Copy the env file and set `DB_PASSWORD` (compose refuses to start without it), `DJANGO_SECRET_KEY`
+and a provider key. Put local-only overrides in `docker-compose.override.yml`, copied from
+`docker-compose.override.yml.example`; Compose loads it automatically.
 
 ```bash
-cd ../dare-frontend
-npm install && npm run dev    # http://localhost:5173
+cp .example.env .env
 ```
 
-**Document-generation quickstart:** log in on the frontend, open `/mcp`, click **Connect** on *CMU Documents*, then start a chat and ask for a document (e.g. a memo) — the assistant renders a PDF via quillmark-mcp.
+### 3. Start the stack
 
-### Manual steps
-
-If you prefer to do what `scripts/dev-setup.sh` does by hand:
+The web container waits for Postgres and Redis, collects static files (hiding errors) and runs
+migrations before it starts Uvicorn. Run `collectstatic` yourself to see any error.
+Static and media files live in named Docker volumes.
 
 ```bash
-git submodule update --init                      # quillmark-mcp build context
-cp .example.env .env                             # set DB_PASSWORD at minimum
-cp docker-compose.override.yml.example docker-compose.override.yml
-# Put DJANGO_SECRET_KEY and CLAUDE_API_KEY (or OPENAI/GEMINI keys) in the override
 docker compose up --build -d
 docker compose exec web python manage.py createsuperuser
-
-# 5. Collect static files so the Django admin renders with its CSS/JS
-docker compose exec web python manage.py collectstatic --noinput
-
-# 6. Check container health
-docker compose ps
-curl http://localhost:8000/api/health/
-curl http://localhost:8000/api/ready/
+docker compose exec web python manage.py collectstatic --noinput   # admin CSS/JS
 ```
 
-The web container waits for Postgres and Redis, then runs migrations before starting Uvicorn. Static and media files are stored in named Docker volumes. New users need a verified email and wallet credit before chat runs; `scripts/dev-setup.sh --demo-user` creates a ready demo account, and [docs/how-to/run-quillmark.md](run-quillmark.md) covers the document renderer.
-
-To enable optional services:
+### 4. Enable optional services
 
 ```bash
 docker compose --profile debug up -d weaviate-console
@@ -141,15 +113,15 @@ docker compose --profile llama up -d ollama
 docker compose exec ollama ollama pull llama3.1:8b
 ```
 
----
+[run-quillmark.md](run-quillmark.md) covers the document renderer.
 
-## Path 2: Bare-Metal Setup
+## Path 2: Bare metal
 
-Use this path for production deployments or constrained environments.
+Use this for production hosts or where Docker is not available.
 
-### 1. System dependencies
+### 1. Install system dependencies
 
-**Ubuntu / Debian:**
+Ubuntu or Debian:
 
 ```bash
 sudo apt update
@@ -158,7 +130,7 @@ sudo apt install -y python3.13 python3.13-venv python3-pip \
     build-essential libpq-dev
 ```
 
-**macOS (Homebrew):**
+macOS (Homebrew):
 
 ```bash
 brew install python@3.13 postgresql@16 redis
@@ -166,7 +138,7 @@ brew services start postgresql@16
 brew services start redis
 ```
 
-### 2. PostgreSQL
+### 2. Create the database
 
 ```bash
 sudo -u postgres psql <<EOF
@@ -177,7 +149,7 @@ ALTER DATABASE dare OWNER TO dare;
 EOF
 ```
 
-Set the corresponding values in `.env`:
+Set the matching values in `.env`:
 
 ```
 USE_POSTGRES=True
@@ -188,47 +160,51 @@ DB_HOST=localhost
 DB_PORT=5432
 ```
 
-### 3. Redis
+### 3. Check Redis
 
-Redis should be running on `localhost:6379` after install. Verify:
+Redis runs on `localhost:6379` after install.
 
 ```bash
-redis-cli ping   # → PONG
+redis-cli ping   # PONG
 ```
 
-### 4. Vector store
+### 4. Choose a vector store
 
-DARE supports two vector backends — pick one or run both:
+Use one or both:
 
-- **Weaviate** — self-hostable. Run via Docker (`docker compose up -d weaviate`) or follow upstream install docs.
-- **Pinecone** — managed service. Provide `PINECONE_API_KEY` and `PINECONE_INDEX_NAME` in `.env`.
+- **Weaviate** is self-hostable. Run it with `docker compose up -d weaviate` or follow the
+  upstream install docs.
+- **Pinecone** is a managed service. Set `PINECONE_API_KEY` and `PINECONE_INDEX_NAME` in `.env`.
 
-### 5. Application
+### 5. Install the application
 
 ```bash
-# Clone and enter
 git clone https://github.com/cmudco/dare-backend.git && cd dare-backend
-
-# Create env file
-cp .example.env .env
-# Edit .env per docs/reference/configuration.md
-
-# Python environment
+cp .example.env .env   # edit per docs/reference/configuration.md
 python3.13 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements/prod.txt   # local.txt for development
-
-# Migrate, collect static, create admin user
+bash devops/install_document_runtime.sh   # Debian/Ubuntu: OpenCV system libraries
+pip install -r requirements/prod.txt      # local.txt for development
+python devops/check_document_runtime.py
 python manage.py migrate
 python manage.py collectstatic --noinput
 python manage.py createsuperuser
 ```
 
-### 6. Process management (production)
+### 6. Process management
 
-Run two long-lived processes — the ASGI server and the RQ worker. Below is a sample systemd unit; adapt paths to your environment.
+Run these long-lived processes:
 
-**`/etc/systemd/system/dare-api.service`**
+- **API.** The ASGI server (`dare-api` below).
+- **Default workers.** One or more `rqworker default` processes (`dare-worker` below).
+- **Memory worker.** Exactly one `python manage.py rqworker memory` process. Memory writes depend
+  on a single FIFO worker for per-user ordering; never run two.
+- **Scheduler.** One `python manage.py rqscheduler` process, so scheduled jobs fire. Workers
+  register the recurring ingestion sweep at startup (`INGESTION_RECONCILE_INTERVAL_SECONDS`).
+
+Sample systemd units; adapt the paths to your host.
+
+`/etc/systemd/system/dare-api.service`:
 
 ```ini
 [Unit]
@@ -248,7 +224,7 @@ Restart=on-failure
 WantedBy=multi-user.target
 ```
 
-**`/etc/systemd/system/dare-worker.service`**
+`/etc/systemd/system/dare-worker.service`:
 
 ```ini
 [Unit]
@@ -267,16 +243,16 @@ Restart=on-failure
 WantedBy=multi-user.target
 ```
 
-Then:
+Copy `dare-worker.service` for the memory worker and the scheduler, changing `ExecStart`. Then:
 
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable --now dare-api dare-worker
 ```
 
-### 7. Reverse proxy (Nginx)
+## Reverse proxy (Nginx)
 
-Sample Nginx config terminating TLS in front of Uvicorn:
+This config terminates TLS in front of Uvicorn and passes Socket.IO upgrades:
 
 ```nginx
 server {
@@ -304,30 +280,45 @@ server {
 }
 ```
 
----
+## Document parsing runtime
 
-## Verifying the install
+Docling pulls in `opencv-python` through RapidOCR. Its Linux wheel links to `libGL.so.1` even
+though parsing never opens a display.
+
+- **Do not install the headless wheel alongside it.** Both own `cv2`.
+- **Docker** installs `libgl1` and GLib and checks the runtime during the build.
+- **Native hosts** must install these libraries on every worker host
+  (`devops/install_document_runtime.sh`) and run `devops/check_document_runtime.py`. Any external
+  deploy script must run the same two steps.
+- **A passing API health check proves nothing here.** It does not exercise the worker's native
+  libraries. After deploying, reprocess an affected file in Advanced mode and confirm its
+  structure and image descriptions.
+- **The Basic fallback** can keep the text after an Advanced parser error, but it does not repair
+  a missing library.
+
+Image descriptions from OpenAI-compatible models get at most one retry when the response is
+empty, malformed JSON or token-limited. A token-limited retry doubles the output allowance. Every
+attempt is metered, and wallet credit is checked again before the retry. Refusals and
+content-filtered responses are not retried. Persistent failures stay available through the
+retry-image-descriptions action, and successful descriptions stay cached.
+
+## Verify
 
 ```bash
-# REST endpoint
 curl http://localhost:8000/api/health/
 curl http://localhost:8000/api/ready/
-
-# Swagger UI (in browser)
-open http://localhost:8000/api/docs/
-
-# Background worker is consuming jobs
-python manage.py rqstats
+open http://localhost:8000/api/docs/   # Swagger UI
+python manage.py rqstats               # workers are consuming jobs
+docker compose ps                      # Docker path: container health
 ```
 
-If you see migrations applied, Swagger loads, and the worker reports an active default queue, the install is healthy.
+The install is healthy when migrations are applied, Swagger loads and `rqstats` shows an active
+`default` queue.
 
----
+## Upgrade
 
-## Upgrading
-
-`devops/deploy.sh` automates this sequence; review its paths and service names before using it in
-a new environment.
+`devops/deploy.sh` automates this sequence for the reference host. Review its paths and service
+names (`dare`, `rqworker1`–`rqworker4`, `rqscheduler`, `nginx`) before using it anywhere else.
 
 1. Announce the deployment window if users may be affected.
 2. Pull the target commit or release tag and activate the virtual environment.
@@ -335,62 +326,44 @@ a new environment.
    `pip install -r requirements/prod.txt`.
 4. With the workers' Python environment, run `python devops/check_document_runtime.py`, then
    `python manage.py check`.
-5. `python manage.py migrate`, then `python manage.py collectstatic --noinput`.
-6. Restart the API and worker services, e.g. `sudo systemctl restart dare-api dare-worker`.
-7. Verify `/api/health/` and `/api/ready/`.
+5. Run `python manage.py migrate`, then `python manage.py collectstatic --noinput`. Migrate before
+   restarting the API when the upgrade changes the schema.
+6. Restart the API and workers, for example `sudo systemctl restart dare-api dare-worker`.
+7. Check `/api/health/` and `/api/ready/`.
 
-Run migrations *before* restarting the API server when the upgrade includes schema changes.
-
-### Deployment order across repos
-
-1. **dare-backend**: everything else depends on it.
-2. **socraticbots-backend**: depends on the DARE API.
-3. **dare-frontend**: depends on the DARE API.
-4. **socraticbots-frontend**: depends on the Socratic Bots API.
+### Deploy order across repos
 
 Deploy a backend before any frontend that relies on its new API shape.
 
+1. **dare-backend.** Everything else depends on it.
+2. **socraticbots-backend.** Depends on the DARE API.
+3. **dare-frontend.** Depends on the DARE API.
+4. **socraticbots-frontend.** Depends on the Socratic Bots API.
+
 ### Rollback
 
-1. Revert to the previous known-good commit or release tag.
-2. Reinstall dependencies if the lock set changed.
-3. Restart the API and worker services.
-4. Verify the health endpoints and key user flows.
+1. Check out the previous known-good commit or release tag.
+2. Reinstall dependencies if the requirements changed.
+3. Restart the API and workers.
+4. Check the health endpoints and key user flows.
 
-Database rollbacks are migration-specific. Prefer forward-fix migrations unless the migration was
-explicitly designed to reverse safely.
-
-### Document parsing runtime
-
-`opencv-python` is installed transitively by Docling → RapidOCR. Its Linux wheel links to
-`libGL.so.1` even though parsing does not open a display. Do not install the headless wheel
-alongside it: both own `cv2`. Docker installs `libgl1` and GLib and checks the runtime during the
-build. Native deployments must install these libraries on every worker host, and any external
-deploy script must run the same install and check steps. A passing API health check does not
-exercise the document worker's native libraries.
-
-After deploying, reprocess an affected file in Advanced mode and confirm its structure and image
-descriptions. The Basic fallback can preserve text after an Advanced parser error, but does not
-repair a missing runtime library.
-
-OpenAI-compatible image-description responses that are empty, malformed JSON, or token-limited get
-at most one more attempt. A token-limited response doubles the output allowance for that retry;
-every attempt is metered and wallet credit is checked again before retrying. Refusals and
-content-filtered responses are not retried. Persistent failures stay available through the
-retry-image-descriptions action, and successful descriptions stay cached.
-
----
+Database rollbacks depend on the migration. Prefer a forward-fix migration unless the migration
+was designed to reverse safely.
 
 ## Troubleshooting
 
-| Symptom | Likely cause | Fix |
-|---|---|---|
-| `psycopg2.OperationalError: could not connect` | Postgres not running, or wrong `DB_*` values | `systemctl status postgresql`; check `.env` |
-| `redis.exceptions.ConnectionError` | Redis not running, or wrong `REDIS_HOST/PORT` | `redis-cli ping`; check `.env` |
-| `WeaviateConnectionError` | Weaviate container not running | `docker compose ps weaviate` |
-| `ollama: connection refused` | Ollama container not running, or `OLLAMA_HOST` mismatch | `docker compose ps ollama` |
-| RQ worker crashes on macOS (`OBJC_DISABLE_INITIALIZE_FORK_SAFETY` errors) | The default forking worker | Run `rqworker default --worker-class rq.SimpleWorker` |
-| Background jobs stuck | Worker not running | Start the `rqworker` process |
-| 502 from Nginx | Uvicorn bound to wrong host or crashed | `journalctl -u dare-api -f` |
+- **`psycopg2.OperationalError: could not connect`.** Postgres is down or the `DB_*` values are
+  wrong. Run `systemctl status postgresql` and check `.env`.
+- **`redis.exceptions.ConnectionError`.** Redis is down or `REDIS_HOST`/`REDIS_PORT` is wrong. Run
+  `redis-cli ping` and check `.env`.
+- **`WeaviateConnectionError`.** The Weaviate container is not running. Run
+  `docker compose ps weaviate`.
+- **`ollama: connection refused`.** The Ollama container is not running or `OLLAMA_HOST` does not
+  match. Run `docker compose ps ollama`.
+- **The worker crashes on macOS with `OBJC_DISABLE_INITIALIZE_FORK_SAFETY` errors.** The default
+  worker forks. Run `rqworker default --worker-class rq.SimpleWorker`.
+- **Background jobs are stuck.** No worker is running. Start the `rqworker` process.
+- **Nginx returns 502.** Uvicorn crashed or is bound to the wrong host. Run
+  `journalctl -u dare-api -f`.
 
-For more, see [docs/how-to/administer-dare.md](administer-dare.md).
+For user and access management, see [administer-dare.md](administer-dare.md).

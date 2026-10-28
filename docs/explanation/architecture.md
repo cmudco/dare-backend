@@ -1,12 +1,12 @@
-# DARE Backend — Architecture
+# Architecture
 
-How the backend is put together and why. For request-by-request sequence diagrams see
-[data-flows.md](data-flows.md); for event payloads see
-[the Socket.IO reference](../reference/socketio-events.md).
+DARE is one Django ASGI backend serving two products, the DARE app and Socratic Bots. It owns
+the accounts, conversations, files, LLM calls and billing for both, serves REST and Socket.IO
+from one process, and pushes slow work to RQ workers. This page shows how the pieces fit and
+why; [data-flows.md](data-flows.md) has request-by-request sequence diagrams and the
+[Socket.IO reference](../reference/socketio-events.md) has the event payloads.
 
-## The platform
-
-DARE is one backend serving two products: the DARE app and Socratic Bots.
+## Overview
 
 ```mermaid
 graph TB
@@ -48,7 +48,7 @@ graph TB
   socket, sending the tutor's settings as `bot_meta`. See
   [Socratic Bots integration](../reference/socratic-bots-integration.md).
 
-## Inside the backend
+## Components
 
 ```mermaid
 flowchart TB
@@ -86,46 +86,39 @@ flowchart TB
 | **Service layer** | Provider integrations and multi-model coordination | `core/services/` |
 | **Background workers** | File processing, embeddings, email, memory writes | `*/tasks.py`, run by `python manage.py rqworker` |
 | **Models** | Domain data | `*/models.py`; mixins in `common/models.py` |
-| **Settings** | `common` → `local` / `staging` / `production` | `config/settings/`, `config/env.py` |
+| **Settings** | `common` → `local` / `production` | `config/settings/`, `config/env.py` |
 
-A plain REST request goes: client → reverse proxy → Uvicorn → Django middleware → DRF JWT
-authentication → view → serializer → model → Postgres → response.
+## Key relationships
 
-## Architectural choices
+```mermaid
+erDiagram
+    User ||--o{ Conversation : owns
+    User ||--o{ File : uploads
+    User ||--o{ Workflow : creates
+    User ||--o{ Agent : creates
+    User }o--o| ModelGroup : "via access code group"
 
-- **python-socketio, not Django Channels consumers.** The Socket.IO app is mounted next to Django
-  in `dare/asgi.py` and uses a Redis-backed manager, so events reach a room from any process.
-  This is why the backend must run under an ASGI server (Uvicorn); `runserver` cannot serve it.
-- **Service layer over fat models.** Models stay thin. Logic that touches a third party or
-  coordinates several models lives in `core/services/`.
-- **One dispatch point per provider family.** `LLMService` in `core/services/llm_service.py`
-  picks the provider class for a model; `get_vector_service()` in
-  `core/services/vector_service.py` picks the vector store:
+    Conversation ||--o{ Message : contains
+    Message ||--o{ Snippet : "RAG context"
+    Message ||--o{ WebSearchSource : sources
 
-  ```
-  LLMService → AIService implementation
-      ├── OpenAIService
-      ├── ClaudeService
-      ├── GeminiService
-      ├── LlamaService       (Ollama)
-      └── CustomLLMService   (custom endpoints and LiteLLM proxies)
+    Workflow ||--o{ WorkflowNode : contains
+    Workflow ||--o{ WorkflowRun : executes
 
-  get_vector_service() → BaseVectorService implementation
-      ├── WeaviateVectorService
-      └── PineconeVectorService
-  ```
+    File }o--o{ Tag : tagged_with
+    Folder }o--o{ File : contains
 
-- **Chat is a bounded tool loop.** A turn streams, calls tools, reads their results and streams
-  again. See [tool-loop.md](tool-loop.md).
-- **Soft deletes and filtered managers.** `BaseModel` adds `is_active` and `is_deleted`. Most
-  models declare only `active_objects`, which hides retired rows, and there is no `objects`
-  manager on them; reverse relations filter the same way. Use `_base_manager` to see every row.
-- **Slow work goes to RQ.** File ingestion, embeddings and memory writes run in workers so the
-  web process stays responsive. Each job must be safe to retry (`docs/reference/rules.md`, section 7).
-- **camelCase at the boundary.** REST and socket payloads are camelCase; Python stays snake_case.
-  See [serialization.md](../reference/serialization.md).
+    ModelGroup }o--o{ LLM : "grants access"
+```
 
-## Real-time chat
+## Flows
+
+### A REST request
+
+Client → reverse proxy → Uvicorn → Django middleware → DRF JWT authentication → view →
+serializer → model → Postgres → response.
+
+### Real-time chat
 
 ```mermaid
 sequenceDiagram
@@ -151,32 +144,44 @@ sequenceDiagram
     MC-->>SIO: message (type: message, complete)
 ```
 
-Two namespaces:
-- `/chat`: conversations, messages, artifacts, voice input.
-- `/workflow`: workflow execution, step streaming, batch processing, human validation.
+The Socket.IO server has two namespaces:
 
-## Key relationships
+- **`/chat`.** Conversations, messages, artifacts and voice input.
+- **`/workflow`.** Workflow execution, step streaming, batch processing and human validation.
 
-```mermaid
-erDiagram
-    User ||--o{ Conversation : owns
-    User ||--o{ File : uploads
-    User ||--o{ Workflow : creates
-    User ||--o{ Agent : creates
-    User }o--o| ModelGroup : "via access code group"
+## Design choices
 
-    Conversation ||--o{ Message : contains
-    Message ||--o{ Snippet : "RAG context"
-    Message ||--o{ WebSearchSource : sources
+- **python-socketio, not Django Channels consumers.** The Socket.IO app is mounted next to Django
+  in `dare/asgi.py` and uses a Redis-backed manager, so events reach a room from any process.
+  This is why the backend must run under an ASGI server (Uvicorn); `runserver` cannot serve it.
+- **Service layer over fat models.** Models stay thin. Logic that touches a third party or
+  coordinates several models lives in `core/services/`.
+- **One dispatch point per provider family.** `LLMService` in `core/services/llm_service.py`
+  picks the provider class for a model; `get_vector_service()` in
+  `core/services/vector_service.py` picks the vector store:
 
-    Workflow ||--o{ WorkflowNode : contains
-    Workflow ||--o{ WorkflowRun : executes
+  ```
+  LLMService → provider service class
+      ├── OpenAIService
+      ├── ClaudeService
+      ├── GeminiService
+      ├── LlamaService       (Ollama)
+      └── CustomLLMService   (custom endpoints and LiteLLM proxies)
 
-    File }o--o{ Tag : tagged_with
-    Folder }o--o{ File : contains
+  get_vector_service() → BaseVectorService implementation
+      ├── WeaviateVectorService
+      └── PineconeVectorService
+  ```
 
-    ModelGroup }o--o{ LLM : "grants access"
-```
+- **Chat is a bounded tool loop.** A turn streams, calls tools, reads their results and streams
+  again. See [tool-loop.md](tool-loop.md).
+- **Soft deletes and filtered managers.** `BaseModel` adds `is_active` and `is_deleted`. Most
+  models declare only `active_objects`, which hides retired rows, and there is no `objects`
+  manager on them; reverse relations filter the same way. Use `_base_manager` to see every row.
+- **Slow work goes to RQ.** File ingestion, embeddings and memory writes run in workers so the
+  web process stays responsive. Each job must be safe to retry (`docs/reference/rules.md`, section 7).
+- **camelCase at the boundary.** REST and socket payloads are camelCase; Python stays snake_case.
+  See [serialization.md](../reference/serialization.md).
 
 ## Further reading
 

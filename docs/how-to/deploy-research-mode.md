@@ -1,8 +1,8 @@
-# Research Mode on Hermes
+# Deploy research mode
 
-Research Mode runs its agents (the research chat, Scouts, the Critic and the
-Presenter) on **Hermes Agent** over its REST API. DARE owns the record; Hermes
-runs the agent loop and never touches the database.
+Set up a Hermes host and DARE so research mode can run its agents. Research mode runs its agents
+(the research chat, Scouts, the Critic and the Presenter) on **Hermes Agent** over its REST API.
+DARE owns the record; Hermes runs the agent loop and never touches the database.
 
 ```mermaid
 flowchart LR
@@ -19,8 +19,6 @@ flowchart LR
 ```
 
 Tested on **Hermes v0.21.7** with the DARE tool-call patch (§2.2).
-
----
 
 ## 1. What a run is sent
 
@@ -71,8 +69,7 @@ The listener needs `API_SERVER_KEY` to bind (a shorter key makes the gateway
 exit on start). DARE never uses it: each project profile has its own key (§4).
 Keep the API on loopback, or behind TLS and a network policy.
 
-The default profile is still reachable with the listener key, so strip its host
-tools:
+The listener key still reaches the default profile, so strip its host tools:
 
 ```bash
 hermes tools disable --platform api_server \
@@ -155,9 +152,9 @@ watcher notices the directory, some seconds after DARE writes it. DARE's gateway
 records when Hermes first reaches it for a project (its tool listing, then a
 keepalive ping every 60 seconds), and every run waits for that (up to
 `HERMES_TOOLS_WAIT_SECONDS`, shown as "Connecting the agent's tools…") so a new
-project's first turn has its tools. The flag lives in the Django cache, so that
-cache must be shared by the web and worker processes (Redis). Profiles of deleted projects keep retrying with dead tokens and slow
-the gateway's start; remove their directories.
+project's first turn has its tools. The flag lives in the Django cache, so the web and worker
+processes must share that cache (Redis). Profiles of deleted projects keep retrying with dead
+tokens and slow the gateway's start; remove their directories.
 
 Confirm routing and isolation (the listener key must be refused):
 
