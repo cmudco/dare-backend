@@ -16,7 +16,7 @@ Self-healing semantics:
     matching providers).
 
 Bot resolution: `resolve_active_wallet_for_bot(...)` is the bot-aware wrapper.
-It pulls the bot's billing config from SocraticBooks (cached); the bot's model
+It pulls the bot's billing config from Socratic Bots (cached); the bot's model
 decides who pays:
   - A DARE catalog model: the chatter pays from their DARE wallet, or their BYO
     key for that provider. A LiteLLM wallet only serves its own proxy's models,
@@ -265,7 +265,7 @@ def resolve_active_wallet_for_bot(
     """Resolve the wallet that pays for an LLM call inside a bot conversation.
 
     Args:
-        bot_id: SocraticBooks Bot ID.
+        bot_id: Socratic bot ID.
         calling_user: Authenticated DARE user, or ``None`` for anonymous
             public-bot calls.
         requested_provider: Provider of a DARE catalog model, for BYO routing.

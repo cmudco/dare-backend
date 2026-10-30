@@ -552,7 +552,7 @@ class LLMService:
             llm: The LLM model to use. May be a real DB row or an unsaved stub
                 materialized from a synthetic LiteLLM descriptor.
             user: Optional user instance for wallet-aware credential resolution.
-            bot_id: SocraticBooks bot the call belongs to, if any.
+            bot_id: Socratic bot the call belongs to, if any.
             litellm_model_ref: Picker id when ``llm`` is a LiteLLM stub.
         """
         if user or bot_id is not None:

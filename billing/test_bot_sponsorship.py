@@ -1,4 +1,4 @@
-"""Who pays for a SocraticBooks bot turn, and through which key it is sent.
+"""Who pays for a Socratic bot turn, and through which key it is sent.
 
 A DARE catalog model is paid by the chatter (DARE wallet, or their BYO key);
 a LiteLLM model saved on the bot is sponsored by the owner's key.

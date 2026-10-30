@@ -1236,7 +1236,7 @@ class MessageCoordinator:
     async def _fetch_progress_llm(self, llm_id) -> Optional[LLM]:
         """Resolve the Socratic progress-assessment LLM by numeric id.
 
-        Progress LLMs are configured per-bot in SocraticBooks and are always
+        Progress LLMs are configured per-bot in Socratic Bots and are always
         DB-backed (never LiteLLM-routed), so we stringify the bare id to
         feed the opaque-id parser.
         """

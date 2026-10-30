@@ -525,8 +525,8 @@ class InternalSetRoleView(APIView):
 class InternalAccessCodeSyncView(APIView):
     """
     Endpoint for inter-service communication.
-    Allows SocraticBooks backend to create/update/deactivate AccessCodeGroups
-    when subscription codes are saved in SocraticBooks.
+    Allows Socratic Bots backend to create/update/deactivate AccessCodeGroups
+    when subscription codes are saved in Socratic Bots.
 
     Authenticated via JWT token (same token used for all DARE API calls).
 
@@ -612,7 +612,7 @@ class InternalAccessCodeSyncView(APIView):
 
 class InternalVoiceAccessCodeView(APIView):
     """
-    Service-to-service endpoint for SocraticBooks voice-assignment access codes.
+    Service-to-service endpoint for Socratic Bots voice-assignment access codes.
 
     A voice assignment code is registered here as a RESEARCHER access-code group so
     that DARE's normal registration path assigns the role. Groups provisioned by
@@ -673,7 +673,7 @@ class InternalVoiceAccessCodeView(APIView):
                 "max_capacity": VOICE_ACCESS_CODE_CAPACITY,
                 "default_role": RoleChoice.RESEARCHER,
                 "provisioned_by": AccessCodeProvisionerChoice.SOCRATIC_VOICE,
-                "notes": "SocraticBooks voice assignment code (managed by SocraticBooks)",
+                "notes": "Socratic Bots voice assignment code (managed by Socratic Bots)",
             },
         )
         if group.provisioned_by != AccessCodeProvisionerChoice.SOCRATIC_VOICE:

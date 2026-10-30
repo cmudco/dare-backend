@@ -367,7 +367,7 @@ class FileViewSet(viewsets.ModelViewSet):
     )
     def bulk_delete(self, request):
         """
-        Permanently delete many files (Socratic Books relies on this).
+        Permanently delete many files (Socratic Bots relies on this).
         DARE moves files to Recently deleted with ``trash`` instead.
         Expected payload: {"fileIds": [1, 2, 3, ...]}
         """
@@ -1346,7 +1346,7 @@ class InternalFileUploadView(APIView):
     """
     Internal endpoint for inter-service file upload.
 
-    Allows socraticbooks-backend to upload files on behalf of users without
+    Allows socraticbots-backend to upload files on behalf of users without
     requiring a user JWT token. Used for webhook-triggered transcript uploads.
 
     Authenticated via X-Internal-Key header (shared secret).

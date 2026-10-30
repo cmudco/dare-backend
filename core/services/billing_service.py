@@ -525,7 +525,7 @@ class BillingService:
                     if cost > Decimal("0.00"):
                         conversation = message_obj.conversation
 
-                        # SocraticBooks bot conversations always use the
+                        # Socratic bot conversations always use the
                         # wallet router. The legacy user-wallet branch is only
                         # for non-bot DARE conversations.
                         if conversation.bot_id is not None:
@@ -541,7 +541,7 @@ class BillingService:
                                 message_obj.save()
                                 return message_obj
                             raise PaymentRequiredError(
-                                "Unable to resolve SocraticBooks bot wallet",
+                                "Unable to resolve Socratic bot wallet",
                                 code="BOT_CONFIG_UNAVAILABLE",
                                 details={"bot_id": conversation.bot_id},
                             )
