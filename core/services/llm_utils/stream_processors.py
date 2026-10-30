@@ -14,8 +14,15 @@ import base64
 import json
 import logging
 from copy import deepcopy
-from typing import AsyncGenerator, Dict, List
+from typing import AsyncGenerator, Dict, List, Optional
 
+from core.services.code_sandbox import (
+    ANTHROPIC_CODE_EXECUTION_SUBTOOLS,
+    ANTHROPIC_PROVIDER,
+    OPENAI_CONTAINER_FEE,
+    OPENAI_PROVIDER,
+    SANDBOX_TOOL_NAME,
+)
 from core.services.dtos.stream_event_dto import LLMStreamEvent, StreamEventKind
 from core.services.dtos.tool_dto import ToolCallRequest
 
@@ -31,7 +38,18 @@ from .web_search_extractors import (
 )
 
 WEB_FETCH_PREVIEW_CHARS = 4000
+OUT_OF_TOKENS_NOTE = (
+    "_The response stopped because the model ran out of output tokens. "
+    "Raise Max Tokens in this chat's settings and try again._"
+)
 logger = logging.getLogger(__name__)
+
+
+def _out_of_tokens_event(wrote_text: bool) -> LLMStreamEvent:
+    """The note shown when a provider stops at the output-token limit."""
+    return LLMStreamEvent.text_delta(
+        ("\n\n" if wrote_text else "") + OUT_OF_TOKENS_NOTE
+    )
 
 
 def _safe_get(obj, attr: str, default=None):
@@ -106,6 +124,33 @@ def _sanitize_web_fetch_result(block) -> Dict:
             result["truncated"] = len(source_data) > WEB_FETCH_PREVIEW_CHARS
 
     return {key: value for key, value in result.items() if value is not None}
+
+
+def _sanitize_web_search_result(block) -> Dict:
+    """Build a compact, persistence-safe result for Anthropic web search.
+
+    ``encrypted_content`` is dropped: it is only replayable inside the
+    original response, and titles + URLs are what a later turn needs to
+    know the search actually returned something.
+    """
+    content = _safe_get(block, "content")
+    if not isinstance(content, list):
+        return {
+            "type": _safe_get(block, "type"),
+            "error_code": _safe_get(content, "error_code") or "unknown_error",
+        }
+
+    results = []
+    for item in content:
+        if _safe_get(item, "type") != "web_search_result":
+            continue
+        entry = {
+            "title": _safe_get(item, "title"),
+            "url": _safe_get(item, "url"),
+            "page_age": _safe_get(item, "page_age"),
+        }
+        results.append({key: value for key, value in entry.items() if value})
+    return {"type": _safe_get(block, "type"), "results": results}
 
 
 def _merge_provider_tool_calls(
@@ -216,6 +261,9 @@ class OpenAIStreamProcessor:
         current_tool_calls: Dict[int, Dict[str, str]] = {}  # by delta index
         started_indexes = set()
         ready_indexes = set()
+        # Gateway Gemini searches through web_search_options on this path.
+        grounding_extractor = GeminiWebSearchExtractor()
+        sources_sent = 0
 
         def _ready_events(indexes):
             for idx in sorted(indexes):
@@ -229,10 +277,13 @@ class OpenAIStreamProcessor:
                     )
                 )
 
+        wrote_text = False
+
         async for chunk in response:
             choice = chunk.choices[0] if chunk.choices else None
 
             if choice and choice.delta.content:
+                wrote_text = True
                 yield LLMStreamEvent.text_delta(choice.delta.content)
 
             if choice and choice.delta.tool_calls:
@@ -266,13 +317,25 @@ class OpenAIStreamProcessor:
                 for event in _ready_events(current_tool_calls.keys()):
                     yield event
 
+            grounding_extractor.process_gateway_chunk(chunk)
+            if choice and choice.finish_reason == "length":
+                yield _out_of_tokens_event(wrote_text)
+
             usage = OpenAIUsageExtractor.extract_from_chat_completion(chunk)
             if usage:
+                sources = grounding_extractor.get_sources()
+                if sources:
+                    usage["web_search_sources"] = sources
+                    sources_sent = len(sources)
                 yield LLMStreamEvent.usage_frame(usage)
 
         # Fallback: providers that never send finish_reason == "tool_calls"
         for event in _ready_events(current_tool_calls.keys()):
             yield event
+
+        sources = grounding_extractor.get_sources()
+        if len(sources) > sources_sent:
+            yield LLMStreamEvent.usage_frame({"web_search_sources": sources})
 
     @staticmethod
     async def process_responses_api_stream(
@@ -294,6 +357,9 @@ class OpenAIStreamProcessor:
             LLMStreamEvent
         """
         web_search_extractor = OpenAIWebSearchExtractor()
+        sandbox_calls: List[Dict] = []
+        sandbox_containers = set()
+        wrote_text = False
 
         async for chunk in response:
             if not hasattr(chunk, "type"):
@@ -302,6 +368,7 @@ class OpenAIStreamProcessor:
             # Handle text delta events
             if chunk.type == "response.output_text.delta":
                 if hasattr(chunk, "delta") and chunk.delta:
+                    wrote_text = True
                     yield LLMStreamEvent.text_delta(chunk.delta)
 
             # A finished function call arrives as a completed output item with
@@ -326,20 +393,140 @@ class OpenAIStreamProcessor:
                     yield LLMStreamEvent.tool_call_ready(
                         ToolCallRequest(id=call_id, name=name, arguments=arguments)
                     )
+                elif item is not None and item.type == "code_interpreter_call":
+                    sandbox_containers.add(item.container_id)
+                    sandbox_calls.append(_sandbox_tool_call(item))
 
             # Extract web search sources from streaming events
             web_search_extractor.process_chunk(chunk)
 
-            # Handle completion event with usage
-            if chunk.type == "response.completed":
+            if chunk.type == "response.failed":
+                error = getattr(getattr(chunk, "response", None), "error", None)
+                message = getattr(error, "message", None) or "the provider failed"
+                yield LLMStreamEvent.text_delta(f"Error: {message}")
+
+            if chunk.type == "error":
+                message = getattr(chunk, "message", None) or "the provider failed"
+                yield LLMStreamEvent.text_delta(f"Error: {message}")
+
+            # Reasoning models can spend the whole output budget thinking and
+            # searching, ending incomplete with no answer at all.
+            if chunk.type == "response.incomplete":
+                details = getattr(chunk.response, "incomplete_details", None)
+                if getattr(details, "reason", None) == "max_output_tokens":
+                    yield _out_of_tokens_event(wrote_text)
+
+            if chunk.type in ("response.completed", "response.incomplete"):
                 usage = OpenAIUsageExtractor.extract_from_responses_api(chunk) or {}
 
                 # Include web search sources in usage data
                 sources = web_search_extractor.get_sources()
                 if sources:
                     usage["web_search_sources"] = sources
+                if sandbox_calls:
+                    usage["provider_tool_calls"] = sandbox_calls
+                    usage["sandbox_fee"] = float(
+                        OPENAI_CONTAINER_FEE * len(sandbox_containers)
+                    )
+                    citations = _sandbox_file_citations(chunk.response)
+                    if citations:
+                        usage["sandbox_citations"] = citations
 
                 yield LLMStreamEvent.usage_frame(usage)
+
+
+# Persisted sandbox output is for display, not replay; cap what a loop can print.
+SANDBOX_LOG_LIMIT = 8000
+
+
+def _sandbox_tool_call(item) -> Dict:
+    """An OpenAI code_interpreter_call as a provider-executed tool call."""
+    logs = "\n".join(
+        output.logs
+        for output in item.outputs or []
+        if output.type == "logs" and output.logs
+    )
+    return {
+        "id": item.id,
+        "provider": OPENAI_PROVIDER,
+        "name": SANDBOX_TOOL_NAME,
+        "arguments": {"code": item.code or ""},
+        "result": {"code": item.code or "", "logs": logs[:SANDBOX_LOG_LIMIT]},
+        "status": "completed" if item.status == "completed" else "failed",
+    }
+
+
+def _sandbox_file_citations(response) -> List[Dict]:
+    """Files the model cited from its container, in answer order."""
+    citations = []
+    for item in response.output:
+        if item.type != "message":
+            continue
+        for part in item.content:
+            for annotation in getattr(part, "annotations", None) or []:
+                if annotation.type == "container_file_citation":
+                    citations.append(
+                        {
+                            "container_id": annotation.container_id,
+                            "file_id": annotation.file_id,
+                            "filename": annotation.filename,
+                        }
+                    )
+    return citations
+
+
+_CLAUDE_SANDBOX_RESULT_TYPES = (
+    "bash_code_execution_tool_result",
+    "text_editor_code_execution_tool_result",
+)
+
+
+def _claude_sandbox_call(call: Dict, result: Optional[Dict]) -> Dict:
+    """A Claude code execution step as a provider-executed sandbox call.
+
+    Bash steps show the command and what it printed; file steps show the
+    file Claude wrote (usually the script it then runs).
+    """
+    try:
+        arguments = json.loads(call.get("arguments") or "{}")
+    except (TypeError, ValueError):
+        arguments = {}
+    result = result or {}
+    if call["name"] == "bash_code_execution":
+        code = arguments.get("command") or ""
+        logs = "\n".join(
+            part for part in (result.get("stdout"), result.get("stderr")) if part
+        )
+    else:
+        header = f"# {arguments.get('command', '')} {arguments.get('path', '')}"
+        body = arguments.get("file_text") or arguments.get("new_str") or ""
+        code = f"{header.rstrip()}\n{body}".rstrip()
+        logs = result.get("content") if isinstance(result.get("content"), str) else ""
+    failed = (
+        not result
+        or str(result.get("type", "")).endswith("_error")
+        or (result.get("return_code") or 0) != 0
+    )
+    return {
+        "id": call["id"],
+        "provider": ANTHROPIC_PROVIDER,
+        "name": SANDBOX_TOOL_NAME,
+        "arguments": {"code": code},
+        "result": {"code": code, "logs": (logs or "")[:SANDBOX_LOG_LIMIT]},
+        "status": "failed" if failed else "completed",
+    }
+
+
+def _claude_sandbox_output_file_ids(sandbox_results: Dict[str, Dict]) -> List[str]:
+    """Ids of the files Claude left in its output folder, in run order."""
+    return [
+        output["file_id"]
+        for result in sandbox_results.values()
+        for output in result.get("content") or []
+        if isinstance(output, dict)
+        and output.get("type") == "bash_code_execution_output"
+        and output.get("file_id")
+    ]
 
 
 class ClaudeStreamProcessor:
@@ -373,6 +560,20 @@ class ClaudeStreamProcessor:
         current_replay_block_index = None
         current_replay_input_json = ""
         provider_tool_calls_yielded = False
+        wrote_text = False
+        sandbox_results: Dict[str, Dict] = {}
+
+        def merged_provider_tool_calls() -> List[Dict]:
+            return [
+                (
+                    _claude_sandbox_call(call, sandbox_results.get(call["id"]))
+                    if call["name"] in ANTHROPIC_CODE_EXECUTION_SUBTOOLS
+                    else call
+                )
+                for call in _merge_provider_tool_calls(
+                    provider_tool_calls, provider_tool_results
+                )
+            ]
 
         async for event in response:
             # Handle content block start (for tool use and web search results)
@@ -418,6 +619,17 @@ class ClaudeStreamProcessor:
                                 "result": _sanitize_web_fetch_result(block),
                             }
                         )
+                    elif block.type == "web_search_tool_result":
+                        provider_tool_results.append(
+                            {
+                                "tool_call_id": _safe_get(block, "tool_use_id"),
+                                "result": _sanitize_web_search_result(block),
+                            }
+                        )
+                    elif block.type in _CLAUDE_SANDBOX_RESULT_TYPES:
+                        sandbox_results[_safe_get(block, "tool_use_id")] = (
+                            _safe_to_dict(_safe_get(block, "content", {}))
+                        )
                     # Extract web search sources from tool result blocks
                     web_search_extractor.process_event(event)
 
@@ -445,6 +657,7 @@ class ClaudeStreamProcessor:
                         current_replay_block["text"] = (
                             current_replay_block.get("text", "") + event.delta.text
                         )
+                    wrote_text = True
                     yield LLMStreamEvent.text_delta(event.delta.text)
                 # Handle tool input JSON delta
                 elif hasattr(event.delta, "partial_json"):
@@ -528,13 +741,18 @@ class ClaudeStreamProcessor:
                         stop_reason,
                         usage.get("output_tokens"),
                     )
+                if stop_reason == "max_tokens":
+                    yield _out_of_tokens_event(wrote_text)
 
                 if provider_tool_calls:
-                    usage["provider_tool_calls"] = _merge_provider_tool_calls(
-                        provider_tool_calls,
-                        provider_tool_results,
-                    )
+                    usage["provider_tool_calls"] = merged_provider_tool_calls()
                     provider_tool_calls_yielded = True
+                output_file_ids = _claude_sandbox_output_file_ids(sandbox_results)
+                if output_file_ids:
+                    usage["sandbox_output_file_ids"] = output_file_ids
+                container = _safe_get(event.delta, "container")
+                if container:
+                    usage["sandbox_container_id"] = _safe_get(container, "id")
 
                 # Include web search sources in usage data
                 sources = web_search_extractor.get_sources()
@@ -546,12 +764,7 @@ class ClaudeStreamProcessor:
 
         # Provider tool calls that never made it into a usage frame
         if provider_tool_calls and not provider_tool_calls_yielded:
-            final_data = {
-                "provider_tool_calls": _merge_provider_tool_calls(
-                    provider_tool_calls,
-                    provider_tool_results,
-                )
-            }
+            final_data = {"provider_tool_calls": merged_provider_tool_calls()}
             sources = web_search_extractor.get_sources()
             if sources:
                 final_data["web_search_sources"] = sources
@@ -583,16 +796,22 @@ class GeminiStreamProcessor:
         usage_extractor = GeminiUsageExtractor()
         web_search_extractor = GeminiWebSearchExtractor()
         url_context_results = {}
+        wrote_text = False
+        hit_token_limit = False
 
         # Use async for to properly iterate over async stream
         async for chunk in response:
             # Handle candidates (both text and function calls)
             if hasattr(chunk, "candidates") and chunk.candidates:
                 for candidate in chunk.candidates:
+                    finish_reason = getattr(candidate, "finish_reason", None)
+                    if getattr(finish_reason, "value", finish_reason) == "MAX_TOKENS":
+                        hit_token_limit = True
                     if hasattr(candidate, "content") and candidate.content:
-                        for part in candidate.content.parts:
+                        for part in candidate.content.parts or []:
                             # Handle text parts
                             if hasattr(part, "text") and part.text:
+                                wrote_text = True
                                 yield LLMStreamEvent.text_delta(part.text)
 
                             # Handle function calls (Gemini's tool calling).
@@ -634,6 +853,9 @@ class GeminiStreamProcessor:
             provisional = usage_extractor.provisional_usage()
             if provisional:
                 yield LLMStreamEvent.usage_frame(provisional)
+
+        if hit_token_limit:
+            yield _out_of_tokens_event(wrote_text)
 
         # Yield final usage frame with provider tool calls and web search sources
         usage = usage_extractor.get_final_usage() or {}

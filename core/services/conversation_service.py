@@ -3,14 +3,13 @@ from decimal import Decimal
 from typing import Dict, Optional
 
 from channels.db import database_sync_to_async
-from django.core.exceptions import ValidationError
-from django.db import models
-from django.db.models import Prefetch
 from djangorestframework_camel_case.util import camelize
 
 from conversations.api.serializers import MessageSerializer
 from conversations.constants import SenderType
-from conversations.models import LLM, Artifact, Conversation, Message
+from conversations.models import Conversation, Message
+from conversations.services.message_query_service import messages_for_display
+from core.constants import BackgroundTask
 from core.services.background_model_service import (
     BackgroundModelService,
     BackgroundWalletEmpty,
@@ -39,18 +38,7 @@ class ConversationService:
 
         messages = await database_sync_to_async(
             lambda: list(
-                Message.active_objects.filter(conversation=conversation)
-                .select_related("llm")
-                .prefetch_related(
-                    "snippets",
-                    "files",
-                    "tags",
-                    "web_search_sources",
-                    "mcp_tool_calls",
-                    # Only prefetch active artifacts to match what serializer expects
-                    Prefetch("artifacts", queryset=Artifact.active_objects.all()),
-                )
-                .order_by("-created_at")[:limit]
+                messages_for_display(conversation).order_by("-created_at")[:limit]
             )
         )()
 
@@ -195,6 +183,7 @@ class ConversationService:
                 messages=messages,
                 description="Conversation title generation",
                 max_tokens=80,
+                task=BackgroundTask.TITLES,
                 public_bot_id=public_bot_id,
             )
             return self._sanitize_title(result.value)

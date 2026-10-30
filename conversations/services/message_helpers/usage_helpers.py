@@ -26,12 +26,14 @@ _BREAKDOWN_KEYS = (
     "estimated_fields",
     "cached_input_tokens",
     "cache_write_input_tokens",
+    "sandbox_fee",
 )
 _SUMMED_OPTIONAL_KEYS = (
     "thinking_tokens",
     "visible_output_tokens",
     "cached_input_tokens",
     "cache_write_input_tokens",
+    "sandbox_fee",
 )
 
 

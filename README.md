@@ -5,41 +5,20 @@
 
 > Django REST + Socket.IO backend for the **Dietrich Analysis Research Education (DARE) Platform**.
 
-## Table of Contents
-
-- [What is DARE?](#what-is-dare)
-- [Overview](#overview)
-- [Quick Start](#quick-start)
-- [Documentation](#documentation)
-- [Tech Stack](#tech-stack)
-- [What is included in this repo?](#what-is-included-in-this-repo)
-- [What is not included in this repo?](#what-is-not-included-in-this-repo)
-- [Stay in touch](#stay-in-touch)
-- [Acknowledgements](#acknowledgements)
-- [Contributors](#contributors)
-- [License](#license)
-
 ## What is DARE?
 
-The Dietrich Analysis Research Education (DARE) Platform is an open-source, multi-LLM research and
-conversation platform. It provides a single, vendor-agnostic interface to OpenAI, Anthropic Claude,
-Google Gemini, and self-hosted LLaMA models, with file-grounded retrieval (RAG), Model Context
-Protocol (MCP) tool integration, visual multi-step workflows, and real-time streaming. DARE is
-built for researchers and institutions that need more than a chatbot — document intelligence,
-reproducible workflows, and per-user usage tracking in one place.
+DARE is an open-source, multi-LLM research and conversation platform. It gives you one
+vendor-agnostic interface to OpenAI, Anthropic Claude, Google Gemini and self-hosted LLaMA models,
+with file-grounded retrieval (RAG), Model Context Protocol (MCP) tools, visual multi-step
+workflows and real-time streaming.
 
-**This repository is the DARE backend** — the Django ASGI service that powers the platform. It
-handles:
+DARE is built for researchers and institutions that need more than a chatbot: document
+intelligence, reproducible workflows and per-user usage tracking in one place.
 
-- Real-time streaming chat across providers
-- Document upload, processing, and RAG over vector stores (Pinecone, Weaviate)
-- Multi-step AI workflow execution via a visual DAG builder
-- Token usage tracking and per-user billing
-- Access-code based registration for institutional deployments
-- Inter-service authentication for partner platforms (e.g. SocraticBooks)
+**This repository is the DARE backend**, the Django ASGI service that powers the platform.
 
-> **DARE runs standalone.** The DARE backend and frontend are all you need to run the platform —
-> nothing else is required. SocraticBooks is a separate, optional platform built on top of DARE.
+> **DARE runs standalone.** The DARE backend and frontend are all you need to run the platform.
+> Socratic Bots is a separate, optional platform built on top of DARE.
 
 ## Overview
 
@@ -73,62 +52,68 @@ flowchart TB
     services --> ollama
 ```
 
-See [docs/architecture.md](https://github.com/cmudco/dare-backend/blob/main/docs/architecture.md) for the full diagram and
-[docs/architecture/overview.md](https://github.com/cmudco/dare-backend/blob/main/docs/architecture/overview.md) for component-level detail.
+Clients talk to the backend over REST and Socket.IO. Every feature goes through one service layer
+that owns the LLM, vector-store, MCP and email integrations. The full diagrams are in
+[docs/explanation/architecture.md](https://github.com/cmudco/dare-backend/blob/main/docs/explanation/architecture.md).
 
-## Quick Start
+## Features
 
-Fastest path — Docker brings up the whole stack (API, worker, Postgres, Redis, Weaviate):
+- **Streaming chat.** Real-time chat across every supported provider.
+- **Documents and RAG.** Upload, processing and retrieval over Pinecone or Weaviate.
+- **Workflows.** Multi-step AI workflows built in a visual DAG builder.
+- **Usage and billing.** Token usage tracking and per-user billing.
+- **Access codes.** Registration gated by access codes for institutional deployments.
+- **Partner platforms.** Inter-service authentication for partners such as Socratic Bots.
+- **Document generation.** Typst-rendered documents through
+  [quillmark-mcp](https://github.com/tonguetoquill/quillmark-mcp), run as a service in the
+  compose stack.
 
-For local development, `scripts/dev-setup.sh --demo-user` does all of the below in one command
-(submodule init, env files, build, demo login) — see [INSTALL.md](INSTALL.md).
+## Quick start
 
-Document generation is powered by
-[quillmark-mcp](https://github.com/tonguetoquill/quillmark-mcp) (Typst
-rendering over MCP), vendored as the `quillmark-mcp/` git submodule and run as
-a service in the compose stack.
+You need Docker with Compose and one LLM provider key. Docker brings up the whole stack: API,
+worker, Postgres, Redis, Weaviate and quillmark-mcp.
 
 ```bash
-# 1. Clone (with the quillmark-mcp submodule)
 git clone --recurse-submodules https://github.com/cmudco/dare-backend.git
 cd dare-backend
-
-# 2. Configure
-cp .example.env .env
-# Edit .env. At minimum, set DJANGO_SECRET_KEY and one provider key
-# such as OPENAI_API_KEY, CLAUDE_API_KEY, or GEMINI_API_KEY.
-
-# 3. Build and start the backend stack
+cp .example.env .env   # set DJANGO_SECRET_KEY, DB_PASSWORD and one provider key
 docker compose up --build -d
 docker compose exec web python manage.py createsuperuser
-docker compose exec web python manage.py collectstatic --noinput   # so the admin panel renders with its CSS/JS
+docker compose exec web python manage.py collectstatic --noinput   # admin CSS/JS
 curl http://localhost:8000/api/health/
 ```
 
-The API is at `http://localhost:8000/`; Swagger UI at `http://localhost:8000/api/docs/`.
+The API runs at `http://localhost:8000/` and Swagger UI at `http://localhost:8000/api/docs/`.
+For local development, `scripts/dev-setup.sh --demo-user` does all of this in one command.
 
-See **[QUICKSTART.md](https://github.com/cmudco/dare-backend/blob/main/QUICKSTART.md)** for the full walkthrough — the local-Python path,
-collecting static files, and creating an access code so users can register — and
-**[DEPLOYMENT.md](https://github.com/cmudco/dare-backend/blob/main/DEPLOYMENT.md)** for production and server deployment.
+The full walkthrough, including the local-Python path and access codes, is
+[docs/tutorials/quickstart.md](https://github.com/cmudco/dare-backend/blob/main/docs/tutorials/quickstart.md).
+For servers, see [docs/how-to/deploy.md](https://github.com/cmudco/dare-backend/blob/main/docs/how-to/deploy.md).
 
 ## Documentation
 
-| Doc | What's in it |
-| --- | --- |
-| [QUICKSTART.md](https://github.com/cmudco/dare-backend/blob/main/QUICKSTART.md) | Run the backend locally — Docker stack, or local Python in a venv |
-| [DEPLOYMENT.md](https://github.com/cmudco/dare-backend/blob/main/DEPLOYMENT.md) | Production deployment — Docker and bare metal |
-| [docs/configuration.md](https://github.com/cmudco/dare-backend/blob/main/docs/configuration.md) | Every environment variable, with type, default, and description |
-| [docs/architecture.md](https://github.com/cmudco/dare-backend/blob/main/docs/architecture.md) | Component diagram and request flows |
-| [docs/admin-guide.md](https://github.com/cmudco/dare-backend/blob/main/docs/admin-guide.md) | User/role management, access codes, analytics |
-| [CONTRIBUTING.md](https://github.com/cmudco/dare-backend/blob/main/CONTRIBUTING.md) | Issues, pull requests, coding standards |
-| [CHANGELOG.md](https://github.com/cmudco/dare-backend/blob/main/CHANGELOG.md) | Release notes |
-| [SECURITY.md](https://github.com/cmudco/dare-backend/blob/main/SECURITY.md) | Vulnerability disclosure process |
-| [docs/integration/socraticbooks-dare-proxy.md](https://github.com/cmudco/dare-backend/blob/main/docs/integration/socraticbooks-dare-proxy.md) | DARE/SocraticBooks integration contract and update rules |
-| [docs/architecture/socketio-events.md](https://github.com/cmudco/dare-backend/blob/main/docs/architecture/socketio-events.md) | Socket.IO event reference |
-| [docs/api/dare-backend.md](https://github.com/cmudco/dare-backend/blob/main/docs/api/dare-backend.md) | REST API reference |
-| [docs/code-standards.md](https://github.com/cmudco/dare-backend/blob/main/docs/code-standards.md) | Coding conventions |
+| Kind | Doc | What's in it |
+| --- | --- | --- |
+| Tutorial | [docs/tutorials/quickstart.md](https://github.com/cmudco/dare-backend/blob/main/docs/tutorials/quickstart.md) | Run the backend locally: Docker stack, or local Python in a venv |
+| Tutorial | [docs/tutorials/getting-started.md](https://github.com/cmudco/dare-backend/blob/main/docs/tutorials/getting-started.md) | Run the whole DARE platform locally and send a first chat |
+| How-to | [docs/how-to/deploy.md](https://github.com/cmudco/dare-backend/blob/main/docs/how-to/deploy.md) | Production deployment, upgrades, rollback |
+| How-to | [docs/how-to/administer-dare.md](https://github.com/cmudco/dare-backend/blob/main/docs/how-to/administer-dare.md) | Users, roles, access codes, model groups, analytics |
+| Reference | [docs/reference/configuration.md](https://github.com/cmudco/dare-backend/blob/main/docs/reference/configuration.md) | Every environment variable, with default and description |
+| Reference | [docs/reference/rest-api.md](https://github.com/cmudco/dare-backend/blob/main/docs/reference/rest-api.md) | REST API reference |
+| Reference | [docs/reference/socketio-events.md](https://github.com/cmudco/dare-backend/blob/main/docs/reference/socketio-events.md) | Socket.IO event reference |
+| Reference | [docs/reference/socratic-bots-integration.md](https://github.com/cmudco/dare-backend/blob/main/docs/reference/socratic-bots-integration.md) | DARE/Socratic Bots integration contract |
+| Explanation | [docs/explanation/architecture.md](https://github.com/cmudco/dare-backend/blob/main/docs/explanation/architecture.md) | Platform and backend architecture |
+| Project | [.github/CONTRIBUTING.md](https://github.com/cmudco/dare-backend/blob/main/.github/CONTRIBUTING.md) | How to file issues and open pull requests |
+| Project | [docs/reference/rules.md](https://github.com/cmudco/dare-backend/blob/main/docs/reference/rules.md) | Coding rules and project conventions |
+| Project | [.github/SECURITY.md](https://github.com/cmudco/dare-backend/blob/main/.github/SECURITY.md) | Vulnerability disclosure |
+| Project | [AGENTS.md](https://github.com/cmudco/dare-backend/blob/main/AGENTS.md) | Commands and traps for AI coding agents |
+| Project | [BRAND.md](https://github.com/cmudco/dare-backend/blob/main/BRAND.md) | DARE brand guidelines and usage policy |
 
-## Tech Stack
+The full map, including every how-to and explanation, is
+[docs/index.md](https://github.com/cmudco/dare-backend/blob/main/docs/index.md). Release history
+lives in GitHub Releases and the in-app What's New dialog.
+
+## Tech stack
 
 - **Python 3.13**, Django 5.1, Django REST Framework
 - **Django Channels** + python-socketio for real-time streaming
@@ -139,37 +124,38 @@ collecting static files, and creating an access code so users can register — a
 
 ## What is included in this repo?
 
-- Django apps for auth/users, conversations + chat, files/RAG, and the workflow engine
-- `core/services/` — the service layer (LLM providers, vector stores, MCP, email)
-- `docs/` — architecture, configuration, admin, API reference, deployment, and integration guides
-- Docker Compose stack (API, RQ worker, Postgres + pgvector, Redis, Weaviate) and `requirements/`
-- Supporting docs — `QUICKSTART.md`, `DEPLOYMENT.md`, `CONTRIBUTING.md`, `CHANGELOG.md`, `SECURITY.md`, `BRAND.md`
+- Django apps for auth and users, conversations and chat, files and RAG, and the workflow engine
+- `core/services/`: the service layer (LLM providers, vector stores, MCP, email)
+- `docs/`: architecture, configuration, administration, API reference, deployment and integration guides
+- The Docker Compose stack (API, RQ worker, Postgres + pgvector, Redis, Weaviate) and `requirements/`
+- `quillmark-mcp/`: the document renderer, vendored as a git submodule
 
 ## What is not included in this repo?
 
-- [dare-frontend](https://github.com/cmudco/dare-frontend) — the React/TypeScript web client (run it separately)
-- [socraticbooks-backend](https://github.com/cmudco/socraticbooks-backend) and
-  [socraticbooks-react](https://github.com/cmudco/socraticbooks-react) — the SocraticBooks platform that
-  proxies to DARE
-- External infrastructure you provide yourself — LLM provider API keys, an Ollama host for
-  self-hosted models, and managed Postgres/Redis/vector-store instances in production
+- [dare-frontend](https://github.com/cmudco/dare-frontend): the React/TypeScript web client (run it separately)
+- [socraticbots-backend](https://github.com/cmudco/socraticbots-backend) and
+  [socraticbots-frontend](https://github.com/cmudco/socraticbots-frontend): the Socratic Bots platform,
+  which proxies to DARE
+- Infrastructure you provide: LLM provider API keys, an Ollama host for self-hosted models, and
+  managed Postgres, Redis and vector-store instances in production
 
 ## Stay in touch
 
-- **Found a bug or have a feature request?** Open an issue on the project's GitHub repository.
+- **Found a bug or have a feature request?** Open an issue on this repository.
+- **Found a security issue?** Follow [.github/SECURITY.md](https://github.com/cmudco/dare-backend/blob/main/.github/SECURITY.md).
 - **Questions or general inquiries?** Email the project team at vks@andrew.cmu.edu.
-- **Security disclosures:** see [SECURITY.md](https://github.com/cmudco/dare-backend/blob/main/SECURITY.md).
 
 ## Acknowledgements
 
-DARE is an Open Forum for AI (OFAI) initiative, Carnegie Mellon University Libraries.
+DARE is an Open Forum for AI (OFAI) initiative of Carnegie Mellon University Libraries.
 
-The DARE name and marks are owned by Carnegie Mellon University. Use of the name, wordmark,
-Scotty dog mark, header lockup, and footer badge is governed by the
-[DARE Brand Guidelines & Usage Policy](https://github.com/cmudco/dare-backend/blob/main/BRAND.md), independently of the software license.
+Carnegie Mellon University owns the DARE name and marks. The
+[DARE Brand Guidelines & Usage Policy](https://github.com/cmudco/dare-backend/blob/main/BRAND.md)
+governs use of the name, wordmark, Scotty dog mark, header lockup and footer badge, independently
+of the software license.
 
-This software integrates with third-party APIs (Anthropic, OpenAI, Google, and others); use of those
-APIs is subject to each provider's own Terms of Service.
+DARE integrates with third-party APIs (Anthropic, OpenAI, Google and others). Each provider's
+Terms of Service govern your use of its API.
 
 ## Contributors
 
@@ -202,8 +188,6 @@ DARE is built and maintained by contributors at Carnegie Mellon University and i
 
 ## License
 
-This project is licensed under the [GNU Affero General Public License v3.0](https://github.com/cmudco/dare-backend/blob/main/LICENSE) (AGPL-3.0-only).
-The software license does not grant rights to the DARE name or marks; see the
+DARE is licensed under the [GNU Affero General Public License v3.0](https://github.com/cmudco/dare-backend/blob/main/LICENSE) (AGPL-3.0-only); the full text is in [LICENSE](https://github.com/cmudco/dare-backend/blob/main/LICENSE) and at <https://www.gnu.org/licenses/agpl-3.0.en.html>.
+The software license grants no rights to the DARE name or marks; see the
 [DARE Brand Guidelines & Usage Policy](https://github.com/cmudco/dare-backend/blob/main/BRAND.md).
-
-See the [LICENSE](https://github.com/cmudco/dare-backend/blob/main/LICENSE) file for the full license text, or visit <https://www.gnu.org/licenses/agpl-3.0.en.html>.

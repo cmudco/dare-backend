@@ -1,6 +1,7 @@
 from unittest.mock import MagicMock, patch
 
 import requests
+from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.test import TestCase
@@ -19,13 +20,24 @@ from research.models import (
 )
 from research.services.hermes_service import HermesStopResult
 from research.tasks import run_artifact_job, run_critic_job, run_scout_job
+from research.testing import TempProfilesMixin
 from users.constants import RoleChoice
 
 User = get_user_model()
 
 
-class ResearchCancellationTests(TestCase):
+async def _collect(response):
+    return b"".join([chunk async for chunk in response.streaming_content])
+
+
+def read_stream(response):
+    """The SSE body of a chat turn (served as an async stream under ASGI)."""
+    return async_to_sync(_collect)(response).decode()
+
+
+class ResearchCancellationTests(TempProfilesMixin, TestCase):
     def setUp(self):
+        super().setUp()
         self.user = User.objects.create_user(
             email="cancel-owner@example.com",
             password="pw",
@@ -95,7 +107,7 @@ class ResearchCancellationTests(TestCase):
         }
 
         with patch(
-            "research.services.cancellation_service.get_hermes_service",
+            "research.services.cancellation_service.hermes_for",
             return_value=hermes,
         ):
             response = self.client.post(f"/api/research/agent-runs/{run.id}/cancel/")
@@ -124,7 +136,7 @@ class ResearchCancellationTests(TestCase):
         }
 
         with patch(
-            "research.services.cancellation_service.get_hermes_service",
+            "research.services.cancellation_service.hermes_for",
             return_value=hermes,
         ):
             response = self.client.post(f"/api/research/agent-runs/{run.id}/cancel/")
@@ -141,9 +153,7 @@ class ResearchCancellationTests(TestCase):
             status=AgentRunStatus.COMPLETED, completed_at=timezone.now()
         )
 
-        with patch(
-            "research.services.cancellation_service.get_hermes_service"
-        ) as get_hermes:
+        with patch("research.services.cancellation_service.hermes_for") as get_hermes:
             response = self.client.post(f"/api/research/agent-runs/{run.id}/cancel/")
 
         self.assertEqual(response.status_code, 200)
@@ -164,7 +174,7 @@ class ResearchCancellationTests(TestCase):
         hermes.get_run.side_effect = error
 
         with patch(
-            "research.services.cancellation_service.get_hermes_service",
+            "research.services.cancellation_service.hermes_for",
             return_value=hermes,
         ):
             self.client.post(f"/api/research/agent-runs/{run.id}/cancel/")
@@ -192,7 +202,7 @@ class ResearchCancellationTests(TestCase):
                 hermes.get_run.return_value = {"status": terminal_status}
 
                 with patch(
-                    "research.services.cancellation_service.get_hermes_service",
+                    "research.services.cancellation_service.hermes_for",
                     return_value=hermes,
                 ):
                     self.client.post(f"/api/research/agent-runs/{run.id}/cancel/")
@@ -211,7 +221,7 @@ class ResearchCancellationTests(TestCase):
         hermes.get_run.return_value = {"status": "running"}
 
         with patch(
-            "research.services.cancellation_service.get_hermes_service",
+            "research.services.cancellation_service.hermes_for",
             return_value=hermes,
         ):
             first = self.client.post(f"/api/research/agent-runs/{run.id}/cancel/")
@@ -242,7 +252,7 @@ class ResearchCancellationTests(TestCase):
         hermes.get_run.return_value = {"status": "running"}
 
         with patch(
-            "research.services.cancellation_service.get_hermes_service",
+            "research.services.cancellation_service.hermes_for",
             return_value=hermes,
         ):
             response = self.client.post(f"/api/research/agent-runs/{run.id}/cancel/")
@@ -258,9 +268,7 @@ class ResearchCancellationTests(TestCase):
         run = self.make_run()
         self.client.force_authenticate(self.other)
 
-        with patch(
-            "research.services.cancellation_service.get_hermes_service"
-        ) as get_hermes:
+        with patch("research.services.cancellation_service.hermes_for") as get_hermes:
             response = self.client.post(f"/api/research/agent-runs/{run.id}/cancel/")
 
         self.assertEqual(response.status_code, 404)
@@ -271,9 +279,7 @@ class ResearchCancellationTests(TestCase):
         self.user.platform_role = RoleChoice.USER
         self.user.save(update_fields=["platform_role"])
 
-        with patch(
-            "research.services.cancellation_service.get_hermes_service"
-        ) as get_hermes:
+        with patch("research.services.cancellation_service.hermes_for") as get_hermes:
             response = self.client.post(f"/api/research/agent-runs/{run.id}/cancel/")
 
         self.assertEqual(response.status_code, 403)
@@ -292,7 +298,7 @@ class ResearchCancellationTests(TestCase):
         )
 
         with patch(
-            "research.services.cancellation_service.get_hermes_service",
+            "research.services.cancellation_service.hermes_for",
             return_value=hermes,
         ):
             response = self.client.post(f"/api/research/agent-runs/{run.id}/cancel/")
@@ -307,7 +313,7 @@ class ResearchCancellationTests(TestCase):
     def test_queued_dare_job_honors_intent_before_starting_hermes(self):
         run = self.make_run(hermes_run_id="", cancellation_requested_at=timezone.now())
 
-        with patch("research.tasks.get_hermes_service") as get_hermes:
+        with patch("research.services.scout_service.hermes_for") as get_hermes:
             run_scout_job(run.id)
 
         get_hermes.assert_not_called()
@@ -331,14 +337,11 @@ class ResearchCancellationTests(TestCase):
         )
         hermes.get_run.return_value = {"status": "cancelled"}
 
-        with (
-            patch("research.tasks.get_hermes_service", return_value=hermes),
-            patch("research.tasks.gather_tool_results", return_value=[]),
-            patch("research.tasks.parse_staging_items") as parse,
-        ):
+        with patch("research.services.scout_service.hermes_for", return_value=hermes):
             run_scout_job(run.id)
 
-        parse.assert_not_called()
+        run.refresh_from_db()
+        self.assertEqual(run.status, AgentRunStatus.CANCELLED)
         self.assertEqual(ResearchStagingItem.objects.filter(run=run).count(), 0)
 
     def test_cancelled_critic_output_creates_no_verdict(self):
@@ -355,8 +358,8 @@ class ResearchCancellationTests(TestCase):
         hermes.get_run.return_value = {"status": "cancelled"}
 
         with (
-            patch("research.tasks.get_hermes_service", return_value=hermes),
-            patch("research.tasks.parse_critic_verdict") as parse,
+            patch("research.services.critic_service.hermes_for", return_value=hermes),
+            patch("research.services.critic_service.parse_verdict") as parse,
         ):
             run_critic_job(run.id, item.id)
 
@@ -380,8 +383,8 @@ class ResearchCancellationTests(TestCase):
         hermes.get_run.return_value = {"status": "cancelled"}
 
         with (
-            patch("research.tasks.get_hermes_service", return_value=hermes),
-            patch("research.tasks.parse_artifacts") as parse,
+            patch("research.services.artifact_service.hermes_for", return_value=hermes),
+            patch("research.services.artifact_service.parse_artifacts") as parse,
         ):
             run_artifact_job(run.id)
 
@@ -389,8 +392,9 @@ class ResearchCancellationTests(TestCase):
         self.assertEqual(ResearchArtifact.objects.filter(run=run).count(), 0)
 
 
-class ResearchChatTerminalTests(TestCase):
+class ResearchChatTerminalTests(TempProfilesMixin, TestCase):
     def setUp(self):
+        super().setUp()
         self.user = User.objects.create_user(
             email="chat-terminal@example.com",
             password="pw",
@@ -400,6 +404,7 @@ class ResearchChatTerminalTests(TestCase):
             key="enable_research", defaults={"default_enabled": True}
         )
         self.project = ResearchProject.objects.create(user=self.user, title="Chat R2")
+        self.thread = ResearchSession.create_thread(self.project, self.user)
         self.client = APIClient()
         self.client.force_authenticate(self.user)
 
@@ -417,14 +422,14 @@ class ResearchChatTerminalTests(TestCase):
         )
         hermes.get_run.return_value = {"status": "cancelled"}
 
-        with patch("research.api.views.get_hermes_service", return_value=hermes):
+        with patch("research.services.chat_service.hermes_for", return_value=hermes):
             response = self.client.post(
-                f"/api/research/projects/{self.project.id}/chat/",
+                f"/api/research/threads/{self.thread.id}/messages/",
                 {"message": "hello"},
                 format="json",
                 HTTP_ACCEPT="text/event-stream",
             )
-            body = b"".join(response.streaming_content).decode()
+            body = read_stream(response)
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("cancelled", body)
@@ -440,14 +445,14 @@ class ResearchChatTerminalTests(TestCase):
         hermes.stream_events.return_value = iter([{"event": "run.failed"}])
         hermes.get_run.return_value = {"status": "failed", "error": "unsafe detail"}
 
-        with patch("research.api.views.get_hermes_service", return_value=hermes):
+        with patch("research.services.chat_service.hermes_for", return_value=hermes):
             response = self.client.post(
-                f"/api/research/projects/{self.project.id}/chat/",
+                f"/api/research/threads/{self.thread.id}/messages/",
                 {"message": "hello"},
                 format="json",
                 HTTP_ACCEPT="text/event-stream",
             )
-            body = b"".join(response.streaming_content).decode()
+            body = read_stream(response)
 
         self.assertIn("failed", body)
         run = ResearchAgentRun.objects.get(hermes_run_id="chat_failed")

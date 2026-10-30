@@ -19,7 +19,11 @@ from conversations.constants import SenderType
 from conversations.models import Artifact, Conversation, Message
 
 from .db_helpers import convert_file_to_base64_dict
-from .tool_turn_helpers import build_history_tool_turns, summarize_tool_usage
+from .tool_turn_helpers import (
+    build_history_tool_turns,
+    has_stored_web_search_results,
+    summarize_tool_usage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +33,8 @@ MAX_ARTIFACT_CONTENT_IN_CONTEXT = 8000
 # Assistant messages (counted from the newest) whose tool calls replay as
 # full structured turns; older ones compress to a one-line usage note.
 TOOL_HISTORY_MESSAGE_WINDOW = 6
+
+MAX_WEB_SOURCES_IN_HISTORY = 20
 
 
 @database_sync_to_async
@@ -53,7 +59,10 @@ def get_conversation_history(conversation: Conversation, limit: int = 10) -> lis
     messages = (
         Message.active_objects.filter(conversation=conversation)
         .prefetch_related(
-            "files", "mcp_tool_calls", "artifacts__artifact_group__latest_version"
+            "files",
+            "mcp_tool_calls",
+            "web_search_sources",
+            "artifacts__artifact_group__latest_version",
         )
         .order_by("-created_at")
     )
@@ -113,13 +122,19 @@ def get_conversation_history(conversation: Conversation, limit: int = 10) -> lis
 
         content = msg.message
         tool_calls = list(msg.mcp_tool_calls.all())
+        replayed = (
+            bool(tool_calls)
+            and assistant_recency.get(msg.id, 0) < TOOL_HISTORY_MESSAGE_WINDOW
+        )
 
-        if tool_calls:
-            if assistant_recency.get(msg.id, 0) < TOOL_HISTORY_MESSAGE_WINDOW:
-                result.extend(build_history_tool_turns(msg.id, tool_calls))
-            else:
-                suffix = summarize_tool_usage(tool_calls)
-                content = f"{content}\n\n{suffix}" if content else suffix
+        if replayed:
+            result.extend(build_history_tool_turns(msg.id, tool_calls))
+        elif tool_calls:
+            suffix = summarize_tool_usage(tool_calls)
+            content = f"{content}\n\n{suffix}" if content else suffix
+
+        if not (replayed and has_stored_web_search_results(tool_calls)):
+            content = _append_web_sources(msg, content)
 
         content = _append_artifact_context(msg, content, included_artifact_groups)
         result.append({"role": "assistant", "content": content})
@@ -129,6 +144,29 @@ def get_conversation_history(conversation: Conversation, limit: int = 10) -> lis
         f"{len(included_artifact_groups)} artifact groups included"
     )
     return result
+
+
+def _append_web_sources(msg: Message, content: str) -> str:
+    """List the web sources a past answer drew on.
+
+    Hosted search results (OpenAI, Gemini, gateway models, and Claude rows
+    saved before results were captured) never reach history as tool turns,
+    so without this the model sees a sourced answer with no trace of its
+    sources and may disown it as fabricated.
+    """
+    sources = list(msg.web_search_sources.all()[:MAX_WEB_SOURCES_IN_HISTORY])
+    if not sources:
+        return content
+    lines = [
+        f"- {source.title} ({source.url})" if source.title else f"- {source.url}"
+        for source in sources
+    ]
+    note = (
+        "[A web search ran for this answer and returned results; the answer "
+        "cited the sources below. Only their titles and URLs are kept in "
+        "history, not the page text.]\n" + "\n".join(lines)
+    )
+    return f"{content}\n\n{note}" if content else note
 
 
 def _append_artifact_context(

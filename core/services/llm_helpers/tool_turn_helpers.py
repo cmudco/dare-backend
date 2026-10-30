@@ -21,6 +21,14 @@ logger = logging.getLogger(__name__)
 # Cap on how much of a persisted tool result is replayed into history.
 TOOL_RESULT_HISTORY_MAX_CHARS = 2000
 
+# Only titles/URLs are persisted for hosted search; without saying so, a
+# later turn reads the bare list as "the search returned no content" and
+# disowns quotes the original answer took from the pages.
+WEB_SEARCH_HISTORY_NOTE = (
+    "Search results (titles and URLs only. The page text was available when "
+    "the answer was written but is not kept in history):"
+)
+
 
 def synthesize_tool_call_id(message_id: Any, round_index: int, position: int) -> str:
     """Deterministic id for providers that assign none (Gemini)."""
@@ -153,6 +161,23 @@ def summarize_tool_usage(tool_call_rows: List[Any]) -> str:
     return f"[used tools: {', '.join(parts)}]"
 
 
+def has_stored_web_search_results(tool_call_rows: List[Any]) -> bool:
+    """True when any provider web_search row carries its persisted results."""
+    return any(
+        row.tool_name == "web_search" and not _is_unstored_web_search(row)
+        for row in tool_call_rows
+    )
+
+
+def _is_unstored_web_search(row: Any) -> bool:
+    # Rows saved before results were captured hold a bare "{}".
+    return row.tool_name == "web_search" and (row.result or "").strip() in (
+        "",
+        "{}",
+        "null",
+    )
+
+
 def _history_result_text(row: Any) -> str:
     """Model-facing result text for a persisted tool call, truncated.
 
@@ -163,7 +188,14 @@ def _history_result_text(row: Any) -> str:
     """
     if row.status == "failed" or (not row.result and row.error):
         return f"Error: {row.error or 'tool execution failed'}"
+    if _is_unstored_web_search(row):
+        return (
+            "(Search results for this call were not stored. This does not "
+            "mean the search returned nothing.)"
+        )
     text = row.result or ""
+    if row.tool_name == "web_search":
+        text = f"{WEB_SEARCH_HISTORY_NOTE}\n{text}"
     if not text.strip():
         return "(tool completed with no output)"
     if len(text) > TOOL_RESULT_HISTORY_MAX_CHARS:

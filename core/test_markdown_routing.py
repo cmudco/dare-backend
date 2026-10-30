@@ -33,14 +33,17 @@ class MarkdownRoutingTests(SimpleTestCase):
         select.assert_not_called()
         self.assertEqual(parsed.parser, "basic")
 
-    def test_plain_text_and_csv_use_docling_in_advanced_mode(self):
-        for name, data in (("guide.txt", MARKDOWN), ("sales.csv", CSV)):
-            with self.subTest(name=name):
-                parsed = DocumentParsingService().parse(
-                    self.file("advanced", name, data)
-                )
-                self.assertEqual(parsed.parser, "docling")
-                self.assertGreater(len(parsed.elements), 0)
+    def test_plain_text_uses_docling_in_advanced_mode(self):
+        parsed = DocumentParsingService().parse(
+            self.file("advanced", "guide.txt", MARKDOWN)
+        )
+        self.assertEqual(parsed.parser, "docling")
+        self.assertGreater(len(parsed.elements), 0)
+
+    def test_csv_keeps_the_basic_reader_in_advanced_mode(self):
+        parsed = DocumentParsingService().parse(self.file("advanced", "sales.csv", CSV))
+        self.assertEqual(parsed.parser, "basic")
+        self.assertIn("apple,3", parsed.text)
 
     def test_json_keeps_the_basic_reader_in_advanced_mode(self):
         parsed = DocumentParsingService().parse(self.file("advanced", "data.json"))

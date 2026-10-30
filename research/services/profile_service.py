@@ -1,40 +1,33 @@
 """
-Per-project Hermes profiles — the isolation boundary for agent memory.
+Per-project Hermes profiles: each project's agent runs in its own profile.
 
-A Hermes profile is simply its own ``HERMES_HOME`` directory. Everything the
-runtime keeps per profile resolves from that root: ``SOUL.md``, the memory tool's
-``memories/{MEMORY,USER}.md`` (``get_hermes_home() / "memories"`` in Hermes's
-``tools/memory_tool.py``), sessions, and ``.env``. So giving each project its own
-directory makes its agent memory isolated *by construction* — not by a naming
-convention we have to keep honouring.
+A profile is its own ``HERMES_HOME`` directory, so a project's SOUL.md,
+memories/ and skills/ are isolated by construction. The gateway serves every
+profile from one listener under ``/p/<profile>/``.
 
-Two things make this cheap. The gateway's multiplex mode serves every profile
-from the one listener under ``/p/<profile>/``, so N projects still means one
-process and one port. And a profile needs nothing but its directory to exist —
-Hermes resolves it, inherits the default config, and creates the rest on demand.
-We still write a config so the toolset and MCP surface are deliberate rather
-than inherited.
-
-The profile's ``.env`` carries a DARE-minted JWT for the project's owner, so the
-audited web tools run as that scholar. Without it a profile's tools resolve no
-credential at all: Hermes does not fall back to the default profile's ``.env``.
+DARE writes everything in a profile: ``config.yaml`` (model, toolsets, the
+approval gate, the MCP server), ``.env`` (the owner's MCP token, the gateway
+key, the model key) and the files the agent loads, rendered from DARE's
+approved state by ``prompt_builder.profile_files``.
 """
 
+import hashlib
+import hmac
+import json
 import logging
+import shutil
+import time
 from datetime import timedelta
 from pathlib import Path
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
+from rest_framework_simplejwt.exceptions import TokenError
+from rest_framework_simplejwt.settings import api_settings as jwt_settings
 from rest_framework_simplejwt.tokens import AccessToken
 
-from research.constants import MemoryProposalStatus, MemoryType
-from research.models import (
-    ResearcherProfile,
-    ResearchMemoryProposal,
-    ResearchProject,
-    ResearchProjectMemory,
-)
+from research.services.hermes_service import HermesService
+from research.services.tool_readiness import tools_connected
 
 logger = logging.getLogger(__name__)
 
@@ -44,9 +37,27 @@ logger = logging.getLogger(__name__)
 # `code_execution` are inherited by a bare profile and are NOT wanted here.
 PROJECT_TOOLSETS = ["memory", "skills", "todo", "vision"]
 
+# How often the runtime reflects in the background: every N user turns for
+# memory, every N tool iterations for skills. Memory is tight so preferences are
+# caught quickly; skills are loose because a Scout makes 20+ tool calls a run,
+# and a tighter interval proposed the same skill patch several times per run.
+MEMORY_REFLECTION_TURNS = 2
+SKILL_REFLECTION_ITERATIONS = 25
+
 _ENV_FILENAME = ".env"
 _CONFIG_FILENAME = "config.yaml"
 _TOKEN_VAR = "MCP_DARE_API_KEY"
+_API_KEY_VAR = "API_SERVER_KEY"
+_MODEL_KEY_VAR = "DARE_MODEL_API_KEY"
+# A named provider's key must sit in the profile's own .env: when multiplexing,
+# Hermes never reads a provider key from the gateway's environment.
+_PROVIDER_KEY_VARS = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY"}
+SKILL_CATEGORY = "dare"
+PLATFORM_HINT = (
+    "You are answering inside DARE's research workspace. Replies render as "
+    "Markdown, and a ```mermaid code block renders as a chart: xychart-beta for "
+    "numbers over time, timeline for dates, pie for shares, flowchart for steps."
+)
 
 
 def profile_name_for(project):
@@ -68,13 +79,73 @@ def profile_base_url_for(project):
 def mint_project_token(project):
     """A long-lived access token for the project's owner.
 
-    The profile's MCP tools authenticate to DARE with this, so `web_search` /
-    `fetch_page` run under the owner's account and every captured GatewayFetch
-    row is attributed to the right scholar instead of one shared identity.
+    The profile's MCP tools authenticate to DARE with it, so searches and page
+    reads run, and are recorded, as that user.
     """
     token = AccessToken.for_user(project.user)
     token.set_exp(lifetime=timedelta(days=settings.HERMES_PROFILE_TOKEN_DAYS))
     return str(token)
+
+
+def token_names_user(raw_token, user):
+    """Whether ``raw_token`` still authenticates as ``user`` under DARE's current JWT scheme.
+
+    False once the signing key or identity claim changes, or the token expires, so
+    a stored token is re-minted instead of silently failing every tool call.
+    """
+    try:
+        token = AccessToken(raw_token)
+    except TokenError:
+        return False
+    return token.get(jwt_settings.USER_ID_CLAIM) == getattr(
+        user, jwt_settings.USER_ID_FIELD
+    )
+
+
+def read_env_value(env_path, name):
+    """The value of ``name`` in an env file, or "" if absent."""
+    try:
+        lines = Path(env_path).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ""
+    prefix = f"{name}="
+    for line in lines:
+        if line.startswith(prefix):
+            return line[len(prefix) :].strip().strip("\"'")
+    return ""
+
+
+def write_env_value(env_path, name, value):
+    """Set ``name`` in an env file, keeping every other line as it was."""
+    env_path = Path(env_path)
+    try:
+        lines = env_path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        lines = []
+    prefix = f"{name}="
+    entry = f"{prefix}{value}"
+    if any(line.startswith(prefix) for line in lines):
+        lines = [entry if line.startswith(prefix) else line for line in lines]
+    else:
+        lines.append(entry)
+    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    env_path.chmod(0o600)
+
+
+def profile_api_key(project):
+    """The bearer key DARE uses to drive ``project``'s profile on the gateway.
+
+    Hermes fails closed on ``/p/<profile>/`` unless that profile's own ``.env``
+    holds an ``API_SERVER_KEY``; it never falls back to the listener's key.
+    Derived from SECRET_KEY, so it needs no storage and a rotated secret
+    re-keys every profile on its next run.
+    """
+    digest = hmac.new(
+        settings.SECRET_KEY.encode(),
+        f"hermes-profile-api:{project.id}".encode(),
+        hashlib.sha256,
+    )
+    return digest.hexdigest()[:48]
 
 
 def _render_config(project):
@@ -102,6 +173,9 @@ def _render_config(project):
         )
 
     toolsets = "\n".join(f"    - {name}" for name in PROJECT_TOOLSETS)
+    base_url = (settings.HERMES_PROFILE_MODEL_BASE_URL or "").strip()
+    if base_url:
+        provider = "custom"
     model_block = (
         # Pinned on purpose: an unpinned profile follows whatever the runtime
         # default happens to be, so `hermes model` on the box would re-point
@@ -111,6 +185,22 @@ def _render_config(project):
         if model
         else ""
     )
+    if model and base_url:
+        model_block += (
+            f"  base_url: {base_url}\n"
+            f"  api_key: ${{{_MODEL_KEY_VAR}}}\n"
+            "  api_mode: chat_completions\n"
+        )
+    fallback_block = "".join(
+        f"  - provider: {provider}\n    model: {fallback}\n"
+        for provider, fallback in settings.HERMES_PROFILE_FALLBACK_MODELS
+    )
+    if fallback_block:
+        fallback_block = (
+            "# Switched to, in order, when the pinned model is rate-limited or\n"
+            "# down — free tiers hit upstream capacity limits often.\n"
+            "fallback_model:\n" + fallback_block + "\n"
+        )
     return (
         f"# Hermes profile for DARE research project {project.id}\n"
         f"# {project.title}\n"
@@ -120,6 +210,7 @@ def _render_config(project):
         "\n"
         f"{model_block}"
         "\n"
+        f"{fallback_block}"
         "# Tiered disclosure hides the MCP tools behind `tool_search` and makes\n"
         "# the agent go find them. That trade is wrong here: a project profile\n"
         "# exposes two gateway tools, so the extra hop buys nothing and costs a\n"
@@ -128,6 +219,30 @@ def _render_config(project):
         "tools:\n"
         "  tool_search:\n"
         "    enabled: false\n"
+        "\n"
+        "# A Scout searches, reads and stages one tool call at a time; a low\n"
+        "# global ceiling ends it mid-search with nothing staged.\n"
+        "agent:\n"
+        f"  max_turns: {settings.HERMES_PROFILE_MAX_TURNS}\n"
+        "\n"
+        "# The learning loop runs, but nothing it learns is committed on its own:\n"
+        "# every memory and skill write — foreground or the background reflection\n"
+        "# fork — is staged under pending/ for DARE to put in front of the scholar.\n"
+        "# DARE renders what they approve back into memories/ and skills/dare/.\n"
+        "memory:\n"
+        "  memory_enabled: true\n"
+        "  user_profile_enabled: true\n"
+        "  write_approval: true\n"
+        f"  nudge_interval: {MEMORY_REFLECTION_TURNS}\n"
+        "\n"
+        "skills:\n"
+        "  write_approval: true\n"
+        f"  creation_nudge_interval: {SKILL_REFLECTION_ITERATIONS}\n"
+        "\n"
+        "# Hermes tells API clients to expect plain text; DARE renders Markdown.\n"
+        "platform_hints:\n"
+        "  api_server:\n"
+        f"    replace: {json.dumps(PLATFORM_HINT)}\n"
         "\n"
         "platform_toolsets:\n"
         "  api_server:\n"
@@ -138,213 +253,95 @@ def _render_config(project):
         f"    url: {settings.DARE_MCP_GATEWAY_URL}\n"
         "    transport: http\n"
         "    enabled: true\n"
+        "    keepalive_interval: 60\n"
         "    headers:\n"
         f"      Authorization: Bearer ${{{_TOKEN_VAR}}}\n"
+        f'      X-DARE-Project: "{project.id}"\n'
     )
 
 
-def _write_if_changed(path, content):
-    """Write ``content`` only when it differs from what is on disk.
-
-    Idempotent so provisioning can run on every request, while still letting a
-    change to the template (a new pinned model, a different toolset) reach
-    profiles that already exist.
-    """
+def write_if_changed(path, content):
+    """Write ``content`` only when it differs from what is on disk."""
     try:
-        if path.exists() and path.read_text(encoding="utf-8") == content:
+        if path.read_text(encoding="utf-8") == content:
             return False
     except OSError:
         pass
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     return True
 
 
-def ensure_project_profile(project, *, refresh_token=False):
-    """Make sure ``project`` has a Hermes profile on disk, and return its name.
+def _model_key_var():
+    """Where the profile's model key goes: the gateway's variable, or the
+    named provider's own."""
+    if (settings.HERMES_PROFILE_MODEL_BASE_URL or "").strip():
+        return _MODEL_KEY_VAR
+    return _PROVIDER_KEY_VARS.get(
+        (settings.HERMES_PROFILE_MODEL_PROVIDER or "").strip()
+    )
 
-    Idempotent: safe to call on every run. Creates the directory, writes the
-    config and the owner-scoped token on first use, and records the gateway URL
-    on the project so ``get_hermes_service(project)`` routes there from then on.
 
-    Returns "" when per-project profiles are disabled, which leaves every caller
-    on the shared default profile — the pre-multiplex behaviour.
+def ensure_project_profile(project):
+    """Create or refresh ``project``'s profile directory, config and secrets.
+
+    Idempotent, so it runs before every use; a changed template, model or key
+    reaches existing profiles this way.
     """
-    if not settings.HERMES_PROFILE_PER_PROJECT:
-        return ""
-
-    name = profile_name_for(project)
     home = profile_home_for(project)
-    try:
-        home.mkdir(parents=True, exist_ok=True)
-        (home / "memories").mkdir(exist_ok=True)
+    (home / "memories").mkdir(parents=True, exist_ok=True)
+    write_if_changed(home / _CONFIG_FILENAME, _render_config(project))
 
-        _write_if_changed(home / _CONFIG_FILENAME, _render_config(project))
-        render_user_memory(project)
-
-        env_path = home / _ENV_FILENAME
-        if refresh_token or not env_path.exists():
-            # 0600: this file holds a year-long token for the project's owner.
-            env_path.write_text(
-                f"{_TOKEN_VAR}={mint_project_token(project)}\n", encoding="utf-8"
-            )
-            env_path.chmod(0o600)
-    except OSError as exc:
-        # Provisioning is best-effort: a project that cannot get its own profile
-        # must still work, so fall back to the shared default rather than 500.
-        logger.warning(
-            "Could not provision Hermes profile %s at %s: %s", name, home, exc
-        )
-        return ""
-
-    base_url = profile_base_url_for(project)
-    if project.hermes_base_url != base_url:
-        project.hermes_base_url = base_url
-        project.save(update_fields=["hermes_base_url", "updated_at"])
-        logger.info("Project %s bound to Hermes profile %s", project.id, name)
-
-    return name
+    env_path = home / _ENV_FILENAME
+    if not token_names_user(read_env_value(env_path, _TOKEN_VAR), project.user):
+        write_env_value(env_path, _TOKEN_VAR, mint_project_token(project))
+        logger.info("Minted a fresh MCP token for %s", profile_name_for(project))
+    api_key = profile_api_key(project)
+    if read_env_value(env_path, _API_KEY_VAR) != api_key:
+        write_env_value(env_path, _API_KEY_VAR, api_key)
+    model_key = settings.HERMES_PROFILE_MODEL_API_KEY
+    key_var = _model_key_var()
+    if model_key and key_var and read_env_value(env_path, key_var) != model_key:
+        write_env_value(env_path, key_var, model_key)
 
 
-def _user_memory_path(project):
-    return profile_home_for(project) / "memories" / "USER.md"
+def hermes_for(project):
+    """A Hermes client bound to ``project``'s profile, provisioned on first use."""
+    ensure_project_profile(project)
+    return HermesService(profile_base_url_for(project), profile_api_key(project))
 
 
-def render_user_memory(project):
-    """Write the scholar's DARE-owned record into THIS project's USER.md.
+def write_profile_files(project, files):
+    """Write ``files`` (a ``prompt_builder.ProfileFiles``) into the profile.
 
-    Called on every provision, so a new project starts already knowing who its
-    scholar is instead of re-learning it. MEMORY.md is deliberately untouched:
-    the person travels between projects, the project's facts do not.
+    Skills DARE no longer holds are removed, so the profile carries exactly
+    the approved set.
     """
-    record = ResearcherProfile.active_objects.filter(user=project.user).first()
-    if record is None or not record.content.strip():
-        return False
-    path = _user_memory_path(project)
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if path.exists() and path.read_text(encoding="utf-8") == record.content:
+    home = profile_home_for(project)
+    write_if_changed(home / "SOUL.md", files.soul)
+    write_if_changed(home / "memories" / "MEMORY.md", files.memory)
+    write_if_changed(home / "memories" / "USER.md", files.user)
+    skills_root = home / "skills" / SKILL_CATEGORY
+    for name, content in files.skills.items():
+        write_if_changed(skills_root / name / "SKILL.md", content)
+    if skills_root.is_dir():
+        for child in skills_root.iterdir():
+            if child.is_dir() and child.name not in files.skills:
+                shutil.rmtree(child, ignore_errors=True)
+
+
+def wait_for_tools(project):
+    """Wait until Hermes has loaded ``project``'s DARE tools; True once it has.
+
+    Hermes starts serving a new profile, and connects its MCP servers, only when
+    its profile watcher notices the profile, some seconds after it is written.
+    A run started before then has no DARE tools. DARE's gateway records when
+    Hermes first reaches it for the project, so a run can wait for that.
+    """
+    deadline = time.monotonic() + settings.HERMES_TOOLS_WAIT_SECONDS
+    while not tools_connected(project.id):
+        if time.monotonic() >= deadline:
+            logger.warning("Hermes has not loaded the DARE tools for %s", project.id)
             return False
-        path.write_text(record.content, encoding="utf-8")
-        return True
-    except OSError as exc:
-        logger.warning("Could not render USER.md for project %s: %s", project.id, exc)
-        return False
-
-
-def absorb_user_memory(project, user_file_text):
-    """Fold anything the agent learned about the scholar back into DARE's record.
-
-    The agent writes USER.md inside whichever project it is working in. Without
-    this that knowledge would stay stranded there, which is the whole complaint:
-    "it knows me in this project and nowhere else." Absorbing on read means one
-    project teaching it your name makes every project know it, while the
-    projects' own memories stay separate.
-
-    Returns the names of profiles that were refreshed as a result.
-    """
-    incoming = [e.strip() for e in (user_file_text or "").split("§") if e.strip()]
-    if not incoming:
-        return []
-
-    record, _ = ResearcherProfile.objects.get_or_create(user=project.user)
-    changed = record.merge(incoming)
-
-    siblings = [
-        p
-        for p in ResearchProject.active_objects.filter(user=project.user)
-        if profile_home_for(p).is_dir()
-    ]
-
-    # Take in what every OTHER profile already knows before writing over any of
-    # them. Rendering first would destroy a fact the scholar taught a different
-    # project — the same silent clobber that combined memory entries caused, and
-    # just as invisible. Absorb everywhere, then render everywhere.
-    for sibling in siblings:
-        if sibling.id == project.id:
-            continue
-        try:
-            existing = _user_memory_path(sibling).read_text(encoding="utf-8")
-        except OSError:
-            continue
-        others = [e.strip() for e in existing.split("§") if e.strip()]
-        changed = record.merge(others) or changed
-
-    if not changed:
-        return []
-    record.save(update_fields=["content", "updated_at"])
-
-    # Propagate, so the next project the scholar opens already knows them.
-    refreshed = []
-    for sibling in siblings:
-        if render_user_memory(sibling):
-            refreshed.append(profile_name_for(sibling))
-    return refreshed
-
-
-def propose_project_memory(project):
-    """Raise a proposal for anything in MEMORY.md the scholar has not seen.
-
-    The runtime writes project memory directly, which is fine for working
-    context but leaves DARE with no say over what becomes durable — the gap the
-    Agent Memory panel used to paper over. Turning each new entry into a
-    ResearchMemoryProposal gives the scholar the same accept/reject control they
-    already have over staged findings, without blocking the agent mid-run: the
-    entry stays in MEMORY.md and keeps working, and the proposal decides whether
-    it graduates into DARE's own record.
-
-    Returns the proposals created by this call.
-    """
-    path = profile_home_for(project) / "memories" / "MEMORY.md"
-    try:
-        entries = [e.strip() for e in path.read_text(encoding="utf-8").split("§")]
-    except OSError:
-        return []
-
-    # Anything already proposed, decided, or promoted is not news.
-    seen = set(
-        ResearchMemoryProposal.objects.filter(project=project).values_list(
-            "content", flat=True
-        )
-    )
-    seen.update(
-        ResearchProjectMemory.active_objects.filter(project=project).values_list(
-            "detail", flat=True
-        )
-    )
-
-    created = []
-    for entry in entries:
-        if not entry or entry in seen:
-            continue
-        created.append(
-            ResearchMemoryProposal.objects.create(
-                project=project,
-                content=entry,
-                memory_type=MemoryType.PROJECT_MEMORY,
-                proposed_by_role="agent",
-                status=MemoryProposalStatus.PROPOSED,
-            )
-        )
-        seen.add(entry)
-    return created
-
-
-def forget_project_memory(project, entry):
-    """Remove one entry from a project's MEMORY.md.
-
-    Rejecting a proposal has to reach the file. Left in place the agent still
-    believes it, still acts on it, and proposes it again the next time DARE
-    reads — so "reject" would mean nothing.
-    """
-    path = profile_home_for(project) / "memories" / "MEMORY.md"
-    try:
-        kept = [
-            e.strip()
-            for e in path.read_text(encoding="utf-8").split("§")
-            if e.strip() and e.strip() != entry.strip()
-        ]
-        path.write_text("\n§\n".join(kept), encoding="utf-8")
-        return True
-    except OSError as exc:
-        logger.warning("Could not forget memory for project %s: %s", project.id, exc)
-        return False
+        time.sleep(1)
+    return True

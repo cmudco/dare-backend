@@ -69,6 +69,7 @@ from conversations.services.web_search_source_service import WebSearchSourceServ
 from conversations.services.websocket_response_service import WebSocketResponseService
 from core.services.api_key_service import get_chat_dispatch_credentials
 from core.services.billing_service import BillingService
+from core.services.code_sandbox import sandbox_outputs, save_sandbox_file
 from core.services.conversation_service import ConversationService
 from core.services.dtos import LLMDescriptor, LLMQueryRequestBuilder
 from core.services.file_upload_service import FileUploadService
@@ -284,6 +285,27 @@ class MessageCoordinator:
                 )
 
         await save_tool_calls()
+
+    async def _save_sandbox_files(
+        self, message_obj: "Message", token_usage: Optional[Dict], regenerate: bool
+    ) -> None:
+        """Attach the charts and files the code sandbox produced to the reply.
+
+        A regenerated reply drops the previous attempt's outputs even when the
+        new attempt produced none.
+        """
+        sandbox_files = (token_usage or {}).get("sandbox_files") or []
+        if not sandbox_files and not regenerate:
+            return
+
+        @database_sync_to_async
+        def attach():
+            if regenerate:
+                message_obj.files.remove(*sandbox_outputs(message_obj))
+            for sandbox_file in sandbox_files:
+                message_obj.files.add(save_sandbox_file(sandbox_file, self.user))
+
+        await attach()
 
     async def _save_memory_context(
         self,
@@ -675,6 +697,24 @@ class MessageCoordinator:
         task.cancel()
         return True
 
+    def active_generation_ids(self) -> List[int]:
+        """AI message ids still streaming (and stoppable) on this coordinator."""
+        return [
+            mid
+            for mid in self._cancellable_message_ids
+            if mid in self._generation_tasks and not self._generation_tasks[mid].done()
+        ]
+
+    async def send_active_generations(self) -> None:
+        """Tell a re-attaching client which messages are still being generated.
+
+        Persisted history holds only the empty placeholder until the turn is
+        finalized, so without this a client that switched away and back
+        renders a running turn as finished.
+        """
+        for message_id in self.active_generation_ids():
+            await self.send({"type": "generation_active", "messageId": message_id})
+
     async def stream_ai_response(
         self,
         message_data: Dict[str, Any],
@@ -814,6 +854,7 @@ class MessageCoordinator:
                 await self._save_provider_tool_calls(
                     message_obj, token_usage, regenerate
                 )
+                await self._save_sandbox_files(message_obj, token_usage, regenerate)
                 await self._save_memory_context(message_obj, token_usage)
                 logger.info(
                     "[journey] mid=%s finalizing: text=%d chars, tokens=%s/%s",
@@ -1195,7 +1236,7 @@ class MessageCoordinator:
     async def _fetch_progress_llm(self, llm_id) -> Optional[LLM]:
         """Resolve the Socratic progress-assessment LLM by numeric id.
 
-        Progress LLMs are configured per-bot in SocraticBooks and are always
+        Progress LLMs are configured per-bot in Socratic Bots and are always
         DB-backed (never LiteLLM-routed), so we stringify the bare id to
         feed the opaque-id parser.
         """

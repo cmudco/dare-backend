@@ -367,7 +367,7 @@ class FileViewSet(viewsets.ModelViewSet):
     )
     def bulk_delete(self, request):
         """
-        Permanently delete many files (Socratic Books relies on this).
+        Permanently delete many files (Socratic Bots relies on this).
         DARE moves files to Recently deleted with ``trash`` instead.
         Expected payload: {"fileIds": [1, 2, 3, ...]}
         """
@@ -1087,6 +1087,34 @@ class FileViewSet(viewsets.ModelViewSet):
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
+# Types a browser renders without running code. Anything else (HTML, SVG, XML,
+# scripts) could execute as DARE if opened, so it is sent as plain text.
+INLINE_CONTENT_TYPES = {
+    "application/pdf",
+    "application/json",
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/webp",
+    "image/bmp",
+    "text/plain",
+    "text/csv",
+    "text/markdown",
+}
+_ACTIVE_CONTENT_MARKERS = ("html", "xml", "svg", "javascript", "ecmascript")
+
+
+def viewable_content_type(content_type: str) -> tuple[str, bool]:
+    """The type to serve a stored file as, and whether it may open inline."""
+    if content_type in INLINE_CONTENT_TYPES or content_type.startswith(
+        ("audio/", "video/")
+    ):
+        return content_type, True
+    if any(marker in content_type for marker in _ACTIVE_CONTENT_MARKERS):
+        return "text/plain", False
+    return content_type, False
+
+
 class FileViewAPIView(APIView):
     permission_classes = [IsAuthenticated, IsOwner]
 
@@ -1146,19 +1174,18 @@ class FileViewAPIView(APIView):
             except Exception as exc:
                 raise FileNotFoundError("File not found in storage") from exc
 
-            # Create file response
+            content_type, inline = viewable_content_type(content_type)
             response = FileResponse(
-                file_obj.file, content_type=content_type, as_attachment=False
+                file_obj.file,
+                content_type=content_type,
+                as_attachment=not inline,
+                filename=file_obj.name or os.path.basename(file_name),
             )
 
             # Set CORS headers
             response["Access-Control-Allow-Origin"] = "*"
             response["Access-Control-Allow-Methods"] = "GET"
             response["Access-Control-Allow-Headers"] = "Authorization, Content-Type"
-
-            # Set filename
-            filename = file_obj.name or os.path.basename(file_name)
-            response["Content-Disposition"] = f'inline; filename="{filename}"'
 
             return response
 
@@ -1319,7 +1346,7 @@ class InternalFileUploadView(APIView):
     """
     Internal endpoint for inter-service file upload.
 
-    Allows socraticbooks-backend to upload files on behalf of users without
+    Allows socraticbots-backend to upload files on behalf of users without
     requiring a user JWT token. Used for webhook-triggered transcript uploads.
 
     Authenticated via X-Internal-Key header (shared secret).

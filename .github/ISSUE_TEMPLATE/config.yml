@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/cmudco/dare-backend/security/policy
+    about: Never report vulnerabilities in a public issue. Follow the security policy instead.
+  - name: Problem in the DARE web app?
+    url: https://github.com/cmudco/dare-frontend/issues/new/choose
+    about: "File it on dare-frontend if the page renders wrongly but the API answers correctly."

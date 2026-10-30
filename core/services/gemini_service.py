@@ -348,7 +348,7 @@ class GeminiService:
             config_kwargs["temperature"] = temperature
         if system_instruction:
             config_kwargs["system_instruction"] = system_instruction
-        if self.model_identifier.startswith("gemini-3"):
+        if not self.model_identifier.startswith(("gemini-1", "gemini-2")):
             thinking_level = self.capabilities.resolve_effort(effort)
             if thinking_level is not None:
                 # Older clients can retain effort levels from other providers.

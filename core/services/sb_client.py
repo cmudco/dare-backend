@@ -1,5 +1,5 @@
 """
-Typed client for DARE-to-SocraticBooks internal endpoints.
+Typed client for the Socratic Bots internal endpoints that DARE calls.
 
 Caching: ``get_bot_billing_config`` is hot — every LLM call into a bot
 conversation runs through the wallet router. We cache for 60s using Django's
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class BotBillingConfig:
-    """Snapshot of a SocraticBooks bot's billing config as DARE sees it.
+    """Snapshot of a Socratic bot's billing config as DARE sees it.
 
     Per the new SB rule, billing always follows: chatter pays if
     authenticated; otherwise (anonymous public-bot traffic) the bot owner
@@ -67,11 +67,11 @@ class SocraticNullificationResult:
 
 
 class SocraticBooksRequestError(RuntimeError):
-    """Raised when a configured SocraticBooks integration cannot complete a call."""
+    """Raised when a configured Socratic Bots integration cannot complete a call."""
 
 
 class SocraticBooksClient:
-    """Authenticated internal SocraticBooks calls invoked from DARE."""
+    """Authenticated internal Socratic Bots calls invoked from DARE."""
 
     REQUEST_TIMEOUT = 5  # seconds
     BILLING_CONFIG_TTL = 60  # seconds
@@ -89,7 +89,7 @@ class SocraticBooksClient:
 
     @classmethod
     def is_configured(cls) -> bool:
-        """Return whether this DARE deployment is connected to SocraticBooks."""
+        """Return whether this DARE deployment is connected to Socratic Bots."""
         return bool(cls._base_url())
 
     @classmethod
@@ -98,11 +98,11 @@ class SocraticBooksClient:
         headers = cls._headers()
         if not base_url:
             raise SocraticBooksRequestError(
-                "SocraticBooks backend URL is not configured."
+                "Socratic Bots backend URL is not configured."
             )
         if not headers:
             raise SocraticBooksRequestError(
-                "DARE_INTERNAL_KEY is not configured for SocraticBooks requests."
+                "DARE_INTERNAL_KEY is not configured for Socratic Bots requests."
             )
         return base_url, headers
 
@@ -163,7 +163,7 @@ class SocraticBooksClient:
             )
         except requests.RequestException as exc:
             raise SocraticBooksRequestError(
-                f"Could not check SocraticBooks dependencies: {exc}"
+                f"Could not check Socratic Bots dependencies: {exc}"
             ) from exc
 
         if response.status_code != 200:
@@ -174,7 +174,7 @@ class SocraticBooksClient:
                 response.text[:200],
             )
             raise SocraticBooksRequestError(
-                "SocraticBooks rejected the model dependency check."
+                "Socratic Bots rejected the model dependency check."
             )
 
         try:
@@ -210,7 +210,7 @@ class SocraticBooksClient:
                 )
         except (AttributeError, KeyError, TypeError, ValueError) as exc:
             raise SocraticBooksRequestError(
-                "SocraticBooks returned an invalid dependency response."
+                "Socratic Bots returned an invalid dependency response."
             ) from exc
         return tuple(bots)
 
@@ -225,7 +225,7 @@ class SocraticBooksClient:
             )
         except requests.RequestException as exc:
             raise SocraticBooksRequestError(
-                f"Could not update SocraticBooks model references: {exc}"
+                f"Could not update Socratic Bots model references: {exc}"
             ) from exc
 
         if response.status_code != 200:
@@ -236,7 +236,7 @@ class SocraticBooksClient:
                 response.text[:200],
             )
             raise SocraticBooksRequestError(
-                "SocraticBooks rejected the model reference cleanup."
+                "Socratic Bots rejected the model reference cleanup."
             )
 
         try:
@@ -259,7 +259,7 @@ class SocraticBooksClient:
             )
         except (AttributeError, TypeError, ValueError) as exc:
             raise SocraticBooksRequestError(
-                "SocraticBooks returned an invalid cleanup response."
+                "Socratic Bots returned an invalid cleanup response."
             ) from exc
 
     @classmethod
@@ -335,7 +335,7 @@ class SocraticBooksClient:
 
     @classmethod
     def update_bot_budget(cls, bot_id: int, cost: Decimal) -> bool:
-        """Increment SocraticBooks public deployment budget usage."""
+        """Increment Socratic Bots public deployment budget usage."""
         if cost is None or cost <= 0:
             return True
 
@@ -388,7 +388,7 @@ class SocraticBooksClient:
 
     @classmethod
     def delete_user(cls, dare_user_id: int) -> bool:
-        """Delete the SocraticBooks account linked to a DARE user.
+        """Delete the Socratic Bots account linked to a DARE user.
 
         Called during account expunge. Returns ``True`` when the SB account
         was deleted or none exists (404); ``False`` when SB is unreachable or

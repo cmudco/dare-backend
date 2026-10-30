@@ -1,15 +1,9 @@
 """
-Constants for the Research app (Research Mode / the "epistemic ecosystem").
+Constants for the Research app.
 
-Naming follows the house style: choice groups are plain classes exposing a
-``choices()`` classmethod (see ``mcp/constants.py``).
-
-Only ``ResearchProjectStatus`` is enforced at the DB level — it is a workflow
-state DARE itself sets. ``StandardsTemplate`` is kept here as a canonical
-reference set for the UI/docs. Enabled tools are NOT modelled here: they are
-stored as free-form slugs in ``ResearchProject.enabled_tools`` (the user's
-connected MCP integrations, plus built-ins like web search), so there is no
-hardcoded tool enum to keep in sync.
+Choice groups are plain classes exposing a ``choices()`` classmethod (see
+``mcp/constants.py``). Enabled tools are not modelled here: they are free-form
+slugs in ``ResearchProject.enabled_tools`` (connected MCP servers plus web).
 """
 
 
@@ -27,29 +21,8 @@ class ResearchProjectStatus:
         ]
 
 
-class StandardsTemplate:
-    """Known soul-file starter templates (free-form; NOT enforced at the DB level)."""
-
-    RESEARCH_ETHICS = "research-ethics"
-    EMPIRICAL_RIGOR = "empirical-rigor"
-    CUSTOM = "custom"
-
-    @classmethod
-    def choices(cls):
-        return [
-            (cls.RESEARCH_ETHICS, "Research Ethics"),
-            (cls.EMPIRICAL_RIGOR, "Empirical Rigor"),
-            (cls.CUSTOM, "Custom"),
-        ]
-
-
 class ResearchSessionMode:
-    """
-    The delegation modes (DARE-owned, enforced). Each maps 1:1 to a Hermes
-    session per project: a persistent 'scout' session, a persistent 'chat'
-    session, and a persistent 'artifact' session (the Presentation Assistant —
-    kept separate so artifact work never mixes into Scout's session memory).
-    """
+    """What a session holds: a chat thread, or the project's Scout or artifact runs."""
 
     SCOUT = "scout"
     CHAT = "chat"
@@ -107,6 +80,41 @@ class AgentRunStatus:
             (cls.CANCELLED, "Cancelled"),
             (cls.OUTCOME_UNKNOWN, "Outcome unknown"),
         ]
+
+
+# Statuses in which a run still holds the runtime (not yet terminal).
+LIVE_RUN_STATUSES = frozenset(
+    {
+        AgentRunStatus.STARTED,
+        AgentRunStatus.QUEUED,
+        AgentRunStatus.RUNNING,
+        AgentRunStatus.STOPPING,
+        AgentRunStatus.WAITING_FOR_APPROVAL,
+    }
+)
+
+
+TERMINAL_RUN_STATUSES = frozenset(
+    {AgentRunStatus.COMPLETED, AgentRunStatus.FAILED, AgentRunStatus.CANCELLED}
+)
+
+
+class AgentRole:
+    """Which agent a run is. Each role has its own brief in ``prompt_builder``."""
+
+    CHAT = "main-assistant"
+    SCOUT = "scout"
+    CRITIC = "critic"
+    PRESENTER = "presenter"
+
+
+# A Scout's (searches, page reads) per depth. The brief states them and the
+# gateway enforces them with a little slack.
+SCOUT_LIMITS = {"quick": (2, 3), "deep": (5, 10)}
+
+
+def scout_limits(depth):
+    return SCOUT_LIMITS["quick"] if depth == "quick" else SCOUT_LIMITS["deep"]
 
 
 class AgentToolCallStatus:
@@ -232,17 +240,113 @@ class MemoryProposalStatus:
 
 
 class ChatMessageRole:
-    """Author of a chat message (DARE-owned, enforced)."""
+    """Author of a chat message (DARE-owned, enforced).
+
+    ``event`` rows are DARE-written facts pushed into a thread (a Scout started
+    or finished, a review decision, a memory proposal) so both the scholar and
+    the agent see what happened outside the conversation itself.
+    """
 
     USER = "user"
     ASSISTANT = "assistant"
+    EVENT = "event"
 
     @classmethod
     def choices(cls):
         return [
             (cls.USER, "User"),
             (cls.ASSISTANT, "Assistant"),
+            (cls.EVENT, "Event"),
         ]
+
+
+class ThreadEventType:
+    """What a thread event row records (DARE-owned, enforced)."""
+
+    SCOUTS_LAUNCHED = "scouts_launched"
+    SCOUT_FINISHED = "scout_finished"
+    REVIEW_DECISION = "review_decision"
+    MEMORY_PROPOSED = "memory_proposed"
+    MEMORY_DECIDED = "memory_decided"
+
+    @classmethod
+    def choices(cls):
+        return [
+            (cls.SCOUTS_LAUNCHED, "Scouts launched"),
+            (cls.SCOUT_FINISHED, "Scout finished"),
+            (cls.REVIEW_DECISION, "Review decision"),
+            (cls.MEMORY_PROPOSED, "Memory proposed"),
+            (cls.MEMORY_DECIDED, "Memory decided"),
+        ]
+
+
+class MemoryLayer:
+    """Where an approved memory lives (D5).
+
+    ``researcher`` travels with the scholar into every project (rendered to
+    each profile's USER.md); ``project`` stays in one project (MEMORY.md);
+    ``procedure`` is a learned method, rendered as a Hermes skill.
+    """
+
+    RESEARCHER = "researcher"
+    PROJECT = "project"
+    PROCEDURE = "procedure"
+
+    @classmethod
+    def choices(cls):
+        return [
+            (cls.RESEARCHER, "Researcher-wide"),
+            (cls.PROJECT, "Project only"),
+            (cls.PROCEDURE, "Procedure"),
+        ]
+
+
+class MemoryProposalOrigin:
+    """Who raised a memory proposal."""
+
+    FOREGROUND = "foreground"
+    BACKGROUND_REVIEW = "background_review"
+    LEGACY = "legacy"
+
+    @classmethod
+    def choices(cls):
+        return [
+            (cls.FOREGROUND, "During the conversation"),
+            (cls.BACKGROUND_REVIEW, "Agent's own reflection"),
+            (cls.LEGACY, "Earlier memory file"),
+        ]
+
+
+class ReviewReasonTag:
+    """Quick-pick reasons a scholar can attach to a review decision."""
+
+    PREPRINT = "preprint"
+    OFF_SCOPE = "off_scope"
+    CONFLICT_OF_INTEREST = "conflict_of_interest"
+    WEAK_METHOD = "weak_method"
+    DUPLICATE = "duplicate"
+    OUTDATED = "outdated"
+    STRONG_EVIDENCE = "strong_evidence"
+
+    @classmethod
+    def choices(cls):
+        return [
+            (cls.PREPRINT, "Preprint"),
+            (cls.OFF_SCOPE, "Off scope"),
+            (cls.CONFLICT_OF_INTEREST, "Conflict of interest"),
+            (cls.WEAK_METHOD, "Weak method"),
+            (cls.DUPLICATE, "Duplicate"),
+            (cls.OUTDATED, "Outdated"),
+            (cls.STRONG_EVIDENCE, "Strong evidence"),
+        ]
+
+    @classmethod
+    def values(cls):
+        return {value for value, _ in cls.choices()}
+
+
+# Most Scouts one chat turn may launch at once; each is a parallel Hermes run.
+MAX_SCOUTS_PER_LAUNCH = 4
 
 
 class StagingItemStatus:
@@ -263,30 +367,96 @@ class StagingItemStatus:
         ]
 
 
-class EvidenceLabel:
-    """
-    How a candidate relates to the thesis (produced by the agent; stored
-    free-form). Canonical set per the §11 contract.
-    """
-
-    SUPPORTING = "supporting"
-    DISPUTING = "disputing"
-    PARTIAL = "partial"
-    TANGENTIAL = "tangential"
-    UNVERIFIABLE = "unverifiable"
-
-    @classmethod
-    def choices(cls):
-        return [
-            (cls.SUPPORTING, "Supporting"),
-            (cls.DISPUTING, "Disputing"),
-            (cls.PARTIAL, "Partial"),
-            (cls.TANGENTIAL, "Tangential"),
-            (cls.UNVERIFIABLE, "Unverifiable"),
-        ]
+# How a staged source bears on the question, as the Scout labels it.
+EVIDENCE_LABELS = frozenset(
+    {"supporting", "disputing", "partial", "tangential", "unverifiable"}
+)
+# What sort of source a staged item is.
+SOURCE_KINDS = frozenset(
+    {
+        "peer-reviewed",
+        "preprint",
+        "report",
+        "article",
+        "documentation",
+        "official-data",
+        "news",
+        "community",
+        "video",
+    }
+)
 
 
 class StagingSourceType:
     """Type of staged item (free-form; the contract's default is sourceCandidate)."""
 
     SOURCE_CANDIDATE = "sourceCandidate"
+
+
+class ProjectKind:
+    """What sort of question a project asks; sets which sources count and how fresh.
+
+    ``fresh_months`` flags a staged source older than that (0 = age doesn't matter).
+    ``guidance`` is handed to Scouts verbatim.
+    """
+
+    GENERAL = "general"
+    ACADEMIC = "academic"
+    WORK = "work"
+    MONEY = "money"
+    PERSONAL = "personal"
+    NEWS = "news"
+
+    CONFIG = {
+        GENERAL: {
+            "label": "General",
+            "fresh_months": 0,
+            "guidance": "Use whatever sources answer the question best, and label what each one is.",
+        },
+        ACADEMIC: {
+            "label": "Academic",
+            "fresh_months": 0,
+            "guidance": "Prefer peer-reviewed papers and preprints; use search_papers first.",
+        },
+        WORK: {
+            "label": "Work & tech",
+            "fresh_months": 24,
+            "guidance": (
+                "Prefer official docs, specs, changelogs, engineering write-ups from "
+                "teams that built it, and benchmarks with methods. Papers when they exist."
+            ),
+        },
+        MONEY: {
+            "label": "Money & markets",
+            "fresh_months": 12,
+            "guidance": (
+                "Prefer official data: regulators, exchanges, central banks, fund "
+                "factsheets and offering documents. Numbers must be dated. No tips or "
+                "promotional content; this is research, not advice."
+            ),
+        },
+        PERSONAL: {
+            "label": "Personal & habits",
+            "fresh_months": 0,
+            "guidance": (
+                "Prefer controlled studies and careful practitioner write-ups. Community "
+                "threads are fine for lived experience if labelled community."
+            ),
+        },
+        NEWS: {
+            "label": "News & politics",
+            "fresh_months": 12,
+            "guidance": (
+                "Prefer primary records (court orders, official statements) and "
+                "established outlets; show more than one side; date every claim."
+            ),
+        },
+    }
+
+    @classmethod
+    def choices(cls):
+        return [(key, value["label"]) for key, value in cls.CONFIG.items()]
+
+    @classmethod
+    def config(cls, kind):
+        return cls.CONFIG.get(kind) or cls.CONFIG[cls.GENERAL]

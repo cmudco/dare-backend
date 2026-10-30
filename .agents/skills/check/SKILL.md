@@ -5,8 +5,8 @@ description: Run the DARE backend's local check suite — Black, isort, and the 
 
 # Check the DARE backend before a PR
 
-Run these from an activated venv at the repo root. All three must pass before a PR is opened —
-they are the same checks CI runs.
+Run these from an activated venv at the repo root. All three must pass before a PR is opened.
+CI only deploys and runs none of them, so nothing else catches a failure.
 
 ```bash
 black --check .
@@ -40,8 +40,13 @@ python manage.py showmigrations
 
 ## If the change touches the API
 
-Regenerate the OpenAPI schema so `docs/api/dare-backend.md` and the served schema stay in sync with
+Regenerate the OpenAPI schema so `docs/reference/rest-api.md` and the served schema stay in sync with
 the code.
+
+## If the change is user-facing
+
+When the change alters what users can see or do, suggest a What's New release note with the
+`release-note` skill so the change is announced in the in-app dialog once it ships.
 
 ## Branch and PR conventions
 
@@ -61,5 +66,5 @@ backwards-incompatible.
 
 ## Related
 
-- `CONTRIBUTING.md` — the full contribution guide this skill summarizes.
-- `rules.md` — the repo's coding standards, in detail.
+- `.github/CONTRIBUTING.md` — the full contribution guide this skill summarizes.
+- `docs/reference/rules.md` — the repo's coding standards, in detail.

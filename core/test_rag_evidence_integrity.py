@@ -480,9 +480,10 @@ class IndexReplacementTests(TestCase):
         embeddings.create_embeddings.return_value = [1.0]
         processor = DocumentProcessor(openai_client=embeddings)
         failures = []
+        # database_sync_to_async would close the TestCase's open transaction.
         with patch(
             "core.services.document_processor.get_vector_service", return_value=service
-        ):
+        ), patch("channels.db.close_old_connections"):
             result = async_to_sync(processor.search_similar_documents)(
                 "evidence", [self.file.pk], self.user.pk, failures=failures
             )

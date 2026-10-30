@@ -7,10 +7,17 @@ renderer emits exactly the camelCase shape the frontend expects
 ``standardsTemplate``).
 """
 
+from django.db.models import Sum
 from rest_framework import serializers
 
 from research.constants import (
+    LIVE_RUN_STATUSES,
+    AgentRole,
+    AgentRunStatus,
+    ChatMessageRole,
     MemoryProposalStatus,
+    ProjectMemorySource,
+    SoulFileOrigin,
     SourceType,
     StagingItemStatus,
     soul_template_content,
@@ -24,11 +31,28 @@ from research.models import (
     ResearchMemoryProposal,
     ResearchProject,
     ResearchProjectMemory,
+    ResearchSession,
     ResearchSource,
     ResearchStagingItem,
     SoulFile,
     SoulFileVersion,
 )
+from research.services.learning_service import proposal_payload
+from research.services.thread_service import scout_summary
+
+
+def soul_payload(project):
+    """The project's current SOUL.md version, or None."""
+    version = SoulFile.current_for(project)
+    if version is None:
+        return None
+    return {
+        "id": version.soul_file_id,
+        "version": version.version,
+        "content": version.content,
+        "origin": version.origin,
+        "updatedAt": version.created_at,
+    }
 
 
 class ResearchProjectSerializer(serializers.ModelSerializer):
@@ -37,12 +61,27 @@ class ResearchProjectSerializer(serializers.ModelSerializer):
     pending_review_count = serializers.SerializerMethodField()
     approved_count = serializers.SerializerMethodField()
     source_count = serializers.SerializerMethodField()
+    last_run_at = serializers.SerializerMethodField()
     # Write-only: file metadata from the create wizard, persisted as sources.
     sources = serializers.ListField(
         child=serializers.DictField(),
         required=False,
         write_only=True,
         help_text="Optional source files to attach on create.",
+    )
+    project_memory = serializers.ListField(
+        child=serializers.CharField(max_length=600, trim_whitespace=True),
+        required=False,
+        write_only=True,
+        max_length=40,
+        help_text="The project's MEMORY.md entries written in the wizard.",
+    )
+    soul_content = serializers.CharField(
+        required=False,
+        write_only=True,
+        allow_blank=True,
+        max_length=20000,
+        help_text="SOUL.md as built in the Standards step; replaces the template.",
     )
 
     class Meta:
@@ -52,6 +91,7 @@ class ResearchProjectSerializer(serializers.ModelSerializer):
             "title",
             "question",
             "field",
+            "kind",
             "status",
             "enabled_tools",
             "standards_template",
@@ -59,8 +99,11 @@ class ResearchProjectSerializer(serializers.ModelSerializer):
             "approved_count",
             "source_count",
             "sources",
+            "project_memory",
+            "soul_content",
             "created_at",
             "updated_at",
+            "last_run_at",
         ]
         read_only_fields = [
             "id",
@@ -70,7 +113,12 @@ class ResearchProjectSerializer(serializers.ModelSerializer):
             "source_count",
             "created_at",
             "updated_at",
+            "last_run_at",
         ]
+
+    def get_last_run_at(self, obj):
+        """When the project's newest agent run started (annotated by the view)."""
+        return getattr(obj, "last_run_at", None)
 
     def get_pending_review_count(self, obj):
         return ResearchStagingItem.active_objects.filter(
@@ -85,7 +133,19 @@ class ResearchProjectSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         source_files = validated_data.pop("sources", [])
+        soul_override = validated_data.pop("soul_content", None)
+        scope = [line for line in validated_data.pop("project_memory", []) if line]
         project = super().create(validated_data)
+        # Facts about the inquiry live in project memory, not in SOUL.md: the
+        # soul file is who the agent is, and Hermes keeps the two apart.
+        for line in scope:
+            ResearchProjectMemory.objects.create(
+                project=project,
+                added_by=project.user,
+                label=line.split(":", 1)[0][:255] if ":" in line[:60] else "Scope",
+                detail=line,
+                source=ProjectMemorySource.MANUAL,
+            )
         for item in source_files:
             ResearchSource.objects.create(
                 project=project,
@@ -98,6 +158,8 @@ class ResearchProjectSerializer(serializers.ModelSerializer):
         # Every project starts with a versioned soul file (v1) seeded from the
         # chosen standards template (or empty for a custom/blank start).
         content, origin = soul_template_content(project.standards_template)
+        if soul_override is not None and soul_override.strip() != content.strip():
+            content, origin = soul_override.strip(), SoulFileOrigin.EDIT
         soul = SoulFile.objects.create(project=project)
         SoulFileVersion.objects.create(
             soul_file=soul,
@@ -107,6 +169,17 @@ class ResearchProjectSerializer(serializers.ModelSerializer):
             created_by=project.user,
         )
         return project
+
+
+class ProjectMemoryDocumentSerializer(serializers.Serializer):
+    """A project's MEMORY.md as the scholar edits it — one entry per item."""
+
+    entries = serializers.ListField(
+        child=serializers.CharField(
+            max_length=600, trim_whitespace=True, allow_blank=True
+        ),
+        max_length=40,
+    )
 
 
 class ResearchSourceSerializer(serializers.ModelSerializer):
@@ -161,14 +234,16 @@ class ResearchAgentToolCallSerializer(serializers.ModelSerializer):
 
 
 class ResearchAgentRunSerializer(serializers.ModelSerializer):
-    """A delegated run with its tool calls (the Runs/activity record)."""
+    """A run in the project's run list."""
 
     tools = serializers.JSONField(source="allowed_tools", read_only=True)
     cost = serializers.FloatField(read_only=True)
     ran_at = serializers.SerializerMethodField()
     staged_count = serializers.SerializerMethodField()
-    tool_calls = serializers.SerializerMethodField()
+    tool_call_count = serializers.SerializerMethodField()
     cancellation = serializers.SerializerMethodField()
+    focus = serializers.SerializerMethodField()
+    coverage = serializers.SerializerMethodField()
 
     class Meta:
         model = ResearchAgentRun
@@ -188,10 +263,32 @@ class ResearchAgentRunSerializer(serializers.ModelSerializer):
             "completed_at",
             "ran_at",
             "hermes_run_id",
-            "tool_calls",
+            "thread",
+            "learning",
+            "focus",
+            "tool_call_count",
+            "coverage",
             "cancellation",
         ]
         read_only_fields = fields
+
+    def get_coverage(self, obj):
+        """How wide a Scout looked: searches run and pages read."""
+        if obj.role != AgentRole.SCOUT:
+            return None
+        searches = reads = 0
+        for tool in ResearchAgentToolCall.active_objects.filter(run=obj).values_list(
+            "tool", flat=True
+        ):
+            name = tool.removeprefix("mcp__dare__")
+            if name == "fetch_page":
+                reads += 1
+            elif name in ("web_search", "search_papers") or "__" in name:
+                searches += 1
+        return {"searches": searches, "reads": reads}
+
+    def get_focus(self, obj):
+        return (obj.selected_context or {}).get("focus") or ""
 
     def get_ran_at(self, obj):
         return obj.started_at or obj.created_at
@@ -199,11 +296,8 @@ class ResearchAgentRunSerializer(serializers.ModelSerializer):
     def get_staged_count(self, obj):
         return ResearchStagingItem.active_objects.filter(run=obj).count()
 
-    def get_tool_calls(self, obj):
-        calls = ResearchAgentToolCall.active_objects.filter(run=obj).order_by(
-            "created_at"
-        )
-        return ResearchAgentToolCallSerializer(calls, many=True).data
+    def get_tool_call_count(self, obj):
+        return ResearchAgentToolCall.active_objects.filter(run=obj).count()
 
     def get_cancellation(self, obj):
         if obj.cancellation_requested_at is None:
@@ -228,18 +322,29 @@ class ResearchAgentRunSerializer(serializers.ModelSerializer):
 
 
 class ResearchAgentRunDetailSerializer(ResearchAgentRunSerializer):
-    """Single-run audit view: everything the list carries plus the agent's exact
-    final response. `raw_output` is excluded from the list serializer so run
-    lists stay lean; it is only sent for one explicitly opened run.
+    """One run's full audit: the list fields plus what it was sent, every tool
+    call and its exact final reply."""
 
-    Note: `reasoning_trace` is still captured to the DB (dormant) but not
-    surfaced — for the current model `reasoning.available` merely duplicates the
-    start of `raw_output`. If a model that emits genuinely distinct per-turn
-    reasoning is configured later, add it back here."""
+    tool_calls = serializers.SerializerMethodField()
+    prompt = serializers.SerializerMethodField()
 
     class Meta(ResearchAgentRunSerializer.Meta):
-        fields = ResearchAgentRunSerializer.Meta.fields + ["raw_output"]
+        fields = ResearchAgentRunSerializer.Meta.fields + [
+            "tool_calls",
+            "prompt",
+            "raw_output",
+        ]
         read_only_fields = fields
+
+    def get_tool_calls(self, obj):
+        calls = ResearchAgentToolCall.active_objects.filter(run=obj).order_by(
+            "created_at"
+        )
+        return ResearchAgentToolCallSerializer(calls, many=True).data
+
+    def get_prompt(self, obj):
+        # Runs from before prompts were recorded have none.
+        return obj.prompt or None
 
 
 class ResearchProjectMemorySerializer(serializers.ModelSerializer):
@@ -261,21 +366,114 @@ class ResearchMemoryProposalSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = ResearchMemoryProposal
-        fields = ["id", "role", "content", "memory_type", "status", "proposed_at"]
+        fields = [
+            "id",
+            "role",
+            "content",
+            "memory_type",
+            "layer",
+            "origin",
+            "why",
+            "evidence",
+            "thread",
+            "status",
+            "proposed_at",
+        ]
         read_only_fields = fields
 
 
 class ResearchChatMessageSerializer(serializers.ModelSerializer):
-    """One message in a project's chat transcript."""
+    """One thread row: a scholar or agent message, or a DARE event."""
 
     class Meta:
         model = ResearchChatMessage
-        fields = ["id", "role", "content", "created_at"]
+        fields = ["id", "role", "content", "event_type", "payload", "run", "created_at"]
         read_only_fields = fields
 
 
+class ResearchThreadSerializer(serializers.ModelSerializer):
+    """A chat thread in the thread list."""
+
+    preview = serializers.SerializerMethodField()
+    message_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ResearchSession
+        fields = [
+            "id",
+            "title",
+            "preview",
+            "message_count",
+            "last_run_at",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+    def get_preview(self, obj):
+        last = (
+            ResearchChatMessage.active_objects.filter(
+                session=obj, role__in=[ChatMessageRole.USER, ChatMessageRole.ASSISTANT]
+            )
+            .order_by("-created_at")
+            .values_list("content", flat=True)
+            .first()
+        )
+        return (last or "")[:140]
+
+    def get_message_count(self, obj):
+        return ResearchChatMessage.active_objects.filter(
+            session=obj, role__in=[ChatMessageRole.USER, ChatMessageRole.ASSISTANT]
+        ).count()
+
+
+def thread_detail(thread):
+    """The thread view payload: transcript, Scouts, proposals, live state."""
+    messages = ResearchChatMessage.active_objects.filter(session=thread).order_by(
+        "created_at"
+    )
+    scouts = ResearchAgentRun.active_objects.filter(
+        thread=thread, role=AgentRole.SCOUT
+    ).order_by("created_at")
+    last_turn = (
+        ResearchAgentRun.active_objects.filter(thread=thread, role=AgentRole.CHAT)
+        .order_by("-created_at")
+        .first()
+    )
+
+    def turn(states):
+        if last_turn is None or last_turn.status not in states:
+            return None
+        return {
+            "runId": last_turn.id,
+            "followup": bool((last_turn.selected_context or {}).get("followup")),
+            "status": last_turn.status,
+        }
+
+    proposals = ResearchMemoryProposal.active_objects.filter(thread=thread).order_by(
+        "created_at"
+    )
+    return {
+        "thread": ResearchThreadSerializer(thread).data,
+        "messages": ResearchChatMessageSerializer(messages, many=True).data,
+        "scouts": [scout_summary(run) for run in scouts],
+        "proposals": {p.id: proposal_payload(p) for p in proposals},
+        "cost": float(
+            ResearchAgentRun.active_objects.filter(thread=thread).aggregate(
+                total=Sum("cost")
+            )["total"]
+            or 0
+        ),
+        "activeTurn": turn(LIVE_RUN_STATUSES),
+        "lastTurnFailed": turn({AgentRunStatus.FAILED, AgentRunStatus.OUTCOME_UNKNOWN}),
+    }
+
+
 class ResearchStagingItemSerializer(serializers.ModelSerializer):
-    """A staged review candidate — the canonical §11 shape (camelCased)."""
+    """A finding a Scout staged, with the task it was found for."""
+
+    thread_id = serializers.SerializerMethodField()
+    focus = serializers.SerializerMethodField()
+    task = serializers.SerializerMethodField()
 
     class Meta:
         model = ResearchStagingItem
@@ -288,9 +486,9 @@ class ResearchStagingItemSerializer(serializers.ModelSerializer):
             "doi",
             "url",
             "abstract",
+            "finding",
             "rationale",
             "confidence",
-            "confidence_rationale",
             "evidence_label",
             "citation_context",
             "provenance",
@@ -299,81 +497,39 @@ class ResearchStagingItemSerializer(serializers.ModelSerializer):
             "later_reason",
             "critic_metadata",
             "review_metadata",
+            "thread_id",
+            "focus",
+            "task",
             "created_at",
         ]
         read_only_fields = fields
+
+    def get_thread_id(self, obj):
+        return obj.run.thread_id if obj.run else None
+
+    def get_focus(self, obj):
+        return (obj.run.selected_context or {}).get("focus", "") if obj.run else ""
+
+    def get_task(self, obj):
+        return obj.run.task if obj.run else ""
 
 
 class ResearchKnowledgeItemSerializer(serializers.ModelSerializer):
-    """
-    Approved durable knowledge. Bibliographic display fields are read from the
-    source staging item (the contract references it rather than duplicating it).
-    """
-
-    title = serializers.SerializerMethodField()
-    authors = serializers.SerializerMethodField()
-    year = serializers.SerializerMethodField()
-    venue = serializers.SerializerMethodField()
-    url = serializers.SerializerMethodField()
-    confidence = serializers.SerializerMethodField()
-    evidence_label = serializers.SerializerMethodField()
-    citation_context = serializers.SerializerMethodField()
+    """Approved knowledge: the finding it was approved from, in full, plus when."""
 
     class Meta:
         model = ResearchKnowledgeItem
-        fields = [
-            "id",
-            "title",
-            "authors",
-            "year",
-            "venue",
-            "url",
-            "rationale",
-            "confidence",
-            "evidence_label",
-            "citation_context",
-            "provenance",
-            "soul_file_version",
-            "used_in",
-            "approved_at",
-            "created_at",
-        ]
+        fields = ["id", "used_in", "approved_at", "created_at"]
         read_only_fields = fields
 
-    def _staged(self, obj):
-        return obj.source_staging_item
-
-    def get_title(self, obj):
-        s = self._staged(obj)
-        return s.title if s else ""
-
-    def get_authors(self, obj):
-        s = self._staged(obj)
-        return s.authors if s else ""
-
-    def get_year(self, obj):
-        s = self._staged(obj)
-        return s.year if s else None
-
-    def get_venue(self, obj):
-        s = self._staged(obj)
-        return s.venue if s else ""
-
-    def get_url(self, obj):
-        s = self._staged(obj)
-        return s.url if s else ""
-
-    def get_confidence(self, obj):
-        s = self._staged(obj)
-        return s.confidence if s else None
-
-    def get_evidence_label(self, obj):
-        s = self._staged(obj)
-        return s.evidence_label if s else ""
-
-    def get_citation_context(self, obj):
-        s = self._staged(obj)
-        return s.citation_context if s else ""
+    def to_representation(self, obj):
+        staged = obj.source_staging_item
+        evidence = ResearchStagingItemSerializer(staged).data if staged else {}
+        return {
+            **evidence,
+            **super().to_representation(obj),
+            "staging_item_id": staged.id if staged else None,
+        }
 
 
 class ResearchArtifactSerializer(serializers.ModelSerializer):
@@ -436,19 +592,7 @@ class ResearchProjectDetailSerializer(ResearchProjectSerializer):
         return ResearchSourceSerializer(sources, many=True).data
 
     def get_soul_file(self, obj):
-        soul = SoulFile.active_objects.filter(project=obj).first()
-        if not soul:
-            return None
-        version = soul.current_version()
-        if not version:
-            return None
-        return {
-            "id": soul.id,
-            "version": version.version,
-            "content": version.content,
-            "origin": version.origin,
-            "updatedAt": version.created_at,
-        }
+        return soul_payload(obj)
 
     def get_project_memory(self, obj):
         memory = ResearchProjectMemory.active_objects.filter(project=obj).order_by(
@@ -463,14 +607,18 @@ class ResearchProjectDetailSerializer(ResearchProjectSerializer):
         return ResearchMemoryProposalSerializer(proposals, many=True).data
 
     def get_review_items(self, obj):
-        items = ResearchStagingItem.active_objects.filter(project=obj).order_by(
-            "-created_at"
+        items = (
+            ResearchStagingItem.active_objects.filter(project=obj)
+            .select_related("run")
+            .order_by("-created_at")
         )
         return ResearchStagingItemSerializer(items, many=True).data
 
     def get_knowledge_items(self, obj):
-        items = ResearchKnowledgeItem.active_objects.filter(project=obj).order_by(
-            "-created_at"
+        items = (
+            ResearchKnowledgeItem.active_objects.filter(project=obj)
+            .select_related("source_staging_item__run")
+            .order_by("-created_at")
         )
         return ResearchKnowledgeItemSerializer(items, many=True).data
 
