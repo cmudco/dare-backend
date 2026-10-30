@@ -1,0 +1,23 @@
+name: Docs problem
+description: Something in the docs is wrong, unclear or missing
+labels: ["documentation"]
+body:
+  - type: input
+    id: page
+    attributes:
+      label: Page
+      description: The file path or link.
+      placeholder: "docs/tutorials/quickstart.md"
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is wrong or missing
+      description: Quote the sentence if it is wrong, or describe what you looked for and did not find.
+    validations:
+      required: true
+  - type: textarea
+    id: fix
+    attributes:
+      label: Suggested fix

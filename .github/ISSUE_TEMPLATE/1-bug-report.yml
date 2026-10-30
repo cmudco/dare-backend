@@ -1,0 +1,76 @@
+name: Bug report
+description: Something does not work as described
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Search [open and closed issues](https://github.com/cmudco/dare-backend/issues?q=is%3Aissue) first. Found a security vulnerability? Do not use this form: [report it privately](https://github.com/cmudco/dare-backend/security/policy).
+  - type: dropdown
+    id: service
+    attributes:
+      label: Where does it fail?
+      options:
+        - "DARE backend (API, workers)"
+        - "DARE frontend (web app)"
+        - "Not sure"
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Branch and commit, or the URL of the deployment.
+      placeholder: "dev @ 1a2b3c4"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The fewest steps that show the problem.
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or traceback
+      description: "Server output, stack traces or error responses. Remove keys, tokens and student data."
+      render: shell
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: "OS, Python version, and Docker or bare metal."
+      placeholder: "macOS 15, Python 3.13, Docker"
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Screenshots, recordings or related issues. Drag files in.
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Before you submit
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
+        - label: I removed keys, tokens and student data from everything above.
+          required: true
+        - label: An AI tool helped write this report.

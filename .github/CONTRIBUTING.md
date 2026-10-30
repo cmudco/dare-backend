@@ -1,19 +1,27 @@
 # Contributing
 
-Thanks for contributing to the DARE backend, the Django service behind the DARE platform and
-the Socratic Bots apps built on it.
+Thanks for contributing to the DARE backend, the Django service behind the DARE platform and the
+Socratic Bots apps built on it.
 
 ## Filing issues
 
-Search existing issues first and confirm the problem still happens on the latest `dev`.
+1. **Search first.** Look through
+   [open and closed issues](https://github.com/cmudco/dare-backend/issues?q=is%3Aissue), and check
+   that the problem still happens on the latest `dev`.
+2. **Pick the right repo.** API errors, worker failures and ingestion problems belong here. If the
+   API answers correctly but the page looks wrong, file it on
+   [dare-frontend](https://github.com/cmudco/dare-frontend/issues/new/choose).
+3. **Open a form.** Go to
+   [Issues → New issue](https://github.com/cmudco/dare-backend/issues/new/choose) and choose **Bug
+   report**, **Feature request** or **Docs problem**. Each form asks for exactly what we need; fill
+   in every required field.
+4. **Redact.** Remove keys, tokens and student data from logs and screenshots.
+5. **Watch the issue.** If we need more detail, we ask there.
 
-- **Bugs.** Include your environment (OS, Python version, Docker or bare metal, browser if the
-  frontend is involved), minimal numbered steps to reproduce, expected and actual behaviour with
-  stack traces or error responses (redact secrets), and how badly it blocks use.
-- **Features.** Describe the user-facing problem rather than the implementation you have in mind,
-  who it affects, and any constraints or non-goals. For a large architectural change, file an
-  issue with a design sketch before writing code.
-- **Security issues.** Do not open a public issue. Follow [SECURITY.md](SECURITY.md).
+Before a large change, such as a new app, a schema change across apps, or a new service, open a
+feature request with a short design sketch and wait for a reply before you write code.
+
+Security vulnerabilities never go in an issue. Follow [SECURITY.md](SECURITY.md).
 
 ## Pull requests
 
@@ -46,27 +54,22 @@ python manage.py test
 
 ### PR description
 
-- **What.** A one-paragraph summary.
-- **Why.** The motivation, with the issue linked (`Closes #123`).
-- **How.** The approach, with non-obvious decisions called out.
-- **Testing.** How you verified it: new tests, manual steps.
-- **Screenshots or recordings.** For any user-facing or API-shape change.
-- **Migration notes.** For anything backwards-incompatible.
+The [pull request template](pull_request_template.md) asks for what, why, how, testing and AI
+assistance, plus a checklist. Fill in every section; write "none" where nothing applies. Add
+migration notes for anything backwards-incompatible, and screenshots for an API-shape change.
 
 ### Review and merge
 
 - A PR needs at least one approving review from a maintainer and a passing local check suite.
 - PRs land as merge commits, so every commit message on the branch must stand on its own.
 - Maintainers may rebase on `dev` before merging.
-- Review for correctness, then design, then style. Mark comments `nit:`, `consider:` or
-  `blocking:`.
+- Review for correctness, then design, then style. Mark comments `nit:`, `consider:` or `blocking:`.
 - Approve when you would ship the change as it is.
 
 ### Commit messages
 
-Use `<type>(<scope>): <summary>`, where type is `feat`, `fix`, `refactor`, `docs`, `test` or
-`chore` and the scope is optional. Keep the summary under 70 characters and put context in the
-body.
+Use `<type>(<scope>): <summary>`, where type is `feat`, `fix`, `refactor`, `docs`, `test` or `chore`
+and the scope is optional. Keep the summary under 70 characters and put context in the body.
 
 ```
 feat(rag): index spreadsheets by a summary card, not their rows
@@ -78,9 +81,9 @@ docs(agents): cut AGENTS.md to commands and real traps
 
 `AGENTS.md` holds the commands and traps, and `.claude/CLAUDE.md` imports it for Claude Code.
 Procedures (`run-backend`, `run-workers`, `check`, `release-note`) live in `.agents/skills/`, with
-symlinks in `.claude/skills/`; [.agents/README.md](../.agents/README.md) explains the layout.
-Treat these files like code: if you change how the backend runs, builds or tests, update the
-matching skill in the same PR.
+symlinks in `.claude/skills/`; [.agents/README.md](../.agents/README.md) explains the layout. Treat
+these files like code: if you change how the backend runs, builds or tests, update the matching
+skill in the same PR.
 
 ## Getting help
 
