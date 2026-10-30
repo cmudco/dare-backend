@@ -138,12 +138,12 @@ class AccessCodeGroupAdmin(admin.ModelAdmin):
             'fields': ('default_role',),
             'description': (
                 'Role assigned to users who register with this access code.<br><br>'
-                '<strong>SUPERADMIN</strong> — Full DARE platform access + SocraticBooks creator + admin privileges.<br>'
-                '<strong>SUPERVISOR</strong> — DARE platform access + cross-user bot/agent management in SocraticBooks + creator access.<br>'
-                '<strong>RESEARCHER</strong> — DARE platform access + SocraticBooks creator (can create and manage books).<br>'
-                '<strong>USER</strong> — DARE platform access + SocraticBooks student/consumer (can read and interact with books).<br>'
-                '<strong>CREATOR</strong> — No DARE access + SocraticBooks creator (can create and manage books only).<br>'
-                '<strong>SB_USER</strong> — No DARE access + SocraticBooks student/consumer only.'
+                '<strong>SUPERADMIN</strong> — Full DARE platform access + Socratic Bots creator + admin privileges.<br>'
+                '<strong>SUPERVISOR</strong> — DARE platform access + cross-user bot/agent management in Socratic Bots + creator access.<br>'
+                '<strong>RESEARCHER</strong> — DARE platform access + Socratic Bots creator (can create and manage bots).<br>'
+                '<strong>USER</strong> — DARE platform access + Socratic Bots student/consumer (can read and interact with bots).<br>'
+                '<strong>CREATOR</strong> — No DARE access + Socratic Bots creator (can create and manage bots only).<br>'
+                '<strong>SB_USER</strong> — No DARE access + Socratic Bots student/consumer only.'
             )
         }),
         (_('Model Access'), {

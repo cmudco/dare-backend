@@ -489,7 +489,7 @@ class Transaction(TimeStampMixin):
         help_text=("Platform where this transaction originated: DARE or SocraticBots"),
     )
 
-    # Bot attribution (only populated for bot-driven transactions; SocraticBooks
+    # Bot attribution (only populated for bot-driven transactions; Socratic Bots
     # owns the Bot table so we keep these as plain ints, not FKs across DBs).
     bot_id = models.PositiveIntegerField(
         null=True,

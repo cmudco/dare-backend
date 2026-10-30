@@ -395,7 +395,7 @@ class WalletsListResponseSerializer(serializers.Serializer):
 
     active_wallet = ActiveWalletRefSerializer()
     wallets = UnifiedWalletSerializer(many=True)
-    # Clients without feature-flag access (SocraticBooks) hide what's off.
+    # Clients without feature-flag access (Socratic Bots) hide what's off.
     byo_enabled = serializers.BooleanField()
     litellm_enabled = serializers.BooleanField()
 
@@ -452,7 +452,7 @@ class LiteLLMTestResponseSerializer(serializers.Serializer):
 
 
 class LiteLLMKeyDependentBotSerializer(serializers.Serializer):
-    """A SocraticBooks bot whose chat model routes through a LiteLLM key."""
+    """A Socratic bot whose chat model routes through a LiteLLM key."""
 
     bot_id = serializers.IntegerField()
     bot_title = serializers.CharField()

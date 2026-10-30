@@ -173,10 +173,10 @@ class BotModelCheckRequestSerializer(serializers.Serializer):
 
 
 class InternalBotModelCheckView(APIView):
-    """Tell SocraticBooks whether a bot's owner may save these models on it.
+    """Tell Socratic Bots whether a bot's owner may save these models on it.
 
     Called on bot save. The response carries one problem code per field, or
-    ``null`` when that model is fine; SocraticBooks turns codes into messages.
+    ``null`` when that model is fine; Socratic Bots turns codes into messages.
     """
 
     authentication_classes = []

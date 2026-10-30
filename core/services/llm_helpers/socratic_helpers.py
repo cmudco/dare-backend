@@ -1,7 +1,7 @@
 """
 Socratic Message Builders
 
-Complete message construction for SocraticBooks classic and advanced modes.
+Complete message construction for Socratic Bots classic and advanced modes.
 These functions handle all logging, history retrieval, vector service init,
 document context retrieval, and prompt assembly.
 """
@@ -49,7 +49,7 @@ async def build_classic_socratic_messages(
     document_processor: DocumentProcessor,
 ) -> SocraticBuildResult:
     """
-    Build complete message array for classic SocraticBooks mode.
+    Build complete message array for classic Socratic Bots mode.
 
     The classic format establishes the AI as a "living Socratic book" that helps
     students learn through dialogue. System prompt defines the teaching context,
@@ -142,7 +142,7 @@ async def build_advanced_socratic_messages(
     document_processor: DocumentProcessor,
 ) -> SocraticBuildResult:
     """
-    Build complete message array for advanced SocraticBooks mode.
+    Build complete message array for advanced Socratic Bots mode.
 
     The advanced format embeds all context (conversation history, documents,
     learning goals) into a comprehensive system prompt. The user message

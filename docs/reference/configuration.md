@@ -11,8 +11,8 @@ them differently for local development.
 
 | Variable | Must equal |
 | --- | --- |
-| `SSO_JWT_KEY` | The same variable in socraticbooks-backend, which verifies DARE's JWTs |
-| `DARE_INTERNAL_KEY` | The same variable in socraticbooks-backend and voice-agent-runtime |
+| `SSO_JWT_KEY` | The same variable in socraticbots-backend, which verifies DARE's JWTs |
+| `DARE_INTERNAL_KEY` | The same variable in socraticbots-backend and voice-agent-runtime |
 
 ## Django core
 

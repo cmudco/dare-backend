@@ -286,7 +286,7 @@ Confirmation that a message was edited.
 
 #### `message` (type: `progress_stream` / `progress_complete` / `progress_error`)
 
-Learning progress assessment streaming (Socratic Books feature).
+Learning progress assessment streaming (Socratic Bots feature).
 
 `conversationId` is the public `Conversation.conversation_id` used by
 `subscribe_conversation` and `send_message` (for example, `OQ48N`), never the

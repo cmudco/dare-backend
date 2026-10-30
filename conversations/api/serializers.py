@@ -145,7 +145,7 @@ class ConversationSerializer(serializers.ModelSerializer):
             "Access code redeemed by the user when starting a bot conversation. "
             "Persisted on the Conversation so the billing finalizer can resolve "
             "the matching AccessCodeGroup and its GroupWallet for institutional "
-            "(GROUP_WALLET) bots without round-tripping back to SocraticBooks."
+            "(GROUP_WALLET) bots without round-tripping back to Socratic Bots."
         ),
     )
     selected_mcp_server_ids = serializers.PrimaryKeyRelatedField(

@@ -79,7 +79,7 @@ class LLMQueryRequest:
 
     @property
     def bot_id(self) -> Optional[int]:
-        """SocraticBooks bot this turn belongs to, if any."""
+        """Socratic bot this turn belongs to, if any."""
         return self.conversation.bot_id if self.conversation is not None else None
 
     @property

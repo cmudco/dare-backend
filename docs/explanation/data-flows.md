@@ -195,13 +195,13 @@ sequenceDiagram
 
 ## 4. Socratic Bots authentication flow
 
-When a user logs in through the Socratic Books platform:
+When a user logs in through the Socratic Bots platform:
 
 ```mermaid
 sequenceDiagram
     participant User
-    participant SR as socraticbooks-react
-    participant SB as socraticbooks-backend
+    participant SR as socraticbots-frontend
+    participant SB as socraticbots-backend
     participant DAC as DareAuthClient
     participant DB as DARE Backend
 

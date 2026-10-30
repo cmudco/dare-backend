@@ -18,7 +18,7 @@ intelligence, reproducible workflows and per-user usage tracking in one place.
 **This repository is the DARE backend**, the Django ASGI service that powers the platform.
 
 > **DARE runs standalone.** The DARE backend and frontend are all you need to run the platform.
-> SocraticBooks is a separate, optional platform built on top of DARE.
+> Socratic Bots is a separate, optional platform built on top of DARE.
 
 ## Overview
 
@@ -63,7 +63,7 @@ that owns the LLM, vector-store, MCP and email integrations. The full diagrams a
 - **Workflows.** Multi-step AI workflows built in a visual DAG builder.
 - **Usage and billing.** Token usage tracking and per-user billing.
 - **Access codes.** Registration gated by access codes for institutional deployments.
-- **Partner platforms.** Inter-service authentication for partners such as SocraticBooks.
+- **Partner platforms.** Inter-service authentication for partners such as Socratic Bots.
 - **Document generation.** Typst-rendered documents through
   [quillmark-mcp](https://github.com/tonguetoquill/quillmark-mcp), run as a service in the
   compose stack.
@@ -133,8 +133,8 @@ lives in GitHub Releases and the in-app What's New dialog.
 ## What is not included in this repo?
 
 - [dare-frontend](https://github.com/cmudco/dare-frontend): the React/TypeScript web client (run it separately)
-- [socraticbooks-backend](https://github.com/cmudco/socraticbooks-backend) and
-  [socraticbooks-react](https://github.com/cmudco/socraticbooks-react): the SocraticBooks platform,
+- [socraticbots-backend](https://github.com/cmudco/socraticbots-backend) and
+  [socraticbots-frontend](https://github.com/cmudco/socraticbots-frontend): the Socratic Bots platform,
   which proxies to DARE
 - Infrastructure you provide: LLM provider API keys, an Ollama host for self-hosted models, and
   managed Postgres, Redis and vector-store instances in production
