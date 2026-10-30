@@ -3,6 +3,7 @@ from allauth.account.adapter import DefaultAccountAdapter
 from config.env import FRONTEND_CONFIRM_EMAIL_URL, FRONTEND_PASSWORD_RESET_URL
 from users.utils import detect_platform_from_request, get_platform_frontend_url
 from users.constants import AuthSourceChoice
+from django.conf import settings
 
 class AccountAdapter(DefaultAccountAdapter):
     def get_email_confirmation_url(self, request, emailconfirmation):
@@ -35,4 +36,5 @@ class AccountAdapter(DefaultAccountAdapter):
 
             context['password_reset_url'] = password_reset_url
 
+        context = {**context, "support_email": getattr(settings, "EMAIL_REPLY_TO", "")}
         return super().render_mail(template_prefix, email, context)

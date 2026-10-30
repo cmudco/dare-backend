@@ -14,6 +14,8 @@ from users.api.views import (
     token_health_check,
 )
 from users.constants import APP_NAME
+from users.api.access_requests import AccessRequestView
+from users.api.registration import CustomRegisterView
 
 app_name = APP_NAME
 
@@ -23,6 +25,10 @@ router.register(r'chunking', ChunkingSettingsViewSet, basename='chunking')
 router.register(r'avatar', AvatarViewSet, basename='avatar')
 
 urlpatterns = [
+    path(
+        "dj-rest-auth/registration/", CustomRegisterView.as_view(), name="rest_register"
+    ),
+    path("access-requests/", AccessRequestView.as_view(), name="access-request"),
     # Custom verify-email with auto-login (must come before dj-rest-auth include)
     path("dj-rest-auth/registration/verify-email/", CustomVerifyEmailView.as_view(), name="rest_verify_email"),
     path("dj-rest-auth/", include("dj_rest_auth.urls")),

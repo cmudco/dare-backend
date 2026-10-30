@@ -13,6 +13,8 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 import os
 from datetime import timedelta
 
+from django.core.exceptions import ImproperlyConfigured
+
 from config import env
 from config.sentry import init_sentry
 
@@ -154,16 +156,51 @@ EMAIL_HOST_USER = env.EMAIL_HOST_USER
 EMAIL_HOST_PASSWORD = env.EMAIL_HOST_PASSWORD
 EMAIL_FROM = env.EMAIL_FROM
 DEFAULT_FROM_EMAIL = EMAIL_FROM
-EMAIL_PORT = env.EMAIL_PORT
+EMAIL_REPLY_TO = os.environ.get("EMAIL_REPLY_TO", "").strip()
+ACCESS_REQUEST_REVIEW_CC = [
+    address.strip()
+    for address in os.environ.get("ACCESS_REQUEST_REVIEW_CC", "").split(",")
+    if address.strip()
+]
+# Explicit full origins only; empty keeps production signup HTTPS-only.
+ACCESS_REQUEST_ALLOWED_HTTP_ORIGINS = [
+    origin.strip().lower().rstrip("/")
+    for origin in os.environ.get("ACCESS_REQUEST_ALLOWED_HTTP_ORIGINS", "").split(",")
+    if origin.strip()
+]
+EMAIL_PORT = int(env.EMAIL_PORT or 587)
+EMAIL_USE_TLS = env.EMAIL_USE_TLS
+EMAIL_USE_SSL = env.EMAIL_USE_SSL
+EMAIL_TIMEOUT = int(os.environ.get("EMAIL_TIMEOUT", "10"))
 
-if env.EMAIL_HOST_USER and env.EMAIL_HOST_PASSWORD:
+if os.environ.get("EMAIL_BACKEND"):
+    EMAIL_BACKEND = os.environ["EMAIL_BACKEND"]
+elif env.EMAIL_HOST_USER and env.EMAIL_HOST_PASSWORD:
     EMAIL_BACKEND = "email_logs.backends.LoggingResendEmailBackend"
 elif env.EMAIL_HOST:
     EMAIL_BACKEND = "email_logs.backends.LoggingSMTPEmailBackend"
 else:
     EMAIL_BACKEND = "email_logs.backends.LoggingConsoleEmailBackend"
 
+EMAIL_BACKEND = {
+    "django.core.mail.backends.console.EmailBackend": "email_logs.backends.LoggingConsoleEmailBackend",
+    "django.core.mail.backends.smtp.EmailBackend": "email_logs.backends.LoggingSMTPEmailBackend",
+}.get(EMAIL_BACKEND, EMAIL_BACKEND)
+
+SESSION_COOKIE_SECURE = os.environ.get("DJANGO_SECURE_COOKIES", "False") == "True"
+CSRF_COOKIE_SECURE = SESSION_COOKIE_SECURE
+SECURE_PROXY_SSL_HEADER = (
+    ("HTTP_X_FORWARDED_PROTO", "https")
+    if os.environ.get("TRUST_PROXY_HTTPS", "False") == "True"
+    else None
+)
+
+TRUSTED_PROXY_COUNT = int(os.environ.get("TRUSTED_PROXY_COUNT", "0"))
+if TRUSTED_PROXY_COUNT < 0:
+    raise ImproperlyConfigured("TRUSTED_PROXY_COUNT must be nonnegative.")
+
 REST_FRAMEWORK = {
+    "NUM_PROXIES": TRUSTED_PROXY_COUNT,
     "DEFAULT_RENDERER_CLASSES": (
         "djangorestframework_camel_case.render.CamelCaseJSONRenderer",
         "djangorestframework_camel_case.render.CamelCaseBrowsableAPIRenderer",

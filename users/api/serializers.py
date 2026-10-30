@@ -1,10 +1,13 @@
 import logging
 from decimal import Decimal
 
+from allauth.account.models import EmailAddress
 from dj_rest_auth.registration.serializers import RegisterSerializer
 from dj_rest_auth.serializers import LoginSerializer, UserDetailsSerializer
 from django.contrib.auth import authenticate, get_user_model
 from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import IntegrityError, transaction
+from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
 
 from billing.constants import TransactionSourceChoice
@@ -13,8 +16,15 @@ from billing.models import Wallet
 from billing.services import WalletService
 from core.storage.constants import StorageBackendChoice
 from prompts.api.serializers import PromptSerializer
+from users.access_request_constants import RequestKind, RequestState
+from users.access_request_models import AccessRequest
 from users.constants import AuthSourceChoice, RoleChoice, VectorDBChoice
 from users.models import AccessCodeGroup
+from users.services.access_request_service import (
+    AccessRequestsUnavailable,
+    active_policy,
+    request_registration_approval,
+)
 from users.utils import detect_platform_from_request, get_platform_access_permission
 
 logger = logging.getLogger(__name__)
@@ -149,59 +159,72 @@ class CustomUserDetailsSerializer(UserDetailsSerializer):
 class CustomRegisterSerializer(RegisterSerializer):
     name = serializers.CharField(max_length=255, required=True)
     access_code = serializers.CharField(
-        max_length=255, required=False, allow_blank=True
+        max_length=255, required=False, allow_blank=True, default=""
     )
 
-    validate_access_code_attrs = {
-        # Platform rules:
-        # - DARE: access_code is optional
-        # - SocraticBots: access_code is optional
-        AuthSourceChoice.DARE: {"access_code_required": False},
-        AuthSourceChoice.SOCRATIC_BOTS: {"access_code_required": False},
-    }
-
     def validate(self, attrs):
-        """
-        Validate registration based on platform detection
-        """
-        # Get platform from request
-        platform = detect_platform_from_request(self.context["request"])
-
-        access_code = attrs.get("access_code")
-        validation_rules = self.validate_access_code_attrs.get(platform, {})
-
-        # For SocraticBots, empty access code is allowed
-        if platform == AuthSourceChoice.SOCRATIC_BOTS and not access_code:
-            return attrs
-
-        # If access code is provided, validate it exists and is active
-        if access_code:
+        attrs = super().validate(attrs)
+        if not attrs.get("access_code"):
             try:
-                code_group = AccessCodeGroup.objects.get(access_code=access_code)
-                if not code_group.is_available:
-                    # Provide specific error message based on the reason
-                    if code_group.is_expired:
-                        error_message = "This access code has expired."
-                    elif not code_group.is_active:
-                        error_message = "This access code is no longer active."
-                    else:
-                        error_message = "This access code has reached its usage limit."
-                    raise serializers.ValidationError({"access_code": error_message})
-                attrs["_code_group"] = code_group
-            except AccessCodeGroup.DoesNotExist:
+                active_policy()
+            except AccessRequestsUnavailable:
                 raise serializers.ValidationError(
                     {
-                        "access_code": "Invalid access code. Please check the code and try again."
+                        "access_code": _(
+                            "Registration without a code is unavailable. Use a valid invitation code or contact the deployment administrator."
+                        )
                     }
                 )
-
-        # Check if access code is required for the platform
-        elif validation_rules.get("access_code_required", False):
+            existing = AccessRequest.objects.filter(email=attrs["email"]).first()
+            if existing and existing.status != RequestState.PENDING:
+                if (
+                    existing.kind == RequestKind.INVITATION
+                    and existing.status == RequestState.APPROVED
+                ):
+                    raise serializers.ValidationError(
+                        {
+                            "access_code": _(
+                                "Your invitation is already approved. Enter the single-use code emailed to this address in the Access Code field. If the invitation email is missing, ask the administrator to retry its delivery."
+                            )
+                        }
+                    )
+                raise serializers.ValidationError(
+                    {
+                        "email": _(
+                            "An access request already exists. Use your invitation or contact the deployment administrator."
+                        )
+                    }
+                )
+            return attrs
+        try:
+            group = AccessCodeGroup.objects.get(access_code=attrs["access_code"])
+        except AccessCodeGroup.DoesNotExist:
             raise serializers.ValidationError(
-                {"access_code": f"Access code is required for {platform} registration."}
+                {"access_code": _("Invalid access code.")}
             )
-
+        if not group.is_available:
+            raise serializers.ValidationError(
+                {
+                    "access_code": _(
+                        "This access code is expired, disabled, or fully used."
+                    )
+                }
+            )
+        self.validate_invitation(group, attrs["email"])
         return attrs
+
+    @staticmethod
+    def validate_invitation(group, email):
+        invitation = AccessRequest.objects.filter(code_group=group).first()
+        if invitation and invitation.email != email:
+            raise serializers.ValidationError(
+                {
+                    "access_code": _(
+                        "This invitation is not valid for this email address."
+                    )
+                }
+            )
+        return invitation
 
     def validate_email(self, email):
         """
@@ -233,8 +256,42 @@ class CustomRegisterSerializer(RegisterSerializer):
         data["access_code"] = self.validated_data.get("access_code", "")
         return data
 
+    @transaction.atomic
     def save(self, request):
-        user = super().save(request)
+        code_group = None
+        code = self.validated_data.get("access_code")
+        if code:
+            try:
+                code_group = AccessCodeGroup.objects.select_for_update().get(
+                    access_code=code
+                )
+            except AccessCodeGroup.DoesNotExist:
+                raise serializers.ValidationError(
+                    {"access_code": _("This access code is no longer available.")}
+                )
+            invitation = self.validate_invitation(
+                code_group, self.validated_data["email"]
+            )
+            if not code_group.use_code():
+                raise serializers.ValidationError(
+                    {"access_code": _("This access code is no longer available.")}
+                )
+            if invitation:
+                # Generated invitations expire before redemption, not the account
+                # they activate. Legacy groups retain their existing expiry policy.
+                code_group.expires_at = None
+                code_group.save(update_fields=["expires_at"])
+        try:
+            # Validation can race another signup for the same address. A savepoint
+            # keeps a uniqueness failure from breaking the surrounding transaction.
+            with transaction.atomic():
+                user = super().save(request)
+        except IntegrityError:
+            if User.objects.filter(email__iexact=self.validated_data["email"]).exists():
+                raise serializers.ValidationError(
+                    {"email": _("An account with this email address already exists.")}
+                )
+            raise
         full_name = self.validated_data.get("name", "")
         name_parts = full_name.split(maxsplit=1)
         user.first_name = name_parts[0]
@@ -244,20 +301,23 @@ class CustomRegisterSerializer(RegisterSerializer):
         platform = detect_platform_from_request(request)
         user.auth_source = platform
 
-        access_code = self.validated_data.get("access_code")
-        code_group = None
-
-        if access_code:
-            try:
-                code_group = AccessCodeGroup.objects.get(access_code=access_code)
-                code_group.use_code()
-                user.access_code_group = code_group
-                # Assign platform role from access code's default_role
-                user.platform_role = code_group.default_role
-            except AccessCodeGroup.DoesNotExist:
-                pass
+        user.access_code_group = code_group
+        user.platform_role = code_group.default_role if code_group else RoleChoice.USER
+        if not code_group:
+            user.is_active = False
 
         user.save()
+        if not code_group:
+            try:
+                request_registration_approval(user, full_name)
+            except (AccessRequestsUnavailable, DjangoValidationError):
+                raise serializers.ValidationError(
+                    {
+                        "email": _(
+                            "Could not queue administrator review. Use your invitation or contact the deployment administrator."
+                        )
+                    }
+                )
 
         # Members of a group that was issued a LiteLLM key route through it by
         # default. Their own wallet and credit below are untouched — this sets
@@ -327,6 +387,42 @@ class CustomLoginSerializer(LoginSerializer):
                         raise serializers.ValidationError(
                             "Your account has been deactivated because your access code has expired. Please contact the administrator for assistance."
                         )
+                    if (
+                        not user.is_deleted
+                        and user.check_password(attrs.get("password", ""))
+                        and (
+                            not user.access_code_group
+                            or user.access_code_group.is_active
+                        )
+                    ):
+                        registration = AccessRequest.objects.filter(
+                            registered_user=user,
+                            kind=RequestKind.REGISTRATION,
+                            activated_at__isnull=True,
+                        ).first()
+                        if registration:
+                            verified = EmailAddress.objects.filter(
+                                user=user, email__iexact=user.email, verified=True
+                            ).exists()
+                            if (
+                                registration.status == RequestState.APPROVED
+                                and not verified
+                            ):
+                                raise serializers.ValidationError(
+                                    _(
+                                        "Your signup is approved, but your e-mail is not verified. Follow the verification link in your email or use Resend Verification Email below before signing in."
+                                    )
+                                )
+                            if registration.status == RequestState.PENDING:
+                                raise serializers.ValidationError(
+                                    _(
+                                        "Your email is verified. Your signup is awaiting administrator approval before you can sign in."
+                                    )
+                                    if verified
+                                    else _(
+                                        "Your e-mail is not verified, and your signup is awaiting administrator approval. Follow the verification link in your email or use Resend Verification Email below."
+                                    )
+                                )
                     raise serializers.ValidationError(
                         "Your account is currently inactive. Please contact the administrator for assistance."
                     )
