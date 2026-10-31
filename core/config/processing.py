@@ -1,5 +1,7 @@
 import os
 
+from config import env
+
 
 def _int_env(name: str, default: int) -> int:
     try:
@@ -22,6 +24,6 @@ CHUNK_SIZE = _int_env("RAG_CHUNK_SIZE", 1500)
 OVERLAP_SIZE = _int_env("RAG_OVERLAP_SIZE", 180)
 
 BATCH_SIZE = 100
-VECTOR_DIMENSION = 3072
+VECTOR_DIMENSION = env.EMBEDDING_DIMENSIONS
 DEFAULT_SIMILARITY_THRESHOLD = 0.5
 DEFAULT_TOP_K = 10

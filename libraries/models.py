@@ -8,8 +8,11 @@ from django.utils.translation import gettext_lazy as _
 from common.managers import ActiveObjectsManager
 from common.models import BaseModel
 from core.config.vector_db import get_library_namespace
-from libraries.constants import (DEFAULT_EMBEDDING_MODEL,
-                                 DEFAULT_VECTOR_DIMENSION, VectorBackend)
+from libraries.constants import (
+    VectorBackend,
+    default_embedding_model,
+    default_vector_dimension,
+)
 
 
 class SharedLibrary(BaseModel):
@@ -52,13 +55,13 @@ class SharedLibrary(BaseModel):
     )
     embedding_model = models.CharField(
         max_length=100,
-        default=DEFAULT_EMBEDDING_MODEL,
+        default=default_embedding_model,
         help_text=_(
             "Model the corpus was embedded with. Must match the query embedder."
         ),
     )
     dims = models.PositiveIntegerField(
-        default=DEFAULT_VECTOR_DIMENSION, help_text=_("Vector dimensionality.")
+        default=default_vector_dimension, help_text=_("Vector dimensionality.")
     )
 
     object_count = models.PositiveIntegerField(

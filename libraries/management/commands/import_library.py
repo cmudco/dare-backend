@@ -32,7 +32,7 @@ from typing import Dict, List, Optional
 import requests
 from django.core.management.base import BaseCommand, CommandError
 
-from core.helpers.openai import OpenAIWrapper
+from core.helpers.embeddings import EmbeddingClient
 from libraries.constants import VectorBackend
 from libraries.models import SharedLibrary
 from libraries.services.library_store import LibraryVectorStore
@@ -175,7 +175,7 @@ class Command(BaseCommand):
         if dry_run:
             self.stdout.write(self.style.WARNING("DRY RUN — no embedding, no writes."))
 
-        embedder = None if (dry_run or use_source_vectors) else OpenAIWrapper()
+        embedder = None if (dry_run or use_source_vectors) else EmbeddingClient()
         store = None
         if not dry_run:
             store = LibraryVectorStore(library)
