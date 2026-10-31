@@ -14,6 +14,7 @@ import os
 from datetime import timedelta
 
 from config import env
+from config.email import EMAIL_BACKENDS, resolve_email_provider
 from config.sentry import init_sentry
 
 init_sentry(
@@ -155,13 +156,15 @@ EMAIL_HOST_PASSWORD = env.EMAIL_HOST_PASSWORD
 EMAIL_FROM = env.EMAIL_FROM
 DEFAULT_FROM_EMAIL = EMAIL_FROM
 EMAIL_PORT = env.EMAIL_PORT
+EMAIL_USE_TLS = env.EMAIL_USE_TLS
+EMAIL_USE_SSL = env.EMAIL_USE_SSL
+RESEND_API_KEY = env.RESEND_API_KEY or env.EMAIL_HOST_PASSWORD
 
-if env.EMAIL_HOST_USER and env.EMAIL_HOST_PASSWORD:
-    EMAIL_BACKEND = "email_logs.backends.LoggingResendEmailBackend"
-elif env.EMAIL_HOST:
-    EMAIL_BACKEND = "email_logs.backends.LoggingSMTPEmailBackend"
-else:
-    EMAIL_BACKEND = "email_logs.backends.LoggingConsoleEmailBackend"
+EMAIL_PROVIDER = resolve_email_provider(
+    env.EMAIL_PROVIDER, env.EMAIL_HOST, env.EMAIL_HOST_USER, env.EMAIL_HOST_PASSWORD
+)
+EMAIL_BACKEND = EMAIL_BACKENDS[EMAIL_PROVIDER]
+EMAIL_DELIVERY_CONFIGURED = EMAIL_PROVIDER != "console"
 
 REST_FRAMEWORK = {
     "DEFAULT_RENDERER_CLASSES": (

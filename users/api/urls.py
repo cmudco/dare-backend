@@ -2,6 +2,8 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 from users.api.views import (
     AccountDeletionView,
+    CustomRegisterView,
+    CustomResendEmailVerificationView,
     CustomVerifyEmailView,
     UserStatsView,
     VectorDBViewSet,
@@ -25,6 +27,12 @@ router.register(r'avatar', AvatarViewSet, basename='avatar')
 urlpatterns = [
     # Custom verify-email with auto-login (must come before dj-rest-auth include)
     path("dj-rest-auth/registration/verify-email/", CustomVerifyEmailView.as_view(), name="rest_verify_email"),
+    path("dj-rest-auth/registration/", CustomRegisterView.as_view(), name="rest_register"),
+    path(
+        "dj-rest-auth/registration/resend-email/",
+        CustomResendEmailVerificationView.as_view(),
+        name="rest_resend_email",
+    ),
     path("dj-rest-auth/", include("dj_rest_auth.urls")),
     path("dj-rest-auth/registration/", include("dj_rest_auth.registration.urls")),
 
