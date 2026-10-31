@@ -4,7 +4,7 @@ import resend
 from django.conf import settings
 from django.core.mail import EmailMessage, EmailMultiAlternatives
 
-resend.api_key = settings.EMAIL_HOST_PASSWORD
+resend.api_key = settings.RESEND_API_KEY
 
 
 def send_email_via_resend(
