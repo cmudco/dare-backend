@@ -6,10 +6,9 @@ time, the question. 512 dimensions rather than the default 1536: the model is
 trained so a truncated vector still works, and 512 keeps ~97% of retrieval
 quality for a third of the storage.
 
-Deliberately its own client rather than ``core.helpers.openai.OpenAIWrapper``:
-that wrapper hardcodes text-embedding-3-large/3072 for the document RAG
-namespace and other callers depend on it; memory's vectors must stay 512-dim
-or every stored row goes stale.
+Configured separately from document embeddings (``MEMORY_EMBEDDING_*``):
+memory's vectors live in a fixed ``vector(512)`` column, so a vector of any
+other length is dropped rather than written.
 
 Failure mode is ``None``s, never an exception — a missing embedding degrades
 ranking to the lexical and recency signals, which is worse; an exception here
@@ -20,22 +19,27 @@ unacceptable.
 import logging
 from typing import List, Optional
 
-from openai import OpenAI
-
-from config.env import OPENAI_API_KEY
-from memory.constants import EMBED_DIMS, EMBED_MODEL
+from config import env
+from core.helpers.embeddings import EmbeddingClient
+from memory.constants import EMBED_DIMS
 
 logger = logging.getLogger(__name__)
 
-_client: Optional[OpenAI] = None
+_client: Optional[EmbeddingClient] = None
 
 
-def _get_client() -> Optional[OpenAI]:
+def _get_client() -> Optional[EmbeddingClient]:
     global _client
     if _client is None:
-        if not OPENAI_API_KEY:
+        if not (env.MEMORY_EMBEDDING_API_KEY or env.MEMORY_EMBEDDING_BASE_URL):
             return None
-        _client = OpenAI(api_key=OPENAI_API_KEY)
+        _client = EmbeddingClient(
+            base_url=env.MEMORY_EMBEDDING_BASE_URL,
+            api_key=env.MEMORY_EMBEDDING_API_KEY,
+            model=env.MEMORY_EMBEDDING_MODEL,
+            dimensions=env.MEMORY_EMBEDDING_DIMENSIONS,
+            send_dimensions=env.MEMORY_EMBEDDING_SEND_DIMENSIONS,
+        )
     return _client
 
 
@@ -62,21 +66,26 @@ def embed_texts(texts: List[str]) -> List[Optional[List[float]]]:
 
     client = _get_client()
     if client is None:
-        logger.warning("[memory] embeddings skipped: no OPENAI_API_KEY configured")
+        logger.warning("[memory] embeddings skipped: no embedding endpoint configured")
         return results
 
     try:
-        response = client.embeddings.create(
-            model=EMBED_MODEL, input=cleaned, dimensions=EMBED_DIMS
-        )
+        vectors = client.create_batch_embeddings(cleaned)
     except Exception as exc:
         logger.warning(
             "[memory] embedding call failed (%d texts): %s", len(cleaned), exc
         )
         return results
 
-    for position, item in zip(keep, response.data):
-        results[position] = item.embedding
+    for position, vector in zip(keep, vectors):
+        if len(vector) != EMBED_DIMS:
+            logger.warning(
+                "[memory] dropped a %d-dim embedding; the column holds %d",
+                len(vector),
+                EMBED_DIMS,
+            )
+            continue
+        results[position] = vector
     return results
 
 

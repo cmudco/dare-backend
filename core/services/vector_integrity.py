@@ -12,8 +12,13 @@ class VectorIntegrityError(ValueError):
 
 
 def validate_embedding(vector):
-    if not isinstance(vector, (list, tuple)) or len(vector) != VECTOR_DIMENSION:
+    if not isinstance(vector, (list, tuple)) or not vector:
         raise VectorIntegrityError("Embedding has an incorrect dimension or is empty")
+    if len(vector) != VECTOR_DIMENSION:
+        raise VectorIntegrityError(
+            f"Embedding has {len(vector)} dimensions; EMBEDDING_DIMENSIONS is "
+            f"{VECTOR_DIMENSION}"
+        )
     if any(
         isinstance(value, bool)
         or not isinstance(value, Real)

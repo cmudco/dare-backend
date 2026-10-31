@@ -17,7 +17,7 @@ from core.config.processing import (
     OVERLAP_SIZE,
 )
 from core.config.vector_db import get_user_namespace
-from core.helpers.openai import OpenAIWrapper
+from core.helpers.embeddings import EmbeddingClient
 from core.services.document_enrichment_service import DocumentEnrichmentService
 from core.services.document_parsers.pdf_outline import extract_pdf_outline
 from core.services.document_parsing_service import DocumentParsingService
@@ -77,7 +77,7 @@ class DocumentProcessor:
         parsing_service=None,
         enrichment_service=None,
     ):
-        self.openai_client = openai_client or OpenAIWrapper()
+        self.openai_client = openai_client or EmbeddingClient()
         self.user_id = user_id
         self.vector_service = vector_service
         self.embedding_service = embedding_service or EmbeddingService(

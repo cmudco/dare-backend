@@ -67,6 +67,64 @@ them differently for local development.
 | `LLM_SANDBOX_IDLE_TIMEOUT_SECONDS` | `300` | The same limit while sandbox code runs or files upload. |
 | `BOT_WALLET_ENFORCEMENT_ENABLED` | `0` | `1` applies bot wallet routing (the chatter pays; anonymous chats fall back to the bot owner). |
 
+## Embeddings
+
+Documents, retrieval, shared libraries and memory embed text through any
+OpenAI-compatible `/v1/embeddings` endpoint. These are deployment settings, not user
+choices: documents and the questions asked of them must be embedded by the same model.
+Unset, DARE uses OpenAI exactly as before.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `EMBEDDING_BASE_URL` | *(OpenAI)* | Base URL of the embedding server, e.g. `http://localhost:11434/v1`. |
+| `EMBEDDING_API_KEY` | `OPENAI_API_KEY` | Key sent to the embedding server. Servers without auth ignore it. |
+| `EMBEDDING_MODEL` | `text-embedding-3-large` | Model for documents, retrieval and shared libraries. |
+| `EMBEDDING_DIMENSIONS` | `3072` | Vector length the model returns. Every generated vector is checked against it, and new shared libraries record it. |
+| `EMBEDDING_SEND_DIMENSIONS` | `False` | Send `dimensions` in the request, for models that shorten vectors on request (e.g. `text-embedding-3-large` at `1024`). Many local servers reject the field. |
+| `MEMORY_EMBEDDING_BASE_URL` | `EMBEDDING_BASE_URL` | Embedding server for memory. |
+| `MEMORY_EMBEDDING_API_KEY` | `EMBEDDING_API_KEY` | Key for the memory embedding server. |
+| `MEMORY_EMBEDDING_MODEL` | `text-embedding-3-small` | Model for memory rows and memory retrieval. |
+| `MEMORY_EMBEDDING_DIMENSIONS` | `512` | Must be `512`: the memory column is `vector(512)`, and startup fails with `ImproperlyConfigured` otherwise. |
+| `MEMORY_EMBEDDING_SEND_DIMENSIONS` | `True` | Send `dimensions=512` in the request. Set `False` for a model that returns 512 natively on a server that rejects the field. |
+
+A self-hosted example with Ollama (`ollama pull nomic-embed-text`):
+
+```bash
+EMBEDDING_BASE_URL=http://localhost:11434/v1
+EMBEDDING_MODEL=nomic-embed-text
+EMBEDDING_DIMENSIONS=768
+MEMORY_EMBEDDING_MODEL=nomic-embed-text
+WEAVIATE_COLLECTION_NAME=DocumentNomic768
+```
+
+Ollama honours `dimensions` for `nomic-embed-text`, so memory gets 512-dimension vectors
+from the same server.
+
+vLLM works the same way: `vllm serve <model> --task embed` and point
+`EMBEDDING_BASE_URL` at `http://<host>:8000/v1`.
+
+Memory embeddings that the server rejects, or that are not 512 long, are dropped, and
+memory ranks on its lexical and recency signals alone. To keep semantic memory on a local
+server, use a model that can return 512 dimensions.
+
+### Changing the embedding model
+
+Vectors from different models are not comparable, and the vector stores fix their length
+on first write. A Pinecone index has one dimension set at creation, so writes of any other
+length fail. A Weaviate collection takes its vector length from the first object, so writes
+of another length fail too. Changing `EMBEDDING_MODEL` or `EMBEDDING_DIMENSIONS` therefore
+needs a fresh container and a re-embed:
+
+1. Point DARE at an empty container: a new `WEAVIATE_COLLECTION_NAME`, or a new Pinecone
+   index with the new dimension in `PINECONE_INDEX_NAME`.
+2. Restart the backend and the workers.
+3. Re-embed documents: `python manage.py reprocess_documents --all --limit 100000`.
+4. Re-import shared libraries: `python manage.py import_library --library <slug> ...`,
+   which re-embeds with the configured model. Update the library's `embedding_model` and
+   `dims` in Django admin.
+
+Until a document is re-embedded, retrieval cannot find it.
+
 ## Vector stores
 
 You can configure Pinecone (managed), Weaviate (self-hosted) or both; users choose in their

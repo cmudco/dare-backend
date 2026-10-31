@@ -2,7 +2,9 @@ from typing import Any, Dict
 
 from django.conf import settings
 
-VECTOR_DIMENSION = 3072
+from config import env
+
+VECTOR_DIMENSION = env.EMBEDDING_DIMENSIONS
 
 NAMESPACE_SEPARATOR = "_"
 
