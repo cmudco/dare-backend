@@ -58,9 +58,8 @@ other_paths = [
 
 urlpatterns = admin_paths + app_paths + api_docs_paths + other_paths
 
-# Use the settings object to get the MEDIA_ROOT and MEDIA_URL
+# DEBUG-only. Static files are served by WhiteNoise; media needs a reverse proxy.
 urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
-urlpatterns += static(settings.STATIC_URL, document_root=settings.STATIC_ROOT)
 # TODO: Yet to be implemented
 # handler404 = Error404View.as_view()
 # handler500 = Error500View.as_view()

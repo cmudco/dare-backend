@@ -97,12 +97,14 @@ cp .example.env .env
 
 The web container waits for Postgres and Redis, collects static files (hiding errors) and runs
 migrations before it starts Uvicorn. Run `collectstatic` yourself to see any error.
-Static and media files live in named Docker volumes.
+Static and media files live in named Docker volumes. Django serves static files (admin CSS/JS)
+through WhiteNoise, so no extra service is needed. Uploaded media under `/media/` is served only
+when `DEBUG` is on; in production, put it behind your reverse proxy.
 
 ```bash
 docker compose up --build -d
 docker compose exec web python manage.py createsuperuser
-docker compose exec web python manage.py collectstatic --noinput   # admin CSS/JS
+docker compose exec web python manage.py collectstatic --noinput   # admin CSS/JS, served by WhiteNoise
 ```
 
 ### 4. Enable optional services
@@ -252,7 +254,8 @@ sudo systemctl enable --now dare-api dare-worker
 
 ## Reverse proxy (Nginx)
 
-This config terminates TLS in front of Uvicorn and passes Socket.IO upgrades:
+This config terminates TLS in front of Uvicorn and passes Socket.IO upgrades. Uvicorn serves
+`/static/` itself through WhiteNoise, so the proxy needs no static block.
 
 ```nginx
 server {
