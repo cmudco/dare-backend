@@ -105,6 +105,13 @@ docker compose exec web python manage.py createsuperuser
 docker compose exec web python manage.py collectstatic --noinput   # admin CSS/JS
 ```
 
+The image installs the CPU build of PyTorch (the reranker, entity extraction and document
+parsing run on CPU). To use CUDA on a GPU host, build with the PyPI wheel instead:
+
+```bash
+docker compose build --build-arg TORCH_INDEX_URL=https://pypi.org/simple web worker
+```
+
 ### 4. Enable optional services
 
 ```bash
