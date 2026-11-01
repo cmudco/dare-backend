@@ -38,8 +38,8 @@ DISTINCT_TRACKED = 10_000
 # Short text columns (department, role) give each indexed row its context.
 MAX_LABEL_COLUMNS = 4
 ANSWER_CHARS = 2_000
-# About 2M tokens: roughly 20k survey responses, a few minutes of embedding.
-TEXT_ROWS_CHAR_BUDGET = 8_000_000
+# About 500k tokens: roughly 3k long survey answers, a few minutes of embedding.
+TEXT_ROWS_CHAR_BUDGET = 2_000_000
 MISSING_MARKERS = frozenset(
     {"", "na", "n/a", "nan", "null", "none", "-", "#n/a", "inf", "-inf", "+inf"}
 )
