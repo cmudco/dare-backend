@@ -9,11 +9,11 @@ their own tool.
 
 import hashlib
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from decimal import Decimal
 from pathlib import PurePosixPath
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import anthropic
 import openai
@@ -26,6 +26,7 @@ from core.services.api_key_service import (
     get_dispatch_credentials_for_user_sync,
     get_provider_api_key_sync,
 )
+from core.services.table_card import is_table_file
 from core.storage.constants import StorageBackendChoice
 from files.constants import FileStatus
 from files.models import File, SandboxUpload
@@ -90,10 +91,19 @@ _NOTE_LOCATIONS = {
 
 @dataclass(frozen=True)
 class SandboxScope:
-    """Which provider runs the sandbox and whose files may enter it."""
+    """Which provider runs the sandbox, whose files may enter it, and which do."""
 
     provider: str
     owner_ids: List[int]
+    files: Tuple[Tuple[int, str], ...] = ()
+
+    @property
+    def file_ids(self) -> List[int]:
+        return [file_id for file_id, _ in self.files]
+
+    @property
+    def file_names(self) -> List[str]:
+        return [name for _, name in self.files]
 
 
 @dataclass(frozen=True)
@@ -104,11 +114,11 @@ class SandboxFile:
     content: bytes
 
 
-def sandbox_tool(file_ids: Iterable[int], scope: SandboxScope) -> Dict:
+def sandbox_tool(scope: SandboxScope) -> Dict:
     """The marker the provider service turns into its native sandbox tool."""
     return {
         "type": SANDBOX_TOOL_TYPE,
-        "dare_file_ids": list(file_ids),
+        "dare_file_ids": scope.file_ids,
         "dare_owner_ids": list(scope.owner_ids),
     }
 
@@ -185,11 +195,21 @@ def credential_fingerprint(api_key: str) -> str:
 
 
 @sync_to_async
-def sandbox_file_names(file_ids: List[int], owner_ids: List[int]) -> List[str]:
-    return [
-        file.name or file.file.name
-        for file in File.active_objects.filter(id__in=file_ids, user_id__in=owner_ids)
+def with_sandbox_files(
+    scope: SandboxScope, file_ids: List, embedding_ids: List
+) -> SandboxScope:
+    """Full-text picks, plus spreadsheets picked for search: tables are read
+    in the sandbox whichever picker tab they came from."""
+    owned = File.active_objects.filter(user_id__in=scope.owner_ids)
+    files = list(owned.filter(id__in=file_ids))
+    files += [
+        file
+        for file in owned.filter(id__in=embedding_ids).exclude(id__in=file_ids)
+        if is_table_file(file.name or file.file.name)
     ]
+    return replace(
+        scope, files=tuple((file.id, file.name or file.file.name) for file in files)
+    )
 
 
 class SandboxFiles:
