@@ -14,7 +14,7 @@ import logging
 from dataclasses import replace
 from typing import Callable, Dict, List, Optional, Tuple
 
-from core.helpers.openai import OpenAIWrapper
+from core.helpers.embeddings import EmbeddingClient
 from core.services.rag.assembler import ContextAssembler
 from core.services.rag.config import flag
 from core.services.rag.diversifier import MMRDiversifier
@@ -360,7 +360,7 @@ def _load_entity_hops(keys, user_id, file_ids):
 
 
 def build_pipeline(
-    source_type: str = "library", openai_client: Optional[OpenAIWrapper] = None
+    source_type: str = "library", openai_client: Optional[EmbeddingClient] = None
 ) -> RetrievalPipeline:
     """Factory: a ready pipeline for a given source type (library / document)."""
     expander = None

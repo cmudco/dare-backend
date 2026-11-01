@@ -18,6 +18,7 @@ from billing.litellm_model_policy import recommend_vision_models
 from billing.models import LiteLLMKey
 from billing.wallet_router import resolve_active_wallet
 from config import env
+from conversations.constants import Provider
 from conversations.models import LLM
 from core.services.billing_service import BillingService
 from core.services.dtos.llm_descriptor_dto import LLMDescriptor
@@ -86,14 +87,16 @@ def _routes(user) -> List[VisionModelRoute]:
 
 
 def _catalog_routes(user, wallet_type: str) -> List[VisionModelRoute]:
-    # The catalog flag defaults to True, so the family policy decides whether a
-    # row really takes images; the flag can only veto.
+    # The catalog flag defaults to True, so for known providers the family
+    # policy decides whether a row really takes images and the flag can only
+    # veto. Custom (self-hosted) models have no known family: the admin's flag
+    # is the only signal.
     models = [
         model
         for model in LLM.visible_for_user(user).filter(
             supports_vision=True, is_image_generator=False, is_audio_transcriber=False
         )
-        if supports_vision(model.identifier)
+        if model.provider == Provider.CUSTOM.value or supports_vision(model.identifier)
     ]
     if wallet_type == UserWalletPreferenceTypeChoice.BYO:
         providers = (

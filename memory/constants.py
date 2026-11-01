@@ -159,5 +159,5 @@ HISTORICAL_RE = re.compile(
 
 # Embeddings
 
-EMBED_MODEL = "text-embedding-3-small"
+# EMBED_DIMS is the pgvector column size in the schema, not a setting.
 EMBED_DIMS = 512

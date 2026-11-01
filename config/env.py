@@ -67,6 +67,14 @@ CLAUDE_API_KEY = env("CLAUDE_API_KEY")
 GEMINI_API_KEY = env("GEMINI_API_KEY")
 OLLAMA_HOST = env("OLLAMA_HOST", default="http://localhost:11434")
 
+# Embeddings: any OpenAI-compatible /v1/embeddings endpoint. Documents and
+# queries must share one model, so changing these means re-embedding.
+EMBEDDING_BASE_URL = env("EMBEDDING_BASE_URL", default="") or None
+EMBEDDING_API_KEY = env("EMBEDDING_API_KEY", default="") or OPENAI_API_KEY
+EMBEDDING_MODEL = env("EMBEDDING_MODEL", default="text-embedding-3-large")
+EMBEDDING_DIMENSIONS = env.int("EMBEDDING_DIMENSIONS", default=3072)
+MEMORY_EMBEDDING_MODEL = env("MEMORY_EMBEDDING_MODEL", default="text-embedding-3-small")
+
 # Docling enrichment; the model resolves from DARE's LLM catalog so billing stays consistent.
 DOCUMENT_ENRICHMENT_ENABLED = env.bool("DOCUMENT_ENRICHMENT_ENABLED", default=True)
 DOCUMENT_ENRICHMENT_MODEL = env(
