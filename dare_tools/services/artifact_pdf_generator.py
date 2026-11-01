@@ -136,6 +136,8 @@ def _docx_block_to_html(block: Dict[str, Any]) -> str:
         return f"<{tag}>{items}</{tag}>"
     if block_type == "blockquote":
         return f"<blockquote>{escape(str(block.get('text') or ''))}</blockquote>"
+    if block_type == "code":
+        return f"<pre><code>{escape(str(block.get('text') or ''))}</code></pre>"
     if block_type == "table":
         headers = "".join(
             f"<th>{escape(str(header))}</th>" for header in block.get("headers") or []
