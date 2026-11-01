@@ -23,6 +23,7 @@ from core.services.dtos.llm_descriptor_dto import (
     LITELLM_ID_PREFIX,
     split_litellm_picker_id,
 )
+from files.models import File
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,12 @@ def get_message_media_file_ids(message: Message) -> List[int]:
             "id", flat=True
         )
     )
+
+
+@database_sync_to_async
+def get_message_document_files(message: Message) -> List[File]:
+    """The non-media files attached to a user turn."""
+    return list(message.files.filter(is_media=False, is_active=True, is_deleted=False))
 
 
 @database_sync_to_async
@@ -179,20 +186,14 @@ def get_conversation_default_descriptor(
 
 
 @database_sync_to_async
-def fetch_preceding_user_message(conversation: Conversation) -> Optional[Message]:
-    """Get the most recent user message in the conversation.
-
-    Args:
-        conversation: Conversation instance
-
-    Returns:
-        Most recent user message or None
-    """
-    return (
-        conversation.messages.filter(sender_type=SenderType.PLAYER)
-        .order_by("-created_at")
-        .first()
-    )
+def fetch_preceding_user_message(
+    conversation: Conversation, before: Optional[Message] = None
+) -> Optional[Message]:
+    """The latest user message, or the one that prompted ``before``."""
+    messages = conversation.messages.filter(sender_type=SenderType.PLAYER)
+    if before is not None:
+        messages = messages.filter(created_at__lt=before.created_at)
+    return messages.order_by("-created_at").first()
 
 
 @database_sync_to_async

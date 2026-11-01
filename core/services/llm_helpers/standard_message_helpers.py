@@ -295,7 +295,9 @@ async def build_standard_messages(
     with trace.stage("history") as stage:
         conversation_history = (
             await get_conversation_history(
-                request.conversation, limit=request.context.history_limit
+                request.conversation,
+                limit=request.context.history_limit,
+                before=request.message_obj,
             )
             if request.conversation
             else []

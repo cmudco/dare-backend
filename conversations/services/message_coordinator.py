@@ -505,7 +505,9 @@ class MessageCoordinator:
                 return None
 
             # Get the preceding user message
-            preceding_user_message = await self._get_preceding_user_message()
+            preceding_user_message = await self._get_preceding_user_message(
+                before=ai_message
+            )
             if not preceding_user_message:
                 await self.send_error(
                     ErrorCode.NO_USER_MESSAGE, ErrorMessage.NO_USER_MESSAGE
@@ -1327,9 +1329,10 @@ class MessageCoordinator:
             self.conversation, user=self.user
         )
 
-    async def _get_preceding_user_message(self) -> Optional[Message]:
-        """Get the most recent user message in the conversation."""
-        return await fetch_preceding_user_message(self.conversation)
+    async def _get_preceding_user_message(
+        self, before: Optional[Message] = None
+    ) -> Optional[Message]:
+        return await fetch_preceding_user_message(self.conversation, before)
 
     async def send_conversation_history(self):
         """Send conversation history and artifacts to client."""

@@ -11,7 +11,7 @@ the token budget.
 """
 
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from channels.db import database_sync_to_async
 
@@ -38,7 +38,9 @@ MAX_WEB_SOURCES_IN_HISTORY = 20
 
 
 @database_sync_to_async
-def get_conversation_history(conversation: Conversation, limit: int = 10) -> list:
+def get_conversation_history(
+    conversation: Conversation, limit: int = 10, before: Optional[Message] = None
+) -> list:
     """Retrieves recent chat history for AI context, including tool turns and artifacts.
 
     Assistant messages that made tool calls are replayed as structured tool
@@ -67,10 +69,23 @@ def get_conversation_history(conversation: Conversation, limit: int = 10) -> lis
         .order_by("-created_at")
     )
 
+    # History ends before the user turn that prompted ``before``, so
+    # regenerating an older reply never sees the messages that followed it.
+    # Without it, the newest two rows are the turn being answered.
+    skip = 2
+    if before is not None:
+        prompt = messages.filter(
+            sender_type=SenderType.PLAYER, created_at__lt=before.created_at
+        ).first()
+        messages = messages.filter(
+            created_at__lt=prompt.created_at if prompt else before.created_at
+        )
+        skip = 0
+
     if limit >= 50:
-        messages = messages[2:]
+        messages = messages[skip:]
     else:
-        messages = messages[2 : limit + 2] if limit > 0 else messages[2:]
+        messages = messages[skip : limit + skip] if limit > 0 else messages[skip:]
 
     ordered = list(reversed(messages))
 

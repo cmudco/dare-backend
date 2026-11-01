@@ -16,6 +16,7 @@ from typing import Any, Awaitable, Callable, Dict, Optional, Tuple
 from conversations.constants import ErrorCode
 from conversations.models import LLM, Message
 from conversations.services.message_helpers.db_helpers import (
+    get_message_document_files,
     get_message_image_file_ids,
     get_message_media_file_ids,
 )
@@ -80,5 +81,11 @@ async def prepare_regeneration_data(
         regeneration_message_data["media_ids"] = list(
             dict.fromkeys((message_data.get("media_ids") or []) + image_ids)
         )
+        # The picker is often empty by now (a chat switch clears it), so the
+        # turn's own files are what the regenerated reply must read. Search
+        # still covers documents, and spreadsheets also go to the sandbox.
+        if not (message_data.get("file_ids") or message_data.get("embedding_ids")):
+            documents = await get_message_document_files(preceding_user_message)
+            regeneration_message_data["embedding_ids"] = [doc.id for doc in documents]
 
     return llm, regeneration_message_data
