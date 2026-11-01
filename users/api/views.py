@@ -4,7 +4,11 @@ import uuid
 
 from allauth.account import app_settings as allauth_account_settings
 from allauth.account.models import EmailAddress
-from dj_rest_auth.registration.views import VerifyEmailView
+from dj_rest_auth.registration.views import (
+    RegisterView,
+    ResendEmailVerificationView,
+    VerifyEmailView,
+)
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core import signing
@@ -38,6 +42,26 @@ from users.services.stats_service import get_user_stats
 User = get_user_model()
 
 logger = logging.getLogger(__name__)
+
+
+class CustomRegisterView(RegisterView):
+    """Tells the client whether the verification email can actually be delivered."""
+
+    def get_response_data(self, user):
+        data = super().get_response_data(user)
+        if (
+            allauth_account_settings.EMAIL_VERIFICATION
+            == allauth_account_settings.EmailVerificationMethod.MANDATORY
+        ):
+            data["email_delivery_configured"] = settings.EMAIL_DELIVERY_CONFIGURED
+        return data
+
+
+class CustomResendEmailVerificationView(ResendEmailVerificationView):
+    def create(self, request, *args, **kwargs):
+        response = super().create(request, *args, **kwargs)
+        response.data["email_delivery_configured"] = settings.EMAIL_DELIVERY_CONFIGURED
+        return response
 
 
 class CustomVerifyEmailView(VerifyEmailView):
