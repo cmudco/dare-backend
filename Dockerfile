@@ -16,9 +16,8 @@ WORKDIR /app
 
 COPY requirements/ requirements/
 
-# PyPI's Linux torch wheel is CUDA-linked (~2.7 GB of nvidia libs). The CPU
-# index ranks 2.x+cpu above 2.x, so pip prefers it. GPU hosts:
-# --build-arg TORCH_INDEX_URL=https://pypi.org/simple
+# PyPI's Linux torch wheel bundles ~2.7 GB of CUDA; pip prefers the +cpu build from this
+# index. GPU hosts: --build-arg TORCH_INDEX_URL=https://pypi.org/simple
 ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
 
 RUN pip install --no-cache-dir --prefix=/install \
