@@ -25,7 +25,7 @@ TOOL_RESULT_HISTORY_MAX_CHARS = 2000
 # later turn reads the bare list as "the search returned no content" and
 # disowns quotes the original answer took from the pages.
 WEB_SEARCH_HISTORY_NOTE = (
-    "Search results (titles and URLs only. The page text was available when "
+    "Search results (titles, URLs and quoted passages only. The page text was available when "
     "the answer was written but is not kept in history):"
 )
 
@@ -95,7 +95,7 @@ def build_tool_result_turn(result: ToolCallResult) -> Dict[str, Any]:
 
 
 def build_history_tool_turns(
-    message_id: Any, tool_call_rows: List[Any]
+    message_id: Any, tool_call_rows: List[Any], web_quotes: str = ""
 ) -> List[Dict[str, Any]]:
     """Reconstruct structured tool turns from persisted ``MessageToolCall`` rows.
 
@@ -140,7 +140,7 @@ def build_history_tool_turns(
                     tool_name=row.tool_name,
                     origin=row.origin,
                     server_slug=row.server_slug,
-                    content=_history_result_text(row),
+                    content=_history_result_text(row, web_quotes),
                 )
             )
         turns.append(build_assistant_tool_call_turn("", requests))
@@ -178,7 +178,7 @@ def _is_unstored_web_search(row: Any) -> bool:
     )
 
 
-def _history_result_text(row: Any) -> str:
+def _history_result_text(row: Any, web_quotes: str = "") -> str:
     """Model-facing result text for a persisted tool call, truncated.
 
     Never returns an empty string: an empty ``role:"tool"`` turn risks being
@@ -195,7 +195,8 @@ def _history_result_text(row: Any) -> str:
         )
     text = row.result or ""
     if row.tool_name == "web_search":
-        text = f"{WEB_SEARCH_HISTORY_NOTE}\n{text}"
+        # Quotes go first so truncation of the result list never drops them.
+        text = f"{WEB_SEARCH_HISTORY_NOTE}\n{web_quotes}{text}"
     if not text.strip():
         return "(tool completed with no output)"
     if len(text) > TOOL_RESULT_HISTORY_MAX_CHARS:

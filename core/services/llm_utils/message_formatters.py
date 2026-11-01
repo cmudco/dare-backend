@@ -45,8 +45,8 @@ class MessageFormatter:
         filtered_messages = []
 
         for message in messages:
-            if message.get('role') == 'system':
-                system_message = message.get('content', '')
+            if message.get("role") == "system":
+                system_message = message.get("content", "")
             else:
                 filtered_messages.append(message)
 
@@ -64,10 +64,12 @@ class MessageFormatter:
         Returns:
             Formatted text string
         """
-        return separator.join([
-            f"{msg.get('role', 'user').capitalize()}: {msg.get('content', '')}"
-            for msg in messages
-        ]).strip()
+        return separator.join(
+            [
+                f"{msg.get('role', 'user').capitalize()}: {msg.get('content', '')}"
+                for msg in messages
+            ]
+        ).strip()
 
 
 class GeminiMessageFormatter:
@@ -120,12 +122,14 @@ class GeminiMessageFormatter:
                     if "base64," in image_url:
                         mime_type, base64_data = image_url.split("base64,", 1)
                         mime_type = mime_type.split(":")[1].split(";")[0]
-                        parts.append(types.Part(
-                            inline_data=types.Blob(
-                                mime_type=mime_type,
-                                data=base64.b64decode(base64_data)
+                        parts.append(
+                            types.Part(
+                                inline_data=types.Blob(
+                                    mime_type=mime_type,
+                                    data=base64.b64decode(base64_data),
+                                )
                             )
-                        ))
+                        )
 
         return parts
 
@@ -186,18 +190,14 @@ class OpenAIMessageFormatter:
             String for plain text-only, list of input items once the history
             carries tool turns or images
         """
-        if OpenAIMessageFormatter._has_tool_turns(messages):
-            # Tool turns must stay structured: flattening them to
-            # "assistant: " / "tool: ..." lines drops the call_id linkage the
-            # model needs to tie a result back to the call it made.
+        # Tool turns and images must stay structured: flattening tool turns
+        # drops the call_id linkage, and images need typed input parts.
+        if OpenAIMessageFormatter._has_tool_turns(
+            messages
+        ) or MessageFormatter.has_multimodal_content(messages):
             return OpenAIMessageFormatter._build_tool_aware_input(messages)
 
-        has_multimodal = MessageFormatter.has_multimodal_content(messages)
-
-        if not has_multimodal:
-            return "\n".join([f"{msg['role']}: {msg['content']}" for msg in messages])
-
-        return OpenAIMessageFormatter._build_multimodal_content(messages)
+        return "\n".join([f"{msg['role']}: {msg['content']}" for msg in messages])
 
     @staticmethod
     def _has_tool_turns(messages: List[Dict]) -> bool:
@@ -289,35 +289,6 @@ class OpenAIMessageFormatter:
         return parts
 
     @staticmethod
-    def _build_multimodal_content(messages: List[Dict]) -> List:
-        """
-        Build multimodal content array for Responses API.
-
-        Args:
-            messages: List of message dictionaries
-
-        Returns:
-            List of content items
-        """
-        input_data = []
-        for msg in messages:
-            role_prefix = f"{msg['role']}: "
-            content = msg.get("content", "")
-
-            if isinstance(content, str):
-                input_data.append({"type": "text", "text": role_prefix + content})
-                continue
-
-            # Process structured content (text + images)
-            for item in content:
-                if item.get("type") == "text":
-                    input_data.append({"type": "text", "text": role_prefix + item["text"]})
-                elif item.get("type") == "image_url":
-                    input_data.append({"type": "image_url", "image_url": item["image_url"]["url"]})
-
-        return input_data
-
-    @staticmethod
     def flatten_to_text(messages: List[Dict]) -> str:
         """
         Flatten messages to text-only format (removes images).
@@ -332,7 +303,7 @@ class OpenAIMessageFormatter:
         """
         flat = []
         for msg in messages:
-            content = msg.get('content', '')
+            content = msg.get("content", "")
             if isinstance(content, str):
                 flat.append(f"{msg['role']}: {content}")
         return "\n".join(flat)

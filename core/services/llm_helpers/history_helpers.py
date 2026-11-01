@@ -11,7 +11,7 @@ the token budget.
 """
 
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from channels.db import database_sync_to_async
 
@@ -35,10 +35,18 @@ MAX_ARTIFACT_CONTENT_IN_CONTEXT = 8000
 TOOL_HISTORY_MESSAGE_WINDOW = 6
 
 MAX_WEB_SOURCES_IN_HISTORY = 20
+WEB_QUOTE_HISTORY_CHARS = 500
+WEB_SOURCES_HISTORY_NOTE = (
+    "[A web search ran for this answer and returned results; the answer "
+    "cited the sources below. Only their titles, URLs and quoted passages "
+    "are kept in history, not the page text.]"
+)
 
 
 @database_sync_to_async
-def get_conversation_history(conversation: Conversation, limit: int = 10) -> list:
+def get_conversation_history(
+    conversation: Conversation, limit: int = 10, before: Optional[Message] = None
+) -> list:
     """Retrieves recent chat history for AI context, including tool turns and artifacts.
 
     Assistant messages that made tool calls are replayed as structured tool
@@ -67,10 +75,23 @@ def get_conversation_history(conversation: Conversation, limit: int = 10) -> lis
         .order_by("-created_at")
     )
 
+    # History ends before the user turn that prompted ``before``, so
+    # regenerating an older reply never sees the messages that followed it.
+    # Without it, the newest two rows are the turn being answered.
+    skip = 2
+    if before is not None:
+        prompt = messages.filter(
+            sender_type=SenderType.PLAYER, created_at__lt=before.created_at
+        ).first()
+        messages = messages.filter(
+            created_at__lt=prompt.created_at if prompt else before.created_at
+        )
+        skip = 0
+
     if limit >= 50:
-        messages = messages[2:]
+        messages = messages[skip:]
     else:
-        messages = messages[2 : limit + 2] if limit > 0 else messages[2:]
+        messages = messages[skip : limit + skip] if limit > 0 else messages[skip:]
 
     ordered = list(reversed(messages))
 
@@ -128,7 +149,9 @@ def get_conversation_history(conversation: Conversation, limit: int = 10) -> lis
         )
 
         if replayed:
-            result.extend(build_history_tool_turns(msg.id, tool_calls))
+            result.extend(
+                build_history_tool_turns(msg.id, tool_calls, _web_quotes(msg))
+            )
         elif tool_calls:
             suffix = summarize_tool_usage(tool_calls)
             content = f"{content}\n\n{suffix}" if content else suffix
@@ -146,26 +169,33 @@ def get_conversation_history(conversation: Conversation, limit: int = 10) -> lis
     return result
 
 
-def _append_web_sources(msg: Message, content: str) -> str:
-    """List the web sources a past answer drew on.
+def _web_quotes(msg: Message) -> str:
+    """The passages a past answer quoted from its search results."""
+    quoted = [
+        f'- {source.url}: "{source.cited_text[:WEB_QUOTE_HISTORY_CHARS]}"'
+        for source in msg.web_search_sources.all()[:MAX_WEB_SOURCES_IN_HISTORY]
+        if source.cited_text
+    ]
+    return "Passages the answer quoted:\n" + "\n".join(quoted) + "\n" if quoted else ""
 
-    Hosted search results (OpenAI, Gemini, gateway models, and Claude rows
-    saved before results were captured) never reach history as tool turns,
-    so without this the model sees a sourced answer with no trace of its
-    sources and may disown it as fabricated.
+
+def _append_web_sources(msg: Message, content: str) -> str:
+    """List the web sources a past answer drew on, with the passages it quoted.
+
+    Hosted search results never reach history as tool turns, so without this
+    the model sees a sourced answer with no trace of its sources and may
+    disown it as fabricated.
     """
     sources = list(msg.web_search_sources.all()[:MAX_WEB_SOURCES_IN_HISTORY])
     if not sources:
         return content
-    lines = [
-        f"- {source.title} ({source.url})" if source.title else f"- {source.url}"
-        for source in sources
-    ]
-    note = (
-        "[A web search ran for this answer and returned results; the answer "
-        "cited the sources below. Only their titles and URLs are kept in "
-        "history, not the page text.]\n" + "\n".join(lines)
-    )
+    lines = []
+    for source in sources:
+        line = f"- {source.title} ({source.url})" if source.title else f"- {source.url}"
+        if source.cited_text:
+            line += f': "{source.cited_text[:WEB_QUOTE_HISTORY_CHARS]}"'
+        lines.append(line)
+    note = WEB_SOURCES_HISTORY_NOTE + "\n" + "\n".join(lines)
     return f"{content}\n\n{note}" if content else note
 
 

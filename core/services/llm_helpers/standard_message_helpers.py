@@ -11,11 +11,7 @@ from typing import Any, Dict, List, Optional
 from channels.db import database_sync_to_async
 
 from conversations.constants import RagMode
-from core.services.code_sandbox import (
-    SandboxScope,
-    sandbox_file_names,
-    sandbox_files_note,
-)
+from core.services.code_sandbox import SandboxScope, sandbox_files_note
 from core.services.document_processor import DocumentProcessor
 from core.services.dtos import LLMQueryRequest
 from core.services.file_processor import FileProcessor
@@ -200,12 +196,10 @@ async def build_standard_messages(
                 stage["count"] = len(request.context.referenced_summary_ids)
 
     # Add full file contents, or name them when they live in the sandbox
-    if request.context.file_ids and code_sandbox:
-        with trace.stage("files") as stage:
-            names = await sandbox_file_names(
-                list(request.context.file_ids), code_sandbox.owner_ids
-            )
-            if names:
+    if code_sandbox:
+        names = code_sandbox.file_names
+        if names:
+            with trace.stage("files") as stage:
                 messages.append(
                     {
                         "role": "user",
@@ -301,7 +295,9 @@ async def build_standard_messages(
     with trace.stage("history") as stage:
         conversation_history = (
             await get_conversation_history(
-                request.conversation, limit=request.context.history_limit
+                request.conversation,
+                limit=request.context.history_limit,
+                before=request.message_obj,
             )
             if request.conversation
             else []
