@@ -9,6 +9,7 @@ their own tool.
 
 import hashlib
 import logging
+import re
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -289,6 +290,9 @@ class SandboxFiles:
             return handle.read()
 
 
+_DISPLAY_COPY = re.compile(r"^cfile_[0-9a-f]+\.\w+$")
+
+
 class OpenAISandboxFiles(SandboxFiles):
     provider = OPENAI_PROVIDER
 
@@ -310,7 +314,15 @@ class OpenAISandboxFiles(SandboxFiles):
         """Fetch each cited container file once."""
         downloaded: List[SandboxFile] = []
         seen = set()
-        for citation in citations:
+        # Code Interpreter saves every displayed figure as cfile_<id>.png; when
+        # the model also saved the chart under a real name, that copy is a
+        # duplicate of it.
+        named = [
+            citation
+            for citation in citations
+            if not _DISPLAY_COPY.match(citation.get("filename") or "")
+        ]
+        for citation in named or citations:
             key = (citation["container_id"], citation["file_id"])
             filename = citation.get("filename") or citation["file_id"]
             if key in seen or not sandbox_output_name(filename):
