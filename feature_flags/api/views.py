@@ -1,3 +1,4 @@
+from django.conf import settings
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -18,4 +19,7 @@ class MyFeatureFlagsView(APIView):
 
     def get(self, request):
         flags = resolve_flags_for_user(request.user)
+        # A deployment setting, not a DB flag: the UI must not promise
+        # summaries the server never writes.
+        flags["conversation_summaries"] = settings.CONVERSATION_SUMMARY_JOBS_ENABLED
         return Response({"flags": flags})
