@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from .generation_dto import GenerationConfig
+from .llm_generation_dto import LLMGenerationContext
 
 
 @dataclass(frozen=True)
@@ -27,6 +28,8 @@ class PreparedChat:
         context_trace: Timed context-assembly stages for the turn (the
             ``context_trace`` event payload), or None for flows that don't
             record one (Socratic mode).
+        generation_context: Observability identity for the turn; each round
+            is tracked as one generation with its own input messages.
     """
 
     messages: List[Dict[str, Any]]
@@ -37,3 +40,4 @@ class PreparedChat:
     memory_context: List[Dict[str, Any]]
     llm: Any
     context_trace: Optional[Dict[str, Any]] = None
+    generation_context: Optional[LLMGenerationContext] = None
