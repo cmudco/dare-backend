@@ -73,20 +73,7 @@ EMBEDDING_BASE_URL = env("EMBEDDING_BASE_URL", default="") or None
 EMBEDDING_API_KEY = env("EMBEDDING_API_KEY", default="") or OPENAI_API_KEY
 EMBEDDING_MODEL = env("EMBEDDING_MODEL", default="text-embedding-3-large")
 EMBEDDING_DIMENSIONS = env.int("EMBEDDING_DIMENSIONS", default=3072)
-# Many local servers reject the `dimensions` request field; send it only on request.
-EMBEDDING_SEND_DIMENSIONS = env.bool("EMBEDDING_SEND_DIMENSIONS", default=False)
-
-MEMORY_EMBEDDING_BASE_URL = (
-    env("MEMORY_EMBEDDING_BASE_URL", default="") or EMBEDDING_BASE_URL
-)
-MEMORY_EMBEDDING_API_KEY = (
-    env("MEMORY_EMBEDDING_API_KEY", default="") or EMBEDDING_API_KEY
-)
 MEMORY_EMBEDDING_MODEL = env("MEMORY_EMBEDDING_MODEL", default="text-embedding-3-small")
-MEMORY_EMBEDDING_DIMENSIONS = env.int("MEMORY_EMBEDDING_DIMENSIONS", default=512)
-MEMORY_EMBEDDING_SEND_DIMENSIONS = env.bool(
-    "MEMORY_EMBEDDING_SEND_DIMENSIONS", default=True
-)
 
 # Docling enrichment; the model resolves from DARE's LLM catalog so billing stays consistent.
 DOCUMENT_ENRICHMENT_ENABLED = env.bool("DOCUMENT_ENRICHMENT_ENABLED", default=True)

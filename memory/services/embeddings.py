@@ -6,9 +6,9 @@ time, the question. 512 dimensions rather than the default 1536: the model is
 trained so a truncated vector still works, and 512 keeps ~97% of retrieval
 quality for a third of the storage.
 
-Configured separately from document embeddings (``MEMORY_EMBEDDING_*``):
-memory's vectors live in a fixed ``vector(512)`` column, so a vector of any
-other length is dropped rather than written.
+Shares the document embedding server but has its own model
+(``MEMORY_EMBEDDING_MODEL``): memory's vectors live in a fixed ``vector(512)``
+column, so it always asks for 512 and drops a vector of any other length.
 
 Failure mode is ``None``s, never an exception — a missing embedding degrades
 ranking to the lexical and recency signals, which is worse; an exception here
@@ -31,14 +31,12 @@ _client: Optional[EmbeddingClient] = None
 def _get_client() -> Optional[EmbeddingClient]:
     global _client
     if _client is None:
-        if not (env.MEMORY_EMBEDDING_API_KEY or env.MEMORY_EMBEDDING_BASE_URL):
+        if not (env.EMBEDDING_API_KEY or env.EMBEDDING_BASE_URL):
             return None
         _client = EmbeddingClient(
-            base_url=env.MEMORY_EMBEDDING_BASE_URL,
-            api_key=env.MEMORY_EMBEDDING_API_KEY,
             model=env.MEMORY_EMBEDDING_MODEL,
-            dimensions=env.MEMORY_EMBEDDING_DIMENSIONS,
-            send_dimensions=env.MEMORY_EMBEDDING_SEND_DIMENSIONS,
+            dimensions=EMBED_DIMS,
+            send_dimensions=True,
         )
     return _client
 

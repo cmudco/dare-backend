@@ -80,12 +80,11 @@ Unset, DARE uses OpenAI exactly as before.
 | `EMBEDDING_API_KEY` | `OPENAI_API_KEY` | Key sent to the embedding server. Servers without auth ignore it. |
 | `EMBEDDING_MODEL` | `text-embedding-3-large` | Model for documents, retrieval and shared libraries. |
 | `EMBEDDING_DIMENSIONS` | `3072` | Vector length the model returns. Every generated vector is checked against it, and new shared libraries record it. |
-| `EMBEDDING_SEND_DIMENSIONS` | `False` | Send `dimensions` in the request, for models that shorten vectors on request (e.g. `text-embedding-3-large` at `1024`). Many local servers reject the field. |
-| `MEMORY_EMBEDDING_BASE_URL` | `EMBEDDING_BASE_URL` | Embedding server for memory. |
-| `MEMORY_EMBEDDING_API_KEY` | `EMBEDDING_API_KEY` | Key for the memory embedding server. |
-| `MEMORY_EMBEDDING_MODEL` | `text-embedding-3-small` | Model for memory rows and memory retrieval. |
-| `MEMORY_EMBEDDING_DIMENSIONS` | `512` | Must be `512`: the memory column is `vector(512)`, and startup fails with `ImproperlyConfigured` otherwise. |
-| `MEMORY_EMBEDDING_SEND_DIMENSIONS` | `True` | Send `dimensions=512` in the request. Set `False` for a model that returns 512 natively on a server that rejects the field. |
+| `MEMORY_EMBEDDING_MODEL` | `text-embedding-3-small` | Model for memory rows and memory retrieval, on the same server. Memory always requests 512 dimensions (its column is `vector(512)`). |
+
+On OpenAI, DARE sends `EMBEDDING_DIMENSIONS` in the request, so `text-embedding-3-large`
+can be shortened (e.g. to `1024`). With `EMBEDDING_BASE_URL` set it does not, because many
+local servers reject the field: set `EMBEDDING_DIMENSIONS` to the model's native length.
 
 A self-hosted example with Ollama (`ollama pull nomic-embed-text`):
 

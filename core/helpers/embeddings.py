@@ -21,8 +21,9 @@ class EmbeddingClient:
         self.api_key = api_key if api_key is not None else env.EMBEDDING_API_KEY
         self.model = model or env.EMBEDDING_MODEL
         self.dimensions = dimensions or env.EMBEDDING_DIMENSIONS
+        # Many local servers reject the `dimensions` field; OpenAI honours it.
         if send_dimensions is None:
-            send_dimensions = env.EMBEDDING_SEND_DIMENSIONS
+            send_dimensions = self.base_url is None
         self.send_dimensions = send_dimensions
         self._client: Optional[OpenAI] = None
 
