@@ -192,6 +192,10 @@ class ClaudeWebSearchExtractor:
                     provider='claude',
                 )
 
+    def process_citation(self, citation: Any) -> None:
+        """Record a streamed citations_delta: the passage the answer quoted."""
+        self._extract_citation(citation)
+
     def _extract_citation(self, citation: Any) -> None:
         """Extract source from a citation in a text block."""
         if getattr(citation, 'type', None) != 'web_search_result_location':

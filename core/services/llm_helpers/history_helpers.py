@@ -35,6 +35,12 @@ MAX_ARTIFACT_CONTENT_IN_CONTEXT = 8000
 TOOL_HISTORY_MESSAGE_WINDOW = 6
 
 MAX_WEB_SOURCES_IN_HISTORY = 20
+WEB_QUOTE_HISTORY_CHARS = 500
+WEB_SOURCES_HISTORY_NOTE = (
+    "[A web search ran for this answer and returned results; the answer "
+    "cited the sources below. Only their titles, URLs and quoted passages "
+    "are kept in history, not the page text.]"
+)
 
 
 @database_sync_to_async
@@ -143,7 +149,9 @@ def get_conversation_history(
         )
 
         if replayed:
-            result.extend(build_history_tool_turns(msg.id, tool_calls))
+            result.extend(
+                build_history_tool_turns(msg.id, tool_calls, _web_quotes(msg))
+            )
         elif tool_calls:
             suffix = summarize_tool_usage(tool_calls)
             content = f"{content}\n\n{suffix}" if content else suffix
@@ -161,26 +169,33 @@ def get_conversation_history(
     return result
 
 
-def _append_web_sources(msg: Message, content: str) -> str:
-    """List the web sources a past answer drew on.
+def _web_quotes(msg: Message) -> str:
+    """The passages a past answer quoted from its search results."""
+    quoted = [
+        f'- {source.url}: "{source.cited_text[:WEB_QUOTE_HISTORY_CHARS]}"'
+        for source in msg.web_search_sources.all()[:MAX_WEB_SOURCES_IN_HISTORY]
+        if source.cited_text
+    ]
+    return "Passages the answer quoted:\n" + "\n".join(quoted) + "\n" if quoted else ""
 
-    Hosted search results (OpenAI, Gemini, gateway models, and Claude rows
-    saved before results were captured) never reach history as tool turns,
-    so without this the model sees a sourced answer with no trace of its
-    sources and may disown it as fabricated.
+
+def _append_web_sources(msg: Message, content: str) -> str:
+    """List the web sources a past answer drew on, with the passages it quoted.
+
+    Hosted search results never reach history as tool turns, so without this
+    the model sees a sourced answer with no trace of its sources and may
+    disown it as fabricated.
     """
     sources = list(msg.web_search_sources.all()[:MAX_WEB_SOURCES_IN_HISTORY])
     if not sources:
         return content
-    lines = [
-        f"- {source.title} ({source.url})" if source.title else f"- {source.url}"
-        for source in sources
-    ]
-    note = (
-        "[A web search ran for this answer and returned results; the answer "
-        "cited the sources below. Only their titles and URLs are kept in "
-        "history, not the page text.]\n" + "\n".join(lines)
-    )
+    lines = []
+    for source in sources:
+        line = f"- {source.title} ({source.url})" if source.title else f"- {source.url}"
+        if source.cited_text:
+            line += f': "{source.cited_text[:WEB_QUOTE_HISTORY_CHARS]}"'
+        lines.append(line)
+    note = WEB_SOURCES_HISTORY_NOTE + "\n" + "\n".join(lines)
     return f"{content}\n\n{note}" if content else note
 
 
