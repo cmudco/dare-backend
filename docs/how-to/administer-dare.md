@@ -455,3 +455,8 @@ python manage.py shell
 | Access code rejected | Admin → access code group → check **Is active**, expiry, and `current_usage` against max capacity |
 
 For deeper issues, see [Deploy § Troubleshooting](deploy.md#troubleshooting).
+
+The new code-free approval gate applies to DARE registration. Socratic Bots retains
+its existing registration and response behavior; it is not enrolled into the DARE
+approval policy. Supplied invitation codes still receive validation and atomic
+consumption on either platform.

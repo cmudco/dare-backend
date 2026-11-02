@@ -165,6 +165,11 @@ class CustomRegisterSerializer(RegisterSerializer):
     def validate(self, attrs):
         attrs = super().validate(attrs)
         if not attrs.get("access_code"):
+            if (
+                detect_platform_from_request(self.context["request"])
+                == AuthSourceChoice.SOCRATIC_BOTS
+            ):
+                return attrs
             try:
                 active_policy()
             except AccessRequestsUnavailable:
@@ -303,11 +308,12 @@ class CustomRegisterSerializer(RegisterSerializer):
 
         user.access_code_group = code_group
         user.platform_role = code_group.default_role if code_group else RoleChoice.USER
-        if not code_group:
+        review_required = not code_group and platform == AuthSourceChoice.DARE
+        if review_required:
             user.is_active = False
 
         user.save()
-        if not code_group:
+        if review_required:
             try:
                 request_registration_approval(user, full_name)
             except (AccessRequestsUnavailable, DjangoValidationError):

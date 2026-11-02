@@ -363,3 +363,8 @@ checks settings without sending mail. Use the explicit `--send-test-to` option o
 when a diagnostic recipient is intended. Configure Site domain and Site name for
 public URLs and email branding; retain backend routes while the frontend proxy
 serves verification and password-reset SPA pages.
+
+The new code-free approval gate applies to DARE registration. Socratic Bots retains
+its existing registration and response behavior; it is not enrolled into the DARE
+approval policy. Supplied invitation codes still receive validation and atomic
+consumption on either platform.

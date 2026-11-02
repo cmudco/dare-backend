@@ -15,6 +15,8 @@ from users.api.access_requests import (
     AccessRequestResponseSerializer,
     AccessRequestThrottle,
 )
+from users.constants import AuthSourceChoice
+from users.utils import detect_platform_from_request
 
 
 class RegistrationResponseSerializer(serializers.Serializer):
@@ -32,11 +34,15 @@ class RegistrationResponseSerializer(serializers.Serializer):
     )
 )
 class CustomRegisterView(RegisterView):
-    throttle_classes = [AccessRequestThrottle]
+    def get_throttles(self):
+        if detect_platform_from_request(self.request) == AuthSourceChoice.DARE:
+            return [AccessRequestThrottle()]
+        return super().get_throttles()
 
     def create(self, request, *args, **kwargs):
         if (
-            account_settings.EMAIL_VERIFICATION
+            detect_platform_from_request(request) == AuthSourceChoice.DARE
+            and account_settings.EMAIL_VERIFICATION
             != account_settings.EmailVerificationMethod.MANDATORY
         ):
             return Response(
@@ -50,7 +56,11 @@ class CustomRegisterView(RegisterView):
         return super().create(request, *args, **kwargs)
 
     def perform_create(self, serializer):
-        if serializer.validated_data.get("access_code"):
+        if (
+            serializer.validated_data.get("access_code")
+            or detect_platform_from_request(self.request)
+            == AuthSourceChoice.SOCRATIC_BOTS
+        ):
             return super().perform_create(serializer)
         self.approval_required = True
         with transaction.atomic():
@@ -68,6 +78,15 @@ class CustomRegisterView(RegisterView):
         return user
 
     def get_response_data(self, user):
+        if detect_platform_from_request(self.request) == AuthSourceChoice.SOCRATIC_BOTS:
+            data = super().get_response_data(user)
+            if (
+                account_settings.EMAIL_VERIFICATION
+                == account_settings.EmailVerificationMethod.MANDATORY
+            ):
+                data["email_delivery_configured"] = settings.EMAIL_DELIVERY_CONFIGURED
+                data["approval_required"] = False
+            return data
         pending = getattr(self, "approval_required", False)
         return {
             "detail": (
