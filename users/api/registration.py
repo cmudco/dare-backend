@@ -4,6 +4,7 @@ from allauth.account import app_settings as account_settings
 from allauth.account import signals
 from allauth.account.models import EmailAddress
 from dj_rest_auth.registration.views import RegisterView
+from django.conf import settings
 from django.db import transaction
 from django.utils.translation import gettext_lazy as _
 from drf_spectacular.utils import extend_schema, extend_schema_view
@@ -19,6 +20,7 @@ from users.api.access_requests import (
 class RegistrationResponseSerializer(serializers.Serializer):
     detail = serializers.CharField()
     approval_required = serializers.BooleanField()
+    email_delivery_configured = serializers.BooleanField()
 
 
 @extend_schema_view(
@@ -78,4 +80,5 @@ class CustomRegisterView(RegisterView):
                 )
             ),
             "approval_required": pending,
+            "email_delivery_configured": settings.EMAIL_DELIVERY_CONFIGURED,
         }

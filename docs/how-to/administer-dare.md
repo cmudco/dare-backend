@@ -221,9 +221,8 @@ the request to issue a replacement through the confirmed decision-change workflo
 
 #### Mail, public URLs and setup checks
 
-Configure `EMAIL_BACKEND` explicitly as
-`email_logs.backends.LoggingSMTPEmailBackend` or
-`email_logs.backends.LoggingResendEmailBackend`. Set the approved sender, delivery
+Select `EMAIL_PROVIDER=smtp`, `resend` or `console` using the shared provider
+configuration. Console logs messages without delivering them. Set the approved sender, delivery
 service, credentials if required, port and TLS/SSL settings privately.
 `EMAIL_REPLY_TO` controls replies, not the sending identity; an explicit per-message
 reply address takes precedence. `EMAIL_TIMEOUT` defaults to ten seconds.

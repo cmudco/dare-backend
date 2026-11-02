@@ -33,11 +33,13 @@ DB_PASSWORD = os.getenv("DB_PASSWORD")
 DB_HOST = os.getenv("DB_HOST")
 DB_PORT = os.getenv("DB_PORT")
 
+EMAIL_PROVIDER = os.getenv("EMAIL_PROVIDER")
 EMAIL_HOST = os.getenv("EMAIL_HOST", None)
-EMAIL_PORT = os.getenv("EMAIL_PORT", 587)
+EMAIL_PORT = int(os.getenv("EMAIL_PORT") or 587)
 EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER")
 EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD")
 EMAIL_FROM = os.getenv("EMAIL_FROM")
+RESEND_API_KEY = os.getenv("RESEND_API_KEY")
 
 EMAIL_USE_TLS = env.bool("EMAIL_USE_TLS", default=False)
 EMAIL_USE_SSL = env.bool("EMAIL_USE_SSL", default=False)
@@ -66,6 +68,14 @@ BACKGROUND_MODEL = os.getenv("BACKGROUND_MODEL", "gpt-5.6-luna")
 CLAUDE_API_KEY = env("CLAUDE_API_KEY")
 GEMINI_API_KEY = env("GEMINI_API_KEY")
 OLLAMA_HOST = env("OLLAMA_HOST", default="http://localhost:11434")
+
+# Embeddings: any OpenAI-compatible /v1/embeddings endpoint. Documents and
+# queries must share one model, so changing these means re-embedding.
+EMBEDDING_BASE_URL = env("EMBEDDING_BASE_URL", default="") or None
+EMBEDDING_API_KEY = env("EMBEDDING_API_KEY", default="") or OPENAI_API_KEY
+EMBEDDING_MODEL = env("EMBEDDING_MODEL", default="text-embedding-3-large")
+EMBEDDING_DIMENSIONS = env.int("EMBEDDING_DIMENSIONS", default=3072)
+MEMORY_EMBEDDING_MODEL = env("MEMORY_EMBEDDING_MODEL", default="text-embedding-3-small")
 
 # Docling enrichment; the model resolves from DARE's LLM catalog so billing stays consistent.
 DOCUMENT_ENRICHMENT_ENABLED = env.bool("DOCUMENT_ENRICHMENT_ENABLED", default=True)

@@ -4,7 +4,10 @@ import uuid
 
 from allauth.account import app_settings as allauth_account_settings
 from allauth.account.models import EmailAddress
-from dj_rest_auth.registration.views import VerifyEmailView
+from dj_rest_auth.registration.views import (
+    ResendEmailVerificationView,
+    VerifyEmailView,
+)
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core import signing
@@ -40,6 +43,13 @@ from users.services.stats_service import get_user_stats
 User = get_user_model()
 
 logger = logging.getLogger(__name__)
+
+
+class CustomResendEmailVerificationView(ResendEmailVerificationView):
+    def create(self, request, *args, **kwargs):
+        response = super().create(request, *args, **kwargs)
+        response.data["email_delivery_configured"] = settings.EMAIL_DELIVERY_CONFIGURED
+        return response
 
 
 class CustomVerifyEmailView(VerifyEmailView):

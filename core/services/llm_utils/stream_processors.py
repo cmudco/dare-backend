@@ -673,11 +673,13 @@ class ClaudeStreamProcessor:
                         current_provider_tool_call[
                             "arguments"
                         ] += event.delta.partial_json
-                elif (
-                    delta_type == "citations_delta" and current_replay_block is not None
-                ):
-                    citation = _safe_to_dict(getattr(event.delta, "citation", {}))
-                    current_replay_block.setdefault("citations", []).append(citation)
+                elif delta_type == "citations_delta":
+                    web_search_extractor.process_citation(event.delta.citation)
+                    if current_replay_block is not None:
+                        citation = _safe_to_dict(getattr(event.delta, "citation", {}))
+                        current_replay_block.setdefault("citations", []).append(
+                            citation
+                        )
 
             # Handle content block stop (finalize tool call)
             elif event.type == "content_block_stop":

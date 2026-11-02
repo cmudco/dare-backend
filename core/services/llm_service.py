@@ -16,6 +16,7 @@ from core.services.code_sandbox import (
     OPENAI_PROVIDER,
     SandboxScope,
     sandbox_tool,
+    with_sandbox_files,
 )
 from core.services.custom_llm_service import CustomLLMService
 from core.services.document_processor import DocumentProcessor
@@ -170,6 +171,12 @@ class LLMService:
             litellm_model_ref=request.litellm_model_ref,
         )
         sandbox_scope = self._code_sandbox_scope(request, ai_service)
+        if sandbox_scope:
+            sandbox_scope = await with_sandbox_files(
+                sandbox_scope,
+                request.context.file_ids,
+                request.context.embedding_ids,
+            )
         self._pending_memory_context = []
         self._pending_context_trace = None
         if messages is None:
@@ -193,7 +200,7 @@ class LLMService:
         if sandbox_scope:
             llm_tools = [
                 *(llm_tools or []),
-                sandbox_tool(request.context.file_ids, sandbox_scope),
+                sandbox_tool(sandbox_scope),
             ]
         tools_ms = int((time.monotonic() - tools_start) * 1000)
 

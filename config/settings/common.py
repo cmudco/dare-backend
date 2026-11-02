@@ -16,6 +16,7 @@ from datetime import timedelta
 from django.core.exceptions import ImproperlyConfigured
 
 from config import env
+from config.email import EMAIL_BACKENDS, resolve_email_provider
 from config.sentry import init_sentry
 
 init_sentry(
@@ -104,6 +105,7 @@ INSTALLED_APPS = DJANGO_APPS + LOCAL_APPS + THIRD_PARTY_APPS
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
@@ -168,24 +170,17 @@ ACCESS_REQUEST_ALLOWED_HTTP_ORIGINS = [
     for origin in os.environ.get("ACCESS_REQUEST_ALLOWED_HTTP_ORIGINS", "").split(",")
     if origin.strip()
 ]
-EMAIL_PORT = int(env.EMAIL_PORT or 587)
+EMAIL_PORT = env.EMAIL_PORT
 EMAIL_USE_TLS = env.EMAIL_USE_TLS
 EMAIL_USE_SSL = env.EMAIL_USE_SSL
+RESEND_API_KEY = env.RESEND_API_KEY or env.EMAIL_HOST_PASSWORD
+
+EMAIL_PROVIDER = resolve_email_provider(
+    env.EMAIL_PROVIDER, env.EMAIL_HOST, env.EMAIL_HOST_USER, env.EMAIL_HOST_PASSWORD
+)
+EMAIL_BACKEND = EMAIL_BACKENDS[EMAIL_PROVIDER]
+EMAIL_DELIVERY_CONFIGURED = EMAIL_PROVIDER != "console"
 EMAIL_TIMEOUT = int(os.environ.get("EMAIL_TIMEOUT", "10"))
-
-if os.environ.get("EMAIL_BACKEND"):
-    EMAIL_BACKEND = os.environ["EMAIL_BACKEND"]
-elif env.EMAIL_HOST_USER and env.EMAIL_HOST_PASSWORD:
-    EMAIL_BACKEND = "email_logs.backends.LoggingResendEmailBackend"
-elif env.EMAIL_HOST:
-    EMAIL_BACKEND = "email_logs.backends.LoggingSMTPEmailBackend"
-else:
-    EMAIL_BACKEND = "email_logs.backends.LoggingConsoleEmailBackend"
-
-EMAIL_BACKEND = {
-    "django.core.mail.backends.console.EmailBackend": "email_logs.backends.LoggingConsoleEmailBackend",
-    "django.core.mail.backends.smtp.EmailBackend": "email_logs.backends.LoggingSMTPEmailBackend",
-}.get(EMAIL_BACKEND, EMAIL_BACKEND)
 
 SESSION_COOKIE_SECURE = os.environ.get("DJANGO_SECURE_COOKIES", "False") == "True"
 CSRF_COOKIE_SECURE = SESSION_COOKIE_SECURE

@@ -253,7 +253,9 @@ addition to the normal name, email and password fields. A valid invitation retai
 the code path. An omitted/blank code requires enabled administrator review and
 creates an inactive ordinary account. Invalid supplied codes never fall back to
 code-free registration. Both paths require mandatory email verification. Success
-is HTTP 201 with `detail` and `approvalRequired`; it does not authenticate the user.
+is HTTP 201 with `detail`, `approvalRequired` and `emailDeliveryConfigured`; it does
+not authenticate the user. Delivery configuration does not establish successful
+submission or inbox delivery. Resend responses retain the same configuration flag.
 
 Verification responses include `approvalRequired` while administrator review is
 pending. Tokens are issued only for active accounts, retaining the shared identity

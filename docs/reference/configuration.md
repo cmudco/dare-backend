@@ -67,6 +67,63 @@ them differently for local development.
 | `LLM_SANDBOX_IDLE_TIMEOUT_SECONDS` | `300` | The same limit while sandbox code runs or files upload. |
 | `BOT_WALLET_ENFORCEMENT_ENABLED` | `0` | `1` applies bot wallet routing (the chatter pays; anonymous chats fall back to the bot owner). |
 
+## Embeddings
+
+Documents, retrieval, shared libraries and memory embed text through any
+OpenAI-compatible `/v1/embeddings` endpoint. These are deployment settings, not user
+choices: documents and the questions asked of them must be embedded by the same model.
+Unset, DARE uses OpenAI exactly as before.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `EMBEDDING_BASE_URL` | *(OpenAI)* | Base URL of the embedding server, e.g. `http://localhost:11434/v1`. |
+| `EMBEDDING_API_KEY` | `OPENAI_API_KEY` | Key sent to the embedding server. Servers without auth ignore it. |
+| `EMBEDDING_MODEL` | `text-embedding-3-large` | Model for documents, retrieval and shared libraries. |
+| `EMBEDDING_DIMENSIONS` | `3072` | Vector length the model returns. Every generated vector is checked against it, and new shared libraries record it. |
+| `MEMORY_EMBEDDING_MODEL` | `text-embedding-3-small` | Model for memory rows and memory retrieval, on the same server. Memory always requests 512 dimensions (its column is `vector(512)`). |
+
+On OpenAI, DARE sends `EMBEDDING_DIMENSIONS` in the request, so `text-embedding-3-large`
+can be shortened (e.g. to `1024`). With `EMBEDDING_BASE_URL` set it does not, because many
+local servers reject the field: set `EMBEDDING_DIMENSIONS` to the model's native length.
+
+A self-hosted example with Ollama (`ollama pull nomic-embed-text`):
+
+```bash
+EMBEDDING_BASE_URL=http://localhost:11434/v1
+EMBEDDING_MODEL=nomic-embed-text
+EMBEDDING_DIMENSIONS=768
+MEMORY_EMBEDDING_MODEL=nomic-embed-text
+WEAVIATE_COLLECTION_NAME=DocumentNomic768
+```
+
+Ollama honours `dimensions` for `nomic-embed-text`, so memory gets 512-dimension vectors
+from the same server.
+
+vLLM works the same way: `vllm serve <model> --task embed` and point
+`EMBEDDING_BASE_URL` at `http://<host>:8000/v1`.
+
+Memory embeddings that the server rejects, or that are not 512 long, are dropped, and
+memory ranks on its lexical and recency signals alone. To keep semantic memory on a local
+server, use a model that can return 512 dimensions.
+
+### Changing the embedding model
+
+Vectors from different models are not comparable, and the vector stores fix their length
+on first write. A Pinecone index has one dimension set at creation, so writes of any other
+length fail. A Weaviate collection takes its vector length from the first object, so writes
+of another length fail too. Changing `EMBEDDING_MODEL` or `EMBEDDING_DIMENSIONS` therefore
+needs a fresh container and a re-embed:
+
+1. Point DARE at an empty container: a new `WEAVIATE_COLLECTION_NAME`, or a new Pinecone
+   index with the new dimension in `PINECONE_INDEX_NAME`.
+2. Restart the backend and the workers.
+3. Re-embed documents: `python manage.py reprocess_documents --all --limit 100000`.
+4. Re-import shared libraries: `python manage.py import_library --library <slug> ...`,
+   which re-embeds with the configured model. Update the library's `embedding_model` and
+   `dims` in Django admin.
+
+Until a document is re-embedded, retrieval cannot find it.
+
 ## Vector stores
 
 You can configure Pinecone (managed), Weaviate (self-hosted) or both; users choose in their
@@ -120,23 +177,55 @@ These are read from Django settings first, then the environment. Boolean flags t
 
 ## Email
 
-The backend picks the email backend itself (`config/settings/common.py`); there is no
-`EMAIL_BACKEND` variable. Every backend also writes an `EmailLog` row.
+Registration sends a verification link, and users can't sign in until they open it. Set
+`EMAIL_PROVIDER` to choose how mail is sent. Every provider also writes an `EmailLog` row.
 
-- **`EMAIL_HOST_USER` and `EMAIL_HOST_PASSWORD` set:** sends through Resend, with
-  `EMAIL_HOST_PASSWORD` as the Resend API key.
-- **Only `EMAIL_HOST` set:** sends over SMTP.
-- **Neither:** prints mail to the console.
+- **`resend`:** sends through the [Resend](https://resend.com) API with `RESEND_API_KEY`.
+  `EMAIL_FROM` must use a sender or domain verified in Resend.
+- **`smtp`:** sends through your SMTP server, signing in with `EMAIL_HOST_USER` and
+  `EMAIL_HOST_PASSWORD` when they are set.
+- **`console`:** only writes mail to the log. Nothing reaches an inbox, so the frontend tells
+  new users to ask an administrator to verify their account.
+
+When `EMAIL_PROVIDER` is unset, the backend infers it, as older versions did: `resend` when
+`EMAIL_HOST_USER` and `EMAIL_HOST_PASSWORD` are both set (the password is then the Resend
+key), `smtp` when only `EMAIL_HOST` is set, and `console` otherwise. Set the provider
+explicitly for authenticated SMTP, because a username and password alone select Resend.
 
 | Variable | Default | Description |
 | --- | --- | --- |
+| `EMAIL_PROVIDER` | *(inferred)* | `resend`, `smtp` or `console`. Any other value stops startup. |
+| `EMAIL_FROM` | *(none)* | `From:` address for every email. |
 | `EMAIL_HOST` | *(none)* | SMTP host. |
 | `EMAIL_PORT` | `587` | SMTP port. |
 | `EMAIL_HOST_USER` | *(none)* | SMTP username. |
-| `EMAIL_HOST_PASSWORD` | *(none)* | SMTP password, or the Resend API key. |
-| `EMAIL_FROM` | *(none)* | Default `From:` address. |
-| `EMAIL_USE_TLS` | `False` | Read by `config/env.py` but not passed to Django settings, so it has no effect. |
-| `EMAIL_USE_SSL` | `False` | Read by `config/env.py` but not passed to Django settings, so it has no effect. |
+| `EMAIL_HOST_PASSWORD` | *(none)* | SMTP password. Also the Resend key when `RESEND_API_KEY` is unset. |
+| `EMAIL_USE_TLS` | `False` | Upgrade the SMTP connection with STARTTLS, usually on port 587. |
+| `EMAIL_USE_SSL` | `False` | Connect over implicit TLS, usually on port 465. Don't combine with `EMAIL_USE_TLS`. |
+| `RESEND_API_KEY` | `EMAIL_HOST_PASSWORD` | Resend API key. |
+
+The link in the email is `FRONTEND_CONFIRM_EMAIL_URL` followed by `/?key=…`, so set it to the
+public address of the frontend's confirmation page, without a trailing slash, for example
+`https://dare.example.edu/users/confirm-email`.
+
+A self-hosted deployment using an authenticated SMTP relay:
+
+```bash
+EMAIL_PROVIDER=smtp
+EMAIL_HOST=smtp.example.edu
+EMAIL_PORT=587
+EMAIL_HOST_USER=dare-mailer@example.edu
+EMAIL_HOST_PASSWORD=your_smtp_password
+EMAIL_USE_TLS=True
+EMAIL_FROM="DARE <dare-mailer@example.edu>"
+FRONTEND_CONFIRM_EMAIL_URL=https://dare.example.edu/users/confirm-email
+```
+
+To check what the backend selected:
+
+```bash
+python manage.py shell -c "from django.conf import settings; print(settings.EMAIL_PROVIDER, settings.EMAIL_BACKEND)"
+```
 
 ## Cross-platform URLs and keys
 
@@ -144,7 +233,7 @@ Used for unified authentication, email links and inter-service calls.
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `FRONTEND_CONFIRM_EMAIL_URL` | *(none)* | Base URL for email-confirmation links. |
+| `FRONTEND_CONFIRM_EMAIL_URL` | *(none)* | Public URL of the frontend's confirmation page, without a trailing slash. Verification links are built from it. |
 | `FRONTEND_PASSWORD_RESET_URL` | *(none)* | Base URL for password-reset links. |
 | `DARE_FRONTEND_URL` | *(none)* | Public URL of the DARE frontend. |
 | `DARE_BACKEND_URL` | *(none)* | Public URL of this backend. |
@@ -244,3 +333,33 @@ the `web` and `worker` containers.
 python manage.py check
 python manage.py shell -c "from config import env; print(env.OPENAI_API_KEY[:7])"
 ```
+
+## Reviewed signup
+
+Optional-code registration can be enabled in Django admin under Access request
+settings. Select existing active staff approvers with change-access-request
+permission, configure the public admin origin and registration URL, and retain
+mandatory email verification. The feature is disabled until configured. See
+[signup administration](../how-to/administer-dare.md#signup-and-approval).
+
+| Environment variable | Default | Purpose |
+|---|---|---|
+| `EMAIL_REPLY_TO` | Empty | Support reply address; explicit per-message Reply-To takes precedence. |
+| `EMAIL_TIMEOUT` | `10` | Mail connection timeout in seconds. |
+| `ACCESS_REQUEST_REVIEW_CC` | Empty | Comma-separated copies for registration reviews, once per request. Invitation-request reviews have no copy from this setting. |
+| `TRUSTED_PROXY_COUNT` | `0` | Number of sanitizing trusted proxies used for per-client throttling. Direct backend access must be blocked when trusting forwarded headers. |
+| `DJANGO_SECURE_COOKIES` | `False` | Enable session/CSRF secure cookies for HTTPS deployments. |
+| `TRUST_PROXY_HTTPS` | `False` | Trust sanitized `X-Forwarded-Proto` only behind the actual TLS proxy. |
+| `ACCESS_REQUEST_ALLOWED_HTTP_ORIGINS` | Empty | Explicit complete HTTP origins for a deliberately network-restricted deployment; otherwise public signup URLs require HTTPS. This adds no TLS. |
+
+Use the shared `EMAIL_PROVIDER` settings above. `emailDeliveryConfigured` in
+registration/resend responses indicates provider selection, not confirmed SMTP/API
+submission or inbox delivery. Clients must retain `approvalRequired` independently
+and must not treat successful registration as authentication. Verification is
+required even if an administrator approves first.
+
+After migrations, run `python manage.py check_signup_setup --require-enabled`. It
+checks settings without sending mail. Use the explicit `--send-test-to` option only
+when a diagnostic recipient is intended. Configure Site domain and Site name for
+public URLs and email branding; retain backend routes while the frontend proxy
+serves verification and password-reset SPA pages.

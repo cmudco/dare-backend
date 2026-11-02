@@ -176,4 +176,4 @@ This policy may be updated as the DARE project evolves. The version number and d
 
 ---
 
-*The Dietrich Analysis Research Education (DARE) Platform is an Open Forum for AI (OFAI) initiative, Carnegie Mellon University Libraries. The DARE name and marks are owned by Carnegie Mellon University. The DARE software is released under \[GPL 2.0 / AGPL-3.0 — TBD\]. Copyright Carnegie Mellon University.*
+*The Dietrich Analysis Research Education (DARE) Platform is an Open Forum for AI (OFAI) initiative, Carnegie Mellon University Libraries. The DARE name and marks are owned by Carnegie Mellon University. The DARE software is released under AGPL-3.0. Copyright Carnegie Mellon University.*
