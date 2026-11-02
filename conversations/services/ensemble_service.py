@@ -124,6 +124,7 @@ class EnsembleTurn:
             data.update(
                 web_search_enabled=False,
                 web_fetch_enabled=False,
+                code_sandbox_enabled=False,
                 mcp_server_ids=[],
                 dare_tool_slugs=[],
                 artifacts_enabled=False,

@@ -17,12 +17,12 @@ from core.config.processing import (
     OVERLAP_SIZE,
 )
 from core.config.vector_db import get_user_namespace
-from core.helpers.openai import OpenAIWrapper
+from core.helpers.embeddings import EmbeddingClient
 from core.services.document_enrichment_service import DocumentEnrichmentService
 from core.services.document_parsers.pdf_outline import extract_pdf_outline
 from core.services.document_parsing_service import DocumentParsingService
 from core.services.document_text_sanitizer import sanitize_document_text
-from core.services.dtos.parsed_document_dto import ParsedDocument
+from core.services.dtos.parsed_document_dto import ParsedDocument, text_only_document
 from core.services.embedding_service import EmbeddingService
 from core.services.file_processing_journey import FileProcessingJourney
 from core.services.file_processor import FileProcessor
@@ -41,6 +41,7 @@ from core.services.rag.structured_chunker import (
     StructuredChunk,
     StructuredChunker,
 )
+from core.services.table_card import build_table_index, is_table_file
 from core.services.vector_integrity import (
     VectorIntegrityError,
     validate_generated,
@@ -76,7 +77,7 @@ class DocumentProcessor:
         parsing_service=None,
         enrichment_service=None,
     ):
-        self.openai_client = openai_client or OpenAIWrapper()
+        self.openai_client = openai_client or EmbeddingClient()
         self.user_id = user_id
         self.vector_service = vector_service
         self.embedding_service = embedding_service or EmbeddingService(
@@ -208,11 +209,41 @@ class DocumentProcessor:
                     backend=file.user.vector_db,
                 )
             with journey.stage("embedding") as stage:
-                vectors, prepared_map = self._embed_with_structure(
-                    file,
+                index_parsed, index_model, index_content = (
                     parsed,
                     enrichment.document_model,
                     content,
+                )
+                file_name = file.name or file.file.name
+                if is_table_file(file_name):
+                    # The full table stays in extracted_text for full-file
+                    # reading and the Code sandbox; search gets the summary
+                    # card plus any free-text answers.
+                    with file.file.open("rb") as handle:
+                        table = build_table_index(handle.read(), file_name)
+                    index_parsed = text_only_document(table.text, parser="basic")
+                    index_model, index_content = index_parsed.to_dict(), table.text
+                    stage.add_details(
+                        indexed_as=(
+                            "table summary and text answers"
+                            if table.text_columns
+                            else "table summary"
+                        ),
+                        text_columns=list(table.text_columns),
+                        text_rows=table.rows_with_text,
+                        indexed_text_rows=table.indexed_rows,
+                    )
+                    if table.capped:
+                        stage.partial(
+                            f"Text answers were indexed for {table.indexed_rows:,} of "
+                            f"{table.rows_with_text:,} rows, the per-file limit. "
+                            "The Code sandbox still reads every row."
+                        )
+                vectors, prepared_map = self._embed_with_structure(
+                    file,
+                    index_parsed,
+                    index_model,
+                    index_content,
                     effective_chunk_size,
                     effective_overlap_size,
                 )
@@ -221,7 +252,7 @@ class DocumentProcessor:
                         "No searchable text was produced; the previous index was retained."
                     )
                 stage.add_details(
-                    text_characters=len(content),
+                    text_characters=len(index_content),
                     chunks=len(vectors),
                     chunk_size=effective_chunk_size,
                     overlap_size=effective_overlap_size,

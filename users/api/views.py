@@ -4,7 +4,11 @@ import uuid
 
 from allauth.account import app_settings as allauth_account_settings
 from allauth.account.models import EmailAddress
-from dj_rest_auth.registration.views import VerifyEmailView
+from dj_rest_auth.registration.views import (
+    RegisterView,
+    ResendEmailVerificationView,
+    VerifyEmailView,
+)
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core import signing
@@ -38,6 +42,26 @@ from users.services.stats_service import get_user_stats
 User = get_user_model()
 
 logger = logging.getLogger(__name__)
+
+
+class CustomRegisterView(RegisterView):
+    """Tells the client whether the verification email can actually be delivered."""
+
+    def get_response_data(self, user):
+        data = super().get_response_data(user)
+        if (
+            allauth_account_settings.EMAIL_VERIFICATION
+            == allauth_account_settings.EmailVerificationMethod.MANDATORY
+        ):
+            data["email_delivery_configured"] = settings.EMAIL_DELIVERY_CONFIGURED
+        return data
+
+
+class CustomResendEmailVerificationView(ResendEmailVerificationView):
+    def create(self, request, *args, **kwargs):
+        response = super().create(request, *args, **kwargs)
+        response.data["email_delivery_configured"] = settings.EMAIL_DELIVERY_CONFIGURED
+        return response
 
 
 class CustomVerifyEmailView(VerifyEmailView):
@@ -525,8 +549,8 @@ class InternalSetRoleView(APIView):
 class InternalAccessCodeSyncView(APIView):
     """
     Endpoint for inter-service communication.
-    Allows SocraticBooks backend to create/update/deactivate AccessCodeGroups
-    when subscription codes are saved in SocraticBooks.
+    Allows Socratic Bots backend to create/update/deactivate AccessCodeGroups
+    when subscription codes are saved in Socratic Bots.
 
     Authenticated via JWT token (same token used for all DARE API calls).
 
@@ -612,7 +636,7 @@ class InternalAccessCodeSyncView(APIView):
 
 class InternalVoiceAccessCodeView(APIView):
     """
-    Service-to-service endpoint for SocraticBooks voice-assignment access codes.
+    Service-to-service endpoint for Socratic Bots voice-assignment access codes.
 
     A voice assignment code is registered here as a RESEARCHER access-code group so
     that DARE's normal registration path assigns the role. Groups provisioned by
@@ -673,7 +697,7 @@ class InternalVoiceAccessCodeView(APIView):
                 "max_capacity": VOICE_ACCESS_CODE_CAPACITY,
                 "default_role": RoleChoice.RESEARCHER,
                 "provisioned_by": AccessCodeProvisionerChoice.SOCRATIC_VOICE,
-                "notes": "SocraticBooks voice assignment code (managed by SocraticBooks)",
+                "notes": "Socratic Bots voice assignment code (managed by Socratic Bots)",
             },
         )
         if group.provisioned_by != AccessCodeProvisionerChoice.SOCRATIC_VOICE:

@@ -1,23 +1,28 @@
 """
-Thin client for the Hermes agent gateway — the DARE-owned adapter boundary.
+HTTP client for one Hermes profile on the gateway: the only place DARE talks
+to the runtime.
 
-Hermes is driven over REST: `POST /v1/runs` starts an async run (the soul rides
-in `instructions`, continuity via `session_id`), and `GET /v1/runs/{id}/events`
-streams the reply as SSE (`message.delta`) plus tool-call provenance. DARE never
-gives Hermes DB access; this is the only place DARE talks to Hermes.
+``POST /v1/runs`` starts a run, ``GET /v1/runs/{id}/events`` streams it as SSE
+(``message.delta``, ``tool.*``, ``run.*``), and the run record answers what the
+stream could not. Get one bound to a project with ``profile_service.hermes_for``.
 """
 
 import json
 import logging
 import time
 from dataclasses import dataclass
-from pathlib import Path
 
 import requests
 from django.conf import settings
 
 logger = logging.getLogger(__name__)
-_SAFE_USAGE_FIELDS = ("input_tokens", "output_tokens", "total_tokens")
+_SAFE_USAGE_FIELDS = (
+    "input_tokens",
+    "output_tokens",
+    "total_tokens",
+    "cache_read_tokens",
+    "cache_write_tokens",
+)
 
 
 def safe_hermes_usage(value):
@@ -44,25 +49,11 @@ class HermesStopResult:
 
 
 class HermesService:
-    """REST client for the Hermes gateway (drive + SSE stream)."""
+    """REST client for one profile on the Hermes gateway."""
 
-    def __init__(self, base_url=None, api_key=None, profile=""):
-        self.base_url = (base_url or settings.HERMES_GATEWAY_URL).rstrip("/")
-        self.api_key = api_key or settings.HERMES_API_KEY
-        # Empty => the shared default profile (pre-multiplex behaviour).
-        self.profile = profile
-
-    @property
-    def home(self):
-        """The profile's HERMES_HOME — the root every per-profile file hangs off.
-
-        Hermes resolves SOUL.md, sessions and the memory tool's
-        ``memories/{MEMORY,USER}.md`` from this directory, so pointing it at the
-        project's own profile is what makes that project's agent memory private.
-        """
-        if self.profile:
-            return Path(settings.HERMES_PROFILES_ROOT) / self.profile
-        return Path(settings.HERMES_SOUL_PATH).parent
+    def __init__(self, base_url, api_key):
+        self.base_url = base_url.rstrip("/")
+        self.api_key = api_key
 
     def _headers(self, *, json_body=False):
         headers = {"Authorization": f"Bearer {self.api_key}"}
@@ -71,46 +62,48 @@ class HermesService:
         return headers
 
     def start_run(
-        self, *, input_text, instructions, session_id, session_key=None, timeout=30
+        self,
+        *,
+        input_text,
+        instructions,
+        session_id,
+        session_key=None,
+        conversation_history=None,
+        timeout=30,
     ):
-        """
-        Start an async run. The soul-file content rides in `instructions`;
-        `session_id` gives persistent cross-run memory within one mode's thread.
-        `session_key` (Hermes's official X-Hermes-Session-Key) is the stable
-        long-term memory scope — one per research workspace, shared by all of
-        its modes. Returns the gateway JSON (``{"run_id": ..., "status": ...}``).
+        """Start an async run; returns ``{"run_id", "status"}``.
+
+        ``/v1/runs`` does not reload earlier turns from ``session_id``, so a
+        multi-turn conversation sends them as ``conversation_history``
+        (``[{"role", "content"}]``, oldest first). ``session_key`` scopes the
+        runtime's long-term memory.
         """
         headers = self._headers(json_body=True)
         if session_key:
             headers["X-Hermes-Session-Key"] = session_key
+        body = {
+            "input": input_text,
+            "instructions": instructions,
+            "session_id": session_id,
+        }
+        if conversation_history:
+            body["conversation_history"] = conversation_history
         resp = requests.post(
             f"{self.base_url}/v1/runs",
             headers=headers,
-            json={
-                "input": input_text,
-                "instructions": instructions,
-                "session_id": session_id,
-            },
+            json=body,
             timeout=timeout,
         )
         resp.raise_for_status()
         return resp.json()
 
     def stream_events(self, hermes_run_id, timeout=300, idle_timeout=None):
-        """
-        Stream a run's SSE events as parsed dicts. Each event carries an
-        ``event`` key: ``message.delta`` (``delta`` token), ``tool.started`` /
-        ``tool.completed``, ``run.completed``, etc.
+        """Yield a run's SSE events as dicts, each with an ``event`` key.
 
-        Ends the stream once ``idle_timeout`` seconds pass with no real event.
-
-        The socket timeout alone does not bound this. `requests` measures it
-        between *bytes*, and an SSE channel emits keep-alive lines that carry no
-        event — so a stream that stops delivering events while staying alive
-        blocks forever. That is not hypothetical: a run whose terminal event was
-        missed held its worker for 55 minutes and only ended when a scholar hit
-        cancel. Ending the generator hands the outcome to `_verify_terminal_run`,
-        which resolves it from Hermes's pollable record.
+        Ends once ``idle_timeout`` seconds pass with no real event. The socket
+        timeout cannot bound this: SSE keep-alive lines reset it, so a stream
+        that stops delivering events would block its worker indefinitely. The
+        caller then resolves the outcome from the run record instead.
         """
         if idle_timeout is None:
             idle_timeout = settings.HERMES_STREAM_IDLE_SECONDS
@@ -148,51 +141,6 @@ class HermesService:
                     continue
                 last_event = time.monotonic()
                 yield event
-
-    def provision_soul(self, content):
-        """
-        Write DARE's canonical soul into the gateway profile's SOUL.md — the
-        anchor (slot #1 of the system prompt) that Hermes reads fresh each run.
-        This is how DARE's soul actually governs, kept in sync on every edit/run.
-
-        No-op (returns False) if syncing is disabled or the path isn't writable;
-        the per-run ``instructions`` overlay then remains the fallback.
-        """
-        if not settings.HERMES_SYNC_SOUL:
-            return False
-        path = self.home / "SOUL.md"
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(content or "", encoding="utf-8")
-            return True
-        except OSError as exc:
-            logger.warning("Could not provision Hermes SOUL.md at %s: %s", path, exc)
-            return False
-
-    def read_agent_memory(self):
-        """
-        Read the Hermes profile's operational memory files (read-only), so DARE
-        can show what the agent holds: the on-disk SOUL.md (which DARE provisions
-        — so it mirrors the project's soul), plus MEMORY.md / USER.md that Hermes
-        auto-writes as it learns. Returns {} values for files that don't exist yet.
-        """
-        home = self.home
-
-        def _read(path):
-            try:
-                return path.read_text(encoding="utf-8")
-            except OSError:
-                return ""
-
-        return {
-            "soul": _read(home / "SOUL.md"),
-            "memory": _read(home / "memories" / "MEMORY.md"),
-            "user": _read(home / "memories" / "USER.md"),
-            # Which profile these files came from, so the UI can say whose memory
-            # it is showing instead of implying there is only ever one.
-            "profile": self.profile or "default",
-            "isolated": bool(self.profile),
-        }
 
     def get_run(self, hermes_run_id, timeout=30):
         """Poll a run's status/result (``{status, output, usage, model, ...}``)."""
@@ -279,6 +227,30 @@ class HermesService:
             detail="Hermes returned an unexpected stop status.",
         )
 
+    def steer_run(self, hermes_run_id, text, timeout=15):
+        """Inject guidance into a running agent; True when Hermes accepted it.
+
+        The run keeps its context and work in flight, unlike stop-and-restart.
+        Hermes answers 409 when the run is not mid-turn, so False means the
+        caller should fall back to a fresh run.
+        """
+        try:
+            resp = requests.post(
+                f"{self.base_url}/v1/runs/{hermes_run_id}/steer",
+                headers=self._headers(json_body=True),
+                json={"text": text},
+                timeout=timeout,
+            )
+        except requests.RequestException as exc:
+            logger.warning("Could not steer Hermes run %s: %s", hermes_run_id, exc)
+            return False
+        if resp.status_code != 200:
+            return False
+        try:
+            return bool(resp.json().get("accepted"))
+        except ValueError:
+            return False
+
     def fetch_usage(self, hermes_run_id, timeout=30):
         """
         Fetch a finished run's token usage from the run summary. Best-effort
@@ -293,39 +265,3 @@ class HermesService:
             )
             return {}
         return safe_hermes_usage(usage)
-
-
-_hermes_service = None
-
-
-def get_hermes_service(project=None):
-    """Return a HermesService bound to ``project``'s own Hermes profile.
-
-    The profile is provisioned on first use (a directory, a config and an
-    owner-scoped token) and the project remembers its gateway URL, so every
-    later call routes to ``/p/<profile>/`` on the shared multiplex listener.
-    That one indirection is what separates each project's SOUL.md and
-    memories/{MEMORY,USER}.md — they are different directories, not different
-    sections of one file.
-
-    Without a project, or with per-project profiles switched off, this returns
-    the shared default instance exactly as before.
-    """
-    if project is not None:
-        # Imported here, not at module scope: research.services.__init__ pulls
-        # this module in, and profile_service reaches back for the same package.
-        from research.services.profile_service import ensure_project_profile
-
-        profile = ensure_project_profile(project)
-        base = getattr(project, "hermes_base_url", "") or ""
-        if profile or base:
-            key = getattr(project, "hermes_api_key", "") or settings.HERMES_API_KEY
-            return HermesService(
-                base_url=base or settings.HERMES_GATEWAY_URL,
-                api_key=key,
-                profile=profile,
-            )
-    global _hermes_service
-    if _hermes_service is None:
-        _hermes_service = HermesService()
-    return _hermes_service

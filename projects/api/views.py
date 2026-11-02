@@ -1,9 +1,19 @@
 from rest_framework import serializers, status, viewsets
+from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from projects.api.serializers import PersonalProjectSerializer
-from projects.services.project_service import delete_project, owned_projects
+from projects.api.serializers import (
+    PersonalProjectSerializer,
+    SourceSizeRequestSerializer,
+    SourceSizeSerializer,
+)
+from projects.services.project_service import (
+    delete_project,
+    estimate_source_size,
+    owned_projects,
+    selected_source_files,
+)
 
 
 class DeleteProjectQuerySerializer(serializers.Serializer):
@@ -43,6 +53,20 @@ class PersonalProjectViewSet(viewsets.ModelViewSet):
             delete_conversations=query.validated_data["delete_conversations"],
         )
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @action(detail=False, methods=["post"], url_path="source-size")
+    def source_size(self, request):
+        """Estimate the tokens of reading the given files and folders in full."""
+        query = SourceSizeRequestSerializer(
+            data=request.data, context=self.get_serializer_context()
+        )
+        query.is_valid(raise_exception=True)
+        files = selected_source_files(
+            request.user,
+            [file.pk for file in query.validated_data["file_ids"]],
+            [folder.pk for folder in query.validated_data["folder_ids"]],
+        )
+        return Response(SourceSizeSerializer(estimate_source_size(files)).data)
 
     def _reloaded(self, pk: int) -> dict:
         """Re-read through the annotated queryset so counts are in the payload."""

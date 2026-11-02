@@ -21,6 +21,7 @@ from typing import List, Literal, Optional
 from asgiref.sync import async_to_sync
 from pydantic import BaseModel, Field
 
+from core.constants import BackgroundTask
 from core.services.background_model_service import BackgroundModelService
 from memory.constants import TOKEN_BUDGET, TOPICS, Sensitivity
 from memory.domain.keys import key_for, procedure_key
@@ -331,7 +332,6 @@ def propose_decisions(
     user_message: str,
     assistant_message: str,
     now: Optional[str] = None,
-    model: Optional[str] = None,
     keys_in_use: Optional[List[str]] = None,
 ) -> WriterProposal:
     """Ask the model what to do. Nothing is written here.
@@ -396,7 +396,7 @@ Set `explicit_request` from what the PERSON asked for in this message, not from 
             response_model=WriterResponse,
             description=f"Memory writer for message {source_message_id}",
             max_tokens=WRITER_MAX_TOKENS,
-            model_override=model,
+            task=BackgroundTask.MEMORY,
         )
         return result.value
 

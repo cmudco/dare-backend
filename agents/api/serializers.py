@@ -56,6 +56,7 @@ class AgentSerializer(serializers.ModelSerializer):
             "document_similarity_threshold",
             "enable_web_search",
             "web_fetch_enabled",
+            "code_sandbox_enabled",
             "artifacts_enabled",
             "memory_enabled",
             "content_files",

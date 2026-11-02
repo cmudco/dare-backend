@@ -36,6 +36,7 @@ from billing.models import (
 from billing.services import WalletService
 from billing.tasks import process_scheduled_refills
 from conversations.models import LLM
+from core.constants import BackgroundModelSource
 from core.services.api_key_service import (
     get_chat_dispatch_credentials_sync,
     get_dispatch_credentials_for_user_sync,
@@ -297,6 +298,7 @@ class SpendLimitGateTests(TestCase):
             model=LLM(identifier="x", provider="custom"),
             wallet_type=UserWalletPreferenceTypeChoice.LITELLM,
             dispatch_user=self.student,
+            source=BackgroundModelSource.LITELLM_KEY,
         )
         refused = PaymentRequiredError("limit", code=LITELLM_SPEND_LIMIT_REACHED)
         with patch(

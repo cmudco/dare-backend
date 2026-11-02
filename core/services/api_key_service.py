@@ -210,7 +210,7 @@ def get_chat_dispatch_credentials_sync(
     Args:
         provider: Provider of the dispatched model (``custom`` for LiteLLM).
         user: The chatter, or ``None`` for anonymous public-bot traffic.
-        bot_id: Set for SocraticBooks bot conversations.
+        bot_id: Set for Socratic bot conversations.
         litellm_model_ref: Picker id (``litellm:<key>:<model>``) when the turn
             uses a LiteLLM model.
 
@@ -229,7 +229,7 @@ def get_chat_dispatch_credentials_sync(
         )
         if wallet is None:
             raise PaymentRequiredError(
-                "Unable to resolve SocraticBooks bot wallet",
+                "Unable to resolve Socratic bot wallet",
                 code="BOT_CONFIG_UNAVAILABLE",
                 details={"bot_id": bot_id},
             )

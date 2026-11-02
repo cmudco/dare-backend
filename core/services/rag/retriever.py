@@ -5,7 +5,7 @@ from abc import ABC, abstractmethod
 from dataclasses import replace
 from typing import List, Optional, Tuple
 
-from core.helpers.openai import OpenAIWrapper
+from core.helpers.embeddings import EmbeddingClient
 from core.services.rag.dtos import RetrievalRequest, RetrievedChunk
 from libraries.services.library_search import search_libraries
 
@@ -15,8 +15,8 @@ logger = logging.getLogger(__name__)
 class BaseRetriever(ABC):
     """Embeds the query and runs hybrid retrieval against one source."""
 
-    def __init__(self, openai_client: Optional[OpenAIWrapper] = None):
-        self.openai_client = openai_client or OpenAIWrapper()
+    def __init__(self, openai_client: Optional[EmbeddingClient] = None):
+        self.openai_client = openai_client or EmbeddingClient()
 
     def embed(self, text: str) -> List[float]:
         return self.openai_client.create_embeddings(text)
@@ -155,7 +155,7 @@ _RETRIEVERS = {"library": LibraryRetriever, "document": DocumentRetriever}
 
 
 def get_retriever(
-    source_type: str = "library", openai_client: Optional[OpenAIWrapper] = None
+    source_type: str = "library", openai_client: Optional[EmbeddingClient] = None
 ) -> BaseRetriever:
     """Factory: pick the retriever for a source type (rules.md §2)."""
     retriever_cls = _RETRIEVERS.get(source_type, LibraryRetriever)

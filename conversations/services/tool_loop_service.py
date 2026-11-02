@@ -41,6 +41,7 @@ from conversations.services.tool_execution_service import (
     ToolExecutionService,
     tool_execution_service,
 )
+from core.services.code_sandbox import SANDBOX_TOOL_TYPE, SandboxFile
 from core.services.dtos import (
     LLMQueryRequest,
     StreamEventKind,
@@ -70,8 +71,9 @@ class ToolLoopResult:
 
     ``token_usage`` carries the summed token totals plus the extras the
     finalization helpers read (``web_search_sources``,
-    ``provider_tool_calls``, ``memory_context``) — the same dict shape the
-    single-call flow produced, so finalization is unchanged.
+    ``provider_tool_calls``, ``sandbox_files``, ``memory_context``) — the
+    same dict shape the single-call flow produced, so finalization is
+    unchanged.
     """
 
     text: str = ""
@@ -96,8 +98,14 @@ class ToolLoopService:
         self.llm_service = llm_service
         self.config = config
         self.execution_service: ToolExecutionService = tool_execution_service
+        # Providers send nothing while a model writes a long tool argument (a
+        # whole document) or reasons; a 24k-character document took 75s.
         self.stream_idle_timeout_seconds = float(
-            os.environ.get("LLM_STREAM_IDLE_TIMEOUT_SECONDS", "45")
+            os.environ.get("LLM_STREAM_IDLE_TIMEOUT_SECONDS", "120")
+        )
+        # The provider sends nothing while sandbox code runs or files upload.
+        self.sandbox_idle_timeout_seconds = float(
+            os.environ.get("LLM_SANDBOX_IDLE_TIMEOUT_SECONDS", "300")
         )
 
     async def _stream_round(self, prepared, messages, tools):
@@ -108,11 +116,14 @@ class ToolLoopService:
         case that otherwise leaves an empty assistant placeholder forever.
         """
         iterator = self.llm_service.stream_round(prepared, messages, tools).__aiter__()
+        idle_timeout = (
+            self.sandbox_idle_timeout_seconds
+            if any(tool.get("type") == SANDBOX_TOOL_TYPE for tool in tools or [])
+            else self.stream_idle_timeout_seconds
+        )
         while True:
             try:
-                event = await asyncio.wait_for(
-                    anext(iterator), timeout=self.stream_idle_timeout_seconds
-                )
+                event = await asyncio.wait_for(anext(iterator), timeout=idle_timeout)
             except StopAsyncIteration:
                 # The HTTP client stack can absorb a task cancellation while
                 # closing the response and report a clean end of stream
@@ -123,8 +134,7 @@ class ToolLoopService:
             except TimeoutError as exc:
                 await iterator.aclose()
                 raise TimeoutError(
-                    "The model stream was idle for "
-                    f"{self.stream_idle_timeout_seconds:g} seconds"
+                    f"The model stream was idle for {idle_timeout:g} seconds"
                 ) from exc
             if _cancel_requested():
                 await iterator.aclose()
@@ -190,6 +200,7 @@ class ToolLoopService:
         thinking_accum = ""
         web_search_sources: List[Dict] = []
         provider_tool_calls: List[Dict] = []
+        sandbox_files: List[SandboxFile] = []
         sent_provider_ids: set = set()
         empty_stream_retried = False
 
@@ -211,6 +222,7 @@ class ToolLoopService:
             round_thinking = ""
             round_thinking_blocks: List[Dict[str, str]] = []
             round_provider_content: Dict[int, Dict[str, Any]] = {}
+            round_stop_reason = None
             logger.info(
                 "[journey] mid=%s round %d start (tools=%s)",
                 turn_key,
@@ -305,9 +317,13 @@ class ToolLoopService:
                             continue
                         if round_thinking:
                             observed_usage["thinking_summary"] = round_thinking
+                        round_stop_reason = (
+                            observed_usage.get("stop_reason") or round_stop_reason
+                        )
                         usage.observe(round_index, observed_usage)
                         if event.usage.get("web_search_sources"):
                             web_search_sources = event.usage["web_search_sources"]
+                        sandbox_files.extend(event.usage.get("sandbox_files") or [])
                         for provider_call in (
                             event.usage.get("provider_tool_calls") or []
                         ):
@@ -380,6 +396,24 @@ class ToolLoopService:
             )
             if result.interrupted:
                 break
+            if (
+                not pending_calls
+                and round_stop_reason == "pause_turn"
+                and round_provider_content
+            ):
+                # Anthropic paused a long server-tool turn (e.g. many sandbox
+                # runs); echoing its content back lets the model carry on.
+                messages.append(
+                    build_assistant_tool_call_turn(
+                        round_text,
+                        [],
+                        provider_assistant_content=[
+                            round_provider_content[index]
+                            for index in sorted(round_provider_content)
+                        ],
+                    )
+                )
+                continue
             if not pending_calls:
                 if not round_has_text and not text_accum and not empty_stream_retried:
                     # Anthropic can occasionally close a successful HTTP 200
@@ -453,6 +487,8 @@ class ToolLoopService:
             token_usage["web_search_sources"] = web_search_sources
         if provider_tool_calls:
             token_usage["provider_tool_calls"] = provider_tool_calls
+        if sandbox_files:
+            token_usage["sandbox_files"] = sandbox_files
         if prepared.memory_context:
             token_usage["memory_context"] = prepared.memory_context
 

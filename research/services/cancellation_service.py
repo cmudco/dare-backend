@@ -7,27 +7,12 @@ import requests
 from django.db import transaction
 from django.utils import timezone
 
-from research.constants import AgentRunStatus
+from research.constants import LIVE_RUN_STATUSES, TERMINAL_RUN_STATUSES, AgentRunStatus
 from research.models import ResearchAgentRun
-from research.services.hermes_service import (
-    HermesStopResult,
-    get_hermes_service,
-    safe_hermes_usage,
-)
+from research.services.hermes_service import safe_hermes_usage
+from research.services.profile_service import hermes_for
 
 CANCELLATION_ATTEMPT_LEASE = timedelta(seconds=90)
-TERMINAL_STATUSES = {
-    AgentRunStatus.COMPLETED,
-    AgentRunStatus.FAILED,
-    AgentRunStatus.CANCELLED,
-}
-ACTIVE_HERMES_STATUSES = {
-    AgentRunStatus.STARTED,
-    AgentRunStatus.QUEUED,
-    AgentRunStatus.RUNNING,
-    AgentRunStatus.WAITING_FOR_APPROVAL,
-    AgentRunStatus.STOPPING,
-}
 
 
 @dataclass(frozen=True)
@@ -73,7 +58,7 @@ def _record_intent(run_id, user):
             .select_related("project")
             .get(id=run_id, project__user=user)
         )
-        if run.status in TERMINAL_STATUSES:
+        if run.status in TERMINAL_RUN_STATUSES:
             return run, False
 
         if run.cancellation_requested_at is None:
@@ -97,7 +82,7 @@ def _claim_attempt(run_id):
             .select_related("project")
             .get(id=run_id)
         )
-        if run.status in TERMINAL_STATUSES or not run.hermes_run_id:
+        if run.status in TERMINAL_RUN_STATUSES or not run.hermes_run_id:
             return None
 
         now = timezone.now()
@@ -175,16 +160,16 @@ def _apply_results(run_id, stop_result, terminal_result):
             )
         elif (
             terminal_result.code == "terminal_received"
-            and terminal_status in ACTIVE_HERMES_STATUSES
+            and terminal_status in LIVE_RUN_STATUSES
         ):
-            if run.status not in TERMINAL_STATUSES:
+            if run.status not in TERMINAL_RUN_STATUSES:
                 run.status = terminal_status
                 run.status_detail = (
                     f"Cancellation requested; Hermes still reports {terminal_status}."
                 )
                 run.completed_at = None
                 fields.update({"status", "status_detail", "completed_at"})
-        elif run.status not in TERMINAL_STATUSES:
+        elif run.status not in TERMINAL_RUN_STATUSES:
             run.status = AgentRunStatus.OUTCOME_UNKNOWN
             run.status_detail = (
                 "Cancellation requested; Hermes terminal outcome is unavailable."
@@ -193,7 +178,7 @@ def _apply_results(run_id, stop_result, terminal_result):
             fields.update({"status", "status_detail", "completed_at"})
 
         usage = safe_hermes_usage(terminal_data.get("usage"))
-        if usage and terminal_status in TERMINAL_STATUSES:
+        if usage and terminal_status in TERMINAL_RUN_STATUSES:
             run.usage = usage
             fields.add("usage")
         run.save(update_fields=sorted(fields))
@@ -206,7 +191,7 @@ def execute_pending_cancellation(run_id, *, hermes=None):
     if claimed is None:
         return ResearchAgentRun.active_objects.get(id=run_id)
 
-    hermes = hermes or get_hermes_service(claimed.project)
+    hermes = hermes or hermes_for(claimed.project)
     stop_result = hermes.stop_run(claimed.hermes_run_id)
     terminal_result = _terminal_run_result(hermes, claimed.hermes_run_id)
     return _apply_results(claimed.id, stop_result, terminal_result)

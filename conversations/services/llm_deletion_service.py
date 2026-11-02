@@ -37,7 +37,7 @@ class LLMDeletionError(RuntimeError):
 
 
 class LLMDeletionIntegrationError(LLMDeletionError):
-    """Raised when SocraticBooks is configured but cannot be synchronized."""
+    """Raised when Socratic Bots is configured but cannot be synchronized."""
 
 
 class LLMDeletionConflictError(LLMDeletionError):
@@ -202,7 +202,7 @@ class LLMDeletionService:
         model: LLM,
         options: LLMDeletionOptions,
     ) -> LLMDeletionResult:
-        """Delete locally, synchronize SocraticBooks, and notify dependents."""
+        """Delete locally, synchronize Socratic Bots, and notify dependents."""
         snapshot = cls.preview(model)
         model_id = model.pk
         model_name = model.name
@@ -212,7 +212,7 @@ class LLMDeletionService:
                 locked_model = LLM.objects.select_for_update().get(pk=model_id)
 
                 # Complete every local write before the external mutation. This
-                # guarantees an FK or notification failure cannot alter SocraticBooks.
+                # guarantees an FK or notification failure cannot alter Socratic Bots.
                 locked_model.delete()
 
                 notified = (0, 0, 0)

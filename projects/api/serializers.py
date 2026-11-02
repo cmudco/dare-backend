@@ -5,18 +5,33 @@ from core.services.model_ref import ModelRefUnavailable, resolve_model_ref
 from files.models import File, Folder
 from libraries.models import SharedLibrary, UserLibraryAccess
 from projects.constants import (
+    FULL_FILES_TOKEN_LIMIT,
     PROJECT_DESCRIPTION_MAX_LENGTH,
     PROJECT_INSTRUCTIONS_MAX_LENGTH,
     PROJECT_NAME_MAX_LENGTH,
+    ProjectSourceMode,
 )
 from projects.models import PersonalProject
 from projects.services.project_service import (
+    SourceSize,
+    estimate_source_size,
     project_model_ref,
+    selected_source_files,
     set_project_instructions,
 )
 from prompts.models import Prompt
 from workflows.constants import WorkflowKind
 from workflows.models import Workflow
+
+
+def full_files_too_large_message(size: SourceSize) -> str:
+    return _(
+        "These files are about %(tokens)s tokens, over the %(limit)s-token "
+        "limit for reading in full. Use search instead."
+    ) % {
+        "tokens": f"{size.estimated_tokens:,}",
+        "limit": f"{FULL_FILES_TOKEN_LIMIT:,}",
+    }
 
 
 class PersonalProjectSerializer(serializers.ModelSerializer):
@@ -81,6 +96,7 @@ class PersonalProjectSerializer(serializers.ModelSerializer):
             "artifacts_enabled",
             "memory_enabled",
             "memory_scope",
+            "source_mode",
             "file_ids",
             "folder_ids",
             "library_ids",
@@ -127,7 +143,30 @@ class PersonalProjectSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         attrs.update(attrs.pop("default_model_ref", {}))
+        self._check_full_files_fit(attrs)
         return attrs
+
+    def _check_full_files_fit(self, attrs):
+        """Refuse switching to full files for sources already too large.
+
+        Sources added later are accepted; chats then fall back to search.
+        """
+        if attrs.get("source_mode") != ProjectSourceMode.FULL:
+            return
+        project = self.instance
+        files = attrs.get("files", project.files.all() if project else [])
+        folders = attrs.get("folders", project.folders.all() if project else [])
+        size = estimate_source_size(
+            selected_source_files(
+                self.context["request"].user,
+                [file.pk for file in files],
+                [folder.pk for folder in folders],
+            )
+        )
+        if not size.fits_full_files:
+            raise serializers.ValidationError(
+                {"source_mode": full_files_too_large_message(size)}
+            )
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
@@ -148,3 +187,32 @@ class PersonalProjectSerializer(serializers.ModelSerializer):
         if instructions is not None:
             set_project_instructions(project, instructions)
         return project
+
+
+class SourceSizeRequestSerializer(serializers.Serializer):
+    file_ids = serializers.PrimaryKeyRelatedField(
+        many=True, required=False, default=list, queryset=File.active_objects.none()
+    )
+    folder_ids = serializers.PrimaryKeyRelatedField(
+        many=True, required=False, default=list, queryset=Folder.objects.none()
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        user = self.context["request"].user
+        self.fields["file_ids"].child_relation.queryset = File.active_objects.filter(
+            user=user, is_media=False
+        )
+        self.fields["folder_ids"].child_relation.queryset = Folder.objects.filter(
+            user=user
+        )
+
+
+class SourceSizeSerializer(serializers.Serializer):
+    file_count = serializers.IntegerField()
+    estimated_tokens = serializers.IntegerField()
+    token_limit = serializers.SerializerMethodField()
+    fits_full_files = serializers.BooleanField()
+
+    def get_token_limit(self, size) -> int:
+        return FULL_FILES_TOKEN_LIMIT

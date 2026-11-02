@@ -79,7 +79,7 @@ class LLMQueryRequest:
 
     @property
     def bot_id(self) -> Optional[int]:
-        """SocraticBooks bot this turn belongs to, if any."""
+        """Socratic bot this turn belongs to, if any."""
         return self.conversation.bot_id if self.conversation is not None else None
 
     @property
@@ -109,6 +109,10 @@ class LLMQueryRequest:
     def requires_web_fetch(self) -> bool:
         """Check if Claude web fetch is enabled."""
         return self.generation.web_fetch_enabled
+
+    def requires_code_sandbox(self) -> bool:
+        """Check if the provider code sandbox is enabled."""
+        return self.generation.code_sandbox_enabled
 
     def requires_image_generation(self) -> bool:
         """Check if image generation is enabled."""

@@ -5,7 +5,7 @@ from django.db.models.signals import pre_delete
 from django.dispatch import receiver
 
 from .models import File, VectorIndexAttempt
-from .tasks import delete_file_vectors
+from .tasks import delete_file_vectors, delete_sandbox_copies
 
 
 @receiver(pre_delete, sender=File)
@@ -31,3 +31,17 @@ def delete_file_embeddings(sender, instance, **kwargs):
         partial(delete_file_vectors.delay, current.pk, current.user_id, targets),
         using=using,
     )
+
+
+@receiver(pre_delete, sender=File)
+def remove_sandbox_copies(sender, instance, **kwargs):
+    """Provider copies outlive the DARE file unless they are deleted with it."""
+    from core.services.code_sandbox import provider_copies
+
+    using = kwargs["using"]
+    copies = provider_copies(instance.pk, using)
+    if copies:
+        transaction.on_commit(
+            partial(delete_sandbox_copies.delay, copies, instance.user_id),
+            using=using,
+        )

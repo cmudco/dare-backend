@@ -576,6 +576,10 @@ class Conversation(BaseModel):
         default=False,
         help_text="Enable Claude web fetch for user-provided URLs and PDFs.",
     )
+    code_sandbox_enabled = models.BooleanField(
+        default=False,
+        help_text="Let OpenAI and Claude models run Python on the chat's full-text files.",
+    )
     image_generation_enabled = models.BooleanField(
         default=False, help_text="Enable AI image generation for this conversation."
     )
@@ -769,6 +773,7 @@ class Conversation(BaseModel):
                 history_limit=self.history_limit,
                 web_search_enabled=self.web_search_enabled,
                 web_fetch_enabled=self.web_fetch_enabled,
+                code_sandbox_enabled=self.code_sandbox_enabled,
                 image_generation_enabled=self.image_generation_enabled,
                 artifacts_enabled=self.artifacts_enabled,
                 selected_model=self.selected_model,

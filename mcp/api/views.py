@@ -22,7 +22,14 @@ from django.utils import timezone
 from asgiref.sync import async_to_sync
 
 from common.permissions import IsResearcherOrAbove
-from mcp.services.mcp_gateway import handle_jsonrpc
+from mcp.services.mcp_gateway import (
+    TOOLS_CHANGED,
+    announce_change,
+    handle_jsonrpc,
+    mark_listed,
+    open_session,
+    session_known,
+)
 from mcp.constants import MCPAuthType
 from mcp.models import MCPServer, UserMCPConnection, MCPToolExecution
 from mcp.api.serializers import (
@@ -39,6 +46,8 @@ from mcp.api.serializers import (
 from mcp.services.credential_service import MCPCredentialService
 from mcp.services.mcp_manager import mcp_manager, MCPManagerError
 from mcp.services.oauth_service import mcp_oauth_service, MCPOAuthError
+from research.models import ResearchProject
+from research.services.tool_readiness import mark_tools_connected
 
 logger = logging.getLogger(__name__)
 
@@ -414,10 +423,10 @@ def _get_connection_credentials(connection: UserMCPConnection) -> dict:
 
 class MCPGatewayView(APIView):
     """
-    MCP Streamable HTTP gateway — exposes the authenticated user's connected MCP
-    tools to an external agent (Hermes). Plain JSON in/out (no camelCase) to keep
-    the JSON-RPC envelope and tool arguments/results verbatim. Credentials and
-    audit stay in DARE (calls route through the executor).
+    MCP Streamable HTTP gateway for a research agent (Hermes): DARE's tools
+    plus the caller's connected tools for the project named in
+    ``X-DARE-Project``. Plain JSON in and out, so the JSON-RPC envelope and
+    tool arguments stay verbatim.
 
     POST /mcp/api/gateway/  — one MCP JSON-RPC message.
     """
@@ -428,15 +437,41 @@ class MCPGatewayView(APIView):
 
     def post(self, request):
         payload = request.data if isinstance(request.data, dict) else {}
-        # The agent runtime forwards its run/session id here (DARE's
-        # "<hermes_session_id>-r<run_id>") when configured to, so captured rows
-        # can be attributed to the exact run. Absent until Hermes forwards it;
-        # the audit falls back to in-order matching in that case.
+        project = ResearchProject.active_objects.filter(
+            id=request.headers.get("X-DARE-Project") or None, user=request.user
+        ).first()
+        method = payload.get("method")
+        session_id = request.headers.get("Mcp-Session-Id", "")
+        if session_id and method != "initialize" and not session_known(session_id):
+            # Unknown or expired session: per MCP, a 404 makes the client start a new one.
+            return HttpResponse(status=404)
         run_key = request.headers.get("X-DARE-Run-Session", "")
-        response = handle_jsonrpc(request.user, payload, run_key)
+        response = handle_jsonrpc(request.user, payload, run_key, project)
+        if method == "initialize":
+            reply = Response(response)
+            reply["Mcp-Session-Id"] = open_session()
+            return reply
+        if project is not None:
+            mark_tools_connected(project.id)
+        if method == "tools/list" and session_id:
+            mark_listed(session_id, request.user, project)
+        elif (
+            response is not None
+            and session_id
+            and announce_change(session_id, request.user, project)
+        ):
+            # Announce the change ahead of this reply; the client lists again.
+            return _event_stream([TOOLS_CHANGED, response])
         if response is None:  # notification — no body
             return HttpResponse(status=202)
         return Response(response)
+
+
+def _event_stream(messages):
+    body = "".join(
+        f"event: message\ndata: {json.dumps(m)}\n\n" for m in messages if m is not None
+    )
+    return HttpResponse(body, content_type="text/event-stream")
 
 
 class QuillmarkQuillsView(APIView):

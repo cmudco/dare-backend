@@ -8,23 +8,29 @@ definitions and executors.
 import logging
 from typing import Any, Callable, Dict, List, Optional
 
-from assistant.domain.tool_schemas import (get_account_overview_schema,
-                                           get_conversation_schema,
-                                           get_project_schema,
-                                           list_my_conversations_schema,
-                                           list_my_files_schema,
-                                           list_my_models_schema,
-                                           list_my_projects_schema,
-                                           search_my_prompts_schema,
-                                           propose_changes_schema,
-                                           search_platform_docs_schema,
-                                           start_page_tour_schema)
-from core.services.llm_utils.diagram_tool import (get_diagram_tool_claude,
-                                                  get_diagram_tool_openai,
-                                                  json_to_mermaid)
-from dare_tools.services.pptx_tool import (execute_create_pptx,
-                                           get_create_pptx_tool_claude,
-                                           get_create_pptx_tool_openai)
+from assistant.domain.tool_schemas import (
+    get_account_overview_schema,
+    get_conversation_schema,
+    get_project_schema,
+    list_my_conversations_schema,
+    list_my_files_schema,
+    list_my_models_schema,
+    list_my_projects_schema,
+    search_my_prompts_schema,
+    propose_changes_schema,
+    search_platform_docs_schema,
+    start_page_tour_schema,
+)
+from core.services.llm_utils.diagram_tool import (
+    get_diagram_tool_claude,
+    get_diagram_tool_openai,
+    json_to_mermaid,
+)
+from dare_tools.services.pptx_tool import (
+    execute_create_pptx,
+    get_create_pptx_tool_claude,
+    get_create_pptx_tool_openai,
+)
 
 # fmt: on
 
@@ -33,13 +39,14 @@ logger = logging.getLogger(__name__)
 
 # ============ TOOL EXECUTORS ============
 
+
 def execute_create_diagram(arguments: Dict[str, Any]) -> Dict[str, Any]:
     """
     Execute the create_diagram tool.
-    
+
     Args:
         arguments: Dict with diagram_type, title, nodes, edges
-        
+
     Returns:
         Dict with mermaid_code and metadata
     """
@@ -62,10 +69,10 @@ def execute_create_diagram(arguments: Dict[str, Any]) -> Dict[str, Any]:
 def execute_create_chart(arguments: Dict[str, Any]) -> Dict[str, Any]:
     """
     Execute the create_chart tool.
-    
+
     Args:
         arguments: Dict with chart_type, title, data, options
-        
+
     Returns:
         Dict with chart configuration for frontend rendering
     """
@@ -74,7 +81,7 @@ def execute_create_chart(arguments: Dict[str, Any]) -> Dict[str, Any]:
         title = arguments.get("title", "Chart")
         data = arguments.get("data", [])
         options = arguments.get("options", {})
-        
+
         # Return chart configuration for frontend to render
         return {
             "success": True,
@@ -136,7 +143,14 @@ def execute_create_docx(arguments: Dict[str, Any]) -> Dict[str, Any]:
             }
 
         allowed_alignments = {"left", "center", "right"}
-        supported_types = {"heading", "paragraph", "list", "table", "blockquote"}
+        supported_types = {
+            "heading",
+            "paragraph",
+            "list",
+            "table",
+            "blockquote",
+            "code",
+        }
 
         for index, block in enumerate(blocks):
             if not isinstance(block, dict):
@@ -191,6 +205,13 @@ def execute_create_docx(arguments: Dict[str, Any]) -> Dict[str, Any]:
                         "error": f"Blockquote block {index + 1} requires text",
                     }
 
+            elif block_type == "code":
+                if not block.get("text", "").strip():
+                    return {
+                        "success": False,
+                        "error": f"Code block {index + 1} requires text",
+                    }
+
             elif block_type == "table":
                 headers = block.get("headers", [])
                 rows = block.get("rows", [])
@@ -229,6 +250,7 @@ def execute_create_docx(arguments: Dict[str, Any]) -> Dict[str, Any]:
 
 # ============ TOOL DEFINITIONS ============
 
+
 def get_chart_tool_openai() -> Dict:
     """Get chart tool definition in OpenAI format."""
     return {
@@ -242,48 +264,66 @@ def get_chart_tool_openai() -> Dict:
                     "chart_type": {
                         "type": "string",
                         "enum": ["bar", "line", "pie", "doughnut", "area", "scatter"],
-                        "description": "Type of chart to create"
+                        "description": "Type of chart to create",
                     },
-                    "title": {
-                        "type": "string",
-                        "description": "Title of the chart"
-                    },
+                    "title": {"type": "string", "description": "Title of the chart"},
                     "data": {
                         "type": "array",
                         "description": "Data points for the chart. IMPORTANT: When updating charts, always preserve existing 'color' fields on data points.",
                         "items": {
                             "type": "object",
                             "properties": {
-                                "label": {"type": "string", "description": "Label for this data point"},
-                                "value": {"type": "number", "description": "Numeric value"},
-                                "color": {"type": "string", "description": "Color for this data point (hex like '#3B82F6' or name like 'blue'). Include this field to customize bar/slice colors."}
+                                "label": {
+                                    "type": "string",
+                                    "description": "Label for this data point",
+                                },
+                                "value": {
+                                    "type": "number",
+                                    "description": "Numeric value",
+                                },
+                                "color": {
+                                    "type": "string",
+                                    "description": "Color for this data point (hex like '#3B82F6' or name like 'blue'). Include this field to customize bar/slice colors.",
+                                },
                             },
-                            "required": ["label", "value"]
-                        }
+                            "required": ["label", "value"],
+                        },
                     },
                     "dataKeys": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Array of field names from data objects to chart (e.g., ['value', 'count']). These must match the keys in the data objects."
+                        "description": "Array of field names from data objects to chart (e.g., ['value', 'count']). These must match the keys in the data objects.",
                     },
                     "xAxisKey": {
                         "type": "string",
-                        "description": "Field name to use for x-axis labels (e.g., 'label', 'month', 'category'). Must match a key in the data objects."
+                        "description": "Field name to use for x-axis labels (e.g., 'label', 'month', 'category'). Must match a key in the data objects.",
                     },
                     "options": {
                         "type": "object",
                         "description": "Additional chart options",
                         "properties": {
-                            "showLegend": {"type": "boolean", "description": "Show chart legend"},
-                            "showLabels": {"type": "boolean", "description": "Show data labels"},
-                            "xAxisLabel": {"type": "string", "description": "X-axis label"},
-                            "yAxisLabel": {"type": "string", "description": "Y-axis label"}
-                        }
-                    }
+                            "showLegend": {
+                                "type": "boolean",
+                                "description": "Show chart legend",
+                            },
+                            "showLabels": {
+                                "type": "boolean",
+                                "description": "Show data labels",
+                            },
+                            "xAxisLabel": {
+                                "type": "string",
+                                "description": "X-axis label",
+                            },
+                            "yAxisLabel": {
+                                "type": "string",
+                                "description": "Y-axis label",
+                            },
+                        },
+                    },
                 },
-                "required": ["chart_type", "title", "data", "dataKeys", "xAxisKey"]
-            }
-        }
+                "required": ["chart_type", "title", "data", "dataKeys", "xAxisKey"],
+            },
+        },
     }
 
 
@@ -294,7 +334,7 @@ def get_chart_tool_claude() -> Dict:
     return {
         "name": func["name"],
         "description": func["description"],
-        "input_schema": func["parameters"]
+        "input_schema": func["parameters"],
     }
 
 
@@ -314,8 +354,9 @@ def get_create_docx_tool_openai() -> Dict:
                 "plan, summary, or other downloadable structured output. "
                 "Structure the document with heading blocks (level 1 for main sections, "
                 "level 2 for subsections), paragraphs for body text (2-4 sentences each), "
-                "lists for enumerations, tables for tabular data, and blockquotes for "
-                "callouts or important notes. Always start with a level 1 heading. "
+                "lists for enumerations, tables for tabular data, blockquotes for "
+                "callouts or important notes, and code blocks for source code (keep "
+                "its line breaks and indentation). Always start with a level 1 heading. "
                 "Use multiple blocks to create a well-structured, professional document. "
                 "Ensure each table row has the same number of cells as headers. "
                 "Do not answer with plain text when a structured document is requested."
@@ -339,7 +380,14 @@ def get_create_docx_tool_openai() -> Dict:
                             "properties": {
                                 "type": {
                                     "type": "string",
-                                    "enum": ["heading", "paragraph", "list", "table", "blockquote"],
+                                    "enum": [
+                                        "heading",
+                                        "paragraph",
+                                        "list",
+                                        "table",
+                                        "blockquote",
+                                        "code",
+                                    ],
                                 },
                                 "level": {
                                     "type": "integer",
@@ -351,7 +399,7 @@ def get_create_docx_tool_openai() -> Dict:
                                 },
                                 "text": {
                                     "type": "string",
-                                    "description": "Text content. Required for heading, paragraph, and blockquote blocks.",
+                                    "description": "Text content. Required for heading, paragraph, blockquote and code blocks; code keeps its newlines.",
                                 },
                                 "alignment": {
                                     "type": "string",
@@ -431,20 +479,20 @@ def get_update_artifact_tool_openai() -> Dict:
                 "properties": {
                     "artifact_id": {
                         "type": "integer",
-                        "description": "The ID of the artifact to update. This must be a valid artifact ID from the current conversation."
+                        "description": "The ID of the artifact to update. This must be a valid artifact ID from the current conversation.",
                     },
                     "content": {
                         "type": "string",
-                        "description": "The COMPLETE new content for the artifact. For React components, provide the full code. For diagrams, provide the complete Mermaid code. For docx documents, provide the complete JSON string with {\"title\": \"...\", \"blocks\": [...]} structure."
+                        "description": 'The COMPLETE new content for the artifact. For React components, provide the full code. For diagrams, provide the complete Mermaid code. For docx documents, provide the complete JSON string with {"title": "...", "blocks": [...]} structure.',
                     },
                     "title": {
                         "type": "string",
-                        "description": "Optional new title for the artifact. If not provided, keeps the original title."
-                    }
+                        "description": "Optional new title for the artifact. If not provided, keeps the original title.",
+                    },
                 },
-                "required": ["artifact_id", "content"]
-            }
-        }
+                "required": ["artifact_id", "content"],
+            },
+        },
     }
 
 
@@ -455,7 +503,7 @@ def get_update_artifact_tool_claude() -> Dict:
     return {
         "name": func["name"],
         "description": func["description"],
-        "input_schema": func["parameters"]
+        "input_schema": func["parameters"],
     }
 
 
@@ -490,7 +538,7 @@ def get_update_artifact_inline_tool_openai() -> Dict:
                 "properties": {
                     "artifact_id": {
                         "type": "integer",
-                        "description": "The ID of the artifact to modify. Must be a valid artifact ID from the current conversation."
+                        "description": "The ID of the artifact to modify. Must be a valid artifact ID from the current conversation.",
                     },
                     "old_str": {
                         "type": "string",
@@ -498,16 +546,16 @@ def get_update_artifact_inline_tool_openai() -> Dict:
                             "The exact string to find and replace in the artifact content. "
                             "Must be UNIQUE in the artifact. If the string appears multiple times, "
                             "include more surrounding context to make it unique."
-                        )
+                        ),
                     },
                     "new_str": {
                         "type": "string",
-                        "description": "The replacement string. Can be empty to delete the old_str."
-                    }
+                        "description": "The replacement string. Can be empty to delete the old_str.",
+                    },
                 },
-                "required": ["artifact_id", "old_str", "new_str"]
-            }
-        }
+                "required": ["artifact_id", "old_str", "new_str"],
+            },
+        },
     }
 
 
@@ -518,7 +566,7 @@ def get_update_artifact_inline_tool_claude() -> Dict:
     return {
         "name": func["name"],
         "description": func["description"],
-        "input_schema": func["parameters"]
+        "input_schema": func["parameters"],
     }
 
 
@@ -572,25 +620,25 @@ def get_create_react_component_tool_openai() -> Dict:
                 "\nexport default function App() {"
                 "\n  const [count, setCount] = useState(0)"
                 "\n  return ("
-                "\n    <div className=\"min-h-screen bg-black p-8 text-white\">"
-                "\n      <div className=\"max-w-md mx-auto bg-neutral-900 rounded-xl border border-neutral-800 p-6\">"
-                "\n        <h1 className=\"flex items-center gap-2 text-xl font-bold mb-4\">"
-                "\n          <Zap className=\"w-5 h-5 text-cyan-500\" />"
+                '\n    <div className="min-h-screen bg-black p-8 text-white">'
+                '\n      <div className="max-w-md mx-auto bg-neutral-900 rounded-xl border border-neutral-800 p-6">'
+                '\n        <h1 className="flex items-center gap-2 text-xl font-bold mb-4">'
+                '\n          <Zap className="w-5 h-5 text-cyan-500" />'
                 "\n          Counter"
                 "\n        </h1>"
-                "\n        <p className=\"text-5xl font-bold text-center text-cyan-500 mb-6\">{count}</p>"
-                "\n        <div className=\"flex gap-2\">"
+                '\n        <p className="text-5xl font-bold text-center text-cyan-500 mb-6">{count}</p>'
+                '\n        <div className="flex gap-2">'
                 "\n          <button"
                 "\n            onClick={() => setCount(c => c + 1)}"
-                "\n            className=\"flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-cyan-500 hover:bg-cyan-600 rounded-lg font-medium transition-colors\""
+                '\n            className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-cyan-500 hover:bg-cyan-600 rounded-lg font-medium transition-colors"'
                 "\n          >"
-                "\n            <Plus className=\"w-4 h-4\" /> Increment"
+                '\n            <Plus className="w-4 h-4" /> Increment'
                 "\n          </button>"
                 "\n          <button"
                 "\n            onClick={() => setCount(0)}"
-                "\n            className=\"flex-1 flex items-center justify-center gap-2 px-4 py-2 border border-neutral-700 hover:bg-neutral-800 rounded-lg font-medium transition-colors\""
+                '\n            className="flex-1 flex items-center justify-center gap-2 px-4 py-2 border border-neutral-700 hover:bg-neutral-800 rounded-lg font-medium transition-colors"'
                 "\n          >"
-                "\n            <RefreshCw className=\"w-4 h-4\" /> Reset"
+                '\n            <RefreshCw className="w-4 h-4" /> Reset'
                 "\n          </button>"
                 "\n        </div>"
                 "\n      </div>"
@@ -611,20 +659,20 @@ def get_create_react_component_tool_openai() -> Dict:
                 "properties": {
                     "title": {
                         "type": "string",
-                        "description": "Short title for the component"
+                        "description": "Short title for the component",
                     },
                     "code": {
                         "type": "string",
-                        "description": "React component code with ES6 imports. Use modern Shadcn patterns: bg-black/bg-white themes, pick random accent color (blue/green/cyan/orange - avoid purple)."
+                        "description": "React component code with ES6 imports. Use modern Shadcn patterns: bg-black/bg-white themes, pick random accent color (blue/green/cyan/orange - avoid purple).",
                     },
                     "description": {
                         "type": "string",
-                        "description": "Brief description (optional)"
-                    }
+                        "description": "Brief description (optional)",
+                    },
                 },
-                "required": ["title", "code"]
-            }
-        }
+                "required": ["title", "code"],
+            },
+        },
     }
 
 
@@ -635,7 +683,7 @@ def get_create_react_component_tool_claude() -> Dict:
     return {
         "name": func["name"],
         "description": func["description"],
-        "input_schema": func["parameters"]
+        "input_schema": func["parameters"],
     }
 
 
@@ -679,6 +727,7 @@ def execute_create_react_component(arguments: Dict[str, Any]) -> Dict[str, Any]:
 
 # ============ REGISTRY ============
 
+
 def get_search_documents_tool_openai() -> Dict:
     """Get search_documents tool definition in OpenAI format."""
     return {
@@ -702,18 +751,18 @@ def get_search_documents_tool_openai() -> Dict:
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Focused natural-language search query describing the information needed."
+                        "description": "Focused natural-language search query describing the information needed.",
                     },
                     "top_k": {
                         "type": "integer",
                         "minimum": 1,
                         "maximum": 10,
-                        "description": "Number of passages to retrieve. Omit to use the conversation's default."
-                    }
+                        "description": "Number of passages to retrieve. Omit to use the conversation's default.",
+                    },
                 },
-                "required": ["query"]
-            }
-        }
+                "required": ["query"],
+            },
+        },
     }
 
 
@@ -724,7 +773,7 @@ def get_search_documents_tool_claude() -> Dict:
     return {
         "name": func["name"],
         "description": func["description"],
-        "input_schema": func["parameters"]
+        "input_schema": func["parameters"],
     }
 
 
@@ -831,7 +880,7 @@ class DareToolRegistry:
 
     Maps tool function names to their definitions and executors.
     """
-    
+
     # Registry mapping function_name -> tool config
     TOOLS: Dict[str, Dict] = {
         "create_diagram": {
@@ -936,7 +985,9 @@ class DareToolRegistry:
         "get_conversation": _assistant_tool(
             "get_conversation", "Get Conversation", get_conversation_schema
         ),
-        "get_project": _assistant_tool("get_project", "Get Project", get_project_schema),
+        "get_project": _assistant_tool(
+            "get_project", "Get Project", get_project_schema
+        ),
         "list_my_projects": _assistant_tool(
             "list_my_projects", "List My Projects", list_my_projects_schema
         ),
@@ -958,96 +1009,92 @@ class DareToolRegistry:
             "start_page_tour", "Start Page Tour", start_page_tour_schema
         ),
     }
-    
+
     @classmethod
     def get_tool(cls, function_name: str) -> Optional[Dict]:
         """Get a tool configuration by function name."""
         return cls.TOOLS.get(function_name)
-    
+
     @classmethod
     def get_all_tools(cls) -> Dict[str, Dict]:
         """Get all registered tools."""
         return cls.TOOLS.copy()
-    
+
     @classmethod
     def get_tool_slugs(cls) -> List[str]:
         """Get all tool slugs."""
         return list(cls.TOOLS.keys())
-    
+
     @classmethod
     def get_openai_schemas(cls, tool_slugs: Optional[List[str]] = None) -> List[Dict]:
         """
         Get OpenAI-format tool schemas for the specified tools.
-        
+
         Args:
             tool_slugs: List of tool slugs to include. If None, include all.
-            
+
         Returns:
             List of OpenAI tool definitions
         """
         schemas = []
         slugs_to_include = tool_slugs or list(cls.TOOLS.keys())
-        
+
         for slug in slugs_to_include:
             tool = cls.TOOLS.get(slug)
             if tool and "get_openai_schema" in tool:
                 schema = tool["get_openai_schema"]()
                 if schema:
                     schemas.append(schema)
-        
+
         return schemas
-    
+
     @classmethod
     def get_claude_schemas(cls, tool_slugs: Optional[List[str]] = None) -> List[Dict]:
         """
         Get Claude-format tool schemas for the specified tools.
-        
+
         Args:
             tool_slugs: List of tool slugs to include. If None, include all.
-            
+
         Returns:
             List of Claude tool definitions
         """
         schemas = []
         slugs_to_include = tool_slugs or list(cls.TOOLS.keys())
-        
+
         for slug in slugs_to_include:
             tool = cls.TOOLS.get(slug)
             if tool and "get_claude_schema" in tool:
                 schema = tool["get_claude_schema"]()
                 if schema:
                     schemas.append(schema)
-        
+
         return schemas
-    
+
     @classmethod
-    def execute_tool(cls, function_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+    def execute_tool(
+        cls, function_name: str, arguments: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """
         Execute a tool by function name.
-        
+
         Args:
             function_name: The function name (e.g., 'create_diagram')
             arguments: Arguments to pass to the executor
-            
+
         Returns:
             Execution result dict
         """
         tool = cls.TOOLS.get(function_name)
         if not tool:
-            return {
-                "success": False,
-                "error": f"Unknown tool: {function_name}"
-            }
-        
+            return {"success": False, "error": f"Unknown tool: {function_name}"}
+
         executor = tool.get("executor")
         if not executor:
-            return {
-                "success": False,
-                "error": f"Tool {function_name} has no executor"
-            }
-        
+            return {"success": False, "error": f"Tool {function_name} has no executor"}
+
         return executor(arguments)
-    
+
     @classmethod
     def is_dare_tool(cls, function_name: str) -> bool:
         """Check if a function name is a DARE tool."""
@@ -1055,19 +1102,21 @@ class DareToolRegistry:
 
 
 # Convenience function for imports
-def get_dare_tool_schemas(tool_slugs: Optional[List[str]] = None, provider: str = "openai") -> List[Dict]:
+def get_dare_tool_schemas(
+    tool_slugs: Optional[List[str]] = None, provider: str = "openai"
+) -> List[Dict]:
     """
     Get tool schemas for the specified provider.
-    
+
     Args:
         tool_slugs: List of tool slugs to include. If None, include all.
         provider: LLM provider ('openai', 'claude', etc.)
-        
+
     Returns:
         List of tool definitions in the provider's format
     """
     provider_lower = provider.lower()
-    
+
     if provider_lower in ["openai", "azure_openai"]:
         return DareToolRegistry.get_openai_schemas(tool_slugs)
     elif provider_lower in ["claude", "anthropic"]:

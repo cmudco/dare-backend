@@ -21,6 +21,14 @@ logger = logging.getLogger(__name__)
 # Cap on how much of a persisted tool result is replayed into history.
 TOOL_RESULT_HISTORY_MAX_CHARS = 2000
 
+# Only titles/URLs are persisted for hosted search; without saying so, a
+# later turn reads the bare list as "the search returned no content" and
+# disowns quotes the original answer took from the pages.
+WEB_SEARCH_HISTORY_NOTE = (
+    "Search results (titles, URLs and quoted passages only. The page text was available when "
+    "the answer was written but is not kept in history):"
+)
+
 
 def synthesize_tool_call_id(message_id: Any, round_index: int, position: int) -> str:
     """Deterministic id for providers that assign none (Gemini)."""
@@ -87,7 +95,7 @@ def build_tool_result_turn(result: ToolCallResult) -> Dict[str, Any]:
 
 
 def build_history_tool_turns(
-    message_id: Any, tool_call_rows: List[Any]
+    message_id: Any, tool_call_rows: List[Any], web_quotes: str = ""
 ) -> List[Dict[str, Any]]:
     """Reconstruct structured tool turns from persisted ``MessageToolCall`` rows.
 
@@ -132,7 +140,7 @@ def build_history_tool_turns(
                     tool_name=row.tool_name,
                     origin=row.origin,
                     server_slug=row.server_slug,
-                    content=_history_result_text(row),
+                    content=_history_result_text(row, web_quotes),
                 )
             )
         turns.append(build_assistant_tool_call_turn("", requests))
@@ -153,7 +161,24 @@ def summarize_tool_usage(tool_call_rows: List[Any]) -> str:
     return f"[used tools: {', '.join(parts)}]"
 
 
-def _history_result_text(row: Any) -> str:
+def has_stored_web_search_results(tool_call_rows: List[Any]) -> bool:
+    """True when any provider web_search row carries its persisted results."""
+    return any(
+        row.tool_name == "web_search" and not _is_unstored_web_search(row)
+        for row in tool_call_rows
+    )
+
+
+def _is_unstored_web_search(row: Any) -> bool:
+    # Rows saved before results were captured hold a bare "{}".
+    return row.tool_name == "web_search" and (row.result or "").strip() in (
+        "",
+        "{}",
+        "null",
+    )
+
+
+def _history_result_text(row: Any, web_quotes: str = "") -> str:
     """Model-facing result text for a persisted tool call, truncated.
 
     Never returns an empty string: an empty ``role:"tool"`` turn risks being
@@ -163,7 +188,15 @@ def _history_result_text(row: Any) -> str:
     """
     if row.status == "failed" or (not row.result and row.error):
         return f"Error: {row.error or 'tool execution failed'}"
+    if _is_unstored_web_search(row):
+        return (
+            "(Search results for this call were not stored. This does not "
+            "mean the search returned nothing.)"
+        )
     text = row.result or ""
+    if row.tool_name == "web_search":
+        # Quotes go first so truncation of the result list never drops them.
+        text = f"{WEB_SEARCH_HISTORY_NOTE}\n{web_quotes}{text}"
     if not text.strip():
         return "(tool completed with no output)"
     if len(text) > TOOL_RESULT_HISTORY_MAX_CHARS:

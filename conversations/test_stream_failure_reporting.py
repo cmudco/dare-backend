@@ -41,7 +41,7 @@ class StreamFailureReportingTests(SimpleTestCase):
 
         async def stalled_round(*args):
             yield LLMStreamEvent.text_delta("Partial answer")
-            raise TimeoutError("The model stream was idle for 45 seconds")
+            raise TimeoutError("The model stream was idle for 120 seconds")
 
         with sentry_sdk.new_scope() as scope:
             scope.set_client(client)
@@ -62,7 +62,7 @@ class StreamFailureReportingTests(SimpleTestCase):
         self.assertEqual(events[0]["extra"]["stream_failure"], "timeout")
         self.assertEqual(events[0]["extra"]["turn_id"], "42")
         self.assertEqual(events[0]["extra"]["model"], "gemini-3.8-flash")
-        self.assertEqual(events[0]["extra"]["idle_timeout_seconds"], 45)
+        self.assertEqual(events[0]["extra"]["idle_timeout_seconds"], 120)
         self.assertTrue(events[0]["extra"]["has_partial_text"])
 
     async def test_terminal_empty_response_is_reported_and_finalized(self):

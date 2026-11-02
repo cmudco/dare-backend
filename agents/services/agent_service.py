@@ -24,6 +24,7 @@ SETTING_FIELDS = (
     "document_similarity_threshold",
     "enable_web_search",
     "web_fetch_enabled",
+    "code_sandbox_enabled",
     "artifacts_enabled",
     "memory_enabled",
 )
@@ -106,6 +107,7 @@ def apply_agent(conversation: Conversation, agent: Optional[Agent]) -> None:
         conversation.document_similarity_threshold = agent.document_similarity_threshold
         conversation.web_search_enabled = agent.enable_web_search
         conversation.web_fetch_enabled = agent.web_fetch_enabled
+        conversation.code_sandbox_enabled = agent.code_sandbox_enabled
         conversation.artifacts_enabled = agent.artifacts_enabled
         conversation.memory_enabled = agent.memory_enabled
         conversation.selected_file_ids = _live_ids(agent.content_files)

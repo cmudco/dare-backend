@@ -10,6 +10,7 @@ from api_keys.constants import BillingModeChoice
 from billing.constants import LiteLLMKeySourceChoice
 from billing.models import LiteLLMKey, LiteLLMSpend, Transaction, Wallet
 from conversations.models import LLM
+from core.constants import BackgroundModelSource, BackgroundTask
 from core.services.background_model_service import (
     BackgroundModelResult,
     BackgroundModelRoute,
@@ -118,6 +119,7 @@ class StructuredWriterServiceTests(TestCase):
                     model=self.llm,
                     wallet_type="DARE",
                     dispatch_user=self.user,
+                    source=BackgroundModelSource.ENVIRONMENT,
                 ),
                 input_tokens=7000,
                 output_tokens=300,
@@ -144,7 +146,7 @@ class StructuredWriterServiceTests(TestCase):
         self.assertIs(call["response_model"], WriterResponse)
         self.assertEqual(call["description"], "Memory writer for message 42")
         self.assertEqual(call["max_tokens"], 4000)
-        self.assertIsNone(call["model_override"])
+        self.assertEqual(call["task"], BackgroundTask.MEMORY)
 
     def test_service_usage_creates_a_costed_transaction(self):
         wallet = Wallet.objects.get(user=self.user)

@@ -1,0 +1,46 @@
+diff --git a/agent/tool_executor.py b/agent/tool_executor.py
+index f0783edaa7..cd41fddc91 100644
+--- a/agent/tool_executor.py
++++ b/agent/tool_executor.py
+@@ -1160,6 +1160,7 @@ def _commit_tool_result(
+         _safe_callback(
+             agent.tool_progress_callback, "Tool progress",
+             "tool.completed", function_name, None, None, duration=tool_duration, is_error=is_error, result=function_result,
++            tool_call_id=tool_call_id or "",  # DARE: lets the run stream name the exact tool_use
+         )
+     if isinstance(function_result, str) and len(function_result) >= _LARGE_TOOL_RESULT_TRIM_CHARS:
+         agent._trim_after_tool_batch = True
+diff --git a/gateway/platforms/api_server_runs.py b/gateway/platforms/api_server_runs.py
+index bfb5b4dbee..2aac5e584c 100644
+--- a/gateway/platforms/api_server_runs.py
++++ b/gateway/platforms/api_server_runs.py
+@@ -93,7 +93,8 @@ _USAGE_FIELDS = (
+ _FIXED_EVENT_FIELDS = {
+     "tool.started": lambda tool, preview, kw: {"tool": tool, "preview": preview},
+     "tool.completed": lambda tool, preview, kw: {
+-        "tool": tool, "duration": round(kw.get("duration", 0), 3), "error": kw.get("is_error", False)},
++        "tool": tool, "duration": round(kw.get("duration", 0), 3), "error": kw.get("is_error", False),
++        "toolCallId": kw.get("tool_call_id", "")},  # DARE: joins the event to the MCP call
+     "reasoning.available": lambda tool, preview, kw: {"text": preview or ""}}
+ _TOOL_COMPLETED_PREVIEW_MAX_CHARS = 500
+ 
+diff --git a/tools/mcp_tool_handlers.py b/tools/mcp_tool_handlers.py
+index e5c4de2de0..7dfe4f6f7b 100644
+--- a/tools/mcp_tool_handlers.py
++++ b/tools/mcp_tool_handlers.py
+@@ -393,7 +393,14 @@ async def _call_tool_racing_stdio_death(server, server_name: str, tool_name: str
+             f"MCP stdio subprocess for '{server_name}' had already exited when the call was dispatched",
+             in_flight=False,
+         )
+-    _call_coro = server.session.call_tool(tool_name, arguments=args)
++    # DARE: forward this call's tool_use id via MCP `_meta`, the same id the run
++    # stream carries on tool.completed, so DARE can join the two exactly.
++    from tools.approval_context import _approval_tool_call_id
++
++    _call_id = _approval_tool_call_id.get("") or ""
++    _call_coro = server.session.call_tool(
++        tool_name, arguments=args, meta={"dareCall": _call_id} if _call_id else None
++    )
+     _watch_children = getattr(server, "_watch_stdio_children", None)
+     if not (inspect.iscoroutinefunction(_watch_children) and asyncio.iscoroutine(_call_coro)):
+         # Stubbed sessions return a non-awaitable, or there is no child-watcher to race: plain await.

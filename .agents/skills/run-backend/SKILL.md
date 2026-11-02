@@ -24,7 +24,7 @@ cp .example.env .env
 ```
 
 At minimum set `DJANGO_SECRET_KEY` and one provider key (`OPENAI_API_KEY`, `CLAUDE_API_KEY`, or
-`GEMINI_API_KEY`). Every variable is documented in `docs/configuration.md`.
+`GEMINI_API_KEY`). Every variable is documented in `docs/reference/configuration.md`.
 
 ## Path 1 — Docker (brings up the whole stack)
 
@@ -99,4 +99,4 @@ before starting a second one.
 - `run-workers` — background jobs; needed before uploaded files will process.
 - The frontend lives in a separate repo, [dare-frontend](https://github.com/cmudco/dare-frontend),
   and defaults to `http://localhost:5173`.
-- `README.md` for the project overview, `INSTALL.md` for full deployment guidance.
+- `README.md` for the project overview, `docs/how-to/deploy.md` for production.

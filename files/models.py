@@ -652,3 +652,44 @@ class VectorIndexAttempt(TimeStampMixin):
 
     def __str__(self):
         return f"File {self.file_id}: {self.generation} ({self.status})"
+
+
+class SandboxUpload(TimeStampMixin):
+    """A DARE file already uploaded to a provider's code sandbox.
+
+    Keyed by credential fingerprint because provider files belong to the
+    account whose key uploaded them.
+    """
+
+    file = models.ForeignKey(
+        File,
+        on_delete=models.CASCADE,
+        related_name="sandbox_uploads",
+        help_text="DARE file the provider copy was made from.",
+    )
+    provider = models.CharField(
+        max_length=32, help_text="Provider that holds the copy (e.g. 'openai')."
+    )
+    credential_fingerprint = models.CharField(
+        max_length=64,
+        help_text="SHA-256 prefix of the API key that owns the provider copy.",
+    )
+    provider_file_id = models.CharField(
+        max_length=128, help_text="Provider's id for the uploaded copy."
+    )
+    expires_at = models.DateTimeField(
+        null=True,
+        blank=True,
+        help_text="When the provider deletes the copy; empty if it never expires.",
+    )
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["file", "provider", "credential_fingerprint"],
+                name="unique_sandbox_upload_per_credential",
+            )
+        ]
+
+    def __str__(self):
+        return f"File {self.file_id} -> {self.provider}:{self.provider_file_id}"

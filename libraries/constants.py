@@ -1,9 +1,16 @@
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 
+from config import env
+
+
 # The query embedder and dimensionality a library must match to be searchable.
-DEFAULT_EMBEDDING_MODEL = "text-embedding-3-large"
-DEFAULT_VECTOR_DIMENSION = 3072
+def default_embedding_model() -> str:
+    return env.EMBEDDING_MODEL
+
+
+def default_vector_dimension() -> int:
+    return env.EMBEDDING_DIMENSIONS
 
 
 class VectorBackend(models.TextChoices):

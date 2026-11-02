@@ -2,7 +2,7 @@
 
 Erases a user's DARE identity and every trace of their data: database rows
 (explicit sweeps plus FK cascade), the vector-store namespace, uploaded file
-blobs, the avatar, email logs, and the linked SocraticBooks account.
+blobs, the avatar, email logs, and the linked Socratic Bots account.
 
 Memory rows are not swept here — ``MemoryRecord``, ``MemoryLedgerEntry`` and
 ``UserMemoryDocument`` all cascade from the user, so the atomic DB delete owns
@@ -138,7 +138,7 @@ class AccountDeletionService:
         deleted = SocraticBooksClient.delete_user(user_id)
         if not deleted:
             report.warnings.append(
-                "The linked SocraticBooks account could not be deleted."
+                "The linked Socratic Bots account could not be deleted."
             )
 
     def _delete_workflow_node_data(self, user) -> None:

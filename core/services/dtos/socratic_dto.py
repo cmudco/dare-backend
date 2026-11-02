@@ -8,7 +8,7 @@ from typing import Dict, Any
 class SocraticConfig:
     """Configuration for Socratic teaching mode.
 
-    Used by the Socratic Books platform to enable educational AI features.
+    Used by the Socratic Bots platform to enable educational AI features.
 
     Attributes:
         enabled: Whether Socratic mode is active

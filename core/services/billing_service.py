@@ -177,11 +177,9 @@ class BillingService:
             if platform is None:
                 platform = await database_sync_to_async(lambda: user.auth_source)()
 
-            # Check if direct cost is provided (e.g., for image generation)
-            if "cost" in token_usage:
-                estimated_cost = Decimal(str(token_usage["cost"]))
-            else:
-                estimated_cost = self._calculate_cost(llm, input_tokens, output_tokens)
+            estimated_cost = self._turn_cost(
+                llm, token_usage, input_tokens, output_tokens
+            )
 
             if estimated_cost > balance:
                 if balance > Decimal("0"):
@@ -505,16 +503,13 @@ class BillingService:
 
                 llm = message_obj.llm
                 if llm:
-                    # Check if direct cost is provided (e.g., for image generation)
-                    if "cost" in token_usage:
-                        cost = Decimal(str(token_usage["cost"]))
-                    else:
-                        cost = self._calculate_cost(
-                            llm,
-                            message_obj.input_tokens,
-                            message_obj.output_tokens,
-                            cached_prompt_tokens(message_obj),
-                        )
+                    cost = self._turn_cost(
+                        llm,
+                        token_usage,
+                        message_obj.input_tokens,
+                        message_obj.output_tokens,
+                        cached_prompt_tokens(message_obj),
+                    )
                     message_obj.cost = cost
                     logger.debug(
                         f"Input tokens: {message_obj.input_tokens}, Output tokens: {message_obj.output_tokens}, Cost: {cost}"
@@ -530,7 +525,7 @@ class BillingService:
                     if cost > Decimal("0.00"):
                         conversation = message_obj.conversation
 
-                        # SocraticBooks bot conversations always use the
+                        # Socratic bot conversations always use the
                         # wallet router. The legacy user-wallet branch is only
                         # for non-bot DARE conversations.
                         if conversation.bot_id is not None:
@@ -546,7 +541,7 @@ class BillingService:
                                 message_obj.save()
                                 return message_obj
                             raise PaymentRequiredError(
-                                "Unable to resolve SocraticBooks bot wallet",
+                                "Unable to resolve Socratic bot wallet",
                                 code="BOT_CONFIG_UNAVAILABLE",
                                 details={"bot_id": conversation.bot_id},
                             )
@@ -685,16 +680,13 @@ class BillingService:
                 llm = message_obj.llm
 
                 if llm:
-                    # Check if direct cost is provided (e.g., for image generation)
-                    if "cost" in token_usage:
-                        cost = Decimal(str(token_usage["cost"]))
-                    else:
-                        cost = self._calculate_cost(
-                            llm,
-                            message_obj.input_tokens,
-                            message_obj.output_tokens,
-                            cached_prompt_tokens(message_obj),
-                        )
+                    cost = self._turn_cost(
+                        llm,
+                        token_usage,
+                        message_obj.input_tokens,
+                        message_obj.output_tokens,
+                        cached_prompt_tokens(message_obj),
+                    )
 
                     message_obj.cost = cost
                     logger.debug(
@@ -843,6 +835,24 @@ class BillingService:
             + Decimal(output_tokens) * output_rate
         )
 
+    def _turn_cost(
+        self,
+        llm: LLM,
+        token_usage: Dict,
+        input_tokens: int,
+        output_tokens: int,
+        cached_input_tokens: int = 0,
+    ) -> Decimal:
+        """A turn's charge: a quoted cost (image generation) or its tokens,
+        plus any code sandbox containers it ran."""
+        if "cost" in token_usage:
+            cost = Decimal(str(token_usage["cost"]))
+        else:
+            cost = self._calculate_cost(
+                llm, input_tokens, output_tokens, cached_input_tokens
+            )
+        return cost + Decimal(str(token_usage.get("sandbox_fee") or 0))
+
     def _calculate_cost(
         self,
         llm: LLM,
@@ -988,10 +998,7 @@ class BillingService:
             input_tokens = token_usage.get("input_tokens", 0)
             output_tokens = token_usage.get("output_tokens", 0)
 
-            if "cost" in token_usage:
-                cost = Decimal(str(token_usage["cost"]))
-            else:
-                cost = self._calculate_cost(llm, input_tokens, output_tokens)
+            cost = self._turn_cost(llm, token_usage, input_tokens, output_tokens)
 
             if cost <= Decimal("0"):
                 return

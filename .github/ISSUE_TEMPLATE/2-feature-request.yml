@@ -1,0 +1,32 @@
+name: Feature request
+description: Suggest a change or a new capability
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Start with the problem, not the solution. For a large change, add a short design sketch and wait for a reply before you write code.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is hard or impossible today?
+    validations:
+      required: true
+  - type: textarea
+    id: who
+    attributes:
+      label: Who it affects
+      description: Who runs into this, and how often?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: Idea
+      description: What could it look like? Leave it open if you are not sure.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds you use today, or other approaches you ruled out.

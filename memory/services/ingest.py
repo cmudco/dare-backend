@@ -53,7 +53,6 @@ def ingest_turn(
     conversation,
     user_message,
     ai_message,
-    model: Optional[str] = None,
 ) -> IngestReport:
     """Propose, gate, embed, and persist one completed turn."""
     user_text = (user_message.message or "").strip()
@@ -86,7 +85,6 @@ def ingest_turn(
             user_message=user_text,
             assistant_message=assistant_text,
             now=now,
-            model=model,
             keys_in_use=keys_in_use,
         )
     except BackgroundWalletEmpty:

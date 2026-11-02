@@ -45,8 +45,8 @@ class MessageFormatter:
         filtered_messages = []
 
         for message in messages:
-            if message.get('role') == 'system':
-                system_message = message.get('content', '')
+            if message.get("role") == "system":
+                system_message = message.get("content", "")
             else:
                 filtered_messages.append(message)
 
@@ -64,10 +64,12 @@ class MessageFormatter:
         Returns:
             Formatted text string
         """
-        return separator.join([
-            f"{msg.get('role', 'user').capitalize()}: {msg.get('content', '')}"
-            for msg in messages
-        ]).strip()
+        return separator.join(
+            [
+                f"{msg.get('role', 'user').capitalize()}: {msg.get('content', '')}"
+                for msg in messages
+            ]
+        ).strip()
 
 
 class GeminiMessageFormatter:
@@ -120,12 +122,14 @@ class GeminiMessageFormatter:
                     if "base64," in image_url:
                         mime_type, base64_data = image_url.split("base64,", 1)
                         mime_type = mime_type.split(":")[1].split(";")[0]
-                        parts.append(types.Part(
-                            inline_data=types.Blob(
-                                mime_type=mime_type,
-                                data=base64.b64decode(base64_data)
+                        parts.append(
+                            types.Part(
+                                inline_data=types.Blob(
+                                    mime_type=mime_type,
+                                    data=base64.b64decode(base64_data),
+                                )
                             )
-                        ))
+                        )
 
         return parts
 
@@ -186,13 +190,12 @@ class OpenAIMessageFormatter:
             String for plain text-only, list of input items once the history
             carries tool turns or images
         """
-        # Tool turns must stay structured: flattening them to
-        # "assistant: " / "tool: ..." lines drops the call_id linkage the
-        # model needs to tie a result back to the call it made.
+        # Tool turns and images must stay structured: flattening tool turns
+        # drops the call_id linkage, and images need typed input parts.
         if OpenAIMessageFormatter._has_tool_turns(
             messages
         ) or MessageFormatter.has_multimodal_content(messages):
-            return OpenAIMessageFormatter._build_input_items(messages)
+            return OpenAIMessageFormatter._build_tool_aware_input(messages)
 
         return "\n".join([f"{msg['role']}: {msg['content']}" for msg in messages])
 
@@ -204,9 +207,9 @@ class OpenAIMessageFormatter:
         )
 
     @staticmethod
-    def _build_input_items(messages: List[Dict]) -> List[Dict]:
+    def _build_tool_aware_input(messages: List[Dict]) -> List[Dict]:
         """
-        Build Responses API input items from a history with tool turns or images.
+        Build Responses API input items from a history containing tool turns.
 
         The internal schema is Chat Completions shaped — an assistant turn
         carrying ``tool_calls`` followed by one ``role:"tool"`` turn per
@@ -300,7 +303,7 @@ class OpenAIMessageFormatter:
         """
         flat = []
         for msg in messages:
-            content = msg.get('content', '')
+            content = msg.get("content", "")
             if isinstance(content, str):
                 flat.append(f"{msg['role']}: {content}")
         return "\n".join(flat)

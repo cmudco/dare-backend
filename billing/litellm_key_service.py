@@ -1,4 +1,4 @@
-"""Lifecycle of a user's LiteLLM key where SocraticBooks bots depend on it.
+"""Lifecycle of a user's LiteLLM key where Socratic bots depend on it.
 
 A bot saved with a ``litellm:<key>:<model>`` id is sponsored through that key,
 so deleting the key must clear it from those bots in the same step, as model
@@ -21,7 +21,7 @@ from core.services.sb_client import (
 
 
 class LiteLLMKeyDependencyError(RuntimeError):
-    """SocraticBooks is configured but could not be checked or updated."""
+    """Socratic Bots is configured but could not be checked or updated."""
 
 
 def bot_dependents(key: LiteLLMKey) -> tuple[SocraticBotDependency, ...]:
@@ -37,7 +37,7 @@ def bot_dependents(key: LiteLLMKey) -> tuple[SocraticBotDependency, ...]:
 def delete_key(key: LiteLLMKey) -> None:
     """Delete ``key`` and clear it from every bot that uses it.
 
-    SocraticBooks cleanup runs last inside the transaction, so a failed
+    Socratic Bots cleanup runs last inside the transaction, so a failed
     cleanup rolls the deletion back instead of leaving bots pointing at a key
     that no longer exists.
     """

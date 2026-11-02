@@ -11,7 +11,7 @@ import markdown
 import weasyprint
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Count, OuterRef, Prefetch, Q, Subquery
+from django.db.models import Count, OuterRef, Q, Subquery
 from django.http import Http404, HttpResponse
 from django.shortcuts import get_object_or_404
 from django.template.loader import render_to_string
@@ -60,6 +60,7 @@ from conversations.services.llm_filter_service import (
     filter_for_bot,
     parse_scope,
 )
+from conversations.services.message_query_service import messages_for_display
 from conversations.services.sharing_service import (
     ConversationSharingService,
     SharingValidationError,
@@ -484,19 +485,7 @@ class ConversationViewSet(ConversationSharingMixin, viewsets.ModelViewSet):
                 )
             )
 
-        messages = (
-            Message.active_objects.filter(conversation=conversation)
-            .select_related("llm")
-            .prefetch_related(
-                "files",
-                "tags",
-                "snippets__file",
-                "web_search_sources",
-                "mcp_tool_calls",
-                Prefetch("artifacts", queryset=Artifact.active_objects.all()),
-            )
-            .order_by("created_at")
-        )
+        messages = messages_for_display(conversation).order_by("created_at")
 
         serializer = MessageSerializer(
             messages, many=True, context={"request": request}
@@ -1283,17 +1272,18 @@ class ModelCardDataViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_object(self):
         slug = self.kwargs.get("slug")
+        cards = ModelCardData.objects.prefetch_related("source_clusters__sources")
 
         # Try exact slug match first
         try:
-            return ModelCardData.objects.get(slug=slug)
+            return cards.get(slug=slug)
         except ModelCardData.DoesNotExist:
             pass
 
         # Fallback: search name_variants
-        for card in ModelCardData.objects.all():
+        for card in ModelCardData.objects.only("id", "name_variants"):
             if slug in [v.lower().replace(" ", "-") for v in card.name_variants]:
-                return card
+                return cards.get(pk=card.pk)
 
         raise NotFound("Model card not found")
 

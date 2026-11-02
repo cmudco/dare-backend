@@ -20,7 +20,11 @@ class GeminiEffortTests(SimpleTestCase):
         )
 
     def test_supported_levels_and_default_reach_google_config(self):
-        service = self.service()
+        for identifier in ["gemini-3.8-flash", "gemini-4-argon"]:
+            with self.subTest(model=identifier):
+                self.assert_levels_reach_google_config(self.service(identifier))
+
+    def assert_levels_reach_google_config(self, service):
         for requested, expected in [
             (None, "MEDIUM"),
             ("low", "LOW"),

@@ -76,4 +76,9 @@ DEFAULT_FLAG_DEFINITIONS = [
         ),
         "default_enabled": False,
     },
+    {
+        "key": "enable_research_tools",
+        "description": "Show the Research Tools link in the sidebar.",
+        "default_enabled": True,
+    },
 ]

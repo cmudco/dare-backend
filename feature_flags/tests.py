@@ -83,8 +83,12 @@ class MyFeatureFlagsViewTests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         # Internal data keeps snake_case; the camelCase renderer transforms
         # keys at render time, which is what the frontend actually sees.
-        self.assertEqual(response.data, {"flags": {"enable_byok": True}})
-        self.assertEqual(response.json(), {"flags": {"enableByok": True}})
+        expected = {"enable_byok": True, "conversation_summaries": False}
+        self.assertEqual(response.data, {"flags": expected})
+        self.assertEqual(
+            response.json(),
+            {"flags": {"enableByok": True, "conversationSummaries": False}},
+        )
 
     def test_requires_authentication(self):
         anon = APIClient()

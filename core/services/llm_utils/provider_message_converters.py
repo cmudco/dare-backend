@@ -93,7 +93,9 @@ class ClaudeMessageConverter:
 
             _flush_tool_results()
 
-            if role == "assistant" and message.get("tool_calls"):
+            if role == "assistant" and (
+                message.get("tool_calls") or message.get("provider_assistant_content")
+            ):
                 provider_content = message.get("provider_assistant_content")
                 if provider_content:
                     # Anthropic's documented tool-continuation contract is to

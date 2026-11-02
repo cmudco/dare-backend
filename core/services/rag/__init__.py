@@ -4,7 +4,7 @@ Layered stages — each a powerful, self-contained class that owns its own model
 or database access — composed by a thin orchestrator. Callers use
 ``build_pipeline`` and ``RetrievalRequest``; everything else is internal.
 
-See ``docs/advanced-rag-implementation.md`` for the design and benchmarks.
+See ``docs/explanation/advanced-rag.md`` for the design and benchmarks.
 """
 
 from core.services.rag.assembler import ContextAssembler

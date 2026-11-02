@@ -272,17 +272,22 @@ class ChatNamespace(socketio.AsyncNamespace):
             await sio.enter_room(sid, room_name, namespace='/chat')
             session['subscriptions'].add(conv_id)
 
-            # Create coordinator for this conversation
-            coordinator = MessageCoordinator(
-                conversation=conversation,
-                user=user,
-                platform=platform,
-                send_callback=self._create_send_callback(sid, conv_id),
-            )
-            self.coordinators[f"{sid}_{conv_id}"] = coordinator
+            # A coordinator still running a turn owns that turn's task; reuse it
+            # so Stop keeps working after the user switches chats and back.
+            coordinator_key = f"{sid}_{conv_id}"
+            coordinator = self.coordinators.get(coordinator_key)
+            if coordinator is None or not coordinator.active_generation_ids():
+                coordinator = MessageCoordinator(
+                    conversation=conversation,
+                    user=user,
+                    platform=platform,
+                    send_callback=self._create_send_callback(sid, conv_id),
+                )
+                self.coordinators[coordinator_key] = coordinator
 
             # Send conversation history
             await coordinator.send_conversation_history()
+            await coordinator.send_active_generations()
 
             # Send latest learning progress if applicable
             await coordinator.send_latest_learning_progress()
@@ -322,9 +327,12 @@ class ChatNamespace(socketio.AsyncNamespace):
             # Pause any in-progress artifacts
             await self._pause_conversation_artifacts(conv_id)
             
-            # Clean up coordinator
+            # Keep a coordinator that is still running a turn: the turn keeps
+            # streaming to the room, and re-subscribing must find its task.
             coordinator_key = f"{sid}_{conv_id}"
-            self.coordinators.pop(coordinator_key, None)
+            coordinator = self.coordinators.get(coordinator_key)
+            if coordinator is None or not coordinator.active_generation_ids():
+                self.coordinators.pop(coordinator_key, None)
             
             logger.info(f"Unsubscribed from conversation: conv_id={conv_id}")
             return {'success': True}

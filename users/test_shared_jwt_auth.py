@@ -24,7 +24,10 @@ from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.exceptions import AuthenticationFailed
 from rest_framework.test import APIRequestFactory
+from rest_framework_simplejwt import settings as jwt_settings
+from rest_framework_simplejwt import state
 from rest_framework_simplejwt.authentication import JWTAuthentication
+from rest_framework_simplejwt.backends import TokenBackend
 from rest_framework_simplejwt.exceptions import InvalidToken
 
 from assistant.namespace import AssistantNamespace
@@ -70,13 +73,40 @@ def research_tools_token(
     )
 
 
+class SharedKeyTestCase(TestCase):
+    """Signs and verifies with the shared test key, whatever ran first.
+
+    simplejwt builds its token backend once per process, from the settings in
+    force at that moment, so overriding SIMPLE_JWT alone only works when these
+    tests happen to run before anything else issues a token.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # Read at setUp: overriding SIMPLE_JWT replaces the module's api_settings.
+        api_settings = jwt_settings.api_settings
+        backend = TokenBackend(
+            api_settings.ALGORITHM,
+            api_settings.SIGNING_KEY,
+            api_settings.VERIFYING_KEY,
+            api_settings.AUDIENCE,
+            api_settings.ISSUER,
+            api_settings.JWK_URL,
+            api_settings.LEEWAY,
+            api_settings.JSON_ENCODER,
+        )
+        patcher = patch.object(state, "token_backend", backend)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+
 def authenticate(token):
     request = APIRequestFactory().get("/", HTTP_AUTHORIZATION=f"Bearer {token}")
     return JWTAuthentication().authenticate(request)
 
 
 @override_settings(SIMPLE_JWT=SIMPLE_JWT)
-class ForeignTokenTests(TestCase):
+class ForeignTokenTests(SharedKeyTestCase):
     """A token this project never issued still identifies its user."""
 
     def test_a_research_tools_token_authenticates_an_existing_user(self):
@@ -116,7 +146,7 @@ class ForeignTokenTests(TestCase):
 
 
 @override_settings(SIMPLE_JWT=SIMPLE_JWT)
-class IssuedTokenClaimTests(TestCase):
+class IssuedTokenClaimTests(SharedKeyTestCase):
     """
     What this project puts in a token, so Research Tools can act on it.
 
@@ -126,6 +156,7 @@ class IssuedTokenClaimTests(TestCase):
     """
 
     def setUp(self):
+        super().setUp()
         self.user = User.objects.create(
             email="ada@example.com", first_name="Ada", last_name="Lovelace"
         )
@@ -181,10 +212,11 @@ class IssuedTokenClaimTests(TestCase):
 
 
 @override_settings(SIMPLE_JWT=SIMPLE_JWT)
-class SocketTokenTests(TestCase):
+class SocketTokenTests(SharedKeyTestCase):
     """Socket.IO handshakes accept exactly the tokens the REST API accepts."""
 
     def setUp(self):
+        super().setUp()
         self.user = User.objects.create(email="ada@example.com", first_name="Ada")
         self.access = str(tokens_for(self.user)[1])
 
