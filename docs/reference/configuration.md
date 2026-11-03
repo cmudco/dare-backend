@@ -333,3 +333,38 @@ the `web` and `worker` containers.
 python manage.py check
 python manage.py shell -c "from config import env; print(env.OPENAI_API_KEY[:7])"
 ```
+
+## Reviewed signup
+
+Optional-code registration can be enabled in Django admin under Access request
+settings. Select existing active staff approvers with change-access-request
+permission, configure the public admin origin and registration URL, and retain
+mandatory email verification. The feature is disabled until configured. See
+[signup administration](../how-to/administer-dare.md#signup-and-approval).
+
+| Environment variable | Default | Purpose |
+|---|---|---|
+| `EMAIL_REPLY_TO` | Empty | Support reply address; explicit per-message Reply-To takes precedence. |
+| `EMAIL_TIMEOUT` | `10` | Mail connection timeout in seconds. |
+| `ACCESS_REQUEST_REVIEW_CC` | Empty | Comma-separated copies for registration reviews, once per request. Invitation-request reviews have no copy from this setting. |
+| `TRUSTED_PROXY_COUNT` | `0` | Number of sanitizing trusted proxies used for per-client throttling. Direct backend access must be blocked when trusting forwarded headers. |
+| `DJANGO_SECURE_COOKIES` | `False` | Enable session/CSRF secure cookies for HTTPS deployments. |
+| `TRUST_PROXY_HTTPS` | `False` | Trust sanitized `X-Forwarded-Proto` only behind the actual TLS proxy. |
+| `ACCESS_REQUEST_ALLOWED_HTTP_ORIGINS` | Empty | Explicit complete HTTP origins for a deliberately network-restricted deployment; otherwise public signup URLs require HTTPS. This adds no TLS. |
+
+Use the shared `EMAIL_PROVIDER` settings above. `emailDeliveryConfigured` in
+registration/resend responses indicates provider selection, not confirmed SMTP/API
+submission or inbox delivery. Clients must retain `approvalRequired` independently
+and must not treat successful registration as authentication. Verification is
+required even if an administrator approves first.
+
+After migrations, run `python manage.py check_signup_setup --require-enabled`. It
+checks settings without sending mail. Use the explicit `--send-test-to` option only
+when a diagnostic recipient is intended. Configure Site domain and Site name for
+public URLs and email branding; retain backend routes while the frontend proxy
+serves verification and password-reset SPA pages.
+
+The new code-free approval gate applies to DARE registration. Socratic Bots retains
+its existing registration and response behavior; it is not enrolled into the DARE
+approval policy. Supplied invitation codes still receive validation and atomic
+consumption on either platform.

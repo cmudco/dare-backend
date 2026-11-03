@@ -30,6 +30,7 @@ from users.admin_constants import (
     ACTIVITY_NEVER_STATE,
 )
 from core.helpers.admin_utils import render_span, render_status_badge
+from users import access_request_admin  # noqa: F401
 
 
 class UserInline(admin.TabularInline):
@@ -269,11 +270,11 @@ class AccessCodeGroupAdmin(admin.ModelAdmin):
 class UserAdmin(DjangoUserAdmin):
     class CreditActionForm(ActionForm):
         amount = forms.DecimalField(
-            required=True,
+            required=False,
             min_value=Decimal('0.01'),
             max_digits=10,
             decimal_places=6,
-            help_text="Amount to credit to each selected user's wallet (USD)"
+            help_text=_("Required only for crediting selected users' wallets (USD)")
         )
         note = forms.CharField(required=False, max_length=255)
 
@@ -411,10 +412,19 @@ class UserAdmin(DjangoUserAdmin):
     activity_status.short_description = "Activity"
     activity_status.admin_order_field = "last_login"
 
-    @admin.action(description="Disable selected inactive accounts")
+    @admin.action(description=_("Disable selected accounts"))
     def disable_inactive_accounts(self, request, queryset):
-        """Disable user accounts that haven't been active"""
+        """Disable selected accounts that are currently active"""
         count = queryset.filter(is_active=True).update(is_active=False)
-        self.message_user(request, f"Disabled {count} user account(s).", level=messages.SUCCESS)
+        if count:
+            self.message_user(
+                request, f"Disabled {count} user account(s).", level=messages.SUCCESS
+            )
+        else:
+            self.message_user(
+                request,
+                "No accounts changed: the selected accounts are already inactive.",
+                level=messages.WARNING,
+            )
 
 admin.site.register(User, UserAdmin)

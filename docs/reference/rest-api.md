@@ -239,3 +239,26 @@ was retained. Scanned documents may pause for the existing OCR approval workflow
 
 The existing conversation tool-call activity and retrieval trace expose actual
 retrieval steps and sources. This feature adds no agentic whole-file-context tool.
+
+## Signup and access requests
+
+`POST /users/api/access-requests/` is public and accepts `name`, `email` and optional
+`reason`. It returns HTTP 202 with `detail` for both new and duplicate/existing-user
+requests, without issuing credentials. Disabled or invalid request configuration
+returns 503; invalid input returns 400. Registration and Request Access share a
+per-client throttle (default five attempts/hour), returning 429 when exhausted.
+
+`POST /users/api/dj-rest-auth/registration/` accepts an optional `accessCode` in
+addition to the normal name, email and password fields. A valid invitation retains
+the code path. An omitted/blank code requires enabled administrator review and
+creates an inactive ordinary account. Invalid supplied codes never fall back to
+code-free registration. Both paths require mandatory email verification. Success
+is HTTP 201 with `detail`, `approvalRequired` and `emailDeliveryConfigured`; it does
+not authenticate the user. Delivery configuration does not establish successful
+submission or inbox delivery. Resend responses retain the same configuration flag.
+
+Verification responses include `approvalRequired` while administrator review is
+pending. Tokens are issued only for active accounts, retaining the shared identity
+claims. Approval and verification can occur in either order. See
+[signup administration](../how-to/administer-dare.md#signup-and-approval) for
+permissions, decision changes, notifications and deployment settings.
