@@ -1,9 +1,10 @@
 from allauth.account.models import EmailAddress, EmailConfirmationHMAC
+from django.contrib.admin.sites import site
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.contrib.messages.storage.fallback import FallbackStorage
+from django.test import RequestFactory, TestCase
 from rest_framework import status
 from rest_framework.test import APIClient
-
 
 User = get_user_model()
 
@@ -51,3 +52,22 @@ class VerifyEmailRegistrationTests(TestCase):
         response = self.client.post(self.url, {"key": "invalid-key"}, format="json")
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+
+class MarkEmailVerifiedAdminActionTests(TestCase):
+    def test_creates_verified_primary_address_for_user_without_one(self):
+        user = User.objects.create_superuser(
+            email="admin-no-address@example.com", password="pw"
+        )
+        request = RequestFactory().post("/")
+        request.user = user
+        request.session = {}
+        request._messages = FallbackStorage(request)
+
+        site._registry[User].mark_email_verified(
+            request, User.objects.filter(pk=user.pk)
+        )
+
+        address = EmailAddress.objects.get(user=user)
+        self.assertTrue(address.verified)
+        self.assertTrue(address.primary)
