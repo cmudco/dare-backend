@@ -15,6 +15,8 @@ class QueryAnalyzerTests(TestCase):
             keywords=["widows", "dependency"],
             rewritten_query="How did widows prove dependency?",
             hyde_passage="Widows submitted affidavits.",
+            route="graph",
+            query_entities=["Widows"],
         )
 
     def test_returns_the_typed_plan_from_the_background_model(self):

@@ -18,8 +18,14 @@ from core.helpers.embeddings import EmbeddingClient
 from core.services.rag.assembler import ContextAssembler
 from core.services.rag.config import flag
 from core.services.rag.diversifier import MMRDiversifier
-from core.services.rag.dtos import RetrievalRequest, RetrievalResult, RetrievedChunk
+from core.services.rag.dtos import (
+    GraphWalkTrace,
+    RetrievalRequest,
+    RetrievalResult,
+    RetrievedChunk,
+)
 from core.services.rag.expander import GraphExpander
+from core.services.rag.graph_walker import GraphWalker
 from core.services.rag.grounding import GroundingChecker
 from core.services.rag.query_analyzer import QueryAnalyzer
 from core.services.rag.reference_extractor import extract_pointers
@@ -30,6 +36,10 @@ from core.services.rag.trace import build_trace
 logger = logging.getLogger(__name__)
 
 KeepHook = Optional[Callable[[int, RetrievedChunk], None]]
+# Graph evidence adds seats instead of replacing direct hits, so a question
+# routed to the graph can only gain context.
+GRAPH_EVIDENCE_SEATS = 6
+RERANK_BLEND_FLOOR = 0.05
 
 
 class RetrievalPipeline:
@@ -44,6 +54,7 @@ class RetrievalPipeline:
         grounding: Optional[GroundingChecker] = None,
         assembler: Optional[ContextAssembler] = None,
         expander: Optional[GraphExpander] = None,
+        walker: Optional[GraphWalker] = None,
     ):
         self.retriever = retriever
         self.analyzer = analyzer or QueryAnalyzer()
@@ -52,6 +63,7 @@ class RetrievalPipeline:
         self.grounding = grounding or GroundingChecker()
         self.assembler = assembler or ContextAssembler()
         self.expander = expander
+        self.walker = walker
 
     def run(
         self, request: RetrievalRequest, on_keep: KeepHook = None
@@ -93,7 +105,28 @@ class RetrievalPipeline:
         # entities shared with another selected file (document path only).
         expanded: List[RetrievedChunk] = []
         expand_applied = False
-        if self.expander is not None and request.file_ids:
+        walk_trace: Optional[GraphWalkTrace] = None
+        graph_route = (
+            self.walker is not None
+            and bool(request.file_ids)
+            and bool(plan)
+            and plan.wants_graph
+        )
+        if graph_route:
+            result = self.walker.walk(
+                pool, request.user_id, request.file_ids, plan.query_entities
+            )
+            pool = result.pool
+            expanded = [*result.hops]
+            expand_applied = True
+            walk_trace = GraphWalkTrace(
+                nodes=result.nodes,
+                edges=result.edges,
+                milliseconds=result.milliseconds,
+                query_entities=result.query_entities,
+                error=result.error,
+            )
+        elif self.expander is not None and request.file_ids:
             expanded = self.expander.expand(
                 pool,
                 reranker_on=rerank_on,
@@ -118,8 +151,15 @@ class RetrievalPipeline:
         # discarded candidate from evicting useful evidence.
         ranked_candidates = reranked
         reranked = ranked_candidates[:working_k]
-        direct = [chunk for chunk in ranked_candidates if chunk.via is None]
-        hops = [chunk for chunk in ranked_candidates if chunk.via is not None]
+        if graph_route:
+            searched = {(c.file_id, c.chunk_index) for c in pool}
+            direct = [
+                c for c in ranked_candidates if (c.file_id, c.chunk_index) in searched
+            ]
+            hops = []
+        else:
+            direct = [chunk for chunk in ranked_candidates if chunk.via is None]
+            hops = [chunk for chunk in ranked_candidates if chunk.via is not None]
         mmr_applied = (
             exploratory
             and bool(query_vector)
@@ -132,13 +172,16 @@ class RetrievalPipeline:
             )
         else:
             picked = direct[: request.top_k]
-        final = self._merge_hops(
-            request.query,
-            picked,
-            hops,
-            request.top_k,
-            rerank_applied=rerank_applied,
-        )
+        if graph_route:
+            final = self._append_graph_evidence(picked, ranked_candidates)
+        else:
+            final = self._merge_hops(
+                request.query,
+                picked,
+                hops,
+                request.top_k,
+                rerank_applied=rerank_applied,
+            )
 
         # 5) Assemble cited, budget-bounded context.
         kept = []
@@ -184,10 +227,18 @@ class RetrievalPipeline:
                 grounding=grounding,
                 grounding_threshold=grounding_threshold,
                 final_size=len(final),
-                expanded=expanded,
+                expanded=(
+                    sorted(
+                        (c for c in ranked_candidates if c.graph_score is not None),
+                        key=lambda chunk: -chunk.graph_score,
+                    )
+                    if graph_route
+                    else expanded
+                ),
                 expand_applied=expand_applied,
                 final=final,
                 citation_offset=citation_offset,
+                walk=walk_trace,
             )
 
         return RetrievalResult(
@@ -248,6 +299,29 @@ class RetrievalPipeline:
             if index not in moved:
                 emit(index)
         return ordered
+
+    @staticmethod
+    def _append_graph_evidence(
+        picked: List[RetrievedChunk], ranked: List[RetrievedChunk]
+    ) -> List[RetrievedChunk]:
+        """The chunks the walk scored highest, seated after the direct evidence.
+
+        Both signals count. PageRank says the chunk is connected, the reranker
+        says it is on topic. The floor keeps a good bridge chunk that does not
+        resemble the question, which is the reason the walk exists.
+        """
+        taken = {(c.file_id, c.chunk_index) for c in picked}
+        linked = sorted(
+            (
+                chunk
+                for chunk in ranked
+                if chunk.graph_score is not None
+                and (chunk.file_id, chunk.chunk_index) not in taken
+            ),
+            key=lambda chunk: -chunk.graph_score
+            * (RERANK_BLEND_FLOOR + (chunk.rerank_score or 0.0)),
+        )
+        return [*picked, *linked[:GRAPH_EVIDENCE_SEATS]]
 
     @classmethod
     def _merge_hops(
@@ -359,6 +433,17 @@ def _load_entity_hops(keys, user_id, file_ids):
     return DocumentMapService.load_entity_hops(keys, user_id, file_ids)
 
 
+def _graph_walker() -> GraphWalker:
+    # Local import: the loader pulls in Django models at import time.
+    from knowledge_graph.services.walk_loader import (
+        load_walk_chunks,
+        load_walk_graph,
+        resolve_query_entities,
+    )
+
+    return GraphWalker(load_walk_graph, resolve_query_entities, load_walk_chunks)
+
+
 def build_pipeline(
     source_type: str = "library", openai_client: Optional[EmbeddingClient] = None
 ) -> RetrievalPipeline:
@@ -371,6 +456,13 @@ def build_pipeline(
                 _load_entity_hops if flag("RAG_ENTITY_HOPS_ENABLED", True) else None
             ),
         )
+    walker = (
+        _graph_walker()
+        if source_type == "document" and flag("RAG_GRAPH_WALK_ENABLED", True)
+        else None
+    )
     return RetrievalPipeline(
-        retriever=get_retriever(source_type, openai_client), expander=expander
+        retriever=get_retriever(source_type, openai_client),
+        expander=expander,
+        walker=walker,
     )

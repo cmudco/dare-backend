@@ -174,6 +174,7 @@ These are read from Django settings first, then the environment. Boolean flags t
 | `RAG_ENTITY_NER_ENABLED` | `true` | Run the GLiNER named-entity lane at ingest alongside the regex identifier lane. Identifiers still run when it is off. |
 | `RAG_ENTITY_MODEL` | `urchade/gliner_small-v2.1` | GLiNER checkpoint for the NER lane, loaded on first use. |
 | `RAG_ENTITY_HOPS_ENABLED` | `true` | With two or more files selected, follow a hit's rarest shared entity into one chunk of another selected file during the expand stage. |
+| `RAG_GRAPH_WALK_ENABLED` | `true` | Send questions the query analyzer routes to the graph through the Personalized PageRank walk. Off, they use the one-hop expand. |
 
 ## Email
 

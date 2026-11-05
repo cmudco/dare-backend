@@ -18,11 +18,45 @@ class QueryPlan:
     keywords: Tuple[str, ...] = ()
     rewritten_query: str = ""
     hyde_passage: str = ""
+    route: str = "direct"  # direct | graph
+    query_entities: Tuple[str, ...] = ()
 
     @property
     def is_exploratory(self) -> bool:
         """Exploratory queries benefit from MMR diversity; precise ones don't."""
         return self.intent == "exploratory"
+
+    @property
+    def wants_graph(self) -> bool:
+        return self.route == "graph"
+
+
+@dataclass(frozen=True)
+class WalkStep:
+    """One node of a graph-walk path, as the trace panel shows it."""
+
+    kind: str  # chunk | entity
+    label: str
+    relation: str = ""  # relationship on the edge arriving at this node
+    relation_reversed: bool = False
+    mentioned_as: str = ""  # the alias spelling that made this link
+    page: Optional[int] = None
+    file_id: str = ""
+    chunk_index: Optional[int] = None
+    entity_id: Optional[int] = None
+
+    def to_payload(self) -> Dict[str, Any]:
+        return {
+            "kind": self.kind,
+            "entityId": self.entity_id,
+            "label": self.label,
+            "relation": self.relation,
+            "relationReversed": self.relation_reversed,
+            "mentionedAs": self.mentioned_as,
+            "page": self.page,
+            "fileId": self.file_id,
+            "chunkIndex": self.chunk_index,
+        }
 
 
 @dataclass(frozen=True)
@@ -34,6 +68,7 @@ class ReferenceHop:
     key: str
     raw_text: str
     source_file_id: str = ""  # file the pointer was found in (entity hops cross files)
+    path: Tuple[WalkStep, ...] = ()  # graph-walk hops only
 
 
 @dataclass(frozen=True)
@@ -54,6 +89,7 @@ class RetrievedChunk:
     page_end: Optional[int] = None
     section: str = ""
     via: Optional[ReferenceHop] = None  # set by the expand stage
+    graph_score: Optional[float] = None  # PageRank score from the graph walk
     retrieval_text: str = ""  # enriched text used for ranking, never for citation
 
     @property
@@ -113,6 +149,7 @@ class TraceEntry:
     via: Optional[str] = None  # raw pointer text for expanded entries
     via_kind: Optional[str] = None  # "entity", or the followed pointer's kind
     citation_id: Optional[str] = None
+    path: Tuple[WalkStep, ...] = ()
 
     def to_payload(self) -> Dict[str, Any]:
         return {
@@ -127,6 +164,30 @@ class TraceEntry:
             "via": self.via,
             "viaKind": self.via_kind,
             "citationId": self.citation_id,
+            "path": [step.to_payload() for step in self.path],
+        }
+
+
+@dataclass(frozen=True)
+class GraphWalkTrace:
+    """What the walk had to work with, shown on the graph step of the trace."""
+
+    nodes: int
+    edges: int
+    milliseconds: int
+    query_entities: Dict[str, str] = field(default_factory=dict)
+    error: str = ""
+
+    def to_payload(self) -> Dict[str, Any]:
+        return {
+            "nodes": self.nodes,
+            "edges": self.edges,
+            "milliseconds": self.milliseconds,
+            "queryEntities": [
+                {"name": name, "entity": entity}
+                for name, entity in self.query_entities.items()
+            ],
+            "error": self.error,
         }
 
 
@@ -149,6 +210,7 @@ class RetrievalTrace:
     expand_applied: bool = False
     expanded: List[TraceEntry] = field(default_factory=list)
     final: List[TraceEntry] = field(default_factory=list)
+    walk: Optional[GraphWalkTrace] = None
 
     def to_payload(self) -> Dict[str, Any]:
         """Camelized payload for the frontend (rules.md §11: typed, no FE parsing)."""
@@ -160,6 +222,8 @@ class RetrievalTrace:
                     "keywords": list(self.plan.keywords),
                     "rewrittenQuery": self.plan.rewritten_query,
                     "hydePassage": self.plan.hyde_passage,
+                    "route": self.plan.route,
+                    "queryEntities": list(self.plan.query_entities),
                 }
                 if self.plan
                 else None
@@ -178,6 +242,7 @@ class RetrievalTrace:
             "expand": {
                 "applied": self.expand_applied,
                 "added": [e.to_payload() for e in self.expanded],
+                "walk": self.walk.to_payload() if self.walk else None,
             },
             "mmr": {"applied": self.mmr_applied, "reason": self.mmr_reason},
             "grounding": (

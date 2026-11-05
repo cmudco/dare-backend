@@ -19,6 +19,8 @@ class QueryPlanResponse(BaseModel):
     keywords: list[str]
     rewritten_query: str
     hyde_passage: str
+    route: Literal["direct", "graph"]
+    query_entities: list[str]
 
 
 _SYSTEM = (
@@ -28,7 +30,12 @@ _SYSTEM = (
     "contrasts); keywords (the exact tokens a keyword index should match — names, "
     "identifiers, numbers, places — no stopwords); rewritten_query (a cleaned, "
     "disambiguated restatement for semantic search); hyde_passage (one or two "
-    "sentences of a plausible answer, to embed instead of the bare question)."
+    "sentences of a plausible answer, to embed instead of the bare question); route "
+    "('graph' when answering needs connections across passages or documents: who "
+    "else, what else, what links two things, or following one fact to another; "
+    "'direct' when one passage can answer it); query_entities (every specific "
+    "person, organization, place, title, or concept the question names, as the "
+    "longest exact name: 'the Attack on Titan final season' is one entity, not two)."
 )
 
 
@@ -78,6 +85,8 @@ class QueryAnalyzer:
                 keywords=tuple(data.keywords),
                 rewritten_query=data.rewritten_query,
                 hyde_passage=data.hyde_passage,
+                route=data.route,
+                query_entities=tuple(data.query_entities),
             )
         except Exception as exc:  # never let analysis break retrieval
             logger.warning("Query analysis failed; using raw query: %s", exc)

@@ -40,6 +40,7 @@ app_paths = [
     path("", include("research.urls", namespace="research")),
     path("", include("libraries.urls", namespace="libraries")),
     path("", include("projects.urls", namespace="projects")),
+    path("", include("knowledge_graph.urls", namespace="knowledge_graph")),
     path("", include("assistant.urls", namespace="assistant")),
     path("", include("release_notes.urls", namespace="release_notes")),
     path("", include("core.urls", namespace="core")),

@@ -74,4 +74,6 @@ class BuildTraceTests(SimpleTestCase):
             grounding_threshold=0.3,
             final_size=0,
         )
-        self.assertEqual(trace.to_payload()["expand"], {"applied": False, "added": []})
+        self.assertEqual(
+            trace.to_payload()["expand"], {"applied": False, "added": [], "walk": None}
+        )
