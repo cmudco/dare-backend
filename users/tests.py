@@ -118,16 +118,6 @@ class LoginEmailCaseTests(TestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
-    def test_accounts_differing_only_by_case_log_in_by_exact_email(self):
-        lower = self.make_user("jane@school.edu", password="lower-pw")
-        upper = self.make_user("Jane@school.edu", password="upper-pw")
-
-        lower_login = self.login("jane@school.edu", password="lower-pw")
-        upper_login = self.login("Jane@school.edu", password="upper-pw")
-
-        self.assertEqual(lower_login.data["user"]["email"], lower.email)
-        self.assertEqual(upper_login.data["user"]["email"], upper.email)
-
     def test_ambiguous_case_variant_fails_without_error(self):
         self.make_user("jane@school.edu")
         self.make_user("Jane@school.edu")

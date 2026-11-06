@@ -307,10 +307,7 @@ class CustomLoginSerializer(LoginSerializer):
 
         if email:
             try:
-                # Exact match first: legacy accounts can differ only by case.
-                user = User.objects.filter(email=email).first() or User.objects.get(
-                    email__iexact=email
-                )
+                user = User.objects.get(email__iexact=email)
                 attrs["email"] = user.email
 
                 # Check if user's access code has expired and deactivate if necessary
