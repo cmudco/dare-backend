@@ -51,6 +51,34 @@ class WeaviateSelectedFileFilterTests(SimpleTestCase):
 
     @patch("core.helpers.weaviate.WeaviateClient._create_collection")
     @patch("core.helpers.weaviate.WeaviateClient._connect_to_weaviate")
+    def test_selecting_over_100_files_builds_a_sendable_filter(
+        self, connect_to_weaviate, _create_collection
+    ):
+        from weaviate.collections.filters import _FilterToGRPC
+
+        from core.helpers.weaviate import WeaviateClient
+
+        collection = MagicMock()
+        collection.query.hybrid.return_value.objects = []
+        client = MagicMock()
+        client.collections.get.return_value = collection
+        connect_to_weaviate.return_value = client
+
+        WeaviateClient().query_vectors(
+            vector=[0.1],
+            top_k=10,
+            namespace="user_7",
+            filter={"user_id": "7", "file_id": {"$in": [str(i) for i in range(500)]}},
+            query_text="compare the files",
+        )
+
+        grpc_filter = _FilterToGRPC.convert(
+            collection.query.hybrid.call_args.kwargs["filters"]
+        )
+        self.assertEqual(len(grpc_filter.filters[1].filters), 500)
+
+    @patch("core.helpers.weaviate.WeaviateClient._create_collection")
+    @patch("core.helpers.weaviate.WeaviateClient._connect_to_weaviate")
     def test_query_returns_source_body_and_retrieval_text_separately(
         self, connect_to_weaviate, _create_collection
     ):
