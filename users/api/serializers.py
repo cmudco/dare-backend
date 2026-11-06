@@ -348,7 +348,9 @@ class CustomLoginSerializer(LoginSerializer):
                             f"You do not have access to the {platform_name} platform. Please contact the administrator for assistance."
                         )
 
-            except (User.DoesNotExist, User.MultipleObjectsReturned):
+            except User.DoesNotExist:
                 pass
+            except User.MultipleObjectsReturned:
+                logger.error(f"Multiple accounts match login email {email}")
 
         return super().validate(attrs)

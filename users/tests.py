@@ -132,6 +132,7 @@ class LoginEmailCaseTests(TestCase):
         self.make_user("jane@school.edu")
         self.make_user("Jane@school.edu")
 
-        response = self.login("JANE@school.edu")
+        with self.assertLogs("users.api.serializers", level="ERROR"):
+            response = self.login("JANE@school.edu")
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
