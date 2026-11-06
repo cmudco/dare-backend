@@ -71,3 +71,67 @@ class MarkEmailVerifiedAdminActionTests(TestCase):
         address = EmailAddress.objects.get(user=user)
         self.assertTrue(address.verified)
         self.assertTrue(address.primary)
+
+
+class LoginEmailCaseTests(TestCase):
+    url = "/users/api/dj-rest-auth/login/"
+
+    def setUp(self):
+        self.client = APIClient()
+
+    def make_user(self, email, password="correct-pw"):
+        user = User.objects.create_user(email=email, password=password)
+        EmailAddress.objects.create(user=user, email=email, primary=True, verified=True)
+        return user
+
+    def login(self, email, password="correct-pw"):
+        return self.client.post(
+            self.url, {"email": email, "password": password}, format="json"
+        )
+
+    def test_capitalized_email_logs_into_lowercase_account(self):
+        user = self.make_user("jane@school.edu")
+
+        response = self.login("Jane@school.edu")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertEqual(response.data["user"]["email"], user.email)
+
+    def test_surrounding_spaces_are_ignored(self):
+        self.make_user("jane@school.edu")
+
+        response = self.login("  Jane@school.edu ")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+
+    def test_lowercase_email_logs_into_account_stored_with_capitals(self):
+        self.make_user("Jane@school.edu")
+
+        response = self.login("jane@school.edu")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+
+    def test_wrong_password_still_fails(self):
+        self.make_user("jane@school.edu")
+
+        response = self.login("Jane@school.edu", password="wrong-pw")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_accounts_differing_only_by_case_log_in_by_exact_email(self):
+        lower = self.make_user("jane@school.edu", password="lower-pw")
+        upper = self.make_user("Jane@school.edu", password="upper-pw")
+
+        lower_login = self.login("jane@school.edu", password="lower-pw")
+        upper_login = self.login("Jane@school.edu", password="upper-pw")
+
+        self.assertEqual(lower_login.data["user"]["email"], lower.email)
+        self.assertEqual(upper_login.data["user"]["email"], upper.email)
+
+    def test_ambiguous_case_variant_fails_without_error(self):
+        self.make_user("jane@school.edu")
+        self.make_user("Jane@school.edu")
+
+        response = self.login("JANE@school.edu")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)

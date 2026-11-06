@@ -307,7 +307,11 @@ class CustomLoginSerializer(LoginSerializer):
 
         if email:
             try:
-                user = User.objects.get(email__iexact=email)
+                # Exact match first: legacy accounts can differ only by case.
+                user = User.objects.filter(email=email).first() or User.objects.get(
+                    email__iexact=email
+                )
+                attrs["email"] = user.email
 
                 # Check if user's access code has expired and deactivate if necessary
                 if (
@@ -344,7 +348,7 @@ class CustomLoginSerializer(LoginSerializer):
                             f"You do not have access to the {platform_name} platform. Please contact the administrator for assistance."
                         )
 
-            except User.DoesNotExist:
+            except (User.DoesNotExist, User.MultipleObjectsReturned):
                 pass
 
         return super().validate(attrs)
