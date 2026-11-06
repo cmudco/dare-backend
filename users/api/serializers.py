@@ -308,6 +308,7 @@ class CustomLoginSerializer(LoginSerializer):
         if email:
             try:
                 user = User.objects.get(email__iexact=email)
+                attrs["email"] = user.email
 
                 # Check if user's access code has expired and deactivate if necessary
                 if (
@@ -346,5 +347,7 @@ class CustomLoginSerializer(LoginSerializer):
 
             except User.DoesNotExist:
                 pass
+            except User.MultipleObjectsReturned:
+                logger.error(f"Multiple accounts match login email {email}")
 
         return super().validate(attrs)
