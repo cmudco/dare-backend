@@ -71,7 +71,7 @@ class FakeWalker:
         self.hops = hops
         self.calls = []
 
-    def walk(self, pool, user_id, file_ids, query_entities):
+    def walk(self, pool, user_id, file_ids, query_entities, connect=False):
         self.calls.append(tuple(query_entities))
         return WalkResult(pool=pool, hops=self.hops, nodes=5, edges=4)
 

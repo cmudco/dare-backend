@@ -177,16 +177,11 @@ class WeaviateClient:
                 # top-k candidates. Filtering the returned top-k in Python can
                 # lose every candidate from a selected file when another file
                 # (including an unselected one) dominates the user's corpus.
+                # One flat clause: chained ORs nest per file and overflow the
+                # gRPC message depth at about 100 files.
                 file_filter = weaviate.classes.query.Filter.by_property(
                     "file_id"
-                ).equal(str(file_ids[0]))
-                for file_id in file_ids[1:]:
-                    file_filter = (
-                        file_filter
-                        | weaviate.classes.query.Filter.by_property("file_id").equal(
-                            str(file_id)
-                        )
-                    )
+                ).contains_any([str(file_id) for file_id in file_ids])
                 query_filter = query_filter & file_filter
 
             if query_text:

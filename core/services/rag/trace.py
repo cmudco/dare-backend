@@ -50,6 +50,7 @@ def _entries(chunks: List[RetrievedChunk], prev_ranks=None, use_rerank=False):
                 via=chunk.via.raw_text if chunk.via is not None else None,
                 via_kind=chunk.via.kind if chunk.via is not None else None,
                 path=chunk.via.path if chunk.via is not None else (),
+                origin=chunk.origin,
             )
         )
     return entries

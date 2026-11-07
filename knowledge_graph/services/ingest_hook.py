@@ -1,7 +1,6 @@
 import logging
 
 from django.contrib.auth import get_user_model
-from django.db import DatabaseError
 
 from knowledge_graph.services.cluster_service import EntityClusterService
 
@@ -14,5 +13,6 @@ def sync_clusters_after_ingest(user_id: int) -> None:
     try:
         EntityClusterService.sync_user(user)
         EntityClusterService.refresh_labels(user)
-    except DatabaseError as error:
-        logger.warning("Entity clustering failed for user %s: %s", user_id, error)
+    except Exception:
+        # Ingest boundary: the document is already searchable, so clustering can retry.
+        logger.warning("Entity clustering failed for user %s", user_id, exc_info=True)

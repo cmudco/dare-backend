@@ -30,22 +30,22 @@ CONFIGS = (
     {
         "id": "plain",
         "label": "Search only",
-        "description": "Advanced RAG with no graph, 4 passages.",
+        "description": "Advanced RAG with no graph, 4 chunks.",
     },
     {
         "id": "wide",
-        "label": "Search, more passages",
-        "description": "No graph, 10 passages, the same room the graph can use.",
+        "label": "Search, more chunks",
+        "description": "No graph, 10 chunks, the same room the graph can use.",
     },
     {
         "id": "hop",
         "label": "Earlier one-hop",
-        "description": "What dev has today: one exact-name hop, 4 passages.",
+        "description": "What dev has today: one exact-name hop, 4 chunks.",
     },
     {
         "id": "graph",
         "label": "Graph walk",
-        "description": "Aliases and PageRank, 4 passages plus up to 6 linked.",
+        "description": "Aliases and PageRank, 4 chunks plus up to 6 linked.",
     },
 )
 
@@ -135,7 +135,7 @@ class Command(BaseCommand):
                 },
             ],
             description="Graph RAG eval answer",
-            max_tokens=400,
+            max_tokens=4000,
             task=BackgroundTask.GRAPH_RELATIONS,
         ).value
         lowered = answer.lower()

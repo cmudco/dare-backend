@@ -12,7 +12,7 @@ query analysis, reranking, grounding, and trace capture; failures degrade safely
 
 import logging
 from dataclasses import replace
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from core.helpers.embeddings import EmbeddingClient
 from core.services.rag.assembler import ContextAssembler
@@ -106,6 +106,7 @@ class RetrievalPipeline:
         expanded: List[RetrievedChunk] = []
         expand_applied = False
         walk_trace: Optional[GraphWalkTrace] = None
+        connection_note = ""
         graph_route = (
             self.walker is not None
             and bool(request.file_ids)
@@ -114,7 +115,11 @@ class RetrievalPipeline:
         )
         if graph_route:
             result = self.walker.walk(
-                pool, request.user_id, request.file_ids, plan.query_entities
+                pool,
+                request.user_id,
+                request.file_ids,
+                plan.query_entities,
+                connect=plan.asks_connection,
             )
             pool = result.pool
             expanded = [*result.hops]
@@ -125,7 +130,9 @@ class RetrievalPipeline:
                 milliseconds=result.milliseconds,
                 query_entities=result.query_entities,
                 error=result.error,
+                connections=result.connections,
             )
+            connection_note = result.connection_note
         elif self.expander is not None and request.file_ids:
             expanded = self.expander.expand(
                 pool,
@@ -173,7 +180,7 @@ class RetrievalPipeline:
         else:
             picked = direct[: request.top_k]
         if graph_route:
-            final = self._append_graph_evidence(picked, ranked_candidates)
+            final = self._append_graph_evidence(picked, ranked_candidates, searched)
         else:
             final = self._merge_hops(
                 request.query,
@@ -182,6 +189,18 @@ class RetrievalPipeline:
                 request.top_k,
                 rerank_applied=rerank_applied,
             )
+            chosen = {(c.file_id, c.chunk_index) for c in direct}
+            final = [
+                replace(
+                    chunk,
+                    origin=(
+                        "search"
+                        if (chunk.file_id, chunk.chunk_index) in chosen
+                        else "graph_only"
+                    ),
+                )
+                for chunk in final
+            ]
 
         # 5) Assemble cited, budget-bounded context.
         kept = []
@@ -206,7 +225,11 @@ class RetrievalPipeline:
             if rerank_applied
             else None
         )
-        blocks = ContextAssembler.grounding_blocks(grounding) + blocks
+        blocks = [
+            *ContextAssembler.grounding_blocks(grounding),
+            *([connection_note] if connection_note else []),
+            *blocks,
+        ]
 
         # 7) Per-stage trace for the UI.
         trace = None
@@ -302,13 +325,16 @@ class RetrievalPipeline:
 
     @staticmethod
     def _append_graph_evidence(
-        picked: List[RetrievedChunk], ranked: List[RetrievedChunk]
+        picked: List[RetrievedChunk],
+        ranked: List[RetrievedChunk],
+        searched: Set[Tuple[str, int]],
     ) -> List[RetrievedChunk]:
         """The chunks the walk scored highest, seated after the direct evidence.
 
         Both signals count. PageRank says the chunk is connected, the reranker
         says it is on topic. The floor keeps a good bridge chunk that does not
-        resemble the question, which is the reason the walk exists.
+        resemble the question, which is the reason the walk exists. A chunk that
+        shows how two named things connect goes first, since it answers the question.
         """
         taken = {(c.file_id, c.chunk_index) for c in picked}
         linked = sorted(
@@ -318,10 +344,25 @@ class RetrievalPipeline:
                 if chunk.graph_score is not None
                 and (chunk.file_id, chunk.chunk_index) not in taken
             ),
-            key=lambda chunk: -chunk.graph_score
-            * (RERANK_BLEND_FLOOR + (chunk.rerank_score or 0.0)),
+            key=lambda chunk: (
+                not chunk.bridge,
+                -chunk.graph_score * (RERANK_BLEND_FLOOR + (chunk.rerank_score or 0.0)),
+            ),
         )
-        return [*picked, *linked[:GRAPH_EVIDENCE_SEATS]]
+        return [
+            *(replace(chunk, origin="search") for chunk in picked),
+            *(
+                replace(
+                    chunk,
+                    origin=(
+                        "graph_ranked"
+                        if (chunk.file_id, chunk.chunk_index) in searched
+                        else "graph_only"
+                    ),
+                )
+                for chunk in linked[:GRAPH_EVIDENCE_SEATS]
+            ),
+        ]
 
     @classmethod
     def _merge_hops(

@@ -20,6 +20,7 @@ class QueryPlan:
     hyde_passage: str = ""
     route: str = "direct"  # direct | graph
     query_entities: Tuple[str, ...] = ()
+    asks_connection: bool = False  # "how are A and B connected?"
 
     @property
     def is_exploratory(self) -> bool:
@@ -28,7 +29,7 @@ class QueryPlan:
 
     @property
     def wants_graph(self) -> bool:
-        return self.route == "graph"
+        return self.route == "graph" or self.asks_connection
 
 
 @dataclass(frozen=True)
@@ -91,6 +92,8 @@ class RetrievedChunk:
     via: Optional[ReferenceHop] = None  # set by the expand stage
     graph_score: Optional[float] = None  # PageRank score from the graph walk
     retrieval_text: str = ""  # enriched text used for ranking, never for citation
+    bridge: bool = False  # shows how two entities the question names connect
+    origin: str = ""  # search | graph_ranked | graph_only, set on final evidence
 
     @property
     def searchable_text(self) -> str:
@@ -150,6 +153,7 @@ class TraceEntry:
     via_kind: Optional[str] = None  # "entity", or the followed pointer's kind
     citation_id: Optional[str] = None
     path: Tuple[WalkStep, ...] = ()
+    origin: str = ""
 
     def to_payload(self) -> Dict[str, Any]:
         return {
@@ -165,6 +169,7 @@ class TraceEntry:
             "viaKind": self.via_kind,
             "citationId": self.citation_id,
             "path": [step.to_payload() for step in self.path],
+            "origin": self.origin,
         }
 
 
@@ -177,9 +182,11 @@ class GraphWalkTrace:
     milliseconds: int
     query_entities: Dict[str, str] = field(default_factory=dict)
     error: str = ""
+    connections: Tuple[Dict[str, Any], ...] = ()
 
     def to_payload(self) -> Dict[str, Any]:
         return {
+            "connections": list(self.connections),
             "nodes": self.nodes,
             "edges": self.edges,
             "milliseconds": self.milliseconds,

@@ -21,6 +21,9 @@ from users.models import User
 
 logger = logging.getLogger(__name__)
 
+# Reasoning models spend part of this before they write the title.
+TITLE_MAX_TOKENS = 2000
+
 
 class ConversationService:
     """Handles conversation metadata and message management."""
@@ -182,7 +185,7 @@ class ConversationService:
                 user=user,
                 messages=messages,
                 description="Conversation title generation",
-                max_tokens=80,
+                max_tokens=TITLE_MAX_TOKENS,
                 task=BackgroundTask.TITLES,
                 public_bot_id=public_bot_id,
             )

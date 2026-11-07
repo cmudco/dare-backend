@@ -11,9 +11,11 @@ from rq.job import Job, JobStatus
 
 from core.services.rag import build_pipeline
 from core.services.rag.dtos import RetrievalRequest
-from files.models import File
+from files.models import File, Folder
 from knowledge_graph.api.serializers import (
+    ApproveSerializer,
     AskSerializer,
+    DiscoverSerializer,
     GraphCreateSerializer,
     GraphUpdateSerializer,
     LabelWriteSerializer,
@@ -24,9 +26,14 @@ from knowledge_graph.constants import MAX_RELATION_LABELS, GraphStatus, LabelSou
 from knowledge_graph.models import EntityCluster, KnowledgeGraph, RelationLabel
 from knowledge_graph.services.cluster_service import EntityClusterService
 from knowledge_graph.services.graph_view_service import GraphViewService
-from knowledge_graph.tasks import build_graph_relations, discover_graph_labels
+from knowledge_graph.tasks import (
+    build_graph_relations,
+    discover_graph_labels,
+    prepare_graph,
+)
+from projects.services.project_service import selected_source_files
 
-BUSY_STATUSES = (GraphStatus.DISCOVERING, GraphStatus.BUILDING)
+BUSY_STATUSES = (GraphStatus.PREPARING, GraphStatus.DISCOVERING, GraphStatus.BUILDING)
 ASK_TOP_K = 4
 
 
@@ -46,22 +53,26 @@ class KnowledgeGraphViewSet(viewsets.ViewSet):
     def create(self, request):
         body = GraphCreateSerializer(data=request.data)
         body.is_valid(raise_exception=True)
-        files = list(
-            File.active_objects.filter(
-                user=request.user, id__in=body.validated_data["file_ids"]
-            )
-        )
-        if len(files) != len(set(body.validated_data["file_ids"])):
+        file_ids = set(body.validated_data["file_ids"])
+        folder_ids = set(body.validated_data["folder_ids"])
+        owned_files = File.active_objects.filter(user=request.user, id__in=file_ids)
+        if owned_files.count() != len(file_ids):
             raise ValidationError({"file_ids": "Some files could not be found."})
+        owned_folders = Folder.objects.filter(user=request.user, id__in=folder_ids)
+        if owned_folders.count() != len(folder_ids):
+            raise ValidationError({"folder_ids": "Some folders could not be found."})
+        files = list(selected_source_files(request.user, file_ids, folder_ids))
+        if not files:
+            raise ValidationError({"file_ids": "Choose at least one document."})
         graph = KnowledgeGraph.objects.create(
             user=request.user,
             name=body.validated_data["name"],
             description=body.validated_data["description"],
         )
         graph.files.set(files)
-        EntityClusterService.sync_user(request.user)
-        EntityClusterService.refresh_labels(request.user)
-        return Response(GraphViewService.summary(graph), status=status.HTTP_201_CREATED)
+        response = self._start(graph, GraphStatus.PREPARING, prepare_graph)
+        response.status_code = status.HTTP_201_CREATED
+        return response
 
     def retrieve(self, request, pk=None):
         return Response(GraphViewService.summary(self._graph(pk)))
@@ -81,7 +92,12 @@ class KnowledgeGraphViewSet(viewsets.ViewSet):
 
     @action(detail=True, methods=["get"], url_path="view")
     def graph_view(self, request, pk=None):
-        return Response(GraphViewService.view(self._graph(pk)))
+        focus = request.query_params.get("focus", "")
+        return Response(
+            GraphViewService.view(
+                self._graph(pk), focus=int(focus) if focus.isdigit() else None
+            )
+        )
 
     @action(detail=True, methods=["get"], url_path="estimate")
     def estimate(self, request, pk=None):
@@ -128,7 +144,9 @@ class KnowledgeGraphViewSet(viewsets.ViewSet):
             JobStatus.SCHEDULED,
         )
 
-    def _start(self, graph: KnowledgeGraph, next_status: str, job_function) -> Response:
+    def _start(
+        self, graph: KnowledgeGraph, next_status: str, job_function, *job_args
+    ) -> Response:
         if graph.status in BUSY_STATUSES and self._job_is_alive(graph):
             return Response(
                 {"error": "This graph is already working."},
@@ -139,23 +157,33 @@ class KnowledgeGraphViewSet(viewsets.ViewSet):
         if next_status == GraphStatus.BUILDING:
             graph.approved_at = timezone.now()
         graph.save()
-        job = enqueue(job_function, graph.id)
+        job = enqueue(job_function, graph.id, *job_args)
         graph.job_id = job.id
         graph.save(update_fields=["job_id", "updated_at"])
         return Response(GraphViewService.summary(graph))
 
     @action(detail=True, methods=["post"], url_path="discover")
     def discover(self, request, pk=None):
-        return self._start(
-            self._graph(pk), GraphStatus.DISCOVERING, discover_graph_labels
-        )
+        graph = self._graph(pk)
+        body = DiscoverSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        if "goal" in body.validated_data:
+            graph.goal = body.validated_data["goal"].strip()
+        return self._start(graph, GraphStatus.DISCOVERING, discover_graph_labels)
 
     @action(detail=True, methods=["post"], url_path="approve")
     def approve(self, request, pk=None):
         graph = self._graph(pk)
         if not graph.labels.exists():
             raise ValidationError({"labels": "Add at least one relationship type."})
-        return self._start(graph, GraphStatus.BUILDING, build_graph_relations)
+        body = ApproveSerializer(data=request.data)
+        body.is_valid(raise_exception=True)
+        return self._start(
+            graph,
+            GraphStatus.BUILDING,
+            build_graph_relations,
+            body.validated_data.get("new_only", False),
+        )
 
     @action(detail=True, methods=["post"], url_path="labels")
     def add_label(self, request, pk=None):

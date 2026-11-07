@@ -13,6 +13,9 @@ from users.models import User
 
 logger = logging.getLogger(__name__)
 
+# Reasoning models spend part of this before they write anything.
+ANALYSIS_MAX_TOKENS = 8000
+
 
 class QueryPlanResponse(BaseModel):
     intent: Literal["precise_lookup", "exploratory", "comparison"]
@@ -21,6 +24,7 @@ class QueryPlanResponse(BaseModel):
     hyde_passage: str
     route: Literal["direct", "graph"]
     query_entities: list[str]
+    asks_connection: bool
 
 
 _SYSTEM = (
@@ -35,7 +39,9 @@ _SYSTEM = (
     "else, what else, what links two things, or following one fact to another; "
     "'direct' when one passage can answer it); query_entities (every specific "
     "person, organization, place, title, or concept the question names, as the "
-    "longest exact name: 'the Attack on Titan final season' is one entity, not two)."
+    "longest exact name: 'the Attack on Titan final season' is one entity, not two); "
+    "asks_connection (true only when the question asks how two or more named things "
+    "relate, connect, or what they have in common)."
 )
 
 
@@ -75,7 +81,7 @@ class QueryAnalyzer:
                 ],
                 response_model=QueryPlanResponse,
                 description="Advanced RAG query analysis",
-                max_tokens=512,
+                max_tokens=ANALYSIS_MAX_TOKENS,
                 task=BackgroundTask.QUERY_ANALYSIS,
                 public_bot_id=payer_bot_id,
             )
@@ -87,6 +93,7 @@ class QueryAnalyzer:
                 hyde_passage=data.hyde_passage,
                 route=data.route,
                 query_entities=tuple(data.query_entities),
+                asks_connection=data.asks_connection,
             )
         except Exception as exc:  # never let analysis break retrieval
             logger.warning("Query analysis failed; using raw query: %s", exc)

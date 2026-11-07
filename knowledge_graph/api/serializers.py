@@ -9,7 +9,16 @@ class GraphCreateSerializer(serializers.Serializer):
         max_length=500, required=False, allow_blank=True, default=""
     )
     file_ids = serializers.ListField(
-        child=serializers.IntegerField(min_value=1), min_length=1, max_length=500
+        child=serializers.IntegerField(min_value=1),
+        max_length=500,
+        required=False,
+        default=list,
+    )
+    folder_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
+        max_length=100,
+        required=False,
+        default=list,
     )
 
 
@@ -18,6 +27,14 @@ class GraphUpdateSerializer(serializers.Serializer):
     description = serializers.CharField(
         max_length=500, required=False, allow_blank=True
     )
+
+
+class ApproveSerializer(serializers.Serializer):
+    new_only = serializers.BooleanField(required=False, default=False)
+
+
+class DiscoverSerializer(serializers.Serializer):
+    goal = serializers.CharField(max_length=300, required=False, allow_blank=True)
 
 
 class LabelWriteSerializer(serializers.Serializer):

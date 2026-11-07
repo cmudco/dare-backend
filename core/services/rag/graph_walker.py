@@ -12,7 +12,8 @@ import logging
 import math
 import time
 from dataclasses import dataclass, field, replace
-from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
+from itertools import combinations
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import networkx as nx
 
@@ -30,6 +31,9 @@ POINTER_WEIGHT = 2.0
 MAX_HOPS = 8
 PATH_SOURCE_CHUNKS = 3
 MAX_PATH_NODES = 7
+MAX_CONNECTIONS = 3
+MAX_TOGETHER_CHUNKS = 2
+MAX_CONNECTED_ENTITIES = 3
 
 
 @dataclass(frozen=True)
@@ -85,6 +89,8 @@ class WalkResult:
     milliseconds: int = 0
     query_entities: Dict[str, str] = field(default_factory=dict)
     error: str = ""
+    connections: Tuple[Dict[str, Any], ...] = ()
+    connection_note: str = ""
 
 
 GraphLoader = Callable[[Optional[int], Sequence[int]], WalkGraph]
@@ -152,6 +158,52 @@ def seed_weights(
     return seeds
 
 
+def _chunks_of(network: nx.Graph, entity: Node) -> List[Node]:
+    """An entity's chunks, heaviest mention first, with a stable tie-break."""
+    return sorted(
+        (node for node in network[entity] if node[0] == "chunk"),
+        key=lambda node: (-network[entity][node]["weight"], node),
+    )
+
+
+def find_connections(
+    network: nx.Graph,
+    first: Node,
+    second: Node,
+    limit: int = MAX_CONNECTIONS,
+) -> Tuple[List[List[Node]], List[List[Node]]]:
+    """Routes between two entities: chunks naming both, then names both sit beside.
+
+    The rarer a shared name, the more it means: thousands of chunks mention the
+    president, so being linked through him says almost nothing.
+    """
+    chunks_a, chunks_b = _chunks_of(network, first), _chunks_of(network, second)
+    together = [node for node in chunks_a if node in set(chunks_b)]
+    direct = [[first, node, second] for node in together[:MAX_TOGETHER_CHUNKS]]
+
+    def neighbours(chunks: List[Node]) -> Dict[Node, List[Node]]:
+        found: Dict[Node, List[Node]] = {}
+        for chunk in chunks:
+            for node in network[chunk]:
+                if node[0] == "entity" and node not in (first, second):
+                    found.setdefault(node, []).append(chunk)
+        return found
+
+    near_a, near_b = neighbours(chunks_a), neighbours(chunks_b)
+    shared = sorted(
+        (node for node in near_a if node in near_b),
+        key=lambda node: (
+            -len(near_a[node]) * len(near_b[node]) / network.degree(node),
+            node,
+        ),
+    )
+    through = [
+        [first, near_a[node][0], node, near_b[node][0], second]
+        for node in shared[:limit]
+    ]
+    return direct, through
+
+
 class GraphWalker:
     def __init__(
         self,
@@ -171,6 +223,7 @@ class GraphWalker:
         user_id: Optional[int],
         file_ids: Sequence[int],
         query_entities: Sequence[str],
+        connect: bool = False,
     ) -> WalkResult:
         started = time.monotonic()
         graph = self._load_graph(user_id, file_ids)
@@ -199,9 +252,17 @@ class GraphWalker:
                 error="The graph walk did not converge",
             )
         marked, hops = self._rank(pool, user_id, network, graph, scores, resolved)
+        connections: Tuple[Dict[str, Any], ...] = ()
+        note = ""
+        if connect:
+            marked, hops, connections, note = self._connect(
+                marked, hops, user_id, network, graph, scores, resolved
+            )
         return WalkResult(
             pool=marked,
             hops=hops,
+            connections=connections,
+            connection_note=note,
             nodes=network.number_of_nodes(),
             edges=network.number_of_edges(),
             milliseconds=int((time.monotonic() - started) * 1000),
@@ -280,6 +341,95 @@ class GraphWalker:
                 )
             )
         return marked, hops
+
+    def _connect(self, pool, hops, user_id, network, graph, scores, resolved):
+        """Seat the chunks that show how the named entities connect."""
+
+        def name(node: Node) -> str:
+            return graph.entity_names.get(node[1], "")
+
+        entities = [_entity_node(entity) for entity in dict.fromkeys(resolved.values())]
+        entities = [node for node in entities if node in network]
+        found: List[List[Node]] = []
+        connections: List[Dict[str, Any]] = []
+        notes: List[str] = []
+        for first, second in combinations(entities[:MAX_CONNECTED_ENTITIES], 2):
+            direct, through = find_connections(network, first, second)
+            found.extend([*direct, *through])
+            via = [name(path[2]) for path in through]
+            connections.append(
+                {
+                    "from": name(first),
+                    "to": name(second),
+                    "together": len(direct),
+                    "via": via,
+                }
+            )
+            if direct:
+                notes.append(
+                    f"Report only what the passages state about {name(first)} and "
+                    f"{name(second)} together. Do not label them allies or opponents "
+                    "unless a passage says so."
+                )
+                continue
+            notes.append(
+                f"{name(first)} and {name(second)} never appear in the same passage. "
+                + (
+                    "They connect only through other names they each appear beside: "
+                    f"{', '.join(via)}. Say that plainly, and do not imply a closer "
+                    "relationship than the passages state."
+                    if via
+                    else "Nothing in these files connects them, so say so."
+                )
+            )
+        by_key = {(c.file_id, c.chunk_index): c for c in [*pool, *hops]}
+        wanted = {node[1] for path in found for node in path if node[0] == "chunk"}
+        loaded = self._load_chunks(
+            [key for key in wanted if key not in by_key], user_id
+        )
+        routes: Dict[ChunkKey, List[Node]] = {}
+        for path in found:
+            for index, node in enumerate(path):
+                if node[0] == "chunk":
+                    routes.setdefault(node[1], path[: index + 1])
+        marked = list(pool)
+        positions = {(c.file_id, c.chunk_index): i for i, c in enumerate(pool)}
+        hop_positions = {(c.file_id, c.chunk_index): i for i, c in enumerate(hops)}
+        extended = list(hops)
+        anchor_score = pool[0].score if pool else 0.0
+        for key, path in routes.items():
+            via = self._hop(path, network, graph, by_key, loaded)
+            score = scores.get(_chunk_node(key), 0.0)
+            if key in positions:
+                marked[positions[key]] = replace(
+                    marked[positions[key]], via=via, graph_score=score, bridge=True
+                )
+            elif key in hop_positions:
+                extended[hop_positions[key]] = replace(
+                    extended[hop_positions[key]], via=via, bridge=True
+                )
+            elif key in loaded:
+                row = loaded[key]
+                extended.append(
+                    RetrievedChunk(
+                        text=row.text,
+                        source_ref=row.file_name,
+                        score=anchor_score,
+                        chunk_index=key[1],
+                        source_type="document",
+                        file_id=key[0],
+                        file_name=row.file_name,
+                        page_start=row.page_start,
+                        page_end=row.page_end,
+                        section=row.section,
+                        retrieval_text=row.retrieval_text,
+                        via=via,
+                        graph_score=score,
+                        bridge=True,
+                    )
+                )
+        note = f"[connection] {' '.join(notes)}" if notes else ""
+        return marked, extended, tuple(connections), note
 
     def _hop(self, path, network, graph, by_key, loaded) -> ReferenceHop:
         steps = self._steps(path, network, graph, by_key, loaded)

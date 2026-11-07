@@ -72,8 +72,10 @@ class AliasDecision(TimeStampMixin):
                 fields=["user", "key_a", "key_b"], name="unique_alias_decision"
             ),
             models.CheckConstraint(
-                condition=models.Q(key_a__lt=models.F("key_b")),
-                name="alias_decision_keys_ordered",
+                # Not key_a < key_b: Python orders the pair, and database collations
+                # sort spaces differently.
+                condition=~models.Q(key_a=models.F("key_b")),
+                name="alias_decision_keys_differ",
             ),
         ]
 
@@ -88,6 +90,12 @@ class KnowledgeGraph(TimeStampMixin):
     )
     name = models.CharField(max_length=200)
     description = models.CharField(max_length=500, blank=True, default="")
+    goal = models.CharField(
+        max_length=300,
+        blank=True,
+        default="",
+        help_text="What the user wants to learn; steers suggested relationship types.",
+    )
     files = models.ManyToManyField(File, related_name="knowledge_graphs")
     status = models.CharField(
         max_length=24, choices=GraphStatus.choices, default=GraphStatus.READY_FREE
@@ -100,6 +108,7 @@ class KnowledgeGraph(TimeStampMixin):
     approved_at = models.DateTimeField(null=True, blank=True)
     built_at = models.DateTimeField(null=True, blank=True)
     eval_report = models.JSONField(null=True, blank=True)
+    proposed_types = models.JSONField(default=list, blank=True)
 
     class Meta:
         ordering = ["-created_at"]
@@ -118,6 +127,9 @@ class RelationLabel(TimeStampMixin):
     description = models.CharField(max_length=200, blank=True, default="")
     source = models.CharField(
         max_length=16, choices=LabelSource.choices, default=LabelSource.DISCOVERED
+    )
+    read_at = models.DateTimeField(
+        null=True, blank=True, help_text="When a build last read chunks for this type."
     )
 
     class Meta:

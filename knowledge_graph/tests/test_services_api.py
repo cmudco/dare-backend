@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -5,8 +6,8 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 
 from core.services.decisions_service import Answer, DecisionBatch
-from files.models import DocumentChunk, DocumentEntity, File
-from knowledge_graph.constants import GraphStatus, LabelSource
+from files.models import DocumentChunk, DocumentEntity, File, Folder
+from knowledge_graph.constants import AliasSource, GraphStatus, LabelSource
 from knowledge_graph.models import (
     AliasDecision,
     ClusterAlias,
@@ -16,17 +17,20 @@ from knowledge_graph.models import (
     RelationLabel,
 )
 from knowledge_graph.services.cluster_service import EntityClusterService
+from knowledge_graph.services.ingest_hook import sync_clusters_after_ingest
 from knowledge_graph.services.relation_service import (
     LabelOperation,
     RelationBuildService,
     apply_label_operations,
 )
-from knowledge_graph.services.walk_loader import (
-    load_walk_graph,
-    resolve_query_entities,
-)
+from knowledge_graph.services.walk_loader import load_walk_graph, resolve_query_entities
 
 User = get_user_model()
+
+
+def run_job_now(job_function, *args):
+    job_function(*args)
+    return SimpleNamespace(id="inline")
 
 
 def make_file(user, name, text, entities):
@@ -66,6 +70,25 @@ class ClusterServiceTests(TestCase):
         self.assertEqual(self.cluster_of("mappa"), self.cluster_of("studio mappa"))
         self.assertNotEqual(self.cluster_of("mappa"), self.cluster_of("chainsaw man"))
 
+    def test_one_sync_survives_a_name_merged_twice(self):
+        make_file(
+            self.user,
+            "c.pdf",
+            "Ann Lee, A. Lee and Lee.",
+            [
+                ("person", "lee", "Lee"),
+                ("person", "a lee", "A. Lee"),
+                ("person", "ann lee", "Ann Lee"),
+            ],
+        )
+        merges = [("lee", "a lee"), ("lee", "ann lee")]
+        with patch(
+            "knowledge_graph.services.cluster_service.rule_merges", return_value=merges
+        ):
+            EntityClusterService.sync_user(self.user)
+        self.assertEqual(self.cluster_of("lee"), self.cluster_of("ann lee"))
+        self.assertEqual(self.cluster_of("a lee"), self.cluster_of("ann lee"))
+
     def test_sync_is_idempotent(self):
         before = EntityCluster.objects.filter(user=self.user).count()
         self.assertEqual(EntityClusterService.sync_user(self.user), 0)
@@ -81,6 +104,18 @@ class ClusterServiceTests(TestCase):
                 user=self.user, key_a="mappa", key_b="studio mappa", same=False
             ).exists()
         )
+
+    def test_decision_saves_keys_postgres_sorts_differently(self):
+        # Postgres en_US ignores spaces, so it sorts these two the other way round.
+        low, high = sorted(["alice", "ali qapu palace"])
+        AliasDecision.objects.create(
+            user=self.user,
+            key_a=low,
+            key_b=high,
+            same=False,
+            source=AliasSource.DECISIONS,
+        )
+        self.assertTrue(AliasDecision.objects.filter(key_a=low, key_b=high).exists())
 
     def test_merge_repoints_relations(self):
         graph = KnowledgeGraph.objects.create(user=self.user, name="g")
@@ -210,6 +245,30 @@ class RelationBuildTests(TestCase):
 
         return Fake()
 
+    def test_failed_rerun_keeps_the_relations_already_paid_for(self):
+        with patch(
+            "knowledge_graph.services.relation_service.DecisionsService",
+            return_value=self.fake_client(),
+        ), patch(
+            "knowledge_graph.services.cluster_service.EntityClusterService.adjudicate",
+            return_value=(0, 0),
+        ):
+            RelationBuildService.build(self.graph)
+        before = self.graph.relations.count()
+        self.assertGreater(before, 0)
+        with patch("knowledge_graph.services.relation_service.DecisionsService"), patch(
+            "knowledge_graph.services.cluster_service.EntityClusterService.adjudicate",
+            return_value=(0, 0),
+        ), patch(
+            "knowledge_graph.services.relation_service.MIN_FAILED_CHUNKS_TO_STOP", 0
+        ), patch.object(
+            RelationBuildService, "_read_chunk", side_effect=RuntimeError("down")
+        ):
+            RelationBuildService.run_build(self.graph.id)
+        self.graph.refresh_from_db()
+        self.assertEqual(self.graph.status, GraphStatus.FAILED)
+        self.assertEqual(self.graph.relations.count(), before)
+
     def test_build_stores_only_stated_relations_with_direction(self):
         with patch(
             "knowledge_graph.services.relation_service.DecisionsService",
@@ -233,6 +292,15 @@ class RelationBuildTests(TestCase):
         self.assertEqual(EntityRelation.objects.count(), 1)
 
 
+class IngestHookTests(TestCase):
+    def test_clustering_failure_never_fails_the_upload(self):
+        user = User.objects.create_user(email="h@dare.test", password="x")
+        with patch.object(
+            EntityClusterService, "sync_user", side_effect=EntityCluster.DoesNotExist
+        ):
+            sync_clusters_after_ingest(user.id)
+
+
 class TenantIsolationTests(TestCase):
     def setUp(self):
         self.owner = User.objects.create_user(email="o@dare.test", password="x")
@@ -241,6 +309,9 @@ class TenantIsolationTests(TestCase):
             self.owner, "a.pdf", "MAPPA.", [("organization", "mappa", "MAPPA")]
         )
         self.api = APIClient()
+        starting = patch("knowledge_graph.api.views.enqueue", run_job_now)
+        starting.start()
+        self.addCleanup(starting.stop)
 
     def test_create_and_read_own_graph(self):
         self.api.force_authenticate(self.owner)
@@ -254,6 +325,58 @@ class TenantIsolationTests(TestCase):
         view = self.api.get(f"/api/knowledge-graphs/{graph_id}/view/")
         self.assertEqual(view.status_code, 200)
         self.assertEqual(view.json()["stats"]["entities"], 1)
+
+    def test_focus_brings_an_entity_outside_the_top_nodes_onto_the_canvas(self):
+        rare = make_file(
+            self.owner,
+            "b.pdf",
+            "Ufotable and Aniplex.",
+            [("organization", "ufotable", "Ufotable")],
+        )
+        self.api.force_authenticate(self.owner)
+        graph_id = self.api.post(
+            "/api/knowledge-graphs/",
+            {"name": "G", "file_ids": [self.file.id, rare.id]},
+            format="json",
+        ).json()["id"]
+        url = f"/api/knowledge-graphs/{graph_id}/view/"
+        with patch("knowledge_graph.services.graph_view_service.MAX_NODES", 1):
+            top = self.api.get(url).json()
+            shown = {node["id"] for node in top["nodes"]}
+            hidden = next(e for e in top["entities"] if e["id"] not in shown)
+            focused = self.api.get(f"{url}?focus={hidden['id']}").json()
+        self.assertEqual(len(top["entities"]), 2)
+        self.assertIn(hidden["id"], {node["id"] for node in focused["nodes"]})
+
+    def test_folder_adds_its_documents(self):
+        media = File.active_objects.create(user=self.owner, name="a.png", is_media=True)
+        folder = Folder.objects.create(user=self.owner, name="Midterms")
+        folder.files.add(self.file, media)
+        self.api.force_authenticate(self.owner)
+        made = self.api.post(
+            "/api/knowledge-graphs/",
+            {"name": "G", "folder_ids": [folder.id]},
+            format="json",
+        )
+        self.assertEqual(made.status_code, 201, made.content)
+        self.assertEqual(made.json()["fileIds"], [self.file.id])
+
+    def test_other_users_folder_is_refused(self):
+        folder = Folder.objects.create(user=self.owner, name="Midterms")
+        folder.files.add(self.file)
+        self.api.force_authenticate(self.other)
+        response = self.api.post(
+            "/api/knowledge-graphs/",
+            {"name": "G", "folder_ids": [folder.id]},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(KnowledgeGraph.objects.filter(user=self.other).exists())
+
+    def test_empty_selection_is_refused(self):
+        self.api.force_authenticate(self.owner)
+        response = self.api.post("/api/knowledge-graphs/", {"name": "G"}, format="json")
+        self.assertEqual(response.status_code, 400)
 
     def test_unauthenticated_is_401(self):
         self.assertEqual(self.api.get("/api/knowledge-graphs/").status_code, 401)

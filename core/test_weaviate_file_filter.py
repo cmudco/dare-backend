@@ -35,19 +35,8 @@ class WeaviateSelectedFileFilterTests(SimpleTestCase):
         self.assertEqual(user_filter.target, "user_id")
         self.assertEqual(user_filter.value, "7")
 
-        def flatten_values(filter_item):
-            if hasattr(filter_item, "target"):
-                return [(filter_item.target, filter_item.value)]
-            return [
-                value
-                for child in filter_item.filters
-                for value in flatten_values(child)
-            ]
-
-        self.assertEqual(
-            flatten_values(selected_files_filter),
-            [("file_id", "11"), ("file_id", "12"), ("file_id", "13")],
-        )
+        self.assertEqual(selected_files_filter.target, "file_id")
+        self.assertEqual(selected_files_filter.value, ["11", "12", "13"])
 
     @patch("core.helpers.weaviate.WeaviateClient._create_collection")
     @patch("core.helpers.weaviate.WeaviateClient._connect_to_weaviate")

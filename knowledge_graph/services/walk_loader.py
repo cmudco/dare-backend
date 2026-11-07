@@ -12,7 +12,7 @@ from core.services.rag.graph_walker import (
 from core.services.rag.structured_chunker import retrieval_text_for
 from files.models import DocumentChunk, DocumentEntity, DocumentReference
 from knowledge_graph.constants import LINKING_EXCLUDED_KINDS
-from knowledge_graph.domain.alias_rules import blocking_key
+from knowledge_graph.domain.alias_rules import blocking_key, generic_keys
 from knowledge_graph.models import ClusterAlias, EntityCluster, EntityRelation
 
 ChunkKey = Tuple[str, int]
@@ -25,13 +25,18 @@ def load_walk_graph(user_id: Optional[int], file_ids: Sequence[int]) -> WalkGrap
     )
     links: List[WalkEntityLink] = []
     names: Dict[int, str] = {}
-    for row in (
+    rows = list(
         DocumentEntity.objects.filter(file__user_id=user_id, file_id__in=file_ids)
         .exclude(kind__in=LINKING_EXCLUDED_KINDS)
         .values("file_id", "chunk__chunk_index", "key", "text", "mentions")
-    ):
+    )
+    # "Affiant" or "board" would join every form to every other one.
+    generic = generic_keys(
+        (row["key"], row["text"], row["mentions"], row["file_id"]) for row in rows
+    )
+    for row in rows:
         cluster_id = aliases.get(row["key"])
-        if cluster_id is None:
+        if cluster_id is None or row["key"] in generic:
             continue
         links.append(
             WalkEntityLink(
@@ -72,7 +77,10 @@ def load_walk_graph(user_id: Optional[int], file_ids: Sequence[int]) -> WalkGrap
         ).values("subject_id", "object_id", "label__name", "probability")
     ]
     return WalkGraph(
-        links=links, pointers=pointers, relations=relations, entity_names=names
+        links=links,
+        pointers=pointers,
+        relations=relations,
+        entity_names=names,
     )
 
 
