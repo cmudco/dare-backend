@@ -17,6 +17,7 @@ from knowledge_graph.domain.relation_pairs import (
     implied_pairs,
     opening_speaker,
     stating_text,
+    trim_quote,
 )
 
 
@@ -253,6 +254,22 @@ class StatingTextTests(SimpleTestCase):
 
     def test_falls_back_when_no_sentence_qualifies(self):
         self.assertEqual(stating_text("Nothing here.", self.PAIR, "fired"), "fallback")
+
+    def test_a_form_page_quote_centers_on_the_names(self):
+        header = "Department of the Interior, PENSION OFFICE, Attention is invited " * 6
+        quote = trim_quote(
+            header + "Name and rank Cain Jenkins, Private, Company C, 34 Regt.",
+            ("Cain Jenkins", "Company C"),
+        )
+        self.assertTrue(quote.startswith("… "))
+        self.assertIn("Cain Jenkins, Private, Company C", quote)
+        self.assertLess(len(quote), len(header))
+
+    def test_a_short_quote_is_left_whole(self):
+        self.assertEqual(
+            trim_quote("Ann  Walker married\nSamuel Brown.", ("Ann Walker",)),
+            "Ann Walker married Samuel Brown.",
+        )
 
 
 class RuleMergeTests(SimpleTestCase):

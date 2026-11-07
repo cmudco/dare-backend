@@ -128,6 +128,10 @@ class RelationLabel(TimeStampMixin):
     source = models.CharField(
         max_length=16, choices=LabelSource.choices, default=LabelSource.DISCOVERED
     )
+    two_way = models.BooleanField(
+        default=False,
+        help_text="Stated the same either way round, like married_to; stored once.",
+    )
     read_at = models.DateTimeField(
         null=True, blank=True, help_text="When a build last read chunks for this type."
     )

@@ -86,8 +86,9 @@ LABEL_SYSTEM = (
     "Describe each type in plain words wide enough for every use of the verb, not "
     "limited to one kind of target. Keep the list small: prefer one general type to "
     "several narrow ones. Favor the acts that recur across the documents and what "
-    "the user wants to learn, when they say. Reply with no changes when the list "
-    "already covers the passages."
+    "the user wants to learn, when they say. Mark a type two_way when 'A type B' "
+    "always means 'B type A' too, like married_to or served_with. Reply with no "
+    "changes when the list already covers the passages."
 )
 IMPLIED_RULES = (
     "This passage does not always name its speaker. 'I' and 'my' mean whoever is "
@@ -112,13 +113,15 @@ PROPOSAL_SYSTEM = (
     "type such as influenced, affected, related_to or involved_in, and never put a "
     "specific name in a type. Ignore sentences that state no act between two named "
     "things. For each type give a plain description and the numbers of the sentences "
-    "that state it. Reply with no types if none recur."
+    "that state it, and mark it two_way when 'A type B' always means 'B type A' "
+    "too, like married_to. Reply with no types if none recur."
 )
 
 
 class ProposedType(BaseModel):
     name: str
     description: str
+    two_way: bool
     sentences: List[int]
 
 
@@ -131,6 +134,7 @@ class LabelOperation(BaseModel):
     name: str
     new_name: str
     description: str
+    two_way: bool
 
 
 class LabelUpdate(BaseModel):
@@ -186,6 +190,7 @@ def apply_label_operations(
                     name=name,
                     description=operation.description[:200],
                     source=LabelSource.DISCOVERED,
+                    two_way=operation.two_way,
                 )
             continue
         current = labels.get(name)
@@ -412,9 +417,12 @@ class RelationBuildService:
             choices.append(
                 Choice(f"f:{label.name}", f"{pair.a.text} {phrase} {pair.b.text}{hint}")
             )
-            choices.append(
-                Choice(f"r:{label.name}", f"{pair.b.text} {phrase} {pair.a.text}{hint}")
-            )
+            if not label.two_way:
+                choices.append(
+                    Choice(
+                        f"r:{label.name}", f"{pair.b.text} {phrase} {pair.a.text}{hint}"
+                    )
+                )
         return Question(
             name=f"pair_{index}",
             instructions=(
@@ -609,6 +617,7 @@ class RelationBuildService:
                         {
                             "name": name,
                             "description": proposed.description[:200],
+                            "two_way": proposed.two_way,
                             "example": batch[cited[0]][:300],
                             "count": 0,
                         },
@@ -645,6 +654,8 @@ class RelationBuildService:
                 if forward
                 else (pair.b.cluster_id, pair.a.cluster_id)
             )
+            if name in by_name and by_name[name].two_way:
+                subject_id, object_id = sorted((subject_id, object_id))
             if (
                 name not in by_name
                 or subject_id not in clusters

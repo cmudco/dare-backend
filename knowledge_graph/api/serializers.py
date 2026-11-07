@@ -60,3 +60,8 @@ class MergeSerializer(serializers.Serializer):
 
 class AskSerializer(serializers.Serializer):
     question = serializers.CharField(max_length=500)
+
+
+class LabelCreateSerializer(LabelWriteSerializer):
+    # Set once: flipping it later would leave old rows stored both ways round.
+    two_way = serializers.BooleanField(required=False, default=False)

@@ -8,8 +8,9 @@ from typing import Dict, List, Optional, Set, Tuple
 from core.services.background_model_service import BackgroundModelUnavailable
 from core.services.decisions_service import DecisionsUnavailable
 from files.models import DocumentChunk, DocumentEntity
-from knowledge_graph.constants import LINKING_EXCLUDED_KINDS
+from knowledge_graph.constants import LABEL_EXAMPLES, LINKING_EXCLUDED_KINDS
 from knowledge_graph.domain.alias_rules import generic_keys
+from knowledge_graph.domain.relation_pairs import names_found
 from knowledge_graph.models import (
     ClusterAlias,
     EntityCluster,
@@ -30,12 +31,62 @@ RELATION_FIELDS = (
     "probability",
     "evidence",
     "label__name",
+    "label__two_way",
     "file__name",
     "chunk__page_start",
 )
 
 
 class GraphViewService:
+    @staticmethod
+    def _labels(
+        graph: KnowledgeGraph, grouped: Dict[Tuple[int, str, int], Dict], clusters
+    ) -> List[Dict]:
+        """Each type with its distinct pairs and the strongest few as proof."""
+        pairs_of: Dict[str, List[Dict]] = defaultdict(list)
+        for edge in grouped.values():
+            pairs_of[edge["label"]].append(edge)
+
+        def named(cluster_id: int) -> str:
+            return getattr(clusters.get(cluster_id), "label", "")
+
+        labels = []
+        for label in graph.labels.all():
+            pairs = sorted(
+                pairs_of[label.name],
+                key=lambda edge: (
+                    -names_found(
+                        edge["evidence"], (named(edge["source"]), named(edge["target"]))
+                    ),
+                    -edge["count"],
+                    -edge["probability"],
+                ),
+            )
+            labels.append(
+                {
+                    "id": label.id,
+                    "name": label.name,
+                    "description": label.description,
+                    "source": label.source,
+                    "two_way": label.two_way,
+                    "relation_count": sum(edge["count"] for edge in pairs),
+                    "pair_count": len(pairs),
+                    "read": label.read_at is not None,
+                    "examples": [
+                        {
+                            "subject": named(edge["source"]),
+                            "object": named(edge["target"]),
+                            "evidence": edge["evidence"],
+                            "file_name": edge["file_name"],
+                            "page": edge["page"],
+                            "sources": edge["count"],
+                        }
+                        for edge in pairs[:LABEL_EXAMPLES]
+                    ],
+                }
+            )
+        return labels
+
     @staticmethod
     def _file_ids(graph: KnowledgeGraph) -> List[int]:
         return list(
@@ -113,13 +164,16 @@ class GraphViewService:
         relation_degree: Counter = Counter()
         grouped: Dict[Tuple[int, str, int], Dict] = {}
         for relation in relations:
-            slot = (relation.subject_id, relation.label.name, relation.object_id)
+            source, target = relation.subject_id, relation.object_id
+            if relation.label.two_way:
+                source, target = sorted((source, target))
+            slot = (source, relation.label.name, target)
             relation_degree[relation.subject_id] += 1
             relation_degree[relation.object_id] += 1
             if slot not in grouped:
                 grouped[slot] = {
-                    "source": relation.subject_id,
-                    "target": relation.object_id,
+                    "source": source,
+                    "target": target,
                     "label": relation.label.name,
                     "probability": relation.probability,
                     "evidence": relation.evidence,
@@ -212,17 +266,7 @@ class GraphViewService:
                 if edge["source"] in chosen_set and edge["target"] in chosen_set
             ],
             "links": links,
-            "labels": [
-                {
-                    "id": label.id,
-                    "name": label.name,
-                    "description": label.description,
-                    "source": label.source,
-                    "relation_count": label.relations.count(),
-                    "read": label.read_at is not None,
-                }
-                for label in graph.labels.all()
-            ],
+            "labels": cls._labels(graph, grouped, all_clusters),
             "stats": {
                 "documents": len(file_ids),
                 "passages": DocumentChunk.objects.filter(file_id__in=file_ids).count(),

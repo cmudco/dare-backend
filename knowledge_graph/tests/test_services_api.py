@@ -8,6 +8,7 @@ from rest_framework.test import APIClient
 from core.services.decisions_service import Answer, DecisionBatch
 from files.models import DocumentChunk, DocumentEntity, File, Folder
 from knowledge_graph.constants import AliasSource, GraphStatus, LabelSource
+from knowledge_graph.domain.relation_pairs import CandidatePair, PairMention
 from knowledge_graph.models import (
     AliasDecision,
     ClusterAlias,
@@ -171,7 +172,11 @@ class LabelOperationTests(TestCase):
 
     def op(self, action, name, new_name="", description=""):
         return LabelOperation(
-            action=action, name=name, new_name=new_name, description=description
+            action=action,
+            name=name,
+            new_name=new_name,
+            description=description,
+            two_way=False,
         )
 
     def test_add_rename_remove(self):
@@ -281,6 +286,28 @@ class RelationBuildTests(TestCase):
         self.graph.refresh_from_db()
         self.assertEqual(self.graph.status, GraphStatus.READY)
         self.assertGreater(self.graph.tokens_used, 0)
+
+    def test_a_two_way_type_is_asked_once_and_stored_in_one_order(self):
+        label = RelationLabel.objects.create(
+            graph=self.graph, name="worked_with", two_way=True
+        )
+        mappa = EntityCluster.objects.get(label="MAPPA")
+        title = EntityCluster.objects.get(label="Chainsaw Man")
+        high, low = sorted((mappa, title), key=lambda cluster: -cluster.pk)
+        pair = CandidatePair(
+            PairMention(high.pk, high.label), PairMention(low.pk, low.label), "s"
+        )
+        question = RelationBuildService._choice_question(0, pair, [label])
+        self.assertEqual([c.value for c in question.choices], ["none", "f:worked_with"])
+        RelationBuildService._save_chunk_relations(
+            self.graph,
+            DocumentChunk.objects.get(file=self.file),
+            [(pair, "worked_with", True, 0.9)],
+            {"worked_with": label},
+            {high.pk, low.pk},
+        )
+        relation = EntityRelation.objects.get(label=label)
+        self.assertEqual((relation.subject_id, relation.object_id), (low.pk, high.pk))
 
     def test_rerun_replaces_instead_of_duplicating(self):
         with patch(

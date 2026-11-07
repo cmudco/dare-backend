@@ -4,6 +4,8 @@ import re
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
+from knowledge_graph.constants import MAX_QUOTE_CHARS, QUOTE_CONTEXT_CHARS
+
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+|\n{2,}")
 
 
@@ -159,11 +161,53 @@ def stating_text(text: str, pair: CandidatePair, label: str) -> str:
     """
     word = label.split("_")[0]
     stem = re.compile(r"(?<!\w)" + re.escape(word[: max(4, len(word) - 3)]), re.I)
+    names = (pair.a.text, pair.b.text)
     for sentence in split_sentences(text):
         if (
             stem.search(sentence)
             and _surname_in(sentence, pair.a)
             and _surname_in(sentence, pair.b)
         ):
-            return sentence
-    return pair.sentence
+            return trim_quote(sentence, names)
+    return trim_quote(pair.sentence, names)
+
+
+def _name_span(text: str, name: str) -> Optional[Tuple[int, int]]:
+    words = re.findall(r"\w+", name)
+    # The full name first; a surname alone still places "Mrs. Fields".
+    for word in (name, words[-1] if words else ""):
+        found = word and re.search(
+            r"(?<!\w)" + re.escape(word) + r"(?!\w)", text, re.IGNORECASE
+        )
+        if found:
+            return found.span()
+    return None
+
+
+def names_found(text: str, names: Sequence[str]) -> int:
+    """How many of the names a quote shows, so a self-explaining quote can lead."""
+    return sum(1 for name in names if _name_span(text, name))
+
+
+def trim_quote(text: str, names: Sequence[str]) -> str:
+    """The stretch of a long quote around the named sides.
+
+    Forms have few sentence breaks, so one "sentence" can be a whole page whose
+    first lines are a printed header.
+    """
+    text = " ".join(text.split())
+    if len(text) <= MAX_QUOTE_CHARS:
+        return text
+    spans = [span for span in (_name_span(text, name) for name in names) if span]
+    if not spans:
+        return text[:MAX_QUOTE_CHARS].rsplit(" ", 1)[0] + " …"
+    start = max(min(begin for begin, _ in spans) - QUOTE_CONTEXT_CHARS, 0)
+    end = min(max(finish for _, finish in spans) + QUOTE_CONTEXT_CHARS, len(text))
+    if start > 0:
+        start = text.find(" ", start) + 1 or start
+    if end < len(text):
+        cut = text.rfind(" ", start, end)
+        end = cut if cut > start else end
+    prefix = "… " if start > 0 else ""
+    suffix = " …" if end < len(text) else ""
+    return prefix + text[start:end] + suffix

@@ -18,6 +18,7 @@ from knowledge_graph.api.serializers import (
     DiscoverSerializer,
     GraphCreateSerializer,
     GraphUpdateSerializer,
+    LabelCreateSerializer,
     LabelWriteSerializer,
     MergeSerializer,
     SeparateSerializer,
@@ -188,7 +189,7 @@ class KnowledgeGraphViewSet(viewsets.ViewSet):
     @action(detail=True, methods=["post"], url_path="labels")
     def add_label(self, request, pk=None):
         graph = self._graph(pk)
-        body = LabelWriteSerializer(data=request.data)
+        body = LabelCreateSerializer(data=request.data)
         body.is_valid(raise_exception=True)
         name = body.validated_data.get("name")
         if not name:
@@ -204,6 +205,7 @@ class KnowledgeGraphViewSet(viewsets.ViewSet):
             name=name,
             description=body.validated_data.get("description", ""),
             source=LabelSource.USER,
+            two_way=body.validated_data["two_way"],
         )
         return Response(
             {
@@ -211,6 +213,7 @@ class KnowledgeGraphViewSet(viewsets.ViewSet):
                 "name": label.name,
                 "description": label.description,
                 "source": label.source,
+                "two_way": label.two_way,
                 "relation_count": 0,
             },
             status=status.HTTP_201_CREATED,
@@ -242,6 +245,7 @@ class KnowledgeGraphViewSet(viewsets.ViewSet):
                 "name": label.name,
                 "description": label.description,
                 "source": label.source,
+                "two_way": label.two_way,
                 "relation_count": label.relations.count(),
             }
         )
