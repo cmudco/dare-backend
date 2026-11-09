@@ -41,23 +41,26 @@ from knowledge_graph.constants import (
     MAX_PAIRS_PER_CHUNK,
     MAX_PROPOSAL_SENTENCES,
     MAX_PROPOSED_TYPES,
+    MAX_REACH_PAIRS_PER_CHUNK,
     MAX_RELATION_LABELS,
     MIN_FAILED_CHUNKS_TO_STOP,
     PROPOSAL_BATCH_SENTENCES,
-    RELATION_CHOICE_THRESHOLD,
     RELATION_VERIFY_THRESHOLD,
+    STRONG_PAIR_CHUNKS,
     VAGUE_RELATION_TYPES,
     GraphStatus,
     LabelSource,
 )
-from knowledge_graph.domain.alias_rules import generic_keys
+from knowledge_graph.domain.alias_rules import file_owners, generic_keys
 from knowledge_graph.domain.relation_pairs import (
     CandidatePair,
     PairMention,
     candidate_pairs,
     implied_pairs,
     opening_speaker,
+    reach_pairs,
     stating_text,
+    strong_pairs,
 )
 from knowledge_graph.models import (
     ClusterAlias,
@@ -229,7 +232,7 @@ class RelationBuildService:
         people: Dict[int, List[PairMention]] = defaultdict(list)
         weights: Dict[int, Counter] = defaultdict(Counter)
         spellings: Dict[int, Counter] = defaultdict(Counter)
-        rows = (
+        rows = list(
             DocumentEntity.objects.filter(
                 chunk__in=cls.graph_chunks(graph).values("id")
             )
@@ -239,14 +242,26 @@ class RelationBuildService:
         generic = generic_keys(
             (row["key"], row["text"], row["mentions"], row["file_id"]) for row in rows
         )
+        rows = [
+            row
+            for row in rows
+            if row["key"] in alias_cluster and row["key"] not in generic
+        ]
+        in_file: Dict[int, List[Tuple[str, int, int]]] = defaultdict(list)
         for row in rows:
-            cluster_id = alias_cluster.get(row["key"])
-            if cluster_id is not None and row["key"] not in generic:
-                mentions[row["chunk_id"]].append(PairMention(cluster_id, row["text"]))
-                if row["kind"] == "person":
-                    people[row["chunk_id"]].append(PairMention(cluster_id, row["text"]))
-                    weights[row["file_id"]][cluster_id] += row["mentions"]
-                    spellings[cluster_id][row["text"]] += row["mentions"]
+            if row["kind"] == "person":
+                in_file[row["file_id"]].append(
+                    (row["key"], alias_cluster[row["key"]], row["mentions"])
+                )
+        owners = {file_id: file_owners(items) for file_id, items in in_file.items()}
+        for row in rows:
+            cluster_id = alias_cluster[row["key"]]
+            if row["kind"] == "person":
+                cluster_id = owners[row["file_id"]].get(row["key"], cluster_id)
+                people[row["chunk_id"]].append(PairMention(cluster_id, row["text"]))
+                weights[row["file_id"]][cluster_id] += row["mentions"]
+                spellings[cluster_id][row["text"]] += row["mentions"]
+            mentions[row["chunk_id"]].append(PairMention(cluster_id, row["text"]))
         plan: Dict[int, List[CandidatePair]] = {}
         subjects = {
             file_id: PairMention(
@@ -261,6 +276,10 @@ class RelationBuildService:
             .order_by("file_id", "chunk_index")
             .values_list("id", "text", "file_id")
         )
+        strong = strong_pairs(
+            ([person.cluster_id for person in named] for named in people.values()),
+            STRONG_PAIR_CHUNKS,
+        )
         speaker: Dict[int, PairMention] = {}
         for chunk_id, text, file_id in chunk_rows:
             items = mentions[chunk_id]
@@ -273,6 +292,9 @@ class RelationBuildService:
                 pairs = pairs + implied_pairs(
                     text, subject, items, pairs, MAX_IMPLIED_PAIRS_PER_CHUNK
                 )
+            pairs = pairs + reach_pairs(
+                text, people[chunk_id], strong, pairs, MAX_REACH_PAIRS_PER_CHUNK
+            )
             if pairs:
                 plan[chunk_id] = pairs
         return plan
@@ -450,12 +472,8 @@ class RelationBuildService:
         unmatched: List[str] = []
         for index, pair in enumerate(pairs):
             answer = first.answers.get(f"pair_{index}")
-            if (
-                answer is None
-                or not answer.choice
-                or answer.choice == NO_RELATION
-                or (answer.confidence or 0) < RELATION_CHOICE_THRESHOLD
-            ):
+            # No confidence cutoff: a dozen types split it, and the check decides.
+            if answer is None or not answer.choice or answer.choice == NO_RELATION:
                 if answer is not None and answer.choice == NO_RELATION:
                     unmatched.append(pair.sentence)
                 continue

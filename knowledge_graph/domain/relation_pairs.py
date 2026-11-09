@@ -1,8 +1,10 @@
 """Pure selection of the entity pairs one passage could state a relationship about."""
 
 import re
+from collections import Counter
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from itertools import combinations
+from typing import Dict, FrozenSet, Iterable, List, Optional, Sequence, Tuple
 
 from knowledge_graph.constants import MAX_QUOTE_CHARS, QUOTE_CONTEXT_CHARS
 
@@ -124,6 +126,61 @@ def implied_pairs(
                 if len(found) >= limit:
                     return found
     return found
+
+
+def strong_pairs(
+    people_by_chunk: Iterable[Iterable[int]], min_chunks: int
+) -> FrozenSet[FrozenSet[int]]:
+    """People named together in at least ``min_chunks`` chunks."""
+    together: Counter = Counter()
+    for people in people_by_chunk:
+        for a, b in combinations(sorted(set(people)), 2):
+            together[frozenset((a, b))] += 1
+    return frozenset(pair for pair, count in together.items() if count >= min_chunks)
+
+
+def reach_pairs(
+    text: str,
+    people: Iterable[PairMention],
+    strong: FrozenSet[FrozenSet[int]],
+    taken: Iterable[CandidatePair],
+    limit: int,
+) -> List[CandidatePair]:
+    """Strong pairs this chunk names anywhere, not just a sentence apart.
+
+    Forms put an examiner and a claimant paragraphs apart, so the sentence rule
+    never asks about the people who appear together most.
+    """
+    asked = {frozenset((pair.a.cluster_id, pair.b.cluster_id)) for pair in taken}
+    unique: Dict[int, PairMention] = {}
+    for person in people:
+        if _found_in(text, person):
+            unique.setdefault(person.cluster_id, person)
+    found: List[CandidatePair] = []
+    for a, b in combinations(_sorted(unique), 2):
+        slot = frozenset((a.cluster_id, b.cluster_id))
+        if slot in strong and slot not in asked:
+            found.append(CandidatePair(a, b, pair_excerpt(text, (a.text, b.text))))
+            if len(found) >= limit:
+                break
+    return found
+
+
+def pair_excerpt(text: str, names: Sequence[str]) -> str:
+    """Each name with a little context, joined, for two names far apart."""
+    text = " ".join(text.split())
+    spans = [span for span in (_name_span(text, name) for name in names) if span]
+    merged: List[List[int]] = []
+    for begin, end in sorted(spans):
+        begin = max(begin - QUOTE_CONTEXT_CHARS, 0)
+        end = min(end + QUOTE_CONTEXT_CHARS, len(text))
+        if merged and begin <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([begin, end])
+    return " … ".join(text[begin:end] for begin, end in merged) or trim_quote(
+        text, names
+    )
 
 
 def _collect(

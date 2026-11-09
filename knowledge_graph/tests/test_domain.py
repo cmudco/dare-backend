@@ -6,6 +6,7 @@ from knowledge_graph.domain.alias_rules import (
     blocking_key,
     defined_abbreviations,
     display_name,
+    file_owners,
     generic_keys,
     people_conflict,
     rule_merges,
@@ -16,7 +17,9 @@ from knowledge_graph.domain.relation_pairs import (
     candidate_pairs,
     implied_pairs,
     opening_speaker,
+    reach_pairs,
     stating_text,
+    strong_pairs,
     trim_quote,
 )
 
@@ -75,6 +78,9 @@ class AliasCandidateTests(SimpleTestCase):
         }
         self.assertIn(("gaza", "gaza strip"), found)
         self.assertIn(("gaza", "gaza war"), found)
+
+    def test_first_name_is_not_an_abbreviation_of_a_full_name(self):
+        self.assertEqual(self.pairs(["rosa", "rosa athers", "rosa fripp"]), set())
 
     def test_numbered_sequels_are_not_spelling_variants(self):
         self.assertEqual(self.pairs(["apollo 11", "apollo 13"]), set())
@@ -152,6 +158,27 @@ class NameQualityTests(SimpleTestCase):
         keys[1] = NamedKey("adam fields", "Adam Fields", "person", 90, frozenset({1}))
         self.assertNotIn(("fields", "adam fields"), rule_merges(keys))
 
+    def test_first_name_joins_the_person_it_starts_not_a_stray_surname(self):
+        keys = [
+            NamedKey("alfred", "Alfred", "person", 20, frozenset({1})),
+            NamedKey("alfred fripp", "Alfred Fripp", "person", 60, frozenset({1})),
+            NamedKey("attest alfred", "Attest Alfred", "person", 1, frozenset({1})),
+        ]
+        self.assertEqual(rule_merges(keys), [("alfred", "alfred fripp")])
+
+    def test_one_word_name_in_a_file_goes_to_its_clear_owner(self):
+        names = [
+            ("alfred", 1, 20),
+            ("alfred fripp", 2, 139),
+            ("attest alfred", 3, 1),
+            ("rosa", 4, 11),
+            ("rosa fripp", 5, 20),
+            ("rosa gathers", 6, 15),
+            ("susan", 7, 31),
+            ("susan mc quam", 8, 2),
+        ]
+        self.assertEqual(file_owners(names), {"alfred": 2})
+
     def test_chunk_can_define_an_abbreviation(self):
         text = "The Israeli Coordinator of Government Activities (COGAT) closed it."
         spellings = {
@@ -184,6 +211,19 @@ class CandidatePairTests(SimpleTestCase):
         mentions = [PairMention(i, f"Name{i}") for i in range(6)]
         text = " ".join(f"Name{i}" for i in range(6)) + "."
         self.assertEqual(len(candidate_pairs(text, mentions, 4)), 4)
+
+
+class ReachPairTests(SimpleTestCase):
+    def test_strong_pair_far_apart_in_a_chunk_is_asked_once(self):
+        rosa, examiner = PairMention(1, "Rosa Fripp"), PairMention(2, "R. E. Roberts")
+        strong = strong_pairs([[1, 2], [1, 2], [2, 1], [1, 3]], 3)
+        self.assertEqual(strong, frozenset({frozenset({1, 2})}))
+        text = "Case of Rosa Fripp. " + "Filler sentence. " * 30 + "R. E. Roberts."
+        pairs = reach_pairs(text, [rosa, examiner], strong, [], 6)
+        self.assertEqual([(p.a, p.b) for p in pairs], [(rosa, examiner)])
+        self.assertIn("Rosa Fripp", pairs[0].sentence)
+        self.assertIn("R. E. Roberts", pairs[0].sentence)
+        self.assertEqual(reach_pairs(text, [rosa, examiner], strong, pairs, 6), [])
 
 
 class ImpliedPairTests(SimpleTestCase):

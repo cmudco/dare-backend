@@ -149,7 +149,12 @@ def alias_candidates(
                 containers.setdefault(short, set()).add(long)
         if len(tokens) == 1:
             for long in by_initial[tokens[0][0]]:
-                if long != short and _is_abbreviation(tokens[0], meaningful[long]):
+                # "rosa" spells out of "rosa athers" too, but that is a first name.
+                if (
+                    long != short
+                    and tokens[0] not in meaningful[long]
+                    and _is_abbreviation(tokens[0], meaningful[long])
+                ):
                     found[(short, long)] = "abbreviation"
         for long in by_surname[(len(tokens), tokens[-1])]:
             if short < long and _initials_match(tokens, meaningful[long]):
@@ -434,8 +439,9 @@ def rule_merges(keys: Iterable[NamedKey]) -> List[Tuple[str, str]]:
 
     "President Nixon" and "Nixon" belong to "Richard Nixon" when one person owns
     that surname. If several do, the name goes to one that clearly dominates;
-    otherwise it stays apart. "CIA" joins "Central Intelligence Agency" only when
-    one name fits those exact initials.
+    otherwise it stays apart. A word that mostly starts full names ("Alfred") is a
+    first name, so it looks for its owner among those instead. "CIA" joins "Central
+    Intelligence Agency" only when one name fits those exact initials.
     """
     items = list(keys)
     # The extractor tags "lobbyists" as a person too; a surname is capitalized.
@@ -450,19 +456,24 @@ def rule_merges(keys: Iterable[NamedKey]) -> List[Tuple[str, str]]:
     for group in _people(full_people):
         merges.extend((member.key, group[0].key) for member in group[1:])
     surname_owners: Dict[str, List[NamedKey]] = defaultdict(list)
+    given_owners: Dict[str, List[NamedKey]] = defaultdict(list)
     by_core_block: Dict[str, NamedKey] = {}
     for other in full_people:
         core_tokens = _tokens(_strip_title(other.key))
         if len(core_tokens) >= 2:
             surname_owners[core_tokens[-1]].append(other)
+            given_owners[core_tokens[0]].append(other)
         by_core_block.setdefault(blocking_key(_strip_title(other.key)), other)
     for item in people:
         core = _strip_title(item.key)
         core_tokens = _tokens(core)
         if len(core_tokens) == 1:
+            as_given = given_owners[core_tokens[0]]
+            as_surname = surname_owners[core_tokens[0]]
+            given = sum(o.weight for o in as_given) > sum(o.weight for o in as_surname)
             owners = [
                 other
-                for other in surname_owners[core_tokens[0]]
+                for other in (as_given if given else as_surname)
                 if other.key != item.key
                 and _strip_title(other.key) != core
                 and _share_a_file(item, other)
@@ -497,6 +508,48 @@ def rule_merges(keys: Iterable[NamedKey]) -> List[Tuple[str, str]]:
         if len(owners) == 1:
             merges.append((item.key, owners[0].key))
     return merges
+
+
+def file_owners(names: Iterable[Tuple[str, int, int]]) -> Dict[str, int]:
+    """Whose one-word name each is inside one file, from (key, cluster id, mentions).
+
+    A spelling has one cluster for every file, so "Alfred" can't join Alfred Fripp
+    while another file has its own Alfred. Inside one file the question is small:
+    the full name that starts or ends with the word, if one clearly leads. A full
+    name written twice can't claim a "Susan" written thirty times.
+    """
+    items = list(names)
+    given: Dict[str, Counter] = defaultdict(Counter)
+    surname: Dict[str, Counter] = defaultdict(Counter)
+    for key, cluster_id, mentions in items:
+        tokens = _tokens(_strip_title(key))
+        if len(tokens) >= 2:
+            given[tokens[0]][cluster_id] += mentions
+            surname[tokens[-1]][cluster_id] += mentions
+    written: Counter = Counter()
+    for key, _, mentions in items:
+        written[key] += mentions
+    found: Dict[str, int] = {}
+    for key in written:
+        tokens = _tokens(_strip_title(key))
+        if len(tokens) != 1:
+            continue
+        as_given, as_surname = given[tokens[0]], surname[tokens[0]]
+        pool = (
+            as_given
+            if sum(as_given.values()) > sum(as_surname.values())
+            else as_surname
+        )
+        ranked = pool.most_common(2)
+        if (
+            ranked
+            and ranked[0][1] >= written[key]
+            and (
+                len(ranked) == 1 or ranked[0][1] >= DOMINANT_OWNER_RATIO * ranked[1][1]
+            )
+        ):
+            found[key] = ranked[0][0]
+    return found
 
 
 def _same_person(a: str, b: str) -> bool:
