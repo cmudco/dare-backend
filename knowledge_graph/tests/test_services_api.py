@@ -18,6 +18,7 @@ from knowledge_graph.models import (
     RelationLabel,
 )
 from knowledge_graph.services.cluster_service import EntityClusterService
+from knowledge_graph.services.fact_loader import load_facts
 from knowledge_graph.services.ingest_hook import sync_clusters_after_ingest
 from knowledge_graph.services.relation_service import (
     LabelOperation,
@@ -163,6 +164,66 @@ class ClusterServiceTests(TestCase):
         )
         EntityClusterService.adjudicate(self.user, ids, client)
         self.assertEqual(self.cluster_of("aot"), self.cluster_of("attack on titan"))
+
+
+class FactLoaderTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(email="f@dare.test", password="x")
+        self.one = make_file(
+            self.user,
+            "ghibli.pdf",
+            "Hayao Miyazaki directed Spirited Away.",
+            [
+                ("person", "hayao miyazaki", "Hayao Miyazaki"),
+                ("title", "spirited away", "Spirited Away"),
+            ],
+        )
+        self.two = make_file(
+            self.user,
+            "awards.pdf",
+            "Spirited Away won the Golden Bear.",
+            [
+                ("title", "spirited away", "Spirited Away"),
+                ("title", "golden bear", "Golden Bear"),
+            ],
+        )
+        EntityClusterService.sync_user(self.user)
+        graph = KnowledgeGraph.objects.create(user=self.user, name="g")
+        for file, subject, name, target in (
+            (self.one, "hayao miyazaki", "directed", "spirited away"),
+            (self.two, "spirited away", "won", "golden bear"),
+        ):
+            EntityRelation.objects.create(
+                graph=graph,
+                file=file,
+                chunk=file.chunks.get(),
+                subject_id=self.cluster(subject),
+                object_id=self.cluster(target),
+                label=RelationLabel.objects.create(graph=graph, name=name),
+                probability=0.9,
+            )
+
+    def cluster(self, key):
+        return ClusterAlias.objects.get(user=self.user, key=key).cluster_id
+
+    def test_named_entity_brings_its_connections_and_the_next_step(self):
+        facts = load_facts(self.user.id, [self.one.id, self.two.id], ["Miyazaki"])
+        self.assertEqual(
+            [(f.subject, f.relation, f.object, f.file_name, f.step) for f in facts],
+            [
+                ("Hayao Miyazaki", "directed", "Spirited Away", "ghibli.pdf", 1),
+                ("Spirited Away", "won", "Golden Bear", "awards.pdf", 2),
+            ],
+        )
+
+    def test_unselected_file_and_other_user_stay_out(self):
+        self.assertEqual(
+            len(load_facts(self.user.id, [self.one.id], ["Spirited Away"])), 1
+        )
+        stranger = User.objects.create_user(email="x@dare.test", password="x")
+        self.assertEqual(
+            load_facts(stranger.id, [self.one.id, self.two.id], ["Miyazaki"]), []
+        )
 
 
 class LabelOperationTests(TestCase):

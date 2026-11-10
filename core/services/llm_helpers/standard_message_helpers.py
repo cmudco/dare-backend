@@ -122,6 +122,22 @@ def _persisted_snippets(message_obj: Any) -> List[Dict[str, Any]]:
     ]
 
 
+RECENT_TURNS_FOR_RETRIEVAL = 4
+RECENT_TURN_CHARS = 1200
+
+
+def _recent_turns(history: List[Dict[str, Any]]) -> List[str]:
+    """The last few spoken turns, short enough to ride along with query analysis."""
+    spoken = [
+        f"{turn['role']}: {turn['content'][:RECENT_TURN_CHARS]}"
+        for turn in history
+        if turn.get("role") in ("user", "assistant")
+        and isinstance(turn.get("content"), str)
+        and turn["content"].strip()
+    ]
+    return spoken[-RECENT_TURNS_FOR_RETRIEVAL:]
+
+
 async def build_standard_messages(
     request: LLMQueryRequest,
     document_processor: DocumentProcessor,
@@ -222,6 +238,17 @@ async def build_standard_messages(
                     for item in file_contents
                 ]
 
+    # Fetched before retrieval so a follow-up's "them" can be resolved.
+    conversation_history = (
+        await get_conversation_history(
+            request.conversation,
+            limit=request.context.history_limit,
+            before=request.message_obj,
+        )
+        if request.conversation
+        else []
+    )
+
     # Add semantic context from vector search
     has_retrieval_sources = bool(
         request.context.embedding_ids
@@ -252,6 +279,7 @@ async def build_standard_messages(
             rag_mode=request.context.rag_mode,
             message_obj=request.message_obj,
             workflow_run_step_obj=request.workflow_run_step_obj,
+            recent_turns=_recent_turns(conversation_history),
         )
         if has_retrieval_sources:
             stage["mode"] = request.context.rag_mode
@@ -293,15 +321,6 @@ async def build_standard_messages(
 
     # Add conversation history
     with trace.stage("history") as stage:
-        conversation_history = (
-            await get_conversation_history(
-                request.conversation,
-                limit=request.context.history_limit,
-                before=request.message_obj,
-            )
-            if request.conversation
-            else []
-        )
         # Keep turns that carry tool_calls even when their text content is empty —
         # dropping them would orphan the role:"tool" results that follow. The same
         # goes for role:"tool" turns themselves: every tool_call id MUST keep its

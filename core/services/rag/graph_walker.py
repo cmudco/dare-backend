@@ -375,12 +375,14 @@ class GraphWalker:
             notes.append(
                 f"{name(first)} and {name(second)} never appear in the same passage. "
                 + (
-                    "They connect only through other names they each appear beside: "
-                    f"{', '.join(via)}. Say that plainly, and do not imply a closer "
-                    "relationship than the passages state."
+                    "In the passages they share only names they each appear beside: "
+                    f"{', '.join(via)}."
                     if via
-                    else "Nothing in these files connects them, so say so."
+                    else "No passage connects them."
                 )
+                + " A stored connection that joins them counts too: report it first. "
+                "Do not imply a closer relationship than the passages or the stored "
+                "connections state."
             )
         by_key = {(c.file_id, c.chunk_index): c for c in [*pool, *hops]}
         wanted = {node[1] for path in found for node in path if node[0] == "chunk"}

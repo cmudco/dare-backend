@@ -122,6 +122,7 @@ class RetrievalRequest:
     similarity_threshold: float = 0.0
     trace: bool = False  # capture a per-stage RetrievalTrace for the UI
     citations: Optional[CitationCounter] = None
+    recent_turns: Tuple[str, ...] = ()  # lets a follow-up's "them" be resolved
 
 
 @dataclass(frozen=True)
@@ -218,6 +219,7 @@ class RetrievalTrace:
     expanded: List[TraceEntry] = field(default_factory=list)
     final: List[TraceEntry] = field(default_factory=list)
     walk: Optional[GraphWalkTrace] = None
+    stored_facts: int = 0  # connections handed to the model as context
 
     def to_payload(self) -> Dict[str, Any]:
         """Camelized payload for the frontend (rules.md §11: typed, no FE parsing)."""
@@ -250,6 +252,7 @@ class RetrievalTrace:
                 "applied": self.expand_applied,
                 "added": [e.to_payload() for e in self.expanded],
                 "walk": self.walk.to_payload() if self.walk else None,
+                "storedFacts": self.stored_facts,
             },
             "mmr": {"applied": self.mmr_applied, "reason": self.mmr_reason},
             "grounding": (

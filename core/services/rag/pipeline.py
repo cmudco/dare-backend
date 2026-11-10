@@ -25,6 +25,7 @@ from core.services.rag.dtos import (
     RetrievedChunk,
 )
 from core.services.rag.expander import GraphExpander
+from core.services.rag.facts import FactLoader, facts_block
 from core.services.rag.graph_walker import GraphWalker
 from core.services.rag.grounding import GroundingChecker
 from core.services.rag.query_analyzer import QueryAnalyzer
@@ -55,6 +56,7 @@ class RetrievalPipeline:
         assembler: Optional[ContextAssembler] = None,
         expander: Optional[GraphExpander] = None,
         walker: Optional[GraphWalker] = None,
+        fact_loader: Optional[FactLoader] = None,
     ):
         self.retriever = retriever
         self.analyzer = analyzer or QueryAnalyzer()
@@ -64,6 +66,7 @@ class RetrievalPipeline:
         self.assembler = assembler or ContextAssembler()
         self.expander = expander
         self.walker = walker
+        self.fact_loader = fact_loader
 
     def run(
         self, request: RetrievalRequest, on_keep: KeepHook = None
@@ -73,6 +76,7 @@ class RetrievalPipeline:
             request.query,
             request.payer_user_id,
             request.payer_bot_id,
+            request.recent_turns,
         )
         exploratory = bool(plan) and plan.is_exploratory
 
@@ -142,6 +146,14 @@ class RetrievalPipeline:
             )
             expand_applied = True
         candidates = [*pool, *expanded]
+
+        # 2c) What the knowledge graph already holds about the names asked
+        # about. A direct question needs it as much as a graph-routed one.
+        fact_note = ""
+        if self.fact_loader is not None and request.file_ids and plan:
+            fact_note = facts_block(
+                self.fact_loader(request.user_id, request.file_ids, plan.query_entities)
+            )
 
         # 3) Rerank for true relevance (keep a wider set if MMR will trim further).
         # The cross-encoder scores every direct hit and graph hop before the
@@ -228,6 +240,7 @@ class RetrievalPipeline:
         blocks = [
             *ContextAssembler.grounding_blocks(grounding),
             *([connection_note] if connection_note else []),
+            *([fact_note] if fact_note else []),
             *blocks,
         ]
 
@@ -262,6 +275,7 @@ class RetrievalPipeline:
                 final=final,
                 citation_offset=citation_offset,
                 walk=walk_trace,
+                stored_facts=fact_note.count("\n- "),
             )
 
         return RetrievalResult(
@@ -474,6 +488,13 @@ def _load_entity_hops(keys, user_id, file_ids):
     return DocumentMapService.load_entity_hops(keys, user_id, file_ids)
 
 
+def _load_facts(user_id, file_ids, names):
+    # Local import: the loader pulls in Django models at import time.
+    from knowledge_graph.services.fact_loader import load_facts
+
+    return load_facts(user_id, file_ids, names)
+
+
 def _graph_walker() -> GraphWalker:
     # Local import: the loader pulls in Django models at import time.
     from knowledge_graph.services.walk_loader import (
@@ -497,13 +518,10 @@ def build_pipeline(
                 _load_entity_hops if flag("RAG_ENTITY_HOPS_ENABLED", True) else None
             ),
         )
-    walker = (
-        _graph_walker()
-        if source_type == "document" and flag("RAG_GRAPH_WALK_ENABLED", True)
-        else None
-    )
+    graph_on = source_type == "document" and flag("RAG_GRAPH_WALK_ENABLED", True)
     return RetrievalPipeline(
         retriever=get_retriever(source_type, openai_client),
         expander=expander,
-        walker=walker,
+        walker=_graph_walker() if graph_on else None,
+        fact_loader=_load_facts if graph_on else None,
     )

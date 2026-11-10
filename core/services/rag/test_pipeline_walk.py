@@ -39,7 +39,7 @@ class FakeAnalyzer:
     def __init__(self, plan):
         self.plan = plan
 
-    def analyze(self, query, payer_user_id, payer_bot_id):
+    def analyze(self, query, payer_user_id, payer_bot_id, recent_turns=()):
         return self.plan
 
     def use_hyde(self):

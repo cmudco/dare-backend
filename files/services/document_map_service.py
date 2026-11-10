@@ -379,9 +379,25 @@ class DocumentMapService:
             return {}
 
         targets_by_slot: Dict[Tuple[str, str], List[DocumentEntity]] = defaultdict(list)
-        for target in DocumentEntity.objects.filter(
-            file__user_id=user_id, file_id__in=scope, key__in=eligible_keys
-        ).select_related("chunk", "file"):
+        # Every row would otherwise carry its file's whole parsed document.
+        for target in (
+            DocumentEntity.objects.filter(
+                file__user_id=user_id, file_id__in=scope, key__in=eligible_keys
+            )
+            .select_related("chunk", "file")
+            .only(
+                "kind",
+                "key",
+                "mentions",
+                "file__name",
+                "chunk__chunk_index",
+                "chunk__text",
+                "chunk__page_start",
+                "chunk__page_end",
+                "chunk__section",
+                "chunk__heading_path",
+            )
+        ):
             targets_by_slot[(target.kind, target.key)].append(target)
 
         hops: Dict[ChunkKey, List[LoadedHop]] = {}

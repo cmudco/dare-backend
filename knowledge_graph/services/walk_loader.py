@@ -1,6 +1,6 @@
 """Loads one user's graph over the selected files for the retrieval walk."""
 
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from core.services.rag.graph_walker import (
     WalkChunk,
@@ -88,7 +88,13 @@ def resolve_query_entities(
     user_id: Optional[int], names: Iterable[str], graph: WalkGraph
 ) -> Dict[str, int]:
     """Map names from the question onto entities present in the selected files."""
-    present = {link.entity_id for link in graph.links}
+    return match_names(user_id, names, {link.entity_id for link in graph.links})
+
+
+def match_names(
+    user_id: Optional[int], names: Iterable[str], present: Set[int]
+) -> Dict[str, int]:
+    """Each name to the one entity in ``present`` that a spelling of it fits."""
     by_block: Dict[str, int] = {}
     tokens_by_entity: Dict[int, List[set]] = {}
     for key, cluster_id in ClusterAlias.objects.filter(

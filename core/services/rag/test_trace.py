@@ -75,5 +75,6 @@ class BuildTraceTests(SimpleTestCase):
             final_size=0,
         )
         self.assertEqual(
-            trace.to_payload()["expand"], {"applied": False, "added": [], "walk": None}
+            trace.to_payload()["expand"],
+            {"applied": False, "added": [], "walk": None, "storedFacts": 0},
         )

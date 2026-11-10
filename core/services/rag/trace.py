@@ -74,6 +74,7 @@ def build_trace(
     final: Optional[List[RetrievedChunk]] = None,
     citation_offset: int = 0,
     walk: Optional[GraphWalkTrace] = None,
+    stored_facts: int = 0,
 ) -> RetrievalTrace:
     expanded = expanded or []
     pool_ranks = {_key(c): i for i, c in enumerate([*pool, *expanded], 1)}
@@ -93,6 +94,7 @@ def build_trace(
         expand_applied=expand_applied,
         expanded=_entries(expanded),
         walk=walk,
+        stored_facts=stored_facts,
         final=[
             replace(entry, citation_id=f"S{citation_offset + index}")
             for index, entry in enumerate(
