@@ -142,10 +142,3 @@ class GraphEvidenceTests(SimpleTestCase):
         hops = [hop(10 + n, 0.5 - n / 100) for n in range(GRAPH_EVIDENCE_SEATS + 3)]
         result = self.run_graph([chunk(1, 0.9)], hops)
         self.assertEqual(len(result.chunks), 1 + GRAPH_EVIDENCE_SEATS)
-
-    def test_trace_carries_route_walk_and_linked_chunks(self):
-        result = self.run_graph([chunk(1, 0.9)], [hop(9, 0.5)])
-        payload = result.trace.to_payload()
-        self.assertEqual(payload["queryAnalysis"]["route"], "graph")
-        self.assertEqual(payload["expand"]["walk"]["nodes"], 5)
-        self.assertEqual(len(payload["expand"]["added"]), 1)

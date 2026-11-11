@@ -5,7 +5,6 @@ on the graph so the page can show them with the raw answers.
 """
 
 import json
-from dataclasses import replace
 
 from asgiref.sync import async_to_sync
 from django.core.management.base import BaseCommand
@@ -40,7 +39,7 @@ CONFIGS = (
     {
         "id": "hop",
         "label": "Earlier one-hop",
-        "description": "What dev has today: one exact-name hop, 4 chunks.",
+        "description": "The earlier method: one exact-name hop, 4 chunks.",
     },
     {
         "id": "graph",
@@ -122,7 +121,7 @@ class Command(BaseCommand):
             payer_user_id=graph.user_id,
             trace=True,
         )
-        retrieved = _pipeline(config_id).run(replace(request))
+        retrieved = _pipeline(config_id).run(request)
         files = sorted({chunk.file_name for chunk in retrieved.chunks})
         answer = async_to_sync(BackgroundModelService().complete_text)(
             user=graph.user,

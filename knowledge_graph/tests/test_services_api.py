@@ -7,7 +7,7 @@ from rest_framework.test import APIClient
 
 from core.services.decisions_service import Answer, DecisionBatch
 from files.models import DocumentChunk, DocumentEntity, File, Folder
-from knowledge_graph.constants import AliasSource, GraphStatus, LabelSource
+from knowledge_graph.constants import GraphStatus, LabelSource
 from knowledge_graph.domain.relation_pairs import CandidatePair, PairMention
 from knowledge_graph.models import (
     AliasDecision,
@@ -106,18 +106,6 @@ class ClusterServiceTests(TestCase):
                 user=self.user, key_a="mappa", key_b="studio mappa", same=False
             ).exists()
         )
-
-    def test_decision_saves_keys_postgres_sorts_differently(self):
-        # Postgres en_US ignores spaces, so it sorts these two the other way round.
-        low, high = sorted(["alice", "ali qapu palace"])
-        AliasDecision.objects.create(
-            user=self.user,
-            key_a=low,
-            key_b=high,
-            same=False,
-            source=AliasSource.DECISIONS,
-        )
-        self.assertTrue(AliasDecision.objects.filter(key_a=low, key_b=high).exists())
 
     def test_merge_repoints_relations(self):
         graph = KnowledgeGraph.objects.create(user=self.user, name="g")

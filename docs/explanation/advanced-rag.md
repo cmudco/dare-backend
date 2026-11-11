@@ -291,6 +291,11 @@ user-added labels alone. The OpenAI Decisions API then labels each entity pair i
 a second question checks that the passage itself says so, which filters outside knowledge. No
 OpenAI key or a LiteLLM wallet disables only this step. Everything above still works.
 
+**Stored connections in chat.** On both routes `facts_block` (`core/services/rag/facts.py`) renders
+the stored relationships about `query_entities` as a `[stored connections]` context block, loaded by
+`knowledge_graph/services/fact_loader.py`. A failure in the walk or the loader is logged and the
+turn keeps its search results.
+
 **Measuring it.** `python manage.py graph_eval <graph id> docs/evals/graph-rag-<set>.json` runs a
 frozen question set four ways, spending real tokens, and stores the raw answers on the graph.
 

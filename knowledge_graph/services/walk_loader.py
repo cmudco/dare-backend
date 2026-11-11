@@ -133,6 +133,17 @@ def load_walk_chunks(
         file_id__in={int(file_id) for file_id, _ in wanted},
         chunk_index__in={index for _, index in wanted},
     ).select_related("file")
+    # A file row carries its whole parsed document; only the name is needed.
+    rows = rows.only(
+        "file_id",
+        "chunk_index",
+        "text",
+        "page_start",
+        "page_end",
+        "section",
+        "heading_path",
+        "file__name",
+    )
     found: Dict[ChunkKey, WalkChunk] = {}
     for row in rows:
         key = (str(row.file_id), row.chunk_index)

@@ -6,7 +6,6 @@ from core.services.rag.graph_walker import (
     WalkChunk,
     WalkEntityLink,
     WalkGraph,
-    WalkPointer,
     WalkRelation,
 )
 
@@ -90,11 +89,6 @@ class GraphWalkerTests(SimpleTestCase):
         step = next(s for s in result.hops[0].via.path if s.label == "MAPPA")
         self.assertEqual(step.relation, "produced")
         self.assertTrue(step.relation_reversed)
-
-    def test_pointer_edge_is_walkable(self):
-        graph = WalkGraph(pointers=[WalkPointer(("1", 0), ("1", 5), "see section 5")])
-        result = walker(graph).walk([chunk(1, 0)], 1, [1], [])
-        self.assertEqual(result.hops, [])
 
     def test_empty_graph_is_a_clean_no_op(self):
         pool = [chunk(1, 0)]

@@ -9,8 +9,8 @@ logger = logging.getLogger(__name__)
 
 def sync_clusters_after_ingest(user_id: int) -> None:
     """Free name-rule clustering. A failure must not fail an ingest already published."""
-    user = get_user_model().objects.get(pk=user_id)
     try:
+        user = get_user_model().objects.get(pk=user_id)
         EntityClusterService.sync_user(user)
         EntityClusterService.refresh_labels(user)
     except Exception:

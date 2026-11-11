@@ -1,7 +1,6 @@
 """Owns entity identity: which keys are one thing for this user, and why."""
 
 import logging
-import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple
@@ -384,10 +383,10 @@ class EntityClusterService:
             for relation in EntityRelation.objects.filter(**{field: drop}):
                 setattr(relation, field, keep)
                 duplicate = EntityRelation.objects.filter(
-                    chunk=relation.chunk,
-                    subject=relation.subject,
-                    object=relation.object,
-                    label=relation.label,
+                    chunk_id=relation.chunk_id,
+                    subject_id=relation.subject_id,
+                    object_id=relation.object_id,
+                    label_id=relation.label_id,
                 ).exclude(pk=relation.pk)
                 if duplicate.exists() or relation.subject_id == relation.object_id:
                     relation.delete()

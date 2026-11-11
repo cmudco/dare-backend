@@ -5,7 +5,7 @@ import re
 from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from typing import Dict, List, Literal, Mapping, Optional, Sequence, Tuple
+from typing import Dict, List, Literal, Mapping, Optional, Sequence, Set, Tuple
 
 from asgiref.sync import async_to_sync
 from django.db import close_old_connections, transaction
@@ -314,10 +314,9 @@ class RelationBuildService:
 
     @classmethod
     def estimates(
-        cls, graph: KnowledgeGraph
+        cls, graph: KnowledgeGraph, plan: Dict[int, List[CandidatePair]]
     ) -> Tuple[BuildEstimate, Optional[BuildEstimate]]:
         """The price of reading every type, and of only the types not read yet."""
-        plan = cls.plan_pairs(graph)
         lengths = dict(
             cls.graph_chunks(graph).filter(id__in=list(plan)).values_list("id", "text")
         )
@@ -354,13 +353,11 @@ class RelationBuildService:
         )
 
     @classmethod
-    def estimate(cls, graph: KnowledgeGraph) -> BuildEstimate:
-        return cls.estimates(graph)[0]
-
-    @classmethod
-    def discovery_estimate(cls, graph: KnowledgeGraph) -> float:
+    def discovery_estimate(
+        cls, graph: KnowledgeGraph, plan: Dict[int, List[CandidatePair]]
+    ) -> float:
         route = resolve_background_model(graph.user, BackgroundTask.GRAPH_RELATIONS)
-        sample = cls._discovery_sample(graph)
+        sample = cls._discovery_sample(graph, plan)
         calls = (len(sample) + DISCOVERY_BATCH_CHUNKS - 1) // DISCOVERY_BATCH_CHUNKS
         input_tokens = (
             sum(len(text) for text in sample) // CHARS_PER_TOKEN
@@ -374,8 +371,9 @@ class RelationBuildService:
         ) / 1_000_000
 
     @classmethod
-    def _discovery_sample(cls, graph: KnowledgeGraph) -> List[str]:
-        plan = cls.plan_pairs(graph)
+    def _discovery_sample(
+        cls, graph: KnowledgeGraph, plan: Dict[int, List[CandidatePair]]
+    ) -> List[str]:
         rows = {
             row.id: row for row in cls.graph_chunks(graph).filter(id__in=list(plan))
         }
@@ -386,7 +384,7 @@ class RelationBuildService:
 
     @classmethod
     def discover_labels(cls, graph: KnowledgeGraph) -> None:
-        sample = cls._discovery_sample(graph)
+        sample = cls._discovery_sample(graph, cls.plan_pairs(graph))
         service = BackgroundModelService()
         for start in range(0, len(sample), DISCOVERY_BATCH_CHUNKS):
             passages = "\n\n---\n\n".join(
@@ -558,7 +556,8 @@ class RelationBuildService:
         )
         results = []
         unmatched: List[str] = []
-        done = tokens = skipped = 0
+        done = tokens = 0
+        skipped: Set[int] = set()
         with ThreadPoolExecutor(max_workers=PARALLEL_REQUESTS) as pool:
             futures = {
                 pool.submit(
@@ -577,11 +576,16 @@ class RelationBuildService:
                 try:
                     kept, used, none_fit = future.result()
                 except Exception as error:
-                    skipped += 1
+                    skipped.add(chunk_id)
                     logger.warning("Chunk %s could not be read: %s", chunk_id, error)
-                    if skipped > allowed_failures:
+                    if len(skipped) > allowed_failures:
                         pool.shutdown(wait=False, cancel_futures=True)
-                        raise DecisionsUnavailable(str(error)) from error
+                        reason = (
+                            str(error)
+                            if isinstance(error, DecisionsUnavailable)
+                            else "Too many chunks could not be read."
+                        )
+                        raise DecisionsUnavailable(reason) from error
                     continue
                 tokens += used
                 unmatched.extend(none_fit)
@@ -589,9 +593,9 @@ class RelationBuildService:
                 KnowledgeGraph.objects.filter(pk=graph.pk).update(
                     chunks_done=done, tokens_used=tokens
                 )
-        cls._replace_relations(graph, results, labels)
+        cls._replace_relations(graph, results, labels, skipped)
         cls._propose_missing_types(graph, unmatched)
-        return skipped
+        return len(skipped)
 
     @classmethod
     def _propose_missing_types(cls, graph, sentences: Sequence[str]) -> None:
@@ -652,14 +656,15 @@ class RelationBuildService:
 
     @classmethod
     @transaction.atomic
-    def _replace_relations(cls, graph, results, labels) -> None:
+    def _replace_relations(cls, graph, results, labels, skipped=()) -> None:
         # Reloaded here: a type removed during the read must not sink the whole swap.
         by_name = {label.name: label for label in graph.labels.all()}
         clusters = set(
             EntityCluster.objects.filter(user=graph.user).values_list("id", flat=True)
         )
         read = [label.pk for label in labels if label.name in by_name]
-        graph.relations.filter(label_id__in=read).delete()
+        # A chunk that failed this time keeps what an earlier read found in it.
+        graph.relations.filter(label_id__in=read).exclude(chunk_id__in=skipped).delete()
         for chunk, kept in results:
             cls._save_chunk_relations(graph, chunk, kept, by_name, clusters)
         RelationLabel.objects.filter(pk__in=read).update(read_at=timezone.now())

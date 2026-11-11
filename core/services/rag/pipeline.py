@@ -117,14 +117,24 @@ class RetrievalPipeline:
             and bool(plan)
             and plan.wants_graph
         )
+        result = None
         if graph_route:
-            result = self.walker.walk(
-                pool,
-                request.user_id,
-                request.file_ids,
-                plan.query_entities,
-                connect=plan.asks_connection,
-            )
+            try:
+                result = self.walker.walk(
+                    pool,
+                    request.user_id,
+                    request.file_ids,
+                    plan.query_entities,
+                    connect=plan.asks_connection,
+                )
+            except Exception:
+                # The graph only adds context: the turn keeps its search results.
+                logger.exception("Graph walk failed")
+                graph_route = False
+                walk_trace = GraphWalkTrace(
+                    nodes=0, edges=0, milliseconds=0, error="The graph walk failed"
+                )
+        if result is not None:
             pool = result.pool
             expanded = [*result.hops]
             expand_applied = True
@@ -151,9 +161,14 @@ class RetrievalPipeline:
         # about. A direct question needs it as much as a graph-routed one.
         fact_note = ""
         if self.fact_loader is not None and request.file_ids and plan:
-            fact_note = facts_block(
-                self.fact_loader(request.user_id, request.file_ids, plan.query_entities)
-            )
+            try:
+                fact_note = facts_block(
+                    self.fact_loader(
+                        request.user_id, request.file_ids, plan.query_entities
+                    )
+                )
+            except Exception:
+                logger.exception("Stored connections could not be loaded")
 
         # 3) Rerank for true relevance (keep a wider set if MMR will trim further).
         # The cross-encoder scores every direct hit and graph hop before the

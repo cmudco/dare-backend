@@ -170,7 +170,6 @@ def find_connections(
     network: nx.Graph,
     first: Node,
     second: Node,
-    limit: int = MAX_CONNECTIONS,
 ) -> Tuple[List[List[Node]], List[List[Node]]]:
     """Routes between two entities: chunks naming both, then names both sit beside.
 
@@ -199,9 +198,30 @@ def find_connections(
     )
     through = [
         [first, near_a[node][0], node, near_b[node][0], second]
-        for node in shared[:limit]
+        for node in shared[:MAX_CONNECTIONS]
     ]
     return direct, through
+
+
+def _linked_chunk(
+    key: ChunkKey, row: WalkChunk, anchor_score: float, via: ReferenceHop, score: float
+) -> RetrievedChunk:
+    """A chunk the search did not return, seated beside the top search hit."""
+    return RetrievedChunk(
+        text=row.text,
+        source_ref=row.file_name,
+        score=anchor_score,
+        chunk_index=key[1],
+        source_type="document",
+        file_id=key[0],
+        file_name=row.file_name,
+        page_start=row.page_start,
+        page_end=row.page_end,
+        section=row.section,
+        retrieval_text=row.retrieval_text,
+        via=via,
+        graph_score=score,
+    )
 
 
 class GraphWalker:
@@ -210,12 +230,10 @@ class GraphWalker:
         graph_loader: GraphLoader,
         entity_resolver: EntityResolver,
         chunk_loader: ChunkLoader,
-        max_hops: int = MAX_HOPS,
     ):
         self._load_graph = graph_loader
         self._resolve = entity_resolver
         self._load_chunks = chunk_loader
-        self.max_hops = max_hops
 
     def walk(
         self,
@@ -234,7 +252,8 @@ class GraphWalker:
             for name, entity in resolved.items()
         }
         seeds = seed_weights(pool, resolved.values(), network)
-        if not seeds:
+        # PageRank divides by the seed total, so all-zero seeds are no seeds.
+        if not any(seeds.values()):
             return WalkResult(pool=pool, hops=[], query_entities=names)
         try:
             scores = nx.pagerank(
@@ -299,7 +318,7 @@ class GraphWalker:
             ):
                 continue
             chosen.append((node[1], path, scores[node]))
-            if len(chosen) >= self.max_hops:
+            if len(chosen) >= MAX_HOPS:
                 break
         missing = list(
             {
@@ -323,23 +342,7 @@ class GraphWalker:
             row = loaded.get(key)
             if row is None:
                 continue
-            hops.append(
-                RetrievedChunk(
-                    text=row.text,
-                    source_ref=row.file_name,
-                    score=anchor_score,
-                    chunk_index=key[1],
-                    source_type="document",
-                    file_id=key[0],
-                    file_name=row.file_name,
-                    page_start=row.page_start,
-                    page_end=row.page_end,
-                    section=row.section,
-                    retrieval_text=row.retrieval_text,
-                    via=via,
-                    graph_score=score,
-                )
-            )
+            hops.append(_linked_chunk(key, row, anchor_score, via, score))
         return marked, hops
 
     def _connect(self, pool, hops, user_id, network, graph, scores, resolved):
@@ -411,22 +414,9 @@ class GraphWalker:
                     extended[hop_positions[key]], via=via, bridge=True
                 )
             elif key in loaded:
-                row = loaded[key]
                 extended.append(
-                    RetrievedChunk(
-                        text=row.text,
-                        source_ref=row.file_name,
-                        score=anchor_score,
-                        chunk_index=key[1],
-                        source_type="document",
-                        file_id=key[0],
-                        file_name=row.file_name,
-                        page_start=row.page_start,
-                        page_end=row.page_end,
-                        section=row.section,
-                        retrieval_text=row.retrieval_text,
-                        via=via,
-                        graph_score=score,
+                    replace(
+                        _linked_chunk(key, loaded[key], anchor_score, via, score),
                         bridge=True,
                     )
                 )

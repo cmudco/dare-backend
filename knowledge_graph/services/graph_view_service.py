@@ -20,6 +20,14 @@ from knowledge_graph.models import (
 from knowledge_graph.services.relation_service import RelationBuildService
 
 MAX_NODES = 60
+# Passages a name appears in: (label, from, to).
+ENTITY_BANDS = (
+    ("1", 1, 1),
+    ("2", 2, 2),
+    ("3-5", 3, 5),
+    ("6+", 6, 10**9),
+)
+BAND_EXAMPLES = 4
 PERSON_BONUS = 3
 MAX_FOCUS_NEIGHBOURS = 12
 MAX_LINK_EDGES = 90
@@ -98,6 +106,7 @@ class GraphViewService:
     @classmethod
     def summary(cls, graph: KnowledgeGraph) -> Dict:
         file_ids = cls._file_ids(graph)
+        accepted = set(graph.labels.values_list("name", flat=True))
         return {
             "id": graph.id,
             "name": graph.name,
@@ -118,21 +127,18 @@ class GraphViewService:
             "chunk_count": DocumentChunk.objects.filter(file_id__in=file_ids).count(),
             "has_eval_report": bool(graph.eval_report),
             "proposed_types": [
-                item
-                for item in graph.proposed_types
-                if item["name"] not in set(graph.labels.values_list("name", flat=True))
+                item for item in graph.proposed_types if item["name"] not in accepted
             ],
         }
 
     @classmethod
     def view(cls, graph: KnowledgeGraph, focus: Optional[int] = None) -> Dict:
         file_ids = cls._file_ids(graph)
-        aliases = list(
-            ClusterAlias.objects.filter(user=graph.user).values(
-                "key", "cluster_id", "text", "source"
+        cluster_of = dict(
+            ClusterAlias.objects.filter(user=graph.user).values_list(
+                "key", "cluster_id"
             )
         )
-        cluster_of = {row["key"]: row["cluster_id"] for row in aliases}
         rows = list(
             DocumentEntity.objects.filter(file_id__in=file_ids)
             .exclude(kind__in=LINKING_EXCLUDED_KINDS)
@@ -280,18 +286,49 @@ class GraphViewService:
                     1 for files in files_of.values() if len(files) > 1
                 ),
                 "relations": len(relations),
+                "entity_bands": cls._entity_bands(
+                    chunk_members, relation_degree, mentions, all_clusters
+                ),
             },
         }
+
+    @staticmethod
+    def _entity_bands(
+        chunk_members: Dict[int, Set[int]],
+        relation_degree: Counter,
+        mentions: Counter,
+        clusters: Dict[int, EntityCluster],
+    ) -> List[Dict]:
+        """How many names appear in one passage, a few, or many."""
+        passages: Counter = Counter()
+        for members in chunk_members.values():
+            passages.update(members)
+        bands = []
+        for name, low, high in ENTITY_BANDS:
+            inside = [c for c, n in passages.items() if low <= n <= high]
+            inside.sort(key=lambda c: (-relation_degree[c], -mentions[c], c))
+            bands.append(
+                {
+                    "band": name,
+                    "entities": len(inside),
+                    "connected": sum(1 for c in inside if relation_degree[c]),
+                    "examples": [clusters[c].label for c in inside if c in clusters][
+                        :BAND_EXAMPLES
+                    ],
+                }
+            )
+        return bands
 
     @staticmethod
     def cluster_detail(graph: KnowledgeGraph, cluster: EntityCluster) -> Dict:
         file_ids = GraphViewService._file_ids(graph)
         aliases = list(cluster.aliases.all())
         keys = [alias.key for alias in aliases]
-        rows_for_files = list(
-            DocumentEntity.objects.filter(file_id__in=file_ids, key__in=keys).only(
-                "file_id"
-            )
+        file_count = (
+            DocumentEntity.objects.filter(file_id__in=file_ids, key__in=keys)
+            .values("file_id")
+            .distinct()
+            .count()
         )
         rows = (
             DocumentEntity.objects.filter(file_id__in=file_ids, key__in=keys)
@@ -338,7 +375,7 @@ class GraphViewService:
             "id": cluster.id,
             "label": cluster.label,
             "kind": cluster.kind,
-            "files": len({row.file_id for row in rows_for_files}),
+            "files": file_count,
             "aliases": [
                 {
                     "key": alias.key,
@@ -375,8 +412,11 @@ class GraphViewService:
             "unavailable_reason": "",
         }
         try:
-            payload["discovery_cost"] = RelationBuildService.discovery_estimate(graph)
-            build, new_types = RelationBuildService.estimates(graph)
+            plan = RelationBuildService.plan_pairs(graph)
+            payload["discovery_cost"] = RelationBuildService.discovery_estimate(
+                graph, plan
+            )
+            build, new_types = RelationBuildService.estimates(graph, plan)
             payload["build"] = asdict(build)
             payload["new_types"] = asdict(new_types) if new_types else None
         except (BackgroundModelUnavailable, DecisionsUnavailable) as error:

@@ -62,7 +62,11 @@ class KnowledgeGraphViewSet(viewsets.ViewSet):
         owned_folders = Folder.objects.filter(user=request.user, id__in=folder_ids)
         if owned_folders.count() != len(folder_ids):
             raise ValidationError({"folder_ids": "Some folders could not be found."})
-        files = list(selected_source_files(request.user, file_ids, folder_ids))
+        files = list(
+            selected_source_files(request.user, file_ids, folder_ids).values_list(
+                "id", flat=True
+            )
+        )
         if not files:
             raise ValidationError({"file_ids": "Choose at least one document."})
         graph = KnowledgeGraph.objects.create(
@@ -84,7 +88,8 @@ class KnowledgeGraphViewSet(viewsets.ViewSet):
         body.is_valid(raise_exception=True)
         for field, value in body.validated_data.items():
             setattr(graph, field, value)
-        graph.save()
+        # A build updates progress columns meanwhile; a full save would undo them.
+        graph.save(update_fields=[*body.validated_data, "updated_at"])
         return Response(GraphViewService.summary(graph))
 
     def destroy(self, request, pk=None):
@@ -183,7 +188,7 @@ class KnowledgeGraphViewSet(viewsets.ViewSet):
             graph,
             GraphStatus.BUILDING,
             build_graph_relations,
-            body.validated_data.get("new_only", False),
+            body.validated_data["new_only"],
         )
 
     @action(detail=True, methods=["post"], url_path="labels")

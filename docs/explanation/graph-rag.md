@@ -174,7 +174,7 @@ apart, and **Separate** undoes any merge for good.
 and see which ones are mentioned together.
 
 **Stated relationships are the optional paid step.** A model suggests up to 12 relationship types
-from about 60 chunks spread across your files, plus an optional note on what you want to learn. You
+from about 200 chunks spread across your files, plus an optional note on what you want to learn. You
 can edit the list. DARE shows the number of chunks, the pairs to check, and the estimated cost before
 anything runs. Generic names like "legislation" are skipped. Each chunk with two or more names nearby
 is then read twice:
@@ -204,10 +204,13 @@ flowchart TD
     D -->|graph| W["Graph walk<br/>PageRank from the names<br/>and search results"]
     W --> R
     R --> E["Best chunks, plus up to 6<br/>linked chunks on the graph route"]
-    E --> F["Answer with citations"]
+    E --> C["Stored connections<br/>for the names in the question"]
+    C --> F["Answer with citations"]
 ```
 
-The route only decides what's added. Search and reranking always run. Query analysis returns this
+The route only decides what's added. Search and reranking always run. Query analysis reads the
+question together with the last four turns, so "she" or "that attorney" resolves to a name. It
+returns this
 (shortened from a real question):
 
 ```json
@@ -227,6 +230,14 @@ chunks never replace direct search results, and each one shows the path that rea
 
 If search already found every chunk the walk can reach, the trace shows **no new chunks**. Small
 selections do this often.
+
+**Stored connections reach the model on both routes.** When the selected files have stated
+relationships, the ones about the names in the question are added to the context as a short list:
+those joining two asked names first, then those about one name, then one step further. Each line
+names its file and page. The list is capped, and the model is told it is incomplete, so a missing
+line never counts as "false". The trace shows how many were given.
+
+If the graph step fails, the answer still uses the search results and the trace records the error.
 
 ### Where the graph lives
 
@@ -283,7 +294,8 @@ chunk, together with the anime document results.
   walk toward heavily connected entities. Our walk reduces that effect but doesn't remove it.
 - **Finding names needs server memory.** Plan for about 1.7 GB per process that loads GLiNER.
 - **Exports don't include graphs yet.** Account export and restore don't carry the graph tables.
-- **Simple questions gain nothing,** which is why they skip the graph.
+- **Simple questions skip the walk.** They still get the stored connections for the names they
+  mention.
 
 ## References
 
