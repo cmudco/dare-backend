@@ -22,7 +22,7 @@ from users.services.access_request_service import (
     AccessRequestsUnavailable,
     RequestAlreadyReviewed,
     decide_request,
-    deliver,
+    enqueue_delivery,
     resolve_email_review,
     validate_public_url,
 )
@@ -413,11 +413,11 @@ class AccessRequestAdmin(admin.ModelAdmin):
         for delivery in AccessRequestDelivery.objects.filter(
             request__in=queryset
         ).exclude(state=DeliveryState.SENT):
-            count += int(deliver(delivery.pk))
+            count += int(enqueue_delivery(delivery.pk))
         self.message_user(
             request,
             _(
-                "Submitted %(count)s email(s). Review delivery records for remaining failures."
+                "Queued %(count)s email(s). Review delivery records after the worker runs."
             )
             % {"count": count},
         )

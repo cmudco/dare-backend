@@ -15,7 +15,7 @@ from users.api.views import (
     token_health_check,
 )
 from users.constants import APP_NAME
-from users.api.access_requests import AccessRequestView
+from users.api.access_requests import AccessRequestView, SignupOptionsView
 from users.api.registration import CustomRegisterView
 
 app_name = APP_NAME
@@ -30,6 +30,7 @@ urlpatterns = [
         "dj-rest-auth/registration/", CustomRegisterView.as_view(), name="rest_register"
     ),
     path("access-requests/", AccessRequestView.as_view(), name="access-request"),
+    path("signup-options/", SignupOptionsView.as_view(), name="signup-options"),
     # Custom verify-email with auto-login (must come before dj-rest-auth include)
     path("dj-rest-auth/registration/verify-email/", CustomVerifyEmailView.as_view(), name="rest_verify_email"),
     path(

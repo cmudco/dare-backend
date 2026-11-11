@@ -1,3 +1,4 @@
+from allauth.account import app_settings as account_settings
 from django.conf import settings
 from django.utils.translation import gettext_lazy as _
 from drf_spectacular.utils import extend_schema
@@ -11,6 +12,7 @@ from rest_framework.views import APIView
 from users.access_request_constants import ACCESS_REQUEST_THROTTLE_RATE
 from users.services.access_request_service import (
     AccessRequestsUnavailable,
+    active_policy,
     request_access,
 )
 
@@ -34,8 +36,9 @@ class AccessRequestThrottle(SimpleRateThrottle):
     scope = "access_request"
 
     def get_rate(self):
-        return getattr(
-            settings, "ACCESS_REQUEST_THROTTLE_RATE", ACCESS_REQUEST_THROTTLE_RATE
+        return (
+            getattr(settings, "ACCESS_REQUEST_THROTTLE_RATE", None)
+            or ACCESS_REQUEST_THROTTLE_RATE
         )
 
     def get_cache_key(self, request, view):
@@ -87,3 +90,25 @@ class AccessRequestView(APIView):
             ).data,
             status=status.HTTP_202_ACCEPTED,
         )
+
+
+class SignupOptionsSerializer(serializers.Serializer):
+    approval_signup_enabled = serializers.BooleanField()
+
+
+class SignupOptionsView(APIView):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    @extend_schema(responses=SignupOptionsSerializer)
+    def get(self, request):
+        available = False
+        try:
+            active_policy()
+            available = (
+                account_settings.EMAIL_VERIFICATION
+                == account_settings.EmailVerificationMethod.MANDATORY
+            )
+        except AccessRequestsUnavailable:
+            pass
+        return Response({"approval_signup_enabled": available})

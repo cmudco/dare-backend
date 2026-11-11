@@ -246,13 +246,17 @@ retrieval steps and sources. This feature adds no agentic whole-file-context too
 `reason`. It returns HTTP 202 with `detail` for both new and duplicate/existing-user
 requests, without issuing credentials. Disabled or invalid request configuration
 returns 503; invalid input returns 400. Registration and Request Access share a
-per-client throttle (default five attempts/hour), returning 429 when exhausted.
+per-client throttle while approval is enabled (default 300 attempts/hour),
+returning 429 when exhausted. With the policy off, registration keeps upstream's
+existing throttle.
 
 `POST /users/api/dj-rest-auth/registration/` accepts an optional `accessCode` in
 addition to the normal name, email and password fields. A valid invitation retains
-the code path. An omitted/blank code requires enabled administrator review and
-creates an inactive ordinary account. Invalid supplied codes never fall back to
-code-free registration. Both paths require mandatory email verification. Success
+the code path. With review enabled, an omitted/blank code creates an inactive
+ordinary account awaiting review. When the policy is absent or disabled, code-free
+registration retains upstream behavior. Invalid supplied codes never fall back to
+code-free registration. While review is enabled, both paths require mandatory
+email verification. Success
 is HTTP 201 with `detail`, `approvalRequired` and `emailDeliveryConfigured`; it does
 not authenticate the user. Delivery configuration does not establish successful
 submission or inbox delivery. Resend responses retain the same configuration flag.
@@ -262,3 +266,10 @@ pending. Tokens are issued only for active accounts, retaining the shared identi
 claims. Approval and verification can occur in either order. See
 [signup administration](../how-to/administer-dare.md#signup-and-approval) for
 permissions, decision changes, notifications and deployment settings.
+
+### Public signup options
+
+`GET /users/api/signup-options/` requires no authentication and returns
+`{"approvalSignupEnabled": true}` only when the review policy is configured,
+enabled and mandatory verification is active. Otherwise it returns `false`.
+No reviewer identities, email addresses or internal configuration are exposed.

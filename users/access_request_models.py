@@ -18,7 +18,10 @@ from users.access_request_constants import (
 class AccessRequestPolicy(models.Model):
     id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
     enabled = models.BooleanField(
-        default=False, help_text=_("Allow visitors to request access.")
+        default=False,
+        help_text=_(
+            "Enable access requests and administrator approval for code-free DARE signup."
+        ),
     )
     email_approval_enabled = models.BooleanField(
         default=False,

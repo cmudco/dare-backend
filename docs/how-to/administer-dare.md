@@ -45,9 +45,10 @@ Three options:
 
 ### Signup and approval
 
-There are two ordinary-user signup paths. Both require email verification and an
-administrator's approval, either through an approved invitation or review of a
-code-free registration. Applicants choose their own password on `/register`;
+When the access-request policy is enabled, there are two ordinary-user signup
+paths. Both require email verification and an administrator's approval, either
+through an approved invitation or review of a code-free registration. With no
+policy or with the policy disabled, normal upstream registration is unchanged. Applicants choose their own password on `/register`;
 administrators do not create or distribute that password.
 
 #### Setup and approver access
@@ -72,7 +73,9 @@ administrators do not create or distribute that password.
 5. Enable **Email approval enabled** to include personal review links. Turning it
    off invalidates those links immediately; selected approvers can still review
    through the normal admin list. Turning **Enabled** off also stops new access
-   requests, code-free signup and request decisions; existing account login is separate.
+   invitation requests and request decisions. New code-free registrations then use
+   normal upstream signup, without the approval gate. Existing pending applicants
+   are not automatically activated; review them before disabling the policy.
 
 Production URLs require HTTPS by default. An explicitly selected, network-restricted
 HTTP deployment must allowlist its complete origins in
@@ -251,8 +254,19 @@ For allowlisted HTTP, keep network restrictions, `DJANGO_DEBUG=False`,
 coordinate trusted certificates, public URLs, secure cookies and sanitized proxy
 headers together. `TRUSTED_PROXY_COUNT` must match the real trusted ingress and
 backends must not be directly reachable; a wrong count can make all users share
-one rate limit. The default request/registration limit is five attempts per hour
-per client, using Django's cache; multi-worker deployments need a shared cache.
+one rate limit. When approval is enabled, the default shared request/registration limit is 300
+attempts per hour per client. Set `ACCESS_REQUEST_THROTTLE_RATE` for your deployment;
+multi-worker deployments need a shared cache. With the feature off, registration
+retains the existing upstream throttle and signup behavior.
+
+Review notifications and code-free verification emails are queued on RQ's
+`default` queue after the database transaction commits. Run a default worker.
+Delivery rows show failed queue submissions and worker delivery results; the admin
+retry action queues work rather than sending mail during the request. Verification
+job failures are also visible in RQ and can be recovered with Resend verification.
+
+The upstream contribution uses one new migration, `0040_access_requests`. It is
+separate from GT's deployed migration history; do not replace GT migrations with it.
 
 Deploy the backend and migrations before exposing new UI. Retain the additive
 request, decision and delivery tables during an application rollback; reversing

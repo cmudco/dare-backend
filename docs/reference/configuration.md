@@ -346,6 +346,7 @@ mandatory email verification. The feature is disabled until configured. See
 |---|---|---|
 | `EMAIL_REPLY_TO` | Empty | Support reply address; explicit per-message Reply-To takes precedence. |
 | `EMAIL_TIMEOUT` | `10` | Mail connection timeout in seconds. |
+| `ACCESS_REQUEST_THROTTLE_RATE` | `300/hour` | Shared per-client request and registration limit while approval is enabled. Defaults support classrooms on a shared network. |
 | `ACCESS_REQUEST_REVIEW_CC` | Empty | Comma-separated copies for registration reviews, once per request. Invitation-request reviews have no copy from this setting. |
 | `TRUSTED_PROXY_COUNT` | `0` | Number of sanitizing trusted proxies used for per-client throttling. Direct backend access must be blocked when trusting forwarded headers. |
 | `DJANGO_SECURE_COOKIES` | `False` | Enable session/CSRF secure cookies for HTTPS deployments. |
@@ -368,3 +369,8 @@ The new code-free approval gate applies to DARE registration. Socratic Bots reta
 its existing registration and response behavior; it is not enrolled into the DARE
 approval policy. Supplied invitation codes still receive validation and atomic
 consumption on either platform.
+
+Approval is opt-in. With the policy absent or disabled, DARE retains normal
+code-free registration. `GET /users/api/signup-options/` advertises
+`approvalSignupEnabled` only when the configured approval workflow is ready.
+The frontend uses this flag for approval text and invitation-request links.

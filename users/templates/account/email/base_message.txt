@@ -1,8 +1,0 @@
-{% load i18n %}{% autoescape off %}{% if user %}{% blocktranslate with recipient_name=user.get_full_name|default:user.email %}Hello {{ recipient_name }},{% endblocktranslate %}{% else %}{% translate "Hello," %}{% endif %}
-
-{% block content %}{% endblock content %}
-{% if support_email %}
-{% blocktranslate %}Questions? Reply to this email to contact our team at {{ support_email }}.{% endblocktranslate %}
-{% endif %}
-{% blocktranslate with site_name=current_site.name %}The {{ site_name }} team{% endblocktranslate %}
-{% endautoescape %}

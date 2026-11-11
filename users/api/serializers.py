@@ -23,6 +23,7 @@ from users.models import AccessCodeGroup
 from users.services.access_request_service import (
     AccessRequestsUnavailable,
     active_policy,
+    registration_approval_enabled,
     request_registration_approval,
 )
 from users.utils import detect_platform_from_request, get_platform_access_permission
@@ -164,12 +165,15 @@ class CustomRegisterSerializer(RegisterSerializer):
 
     def validate(self, attrs):
         attrs = super().validate(attrs)
+        self.approval_required = False
         if not attrs.get("access_code"):
             if (
                 detect_platform_from_request(self.context["request"])
                 == AuthSourceChoice.SOCRATIC_BOTS
+                or not registration_approval_enabled()
             ):
                 return attrs
+            self.approval_required = True
             try:
                 active_policy()
             except AccessRequestsUnavailable:
@@ -308,7 +312,7 @@ class CustomRegisterSerializer(RegisterSerializer):
 
         user.access_code_group = code_group
         user.platform_role = code_group.default_role if code_group else RoleChoice.USER
-        review_required = not code_group and platform == AuthSourceChoice.DARE
+        review_required = self.approval_required
         if review_required:
             user.is_active = False
 

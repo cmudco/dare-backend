@@ -8,6 +8,7 @@ from functools import partial
 from smtplib import SMTPException
 from urllib.parse import urljoin, urlsplit
 
+import django_rq
 from allauth.account.models import EmailAddress
 from django.conf import settings
 from django.core import signing
@@ -17,6 +18,7 @@ from django.db import DatabaseError, transaction
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.translation import gettext as _
+from redis.exceptions import RedisError
 
 from users.access_request_constants import (
     APPROVAL_SALT,
@@ -91,6 +93,30 @@ def validate_public_url(value, *, origin_only=False):
         )
 
 
+def registration_approval_enabled():
+    return AccessRequestPolicy.objects.filter(pk=1, enabled=True).exists()
+
+
+def enqueue_delivery(delivery_id):
+    try:
+        django_rq.get_queue("default").enqueue(
+            "users.tasks.deliver_access_request", delivery_id, job_timeout=60
+        )
+    except RedisError:
+        AccessRequestDelivery.objects.filter(pk=delivery_id).exclude(
+            state__in=[DeliveryState.SENT, DeliveryState.SENDING]
+        ).update(state=DeliveryState.FAILED, failure_reason="mail_queue_unavailable")
+        logger.warning("Access request delivery %s could not be queued", delivery_id)
+        return False
+    return True
+
+
+def enqueue_signup_verification(email_id):
+    django_rq.get_queue("default").enqueue(
+        "users.tasks.send_signup_verification", email_id, job_timeout=60
+    )
+
+
 def active_policy():
     policy = AccessRequestPolicy.objects.filter(pk=1, enabled=True).first()
     if (
@@ -117,7 +143,7 @@ def queue_delivery(access_request, kind, recipient, reviewer=None):
         defaults={"reviewer": reviewer},
     )
     if created:
-        transaction.on_commit(partial(deliver, delivery.pk), robust=True)
+        transaction.on_commit(partial(enqueue_delivery, delivery.pk), robust=True)
     return delivery
 
 
