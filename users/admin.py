@@ -1,3 +1,4 @@
+from allauth.account.models import EmailAddress
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
 from django.utils.translation import gettext_lazy as _
@@ -364,7 +365,7 @@ class UserAdmin(DjangoUserAdmin):
     list_filter = ("is_staff", "is_superuser", "is_active", "platform_role", LastLoginFilter, "vector_db", "storage_backend", "access_code_group", "auth_source")
     search_fields = ("email", "first_name", "last_name")
     ordering = ("-last_login",)
-    actions = ["credit_selected_users", "disable_inactive_accounts"]
+    actions = ["credit_selected_users", "disable_inactive_accounts", "mark_email_verified"]
     date_hierarchy = "date_joined"
 
     def last_login_display(self, obj):
@@ -426,5 +427,15 @@ class UserAdmin(DjangoUserAdmin):
                 "No accounts changed: the selected accounts are already inactive.",
                 level=messages.WARNING,
             )
+
+    @admin.action(description="Mark email verified (allow login)")
+    def mark_email_verified(self, request, queryset):
+        for user in queryset:
+            address = EmailAddress.objects.filter(user=user, email__iexact=user.email).first()
+            if address is None:
+                address = EmailAddress.objects.create(user=user, email=user.email)
+            address.set_verified(commit=True)
+            address.set_as_primary()
+        self.message_user(request, f"Marked {queryset.count()} user email(s) as verified.", level=messages.SUCCESS)
 
 admin.site.register(User, UserAdmin)

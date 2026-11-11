@@ -1,9 +1,10 @@
 from allauth.account.models import EmailAddress, EmailConfirmationHMAC
+from django.contrib.admin.sites import site
 from django.contrib.auth import get_user_model
-from django.test import TestCase
+from django.contrib.messages.storage.fallback import FallbackStorage
+from django.test import RequestFactory, TestCase
 from rest_framework import status
 from rest_framework.test import APIClient
-
 
 User = get_user_model()
 
@@ -51,3 +52,77 @@ class VerifyEmailRegistrationTests(TestCase):
         response = self.client.post(self.url, {"key": "invalid-key"}, format="json")
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+
+class MarkEmailVerifiedAdminActionTests(TestCase):
+    def test_creates_verified_primary_address_for_user_without_one(self):
+        user = User.objects.create_superuser(
+            email="admin-no-address@example.com", password="pw"
+        )
+        request = RequestFactory().post("/")
+        request.user = user
+        request.session = {}
+        request._messages = FallbackStorage(request)
+
+        site._registry[User].mark_email_verified(
+            request, User.objects.filter(pk=user.pk)
+        )
+
+        address = EmailAddress.objects.get(user=user)
+        self.assertTrue(address.verified)
+        self.assertTrue(address.primary)
+
+
+class LoginEmailCaseTests(TestCase):
+    url = "/users/api/dj-rest-auth/login/"
+
+    def setUp(self):
+        self.client = APIClient()
+
+    def make_user(self, email, password="correct-pw"):
+        user = User.objects.create_user(email=email, password=password)
+        EmailAddress.objects.create(user=user, email=email, primary=True, verified=True)
+        return user
+
+    def login(self, email, password="correct-pw"):
+        return self.client.post(
+            self.url, {"email": email, "password": password}, format="json"
+        )
+
+    def test_capitalized_email_logs_into_lowercase_account(self):
+        user = self.make_user("jane@school.edu")
+
+        response = self.login("Jane@school.edu")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertEqual(response.data["user"]["email"], user.email)
+
+    def test_surrounding_spaces_are_ignored(self):
+        self.make_user("jane@school.edu")
+
+        response = self.login("  Jane@school.edu ")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+
+    def test_lowercase_email_logs_into_account_stored_with_capitals(self):
+        self.make_user("Jane@school.edu")
+
+        response = self.login("jane@school.edu")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+
+    def test_wrong_password_still_fails(self):
+        self.make_user("jane@school.edu")
+
+        response = self.login("Jane@school.edu", password="wrong-pw")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_ambiguous_case_variant_fails_without_error(self):
+        self.make_user("jane@school.edu")
+        self.make_user("Jane@school.edu")
+
+        with self.assertLogs("users.api.serializers", level="ERROR"):
+            response = self.login("JANE@school.edu")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
